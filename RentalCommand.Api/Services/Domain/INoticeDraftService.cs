@@ -1,13 +1,19 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
 public interface INoticeDraftService
 {
     Task<IReadOnlyList<NoticeDraftResponse>> ListAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         string? status,
         ListQuery query,
+        CancellationToken ct = default);
+
+    Task<NoticeDraftResponse?> GetAsync(
+        WorkspaceReadScope scope,
+        int id,
         CancellationToken ct = default);
 
     /// <summary>
@@ -18,9 +24,16 @@ public interface INoticeDraftService
     /// lead window.
     /// </summary>
     Task<GenerateNoticeDraftsResponse> GenerateAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         GenerateNoticeDraftsRequest? request = null,
         CancellationToken ct = default);
-    Task<NoticeDraftResponse?> UpdateAsync(int portfolioId, int id, UpdateNoticeDraftRequest request, CancellationToken ct = default);
-    Task<NoticeDraftResponse?> DismissAsync(int portfolioId, int id, CancellationToken ct = default);
+    Task<NoticeDraftResponse?> UpdateAsync(
+        WorkspaceReadScope scope,
+        int id,
+        UpdateNoticeDraftRequest request,
+        CancellationToken ct = default);
+    Task<NoticeDraftResponse?> DismissAsync(
+        WorkspaceReadScope scope,
+        int id,
+        CancellationToken ct = default);
 }

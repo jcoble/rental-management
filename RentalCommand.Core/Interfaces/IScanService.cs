@@ -1,3 +1,4 @@
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Scanning;
 
 namespace RentalCommand.Core.Interfaces;
@@ -28,7 +29,7 @@ public interface IScanService
 
     /// <summary>Reject a draft; no record is created.</summary>
     Task<bool> RejectDraftAsync(
-        int portfolioId, int draftId, int userId, string? reason, CancellationToken ct = default);
+        WorkspaceReadScope scope, int draftId, int userId, string? reason, CancellationToken ct = default);
 }
 
 public enum ScanConfirmationPreparationOutcome

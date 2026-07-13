@@ -36,7 +36,7 @@ public class VoiceTranscriptionFailureTests
     {
         var voice = new Mock<IVoiceIntakeService>(MockBehavior.Strict);
         voice.Setup(v => v.CreateDraftAsync(
-                42,
+                It.Is<WorkspaceReadScope>(scope => scope.PortfolioId == 42),
                 It.Is<byte[]>(b => b.SequenceEqual(new byte[] { 1, 2, 3 })),
             "audio/webm",
             null,

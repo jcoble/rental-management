@@ -26,10 +26,13 @@ namespace RentalCommand.Api.Tests.Scanning;
 public class ScanBatchControllerTests : IDisposable
 {
     private const int PortfolioId = 42;
+    private static readonly Guid SessionId =
+        Guid.Parse("22222222-2222-2222-2222-222222222222");
 
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
     private readonly List<string> _executedSql = [];
+    private readonly CanonicalScanTestAuthorization _authorization;
 
     public ScanBatchControllerTests()
     {
@@ -45,6 +48,8 @@ public class ScanBatchControllerTests : IDisposable
         _db.Database.EnsureCreated();
 
         SeedPortfolio(PortfolioId);
+        _authorization = CanonicalScanAuthorizationTestData.SeedWorkspaceAdministrator(
+            _db, PortfolioId, userId: 7, sessionId: SessionId);
     }
 
     public void Dispose()
@@ -181,6 +186,51 @@ public class ScanBatchControllerTests : IDisposable
         _executedSql[0].Should().ContainEquivalentOf("COUNT");
         _executedSql[0].Should().ContainEquivalentOf("ORDER BY");
         _executedSql[0].Should().ContainEquivalentOf("LIMIT");
+    }
+
+    [Fact]
+    public async Task ListBatches_FileCountUsesAuthorizedDraftCountWhenBatchIsPartiallyVisible()
+    {
+        var now = DateTime.UtcNow;
+        var allowedProperty = SeedProperty("Allowed Property", now);
+        var forbiddenProperty = SeedProperty("Forbidden Property", now);
+        var assignment = _db.MembershipRoleAssignments
+            .Include(candidate => candidate.SelectedProperties)
+            .Single();
+        assignment.RoleProfileId = AccessCatalog.Roles.Single(role =>
+            role.Key == RoleProfileKeys.PropertyManager).Id;
+        assignment.ScopeKind = MembershipRoleAssignmentScopeKind.SelectedProperties;
+        assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = allowedProperty.Id,
+        });
+
+        var batch = SeedBatch(PortfolioId, fileCount: 2);
+        var allowedDraft = SeedDraft(batch.Id, "Reviewing");
+        allowedDraft.CapturePropertyId = allowedProperty.Id;
+        var forbiddenDraft = SeedDraft(batch.Id, "Reviewing");
+        forbiddenDraft.CapturePropertyId = forbiddenProperty.Id;
+        await _db.SaveChangesAsync();
+
+        var controller = CreateController(Mock.Of<IScanService>());
+        _executedSql.Clear();
+
+        var result = await controller.ListBatches(skip: 0, take: 50, CancellationToken.None);
+
+        var summaries = result.Result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeAssignableTo<IReadOnlyList<ScanBatchSummaryResponse>>().Subject;
+        var summary = summaries.Should().ContainSingle().Which;
+        batch.FileCount.Should().Be(2);
+        summary.Id.Should().Be(batch.Id);
+        summary.FileCount.Should().Be(1);
+        summary.Counts.Total.Should().Be(1);
+        summary.Counts.Reviewing.Should().Be(1);
+
+        _executedSql.Should().ContainSingle(
+            "batch visibility and every rollup count stay in one authorized SQL statement");
+        _executedSql[0].Should().ContainEquivalentOf("MembershipRoleAssignmentProperties");
+        _executedSql[0].Should().ContainEquivalentOf("COUNT");
     }
 
     [Fact]
@@ -427,16 +477,16 @@ public class ScanBatchControllerTests : IDisposable
     {
         var files = Mock.Of<IFileStorage>();
         var controller = new ScanController(
-            scan, uploads ?? Mock.Of<IScanUploadService>(), Mock.Of<IAtomicUnitOfWork>(), _db, files)
+            scan, uploads ?? Mock.Of<IScanUploadService>(), Mock.Of<IAtomicUnitOfWork>(), _db, files,
+            TimeProvider.System)
         {
             ControllerContext = new ControllerContext
             {
                 HttpContext = new DefaultHttpContext(),
             },
         };
-        controller.HttpContext.Items[CanonicalAccessContextHttpItem.Key] = new ActiveAccessContext(
-            Guid.NewGuid(), 7, 1, PortfolioId, 1,
-            WorkspaceExperience.Management, 1, WorkspaceExperience.Management);
+        controller.HttpContext.Items[CanonicalAccessContextHttpItem.Key] =
+            _authorization.HttpAccessContext;
         return controller;
     }
 
@@ -459,6 +509,24 @@ public class ScanBatchControllerTests : IDisposable
             UpdatedAt = DateTime.UtcNow,
         });
         _db.SaveChanges();
+    }
+
+    private Property SeedProperty(string name, DateTime now)
+    {
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = name,
+            AddressLine1 = $"{name} address",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Properties.Add(property);
+        _db.SaveChanges();
+        return property;
     }
 
     private ScanBatch SeedBatch(int portfolioId, int fileCount)
@@ -514,15 +582,16 @@ public class ScanBatchControllerTests : IDisposable
         public RecordingBatchScanUploadService(RentalCommandDbContext db) => _db = db;
 
         public async Task<FinalizeScanUploadResult> UploadAsync(
-            int portfolioId,
-            int userId,
+            WorkspaceReadScope scope,
             string clientOperationId,
             string targetEntityType,
             bool createBatch,
             string? batchName,
+            ScanCaptureContextData captureContext,
             IReadOnlyList<ScanUploadFilePayload> files,
             CancellationToken ct = default)
         {
+            var portfolioId = scope.PortfolioId;
             var batch = new ScanBatch
             {
                 PortfolioId = portfolioId,
@@ -557,12 +626,12 @@ public class ScanBatchControllerTests : IDisposable
     private sealed class FailingBatchScanUploadService : IScanUploadService
     {
         public Task<FinalizeScanUploadResult> UploadAsync(
-            int portfolioId,
-            int userId,
+            WorkspaceReadScope scope,
             string clientOperationId,
             string targetEntityType,
             bool createBatch,
             string? batchName,
+            ScanCaptureContextData captureContext,
             IReadOnlyList<ScanUploadFilePayload> files,
             CancellationToken ct = default)
             => throw new ArgumentException("Second draft failed validation.");

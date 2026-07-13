@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Scanning;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
@@ -27,6 +28,8 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
     private ServiceProvider? _services;
     private bool _dockerAvailable;
     private int _portfolioId;
+    private WorkspaceReadScope _scope;
+    private static readonly Guid SessionId = Guid.Parse("85efadce-c871-4436-89bc-a959ccfa1d16");
 
     public async Task InitializeAsync()
     {
@@ -92,6 +95,64 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
         db.Portfolios.Add(portfolio);
         await db.SaveChangesAsync();
         _portfolioId = portfolio.Id;
+
+        var user = new ApplicationUser
+        {
+            Id = 73,
+            UserName = "scan-upload@example.test",
+            NormalizedUserName = "SCAN-UPLOAD@EXAMPLE.TEST",
+            Email = "scan-upload@example.test",
+            NormalizedEmail = "SCAN-UPLOAD@EXAMPLE.TEST",
+            DisplayName = "Scan Upload",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = now,
+        };
+        var accessContext = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = _portfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Management,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = accessContext,
+            PortfolioId = _portfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = _portfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var session = new AuthSession
+        {
+            Id = SessionId,
+            User = user,
+            ActiveAccessContext = accessContext,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        db.AddRange(assignment, session);
+        await db.SaveChangesAsync();
+        _scope = new WorkspaceReadScope(
+            _portfolioId, user.Id, SessionId, accessContext.Id, accessContext.AccessRevision);
     }
 
     public async Task DisposeAsync()
@@ -252,13 +313,39 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
             "cross-portfolio-context",
             [Pdf("outside.pdf", "outside")],
             captureContext: captureContext);
-        await rejected.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*outside this workspace*");
+        await rejected.Should().ThrowAsync<UnauthorizedAccessException>()
+            .WithMessage("*not authorized*");
 
         await using var verify = NewContext();
         (await verify.ScanDrafts.CountAsync()).Should().Be(0);
         (await verify.StoredFiles.CountAsync()).Should().Be(0);
         (await verify.ScanBatches.CountAsync()).Should().Be(0);
+        (await verify.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "scan-upload.finalize")).Should().Be(0);
+    }
+
+    [SkippableFact]
+    public async Task Revoked_session_is_rejected_inside_finalization_transaction()
+    {
+        SkipIfNoDocker();
+        await using (var revoke = NewContext())
+        {
+            await revoke.AuthSessions
+                .Where(session => session.Id == _scope.SessionId)
+                .ExecuteUpdateAsync(update => update
+                    .SetProperty(session => session.Status, AuthSessionStatus.Revoked)
+                    .SetProperty(session => session.RevokedAtUtc, DateTime.UtcNow));
+        }
+
+        var rejected = () => UploadAsync(
+            "revoked-session",
+            [Pdf("revoked.pdf", "revoked")]);
+        await rejected.Should().ThrowAsync<UnauthorizedAccessException>()
+            .WithMessage("*not authorized*");
+
+        await using var verify = NewContext();
+        (await verify.ScanDrafts.CountAsync()).Should().Be(0);
+        (await verify.StoredFiles.CountAsync()).Should().Be(0);
         (await verify.AtomicCommandReceipts.CountAsync(receipt =>
             receipt.CommandType == "scan-upload.finalize")).Should().Be(0);
     }
@@ -423,6 +510,9 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
         var command = new FinalizeScanUploadCommand(
             PortfolioId: _portfolioId,
             UploadedByUserId: 73,
+            AuthSessionId: _scope.SessionId,
+            AccessContextId: _scope.AccessContextId,
+            ExpectedAccessRevision: _scope.AccessRevision,
             ClientOperationId: operationId,
             RequestFingerprint: fingerprint,
             TargetEntityType: "LeaseAgreement",
@@ -443,7 +533,8 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
                     ThumbnailFileName: null,
                     ThumbnailSizeBytes: null,
                     ThumbnailSha256: null)
-            ]);
+            ],
+            CaptureContext: CanonicalCaptureContext());
         var identity = new AtomicCommandIdentity(
             "scan-upload.finalize",
             $"security:{mismatch}");
@@ -476,13 +567,22 @@ public sealed class ScanUploadAtomicCommandTests : IAsyncLifetime
     {
         await using var scope = _services!.CreateAsyncScope();
         var service = scope.ServiceProvider.GetRequiredService<IScanUploadService>();
-        return captureContext is null
-            ? await service.UploadAsync(
-                _portfolioId, 73, operationId, "LeaseAgreement", createBatch, batchName, files)
-            : await service.UploadAsync(
-                _portfolioId, 73, operationId, "LeaseAgreement", createBatch, batchName,
-                captureContext, files);
+        var canonicalContext = (captureContext ?? CanonicalCaptureContext()) with
+        {
+            AccessContextId = _scope.AccessContextId,
+            AccessRevision = _scope.AccessRevision,
+        };
+        return await service.UploadAsync(
+            _scope, operationId, "LeaseAgreement", createBatch, batchName,
+            canonicalContext, files);
     }
+
+    private ScanCaptureContextData CanonicalCaptureContext() => new(
+        WorkspaceExperience.Management,
+        _scope.AccessContextId,
+        _scope.AccessRevision,
+        null, null, null, null, null, null, null, null, null,
+        "integration test");
 
     private static ScanUploadFilePayload Pdf(string fileName, string marker) => new(
         Encoding.ASCII.GetBytes($"%PDF-1.4\n{marker}\n%%EOF"),

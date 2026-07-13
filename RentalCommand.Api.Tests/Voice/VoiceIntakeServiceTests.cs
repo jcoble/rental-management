@@ -3,7 +3,9 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using RentalCommand.Api.Tests.Domain;
 using RentalCommand.Api.Services.Voice;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
@@ -17,6 +19,12 @@ public class VoiceIntakeServiceTests : IDisposable
     private readonly Mock<ILlmProvider> _llm = new();
     private readonly Mock<IAudioTranscriptionService> _transcriber = new();
     private readonly Mock<IFileStorage> _storage = new();
+    private readonly WorkspaceReadScope _scope;
+
+    public VoiceIntakeServiceTests()
+    {
+        _scope = _ctx.Db.SeedAdministratorScope(1, nameof(VoiceIntakeServiceTests));
+    }
 
     public void Dispose() => _ctx.Dispose();
 
@@ -59,7 +67,7 @@ public class VoiceIntakeServiceTests : IDisposable
             TimeProvider.System);
 
         var draft = await sut.CreateDraftAsync(
-            portfolioId: 1,
+            scope: _scope,
             audioBytes: Array.Empty<byte>(),
             contentType: null,
             providedTranscript: "Frank says water is coming through Unit 3 ceiling.",
@@ -98,7 +106,7 @@ public class VoiceIntakeServiceTests : IDisposable
             TimeProvider.System);
 
         var act = () => sut.CreateDraftAsync(
-            portfolioId: 1,
+            scope: _scope,
             audioBytes: Array.Empty<byte>(),
             contentType: null,
             providedTranscript: transcript,

@@ -1,4 +1,5 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -8,5 +9,7 @@ namespace RentalCommand.Api.Services.Domain;
 /// </summary>
 public interface IAnalyticsService
 {
-    Task<AnalyticsOverview> GetOverviewAsync(int portfolioId, CancellationToken ct = default);
+    Task<AnalyticsOverview> GetOverviewAsync(
+        WorkspaceReadScope scope,
+        CancellationToken ct = default);
 }

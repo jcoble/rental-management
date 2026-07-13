@@ -39,6 +39,7 @@ public sealed class RolePresetCapabilityTests
                 CapabilityKeys.MoneyOwnerReportsRead,
                 CapabilityKeys.MoneyReconciliationOperate,
                 CapabilityKeys.ResponsibilityAssignExistingMember,
+                CapabilityKeys.TenantNoticesManage,
             ]);
 
         var leasingAgent = Role(RoleProfileKeys.LeasingAgent);

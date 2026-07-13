@@ -3,7 +3,9 @@ using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
@@ -66,8 +68,11 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
         long validLedgerId;
         long otherLedgerId;
         int validLeaseManagementId;
+        int otherLeaseManagementId;
         int validTenantId;
         int portfolioId;
+        WorkspaceReadScope manualScope = default;
+        WorkspaceReadScope selectedPropertyScope = default;
 
         await using (var setup = NewContext())
         {
@@ -94,6 +99,7 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
             };
             setup.AddRange(actor, portfolio);
             await setup.SaveChangesAsync();
+            manualScope = await SeedAdministratorScopeAsync(setup, portfolio.Id, actor, now);
             setup.SimulationClocks.Add(new SimulationClock
             {
                 Id = 1,
@@ -107,6 +113,8 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
 
             var first = await SeedRelationshipAsync(setup, portfolio, actor, "A", now);
             var second = await SeedRelationshipAsync(setup, portfolio, actor, "B", now);
+            selectedPropertyScope = await SeedPropertyManagerScopeAsync(
+                setup, portfolio.Id, first.PropertyId, now);
             var foundation = new NotificationFoundationService(setup, TimeProvider.System);
             await foundation.SeedSuppliedTemplatesAsync(portfolio.Id, actor.Id, CancellationToken.None);
             var policy = await setup.TenantNoticePolicies.SingleAsync(row =>
@@ -128,6 +136,7 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
             validLedgerId = first.LedgerEntryId;
             otherLedgerId = second.LedgerEntryId;
             validLeaseManagementId = first.LeaseManagementId;
+            otherLeaseManagementId = second.LeaseManagementId;
             validTenantId = first.TenantId;
         }
 
@@ -161,7 +170,8 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
         sql.Should().Contain("row_number() OVER");
         sql.Should().Contain("ON CONFLICT");
 
-        await using (var replay = NewContext())
+        var manualRecorder = new CommandRecorder();
+        await using (var replay = NewContext(manualRecorder))
         {
             var store = new TenantNoticeDraftSetStore(replay);
             var rows = await store.GenerateClaimedBatchAsync(token);
@@ -170,29 +180,102 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
             rows[0].DraftId.Should().Be(concurrent[0][0].DraftId);
 
             var manual = await store.GenerateManualAsync(
-                portfolioId, null, validLeaseManagementId, null, validLedgerId, "rent-reminder");
+                manualScope, null, validLeaseManagementId, null, validLedgerId,
+                "rent-reminder", now);
             manual.Should().ContainSingle();
             manual[0].WorkItemId.Should().BeNull();
             manual[0].WasCreated.Should().BeFalse();
             manual[0].DraftId.Should().Be(rows[0].DraftId);
 
             var crossAccount = await store.GenerateManualAsync(
-                portfolioId, null, validLeaseManagementId, null, otherLedgerId, "rent-reminder");
+                manualScope, null, validLeaseManagementId, null, otherLedgerId,
+                "rent-reminder", now);
             crossAccount.Should().BeEmpty();
 
+            var otherPropertyDraft = await store.GenerateManualAsync(
+                manualScope, null, otherLeaseManagementId, null, otherLedgerId,
+                "rent-reminder", now);
+            otherPropertyDraft.Should().ContainSingle();
+
+            var selectedService = new NoticeDraftService(
+                replay, store, new FixedTimeProvider(new DateTimeOffset(now)));
+            var selectedDrafts = await selectedService.ListAsync(
+                selectedPropertyScope, null, new ListQuery { Take = 20 });
+            selectedDrafts.Should().ContainSingle();
+            selectedDrafts[0].LeaseManagementId.Should().Be(validLeaseManagementId);
+            var authorizedUpdate = await selectedService.UpdateAsync(
+                selectedPropertyScope,
+                selectedDrafts[0].Id,
+                new UpdateNoticeDraftRequest
+                {
+                    Subject = "Upcoming rent reminder - reviewed",
+                });
+            authorizedUpdate.Should().NotBeNull();
+            authorizedUpdate!.Subject.Should().Be("Upcoming rent reminder - reviewed");
+            (await selectedService.GetAsync(selectedPropertyScope, otherPropertyDraft[0].DraftId))
+                .Should().BeNull();
+            (await selectedService.UpdateAsync(
+                    selectedPropertyScope,
+                    otherPropertyDraft[0].DraftId,
+                    new UpdateNoticeDraftRequest { Subject = "Unauthorized edit" }))
+                .Should().BeNull();
+            (await selectedService.DismissAsync(
+                    selectedPropertyScope, otherPropertyDraft[0].DraftId))
+                .Should().BeNull();
+
+            var deniedGeneration = await selectedService.GenerateAsync(
+                selectedPropertyScope,
+                new GenerateNoticeDraftsRequest
+                {
+                    LeaseManagementId = otherLeaseManagementId,
+                    TenantLedgerEntryId = otherLedgerId,
+                    NoticeType = "rent-reminder",
+                });
+            deniedGeneration.CreatedCount.Should().Be(0);
+            deniedGeneration.Drafts.Should().BeEmpty();
+
+            var selectedContext = await replay.WorkspaceAccessContexts.SingleAsync(row =>
+                row.Id == selectedPropertyScope.AccessContextId);
+            selectedContext.AdvanceRevision(selectedPropertyScope.AccessRevision);
+            await replay.SaveChangesAsync();
+
+            (await selectedService.DismissAsync(selectedPropertyScope, selectedDrafts[0].Id))
+                .Should().BeNull(
+                    because: "every write must revalidate the presented access revision inside its transaction");
+            var staleGeneration = await selectedService.GenerateAsync(
+                selectedPropertyScope,
+                new GenerateNoticeDraftsRequest
+                {
+                    LeaseManagementId = validLeaseManagementId,
+                    TenantLedgerEntryId = validLedgerId,
+                    NoticeType = "rent-reminder",
+                });
+            staleGeneration.CreatedCount.Should().Be(0);
+            staleGeneration.Drafts.Should().BeEmpty();
+
             var forcedLifecycle = await store.GenerateManualAsync(
-                portfolioId, validTenantId, null, null, null, "lease-renewal-offer");
+                manualScope, validTenantId, null, null, null,
+                "lease-renewal-offer", now);
             forcedLifecycle.Should().ContainSingle(
                 because: "an explicitly requested lifecycle notice is valid outside its lead window when tenant-scoped");
             forcedLifecycle[0].WorkItemId.Should().BeNull();
             forcedLifecycle[0].NoticeType.Should().Be("lease-renewal-offer");
         }
 
+        manualRecorder.ReaderCommands.Should().Contain(command =>
+            command.Contains("MembershipRoleAssignmentProperties", StringComparison.Ordinal) &&
+            command.Contains("AuthSessions", StringComparison.Ordinal) &&
+            command.Contains("authorized_properties", StringComparison.Ordinal),
+            because: "interactive generation must authorize the exact selected property in the PostgreSQL command");
+
         await using var verify = NewContext();
-        (await verify.NoticeDrafts.CountAsync(row => row.PortfolioId == portfolioId)).Should().Be(2);
+        (await verify.NoticeDrafts.CountAsync(row => row.PortfolioId == portfolioId)).Should().Be(3);
         var persisted = await verify.NoticeDrafts.SingleAsync(row =>
-            row.PortfolioId == portfolioId && row.NoticeType == "rent-reminder");
+            row.PortfolioId == portfolioId &&
+            row.LeaseManagementId == validLeaseManagementId &&
+            row.NoticeType == "rent-reminder");
         persisted.TenantLedgerEntryId.Should().Be(validLedgerId);
+        persisted.Status.Should().Be("Draft");
         persisted.Subject.Should().Contain("Upcoming rent reminder");
         persisted.Body.Should().Contain("Resident");
         persisted.Body.Should().NotContain("Casey A",
@@ -222,6 +305,132 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
         ClaimExpiresAtUtc = now.AddMinutes(5),
         CreatedAtUtc = now,
     };
+
+    private static async Task<WorkspaceReadScope> SeedAdministratorScopeAsync(
+        RentalCommandDbContext db,
+        int portfolioId,
+        ApplicationUser actor,
+        DateTime now)
+    {
+        var context = new WorkspaceAccessContext
+        {
+            UserId = actor.Id,
+            PortfolioId = portfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = context,
+            PortfolioId = portfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = portfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = actor.Id,
+            ActiveAccessContext = context,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        db.AddRange(assignment, session);
+        await db.SaveChangesAsync();
+        return new WorkspaceReadScope(
+            portfolioId,
+            actor.Id,
+            session.Id,
+            context.Id,
+            context.AccessRevision);
+    }
+
+    private static async Task<WorkspaceReadScope> SeedPropertyManagerScopeAsync(
+        RentalCommandDbContext db,
+        int portfolioId,
+        int propertyId,
+        DateTime now)
+    {
+        var email = $"notice-property-manager-{Guid.NewGuid():N}@example.test";
+        var user = new ApplicationUser
+        {
+            UserName = email,
+            NormalizedUserName = email.ToUpperInvariant(),
+            Email = email,
+            NormalizedEmail = email.ToUpperInvariant(),
+            DisplayName = "Notice Property Manager",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = now,
+        };
+        var context = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = portfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = context,
+            PortfolioId = portfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = portfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.PropertyManager).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.SelectedProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+        {
+            MembershipRoleAssignment = assignment,
+            PortfolioId = portfolioId,
+            PropertyId = propertyId,
+        });
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            User = user,
+            ActiveAccessContext = context,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        db.AddRange(assignment, session);
+        await db.SaveChangesAsync();
+        return new WorkspaceReadScope(
+            portfolioId, user.Id, session.Id, context.Id, context.AccessRevision);
+    }
 
     private static async Task<RelationshipSeed> SeedRelationshipAsync(
         RentalCommandDbContext db,
@@ -386,7 +595,7 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
         };
         db.Add(charge);
         await db.SaveChangesAsync();
-        return new RelationshipSeed(management.Id, tenant.Id, charge.Id);
+        return new RelationshipSeed(property.Id, management.Id, account.Id, tenant.Id, charge.Id);
     }
 
     private RentalCommandDbContext NewContext(CommandRecorder? recorder = null)
@@ -446,5 +655,15 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
         }
     }
 
-    private sealed record RelationshipSeed(int LeaseManagementId, int TenantId, long LedgerEntryId);
+    private sealed record RelationshipSeed(
+        int PropertyId,
+        int LeaseManagementId,
+        int TenantAccountId,
+        int TenantId,
+        long LedgerEntryId);
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
+    }
 }

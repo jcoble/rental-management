@@ -1,3 +1,4 @@
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Scanning;
 
 namespace RentalCommand.Core.Interfaces;
@@ -11,25 +12,12 @@ public sealed record ScanUploadFilePayload(
 public interface IScanUploadService
 {
     Task<FinalizeScanUploadResult> UploadAsync(
-        int portfolioId,
-        int userId,
-        string clientOperationId,
-        string targetEntityType,
-        bool createBatch,
-        string? batchName,
-        IReadOnlyList<ScanUploadFilePayload> files,
-        CancellationToken ct = default);
-
-    Task<FinalizeScanUploadResult> UploadAsync(
-        int portfolioId,
-        int userId,
+        WorkspaceReadScope scope,
         string clientOperationId,
         string targetEntityType,
         bool createBatch,
         string? batchName,
         ScanCaptureContextData captureContext,
         IReadOnlyList<ScanUploadFilePayload> files,
-        CancellationToken ct = default) =>
-        UploadAsync(portfolioId, userId, clientOperationId, targetEntityType, createBatch,
-            batchName, files, ct);
+        CancellationToken ct = default);
 }

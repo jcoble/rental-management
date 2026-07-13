@@ -26,7 +26,16 @@ public class NoticeDraftsController : ManagementControllerBase
         [FromQuery] ListQuery query,
         CancellationToken ct)
     {
-        return Ok(await _service.ListAsync(GetPortfolioId(), status, query, ct));
+        return Ok(await _service.ListAsync(GetWorkspaceReadScope(), status, query, ct));
+    }
+
+    [HttpGet("{id:int}")]
+    [ProducesResponseType(typeof(NoticeDraftResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<NoticeDraftResponse>> Get(int id, CancellationToken ct)
+    {
+        var draft = await _service.GetAsync(GetWorkspaceReadScope(), id, ct);
+        return draft == null ? NotFound(new { error = "Draft notice not found" }) : Ok(draft);
     }
 
     /// <summary>
@@ -40,7 +49,7 @@ public class NoticeDraftsController : ManagementControllerBase
         [FromBody] GenerateNoticeDraftsRequest? request,
         CancellationToken ct)
     {
-        return Ok(await _service.GenerateAsync(GetPortfolioId(), request, ct));
+        return Ok(await _service.GenerateAsync(GetWorkspaceReadScope(), request, ct));
     }
 
     [HttpPatch("{id:int}")]
@@ -51,7 +60,7 @@ public class NoticeDraftsController : ManagementControllerBase
         [FromBody] UpdateNoticeDraftRequest request,
         CancellationToken ct)
     {
-        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, ct);
+        var updated = await _service.UpdateAsync(GetWorkspaceReadScope(), id, request, ct);
         return updated == null ? NotFound(new { error = "Draft notice not found or no longer editable" }) : Ok(updated);
     }
 
@@ -60,7 +69,7 @@ public class NoticeDraftsController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<NoticeDraftResponse>> Dismiss(int id, CancellationToken ct)
     {
-        var updated = await _service.DismissAsync(GetPortfolioId(), id, ct);
+        var updated = await _service.DismissAsync(GetWorkspaceReadScope(), id, ct);
         return updated == null ? NotFound(new { error = "Draft notice not found or cannot be dismissed" }) : Ok(updated);
     }
 }

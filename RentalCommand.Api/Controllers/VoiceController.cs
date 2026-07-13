@@ -40,7 +40,7 @@ public class VoiceController : ManagementControllerBase
 
         try
         {
-            var draft = await _voice.CreateDraftAsync(GetPortfolioId(), bytes, contentType, transcript, ct);
+            var draft = await _voice.CreateDraftAsync(GetWorkspaceReadScope(), bytes, contentType, transcript, ct);
             return CreatedAtAction(
                 "Get",
                 "Scan",
@@ -50,6 +50,10 @@ public class VoiceController : ManagementControllerBase
         catch (ArgumentException ex)
         {
             return BadRequest(new { error = ex.Message });
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
         }
         catch (VoiceTranscriptionUnavailableException ex)
         {
@@ -89,10 +93,14 @@ public class VoiceController : ManagementControllerBase
 
         try
         {
-            var draft = await _voice.AnswerAsync(GetPortfolioId(), id, bytes, contentType, transcript, ct);
+            var draft = await _voice.AnswerAsync(GetWorkspaceReadScope(), id, bytes, contentType, transcript, ct);
             return Ok(ScanDraftResponse.FromEntity(draft).WithVoiceSlots());
         }
         catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
+        catch (UnauthorizedAccessException)
         {
             return NotFound();
         }
@@ -103,6 +111,10 @@ public class VoiceController : ManagementControllerBase
         catch (VoiceTranscriptionUnavailableException ex)
         {
             return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { error = ex.Message });
         }
     }
 }

@@ -5058,7 +5058,8 @@ namespace RentalCommand.Data.Migrations
                     { 34, "Workspace", "Perform destructive reconciliation actions.", "money.reconciliation.destructive" },
                     { 35, "Workspace", "Perform destructive workspace or account actions.", "account.destructive-actions" },
                     { 36, "Property", "Collect in-scope application fees without refund authority.", "leasing.application-fees.collect" },
-                    { 37, "Workspace", "Manage Team routing, tenant notice policy, delivery configuration, and notice templates.", "notifications.manage" }
+                    { 37, "Workspace", "Manage Team routing, tenant notice policy, delivery configuration, and notice templates.", "notifications.manage" },
+                    { 38, "Property", "Manage tenant-notice drafts within assigned property scope.", "notifications.tenant-notices.manage" }
                 });
 
             migrationBuilder.InsertData(
@@ -5126,6 +5127,7 @@ namespace RentalCommand.Data.Migrations
                     { 35, 1 },
                     { 36, 1 },
                     { 37, 1 },
+                    { 38, 1 },
                     { 1, 2 },
                     { 2, 2 },
                     { 3, 2 },
@@ -5139,6 +5141,7 @@ namespace RentalCommand.Data.Migrations
                     { 11, 2 },
                     { 12, 2 },
                     { 13, 2 },
+                    { 38, 2 },
                     { 1, 3 },
                     { 14, 3 },
                     { 15, 3 },

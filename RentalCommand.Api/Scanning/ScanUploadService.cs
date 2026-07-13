@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Imaging;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Enums;
@@ -38,22 +39,8 @@ public sealed class ScanUploadService : IScanUploadService
         _timeProvider = timeProvider;
     }
 
-    public Task<FinalizeScanUploadResult> UploadAsync(
-        int portfolioId,
-        int userId,
-        string clientOperationId,
-        string targetEntityType,
-        bool createBatch,
-        string? batchName,
-        IReadOnlyList<ScanUploadFilePayload> files,
-        CancellationToken ct = default) => UploadAsync(
-            portfolioId, userId, clientOperationId, targetEntityType, createBatch, batchName,
-            new ScanCaptureContextData(null, null, null, null, null, null, null, null, null, null, null, null, null),
-            files, ct);
-
     public async Task<FinalizeScanUploadResult> UploadAsync(
-        int portfolioId,
-        int userId,
+        WorkspaceReadScope scope,
         string clientOperationId,
         string targetEntityType,
         bool createBatch,
@@ -62,8 +49,16 @@ public sealed class ScanUploadService : IScanUploadService
         IReadOnlyList<ScanUploadFilePayload> files,
         CancellationToken ct = default)
     {
+        var portfolioId = scope.PortfolioId;
+        var userId = scope.UserId;
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(portfolioId);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(userId);
+        if (scope.SessionId == Guid.Empty || scope.AccessContextId <= 0 || scope.AccessRevision <= 0)
+            throw new ArgumentException("An active workspace session is required.", nameof(scope));
+        if (captureContext.AccessContextId != scope.AccessContextId
+            || captureContext.AccessRevision != scope.AccessRevision)
+            throw new UnauthorizedAccessException(
+                "The scan capture context does not match the active workspace access context.");
         var operationId = NormalizeOperationId(clientOperationId);
         if (files is not { Count: > 0 and <= 100 })
             throw new ArgumentException("A scan upload must contain between 1 and 100 files.", nameof(files));
@@ -187,6 +182,9 @@ public sealed class ScanUploadService : IScanUploadService
             new FinalizeScanUploadCommand(
                 portfolioId,
                 userId,
+                scope.SessionId,
+                scope.AccessContextId,
+                scope.AccessRevision,
                 operationId,
                 fingerprint,
                 normalizedTarget,

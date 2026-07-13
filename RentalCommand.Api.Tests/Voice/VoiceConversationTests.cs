@@ -1,8 +1,11 @@
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using RentalCommand.Api.Tests.Domain;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Voice;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
 
@@ -18,6 +21,12 @@ public class VoiceConversationTests : IDisposable
     private readonly Mock<ILlmProvider> _llm = new();
     private readonly Mock<IAudioTranscriptionService> _transcriber = new();
     private readonly Mock<IFileStorage> _storage = new();
+    private readonly WorkspaceReadScope _scope;
+
+    public VoiceConversationTests()
+    {
+        _scope = _ctx.Db.SeedAdministratorScope(1, nameof(VoiceConversationTests));
+    }
 
     public void Dispose() => _ctx.Dispose();
 
@@ -32,6 +41,21 @@ public class VoiceConversationTests : IDisposable
     [Fact]
     public async Task Conversation_FillsMissingAmount_ThenCompletes()
     {
+        var now = DateTime.UtcNow;
+        _ctx.Db.Properties.Add(new Property
+        {
+            Id = 5,
+            PortfolioId = _scope.PortfolioId,
+            Name = "123 Main",
+            AddressLine1 = "123 Main St",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43004",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await _ctx.Db.SaveChangesAsync();
+
         // Base classification (no "forty" in the transcript yet): an expense with
         // property + category but no amount.
         _llm.Setup(x => x.ChatAsync(
@@ -57,7 +81,7 @@ public class VoiceConversationTests : IDisposable
         var sut = CreateSut();
 
         var draft = await sut.CreateDraftAsync(
-            portfolioId: 1,
+            scope: _scope,
             audioBytes: [],
             contentType: null,
             providedTranscript: "Log a plumbing expense for 123 Main.",
@@ -70,7 +94,7 @@ public class VoiceConversationTests : IDisposable
         turn1.NextPrompt.Should().Be("How much was it?");
 
         var answered = await sut.AnswerAsync(
-            portfolioId: 1,
+            scope: _scope,
             draftId: draft.Id,
             audioBytes: [],
             contentType: null,
@@ -101,7 +125,7 @@ public class VoiceConversationTests : IDisposable
         var sut = CreateSut();
 
         var draft = await sut.CreateDraftAsync(
-            portfolioId: 1,
+            scope: _scope,
             audioBytes: [],
             contentType: null,
             providedTranscript: "Tenant called about a leaky faucet.",
@@ -141,7 +165,7 @@ public class VoiceConversationTests : IDisposable
         var sut = CreateSut();
 
         var draft = await sut.CreateDraftAsync(
-            portfolioId: 1,
+            scope: _scope,
             audioBytes: [],
             contentType: null,
             providedTranscript: "Tenant called about a leaky faucet.",
@@ -150,7 +174,7 @@ public class VoiceConversationTests : IDisposable
         ScanDraftResponse.FromEntity(draft).WithVoiceSlots().Ambiguous.Should().BeTrue();
 
         var answered = await sut.AnswerAsync(
-            portfolioId: 1,
+            scope: _scope,
             draftId: draft.Id,
             audioBytes: [],
             contentType: null,
@@ -170,7 +194,7 @@ public class VoiceConversationTests : IDisposable
         var sut = CreateSut();
 
         var act = () => sut.AnswerAsync(
-            portfolioId: 1,
+            scope: _scope,
             draftId: 999,
             audioBytes: [],
             contentType: null,
