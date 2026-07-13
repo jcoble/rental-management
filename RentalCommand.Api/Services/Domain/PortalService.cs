@@ -33,38 +33,82 @@ public class PortalService : IPortalService
             .Select(access => (int?)access.TenantId)
             .FirstOrDefaultAsync(ct);
 
-    public async Task<IReadOnlyList<LeaseResponse>> GetLeasesAsync(int portfolioId, int tenantId, CancellationToken ct = default)
-    {
-        return await _db.Leases
-            .AsNoTracking()
-            .Where(l => l.PortfolioId == portfolioId && l.TenantId == tenantId)
-            .OrderByDescending(l => l.StartDate)
-            .Select(l => new LeaseResponse
-            {
-                Id = l.Id,
-                PortfolioId = l.PortfolioId,
-                PropertyId = l.PropertyId,
-                UnitId = l.UnitId,
-                TenantId = l.TenantId,
-                LeaseNumber = l.LeaseNumber,
-                Status = l.Status,
-                StartDate = l.StartDate,
-                EndDate = l.EndDate,
-                MoveInDate = l.MoveInDate,
-                MoveOutDate = l.MoveOutDate,
-                MonthlyRent = l.MonthlyRent,
-                SecurityDeposit = l.SecurityDeposit,
-                LateFeeAmount = l.LateFeeAmount,
-                RentDueDay = l.RentDueDay,
-                Notes = l.Notes,
-                CreatedAt = l.CreatedAt,
-                UpdatedAt = l.UpdatedAt,
-                TenantName = l.Tenant == null ? null : (l.Tenant.FirstName + " " + l.Tenant.LastName).Trim(),
-                UnitNumber = l.Unit == null ? null : l.Unit.UnitNumber,
-                PropertyName = l.Property == null ? null : l.Property.Name,
-            })
+    public async Task<IReadOnlyList<PortalLeaseRelationshipResponse>> GetLeasesAsync(
+        int portfolioId,
+        int accessContextId,
+        int tenantId,
+        CancellationToken ct = default) =>
+        await BuildLeaseRelationshipQuery(portfolioId, accessContextId, tenantId)
             .ToListAsync(ct);
-    }
+
+    internal IQueryable<PortalLeaseRelationshipResponse> BuildLeaseRelationshipQuery(
+        int portfolioId,
+        int accessContextId,
+        int tenantId) =>
+        from access in EffectiveTenantRelationshipQuery(portfolioId, accessContextId, tenantId)
+        join party in _db.LeaseManagementParties.AsNoTracking()
+            on new { access.PortfolioId, Id = access.LeaseManagementPartyId }
+            equals new { party.PortfolioId, party.Id }
+        join management in _db.LeaseManagements.AsNoTracking()
+            on new { access.PortfolioId, Id = access.LeaseManagementId }
+            equals new { management.PortfolioId, management.Id }
+        join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+            on new { access.PortfolioId, access.LeaseManagementId }
+            equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+        let selectedAgreementId = lifecycle.CurrentAgreementId ?? lifecycle.UpcomingAgreementId
+        from agreement in _db.LeaseAgreements.AsNoTracking()
+            .Where(item => item.PortfolioId == access.PortfolioId
+                && item.Id == selectedAgreementId)
+            .DefaultIfEmpty()
+        from agreementStatus in _db.LeaseAgreementStatusProjections.AsNoTracking()
+            .Where(status => status.PortfolioId == access.PortfolioId
+                && status.AgreementId == selectedAgreementId)
+            .DefaultIfEmpty()
+        orderby (DateOnly?)agreement!.TermStartOn descending,
+            management.Id descending
+        select new PortalLeaseRelationshipResponse
+        {
+            LeaseManagementId = management.Id,
+            LeaseManagementPublicId = management.PublicId,
+            PortfolioId = management.PortfolioId,
+            PropertyId = management.PropertyId,
+            UnitId = management.UnitId,
+            TenantId = party.TenantId,
+            TenantAccountId = lifecycle.TenantAccountId,
+            RelationshipNumber = management.RelationshipNumber,
+            Lifecycle = lifecycle.Lifecycle,
+            PropertyName = management.Property!.Name,
+            UnitNumber = management.Unit!.UnitNumber,
+            TenantName = (party.Tenant!.FirstName + " " + party.Tenant.LastName).Trim(),
+            Agreement = agreement == null
+                ? null
+                : new PortalLeaseAgreementResponse
+                {
+                    LeaseAgreementId = agreement.Id,
+                    VersionNumber = agreement.VersionNumber,
+                    AgreementNumber = agreement.AgreementNumber,
+                    AgreementStatus = agreementStatus == null
+                        ? string.Empty
+                        : agreementStatus.AgreementStatus,
+                    IsGoverning = agreementStatus != null && agreementStatus.IsGoverning,
+                    ChangeType = agreement.ChangeType,
+                    TermType = agreement.TermType,
+                    TermStartOn = agreement.TermStartOn,
+                    TermEndOn = agreement.TermEndOn,
+                    BaseRentAmount = agreement.BaseRentAmount,
+                    SecurityDepositObligation = agreement.SecurityDepositObligation,
+                    LateFeeAmount = agreement.LateFeeAmount,
+                    RentDueDay = agreement.RentDueDay,
+                    Currency = agreement.Currency,
+                    FullyExecutedAtUtc = agreement.FullyExecutedAtUtc,
+                    ExecutedStoredFileId = agreement.ExecutedArtifact == null
+                        || agreement.ExecutedArtifact.ArtifactKind != LegalDocumentArtifactKind.ExecutedAgreement
+                        || agreement.ExecutedArtifact.StoredFile == null
+                        || agreement.ExecutedArtifact.StoredFile.DeletedAt != null
+                            ? null
+                            : agreement.ExecutedArtifact.StoredFileId,
+                },
+        };
 
     public async Task<PortalBalanceResponse> GetBalanceAsync(int portfolioId, int tenantId, CancellationToken ct = default)
     {
@@ -185,51 +229,95 @@ public class PortalService : IPortalService
         return payments;
     }
 
-    public async Task<IReadOnlyList<AppointmentResponse>> GetAppointmentsAsync(int portfolioId, int tenantId, CancellationToken ct = default)
+    public async Task<IReadOnlyList<AppointmentResponse>> GetAppointmentsAsync(
+        int portfolioId,
+        int accessContextId,
+        int tenantId,
+        CancellationToken ct = default)
     {
         var now = _timeProvider.UtcNow();
 
-        return await _db.Appointments
-            .AsNoTracking()
-            .Where(a => a.PortfolioId == portfolioId
-                && a.TenantId == tenantId
-                && a.ScheduledStart >= now
-                && (a.Status == AppointmentStatus.Scheduled || a.Status == AppointmentStatus.Confirmed))
-            .OrderBy(a => a.ScheduledStart)
-            .ThenBy(a => a.Id)
-            .Take(50)
-            .Select(a => new AppointmentResponse
-            {
-                Id = a.Id,
-                PortfolioId = a.PortfolioId,
-                PropertyId = a.PropertyId,
-                UnitId = a.UnitId,
-                LeaseManagementId = a.LeaseManagementId,
-                TenantId = a.TenantId,
-                Title = a.Title,
-                ProspectName = a.ProspectName,
-                ProspectEmail = a.ProspectEmail,
-                Type = a.Type,
-                Status = a.Status,
-                ScheduledStart = a.ScheduledStart,
-                ScheduledEnd = a.ScheduledEnd,
-                AssignedTo = a.AssignedTo,
-                Notes = a.Notes,
-                CreatedAt = a.CreatedAt,
-                UpdatedAt = a.UpdatedAt,
-                PropertyName = a.Property == null ? null : a.Property.Name,
-                UnitNumber = a.Unit == null
-                    ? _db.Leases
-                        .Where(l => l.PortfolioId == portfolioId && l.TenantId == tenantId)
-                        .OrderByDescending(l => l.Status == LeaseStatus.Active)
-                        .ThenByDescending(l => l.EndDate)
-                        .ThenByDescending(l => l.Id)
-                        .Select(l => l.Unit == null ? null : l.Unit.UnitNumber)
-                        .FirstOrDefault()
-                    : a.Unit.UnitNumber,
-                TenantName = a.Tenant == null ? null : (a.Tenant.FirstName + " " + a.Tenant.LastName).Trim(),
-            })
+        return await BuildAppointmentsQuery(portfolioId, accessContextId, tenantId, now)
             .ToListAsync(ct);
+    }
+
+    internal IQueryable<AppointmentResponse> BuildAppointmentsQuery(
+        int portfolioId,
+        int accessContextId,
+        int tenantId,
+        DateTime now)
+    {
+        var effectiveRelationships = EffectiveTenantRelationshipQuery(
+            portfolioId, accessContextId, tenantId);
+
+        return _db.Appointments
+            .AsNoTracking()
+            .Where(appointment => appointment.PortfolioId == portfolioId
+                && appointment.TenantId == tenantId
+                && appointment.ScheduledStart >= now
+                && (appointment.Status == AppointmentStatus.Scheduled
+                    || appointment.Status == AppointmentStatus.Confirmed)
+                && effectiveRelationships.Any(access =>
+                    appointment.LeaseManagementId == null
+                    || access.LeaseManagementId == appointment.LeaseManagementId))
+            .OrderBy(appointment => appointment.ScheduledStart)
+            .ThenBy(appointment => appointment.Id)
+            .Take(50)
+            .Select(appointment => new AppointmentResponse
+            {
+                Id = appointment.Id,
+                PortfolioId = appointment.PortfolioId,
+                PropertyId = appointment.PropertyId,
+                UnitId = appointment.UnitId,
+                LeaseManagementId = appointment.LeaseManagementId,
+                TenantId = appointment.TenantId,
+                Title = appointment.Title,
+                ProspectName = appointment.ProspectName,
+                ProspectEmail = appointment.ProspectEmail,
+                Type = appointment.Type,
+                Status = appointment.Status,
+                ScheduledStart = appointment.ScheduledStart,
+                ScheduledEnd = appointment.ScheduledEnd,
+                AssignedTo = appointment.AssignedTo,
+                Notes = appointment.Notes,
+                CreatedAt = appointment.CreatedAt,
+                UpdatedAt = appointment.UpdatedAt,
+                PropertyName = appointment.Property == null
+                    ? (from access in effectiveRelationships
+                       join management in _db.LeaseManagements.AsNoTracking()
+                           on new { access.PortfolioId, Id = access.LeaseManagementId }
+                           equals new { management.PortfolioId, management.Id }
+                       join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                           on new { access.PortfolioId, access.LeaseManagementId }
+                           equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+                       where appointment.LeaseManagementId == null
+                           || appointment.LeaseManagementId == management.Id
+                       orderby lifecycle.CurrentAgreementId != null descending,
+                           management.PossessionGivenAtUtc descending,
+                           management.Id descending
+                       select management.Property!.Name)
+                        .FirstOrDefault()
+                    : appointment.Property.Name,
+                UnitNumber = appointment.Unit == null
+                    ? (from access in effectiveRelationships
+                       join management in _db.LeaseManagements.AsNoTracking()
+                           on new { access.PortfolioId, Id = access.LeaseManagementId }
+                           equals new { management.PortfolioId, management.Id }
+                       join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                           on new { access.PortfolioId, access.LeaseManagementId }
+                           equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+                       where appointment.LeaseManagementId == null
+                           || appointment.LeaseManagementId == management.Id
+                       orderby lifecycle.CurrentAgreementId != null descending,
+                           management.PossessionGivenAtUtc descending,
+                           management.Id descending
+                       select management.Unit!.UnitNumber)
+                        .FirstOrDefault()
+                    : appointment.Unit.UnitNumber,
+                TenantName = appointment.Tenant == null
+                    ? null
+                    : (appointment.Tenant.FirstName + " " + appointment.Tenant.LastName).Trim(),
+            });
     }
 
     public async Task<IReadOnlyList<WorkOrderResponse>> GetWorkOrdersAsync(int portfolioId, int tenantId, CancellationToken ct = default)
@@ -326,20 +414,23 @@ public class PortalService : IPortalService
     }
 
     public async Task<LeaseQuestionResponse?> AskLeaseAsync(
-        int portfolioId, int tenantId, int? leaseId, string question, CancellationToken ct = default)
+        int portfolioId,
+        int accessContextId,
+        int tenantId,
+        int? leaseManagementId,
+        string question,
+        CancellationToken ct = default)
     {
-        // Resolve to one of THIS tenant's own leases. An explicit leaseId is ownership-checked; a
-        // null one falls back to the tenant's most relevant lease. A lease that isn't the tenant's
-        // (or no lease at all) yields null → the controller maps that to 404, so a tenant can never
-        // ask about another tenant's lease. IDOR gate.
-        var resolvedLeaseId = await ResolveOwnedLeaseIdAsync(portfolioId, tenantId, leaseId, ct);
-        if (resolvedLeaseId == null)
+        var resolvedLeaseManagementId = await BuildOwnedLeaseManagementQuery(
+                portfolioId, accessContextId, tenantId, leaseManagementId)
+            .FirstOrDefaultAsync(ct);
+        if (resolvedLeaseManagementId == null)
         {
             return null;
         }
 
-        // The Q&A service is portfolio-scoped; ownership has already been enforced above.
-        return await _leaseQa.AskAsync(portfolioId, resolvedLeaseId.Value, question, ct);
+        return await _leaseQa.AskAsync(
+            portfolioId, resolvedLeaseManagementId.Value, question, ct);
     }
 
     public async Task<AutopayStatusResponse?> GetAutopayStatusAsync(
@@ -407,27 +498,36 @@ public class PortalService : IPortalService
 
     private sealed record OwnedAutopayRow(TenantAccount Account, TenantAutopayEnrollment? Enrollment);
 
-    /// <summary>
-    /// Validates that <paramref name="leaseId"/> (if given) is the tenant's own lease; when null,
-    /// returns the tenant's most relevant lease id (active-preferred). Returns null when the tenant
-    /// has no matching lease — the ownership/IDOR gate for the autopay endpoints.
-    /// </summary>
-    private async Task<int?> ResolveOwnedLeaseIdAsync(int portfolioId, int tenantId, int? leaseId, CancellationToken ct)
-    {
-        if (leaseId.HasValue)
-        {
-            var owns = await _db.Leases.AnyAsync(
-                l => l.Id == leaseId.Value && l.PortfolioId == portfolioId && l.TenantId == tenantId, ct);
-            return owns ? leaseId.Value : (int?)null;
-        }
+    internal IQueryable<int?> BuildOwnedLeaseManagementQuery(
+        int portfolioId,
+        int accessContextId,
+        int tenantId,
+        int? leaseManagementId) =>
+        from access in EffectiveTenantRelationshipQuery(portfolioId, accessContextId, tenantId)
+        join party in _db.LeaseManagementParties.AsNoTracking()
+            on new { access.PortfolioId, Id = access.LeaseManagementPartyId }
+            equals new { party.PortfolioId, party.Id }
+        join management in _db.LeaseManagements.AsNoTracking()
+            on new { access.PortfolioId, Id = access.LeaseManagementId }
+            equals new { management.PortfolioId, management.Id }
+        join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+            on new { access.PortfolioId, access.LeaseManagementId }
+            equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+        where (leaseManagementId == null || management.Id == leaseManagementId)
+            && lifecycle.CurrentAgreementId != null
+            && party.TenantId == tenantId
+        orderby (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending") descending,
+            management.PossessionGivenAtUtc descending,
+            management.Id descending
+        select (int?)management.Id;
 
-        var resolved = await _db.Leases
-            .Where(l => l.PortfolioId == portfolioId && l.TenantId == tenantId)
-            .OrderByDescending(l => l.Status == LeaseStatus.Active)
-            .ThenByDescending(l => l.EndDate)
-            .Select(l => (int?)l.Id)
-            .FirstOrDefaultAsync(ct);
-
-        return resolved;
-    }
+    private IQueryable<RentalCommand.Data.Authorization.EffectiveTenantAccessProjection> EffectiveTenantRelationshipQuery(
+        int portfolioId,
+        int accessContextId,
+        int tenantId) =>
+        _db.EffectiveTenantAccess
+            .AsNoTracking()
+            .Where(access => access.PortfolioId == portfolioId
+                && access.AccessContextId == accessContextId
+                && access.TenantId == tenantId);
 }

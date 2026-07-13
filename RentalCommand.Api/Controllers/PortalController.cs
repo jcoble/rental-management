@@ -34,9 +34,9 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         _service.ResolveTenantIdAsync(GetPortfolioId(), GetAccessContextId(), ct);
 
     [HttpGet("leases")]
-    [ProducesResponseType(typeof(IReadOnlyList<LeaseResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(IReadOnlyList<PortalLeaseRelationshipResponse>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
-    public async Task<ActionResult<IReadOnlyList<LeaseResponse>>> Leases(CancellationToken ct)
+    public async Task<ActionResult<IReadOnlyList<PortalLeaseRelationshipResponse>>> Leases(CancellationToken ct)
     {
         var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
@@ -44,7 +44,8 @@ public class PortalController : AuthenticatedPortfolioControllerBase
             return Forbid();
         }
 
-        var items = await _service.GetLeasesAsync(GetPortfolioId(), tenantId.Value, ct);
+        var items = await _service.GetLeasesAsync(
+            GetPortfolioId(), GetAccessContextId(), tenantId.Value, ct);
         return Ok(items);
     }
 
@@ -89,22 +90,23 @@ public class PortalController : AuthenticatedPortfolioControllerBase
             return Forbid();
         }
 
-        var items = await _service.GetAppointmentsAsync(GetPortfolioId(), tenantId.Value, ct);
+        var items = await _service.GetAppointmentsAsync(
+            GetPortfolioId(), GetAccessContextId(), tenantId.Value, ct);
         return Ok(items);
     }
 
     /// <summary>
-    /// Answers a tenant's plain-English question grounded in their OWN lease (rent, dates, deposit,
-    /// late fee, notes). Scope is the tenant's lease only: an explicit <c>leaseId</c> that isn't theirs
-    /// — or no lease at all — returns 404, never another tenant's lease. Falls back to a deterministic
-    /// answer when no LLM key is configured.
+    /// Answers a tenant's plain-English question from the governing executed agreement on one of
+    /// their effective rental relationships. The optional selector is a LeaseManagement id.
     /// </summary>
     [HttpPost("lease/ask")]
     [ProducesResponseType(typeof(LeaseQuestionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<LeaseQuestionResponse>> AskLease(
-        [FromQuery] int? leaseId, [FromBody] LeaseQuestionRequest request, CancellationToken ct)
+        [FromQuery] int? leaseManagementId,
+        [FromBody] LeaseQuestionRequest request,
+        CancellationToken ct)
     {
         var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
@@ -112,7 +114,13 @@ public class PortalController : AuthenticatedPortfolioControllerBase
             return Forbid();
         }
 
-        var answer = await _service.AskLeaseAsync(GetPortfolioId(), tenantId.Value, leaseId, request.Question, ct);
+        var answer = await _service.AskLeaseAsync(
+            GetPortfolioId(),
+            GetAccessContextId(),
+            tenantId.Value,
+            leaseManagementId,
+            request.Question,
+            ct);
         return answer == null
             ? NotFound(new { error = "No lease was found for this tenant, or the question was empty." })
             : Ok(answer);
