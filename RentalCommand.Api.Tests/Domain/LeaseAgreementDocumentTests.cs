@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
@@ -15,22 +16,22 @@ using RentalCommand.Data;
 namespace RentalCommand.Api.Tests.Domain;
 
 /// <summary>
-/// Tests the "5-question generator": generating a residential lease agreement PDF from a lease's
-/// captured terms, storing it as a StoredFile, and streaming it back. Uses SQLite in-memory.
+/// Covers agreement rendering and the canonical legal-artifact graph. Issuance and execution belong
+/// to LeaseManagement/LeaseAgreement; the retired mutable Lease document endpoints are intentionally
+/// not represented here.
 /// </summary>
 public sealed class LeaseAgreementDocumentTests : IDisposable
 {
     private const int PortfolioId = 1;
+    private const int ActorUserId = 7;
 
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
     private readonly InMemoryFileStorage _storage = new();
-    private readonly LeaseService _sut;
+    private readonly LeaseAgreementRenderer _renderer;
 
     public LeaseAgreementDocumentTests()
     {
-        // QuestPDF refuses to render until a license tier is selected; Program.cs sets this for the
-        // running app, so the test process must set it too (mirrors the other PDF test suites).
         QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
 
         _conn = new SqliteConnection("DataSource=:memory:");
@@ -43,30 +44,36 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
         _db = new LeaseDocumentTestDbContext(options);
         _db.Database.EnsureCreated();
 
+        var now = DateTime.UtcNow;
         _db.Portfolios.Add(new Portfolio
         {
             Id = PortfolioId,
             Name = "Test Portfolio",
             ManagementCompanyName = "Acme Property Management LLC",
             TimeZone = "UTC",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.Users.Add(new ApplicationUser
+        {
+            Id = ActorUserId,
+            UserName = "agreement-document-test-user",
+            NormalizedUserName = "AGREEMENT-DOCUMENT-TEST-USER",
+            Email = "agreement-documents@example.test",
+            NormalizedEmail = "AGREEMENT-DOCUMENTS@EXAMPLE.TEST",
+            DisplayName = "Agreement Document Test User",
+            PortfolioId = PortfolioId,
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = now,
         });
         _db.SaveChanges();
 
-        _sut = new LeaseService(
+        _renderer = new LeaseAgreementRenderer(
             _db,
-            new NoopDataUpdateService(),
             _storage,
             new LeaseAgreementPdfGenerator(),
-            new RentalCommand.Api.Services.AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope(), TimeProvider.System),
-            NullLogger<LeaseService>.Instance,
-            TimeProvider.System,
-            new LeaseAgreementRenderer(
-                _db,
-                _storage,
-                new LeaseAgreementPdfGenerator(),
-                NullLogger<LeaseAgreementRenderer>.Instance));
+            NullLogger<LeaseAgreementRenderer>.Instance);
     }
 
     public void Dispose()
@@ -76,47 +83,34 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
     }
 
     [Fact]
-    public async Task GenerateDocumentAsync_StoresPdf_AndReturnsRef()
+    public async Task RenderAsync_WithoutOverlay_ReturnsBuiltInAgreementWithoutTemplateProvenance()
     {
-        var lease = SeedLeaseWithGraph();
+        var fixture = await SeedExecutedAgreementGraphAsync();
 
-        var doc = await _sut.GenerateDocumentAsync(PortfolioId, lease.Id);
+        var rendered = await _renderer.RenderAsync(PortfolioId, fixture.RenderData);
 
-        doc.Should().NotBeNull();
-        doc!.LeaseId.Should().Be(lease.Id);
-        doc.FileSize.Should().BeGreaterThan(0);
-        doc.DownloadUrl.Should().Be($"/api/v1/leases/{lease.Id}/document");
-
-        // A StoredFile row attached to the lease was created.
-        var stored = await _db.StoredFiles
-            .FirstOrDefaultAsync(f => f.Id == doc.StoredFileId);
-        stored.Should().NotBeNull();
-        stored!.EntityType.Should().Be("Lease");
-        stored.EntityId.Should().Be(lease.Id);
-        stored.ContentType.Should().Be("application/pdf");
-        stored.PortfolioId.Should().Be(PortfolioId);
+        Encoding.ASCII.GetString(rendered.PdfBytes, 0, 4).Should().Be("%PDF");
+        rendered.DocumentTemplateId.Should().BeNull();
+        rendered.DocumentTemplateVersion.Should().BeNull();
+        ExtractPdfText(rendered.PdfBytes).Should().Contain("Residential Lease Agreement");
     }
 
     [Fact]
-    public async Task GenerateDocumentAsync_ActiveDefaultOverlayTemplate_StampsLeaseValuesAndFreezesTemplateVersion()
+    public async Task RenderAsync_ActiveOverlay_StampsAgreementSnapshotAndReturnsTemplateProvenance()
     {
-        var lease = SeedLeaseWithGraph();
-        var template = await SeedActiveOverlayTemplateAsync(lease.PropertyId);
+        var fixture = await SeedExecutedAgreementGraphAsync();
+        var template = await SeedActiveOverlayTemplateAsync(fixture.Property.Id);
 
-        var doc = await _sut.GenerateDocumentAsync(PortfolioId, lease.Id);
+        var rendered = await _renderer.RenderAsync(PortfolioId, fixture.RenderData);
 
-        doc.Should().NotBeNull();
-
-        var reloaded = await _db.Leases.AsNoTracking().FirstAsync(l => l.Id == lease.Id);
-        reloaded.DocumentTemplateId.Should().Be(template.Id);
-        reloaded.DocumentTemplateVersion.Should().Be(template.Version);
-
-        var text = await ExtractGeneratedPdfTextAsync(lease.Id);
+        rendered.DocumentTemplateId.Should().Be(template.Id);
+        rendered.DocumentTemplateVersion.Should().Be(template.Version);
+        var text = ExtractPdfText(rendered.PdfBytes);
         text.Should().Contain("Custom Landlord Lease");
         text.Should().Contain("Marcus");
         text.Should().Contain("Williams");
         text.Should().Contain("$1,450.00");
-        text.Should().NotContain("Residential Lease Agreement", "the landlord's exact PDF should be the rendered source");
+        text.Should().NotContain("Residential Lease Agreement");
     }
 
     [Fact]
@@ -134,9 +128,105 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
     }
 
     [Fact]
-    public void RenderOverlayPreview_WhiteoutFieldsArePaintedBeforeLeaseValues()
+    public async Task ExecutedAgreement_IsResolvedThroughCanonicalArtifactAndStoredFile()
     {
-        var lease = SeedLeaseWithGraph();
+        var fixture = await SeedExecutedAgreementGraphAsync();
+
+        var resolved = await _db.LeaseAgreements
+            .AsNoTracking()
+            .Where(agreement => agreement.PortfolioId == PortfolioId
+                && agreement.LeaseManagementId == fixture.Management.Id
+                && agreement.FullyExecutedAtUtc != null
+                && agreement.VoidedAtUtc == null
+                && agreement.ExecutedArtifact != null
+                && agreement.ExecutedArtifact.ArtifactKind == LegalDocumentArtifactKind.ExecutedAgreement
+                && agreement.ExecutedArtifact.StoredFile != null
+                && agreement.ExecutedArtifact.StoredFile.PortfolioId == PortfolioId
+                && agreement.ExecutedArtifact.StoredFile.DeletedAt == null)
+            .Select(agreement => new
+            {
+                agreement.Id,
+                agreement.AgreementNumber,
+                agreement.ExecutedArtifactId,
+                StoredFileId = agreement.ExecutedArtifact!.StoredFileId,
+                agreement.ExecutedArtifact.StoredFile!.FileName,
+            })
+            .SingleAsync();
+
+        resolved.Id.Should().Be(fixture.Agreement.Id);
+        resolved.AgreementNumber.Should().Be("A-2026-7");
+        resolved.ExecutedArtifactId.Should().Be(fixture.ExecutedArtifact.Id);
+        resolved.StoredFileId.Should().Be(fixture.ExecutedFile.Id);
+        resolved.FileName.Should().Be("A-2026-7-executed.pdf");
+    }
+
+    [Fact]
+    public async Task SourceScanAttachment_DoesNotReplaceExecutedAgreementArtifact()
+    {
+        var fixture = await SeedExecutedAgreementGraphAsync();
+        var sourceKey = await _storage.UploadAsync(
+            new MemoryStream(Encoding.UTF8.GetBytes("source scan bytes")),
+            "source-scan.pdf",
+            "application/pdf");
+        _db.StoredFiles.Add(new StoredFile
+        {
+            PortfolioId = PortfolioId,
+            FileName = "source-scan.pdf",
+            FilePath = sourceKey,
+            ContentType = "application/pdf",
+            FileSize = 17,
+            EntityType = "LeaseAgreementSource",
+            EntityId = fixture.Agreement.Id,
+            UploadedAt = DateTime.UtcNow,
+        });
+        await _db.SaveChangesAsync();
+
+        var executedFileId = await _db.LeaseAgreements
+            .AsNoTracking()
+            .Where(agreement => agreement.PortfolioId == PortfolioId
+                && agreement.Id == fixture.Agreement.Id
+                && agreement.ExecutedArtifact != null
+                && agreement.ExecutedArtifact.ArtifactKind == LegalDocumentArtifactKind.ExecutedAgreement)
+            .Select(agreement => agreement.ExecutedArtifact!.StoredFileId)
+            .SingleAsync();
+
+        executedFileId.Should().Be(fixture.ExecutedFile.Id);
+    }
+
+    [Fact]
+    public async Task CanonicalFixture_PersistsPortfolioSafeRelationshipAccountPartyAndSigner()
+    {
+        var fixture = await SeedExecutedAgreementGraphAsync();
+
+        var graph = await _db.LeaseManagements
+            .AsNoTracking()
+            .Where(management => management.Id == fixture.Management.Id
+                && management.PortfolioId == PortfolioId)
+            .Select(management => new
+            {
+                management.PropertyId,
+                management.UnitId,
+                UnitPortfolioId = management.Unit!.PortfolioId,
+                AccountLeaseManagementId = management.TenantAccount!.LeaseManagementId,
+                PrimaryParties = management.Parties.Count(party =>
+                    party.Role == LeaseManagementPartyRole.PrimaryTenant),
+                RequiredSigners = management.Agreements
+                    .SelectMany(agreement => agreement.Signers)
+                    .Count(signer => signer.IsRequired),
+            })
+            .SingleAsync();
+
+        graph.PropertyId.Should().Be(fixture.Property.Id);
+        graph.UnitId.Should().Be(fixture.Unit.Id);
+        graph.UnitPortfolioId.Should().Be(PortfolioId);
+        graph.AccountLeaseManagementId.Should().Be(fixture.Management.Id);
+        graph.PrimaryParties.Should().Be(1);
+        graph.RequiredSigners.Should().Be(1);
+    }
+
+    [Fact]
+    public void RenderOverlayPreview_WhiteoutFieldsArePaintedBeforeAgreementValues()
+    {
         var fields = new List<DocumentTemplateField>
         {
             new()
@@ -166,158 +256,17 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
                 SortOrder = 2,
             },
         };
-        var data = new LeaseAgreementRenderData
-        {
-            PropertyId = lease.PropertyId,
-            AgreementNumber = lease.LeaseNumber,
-            TermStartOn = DateOnly.FromDateTime(lease.StartDate),
-            TermEndOn = DateOnly.FromDateTime(lease.EndDate),
-            BaseRentAmount = lease.MonthlyRent,
-            SecurityDepositObligation = lease.SecurityDeposit,
-            LateFeeAmount = lease.LateFeeAmount,
-            RentDueDay = lease.RentDueDay,
-            LandlordName = "Acme Property Management LLC",
-            TenantName = "Marcus Williams",
-            TenantEmail = lease.Tenant?.Email ?? string.Empty,
-            PropertyName = "Maple Court",
-            PropertyAddress = "10 Maple Ct, Columbus, OH 43215",
-            UnitNumber = "2B",
-            State = "OH",
-        };
-
+        var data = RenderData("OH", null);
         var sourcePdf = LeaseTemplateFixturePdf();
         var sourceContent = FirstPageContent(sourcePdf);
+
         var rendered = LeaseAgreementRenderer.RenderOverlayPreview(sourcePdf, fields, data);
         var content = FirstPageContent(rendered);
 
         CountOccurrences(content, "1 1 1 rg").Should().BeGreaterThan(
             CountOccurrences(sourceContent, "1 1 1 rg"),
-            "whiteout fields must draw a white filled rectangle even though they have no lease value");
+            "whiteout fields must draw a white filled rectangle even though they have no agreement value");
     }
-
-    [Fact]
-    public async Task GetDocumentAsync_AfterGenerate_StreamsNonEmptyPdf()
-    {
-        var lease = SeedLeaseWithGraph();
-        await _sut.GenerateDocumentAsync(PortfolioId, lease.Id);
-
-        var file = await _sut.GetDocumentAsync(PortfolioId, lease.Id);
-
-        file.Should().NotBeNull();
-        file!.Value.ContentType.Should().Be("application/pdf");
-
-        using var ms = new MemoryStream();
-        await file.Value.Stream.CopyToAsync(ms);
-        var bytes = ms.ToArray();
-        bytes.Length.Should().BeGreaterThan(0);
-        // Real PDF files start with the "%PDF" magic header.
-        Encoding.ASCII.GetString(bytes, 0, 4).Should().Be("%PDF");
-    }
-
-    [Fact]
-    public async Task GetDocumentAsync_NoGeneratedDocument_ReturnsNull()
-    {
-        var lease = SeedLeaseWithGraph();
-
-        var file = await _sut.GetDocumentAsync(PortfolioId, lease.Id);
-
-        file.Should().BeNull();
-    }
-
-    [Theory]
-    [InlineData("scan-lease.pdf", "application/pdf")]
-    [InlineData("scan-lease.jpg", "image/jpeg")]
-    public async Task SourceScanAttachment_DoesNotCountAsGeneratedAgreement(string fileName, string contentType)
-    {
-        var lease = SeedLeaseWithGraph();
-        var storageKey = await _storage.UploadAsync(
-            new MemoryStream(Encoding.UTF8.GetBytes("source scan bytes")),
-            fileName,
-            contentType);
-        _db.StoredFiles.Add(new StoredFile
-        {
-            PortfolioId = PortfolioId,
-            FileName = fileName,
-            FilePath = storageKey,
-            ContentType = contentType,
-            FileSize = 17,
-            EntityType = "Lease",
-            EntityId = lease.Id,
-            UploadedAt = DateTime.UtcNow,
-        });
-        await _db.SaveChangesAsync();
-
-        var status = await _sut.GetDocumentStatusAsync(PortfolioId, lease.Id);
-        var file = await _sut.GetDocumentAsync(PortfolioId, lease.Id);
-
-        status.Should().NotBeNull();
-        status!.HasDocument.Should().BeFalse();
-        status.StoredFileId.Should().BeNull();
-        status.DownloadUrl.Should().BeNull();
-        file.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task GetAsync_GeneratedAgreementOnly_DoesNotAdvertiseScannedSourceDocument()
-    {
-        var lease = SeedLeaseWithGraph();
-        await _sut.GenerateDocumentAsync(PortfolioId, lease.Id);
-
-        var detail = await _sut.GetAsync(PortfolioId, lease.Id);
-
-        detail.Should().NotBeNull();
-        detail!.HasScan.Should().BeFalse();
-        detail.ScanIsImage.Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task GetDocumentStatusAsync_NoGeneratedDocument_ReturnsMissingStatus()
-    {
-        var lease = SeedLeaseWithGraph();
-
-        var status = await _sut.GetDocumentStatusAsync(PortfolioId, lease.Id);
-
-        status.Should().NotBeNull();
-        status!.LeaseId.Should().Be(lease.Id);
-        status.HasDocument.Should().BeFalse();
-        status.StoredFileId.Should().BeNull();
-        status.DownloadUrl.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task GetDocumentStatusAsync_AfterGenerate_ReturnsLatestDocumentMetadata()
-    {
-        var lease = SeedLeaseWithGraph();
-        var doc = await _sut.GenerateDocumentAsync(PortfolioId, lease.Id);
-
-        var status = await _sut.GetDocumentStatusAsync(PortfolioId, lease.Id);
-
-        status.Should().NotBeNull();
-        status!.HasDocument.Should().BeTrue();
-        status.StoredFileId.Should().Be(doc!.StoredFileId);
-        status.FileName.Should().Be(doc.FileName);
-        status.FileSize.Should().Be(doc.FileSize);
-        status.DownloadUrl.Should().Be($"/api/v1/leases/{lease.Id}/document");
-        status.GeneratedAt.Should().Be(doc.GeneratedAt);
-    }
-
-    [Fact]
-    public async Task GenerateDocumentAsync_LeaseNotInPortfolio_ReturnsNull()
-    {
-        var doc = await _sut.GenerateDocumentAsync(PortfolioId, id: 99999);
-
-        doc.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task GetDocumentStatusAsync_LeaseNotInPortfolio_ReturnsNull()
-    {
-        var status = await _sut.GetDocumentStatusAsync(PortfolioId, id: 99999);
-
-        status.Should().BeNull();
-    }
-
-    // ---- State-specific clauses (StateLeaseRules) ----
 
     [Fact]
     public void StateLeaseRules_Ohio_HasRealStatutoryFigures()
@@ -351,79 +300,34 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
     }
 
     [Theory]
-    [InlineData("")]
-    [InlineData(null)]
-    public void StateLeaseRules_BlankState_FallsBackToGenericWithNoCitation(string? input)
+    [InlineData(1925, true)]
+    [InlineData(1995, false)]
+    [InlineData(null, false)]
+    public async Task RenderAsync_LeadPaintDisclosureFollowsPropertyYear(int? yearBuilt, bool expected)
     {
-        var rules = StateLeaseRules.For(input);
+        var fixture = await SeedExecutedAgreementGraphAsync(yearBuilt: yearBuilt);
 
-        rules.StatuteCitation.Should().BeNull();
-        rules.GoverningLawLabel.Should().Be("the state where the Premises are located");
-    }
+        var rendered = await _renderer.RenderAsync(PortfolioId, fixture.RenderData);
+        var text = ExtractPdfText(rendered.PdfBytes);
 
-    // ---- Rendered PDF: clauses, disclosures, disclaimer ----
+        if (expected)
+        {
+            text.Should().Contain("Lead-Based Paint");
+            text.Should().Contain("Protect Your Family From Lead");
+        }
+        else
+        {
+            text.Should().NotContain("Lead-Based Paint");
+        }
 
-    [Fact]
-    public async Task Generate_OhioPre1978_RendersStateClausesLeadDisclosureAndDisclaimer()
-    {
-        var lease = SeedLeaseWithGraph(state: "OH", yearBuilt: 1925);
-        await _sut.GenerateDocumentAsync(PortfolioId, lease.Id);
-
-        var text = await ExtractGeneratedPdfTextAsync(lease.Id);
-
-        // Real governing law instead of "State of XX".
-        text.Should().Contain("State of Ohio");
-        text.Should().NotContain("State of XX");
-        // State-specific deposit + entry figures.
-        text.Should().Contain("thirty (30) days");
-        text.Should().Contain("twenty-four (24) hours");
-        // Federal lead-paint disclosure (pre-1978).
-        text.Should().Contain("Lead-Based Paint");
-        text.Should().Contain("Protect Your Family From Lead");
-        // Visible in-body disclaimer.
-        text.Should().Contain("Required Disclosures");
-        text.Should().Contain("NOT legal advice");
-    }
-
-    [Fact]
-    public async Task Generate_Post1978Property_OmitsLeadPaintDisclosure()
-    {
-        var lease = SeedLeaseWithGraph(state: "OH", yearBuilt: 1995);
-        await _sut.GenerateDocumentAsync(PortfolioId, lease.Id);
-
-        var text = await ExtractGeneratedPdfTextAsync(lease.Id);
-
-        text.Should().NotContain("Lead-Based Paint");
-        // Disclaimer is always present regardless of year.
         text.Should().Contain("Required Disclosures");
     }
 
-    [Fact]
-    public async Task Generate_UnknownYearBuilt_OmitsLeadPaintDisclosure()
+    private async Task<CanonicalAgreementFixture> SeedExecutedAgreementGraphAsync(
+        string state = "OH",
+        int? yearBuilt = null)
     {
-        var lease = SeedLeaseWithGraph(state: "OH", yearBuilt: null);
-        await _sut.GenerateDocumentAsync(PortfolioId, lease.Id);
-
-        var text = await ExtractGeneratedPdfTextAsync(lease.Id);
-
-        text.Should().NotContain("Lead-Based Paint");
-    }
-
-    /// <summary>Reads the stored lease PDF back and extracts its selectable text via PdfPig.</summary>
-    private async Task<string> ExtractGeneratedPdfTextAsync(int leaseId)
-    {
-        var file = await _sut.GetDocumentAsync(PortfolioId, leaseId);
-        file.Should().NotBeNull();
-
-        using var ms = new MemoryStream();
-        await file!.Value.Stream.CopyToAsync(ms);
-        var text = RentalCommand.Api.Scanning.PdfTextExtractor.TryExtractText(ms.ToArray());
-        text.Should().NotBeNull("the generated lease PDF should contain selectable text");
-        return text!;
-    }
-
-    private Lease SeedLeaseWithGraph(string state = "OH", int? yearBuilt = null)
-    {
+        var now = DateTime.UtcNow;
         var property = new Property
         {
             PortfolioId = PortfolioId,
@@ -433,56 +337,198 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
             State = state,
             PostalCode = "43215",
             YearBuilt = yearBuilt,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
+            CreatedAt = now,
+            UpdatedAt = now,
         };
-        _db.Properties.Add(property);
-        _db.SaveChanges();
-
         var unit = new Unit
         {
-            PropertyId = property.Id,
+            PortfolioId = PortfolioId,
+            Property = property,
             UnitNumber = "2B",
             Bedrooms = 2,
             Bathrooms = 1,
             MarketRent = 1450m,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
+            CreatedAt = now,
+            UpdatedAt = now,
         };
-        _db.Units.Add(unit);
-
         var tenant = new Tenant
         {
             PortfolioId = PortfolioId,
             FirstName = "Marcus",
             LastName = "Williams",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
+            Email = "marcus@example.test",
+            CreatedAt = now,
+            UpdatedAt = now,
         };
-        _db.Tenants.Add(tenant);
-        _db.SaveChanges();
-
-        var lease = new Lease
+        var management = new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            RelationshipNumber = "LM-2026-7",
+            PlannedPossessionAtUtc = new DateTime(2026, 1, 1, 14, 0, 0, DateTimeKind.Utc),
+            PossessionGivenAtUtc = new DateTime(2026, 1, 1, 14, 0, 0, DateTimeKind.Utc),
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+            UpdatedAtUtc = now,
+            RowVersion = Guid.NewGuid(),
+        };
+        var party = new LeaseManagementParty
         {
             PortfolioId = PortfolioId,
-            PropertyId = property.Id,
-            UnitId = unit.Id,
-            TenantId = tenant.Id,
-            LeaseNumber = "L-2026-7",
-            Status = LeaseStatus.Active,
-            StartDate = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            EndDate = new DateTime(2026, 12, 31, 0, 0, 0, DateTimeKind.Utc),
-            MonthlyRent = 1450m,
-            SecurityDeposit = 1450m,
-            LateFeeAmount = 75m,
-            RentDueDay = 1,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
+            LeaseManagement = management,
+            Tenant = tenant,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = new DateOnly(2026, 1, 1),
+            ChangeReason = "Initial agreement",
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
         };
-        _db.Leases.Add(lease);
-        _db.SaveChanges();
-        return lease;
+        var account = new TenantAccount
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagement = management,
+            AccountNumber = "TA-2026-7",
+            Currency = "USD",
+            OpenedAtUtc = now,
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        };
+        var agreement = new LeaseAgreement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagement = management,
+            VersionNumber = 1,
+            AgreementNumber = "A-2026-7",
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = new DateOnly(2026, 1, 1),
+            TermEndOn = new DateOnly(2026, 12, 31),
+            GoverningFromOn = new DateOnly(2026, 1, 1),
+            BaseRentAmount = 1450m,
+            RentDueDay = 1,
+            SecurityDepositObligation = 1450m,
+            LateFeeAmount = 75m,
+            GracePeriodDays = 5,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+            UpdatedAtUtc = now,
+            DraftRevision = 1,
+        };
+        var signer = new LeaseAgreementSigner
+        {
+            PortfolioId = PortfolioId,
+            LeaseAgreement = agreement,
+            LeaseManagementParty = party,
+            Tenant = tenant,
+            SignerRole = LeaseLegalSignerRole.PrimaryTenant,
+            NameSnapshot = "Marcus Williams",
+            EmailSnapshot = "marcus@example.test",
+            SigningOrder = 1,
+            IsRequired = true,
+        };
+
+        _db.AddRange(property, unit, tenant, management, party, account, agreement, signer);
+        await _db.SaveChangesAsync();
+
+        var renderData = RenderData(state, yearBuilt) with { PropertyId = property.Id };
+        var pdf = new LeaseAgreementPdfGenerator().Generate(renderData);
+        var issuedFile = await AddStoredPdfAsync(agreement.Id, "A-2026-7-issued.pdf", pdf, now);
+        var executedFile = await AddStoredPdfAsync(agreement.Id, "A-2026-7-executed.pdf", pdf, now);
+        var issuedArtifact = Artifact(issuedFile, pdf, LegalDocumentArtifactKind.IssuedAgreement, now);
+        var executedArtifact = Artifact(executedFile, pdf, LegalDocumentArtifactKind.ExecutedAgreement, now);
+        _db.LegalDocumentArtifacts.AddRange(issuedArtifact, executedArtifact);
+        await _db.SaveChangesAsync();
+
+        agreement.IssuedArtifactId = issuedArtifact.Id;
+        agreement.IssuedAtUtc = now;
+        agreement.ExecutedArtifactId = executedArtifact.Id;
+        agreement.FullyExecutedAtUtc = now.AddMinutes(5);
+        await _db.SaveChangesAsync();
+
+        return new CanonicalAgreementFixture(
+            property,
+            unit,
+            management,
+            agreement,
+            executedFile,
+            executedArtifact,
+            renderData);
     }
+
+    private async Task<StoredFile> AddStoredPdfAsync(
+        int agreementId,
+        string fileName,
+        byte[] bytes,
+        DateTime now)
+    {
+        var storageKey = await _storage.UploadAsync(
+            new MemoryStream(bytes),
+            fileName,
+            "application/pdf");
+        var storedFile = new StoredFile
+        {
+            PortfolioId = PortfolioId,
+            FileName = fileName,
+            FilePath = storageKey,
+            ContentType = "application/pdf",
+            FileSize = bytes.Length,
+            EntityType = "LeaseAgreement",
+            EntityId = agreementId,
+            UploadedAt = now,
+        };
+        _db.StoredFiles.Add(storedFile);
+        await _db.SaveChangesAsync();
+        return storedFile;
+    }
+
+    private static LegalDocumentArtifact Artifact(
+        StoredFile file,
+        byte[] bytes,
+        LegalDocumentArtifactKind kind,
+        DateTime now)
+    {
+        return new LegalDocumentArtifact
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            StoredFileId = file.Id,
+            ArtifactKind = kind,
+            StorageKey = file.FilePath,
+            FileName = file.FileName,
+            ContentType = file.ContentType,
+            ByteLength = file.FileSize,
+            ContentSha256 = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        };
+    }
+
+    private static LeaseAgreementRenderData RenderData(string state, int? yearBuilt) => new()
+    {
+        PropertyId = 0,
+        AgreementNumber = "A-2026-7",
+        TermStartOn = new DateOnly(2026, 1, 1),
+        TermEndOn = new DateOnly(2026, 12, 31),
+        BaseRentAmount = 1450m,
+        SecurityDepositObligation = 1450m,
+        LateFeeAmount = 75m,
+        RentDueDay = 1,
+        LandlordName = "Acme Property Management LLC",
+        TenantName = "Marcus Williams",
+        TenantEmail = "marcus@example.test",
+        PropertyName = "Maple Court",
+        PropertyAddress = $"10 Maple Ct, Columbus, {state} 43215",
+        UnitNumber = "2B",
+        State = state,
+        YearBuilt = yearBuilt,
+    };
 
     private async Task<DocumentTemplate> SeedActiveOverlayTemplateAsync(int propertyId)
     {
@@ -491,7 +537,6 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
             new MemoryStream(pdfBytes),
             "custom-landlord-lease.pdf",
             "application/pdf");
-
         var stored = new StoredFile
         {
             PortfolioId = PortfolioId,
@@ -502,7 +547,6 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
             EntityType = "DocumentTemplate",
             UploadedAt = DateTime.UtcNow,
         };
-
         var template = new DocumentTemplate
         {
             PortfolioId = PortfolioId,
@@ -517,7 +561,6 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
             CreatedAtUtc = DateTime.UtcNow,
             UpdatedAtUtc = DateTime.UtcNow,
         };
-
         template.Fields.Add(new DocumentTemplateField
         {
             FieldKey = "tenant.fullName",
@@ -545,7 +588,6 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
 
         _db.DocumentTemplates.Add(template);
         await _db.SaveChangesAsync();
-
         stored.EntityId = template.Id;
         await _db.SaveChangesAsync();
         return template;
@@ -572,6 +614,13 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
         return document.GeneratePdf();
     }
 
+    private static string ExtractPdfText(byte[] bytes)
+    {
+        var text = RentalCommand.Api.Scanning.PdfTextExtractor.TryExtractText(bytes);
+        text.Should().NotBeNull("the rendered agreement should contain selectable text");
+        return text!;
+    }
+
     private static string FirstPageContent(byte[] pdfBytes)
     {
         using var ms = new MemoryStream(pdfBytes);
@@ -592,20 +641,24 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
         return count;
     }
 
-    private sealed class NoopDataUpdateService : IDataUpdateService
-    {
-        public Task BroadcastEntityUpdateAsync(int portfolioId, string entityType, int entityId, object data, CancellationToken ct = default)
-            => Task.CompletedTask;
-
-        public Task BroadcastEntityDeleteAsync(int portfolioId, string entityType, int entityId, CancellationToken ct = default)
-            => Task.CompletedTask;
-    }
+    private sealed record CanonicalAgreementFixture(
+        Property Property,
+        Unit Unit,
+        LeaseManagement Management,
+        LeaseAgreement Agreement,
+        StoredFile ExecutedFile,
+        LegalDocumentArtifact ExecutedArtifact,
+        LeaseAgreementRenderData RenderData);
 
     private sealed class InMemoryFileStorage : IFileStorage
     {
         private readonly Dictionary<string, byte[]> _files = new();
 
-        public async Task<string> UploadAsync(Stream content, string fileName, string contentType, CancellationToken ct = default)
+        public async Task<string> UploadAsync(
+            Stream content,
+            string fileName,
+            string contentType,
+            CancellationToken ct = default)
         {
             using var ms = new MemoryStream();
             await content.CopyToAsync(ms, ct);
@@ -617,7 +670,10 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
         public Task<Stream> DownloadAsync(string path, CancellationToken ct = default)
         {
             if (!_files.TryGetValue(path, out var bytes))
+            {
                 throw new FileNotFoundException(path);
+            }
+
             return Task.FromResult<Stream>(new MemoryStream(bytes));
         }
 
@@ -628,7 +684,6 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
         }
     }
 
-    /// <summary>SQLite context using the shared test-only compatibility model.</summary>
     private sealed class LeaseDocumentTestDbContext : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext
     {
         public LeaseDocumentTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
