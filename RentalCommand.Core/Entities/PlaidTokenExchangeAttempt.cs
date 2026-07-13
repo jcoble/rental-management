@@ -28,4 +28,7 @@ public sealed class PlaidTokenExchangeAttempt
     public string? ExternalAccessTokenCipherText { get; set; }
     public int? BankConnectionId { get; set; }
     public DateTime? CompletedAtUtc { get; set; }
+
+    public Portfolio? Portfolio { get; set; }
+    public BankConnection? BankConnection { get; set; }
 }

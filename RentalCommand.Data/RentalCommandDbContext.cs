@@ -739,11 +739,11 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.ExternalAccessTokenCipherText).HasMaxLength(4000);
             entity.HasIndex(e => new { e.PortfolioId, e.ClientOperationId }).IsUnique();
             entity.HasIndex(e => new { e.PortfolioId, e.Status, e.PreparedAtUtc });
-            entity.HasOne<Portfolio>()
+            entity.HasOne(e => e.Portfolio)
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne<BankConnection>()
+            entity.HasOne(e => e.BankConnection)
                 .WithMany()
                 .HasForeignKey(e => e.BankConnectionId)
                 .OnDelete(DeleteBehavior.SetNull);

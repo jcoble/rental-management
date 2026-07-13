@@ -301,6 +301,7 @@ public class SandboxServiceTests : IDisposable
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         });
+        await _ctx.Db.SaveChangesAsync();
         await BuildService().GoLiveAsync(1, CancellationToken.None);
 
         // Exactly one owner remains: the primary self-owner derived from the account.
