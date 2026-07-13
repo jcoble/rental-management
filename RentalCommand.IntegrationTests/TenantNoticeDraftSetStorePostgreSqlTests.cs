@@ -167,7 +167,8 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
         sql.Should().Contain("vw_lease_management_lifecycle");
         sql.Should().Contain("vw_tenant_charge_balances");
         sql.Should().Contain("WorkspaceNoticeTemplateVersions");
-        sql.Should().Contain("row_number() OVER");
+        sql.Should().Contain("SELECT DISTINCT ON (rendered.\"DedupeKey\")");
+        sql.Should().Contain("ORDER BY rendered.\"DedupeKey\", rendered.\"WorkItemId\" NULLS LAST");
         sql.Should().Contain("ON CONFLICT");
 
         var manualRecorder = new CommandRecorder();
