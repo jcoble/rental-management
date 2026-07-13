@@ -23,8 +23,9 @@ corpus design (`…/2026-06-30-e2e-scenario-corpus-design.md`), and the clock sp
 1. **Always set `Property.OwnerEntityId`** on property create (omitting → silent fallback to the
    primary self-owner → misattributed income that still "passes"). Also set per-property
    `ManagementFeePercent` (fee is per-property, not per-owner).
-2. **Leases created with `RentTrackingStartMode = BackfillFromLeaseStart`** → rent back-fills
-   synchronously inside `POST /leases` (default `ForwardOnly` = ~1 month only).
+2. **Agreement confirmation never generates historical rent.** Confirm against explicit
+   LeaseManagement, Agreement, and TenantAccount targets; post the bounded historical ledger corpus
+   separately.
 3. **Mark rent Paid per-payment** with the row's historical `PaidDate` + `Method` (income buckets by
    `PaidDate` year; the bulk endpoint stamps one shared date). `PayerName/CheckNumber/BankName`
    only settable at `POST /payments` create.
@@ -56,12 +57,13 @@ corpus design (`…/2026-06-30-e2e-scenario-corpus-design.md`), and the clock sp
 3. Create **4 owner entities** (`POST /owner-entities`), capture ids.
 4. Create **13 properties** (`POST /properties`) with **explicit `ownerEntityId`**, `managementFeePercent`, and the depreciation basis fields (from `depreciation.csv`), then their **21 units**. (A subset via lease-scan bootstrap to exercise `/scan/new-rental`; the rest direct or CSV import.)
 5. Create **11 loans** — scan the mortgage-statement JPEGs → `ConfirmAsLoan` (exercises the flagship path) with `MonthlyPrincipalInterest` from `loans.csv`; or direct `POST /loans`.
-6. Create **tenants + 19 active leases** with `RentTrackingStartMode=BackfillFromLeaseStart` (synchronous rent back-fill). Lease docs via lease-scan confirm (born-digital + a stitch set) and direct.
+6. Create **tenants + 19 active relationships and agreements** through explicit LeaseManagement,
+   Agreement, and TenantAccount commands. Lease docs use scan confirm (born-digital + a stitch set).
 7. Create **security deposits** (`/security-deposits`) and **autopay enrollments** for L09/L17.
 
 ### Phase B — History back-fill (CY2023–24)
-8. `run-once{debt-service}` → all historical `LoanPayment` rows; `run-once{recurring-expense}` → recurring `Expense` rows. (Rent already back-filled in step 6.)
-9. **Mark historical rent Paid** — iterate `events.csv` rent rows with `paid_date` in 2023–24, `POST /payments/{id}/mark-paid {paidDate, method}` each.
+8. Post the bounded historical tenant-account ledger corpus; `run-once{debt-service}` → all historical `LoanPayment` rows; `run-once{recurring-expense}` → recurring `Expense` rows.
+9. **Post historical rent receipts** — iterate `events.csv` rent rows with `paid_date` in 2023–24 and preserve each effective date and payment method.
 10. Enter historical **one-off expenses** (receipts scan-confirm or direct) and **direct tax/insurance** for P03/P08.
 
 ### Phase C — Live operations CY2025 (week-by-week per the calendar)

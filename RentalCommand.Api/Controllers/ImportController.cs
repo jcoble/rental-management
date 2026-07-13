@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Mvc;
@@ -10,7 +9,7 @@ namespace RentalCommand.Api.Controllers;
 /// <summary>
 /// CSV / bulk import for a migrating landlord. Upload a spreadsheet of tenants / properties / units
 /// and create them in bulk, with a dry-run preview (per-row validation + errors) before committing.
-/// All routes are scoped to the caller's portfolio via the JWT <c>portfolioId</c> claim — there is no
+/// All routes are scoped to the caller's server-validated workspace context — there is no
 /// <c>{portfolioId}</c> route parameter and a client can never name another portfolio.
 /// </summary>
 [ApiController]
@@ -71,13 +70,11 @@ public class ImportController : ManagementControllerBase
                 var normalizedKey = idempotencyKey?.Trim();
                 if (string.IsNullOrWhiteSpace(normalizedKey) || normalizedKey.Length > 200)
                     return BadRequest(new { error = "A valid Idempotency-Key is required for payment imports (maximum 200 characters)." });
-                if (!Guid.TryParse(User.FindFirstValue("sid"), out var sessionId)
-                    || !int.TryParse(User.FindFirstValue("ctx"), out var accessContextId)
-                    || !long.TryParse(User.FindFirstValue("ar"), out var accessRevision))
+                if (!TryGetActiveAccessContext(out var active))
                     return Forbid();
 
                 commandContext = new CsvImportCommandContext(
-                    GetUserId(), sessionId, accessContextId, accessRevision,
+                    active.UserId, active.SessionId, active.AccessContextId, active.AccessRevision,
                     Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedKey)))
                         .ToLowerInvariant());
             }

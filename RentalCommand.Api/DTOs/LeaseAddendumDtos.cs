@@ -37,7 +37,6 @@ public class CreateLeaseAddendumDraftRequest
     public int TermsSchemaVersion { get; set; }
     public JsonElement TermsPayload { get; set; }
     public int DocumentTemplateId { get; set; }
-    public int DocumentTemplateVersion { get; set; }
     public List<LeaseAddendumSignerRequest> Signers { get; set; } = [];
     public List<LeaseAddendumFinancialEffectRequest> FinancialEffects { get; set; } = [];
 }
@@ -56,7 +55,8 @@ public sealed class IssueLeaseAddendumRequest
 {
     public int DraftRevision { get; set; }
     public Guid PendingUploadId { get; set; }
-    public string RequestFingerprint { get; set; } = string.Empty;
+    public int DocumentSourceVersionId { get; set; }
+    public string IssuanceFingerprint { get; set; } = string.Empty;
     public string StorageKey { get; set; } = string.Empty;
     public string FileName { get; set; } = string.Empty;
     public long FileSize { get; set; }

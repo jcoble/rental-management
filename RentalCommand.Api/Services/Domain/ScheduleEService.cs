@@ -1,38 +1,56 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
 /// <inheritdoc cref="IScheduleEService"/>
 public class ScheduleEService : IScheduleEService
 {
-    private const int UnassignedPropertyId = 0;
-    private const string UnassignedPropertyName = "Unassigned";
-
     private readonly RentalCommandDbContext _db;
+    private readonly TimeProvider _timeProvider;
 
-    public ScheduleEService(RentalCommandDbContext db)
+    public ScheduleEService(RentalCommandDbContext db, TimeProvider? timeProvider = null)
     {
         _db = db;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    public async Task<ScheduleEReport> GetReportAsync(int portfolioId, int year, int? propertyId = null, CancellationToken ct = default)
+    public async Task<ScheduleEReport> GetReportAsync(
+        WorkspaceReadScope scope,
+        int year,
+        int? propertyId = null,
+        CancellationToken ct = default)
     {
+        var properties = _db.Properties
+            .AsNoTracking()
+            .WhereAuthorized(
+                _db,
+                scope,
+                CapabilityKeys.ReportsRead,
+                _timeProvider.GetUtcNow().UtcDateTime);
+        return await GetReportCoreAsync(
+            scope, year, properties, propertyId, ct);
+    }
+
+    private async Task<ScheduleEReport> GetReportCoreAsync(
+        WorkspaceReadScope scope,
+        int year,
+        IQueryable<Property> authorizedProperties,
+        int? propertyId,
+        CancellationToken ct)
+    {
+        var portfolioId = scope.PortfolioId;
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
         var yearStart = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var yearEndExclusive = yearStart.AddYears(1);
         var yearStartDate = new DateOnly(year, 1, 1);
         var yearEndExclusiveDate = yearStartDate.AddYears(1);
-
-        if (propertyId.HasValue)
-        {
-            var inPortfolio = await _db.Properties
-                .AsNoTracking()
-                .AnyAsync(p => p.PortfolioId == portfolioId && p.Id == propertyId.Value, ct);
-            if (!inPortfolio)
-                return EmptyReport(year);
-        }
+        var workspaceAdministratorPortfolio = WorkspaceAdministratorPortfolio(scope, utcNow);
 
         // ── Income ──────────────────────────────────────────────────────────────────────────────
         // Taxable income is projected from tenant cash receipts plus the separate pre-tenancy
@@ -52,6 +70,7 @@ public class ScheduleEService : IScheduleEService
                 on new { account.PortfolioId, Id = account.LeaseManagementId }
                 equals new { management.PortfolioId, management.Id }
             where allocation.PortfolioId == portfolioId
+                && authorizedProperties.Any(property => property.Id == management.PropertyId)
                 && receipt.EntryType == TenantLedgerEntryType.PaymentReceipt
                 && receipt.EffectiveOn >= yearStartDate
                 && receipt.EffectiveOn < yearEndExclusiveDate
@@ -59,52 +78,87 @@ public class ScheduleEService : IScheduleEService
                     || charge.EntryType == TenantLedgerEntryType.LateFeeCharge
                     || charge.EntryType == TenantLedgerEntryType.AddendumCharge
                     || charge.EntryType == TenantLedgerEntryType.ManualCharge)
-            select new
+            select new ScheduleEIncomeComponent
             {
                 PropertyId = (int?)management.PropertyId,
                 Amount = allocation.Amount,
             };
-        var applicationIncomeQuery = _db.ApplicationFinancialEntries
+        var applicationIncomeFactsQuery = _db.ApplicationFinancialEntries
             .IgnoreQueryFilters()
             .AsNoTracking()
             .Where(entry => entry.PortfolioId == portfolioId
                 && entry.EffectiveOn >= yearStartDate
                 && entry.EffectiveOn < yearEndExclusiveDate)
-            .Select(entry => new
+            .Select(entry => new ScheduleEIncomeComponent
             {
-                entry.PropertyId,
+                PropertyId = entry.PropertyId != null
+                    ? entry.PropertyId
+                    : entry.UnitId != null
+                        ? _db.Units.IgnoreQueryFilters()
+                            .Where(unit =>
+                                unit.PortfolioId == portfolioId &&
+                                unit.Id == entry.UnitId.Value)
+                            .Select(unit => (int?)unit.PropertyId)
+                            .FirstOrDefault()
+                        : null,
                 Amount = entry.Direction == ApplicationFinancialDirection.Increase
                     ? entry.Amount
                     : -entry.Amount,
             });
+        var applicationIncomeQuery = applicationIncomeFactsQuery
+            .Where(entry =>
+                entry.PropertyId != null &&
+                authorizedProperties.Any(property => property.Id == entry.PropertyId.Value));
         var incomeQuery = tenantIncomeQuery.Concat(applicationIncomeQuery);
         if (propertyId.HasValue)
             incomeQuery = incomeQuery.Where(row => row.PropertyId == propertyId.Value);
 
-        var totalRentalIncome = await incomeQuery
-            .SumAsync(row => (decimal?)row.Amount, ct) ?? 0m;
+        var unallocatedIncomeQuery = applicationIncomeFactsQuery
+            .Where(entry => entry.PropertyId == null);
 
         // ── Expenses ─────────────────────────────────────────────────────────────────────────────
-        // Soft-deleted records are excluded by the global query filter. Grouped on (property, category)
-        // and summed SQL-side; the flat (propertyId, category, total) rows are reshaped into the nested
-        // map in memory. Property totals are projected below with each property row.
-        var expenseQuery = _db.Expenses
+        // Resolve the expense's canonical operational context in SQL. Work-order receipts inherit the
+        // work order's Property, direct Unit expenses inherit the Unit's Property, and a direct Property
+        // scope is used otherwise. The blueprint's typed ExpenseAllocation rows do not exist in the
+        // current schema yet, so genuinely portfolio-scoped rows remain unallocated and are reconciled
+        // explicitly below instead of being copied or guessed onto a Property.
+        var expenseFactsQuery = _db.Expenses
             .AsNoTracking()
             .Where(e =>
                 e.PortfolioId == portfolioId &&
                 e.CapitalizedAssetId == null &&
                 e.IncurredAt >= yearStart &&
-                e.IncurredAt < yearEndExclusive);
+                e.IncurredAt < yearEndExclusive)
+            .Select(expense => new ScheduleEExpenseFact
+            {
+                PropertyId = expense.WorkOrderId != null
+                    ? _db.WorkOrders.IgnoreQueryFilters()
+                        .Where(workOrder =>
+                            workOrder.PortfolioId == portfolioId &&
+                            workOrder.Id == expense.WorkOrderId.Value)
+                        .Select(workOrder => (int?)workOrder.PropertyId)
+                        .FirstOrDefault()
+                    : expense.UnitId != null
+                        ? _db.Units.IgnoreQueryFilters()
+                            .Where(unit =>
+                                unit.PortfolioId == portfolioId &&
+                                unit.Id == expense.UnitId.Value)
+                            .Select(unit => (int?)unit.PropertyId)
+                            .FirstOrDefault()
+                        : expense.PropertyId,
+                Category = expense.Category,
+                Amount = expense.Amount,
+            });
+
+        var expenseQuery = expenseFactsQuery
+            .Where(expense =>
+                expense.PropertyId != null &&
+                authorizedProperties.Any(property => property.Id == expense.PropertyId.Value));
         if (propertyId.HasValue)
-            expenseQuery = expenseQuery.Where(e => e.PropertyId == propertyId.Value);
+            expenseQuery = expenseQuery.Where(expense => expense.PropertyId == propertyId.Value);
 
-        var expenseCategoryTotals = await expenseQuery
-            .GroupBy(e => new { PropertyId = e.PropertyId ?? UnassignedPropertyId, e.Category })
-            .Select(g => new { g.Key.PropertyId, g.Key.Category, Total = g.Sum(e => e.Amount) })
-            .ToListAsync(ct);
-
-        var expenseTotalsByPropertyCategory = expenseCategoryTotals
-            .ToDictionary(r => (r.PropertyId, r.Category), r => r.Total);
+        var unallocatedExpenseQuery = expenseFactsQuery
+            .Where(expense => expense.PropertyId == null);
 
         // ── Mortgage interest (from the loan split; principal is NEVER deductible) ─────────────────
         // Σ LoanPayment.InterestAmount for the year, per property (via the loan). Summed SQL-side.
@@ -113,30 +167,25 @@ public class ScheduleEService : IScheduleEService
             .Where(lp =>
                 lp.PortfolioId == portfolioId &&
                 lp.Loan != null &&
+                authorizedProperties.Any(property => property.Id == lp.Loan.PropertyId) &&
                 lp.DueDate >= yearStart &&
                 lp.DueDate < yearEndExclusive);
         if (propertyId.HasValue)
             loanPaymentQuery = loanPaymentQuery.Where(lp => lp.Loan!.PropertyId == propertyId.Value);
 
-        var totalModeledInterest = await loanPaymentQuery
-            .SumAsync(lp => (decimal?)lp.InterestAmount, ct) ?? 0m;
-
         // Properties that have ANY loan (active or not) — their legacy manual MortgageInterest expense
         // category is excluded to avoid double-counting once the loan models the interest.
         var loanQuery = _db.Loans
             .AsNoTracking()
-            .Where(l => l.PortfolioId == portfolioId);
+            .Where(l => l.PortfolioId == portfolioId &&
+                authorizedProperties.Any(property => property.Id == l.PropertyId));
         if (propertyId.HasValue)
             loanQuery = loanQuery.Where(l => l.PropertyId == propertyId.Value);
         var loanPropertyIdsQuery = loanQuery.Select(l => l.PropertyId).Distinct();
 
         // ── Depreciation (one SQL union/group/total over property and asset bases; §6/§18) ────────
-        var depreciationRows = await ScheduleEDepreciationQuery
-            .Build(_db, portfolioId, year, propertyId)
-            .ToListAsync(ct);
-
-        var depreciationByProperty = depreciationRows.ToDictionary(row => row.PropertyId);
-        var depreciationPropertyIds = depreciationRows.Select(row => row.PropertyId).ToArray();
+        var depreciationQuery = ScheduleEDepreciationQuery
+            .Build(_db, portfolioId, year, authorizedProperties, propertyId);
 
         var deductibleExpenseQuery = expenseQuery
             .Where(e =>
@@ -145,154 +194,420 @@ public class ScheduleEService : IScheduleEService
                   loanPropertyIdsQuery.Contains(e.PropertyId.Value)) &&
                 !(e.Category == ScheduleECategory.Depreciation &&
                   e.PropertyId != null &&
-                  depreciationPropertyIds.Contains(e.PropertyId.Value)));
+                  depreciationQuery.Any(depreciation =>
+                      depreciation.PropertyId == e.PropertyId.Value)));
 
-        var totalDeductibleExpenses = await deductibleExpenseQuery
-            .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
+        var categoryComponents = deductibleExpenseQuery
+            .Select(expense => new ScheduleECategoryComponent
+            {
+                PropertyId = expense.PropertyId!.Value,
+                Category = expense.Category,
+                Amount = expense.Amount,
+            })
+            .Concat(loanPaymentQuery.Select(payment => new ScheduleECategoryComponent
+            {
+                PropertyId = payment.Loan!.PropertyId,
+                Category = ScheduleECategory.MortgageInterest,
+                Amount = payment.InterestAmount,
+            }))
+            .Concat(depreciationQuery.Select(depreciation => new ScheduleECategoryComponent
+            {
+                PropertyId = depreciation.PropertyId,
+                Category = ScheduleECategory.Depreciation,
+                Amount = depreciation.Amount,
+            }));
 
-        var totalDepreciation = depreciationRows.FirstOrDefault()?.TotalAmount ?? 0m;
+        var categoryTotalsQuery = categoryComponents
+            .GroupBy(component => new { component.PropertyId, component.Category })
+            .Select(group => new ScheduleECategorySqlRow
+            {
+                PropertyId = group.Key.PropertyId,
+                Category = group.Key.Category,
+                Amount = group.Sum(component => component.Amount),
+            });
 
         // ── Property rows ─────────────────────────────────────────────────────────────────────────
-        // Project the Schedule E row facts with the ordered property rows. Income, modeled interest,
-        // and deductible expenses are correlated SQL sums, so no aggregate dictionaries are joined back
-        // to properties in memory. Depreciation is already one grouped SQL result keyed for DTO shaping.
-        var reportPropertyQuery = _db.Properties
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId);
+        // Project one flat property/category relation. Projecting the grouped category query as a nested
+        // collection is not translatable because its depreciation branch is a keyless projection and EF
+        // cannot derive a stable collection identifier. The left join keeps the same work in one SQL
+        // statement while also retaining income-only properties through a null category row.
+        var reportPropertyQuery = authorizedProperties;
         if (propertyId.HasValue)
             reportPropertyQuery = reportPropertyQuery.Where(p => p.Id == propertyId.Value);
 
-        var propertyRows = await reportPropertyQuery
-            .Where(p =>
-                incomeQuery.Any(income => income.PropertyId == p.Id) ||
-                expenseQuery.Any(e => e.PropertyId == p.Id) ||
-                loanPaymentQuery.Any(lp => lp.Loan != null && lp.Loan.PropertyId == p.Id) ||
-                depreciationPropertyIds.Contains(p.Id))
-            .OrderBy(p => p.Name)
-            .Select(p => new
+        var propertyFactsQuery = reportPropertyQuery
+            .Where(property =>
+                incomeQuery.Any(income => income.PropertyId == property.Id) ||
+                categoryTotalsQuery.Any(category => category.PropertyId == property.Id))
+            .Select(property => new ScheduleEPropertySqlRow
             {
-                p.Id,
-                p.Name,
+                PropertyId = property.Id,
+                PropertyName = property.Name,
                 Income = incomeQuery
-                    .Where(income => income.PropertyId == p.Id)
+                    .Where(income => income.PropertyId == property.Id)
                     .Sum(income => (decimal?)income.Amount) ?? 0m,
                 ModeledInterest = loanPaymentQuery
-                    .Where(lp => lp.Loan != null && lp.Loan.PropertyId == p.Id)
-                    .Sum(lp => (decimal?)lp.InterestAmount) ?? 0m,
-                HasLoan = loanQuery.Any(l => l.PropertyId == p.Id),
-                DeductibleExpenses = deductibleExpenseQuery
-                    .Where(e => e.PropertyId == p.Id)
-                    .Sum(e => (decimal?)e.Amount) ?? 0m,
+                    .Where(payment => payment.Loan != null && payment.Loan.PropertyId == property.Id)
+                    .Sum(payment => (decimal?)payment.InterestAmount) ?? 0m,
+                Depreciation = depreciationQuery
+                    .Where(depreciation => depreciation.PropertyId == property.Id)
+                    .Select(depreciation => (decimal?)depreciation.Amount)
+                    .FirstOrDefault() ?? 0m,
+                DepreciationIsFirstYearEstimate = depreciationQuery
+                    .Where(depreciation => depreciation.PropertyId == property.Id)
+                    .Select(depreciation => depreciation.IsFirstYearEstimate)
+                    .FirstOrDefault(),
+                TotalExpenses = categoryTotalsQuery
+                    .Where(category => category.PropertyId == property.Id)
+                    .Sum(category => (decimal?)category.Amount) ?? 0m,
+                NetIncome = (incomeQuery
+                        .Where(income => income.PropertyId == property.Id)
+                        .Sum(income => (decimal?)income.Amount) ?? 0m) -
+                    (categoryTotalsQuery
+                        .Where(category => category.PropertyId == property.Id)
+                        .Sum(category => (decimal?)category.Amount) ?? 0m),
+            });
+        var nonZeroCategoryTotalsQuery = categoryTotalsQuery
+            .Where(category => category.Amount != 0m);
+        var allocatedCategoryTotalsQuery = categoryTotalsQuery
+            .GroupBy(category => category.Category)
+            .Select(group => new ScheduleEReportCategorySqlRow
+            {
+                Category = group.Key,
+                Amount = group.Sum(category => category.Amount),
             })
+            .Where(category => category.Amount != 0m);
+        var unallocatedCategoryTotalsQuery = unallocatedExpenseQuery
+            .GroupBy(expense => expense.Category)
+            .Select(group => new ScheduleEReportCategorySqlRow
+            {
+                Category = group.Key,
+                Amount = group.Sum(expense => expense.Amount),
+            })
+            .Where(category => category.Amount != 0m);
+
+        var reportTotalsQuery = _db.Portfolios
+            .AsNoTracking()
+            .Where(portfolio =>
+                portfolio.Id == portfolioId &&
+                (authorizedProperties.Any() || workspaceAdministratorPortfolio.Any()))
+            .Select(_ => new ScheduleEReportTotalsSqlRow
+            {
+                TotalRentalIncome = incomeQuery.Sum(income => (decimal?)income.Amount) ?? 0m,
+                TotalExpenses = categoryTotalsQuery.Sum(category => (decimal?)category.Amount) ?? 0m,
+                CanViewUnallocated = !propertyId.HasValue && workspaceAdministratorPortfolio.Any(),
+                UnallocatedIncomeEntryCount = !propertyId.HasValue && workspaceAdministratorPortfolio.Any()
+                    ? unallocatedIncomeQuery.Count()
+                    : 0,
+                UnallocatedRentalIncome = !propertyId.HasValue && workspaceAdministratorPortfolio.Any()
+                    ? unallocatedIncomeQuery.Sum(income => (decimal?)income.Amount) ?? 0m
+                    : 0m,
+                UnallocatedExpenseCount = !propertyId.HasValue && workspaceAdministratorPortfolio.Any()
+                    ? unallocatedExpenseQuery.Count()
+                    : 0,
+                UnallocatedTotalExpenses = !propertyId.HasValue && workspaceAdministratorPortfolio.Any()
+                    ? unallocatedExpenseQuery.Sum(expense => (decimal?)expense.Amount) ?? 0m
+                    : 0m,
+            });
+
+        var propertyFlatRowsQuery =
+            from totals in reportTotalsQuery
+            from property in propertyFactsQuery
+            join category in nonZeroCategoryTotalsQuery
+                on property.PropertyId equals category.PropertyId into propertyCategories
+            from category in propertyCategories.DefaultIfEmpty()
+            select new ScheduleEFlatSqlRow
+            {
+                RowKind = ScheduleEFlatRowKind.Property,
+                PropertyId = property.PropertyId,
+                PropertyName = property.PropertyName,
+                Income = property.Income,
+                ModeledInterest = property.ModeledInterest,
+                Depreciation = property.Depreciation,
+                DepreciationIsFirstYearEstimate = property.DepreciationIsFirstYearEstimate,
+                TotalExpenses = property.TotalExpenses,
+                NetIncome = property.NetIncome,
+                Category = (ScheduleECategory?)category.Category,
+                CategoryAmount = (decimal?)category.Amount ?? 0m,
+                ReportTotalRentalIncome = totals.TotalRentalIncome,
+                ReportTotalExpenses = totals.TotalExpenses,
+                CanViewUnallocated = totals.CanViewUnallocated,
+                UnallocatedIncomeEntryCount = totals.UnallocatedIncomeEntryCount,
+                UnallocatedRentalIncome = totals.UnallocatedRentalIncome,
+                UnallocatedExpenseCount = totals.UnallocatedExpenseCount,
+                UnallocatedTotalExpenses = totals.UnallocatedTotalExpenses,
+            };
+
+        var allocatedCategoryFlatRowsQuery =
+            from totals in reportTotalsQuery
+            from category in allocatedCategoryTotalsQuery
+            select new ScheduleEFlatSqlRow
+            {
+                RowKind = ScheduleEFlatRowKind.AllocatedCategory,
+                PropertyId = 0,
+                PropertyName = string.Empty,
+                Income = 0m,
+                ModeledInterest = 0m,
+                Depreciation = 0m,
+                DepreciationIsFirstYearEstimate = false,
+                TotalExpenses = 0m,
+                NetIncome = 0m,
+                Category = category.Category,
+                CategoryAmount = category.Amount,
+                ReportTotalRentalIncome = totals.TotalRentalIncome,
+                ReportTotalExpenses = totals.TotalExpenses,
+                CanViewUnallocated = totals.CanViewUnallocated,
+                UnallocatedIncomeEntryCount = totals.UnallocatedIncomeEntryCount,
+                UnallocatedRentalIncome = totals.UnallocatedRentalIncome,
+                UnallocatedExpenseCount = totals.UnallocatedExpenseCount,
+                UnallocatedTotalExpenses = totals.UnallocatedTotalExpenses,
+            };
+
+        var unallocatedFlatRowsQuery =
+            from totals in reportTotalsQuery
+            where totals.CanViewUnallocated
+            join category in unallocatedCategoryTotalsQuery
+                on 1 equals 1 into categories
+            from category in categories.DefaultIfEmpty()
+            select new ScheduleEFlatSqlRow
+            {
+                RowKind = ScheduleEFlatRowKind.UnallocatedCategory,
+                PropertyId = 0,
+                PropertyName = string.Empty,
+                Income = 0m,
+                ModeledInterest = 0m,
+                Depreciation = 0m,
+                DepreciationIsFirstYearEstimate = false,
+                TotalExpenses = 0m,
+                NetIncome = 0m,
+                Category = (ScheduleECategory?)category.Category,
+                CategoryAmount = (decimal?)category.Amount ?? 0m,
+                ReportTotalRentalIncome = totals.TotalRentalIncome,
+                ReportTotalExpenses = totals.TotalExpenses,
+                CanViewUnallocated = totals.CanViewUnallocated,
+                UnallocatedIncomeEntryCount = totals.UnallocatedIncomeEntryCount,
+                UnallocatedRentalIncome = totals.UnallocatedRentalIncome,
+                UnallocatedExpenseCount = totals.UnallocatedExpenseCount,
+                UnallocatedTotalExpenses = totals.UnallocatedTotalExpenses,
+            };
+
+        var flatRows = await propertyFlatRowsQuery
+            .Concat(allocatedCategoryFlatRowsQuery)
+            .Concat(unallocatedFlatRowsQuery)
+            .OrderBy(row => row.RowKind)
+            .ThenBy(row => row.PropertyName)
+            .ThenBy(row => row.PropertyId)
+            .ThenBy(row => row.Category)
             .ToListAsync(ct);
 
-        // ── Assemble per-property reports ─────────────────────────────────────────────────────────
-        var unassignedIncome = propertyId.HasValue
-            ? 0m
-            : await incomeQuery
-                .Where(income => income.PropertyId == null)
-                .SumAsync(income => (decimal?)income.Amount, ct) ?? 0m;
-        var unassignedDeductibleExpenses = propertyId.HasValue
-            ? 0m
-            : await deductibleExpenseQuery
-                .Where(e => e.PropertyId == null)
-                .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
-        var hasUnassignedExpenseCategory = !propertyId.HasValue &&
-                                           await expenseQuery.AnyAsync(e => e.PropertyId == null, ct);
-        var hasUnassignedRow = !propertyId.HasValue &&
-                               (unassignedIncome != 0m ||
-                                unassignedDeductibleExpenses != 0m ||
-                                hasUnassignedExpenseCategory);
-
-        var reports = new List<ScheduleEPropertyReport>(propertyRows.Count + (hasUnassignedRow ? 1 : 0));
-
-        foreach (var prop in propertyRows)
+        // SQL already authorized, resolved scope, grouped, aggregated, and ordered the flat rows. This
+        // pass only restores nested DTO collections; it never filters or aggregates business values.
+        var reports = new List<ScheduleEPropertyReport>();
+        var reportCategories = new List<ScheduleECategoryAmount>();
+        var unallocatedCategories = new List<ScheduleECategoryAmount>();
+        ScheduleEFlatSqlRow? currentProperty = null;
+        List<ScheduleECategoryAmount>? currentCategories = null;
+        foreach (var row in flatRows)
         {
-            var depreciation = depreciationByProperty.TryGetValue(prop.Id, out var depreciationRow)
-                ? depreciationRow.Amount
-                : 0m;
-            var depreciationIsEstimate = depreciationRow?.IsFirstYearEstimate == true && depreciation > 0m;
-
-            // Build category list in enum-declared order; omit zero amounts. Deterministic legacy
-            // double-count exclusion (§10/§18): when a loan exists for the property, drop the manual
-            // MortgageInterest category (the modeled interest replaces it); when computed depreciation
-            // applies, drop the manual Depreciation category.
-            var categories = new List<ScheduleECategoryAmount>();
-            foreach (ScheduleECategory cat in Enum.GetValues<ScheduleECategory>())
+            if (row.RowKind == ScheduleEFlatRowKind.Property)
             {
-                if (cat == ScheduleECategory.MortgageInterest && prop.HasLoan)
-                    continue;
-                if (cat == ScheduleECategory.Depreciation && depreciation > 0m)
-                    continue;
+                if (currentProperty is null || currentProperty.PropertyId != row.PropertyId)
+                {
+                    currentProperty = row;
+                    currentCategories = [];
+                    reports.Add(new ScheduleEPropertyReport(
+                        row.PropertyId,
+                        row.PropertyName,
+                        row.Income,
+                        currentCategories,
+                        row.TotalExpenses,
+                        row.NetIncome,
+                        row.ModeledInterest,
+                        row.Depreciation,
+                        row.DepreciationIsFirstYearEstimate && row.Depreciation > 0m));
+                }
 
-                if (expenseTotalsByPropertyCategory.TryGetValue((prop.Id, cat), out var amount) && amount != 0m)
-                    categories.Add(new ScheduleECategoryAmount(cat.ToString(), amount));
+                if (row.Category.HasValue)
+                {
+                    currentCategories!.Add(new ScheduleECategoryAmount(
+                        row.Category.Value.ToString(), row.CategoryAmount));
+                }
             }
-
-            // Fold the modeled deductions into the category breakdown (so the CSV/packet show them and
-            // the totals net correctly): mortgage interest from the loan split (principal excluded) and
-            // the computed depreciation.
-            if (prop.ModeledInterest != 0m)
-                categories.Add(new ScheduleECategoryAmount(ScheduleECategory.MortgageInterest.ToString(), prop.ModeledInterest));
-            if (depreciation != 0m)
-                categories.Add(new ScheduleECategoryAmount(ScheduleECategory.Depreciation.ToString(), depreciation));
-
-            var propertyTotalExpenses = prop.DeductibleExpenses +
-                                        prop.ModeledInterest +
-                                        depreciation;
-
-            reports.Add(new ScheduleEPropertyReport(
-                PropertyId: prop.Id,
-                PropertyName: prop.Name,
-                RentalIncome: prop.Income,
-                ExpensesByCategory: categories,
-                TotalExpenses: propertyTotalExpenses,
-                NetIncome: prop.Income - propertyTotalExpenses,
-                MortgageInterest: prop.ModeledInterest,
-                Depreciation: depreciation,
-                DepreciationIsFirstYearEstimate: depreciationIsEstimate));
+            else if (row.RowKind == ScheduleEFlatRowKind.AllocatedCategory && row.Category.HasValue)
+            {
+                reportCategories.Add(new ScheduleECategoryAmount(
+                    row.Category.Value.ToString(), row.CategoryAmount));
+            }
+            else if (row.RowKind == ScheduleEFlatRowKind.UnallocatedCategory && row.Category.HasValue)
+            {
+                unallocatedCategories.Add(new ScheduleECategoryAmount(
+                    row.Category.Value.ToString(), row.CategoryAmount));
+            }
         }
 
-        if (hasUnassignedRow)
-        {
-            var categories = new List<ScheduleECategoryAmount>();
-            foreach (ScheduleECategory cat in Enum.GetValues<ScheduleECategory>())
-            {
-                if (expenseTotalsByPropertyCategory.TryGetValue((UnassignedPropertyId, cat), out var amount) && amount != 0m)
-                    categories.Add(new ScheduleECategoryAmount(cat.ToString(), amount));
-            }
-
-            reports.Add(new ScheduleEPropertyReport(
-                PropertyId: UnassignedPropertyId,
-                PropertyName: UnassignedPropertyName,
-                RentalIncome: unassignedIncome,
-                ExpensesByCategory: categories,
-                TotalExpenses: unassignedDeductibleExpenses,
-                NetIncome: unassignedIncome - unassignedDeductibleExpenses,
-                MortgageInterest: 0m,
-                Depreciation: 0m,
-                DepreciationIsFirstYearEstimate: false));
-        }
-
-        var totalExpenses = totalDeductibleExpenses + totalModeledInterest + totalDepreciation;
+        var reportTotalRentalIncome = flatRows.Count == 0 ? 0m : flatRows[0].ReportTotalRentalIncome;
+        var reportTotalExpenses = flatRows.Count == 0 ? 0m : flatRows[0].ReportTotalExpenses;
+        var canViewUnallocated = flatRows.Count != 0 && flatRows[0].CanViewUnallocated;
+        var unallocatedIncomeEntryCount = flatRows.Count == 0 ? 0 : flatRows[0].UnallocatedIncomeEntryCount;
+        var unallocatedRentalIncome = flatRows.Count == 0 ? 0m : flatRows[0].UnallocatedRentalIncome;
+        var unallocatedExpenseCount = flatRows.Count == 0 ? 0 : flatRows[0].UnallocatedExpenseCount;
+        var unallocatedTotalExpenses = flatRows.Count == 0 ? 0m : flatRows[0].UnallocatedTotalExpenses;
+        var requiresAllocation = unallocatedIncomeEntryCount != 0 || unallocatedExpenseCount != 0;
+        var reconciledRentalIncome = reportTotalRentalIncome + unallocatedRentalIncome;
+        var reconciledExpenses = reportTotalExpenses + unallocatedTotalExpenses;
 
         return new ScheduleEReport
         {
             Year = year,
             Properties = reports,
-            TotalRentalIncome = totalRentalIncome,
-            TotalExpenses = totalExpenses,
-            NetIncome = totalRentalIncome - totalExpenses,
+            ExpensesByCategory = reportCategories,
+            TotalRentalIncome = reportTotalRentalIncome,
+            TotalExpenses = reportTotalExpenses,
+            NetIncome = reportTotalRentalIncome - reportTotalExpenses,
+            UnallocatedActivity = new ScheduleEUnallocatedActivity
+            {
+                CanView = canViewUnallocated,
+                RequiresAllocation = requiresAllocation,
+                IncomeEntryCount = unallocatedIncomeEntryCount,
+                RentalIncome = unallocatedRentalIncome,
+                ExpenseCount = unallocatedExpenseCount,
+                ExpensesByCategory = unallocatedCategories,
+                TotalExpenses = unallocatedTotalExpenses,
+                NetIncome = unallocatedRentalIncome - unallocatedTotalExpenses,
+                Warning = requiresAllocation
+                    ? "Some tax activity is not assigned to a property. Allocate it before filing; it is excluded from per-property Schedule E totals."
+                    : string.Empty,
+            },
+            ReconciledTotalRentalIncome = reconciledRentalIncome,
+            ReconciledTotalExpenses = reconciledExpenses,
+            ReconciledNetIncome = reconciledRentalIncome - reconciledExpenses,
         };
     }
 
-    private static ScheduleEReport EmptyReport(int year) => new()
+    private IQueryable<Portfolio> WorkspaceAdministratorPortfolio(
+        WorkspaceReadScope scope,
+        DateTime utcNow) =>
+        _db.Portfolios
+            .AsNoTracking()
+            .Where(portfolio =>
+                portfolio.Id == scope.PortfolioId &&
+                _db.AuthSessions.AsNoTracking().Any(session =>
+                    session.Id == scope.SessionId &&
+                    session.UserId == scope.UserId &&
+                    session.ActiveAccessContextId == scope.AccessContextId &&
+                    session.Status == AuthSessionStatus.Active &&
+                    session.RevokedAtUtc == null &&
+                    session.ExpiresAtUtc > utcNow &&
+                    session.ActiveAccessContext != null &&
+                    session.ActiveAccessContext.Id == scope.AccessContextId &&
+                    session.ActiveAccessContext.UserId == scope.UserId &&
+                    session.ActiveAccessContext.PortfolioId == scope.PortfolioId &&
+                    session.ActiveAccessContext.AccessRevision == scope.AccessRevision &&
+                    session.ActiveAccessContext.Status == WorkspaceAccessContextStatus.Active &&
+                    session.ActiveAccessContext.SuspendedAtUtc == null &&
+                    session.ActiveAccessContext.RevokedAtUtc == null &&
+                    session.ActiveAccessContext.Membership != null &&
+                    session.ActiveAccessContext.Membership.PortfolioId == portfolio.Id &&
+                    session.ActiveAccessContext.Membership.Status == WorkspaceMembershipStatus.Active &&
+                    session.ActiveAccessContext.Membership.SuspendedAtUtc == null &&
+                    session.ActiveAccessContext.Membership.RevokedAtUtc == null &&
+                    session.ActiveAccessContext.Membership.EffectiveFromUtc <= utcNow &&
+                    (session.ActiveAccessContext.Membership.EffectiveToUtc == null ||
+                     session.ActiveAccessContext.Membership.EffectiveToUtc > utcNow) &&
+                    session.ActiveAccessContext.Membership.RoleAssignments.Any(assignment =>
+                        assignment.PortfolioId == portfolio.Id &&
+                        assignment.Status == MembershipRoleAssignmentStatus.Active &&
+                        assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties &&
+                        assignment.SuspendedAtUtc == null &&
+                        assignment.RevokedAtUtc == null &&
+                        assignment.EffectiveFromUtc <= utcNow &&
+                        (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > utcNow) &&
+                        assignment.RoleProfile != null &&
+                        assignment.RoleProfile.Key == RoleProfileKeys.WorkspaceAdministrator)));
+
+    private enum ScheduleEFlatRowKind
     {
-        Year = year,
-        Properties = [],
-        TotalRentalIncome = 0m,
-        TotalExpenses = 0m,
-        NetIncome = 0m,
-    };
+        Property = 0,
+        AllocatedCategory = 1,
+        UnallocatedCategory = 2,
+    }
+
+    private sealed class ScheduleEExpenseFact
+    {
+        public int? PropertyId { get; set; }
+        public ScheduleECategory Category { get; set; }
+        public decimal Amount { get; set; }
+    }
+
+    private sealed class ScheduleEIncomeComponent
+    {
+        public int? PropertyId { get; set; }
+        public decimal Amount { get; set; }
+    }
+
+    private sealed class ScheduleECategoryComponent
+    {
+        public int PropertyId { get; set; }
+        public ScheduleECategory Category { get; set; }
+        public decimal Amount { get; set; }
+    }
+
+    private sealed class ScheduleECategorySqlRow
+    {
+        public int PropertyId { get; set; }
+        public ScheduleECategory Category { get; set; }
+        public decimal Amount { get; set; }
+    }
+
+    private sealed class ScheduleEReportCategorySqlRow
+    {
+        public ScheduleECategory Category { get; set; }
+        public decimal Amount { get; set; }
+    }
+
+    private sealed class ScheduleEReportTotalsSqlRow
+    {
+        public decimal TotalRentalIncome { get; set; }
+        public decimal TotalExpenses { get; set; }
+        public bool CanViewUnallocated { get; set; }
+        public int UnallocatedIncomeEntryCount { get; set; }
+        public decimal UnallocatedRentalIncome { get; set; }
+        public int UnallocatedExpenseCount { get; set; }
+        public decimal UnallocatedTotalExpenses { get; set; }
+    }
+
+    private sealed class ScheduleEPropertySqlRow
+    {
+        public int PropertyId { get; set; }
+        public string PropertyName { get; set; } = string.Empty;
+        public decimal Income { get; set; }
+        public decimal ModeledInterest { get; set; }
+        public decimal Depreciation { get; set; }
+        public bool DepreciationIsFirstYearEstimate { get; set; }
+        public decimal TotalExpenses { get; set; }
+        public decimal NetIncome { get; set; }
+    }
+
+    private sealed class ScheduleEFlatSqlRow
+    {
+        public ScheduleEFlatRowKind RowKind { get; set; }
+        public int PropertyId { get; set; }
+        public string PropertyName { get; set; } = string.Empty;
+        public decimal Income { get; set; }
+        public decimal ModeledInterest { get; set; }
+        public decimal Depreciation { get; set; }
+        public bool DepreciationIsFirstYearEstimate { get; set; }
+        public decimal TotalExpenses { get; set; }
+        public decimal NetIncome { get; set; }
+        public ScheduleECategory? Category { get; set; }
+        public decimal CategoryAmount { get; set; }
+        public decimal ReportTotalRentalIncome { get; set; }
+        public decimal ReportTotalExpenses { get; set; }
+        public bool CanViewUnallocated { get; set; }
+        public int UnallocatedIncomeEntryCount { get; set; }
+        public decimal UnallocatedRentalIncome { get; set; }
+        public int UnallocatedExpenseCount { get; set; }
+        public decimal UnallocatedTotalExpenses { get; set; }
+    }
 
 }

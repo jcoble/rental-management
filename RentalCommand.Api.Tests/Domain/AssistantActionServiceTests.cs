@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -21,6 +22,7 @@ public sealed class AssistantActionServiceTests : IDisposable
     private readonly RentalCommandDbContext _db;
     private readonly List<string> _commands = [];
     private readonly AssistantActionService _sut;
+    private readonly WorkspaceReadScope _scope;
 
     public AssistantActionServiceTests()
     {
@@ -55,6 +57,7 @@ public sealed class AssistantActionServiceTests : IDisposable
             UpdatedAt = DateTime.UtcNow,
         });
         _db.SaveChanges();
+        _scope = SeedAdministratorScope();
 
         var expenseService = new ExpenseService(_db, new NoopDataUpdateService(), Mock.Of<IFileStorage>(), TimeProvider.System);
         _sut = new AssistantActionService(_db, expenseService, TimeProvider.System);
@@ -72,7 +75,7 @@ public sealed class AssistantActionServiceTests : IDisposable
         _commands.Clear();
 
         var result = await _sut.DraftAsync(
-            PortfolioId,
+            _scope,
             new AssistantActionDraftRequest
             {
                 Command = "log a $200 plumbing expense for Eastland",
@@ -99,7 +102,7 @@ public sealed class AssistantActionServiceTests : IDisposable
     public async Task DraftAsync_ForReadQuestion_ReturnsUnsupportedWithoutPretendingToWrite()
     {
         var result = await _sut.DraftAsync(
-            PortfolioId,
+            _scope,
             new AssistantActionDraftRequest
             {
                 Command = "who owes rent?",
@@ -115,7 +118,7 @@ public sealed class AssistantActionServiceTests : IDisposable
     public async Task DraftAsync_WhenPropertyHintIncludesUnitSuffix_ResolvesPropertyAndCleansDescription()
     {
         var result = await _sut.DraftAsync(
-            PortfolioId,
+            _scope,
             new AssistantActionDraftRequest
             {
                 Command = "Create a 42 dollar plumbing expense for Eastland 8-Plex Unit 2 paid today.",
@@ -131,7 +134,7 @@ public sealed class AssistantActionServiceTests : IDisposable
     public async Task ExecuteAsync_RequiresWriteModeAndExplicitConfirmation()
     {
         var draft = (await _sut.DraftAsync(
-            PortfolioId,
+            _scope,
             new AssistantActionDraftRequest
             {
                 Command = "log a $200 plumbing expense for Eastland",
@@ -139,7 +142,7 @@ public sealed class AssistantActionServiceTests : IDisposable
             })).Draft;
 
         var noWriteMode = await _sut.ExecuteAsync(
-            PortfolioId,
+            _scope,
             new AssistantActionExecuteRequest
             {
                 WriteModeEnabled = false,
@@ -151,7 +154,7 @@ public sealed class AssistantActionServiceTests : IDisposable
         (await _db.Expenses.CountAsync()).Should().Be(0);
 
         var notConfirmed = await _sut.ExecuteAsync(
-            PortfolioId,
+            _scope,
             new AssistantActionExecuteRequest
             {
                 WriteModeEnabled = true,
@@ -167,7 +170,7 @@ public sealed class AssistantActionServiceTests : IDisposable
     public async Task ExecuteAsync_WithConfirmedExpenseDraft_CreatesExpense()
     {
         var draft = (await _sut.DraftAsync(
-            PortfolioId,
+            _scope,
             new AssistantActionDraftRequest
             {
                 Command = "log a $275.20 plumbing expense for Eastland",
@@ -175,7 +178,7 @@ public sealed class AssistantActionServiceTests : IDisposable
             })).Draft;
 
         var result = await _sut.ExecuteAsync(
-            PortfolioId,
+            _scope,
             new AssistantActionExecuteRequest
             {
                 WriteModeEnabled = true,
@@ -193,6 +196,175 @@ public sealed class AssistantActionServiceTests : IDisposable
         fromDb.Category.Should().Be(ScheduleECategory.Repairs);
         fromDb.Description.Should().Contain("plumbing");
         fromDb.Notes.Should().Contain("explicit user confirmation");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithClientDraftForUnassignedProperty_FailsClosed()
+    {
+        var now = DateTime.UtcNow;
+        var unassigned = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Unassigned Property",
+            AddressLine1 = "500 Outside Scope Ave",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Properties.Add(unassigned);
+        await _db.SaveChangesAsync();
+
+        var result = await _sut.ExecuteAsync(
+            _scope,
+            new AssistantActionExecuteRequest
+            {
+                WriteModeEnabled = true,
+                Confirmed = true,
+                Draft = new AssistantActionDraft
+                {
+                    Kind = AssistantActionKind.CreateExpense,
+                    Risk = AssistantActionRisk.Medium,
+                    Summary = "Tampered expense",
+                    Expense = new AssistantExpenseDraft
+                    {
+                        PropertyId = unassigned.Id,
+                        PropertyName = unassigned.Name,
+                        Amount = 50m,
+                        Description = "Tampered expense",
+                        IncurredAt = now,
+                    },
+                },
+            });
+
+        result.Status.Should().Be(AssistantActionStatus.InvalidDraft);
+        (await _db.Expenses.CountAsync()).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task DraftAsync_WithAmbiguousAuthorizedPropertyHint_FailsClosed()
+    {
+        var now = DateTime.UtcNow;
+        var first = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Twin Manor North",
+            AddressLine1 = "10 Twin Way",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var second = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Twin Manor South",
+            AddressLine1 = "12 Twin Way",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Properties.AddRange(first, second);
+        await _db.SaveChangesAsync();
+
+        var assignment = await _db.MembershipRoleAssignments
+            .Include(item => item.SelectedProperties)
+            .SingleAsync();
+        assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+        {
+            MembershipRoleAssignment = assignment,
+            PortfolioId = PortfolioId,
+            PropertyId = first.Id,
+        });
+        assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+        {
+            MembershipRoleAssignment = assignment,
+            PortfolioId = PortfolioId,
+            PropertyId = second.Id,
+        });
+        await _db.SaveChangesAsync();
+
+        var result = await _sut.DraftAsync(
+            _scope,
+            new AssistantActionDraftRequest
+            {
+                Command = "log a $50 repair expense for Twin Manor",
+                WriteModeEnabled = true,
+            });
+
+        result.Status.Should().Be(AssistantActionStatus.MissingRequiredFields);
+        result.Draft!.Expense!.PropertyId.Should().BeNull();
+        result.MissingFields.Should().Contain("property");
+    }
+
+    private WorkspaceReadScope SeedAdministratorScope()
+    {
+        var now = DateTime.UtcNow;
+        var user = new ApplicationUser
+        {
+            UserName = "assistant-action@example.test",
+            NormalizedUserName = "ASSISTANT-ACTION@EXAMPLE.TEST",
+            Email = "assistant-action@example.test",
+            NormalizedEmail = "ASSISTANT-ACTION@EXAMPLE.TEST",
+            DisplayName = "Assistant Action Administrator",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = now,
+        };
+        var accessContext = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = accessContext,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = PortfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.SelectedProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+        {
+            MembershipRoleAssignment = assignment,
+            PortfolioId = PortfolioId,
+            PropertyId = _db.Properties.Single().Id,
+        });
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            User = user,
+            ActiveAccessContext = accessContext,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        _db.AddRange(assignment, session);
+        _db.SaveChanges();
+        return new WorkspaceReadScope(
+            PortfolioId, user.Id, session.Id, accessContext.Id, accessContext.AccessRevision);
     }
 
     private sealed class NoopDataUpdateService : IDataUpdateService

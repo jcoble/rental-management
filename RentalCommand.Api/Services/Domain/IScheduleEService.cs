@@ -1,4 +1,5 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -9,8 +10,13 @@ namespace RentalCommand.Api.Services.Domain;
 public interface IScheduleEService
 {
     /// <summary>
-    /// Returns a per-property Schedule E report for <paramref name="year"/>. Only properties that
-    /// have at least one qualifying rent payment or expense in that year are included.
+    /// Returns a per-property Schedule E report for <paramref name="year"/>, with every source
+    /// constrained by the caller's current
+    /// database-validated report capability and property scope.
     /// </summary>
-    Task<ScheduleEReport> GetReportAsync(int portfolioId, int year, int? propertyId = null, CancellationToken ct = default);
+    Task<ScheduleEReport> GetReportAsync(
+        WorkspaceReadScope scope,
+        int year,
+        int? propertyId = null,
+        CancellationToken ct = default);
 }

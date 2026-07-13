@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -151,7 +150,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
         {
             return BadRequest(new { error = "Idempotency-Key cannot exceed 200 characters." });
         }
-        if (!TryReadAccessClaims(out var sessionId, out var accessContextId, out var accessRevision))
+        if (!TryReadAccessContext(out var sessionId, out var accessContextId, out var accessRevision))
         {
             return Forbid();
         }
@@ -188,7 +187,6 @@ public sealed class LeaseManagementController : ManagementControllerBase
                     party.SigningOrder,
                     party.IsRequiredSigner)).ToArray(),
                 request.DocumentTemplateId,
-                request.DocumentTemplateVersion,
                 request.TermType.Value,
                 request.TermStartOn,
                 request.TermEndOn,
@@ -564,7 +562,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
             error = BadRequest(new { error = "Idempotency-Key cannot exceed 200 characters." });
             return false;
         }
-        if (!TryReadAccessClaims(out var sessionId, out var accessContextId, out var accessRevision))
+        if (!TryReadAccessContext(out var sessionId, out var accessContextId, out var accessRevision))
         {
             error = Forbid();
             return false;
@@ -795,7 +793,6 @@ public sealed class LeaseManagementController : ManagementControllerBase
             || request.SourceUnitId == request.DestinationUnitId
             || request.EffectiveOn == default
             || request.DestinationDocumentTemplateId <= 0
-            || request.DestinationDocumentTemplateVersion <= 0
             || (request.GiveDestinationPossessionNow
                 && !HasRequiredTextWithinLimit(request.PossessionAgreementExceptionReason, 1000))
             || (!request.GiveDestinationPossessionNow
@@ -832,7 +829,6 @@ public sealed class LeaseManagementController : ManagementControllerBase
                     request.GiveDestinationPossessionNow,
                     request.PossessionAgreementExceptionReason,
                     request.DestinationDocumentTemplateId,
-                    request.DestinationDocumentTemplateVersion,
                     request.CarryTenantBalance,
                     request.CarrySecurityDeposit,
                     request.TransferReason,
@@ -880,7 +876,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
         catch (ArgumentException exception) { return BadRequest(new { error = exception.Message }); }
     }
 
-    private bool TryReadAccessClaims(
+    private bool TryReadAccessContext(
         out Guid sessionId,
         out int accessContextId,
         out long accessRevision)
@@ -888,9 +884,11 @@ public sealed class LeaseManagementController : ManagementControllerBase
         sessionId = default;
         accessContextId = default;
         accessRevision = default;
-        return Guid.TryParse(User.FindFirstValue("sid"), out sessionId)
-            && int.TryParse(User.FindFirstValue("ctx"), out accessContextId)
-            && long.TryParse(User.FindFirstValue("ar"), out accessRevision);
+        if (!TryGetActiveAccessContext(out var active)) return false;
+        sessionId = active.SessionId;
+        accessContextId = active.AccessContextId;
+        accessRevision = active.AccessRevision;
+        return true;
     }
 
     private readonly record struct MutationEnvelope(
@@ -915,7 +913,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
             failure = BadRequest(new { error = "A valid Idempotency-Key is required (maximum 200 characters)." });
             return false;
         }
-        if (!TryReadAccessClaims(out sessionId, out accessContextId, out accessRevision))
+        if (!TryReadAccessContext(out sessionId, out accessContextId, out accessRevision))
         {
             failure = Forbid();
             return false;

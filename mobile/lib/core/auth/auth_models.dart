@@ -263,20 +263,12 @@ class AuthUser {
     required this.id,
     required this.email,
     required this.displayName,
-    this.portfolioId,
-    this.ownerEntityId,
-    this.tenantId,
-    required this.roles,
     required this.emailVerified,
   });
 
   final int id;
   final String email;
   final String displayName;
-  final int? portfolioId;
-  final int? ownerEntityId;
-  final int? tenantId;
-  final List<String> roles;
   final bool emailVerified;
 
   factory AuthUser.fromJson(Map<String, dynamic> json) {
@@ -284,10 +276,6 @@ class AuthUser {
       id: (json['id'] as num).toInt(),
       email: json['email'] as String,
       displayName: json['displayName'] as String,
-      portfolioId: (json['portfolioId'] as num?)?.toInt(),
-      ownerEntityId: (json['ownerEntityId'] as num?)?.toInt(),
-      tenantId: (json['tenantId'] as num?)?.toInt(),
-      roles: (json['roles'] as List<dynamic>).cast<String>(),
       emailVerified: json['emailVerified'] as bool,
     );
   }
@@ -296,10 +284,6 @@ class AuthUser {
     'id': id,
     'email': email,
     'displayName': displayName,
-    'portfolioId': portfolioId,
-    'ownerEntityId': ownerEntityId,
-    'tenantId': tenantId,
-    'roles': roles,
     'emailVerified': emailVerified,
   };
 }

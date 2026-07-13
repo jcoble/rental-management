@@ -2,7 +2,8 @@
  * User & auth types — mirror the RentalCommand.Api AuthDtos contract.
  *
  * The API serializes camelCase. User keys are integers (matching the
- * Identity users / domain entities). Roles is an array of role names.
+ * Identity users / domain entities). Authorization and active experience come exclusively from the
+ * accompanying AccessEnvelope.
  */
 
 export type WorkspaceExperience = 'Management' | 'Leasing' | 'Maintenance' | 'Owner' | 'Tenant';
@@ -62,13 +63,6 @@ export interface User {
 	id: number;
 	email: string;
 	displayName: string;
-	/** Null for users not scoped to a single portfolio (e.g. platform admins). */
-	portfolioId: number | null;
-	/** Set when the account is linked to an Owner entity. */
-	ownerEntityId: number | null;
-	/** Set when the account is linked to a Tenant entity. */
-	tenantId: number | null;
-	roles: string[];
 	emailVerified: boolean;
 }
 
@@ -100,10 +94,6 @@ export function userFromAccessEnvelope(access: AccessEnvelope, emailVerified = t
 		id: access.identity.userId,
 		email: access.identity.email ?? '',
 		displayName: access.identity.displayName,
-		portfolioId: access.selectedContext.portfolioId,
-		ownerEntityId: null,
-		tenantId: null,
-		roles: [],
 		emailVerified
 	};
 }

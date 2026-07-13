@@ -1,4 +1,5 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -9,7 +10,8 @@ namespace RentalCommand.Api.Services.Domain;
 /// </summary>
 public interface IUnitService
 {
-    Task<IReadOnlyList<UnitResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default);
+    Task<IReadOnlyList<UnitResponse>> ListAsync(
+        WorkspaceReadScope scope, int? propertyId, ListQuery query, CancellationToken ct = default);
 
     /// <summary>
     /// Lists portfolio units with cheap health badges for the <c>/units</c> page (spec section 10):
@@ -17,8 +19,10 @@ public interface IUnitService
     /// label. Computed DB-side in one projection query (correlated counts + active-lease scalars) — never
     /// a per-unit dashboard call per row.
     /// </summary>
-    Task<IReadOnlyList<UnitHealthResponse>> ListWithHealthAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default);
-    Task<UnitHealthListResponse> ListWithHealthPageAsync(int portfolioId, UnitHealthListQuery query, CancellationToken ct = default);
+    Task<IReadOnlyList<UnitHealthResponse>> ListWithHealthAsync(
+        WorkspaceReadScope scope, int? propertyId, ListQuery query, CancellationToken ct = default);
+    Task<UnitHealthListResponse> ListWithHealthPageAsync(
+        WorkspaceReadScope scope, UnitHealthListQuery query, CancellationToken ct = default);
 
     Task<UnitResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
 

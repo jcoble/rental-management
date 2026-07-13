@@ -4,6 +4,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Scanning;
 
 namespace RentalCommand.Data.Scanning;
@@ -55,15 +56,13 @@ internal static class CanonicalLeaseScanConfirmationWriter
                 return existing;
         }
 
-        var templateIsValid = (target.ReviewDisposition == LeaseScanReviewDisposition.AlreadyFullySigned
-                && target.DocumentTemplateId is null && target.DocumentTemplateVersion is null)
-            || (target.DocumentTemplateId is > 0 && target.DocumentTemplateVersion is > 0
+        var templateIsValid = target.ReviewDisposition == LeaseScanReviewDisposition.AlreadyFullySigned
+            || (target.DocumentTemplateId is > 0
                 && await attempt.Persistence.Query<DocumentTemplate>().AnyAsync(template =>
                     template.Id == target.DocumentTemplateId
                     && template.PortfolioId == command.PortfolioId
                     && template.Kind == DocumentTemplateKind.Lease
                     && template.Status == DocumentTemplateStatus.Active
-                    && template.Version == target.DocumentTemplateVersion
                     && template.ArchivedAtUtc == null
                     && (template.PropertyId == null || template.PropertyId == target.PropertyId), ct));
         if (!templateIsValid)
@@ -111,6 +110,48 @@ internal static class CanonicalLeaseScanConfirmationWriter
         }
 
         var fixedTerm = target.EndDate.HasValue;
+        LegalDocumentArtifact? importedArtifact = null;
+        AtomicLegalDocumentSourceVersionResult sourceVersion;
+        if (target.ReviewDisposition == LeaseScanReviewDisposition.AlreadyFullySigned)
+        {
+            var source = await attempt.Persistence.Query<StoredFile>()
+                .SingleOrDefaultAsync(file => file.Id == command.SourceStoredFileId
+                    && file.PortfolioId == command.PortfolioId && file.DeletedAt == null, ct)
+                ?? throw new ScanConfirmationValidationException(
+                    "The exact uploaded lease source is no longer available.");
+            importedArtifact = new LegalDocumentArtifact
+            {
+                PortfolioId = command.PortfolioId,
+                StoredFileId = source.Id,
+                ArtifactKind = LegalDocumentArtifactKind.ExecutedAgreement,
+                StorageKey = source.FilePath,
+                FileName = source.FileName,
+                ContentType = source.ContentType,
+                ByteLength = source.FileSize,
+                ContentSha256 = command.SourceContentSha256!,
+                CreatedAtUtc = now,
+                CreatedByUserId = command.ConfirmedByUserId,
+            };
+            attempt.Persistence.Add(importedArtifact);
+            attempt.BindSemanticAudit(importedArtifact, Created(command, nameof(LegalDocumentArtifact),
+                $"Preserved exact externally executed Agreement bytes and SHA-256{SourceSuffix(command.SourceLabel)}."));
+            await attempt.FlushBusinessAsync(ct);
+            sourceVersion = await attempt.Leasing.ResolveImportedDocumentSourceVersionAsync(
+                command.PortfolioId, source.Id, importedArtifact.Id, command.SourceContentSha256!,
+                command.SourceLabel, command.ConfirmedByUserId, now, ct);
+        }
+        else
+        {
+            sourceVersion = await attempt.Leasing.ResolveAuthoredDocumentSourceVersionAsync(
+                command.PortfolioId, home.PropertyId, relationship.Id, target.DocumentTemplateId!.Value,
+                command.ConfirmedByUserId, now, ct);
+        }
+        if (!sourceVersion.Resolved)
+        {
+            throw new ScanConfirmationValidationException(
+                "The exact legal-document source could not be frozen as immutable provenance.");
+        }
+
         var agreement = new LeaseAgreement
         {
             PortfolioId = command.PortfolioId,
@@ -132,8 +173,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
             Currency = home.Currency,
             TermsSchemaVersion = target.TermsSchemaVersion,
             TermsPayload = NormalizeJsonObject(target.TermsPayload),
-            DocumentTemplateId = target.DocumentTemplateId,
-            DocumentTemplateVersion = target.DocumentTemplateVersion,
+            DocumentSourceVersionId = sourceVersion.DocumentSourceVersionId,
             CreatedAtUtc = now,
             CreatedByUserId = command.ConfirmedByUserId,
             UpdatedAtUtc = now,
@@ -174,36 +214,11 @@ internal static class CanonicalLeaseScanConfirmationWriter
 
         if (target.ReviewDisposition == LeaseScanReviewDisposition.AlreadyFullySigned)
         {
-            var source = await attempt.Persistence.Query<StoredFile>()
-                .SingleOrDefaultAsync(file =>
-                    file.Id == command.SourceStoredFileId
-                    && file.PortfolioId == command.PortfolioId
-                    && file.DeletedAt == null, ct)
-                ?? throw new ScanConfirmationValidationException(
-                    "The exact uploaded lease source is no longer available.");
-            var artifact = new LegalDocumentArtifact
-            {
-                PortfolioId = command.PortfolioId,
-                StoredFileId = source.Id,
-                ArtifactKind = LegalDocumentArtifactKind.ExecutedAgreement,
-                StorageKey = source.FilePath,
-                FileName = source.FileName,
-                ContentType = source.ContentType,
-                ByteLength = source.FileSize,
-                ContentSha256 = command.SourceContentSha256!,
-                CreatedAtUtc = now,
-                CreatedByUserId = command.ConfirmedByUserId,
-            };
-            attempt.Persistence.Add(artifact);
-            attempt.BindSemanticAudit(artifact, Created(command, nameof(LegalDocumentArtifact),
-                $"Preserved exact externally executed Agreement bytes and SHA-256{SourceSuffix(command.SourceLabel)}."));
-            await attempt.FlushBusinessAsync(ct);
-
             // An externally executed original is both the issued text and the executed evidence.
             // One immutable artifact preserves the exact bytes without manufacturing a second PDF.
-            agreement.IssuedArtifactId = artifact.Id;
+            agreement.IssuedArtifactId = importedArtifact!.Id;
             agreement.IssuedAtUtc = now;
-            agreement.ExecutedArtifactId = artifact.Id;
+            agreement.ExecutedArtifactId = importedArtifact.Id;
             agreement.FullyExecutedAtUtc = now;
             agreement.UpdatedAtUtc = now;
             attempt.BindSemanticAudit(agreement, new AtomicSemanticAudit(

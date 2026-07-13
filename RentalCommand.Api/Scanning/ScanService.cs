@@ -151,8 +151,6 @@ public sealed class ScanService : IScanService
                 ?? draft.CaptureTenantAccountId;
             var templateId = PositiveOverride(
                 overrideRoot, "documentTemplateId", "document_template_id");
-            var templateVersion = PositiveOverride(
-                overrideRoot, "documentTemplateVersion", "document_template_version");
             var dispositionText = TryGetOverrideString(
                 overrideRoot, out var suppliedDisposition,
                 "reviewDisposition", "review_disposition")
@@ -172,10 +170,8 @@ public sealed class ScanService : IScanService
                 fields.PropertyState, fields.PropertyPostalCode, fields.UnitNumber,
                 fields.UnitBedrooms, fields.UnitBathrooms, fields.UnitSquareFeet, fields.LeaseNumber,
                 fields.StartDate, fields.EndDate, fields.MonthlyRent, fields.SecurityDeposit,
-                fields.LateFee, fields.RentDueDay, fields.RentTrackingStartMode,
-                fields.RentTrackingStartDate, fields.OpeningBalanceAmount,
-                fields.OpeningBalanceAsOfDate, fields.OpeningBalanceNote,
-                disposition, leaseManagementId, tenantAccountId, templateId, templateVersion,
+                fields.LateFee, fields.RentDueDay,
+                disposition, leaseManagementId, tenantAccountId, templateId,
                 TermsSchemaVersion: 1,
                 TermsPayload: string.IsNullOrWhiteSpace(draft.ExtractedFields) ? "{}" : draft.ExtractedFields,
                 GracePeriodDays: 0));
@@ -1274,29 +1270,6 @@ public sealed class ScanService : IScanService
                 fields.LateFee = lateFee;
             if (TryGetOverrideInt(root, out var dueDay, "rentDueDay", "rent_due_day"))
                 fields.RentDueDay = dueDay;
-            if (TryGetOverrideString(root, out var rentTrackingMode, "rentTrackingStartMode", "rent_tracking_start_mode") &&
-                Enum.TryParse<RentTrackingStartMode>(rentTrackingMode, ignoreCase: true, out var parsedRentTrackingMode))
-            {
-                fields.RentTrackingStartMode = parsedRentTrackingMode;
-            }
-            if (TryGetOverrideString(root, out var rentTrackingStartStr, "rentTrackingStartDate", "rent_tracking_start_date") &&
-                DateTime.TryParse(rentTrackingStartStr, System.Globalization.CultureInfo.InvariantCulture,
-                    System.Globalization.DateTimeStyles.AdjustToUniversal |
-                    System.Globalization.DateTimeStyles.AssumeUniversal, out var rentTrackingStart))
-            {
-                fields.RentTrackingStartDate = rentTrackingStart;
-            }
-            if (TryGetOverrideDecimal(root, out var openingBalanceAmount, "openingBalanceAmount", "opening_balance_amount"))
-                fields.OpeningBalanceAmount = openingBalanceAmount;
-            if (TryGetOverrideString(root, out var openingBalanceAsOfStr, "openingBalanceAsOfDate", "opening_balance_as_of_date") &&
-                DateTime.TryParse(openingBalanceAsOfStr, System.Globalization.CultureInfo.InvariantCulture,
-                    System.Globalization.DateTimeStyles.AdjustToUniversal |
-                    System.Globalization.DateTimeStyles.AssumeUniversal, out var openingBalanceAsOf))
-            {
-                fields.OpeningBalanceAsOfDate = openingBalanceAsOf;
-            }
-            if (TryGetOverrideString(root, out var openingBalanceNote, "openingBalanceNote", "opening_balance_note"))
-                fields.OpeningBalanceNote = openingBalanceNote;
         }
         catch (Exception ex)
         {
@@ -1718,11 +1691,6 @@ public sealed class ScanService : IScanService
         public decimal? SecurityDeposit { get; set; }
         public decimal? LateFee { get; set; }
         public int? RentDueDay { get; set; }
-        public RentTrackingStartMode? RentTrackingStartMode { get; set; }
-        public DateTime? RentTrackingStartDate { get; set; }
-        public decimal? OpeningBalanceAmount { get; set; }
-        public DateTime? OpeningBalanceAsOfDate { get; set; }
-        public string? OpeningBalanceNote { get; set; }
     }
 
     private sealed class ApplicationDraftFields

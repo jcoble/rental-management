@@ -41,7 +41,6 @@ public sealed record EditLeaseAgreementDraftCommand(
     int TermsSchemaVersion,
     string TermsPayload,
     int DocumentTemplateId,
-    int DocumentTemplateVersion,
     IReadOnlyList<LeaseAgreementDraftSignerInput> Signers,
     int ActorUserId,
     Guid AuthSessionId,

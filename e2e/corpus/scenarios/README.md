@@ -87,7 +87,7 @@ which screen an action drives.
 | Portfolio + owners + users + onboarding wizard | `/onboarding`, `/get-started`, `/owners`, `/owners/[id]`, `/(admin)/admin/users` |
 | **Worker enablement** (Rent reminders / Late fees / Notify tenants toggles) | `/settings` (`settings/+page.svelte`) |
 | Properties + units (owner, escrow, basis, fee%) | `/properties`, `/properties/[id]`, `/units`, `/units/[id]` |
-| **Lease scan→draft→confirm + "Backfill from lease start"** | `/scan/new-rental` (`LeaseFirstImport.svelte` → `LeaseTermFields.svelte`; links to existing property/unit) |
+| **Agreement scan→draft→confirm** | `/scan/new-rental` (`LeaseFirstImport.svelte` → `LeaseTermFields.svelte`; links to existing property/unit and explicit management/account context) |
 | Lease detail / edit / non-renewal auto-action | `/leases/[id]` (`LeaseDetail.svelte`) |
 | Loans (create + mortgage-statement `ConfirmAsLoan`) | `/properties/[id]` (`PropertyLoansSection.svelte`); scan → `/scan/[draftId]` (isLoan) |
 | Recurring-expense templates | `/properties/[id]` (`PropertyRecurringExpensesSection.svelte`) |
@@ -106,15 +106,9 @@ which screen an action drives.
 | Advance sim time / fire scheduled workers | **no user UI** → `[DEV-CLOCK]` / `[WORKER]` (SimClockPanel is the clock UI) |
 
 ### Product-gap findings (surfaced during this pass — a user action with missing/partial UI; do NOT API around them silently)
-- **PG-1 (rent-tracking control missing in the generic scan-draft confirm).** `RentTrackingStartMode`
-  ("Backfill from lease start") is surfaced in **`/scan/new-rental`** (`LeaseFirstImport`) and the manual
-  lease form (`LeaseTermFields`), but **not** in the generic `/scan/[draftId]` lease-draft confirm. So a
-  lease confirmed via the generic draft path **cannot set back-fill from the UI**. **Resolution:** ONB-04
-  routes lease confirms through **`/scan/new-rental`** (which links to the existing property/unit from
-  ONB-03 and exposes the control). **Fix candidate:** add the rent-tracking control to `/scan/[draftId]`
-  lease confirms. (DoD "backend supports it, one UI path doesn't surface it.")
 - **PG-2 (no historical/loan/recurring "generate now" user action).** Rent back-fill runs synchronously on
-  lease create (via the `/scan/new-rental` control, `[UI]`), but **loan** amortization back-fill
+  legacy lease create, but historical tenant-account entries now require an explicit bounded seed;
+  **loan** amortization back-fill
   (DebtService) and **recurring-expense** back-fill have **no create-time trigger and no user "generate
   history" button** — only the scheduled worker. The harness fires them via `[WORKER]`; there is no `[UI]`
   equivalent (inherent to the design, not a regression, but noted).
@@ -204,8 +198,8 @@ All under `/api/v1/dev/*`, mapped **only** when `Simulation:Enabled && non-prod`
   misattributes income to the primary self-owner and still "passes").
 - **`ManagementFeePercent` is per-property** — replicate the owner's % across each of its properties
   (OE-BELL P05/P07 = 8%, OE-TRUST P03 = 8%, all others 0%).
-- **Rent back-fill** needs `RentTrackingStartMode=BackfillFromLeaseStart` on lease-create (default
-  `ForwardOnly` gives ~1 month). Back-fill runs synchronously inside `POST /leases`.
+- **Historical rent** is posted as explicit tenant-account ledger entries by the bounded seed. Agreement
+  confirmation never selects a generation mode or silently creates history.
 - **Scan-month rent-check "replace":** in the 5 scan months (Jan/Apr/Jul/Oct/Dec) a confirmed scanned
   check **replaces** the worker's Scheduled rent row for that lease-month (waive/delete the duplicate) so
   each lease-month has exactly one Paid rent row (design §9 item 12).

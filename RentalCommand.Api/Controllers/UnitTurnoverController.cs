@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Mvc;
@@ -34,15 +33,13 @@ public sealed class UnitTurnoverController : ManagementControllerBase
         {
             return BadRequest(new { error = "A valid Idempotency-Key is required (maximum 200 characters)." });
         }
-        if (!Guid.TryParse(User.FindFirstValue("sid"), out var sessionId)
-            || !int.TryParse(User.FindFirstValue("ctx"), out var accessContextId)
-            || !long.TryParse(User.FindFirstValue("ar"), out var accessRevision))
+        if (!TryGetActiveAccessContext(out var active))
         {
             return Forbid();
         }
 
-        var portfolioId = GetPortfolioId();
-        var userId = GetUserId();
+        var portfolioId = active.PortfolioId;
+        var userId = active.UserId;
         var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedKey)))
             .ToLowerInvariant();
         try
@@ -51,7 +48,7 @@ public sealed class UnitTurnoverController : ManagementControllerBase
                 new AtomicCommandIdentity("unit.complete-turnover",
                     $"{portfolioId}:{unitId}:{periodId}:{digest}"),
                 new CompleteTurnoverCommand(portfolioId, unitId, periodId, userId,
-                    sessionId, accessContextId, accessRevision,
+                    active.SessionId, active.AccessContextId, active.AccessRevision,
                     $"complete-turnover:{portfolioId}:{unitId}:{periodId}:{digest}"),
                 ResultCodec, ct);
             return outcome.Value.Outcome switch

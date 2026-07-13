@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -8,6 +7,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Esign;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Leasing;
@@ -30,6 +30,7 @@ public sealed class LeaseAddendumController : ManagementControllerBase
     private readonly RentalCommandDbContext _db;
     private readonly ILeaseManagementQueryService _queryService;
     private readonly IFileStorage _files;
+    private readonly ILegalDocumentIssuancePreparationService _issuancePreparations;
     private readonly string _webBaseUrl;
 
     public LeaseAddendumController(
@@ -37,12 +38,14 @@ public sealed class LeaseAddendumController : ManagementControllerBase
         RentalCommandDbContext db,
         ILeaseManagementQueryService queryService,
         IFileStorage files,
+        ILegalDocumentIssuancePreparationService issuancePreparations,
         IConfiguration configuration)
     {
         _atomic = atomic;
         _db = db;
         _queryService = queryService;
         _files = files;
+        _issuancePreparations = issuancePreparations;
         _webBaseUrl = (configuration["App:WebBaseUrl"] ?? "https://localhost:5667").TrimEnd('/');
     }
 
@@ -103,7 +106,7 @@ public sealed class LeaseAddendumController : ManagementControllerBase
         var command = new CreateLeaseAddendumDraftCommand(envelope.PortfolioId, leaseManagementId,
             request.BaseAgreementId, request.AddendumNumber, request.Purpose!.Value,
             request.EffectiveFromOn, request.EffectiveThroughOn, request.TermsSchemaVersion,
-            request.TermsPayload.GetRawText(), request.DocumentTemplateId, request.DocumentTemplateVersion,
+            request.TermsPayload.GetRawText(), request.DocumentTemplateId,
             signers!, effects!, envelope.UserId, envelope.SessionId, envelope.AccessContextId,
             envelope.AccessRevision, $"addendum-create:{envelope.PortfolioId}:{leaseManagementId}:{envelope.KeyDigest}");
         return await ExecuteDraft("lease-addendum.draft.create",
@@ -121,7 +124,7 @@ public sealed class LeaseAddendumController : ManagementControllerBase
         var command = new EditLeaseAddendumDraftCommand(envelope.PortfolioId, leaseManagementId,
             leaseAddendumId, request.DraftRevision, request.AddendumNumber, request.Purpose!.Value,
             request.EffectiveFromOn, request.EffectiveThroughOn, request.TermsSchemaVersion,
-            request.TermsPayload.GetRawText(), request.DocumentTemplateId, request.DocumentTemplateVersion,
+            request.TermsPayload.GetRawText(), request.DocumentTemplateId,
             signers!, effects!, envelope.UserId, envelope.SessionId, envelope.AccessContextId,
             envelope.AccessRevision, $"addendum-edit:{envelope.PortfolioId}:{leaseAddendumId}:{envelope.KeyDigest}");
         return await ExecuteDraft("lease-addendum.draft.edit",
@@ -144,6 +147,36 @@ public sealed class LeaseAddendumController : ManagementControllerBase
             StatusCodes.Status201Created, ct);
     }
 
+    [HttpPost("{leaseAddendumId:int}/issuance-preparations")]
+    [ProducesResponseType(typeof(LegalDocumentIssuancePreparationResponse), StatusCodes.Status201Created)]
+    public async Task<IActionResult> PrepareIssuance(
+        int leaseManagementId,
+        int leaseAddendumId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] PrepareLegalDocumentIssuanceRequest request,
+        CancellationToken ct)
+    {
+        if (!TryEnvelope(idempotencyKey, out var envelope, out var error)) return error!;
+        try
+        {
+            var prepared = await _issuancePreparations.PrepareAddendumAsync(
+                new WorkspaceReadScope(envelope.PortfolioId, envelope.UserId, envelope.SessionId,
+                    envelope.AccessContextId, envelope.AccessRevision),
+                leaseManagementId,
+                leaseAddendumId,
+                request.DraftRevision,
+                envelope.KeyDigest,
+                ct);
+            return StatusCode(StatusCodes.Status201Created,
+                LegalDocumentIssuancePreparationResponse.From(prepared));
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (DomainValidationException exception) { return Conflict(new { error = exception.Message }); }
+        catch (RentalCommand.Data.Documents.UploadOperationConflictException exception)
+        { return Conflict(new { error = exception.Message }); }
+        catch (ArgumentException exception) { return BadRequest(new { error = exception.Message }); }
+    }
+
     [HttpPost("{leaseAddendumId:int}/issue")]
     public async Task<IActionResult> Issue(int leaseManagementId, int leaseAddendumId,
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
@@ -154,10 +187,11 @@ public sealed class LeaseAddendumController : ManagementControllerBase
             .Where(item => item.PortfolioId == envelope.PortfolioId && item.LeaseAddendumId == leaseAddendumId)
             .OrderBy(item => item.SigningOrder).Select(item => item.Id).ToArrayAsync(ct);
         if (signerIds.Length == 0) return UnprocessableEntity(new { error = "The Addendum has no signer snapshot." });
-        var command = new IssueLeaseAddendumCommand(request.PendingUploadId, request.RequestFingerprint,
+        var command = new IssueLeaseAddendumCommand(request.PendingUploadId,
+            request.DocumentSourceVersionId, request.IssuanceFingerprint,
             envelope.PortfolioId, leaseManagementId, leaseAddendumId, request.DraftRevision,
             $"addendum-issue:{envelope.PortfolioId}:{leaseAddendumId}:{envelope.KeyDigest}", request.Subject,
-            request.StorageKey, request.FileName, request.FileSize, request.ContentSha256.ToLowerInvariant(),
+            request.StorageKey, request.FileName, request.FileSize, request.ContentSha256,
             _webBaseUrl, signerIds.Select(id => new NativeEsignAddendumSignerCommand(id)).ToArray(),
             envelope.UserId, envelope.SessionId, envelope.AccessContextId, envelope.AccessRevision);
         try
@@ -242,11 +276,10 @@ public sealed class LeaseAddendumController : ManagementControllerBase
         var normalized = key?.Trim();
         if (string.IsNullOrWhiteSpace(normalized) || normalized.Length > 200)
         { error = BadRequest(new { error = "A valid Idempotency-Key is required." }); return false; }
-        if (!Guid.TryParse(User.FindFirstValue("sid"), out var sid)
-            || !int.TryParse(User.FindFirstValue("ctx"), out var context)
-            || !long.TryParse(User.FindFirstValue("ar"), out var revision))
+        if (!TryGetActiveAccessContext(out var active))
         { error = Forbid(); return false; }
-        envelope = new(GetPortfolioId(), GetUserId(), sid, context, revision,
+        envelope = new(active.PortfolioId, active.UserId, active.SessionId,
+            active.AccessContextId, active.AccessRevision,
             Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant());
         return true;
     }

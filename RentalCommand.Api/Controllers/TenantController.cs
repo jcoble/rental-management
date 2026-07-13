@@ -10,7 +10,7 @@ using RentalCommand.Core.Entities;
 namespace RentalCommand.Api.Controllers;
 
 /// <summary>
-/// CRUD for tenants within the caller's portfolio. Scope comes from the JWT <c>portfolioId</c> claim;
+/// CRUD for tenants within the caller's portfolio. Scope comes from the server-validated workspace context;
 /// list supports <c>?skip&amp;take&amp;search&amp;sort</c>. Removal is a soft-delete.
 /// </summary>
 [ApiController]

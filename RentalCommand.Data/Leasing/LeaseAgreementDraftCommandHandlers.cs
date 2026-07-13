@@ -71,6 +71,17 @@ public sealed class EditLeaseAgreementDraftHandler
                 "The template and every signer provenance reference must belong to this lease relationship and portfolio.");
         }
 
+        var sourceVersion = await attempt.Leasing.ResolveAuthoredDocumentSourceVersionAsync(
+            command.PortfolioId, 0, command.LeaseManagementId, command.DocumentTemplateId,
+            command.ActorUserId, nowUtc, ct);
+        if (!sourceVersion.Resolved)
+        {
+            return LeaseAgreementDraftCommandSupport.Error(
+                LeaseAgreementDraftMutationOutcome.InvalidSigners, command, command.LeaseAgreementId,
+                agreement.VersionNumber, agreement.DraftRevision,
+                "The selected lease template could not be frozen as immutable source provenance.");
+        }
+
         agreement.AgreementNumber = command.AgreementNumber.Trim();
         agreement.TermType = command.TermType;
         agreement.TermStartOn = command.TermStartOn;
@@ -83,8 +94,7 @@ public sealed class EditLeaseAgreementDraftHandler
         agreement.GracePeriodDays = command.GracePeriodDays;
         agreement.TermsSchemaVersion = command.TermsSchemaVersion;
         agreement.TermsPayload = command.TermsPayload;
-        agreement.DocumentTemplateId = command.DocumentTemplateId;
-        agreement.DocumentTemplateVersion = command.DocumentTemplateVersion;
+        agreement.DocumentSourceVersionId = sourceVersion.DocumentSourceVersionId;
         agreement.UpdatedAtUtc = nowUtc;
         agreement.DraftRevision++;
 
@@ -180,10 +190,30 @@ public sealed class CreateLeaseAgreementSuccessorDraftHandler
                 "The source must be the currently governing, fully executed, nonvoid Agreement.");
         }
 
+        var existingSuccessor = await attempt.Persistence.Query<LeaseAgreement>()
+            .AnyAsync(candidate =>
+                candidate.PortfolioId == command.PortfolioId
+                && candidate.LeaseManagementId == command.LeaseManagementId
+                && (candidate.ReplacesAgreementId == source.Id || candidate.RenewsAgreementId == source.Id)
+                && candidate.DraftCanceledAtUtc == null
+                && (candidate.VoidedAtUtc == null || candidate.FullyExecutedAtUtc != null),
+                ct);
+        if (existingSuccessor)
+        {
+            return LeaseAgreementDraftCommandSupport.Error(
+                LeaseAgreementDraftMutationOutcome.SourceAgreementNotCurrent,
+                command,
+                0,
+                0,
+                0,
+                "The source already has a durable correction, restatement, renewal, or month-to-month successor.");
+        }
+
         var isReplacement = command.ChangeType is LeaseAgreementChangeType.Correction
             or LeaseAgreementChangeType.Restatement;
         if (isReplacement && (command.TermStartOn != source.TermStartOn
-                || command.TermEndOn != source.TermEndOn))
+                || command.TermEndOn != source.TermEndOn
+                || command.GoverningFromOn <= source.GoverningFromOn))
         {
             return LeaseAgreementDraftCommandSupport.Error(
                 LeaseAgreementDraftMutationOutcome.InvalidTerms,
@@ -191,7 +221,7 @@ public sealed class CreateLeaseAgreementSuccessorDraftHandler
                 0,
                 0,
                 0,
-                "Correction and restatement drafts must initially copy the source Agreement term dates; edit only the new draft afterward.");
+                "Correction and restatement drafts must copy the source term dates and begin governing after the source began governing; edit only the new draft afterward.");
         }
         var isRenewal = command.ChangeType is LeaseAgreementChangeType.Renewal
             or LeaseAgreementChangeType.MonthToMonth;
@@ -254,8 +284,7 @@ public sealed class CreateLeaseAgreementSuccessorDraftHandler
             Currency = source.Currency,
             TermsSchemaVersion = source.TermsSchemaVersion,
             TermsPayload = source.TermsPayload,
-            DocumentTemplateId = source.DocumentTemplateId,
-            DocumentTemplateVersion = source.DocumentTemplateVersion,
+            DocumentSourceVersionId = source.DocumentSourceVersionId,
             CreatedAtUtc = times.WallClockUtc,
             CreatedByUserId = command.ActorUserId,
             UpdatedAtUtc = times.WallClockUtc,
@@ -437,7 +466,6 @@ internal static class LeaseAgreementDraftCommandSupport
                     && template.PortfolioId == command.PortfolioId
                     && template.Kind == DocumentTemplateKind.Lease
                     && template.Status == DocumentTemplateStatus.Active
-                    && template.Version == command.DocumentTemplateVersion
                     && template.ArchivedAtUtc == null
                     && (template.PropertyId == null || template.PropertyId == relationship.PropertyId)),
             })
@@ -474,24 +502,68 @@ internal static class LeaseAgreementDraftCommandSupport
             .Select(relationship => new
             {
                 EffectiveCount = relationship.Addenda.Count(addendum =>
-                    addendum.FullyExecutedAtUtc != null && addendum.VoidedAtUtc == null
+                    addendum.FullyExecutedAtUtc != null
+                    && addendum.ExecutedArtifactId != null
+                    && addendum.VoidedAtUtc == null
+                    && addendum.DraftCanceledAtUtc == null
+                    && addendum.BaseAgreement != null
+                    && addendum.BaseAgreement.FullyExecutedAtUtc != null
+                    && addendum.BaseAgreement.ExecutedArtifactId != null
+                    && addendum.BaseAgreement.VoidedAtUtc == null
+                    && addendum.BaseAgreement.DraftCanceledAtUtc == null
                     && addendum.EffectiveFromOn <= businessDate
                     && (addendum.EffectiveThroughOn == null || addendum.EffectiveThroughOn >= businessDate)
                     && (addendum.SupersededEffectiveOn == null
                         || addendum.SupersededEffectiveOn > businessDate)
                     && !relationship.Addenda.Any(newer =>
                         newer.SeriesPublicId == addendum.SeriesPublicId
-                        && newer.VersionNumber > addendum.VersionNumber)),
+                        && newer.VersionNumber > addendum.VersionNumber
+                        && newer.FullyExecutedAtUtc != null
+                        && newer.ExecutedArtifactId != null
+                        && newer.VoidedAtUtc == null
+                        && newer.DraftCanceledAtUtc == null
+                        && newer.EffectiveFromOn <= businessDate
+                        && (newer.EffectiveThroughOn == null
+                            || newer.EffectiveThroughOn >= businessDate)
+                        && (newer.SupersededEffectiveOn == null
+                            || newer.SupersededEffectiveOn > businessDate)
+                        && newer.BaseAgreement != null
+                        && newer.BaseAgreement.FullyExecutedAtUtc != null
+                        && newer.BaseAgreement.ExecutedArtifactId != null
+                        && newer.BaseAgreement.VoidedAtUtc == null
+                        && newer.BaseAgreement.DraftCanceledAtUtc == null)),
                 MatchedCount = relationship.Addenda.Count(addendum =>
                     series.Contains(addendum.SeriesPublicId)
-                    && addendum.FullyExecutedAtUtc != null && addendum.VoidedAtUtc == null
+                    && addendum.FullyExecutedAtUtc != null
+                    && addendum.ExecutedArtifactId != null
+                    && addendum.VoidedAtUtc == null
+                    && addendum.DraftCanceledAtUtc == null
+                    && addendum.BaseAgreement != null
+                    && addendum.BaseAgreement.FullyExecutedAtUtc != null
+                    && addendum.BaseAgreement.ExecutedArtifactId != null
+                    && addendum.BaseAgreement.VoidedAtUtc == null
+                    && addendum.BaseAgreement.DraftCanceledAtUtc == null
                     && addendum.EffectiveFromOn <= businessDate
                     && (addendum.EffectiveThroughOn == null || addendum.EffectiveThroughOn >= businessDate)
                     && (addendum.SupersededEffectiveOn == null
                         || addendum.SupersededEffectiveOn > businessDate)
                     && !relationship.Addenda.Any(newer =>
                         newer.SeriesPublicId == addendum.SeriesPublicId
-                        && newer.VersionNumber > addendum.VersionNumber)),
+                        && newer.VersionNumber > addendum.VersionNumber
+                        && newer.FullyExecutedAtUtc != null
+                        && newer.ExecutedArtifactId != null
+                        && newer.VoidedAtUtc == null
+                        && newer.DraftCanceledAtUtc == null
+                        && newer.EffectiveFromOn <= businessDate
+                        && (newer.EffectiveThroughOn == null
+                            || newer.EffectiveThroughOn >= businessDate)
+                        && (newer.SupersededEffectiveOn == null
+                            || newer.SupersededEffectiveOn > businessDate)
+                        && newer.BaseAgreement != null
+                        && newer.BaseAgreement.FullyExecutedAtUtc != null
+                        && newer.BaseAgreement.ExecutedArtifactId != null
+                        && newer.BaseAgreement.VoidedAtUtc == null
+                        && newer.BaseAgreement.DraftCanceledAtUtc == null)),
             })
             .SingleAsync(ct);
         return facts.EffectiveCount == command.AddendumDecisions.Count
@@ -518,7 +590,7 @@ internal static class LeaseAgreementDraftCommandSupport
                 command.GoverningFromOn, command.BaseRentAmount, command.RentDueDay,
                 command.SecurityDepositObligation, command.LateFeeAmount, command.GracePeriodDays)
             || command.TermsSchemaVersion <= 0 || command.DocumentTemplateId <= 0
-            || command.DocumentTemplateVersion <= 0 || !IsJsonObject(command.TermsPayload)
+            || !IsJsonObject(command.TermsPayload)
             || !ValidSigners(command.Signers))
         {
             throw new ArgumentException("Agreement draft terms, revision, template, payload, or signers are invalid.");

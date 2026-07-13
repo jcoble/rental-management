@@ -1,3 +1,5 @@
+using RentalCommand.Core.Authorization;
+
 namespace RentalCommand.Api.Services.Domain;
 
 /// <summary>Result of an attempt to email an owner statement.</summary>
@@ -9,13 +11,8 @@ public record StatementEmailResult(bool Sent, string? Reason = null);
 /// </summary>
 public interface IOwnerStatementEmailService : RentalCommand.Core.Atomic.IAtomicRemoteDependency
 {
-    /// <summary>
-    /// Loads the owner statement for <paramref name="ownerId"/> / <paramref name="year"/>,
-    /// renders a plain-text email body, and enqueues an outbox message for delivery.
-    /// Returns {Sent:false} if the owner has no email address or no statement data exists.
-    /// </summary>
     Task<StatementEmailResult> SendOwnerStatementAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         int ownerId,
         int year,
         CancellationToken ct = default);

@@ -18,12 +18,12 @@ public sealed class CanonicalLeaseScanImportContractTests
     }
 
     [Fact]
-    public void External_executed_agreement_does_not_require_fake_template_provenance()
+    public void Every_agreement_requires_one_immutable_document_source_version()
     {
-        typeof(LeaseAgreement).GetProperty(nameof(LeaseAgreement.DocumentTemplateId))!
-            .PropertyType.Should().Be(typeof(int?));
-        typeof(LeaseAgreement).GetProperty(nameof(LeaseAgreement.DocumentTemplateVersion))!
-            .PropertyType.Should().Be(typeof(int?));
+        typeof(LeaseAgreement).GetProperty(nameof(LeaseAgreement.DocumentSourceVersionId))!
+            .PropertyType.Should().Be(typeof(int));
+        typeof(LeaseAgreement).GetProperty("DocumentTemplateId").Should().BeNull();
+        typeof(LeaseAgreement).GetProperty("DocumentTemplateVersion").Should().BeNull();
     }
 
     [Fact]

@@ -229,18 +229,10 @@ no "import 2 years of rent/expenses" button. So historical transaction volume en
    auto-created by a receipt scan), Security deposits, Opening balances, Inspections,
    Appointments, Autopay enrollment, Recurring-expense/maintenance templates, Notice templates,
    Users.
-3. **WORKER-GENERATED (the key insight):** the landlord neither types nor scans the bulk ledger —
-   they configure the lease/loan/recurring-template and the **engine back-fills** it. **[Mechanism
-   source-verified — corrected from the naïve version:]**
-   - **Rent:** back-fill is triggered by `RentTrackingStartMode`, NOT by setting a date directly.
-     `RentTrackingStartDate` is *derived* from the mode (`LeaseService.ResolveRentTrackingStartDate`)
-     and can never precede `StartDate`. The DTO default is **`ForwardOnly` → today → ~1 month only**.
-     To reconstruct ~24 months, create the lease with **`RentTrackingStartMode=BackfillFromLeaseStart`**
-     (and a 2023/24 `StartDate`) — or `CustomCutoffDate` + a 2023 date. Crucially, this back-fill runs
-     **synchronously inside `POST /leases`** (`LeaseService.EnsureRentChargesThroughTodayAsync`), so a
-     single lease-create with `Status=Active` + a future `EndDate` + `MonthlyRent>0` materializes all
-     ~24 `Payment(Rent, Scheduled)` rows immediately — **no worker fire needed.** (Mode is transient;
-     only `RentTrackingStartDate` persists on the lease.) A seeding pass then marks each Paid.
+3. **WORKER/SEED-GENERATED (the key insight):** the landlord neither types nor scans the bulk ledger.
+   Agreement confirmation targets explicit LeaseManagement, Agreement, and TenantAccount commands and
+   never chooses a rent-generation mode. The bounded harness posts the 2023–24 tenant-account ledger
+   entries separately, while loan and recurring-template history remains engine-generated.
    - **Marking rent Paid:** `POST /payments/{id}/mark-paid` accepts an **arbitrary historical
      `PaidDate` + `Method`** (no past-date validation), and income reports bucket by `PaidDate` year —
      so each of the ~500 historical rows needs its **own** `mark-paid` call to land in the right tax
@@ -265,9 +257,9 @@ no "import 2 years of rent/expenses" button. So historical transaction volume en
 |---|---|---|---|
 | Portfolio, 4 owner entities, 5 users | HAND-ENTRY | onboarding wizard forms | scope, owner statements |
 | 13 Properties + 21 Units | SCAN side-effect (lease scan bootstraps) **or** CSV import | lease PDFs / `/import` | rent roll, occupancy, depreciation |
-| 19 current Leases (active at T0) | **SCAN** (create with `RentTrackingStartMode=BackfillFromLeaseStart`) | lease PDFs (born-digital) + **phone-photo lease sets to stitch** | rent roll, rent ledger, Schedule E income |
+| 19 current Agreements (active at T0) | **SCAN** (confirm explicit management/agreement/account targets) | lease PDFs (born-digital) + **phone-photo lease sets to stitch** | rent roll, rent ledger, Schedule E income |
 | 11 Loans/mortgages | **SCAN** | mortgage-statement images → `ConfirmAsLoan` (then fire DebtService) | debt service, Schedule E interest, NOI |
-| Historical rent (2023–24, ~500 rows) | **WORKER-GENERATED** (synchronous on lease-create) then **per-payment `mark-paid`** | `BackfillFromLeaseStart` → ~24 Scheduled rows/lease; then one `mark-paid` each w/ historical `PaidDate`+`Method`; **plus** a sample of rent checks scanned in 5 months (which *replace* the worker charge for those lease-months, §9 item 12) | rent ledger, cash-flow, owner statements |
+| Historical rent (2023–24, ~500 rows) | **BOUNDED LEDGER SEED** followed by explicit receipts | post dated tenant-account charges and receipts; **plus** a sample of rent checks scanned in 5 months (which replace the seeded charge for those account periods, §9 item 12) | rent ledger, cash-flow, owner statements |
 | Historical loan payments (~250 rows) | **WORKER-GENERATED** | DebtServiceService back-fill | Schedule E interest, cash-flow debt service |
 | Recurring expenses (HOA/lawn/pest/trash/direct tax+ins) | HAND-ENTRY template → **WORKER-GENERATED** rows | recurring-expense templates, StartDate 2023-01 | Schedule E, P&L, owner statements |
 | One-off repair/maintenance expenses (2023–24, ~40) | **SCAN** (receipts) + some hand-entry | receipt phone-photos → `ConfirmAsExpense` | Schedule E Repairs/Cleaning, Vendor-1099 |
@@ -315,7 +307,7 @@ Sample of the keyed one-off events (illustrative dates; the ladder in §3.2 fixe
 
 | Sim date | Actor | Action | Artifact | Worker dep. |
 |---|---|---|---|---|
-| 2025-01-01 | Dana | Onboard: create portfolio/owners/users; import leases+loans; enable rent charges & late fees; set RentTrackingStartDate | leases, mortgage stmts | seed then fire RentCharge+DebtService (back-fill) |
+| 2025-01-01 | Dana | Onboard: create portfolio/owners/users; import agreements+loans; enable rent charges & late fees; post bounded opening ledger facts | lease docs, mortgage stmts | seed account history then fire RentCharge+DebtService |
 | 2025-01-06 | Priya | Scan Jan rent checks (check-payers) → confirm Payments | rent-check images | — |
 | 2025-01-12 | Tenant (L14) | Portal: submit maintenance request (leaky faucet) | maintenance photo | ScanProcessingWorker |
 | 2025-01-14 | Priya | WorkOrder → dispatch plumber (Vendor); scan invoice → Expense | receipt image | — |
@@ -506,7 +498,6 @@ only, 0<x<Amount), `DueDate`, `PaidDate?`, `Method`, `PeriodKey`("yyyy-MM"). `Ex
 `ScheduleECategory`: Advertising, AutoTravel, CleaningMaintenance, Commissions, Insurance,
 LegalProfessional, ManagementFees, MortgageInterest, Repairs, Supplies, Taxes, Utilities,
 Depreciation, Other. `LeaseEndAutoAction`: Draft, Renewal, MonthToMonth, NonRenewal.
-`RentTrackingStartMode`: BackfillFromLeaseStart, ForwardOnly, CustomCutoffDate.
 `PropertyType`: SingleFamily, MultiFamily, Condo, Townhome, Commercial, MixedUse.
 `OwnerEntityType`: Person, LLC, Trust. `UserRole`: Admin, Manager, Agent, Owner, Tenant.
 `InspectionType`: MoveIn, MoveOut, Routine, AnnualSafety. `NotificationType`: RentCharge, LateFee,
@@ -552,8 +543,8 @@ at remaining basis; `ManualAnnualDepreciation` overrides. Condo P11 basis = full
 Timer loops (not cron); "today" = `DateTime.UtcNow` → business tz `America/New_York` (except
 LeaseExpiryReminder uses raw UtcNow.Date, DailyBriefing uses each portfolio's tz). Firing =
 invoking the backing service once.
-- **RentChargeWorker** (1h): per Active lease, one `Payment(Rent,Scheduled,Amount=MonthlyRent,
-  DueDate=clamp(RentDueDay), PeriodKey)` per month from `max(Start,RentTrackingStartDate)` to
+- **RentChargeWorker** (1h): per active tenant-account obligation, one scheduled rent ledger entry
+  per due period through the cutoff
   cutoff (today, extended to due date if within `RentChargeLeadDays`=5). **Back-fills all missed
   months in one fire.** Gate `EnableRentCharges` **default OFF** → must enable. Idempotent on
   `(LeaseId,Rent,PeriodKey)`.
@@ -709,9 +700,9 @@ Load-bearing assumptions were re-checked directly against source after the first
 - **Reconciliation predicates** — every P01 CY2025 figure CONFIRMED exact against
   `ScheduleEService`/`ReportsService`/`OwnerStatementService`; 2 seed preconditions recorded in
   `expected/P01-2025.reconciliation.sample.json`.
-- **Import mechanism** — CORRECTED: rent back-fill needs `RentTrackingStartMode=BackfillFromLeaseStart`
-  (default `ForwardOnly` gives ~1 month) and runs synchronously on lease-create; per-payment
-  `mark-paid` for year-correct dating; loans/recurring back-fill need a direct service call (§4).
+- **Import mechanism** — CORRECTED: agreement confirmation creates explicit management/agreement/account
+  facts only; historical rent uses the bounded ledger seed with date-correct receipts. Loans/recurring
+  back-fill still need a direct service call (§4).
 - **Worker enablement** — `PUT /api/v1/notifications/settings` (full overwrite); clock/trigger via
   TSK-615 (§8.7).
 - **Owner model** — the Owner-vs-OwnerEntity concern was a false alarm (onboarding creates an

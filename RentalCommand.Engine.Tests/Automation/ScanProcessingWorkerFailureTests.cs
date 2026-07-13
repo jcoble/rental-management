@@ -397,6 +397,8 @@ public class ScanProcessingWorkerFailureTests : IDisposable
                 Currency = "USD",
                 TermsSchemaVersion = 1,
                 TermsPayload = "{}",
+                DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
+                    1, 1, now),
                 CreatedAtUtc = now,
                 UpdatedAtUtc = now,
                 CreatedByUserId = 1,

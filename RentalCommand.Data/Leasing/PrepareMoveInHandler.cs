@@ -43,7 +43,6 @@ public sealed class PrepareMoveInHandler
                     && template.PortfolioId == command.PortfolioId
                     && template.Kind == DocumentTemplateKind.Lease
                     && template.Status == DocumentTemplateStatus.Active
-                    && template.Version == command.DocumentTemplateVersion
                     && template.ArchivedAtUtc == null
                     && (template.PropertyId == null || template.PropertyId == candidate.PropertyId)),
                 attempt.Persistence.Query<LeaseManagement>().Any(relationship =>
@@ -123,7 +122,16 @@ public sealed class PrepareMoveInHandler
             return Empty(
                 PrepareMoveInOutcome.InvalidTemplate,
                 command,
-                "The selected lease template is not active at the requested version for this property.");
+                "The selected lease template is not active for this property.");
+        }
+
+        var sourceVersion = await attempt.Leasing.ResolveAuthoredDocumentSourceVersionAsync(
+            command.PortfolioId, application.PropertyId, 0, command.DocumentTemplateId,
+            command.CreatedByUserId, wallClockUtc, ct);
+        if (!sourceVersion.Resolved)
+        {
+            return Empty(PrepareMoveInOutcome.InvalidTemplate, command,
+                "The selected lease template could not be frozen as immutable source provenance.");
         }
 
         var requestedTenantIds = command.Parties.Select(party => party.TenantId).Distinct().ToArray();
@@ -240,8 +248,7 @@ public sealed class PrepareMoveInHandler
             Currency = application.Currency,
             TermsSchemaVersion = command.TermsSchemaVersion,
             TermsPayload = command.TermsPayload,
-            DocumentTemplateId = command.DocumentTemplateId,
-            DocumentTemplateVersion = command.DocumentTemplateVersion,
+            DocumentSourceVersionId = sourceVersion.DocumentSourceVersionId,
             CreatedAtUtc = wallClockUtc,
             CreatedByUserId = command.CreatedByUserId,
             UpdatedAtUtc = wallClockUtc,
@@ -540,7 +547,7 @@ public sealed class PrepareMoveInHandler
         {
             throw new ArgumentException("Agreement signer order and party role are invalid.");
         }
-        if (command.DocumentTemplateId <= 0 || command.DocumentTemplateVersion <= 0
+        if (command.DocumentTemplateId <= 0
             || command.TermsSchemaVersion <= 0 || string.IsNullOrWhiteSpace(command.TermsPayload)
             || command.BaseRentAmount < 0 || command.SecurityDepositObligation < 0
             || command.LateFeeAmount < 0 || command.RentDueDay is < 1 or > 31

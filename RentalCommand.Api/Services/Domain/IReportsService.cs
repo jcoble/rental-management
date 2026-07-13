@@ -1,4 +1,5 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -20,53 +21,53 @@ public interface IReportsService
     ReportsCatalogResponse GetCatalog();
 
     /// <summary>Current rent-roll snapshot: one row per active/under-notice lease, plus totals.</summary>
-    Task<RentRollResponse> GetRentRollAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
+    Task<RentRollResponse> GetRentRollAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default);
 
     /// <summary>Accrual rent ledger per lease over the range: charges due vs. payments received, running balance.</summary>
     Task<RentLedgerResponse> GetRentLedgerAsync(
         LeaseManagementReadContext access, ReportRangeQuery query, CancellationToken ct = default);
 
     /// <summary>Outstanding balances aged into 0-30 / 31-60 / 61-90 / 90+ buckets per lease, with totals.</summary>
-    Task<DelinquencyResponse> GetDelinquencyAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
+    Task<DelinquencyResponse> GetDelinquencyAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default);
 
     /// <summary>Income vs. expense by month over the range, with per-month net and grand totals.</summary>
-    Task<CashFlowResponse> GetCashFlowAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
+    Task<CashFlowResponse> GetCashFlowAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default);
 
     /// <summary>
     /// True cash flow per property + portfolio for the range (spec §9/§18): rent in − operating
     /// expenses (escrow-funded taxes/insurance excluded) − full debt service. Excludes deposits and
     /// non-cash depreciation; shows NOI and after-debt cash flow as distinct lines.
     /// </summary>
-    Task<CashFlowSummaryResponse> GetTrueCashFlowAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
+    Task<CashFlowSummaryResponse> GetTrueCashFlowAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default);
 
     /// <summary>
     /// The year-end three-block view for a tax year (spec §11/§18): cash flow vs taxable income as
     /// distinct numbers, with depreciation + debt service present, plus the rent roll and the
     /// "see your accountant" caveats.
     /// </summary>
-    Task<YearEndViewResponse> GetYearEndAsync(int portfolioId, int year, int? propertyId = null, CancellationToken ct = default);
+    Task<YearEndViewResponse> GetYearEndAsync(WorkspaceReadScope scope, int year, int? propertyId = null, CancellationToken ct = default);
 
     /// <summary>Every payment and expense over the range in date order with a running balance.</summary>
-    Task<GeneralLedgerResponse> GetGeneralLedgerAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
+    Task<GeneralLedgerResponse> GetGeneralLedgerAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default);
 
     /// <summary>Income / expense / net per property over the range, plus portfolio totals.</summary>
-    Task<PropertyProfitAndLossResponse> GetPropertyProfitAndLossAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
+    Task<PropertyProfitAndLossResponse> GetPropertyProfitAndLossAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default);
 
     /// <summary>Per-property unit occupancy/vacancy with occupancy %, plus portfolio totals.</summary>
-    Task<OccupancyResponse> GetOccupancyAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
+    Task<OccupancyResponse> GetOccupancyAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default);
 
     /// <summary>Leases ending within the next <paramref name="days"/> days (default 90), with totals.</summary>
-    Task<LeaseExpirationsResponse> GetLeaseExpirationsAsync(int portfolioId, ReportRangeQuery query, int days, CancellationToken ct = default);
+    Task<LeaseExpirationsResponse> GetLeaseExpirationsAsync(WorkspaceReadScope scope, ReportRangeQuery query, int days, CancellationToken ct = default);
 
     /// <summary>Per-lease security-deposit register: held / deductions / returned / current balance + totals.</summary>
-    Task<SecurityDepositRegisterResponse> GetSecurityDepositRegisterAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
+    Task<SecurityDepositRegisterResponse> GetSecurityDepositRegisterAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default);
 
     /// <summary>Per 1099-eligible vendor: total paid in <paramref name="year"/>, W-9 status, review flags.</summary>
-    Task<Vendor1099Response> GetVendor1099Async(int portfolioId, int year, CancellationToken ct = default);
+    Task<Vendor1099Response> GetVendor1099Async(WorkspaceReadScope scope, int year, CancellationToken ct = default);
 
     /// <summary>Per-owner net distribution for <paramref name="year"/> (reuses the owner-statement math).</summary>
-    Task<OwnerDistributionsResponse> GetOwnerDistributionsAsync(int portfolioId, int year, CancellationToken ct = default);
+    Task<OwnerDistributionsResponse> GetOwnerDistributionsAsync(WorkspaceReadScope scope, int year, CancellationToken ct = default);
 
     /// <summary>Work orders requested in the range, with status counts and a cost rollup.</summary>
-    Task<WorkOrderReportResponse> GetWorkOrdersAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
+    Task<WorkOrderReportResponse> GetWorkOrdersAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default);
 }

@@ -3,7 +3,9 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Leasing;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Leasing;
 
 namespace RentalCommand.Data.Atomic;
 
@@ -48,6 +50,7 @@ public static class AtomicPersistenceKernelExtensions
         services.AddScoped<WorkspaceAuthorityOwnershipInterceptor>();
         services.AddScoped<WorkspaceAccessRevisionGuard>();
         services.AddScoped<MembershipAssignmentScopeValidator>();
+        services.AddScoped<ILegalDocumentSourceVersionResolver, LegalDocumentSourceVersionResolver>();
         services.TryAddSingleton<IAtomicUnitOfWork, AtomicUnitOfWork>();
         return services;
     }

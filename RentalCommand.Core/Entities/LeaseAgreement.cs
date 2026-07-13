@@ -32,9 +32,7 @@ public class LeaseAgreement : IAuditable, IPortfolioScoped
     public string Currency { get; set; } = string.Empty;
     public int TermsSchemaVersion { get; set; }
     public string TermsPayload { get; set; } = string.Empty;
-    /// <summary>Template provenance for generated agreements; null for an imported external original.</summary>
-    public int? DocumentTemplateId { get; set; }
-    public int? DocumentTemplateVersion { get; set; }
+    public int DocumentSourceVersionId { get; set; }
     public int? IssuedArtifactId { get; set; }
     public DateTime? IssuedAtUtc { get; set; }
     public int? ExecutedArtifactId { get; set; }
@@ -56,7 +54,7 @@ public class LeaseAgreement : IAuditable, IPortfolioScoped
     public List<LeaseAgreement> TransferSuccessors { get; set; } = [];
     public LeaseAgreement? RenewsAgreement { get; set; }
     public LeaseAgreement? SupersededByAgreement { get; set; }
-    public DocumentTemplate? DocumentTemplate { get; set; }
+    public LegalDocumentSourceVersion? DocumentSourceVersion { get; set; }
     public LegalDocumentArtifact? IssuedArtifact { get; set; }
     public LegalDocumentArtifact? ExecutedArtifact { get; set; }
     public ApplicationUser? CreatedByUser { get; set; }

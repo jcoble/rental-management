@@ -1,9 +1,12 @@
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Npgsql;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
@@ -22,7 +25,7 @@ namespace RentalCommand.IntegrationTests;
 /// but under a different operator (<c>LIKE</c>/no-op), which is why this lives here.
 ///
 /// <para>Spins its OWN Postgres (Testcontainers, same pattern as <see cref="RlsTenantIsolationTests"/>),
-/// applies migrations as the owner (which also creates the <c>AuditSearchTrgmIndexes</c>), seeds three
+/// creates the current model as the owner, seeds three
 /// audit rows under one portfolio, and asserts the search hits. Queries run on the owner connection
 /// (RLS bypassed); the service still scopes <c>WHERE PortfolioId == portfolioId</c>, which is what these
 /// tests rely on.</para>
@@ -39,6 +42,7 @@ public sealed class AuditSearchTests : IAsyncLifetime
     private bool _dockerAvailable;
     private string _ownerConnString = string.Empty;
     private int _portfolioId;
+    private WorkspaceReadScope _scope;
 
     public async Task InitializeAsync()
     {
@@ -62,10 +66,11 @@ public sealed class AuditSearchTests : IAsyncLifetime
 
         _ownerConnString = _pg.GetConnectionString();
 
-        // Apply all migrations as the owner (creates the pg_trgm GIN indexes ApplySearch relies on,
-        // plus the RLS roles/policies and every table).
+        // This test proves the current EF projection and PostgreSQL ILIKE behavior independently of
+        // migration-history correctness. The destructive InitialCreate migration has its own
+        // apply/down/reapply proof and is regenerated only after the source model is final.
         await using var ctx = NewContext(_ownerConnString);
-        await ctx.Database.MigrateAsync();
+        await ctx.Database.EnsureCreatedAsync();
 
         // One portfolio (AuditLog.PortfolioId is a required FK → Portfolio), captured by id.
         var portfolio = new Portfolio
@@ -79,6 +84,120 @@ public sealed class AuditSearchTests : IAsyncLifetime
         ctx.Portfolios.Add(portfolio);
         await ctx.SaveChangesAsync();
         _portfolioId = portfolio.Id;
+
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = _portfolioId,
+            Name = "Authorized property",
+            AddressLine1 = "1 Test Street",
+            City = "Akron",
+            State = "OH",
+            PostalCode = "44308",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            PortfolioId = _portfolioId,
+            Property = property,
+            UnitNumber = "1A",
+            MarketRent = 1_000m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var expense = new Expense
+        {
+            Id = 76,
+            PortfolioId = _portfolioId,
+            Property = property,
+            Unit = unit,
+            Description = "Audit search expense",
+            Amount = 25m,
+            IncurredAt = now,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var workOrder = new WorkOrder
+        {
+            Id = 11,
+            PortfolioId = _portfolioId,
+            Property = property,
+            Unit = unit,
+            Title = "Audit search work",
+            Description = "Audit search work",
+            RequestedAt = now,
+            UpdatedAt = now,
+        };
+        var application = new RentalApplication
+        {
+            Id = 7,
+            PortfolioId = _portfolioId,
+            Property = property,
+            Unit = unit,
+            FirstName = "Jamie",
+            LastName = "Applicant",
+            SubmittedAtUtc = now,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        ctx.AddRange(property, unit, expense, workOrder, application);
+
+        var user = new ApplicationUser
+        {
+            UserName = "audit-search@example.test",
+            NormalizedUserName = "AUDIT-SEARCH@EXAMPLE.TEST",
+            Email = "audit-search@example.test",
+            NormalizedEmail = "AUDIT-SEARCH@EXAMPLE.TEST",
+            DisplayName = "Audit Search Administrator",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = now,
+        };
+        var context = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = _portfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = context,
+            PortfolioId = _portfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = _portfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            User = user,
+            ActiveAccessContext = context,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        ctx.AddRange(assignment, session);
+        await ctx.SaveChangesAsync();
+        _scope = new WorkspaceReadScope(
+            _portfolioId, user.Id, session.Id, context.Id, context.AccessRevision);
 
         // Three audit rows whose EntityType / EntityId / Operation / ActorLabel / IpAddress we control,
         // so the search assertions target exactly the fields the audit page renders. No users needed
@@ -98,7 +217,7 @@ public sealed class AuditSearchTests : IAsyncLifetime
             },
             new AuditLog
             {
-                PortfolioId = _portfolioId, EntityType = "Payment", EntityId = 7,
+                PortfolioId = _portfolioId, EntityType = nameof(RentalApplication), EntityId = 7,
                 Operation = AuditLogOperation.Created, ActorLabel = "Jane Landlord",
                 IpAddress = "203.0.113.5", Timestamp = DateTime.UtcNow.AddMinutes(-1),
             });
@@ -119,11 +238,12 @@ public sealed class AuditSearchTests : IAsyncLifetime
         SkipIfNoDocker();
 
         await using var db = NewContext(_ownerConnString);
-        var sut = new AuditQueryService(db, new AuditDescriber(), new AuditDiffBuilder(), new FakeTimeZoneProvider());
+        var sut = new AuditQueryService(
+            db, new AuditDescriber(), new AuditDiffBuilder(), new FakeTimeZoneProvider(), TimeProvider.System);
 
         async Task<List<int>> SearchIds(string term)
         {
-            var page = await sut.ListAsync(_portfolioId, null, null, null, new ListQuery { Search = term });
+            var page = await sut.ListAsync(_scope, null, null, null, new ListQuery { Search = term });
             return page.Select(e => e.EntityId).ToList();
         }
 
@@ -133,7 +253,7 @@ public sealed class AuditSearchTests : IAsyncLifetime
         (await SearchIds("Expense #76")).Should().Equal(76);
         (await SearchIds("WorkOrder 11")).Should().Equal(11);
         // Entity type via ILIKE.
-        (await SearchIds("payment")).Should().Equal(7);
+        (await SearchIds("application")).Should().Equal(7);
         // Actor label via ILIKE (lowercase term → case-insensitive match on "Bob Staff").
         (await SearchIds("bob")).Should().Equal(11);
         // IP address via ILIKE substring → both Jane rows share 203.0.113.5.
@@ -141,7 +261,52 @@ public sealed class AuditSearchTests : IAsyncLifetime
         // Action verb → operation. "updated" narrows to the WorkOrder row.
         (await SearchIds("updated")).Should().Equal(11);
         // Friendly verb the describer renders for Created → both Created rows.
-        (await SearchIds("recorded")).Should().BeEquivalentTo(new[] { 76, 7 });
+        (await SearchIds("recorded")).Should().Equal(76);
+        (await SearchIds("received")).Should().Equal(7);
+    }
+
+    [SkippableFact]
+    public async Task Page_Projection_Is_One_Translated_Paged_Command_With_All_Unit_Context_Sources()
+    {
+        SkipIfNoDocker();
+
+        var commands = new ReaderCommandRecorder();
+        await using var db = NewContext(_ownerConnString, commands);
+        var sut = new AuditQueryService(
+            db,
+            new AuditDescriber(),
+            new AuditDiffBuilder(),
+            new FakeTimeZoneProvider(),
+            TimeProvider.System);
+        var query = new ListQuery { Skip = 1, Take = 2, Sort = "timestamp" };
+
+        // ToQueryString proves that filtering, stable ordering, paging, actor lookup, and every
+        // supported entity-to-Unit lookup form one provider-translated statement. It does not execute
+        // the query, so the command recorder below remains an independent runtime query-count proof.
+        var sql = sut.BuildPageProjectionQuery(_scope, null, null, null, query)
+            .ToQueryString();
+
+        sql.Should().Contain("FROM \"AuditLogs\"");
+        sql.Should().Contain("\"AspNetUsers\"");
+        sql.Should().Contain("\"WorkspaceAccessContexts\"");
+        sql.Should().Contain("\"AuthSessions\"");
+        sql.Should().Contain("reports.read");
+        sql.Should().Contain("\"LeaseManagements\"");
+        sql.Should().Contain("\"LeaseAgreements\"");
+        sql.Should().Contain("\"TenantAccounts\"");
+        sql.Should().Contain("\"WorkOrders\"");
+        sql.Should().Contain("\"Expenses\"");
+        sql.Should().Contain("\"RentalApplications\"");
+        sql.Should().Contain("ORDER BY");
+        sql.Should().Contain("LIMIT");
+        sql.Should().Contain("OFFSET");
+
+        var page = await sut.ListAsync(_scope, null, null, null, query);
+
+        page.Should().HaveCount(2);
+        commands.ReaderCommands.Should().ContainSingle(
+            "the audit page and all actor/Unit enrichment must execute as one SQL reader command");
+        commands.ReaderCommands[0].Should().Contain("FROM \"AuditLogs\"");
     }
 
     // ───────────────────────────────── helpers ─────────────────────────────────
@@ -149,8 +314,28 @@ public sealed class AuditSearchTests : IAsyncLifetime
     private void SkipIfNoDocker() =>
         Skip.IfNot(_dockerAvailable, "Docker is not available; audit-search runtime verification skipped.");
 
-    private static RentalCommandDbContext NewContext(string connString) =>
-        new(new DbContextOptionsBuilder<RentalCommandDbContext>().UseNpgsql(connString).Options);
+    private static RentalCommandDbContext NewContext(
+        string connString,
+        params IInterceptor[] interceptors) =>
+        new(new DbContextOptionsBuilder<RentalCommandDbContext>()
+            .UseNpgsql(connString)
+            .AddInterceptors(interceptors)
+            .Options);
+
+    private sealed class ReaderCommandRecorder : DbCommandInterceptor
+    {
+        public List<string> ReaderCommands { get; } = [];
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            ReaderCommands.Add(command.CommandText);
+            return ValueTask.FromResult(result);
+        }
+    }
 
     private sealed class FakeTimeZoneProvider : IAppTimeZoneProvider
     {

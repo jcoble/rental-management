@@ -120,7 +120,6 @@ public class AuthService : IAuthService
     private readonly IEffectiveAccessContextSelectionQuery _contextSelection;
     private readonly IAccessEnvelopeQuery _accessEnvelopes;
     private readonly AtomicAuthSessionCredentialOptions _credentialOptions;
-    private readonly IUserMigrationService _userMigration;
     private readonly IAuthEmailSender _emailSender;
     private readonly RentalCommandDbContext _db;
     private readonly IAuditTrailService _audit;
@@ -137,7 +136,6 @@ public class AuthService : IAuthService
         IEffectiveAccessContextSelectionQuery contextSelection,
         IAccessEnvelopeQuery accessEnvelopes,
         IOptions<AtomicAuthSessionCredentialOptions> credentialOptions,
-        IUserMigrationService userMigration,
         IAuthEmailSender emailSender,
         RentalCommandDbContext db,
         IAuditTrailService audit,
@@ -153,7 +151,6 @@ public class AuthService : IAuthService
         _contextSelection = contextSelection;
         _accessEnvelopes = accessEnvelopes;
         _credentialOptions = credentialOptions.Value;
-        _userMigration = userMigration;
         _emailSender = emailSender;
         _db = db;
         _audit = audit;
@@ -169,15 +166,6 @@ public class AuthService : IAuthService
         if (user == null)
         {
             return AuthResult.Fail("Invalid email or password");
-        }
-
-        // Rehash-on-first-login: a migrated account with no password hash can't sign in with a password.
-        // Route it into the reset flow rather than returning a confusing "invalid password".
-        if (await _userMigration.RequiresPasswordResetAsync(user))
-        {
-            _logger.LogInformation("Login for {Email} requires password reset (migrated account, no password set).", email);
-            return AuthResult.Fail(
-                "PASSWORD_RESET_REQUIRED: This account needs a password. Please use the reset-password flow.");
         }
 
         // lockoutOnFailure: true enables Identity's lockout (configured in Program.cs: 5 attempts / 5 min).

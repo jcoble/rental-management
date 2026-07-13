@@ -30,10 +30,9 @@ Open a lease to see its **Account History** — a plain-English ledger of every 
 
 ## Opening balance
 
-If a tenant already owed you money (or had a credit) **before** you started using Rental Command, establish an **opening balance** while preparing move-in:
+If a tenant already owed you money (or had a credit) **before** you started using Rental Command, establish an **opening balance** as an explicit tenant-account fact while preparing move-in:
 
-1. In the lease setup flow, choose **Use opening balance** for rent tracking.
-2. Enter the signed amount, the "as of" date, and an optional note.
-3. Complete move-in. Rental Command posts one immutable **Opening balance** entry to the tenant account ledger, so the running balance is correct from day one.
+1. Enter the signed amount, the "as of" date, and an optional note in Prepare move-in.
+2. Complete move-in. Rental Command posts one immutable **Opening balance** entry to the tenant account ledger, so the running balance is correct from day one.
 
 The opening balance is part of account history, not a separate editable lease record. If it was entered incorrectly, post an explicit account adjustment so both the original entry and the correction remain visible.

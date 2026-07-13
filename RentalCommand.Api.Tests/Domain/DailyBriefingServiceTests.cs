@@ -2,10 +2,12 @@ using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -31,6 +33,7 @@ public class DailyBriefingServiceTests : IDisposable
 
         _db = new DailyBriefingFixtureDbContext(options);
         _db.Database.EnsureCreated();
+        _db.Database.InstallCanonicalLeaseProjectionViewsForSqlite();
 
         _db.Portfolios.Add(new Portfolio
         {
@@ -68,7 +71,7 @@ public class DailyBriefingServiceTests : IDisposable
         SeedBriefingData();
         _executedSql.Clear();
 
-        var briefing = await _sut.ComposeAsync(PortfolioId, CancellationToken.None);
+        var briefing = await _sut.ComposeForSystemAutomationAsync(PortfolioId, CancellationToken.None);
 
         briefing.Bullets.Should().Contain(b => b.Category == "Maintenance" && b.Severity == "critical");
         briefing.Bullets.Should().Contain(b => b.Category == "RentLate");
@@ -86,8 +89,8 @@ public class DailyBriefingServiceTests : IDisposable
             && command.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
             && command.Contains("LIMIT", StringComparison.OrdinalIgnoreCase)
             && command.Contains("WorkOrders", StringComparison.OrdinalIgnoreCase)
-            && command.Contains("DailyBriefingTestChargeBalances", StringComparison.OrdinalIgnoreCase)
-            && command.Contains("DailyBriefingTestLeaseLifecycle", StringComparison.OrdinalIgnoreCase)
+            && command.Contains("vw_tenant_charge_balances", StringComparison.OrdinalIgnoreCase)
+            && command.Contains("vw_lease_management_lifecycle", StringComparison.OrdinalIgnoreCase)
             && command.Contains("LeaseAgreements", StringComparison.OrdinalIgnoreCase)
             && command.Contains("Appointments", StringComparison.OrdinalIgnoreCase)
             && command.Contains("Inspections", StringComparison.OrdinalIgnoreCase),
@@ -123,7 +126,7 @@ public class DailyBriefingServiceTests : IDisposable
         SeedOpenRentCharge(endedRelationship, 925m, DateOnly.FromDateTime(today.AddMonths(-10)));
         SeedOpenRentCharge(currentRelationship, 975m, DateOnly.FromDateTime(today.AddDays(-7)));
 
-        var briefing = await _sut.ComposeAsync(PortfolioId, CancellationToken.None);
+        var briefing = await _sut.ComposeForSystemAutomationAsync(PortfolioId, CancellationToken.None);
 
         briefing.Bullets.Should().ContainSingle(b =>
             b.Category == "RentLate" &&
@@ -151,13 +154,125 @@ public class DailyBriefingServiceTests : IDisposable
 
         SeedOpenRentCharge(relationship, 925m, DateOnly.FromDateTime(today.AddDays(-7)));
 
-        var briefing = await _sut.ComposeAsync(PortfolioId, CancellationToken.None);
+        var briefing = await _sut.ComposeForSystemAutomationAsync(PortfolioId, CancellationToken.None);
 
         var rentBullet = briefing.Bullets.Should().ContainSingle(b => b.Category == "RentLate").Subject;
         rentBullet.Title.Should().Contain("Jordan Smith");
         rentBullet.Title.Should().Contain("Westview Four-Plex");
         rentBullet.Title.Should().Contain("Unit 101");
         rentBullet.Title.Should().NotContain("L2024-003");
+    }
+
+    [Fact]
+    public async Task ComposeAsync_SelectedPropertyScope_ExcludesDecoyWorkCandidate()
+    {
+        var now = DateTime.UtcNow;
+        var allowed = SeedBareProperty("Allowed", now);
+        var decoy = SeedBareProperty("Decoy", now);
+        var scope = SeedSelectedAdministratorScope(allowed.Id, now);
+        _db.WorkOrders.AddRange(
+            new WorkOrder
+            {
+                PortfolioId = PortfolioId,
+                PropertyId = allowed.Id,
+                Title = "Allowed emergency",
+                Description = "Visible",
+                Priority = WorkOrderPriority.Emergency,
+                Status = WorkOrderStatus.New,
+                RequestedAt = now,
+                UpdatedAt = now,
+            },
+            new WorkOrder
+            {
+                PortfolioId = PortfolioId,
+                PropertyId = decoy.Id,
+                Title = "Decoy emergency",
+                Description = "Hidden",
+                Priority = WorkOrderPriority.Emergency,
+                Status = WorkOrderStatus.New,
+                RequestedAt = now,
+                UpdatedAt = now,
+            });
+        await _db.SaveChangesAsync();
+
+        var briefing = await _sut.ComposeAsync(scope, CancellationToken.None);
+
+        briefing.Bullets.Should().ContainSingle(bullet => bullet.Category == "Maintenance");
+        briefing.Bullets.Single(bullet => bullet.Category == "Maintenance").Title
+            .Should().Contain("Allowed emergency");
+    }
+
+    private Property SeedBareProperty(string name, DateTime now)
+    {
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = name,
+            AddressLine1 = $"{name} address",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Properties.Add(property);
+        _db.SaveChanges();
+        return property;
+    }
+
+    private WorkspaceReadScope SeedSelectedAdministratorScope(int propertyId, DateTime now)
+    {
+        var user = _db.Users.Single(user => user.Id == ActorUserId);
+        var context = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = context,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = PortfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.SelectedProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+        {
+            MembershipRoleAssignment = assignment,
+            PortfolioId = PortfolioId,
+            PropertyId = propertyId,
+        });
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            User = user,
+            ActiveAccessContext = context,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        _db.AddRange(assignment, session);
+        _db.SaveChanges();
+        return new WorkspaceReadScope(
+            PortfolioId, user.Id, session.Id, context.Id, context.AccessRevision);
     }
 
     private void SeedBriefingData()
@@ -299,6 +414,8 @@ public class DailyBriefingServiceTests : IDisposable
             Currency = "USD",
             TermsSchemaVersion = 1,
             TermsPayload = "{}",
+            DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
+                PortfolioId, ActorUserId, now),
             IssuedAtUtc = now,
             FullyExecutedAtUtc = now,
             CreatedAtUtc = now,

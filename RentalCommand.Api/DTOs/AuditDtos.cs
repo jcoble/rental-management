@@ -64,7 +64,7 @@ public class AuditEntryResponse
         AuditLog e,
         AuditDescriber describer,
         AuditDiffBuilder? diff = null,
-        IReadOnlyDictionary<int, string>? userNames = null,
+        string? resolvedActorName = null,
         int? unitId = null) => new()
         {
             Id = e.Id,
@@ -73,7 +73,7 @@ public class AuditEntryResponse
             OperationName = e.Operation.ToString(),
             EntityType = e.EntityType,
             EntityId = e.EntityId,
-            Actor = ResolveActor(e, userNames),
+            Actor = ResolveActor(e, resolvedActorName),
             Description = describer.Describe(e),
             DetailHref = BuildDetailHref(e.EntityType, e.EntityId, unitId),
             Timestamp = e.Timestamp,
@@ -83,11 +83,12 @@ public class AuditEntryResponse
     /// <summary>
     /// Resolves a human-readable actor label. Precedence: the row's own <see cref="AuditLog.ActorLabel"/>
     /// (set for system/AI actors and HTTP requests that carried a name claim) → the user's display
-    /// name/email resolved from <paramref name="userNames"/> when only a <see cref="AuditLog.UserId"/>
+    /// name/email resolved by the database projection in <paramref name="resolvedActorName"/> when
+    /// only a <see cref="AuditLog.UserId"/>
     /// is present → "system" for actor-less rows. The bare "User #{id}" is a last resort only when a
     /// user id has no resolvable account (e.g. a since-deleted user), never the normal case.
     /// </summary>
-    internal static string ResolveActor(AuditLog e, IReadOnlyDictionary<int, string>? userNames = null)
+    internal static string ResolveActor(AuditLog e, string? resolvedActorName = null)
     {
         if (!string.IsNullOrWhiteSpace(e.ActorLabel))
         {
@@ -96,11 +97,9 @@ public class AuditEntryResponse
 
         if (e.UserId.HasValue)
         {
-            if (userNames is not null
-                && userNames.TryGetValue(e.UserId.Value, out var name)
-                && !string.IsNullOrWhiteSpace(name))
+            if (!string.IsNullOrWhiteSpace(resolvedActorName))
             {
-                return name;
+                return resolvedActorName;
             }
 
             return $"User #{e.UserId.Value}";
@@ -171,7 +170,8 @@ public sealed class AdminAuditEntryResponse
     public static AdminAuditEntryResponse FromEntity(
         AuditLog e,
         AuditDescriber describer,
-        IReadOnlyDictionary<int, string>? userNames = null) => new()
+        string? resolvedActorName = null,
+        int? unitId = null) => new()
         {
             Id = e.Id,
             PortfolioId = e.PortfolioId,
@@ -179,11 +179,11 @@ public sealed class AdminAuditEntryResponse
             OperationName = e.Operation.ToString(),
             EntityType = e.EntityType,
             EntityId = e.EntityId,
-            Actor = AuditEntryResponse.ResolveActor(e, userNames),
+            Actor = AuditEntryResponse.ResolveActor(e, resolvedActorName),
             UserId = e.UserId,
             ActorLabel = e.ActorLabel,
             Description = describer.Describe(e),
-            DetailHref = AuditEntryResponse.BuildDetailHref(e.EntityType, e.EntityId),
+            DetailHref = AuditEntryResponse.BuildDetailHref(e.EntityType, e.EntityId, unitId),
             Timestamp = e.Timestamp,
             IpAddress = e.IpAddress,
             OldValues = e.OldValues,

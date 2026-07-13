@@ -2,11 +2,13 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -28,9 +30,11 @@ public class UnitService : IUnitService
         _timeProvider = timeProvider;
     }
 
-    public async Task<IReadOnlyList<UnitResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
+    public async Task<IReadOnlyList<UnitResponse>> ListAsync(
+        WorkspaceReadScope scope, int? propertyId, ListQuery query, CancellationToken ct = default)
     {
-        var q = BuildCanonicalResponseQuery(portfolioId);
+        var portfolioId = scope.PortfolioId;
+        var q = BuildCanonicalResponseQuery(scope);
 
         if (propertyId.HasValue)
         {
@@ -104,17 +108,68 @@ public class UnitService : IUnitService
             UpdatedAt = unit.UpdatedAt,
         };
 
-    public async Task<IReadOnlyList<UnitHealthResponse>> ListWithHealthAsync(
-        int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
+    internal IQueryable<UnitResponse> BuildCanonicalResponseQuery(WorkspaceReadScope scope)
     {
-        var page = await ListWithHealthPageAsync(portfolioId, ToUnitHealthListQuery(query, propertyId), ct);
+        var portfolioId = scope.PortfolioId;
+        var authorizedProperties = _db.Properties
+            .AsNoTracking()
+            .WhereAuthorized(
+                _db,
+                scope,
+                CapabilityKeys.RentalsRead,
+                _timeProvider.GetUtcNow().UtcDateTime);
+
+        return from unit in _db.Units.AsNoTracking()
+            where unit.PortfolioId == portfolioId
+                  && authorizedProperties.Any(property =>
+                      property.Id == unit.PropertyId && property.PortfolioId == unit.PortfolioId)
+            join occupancy in _db.UnitOccupancyProjections.AsNoTracking()
+                on new { unit.PortfolioId, UnitId = unit.Id }
+                equals new { occupancy.PortfolioId, occupancy.UnitId }
+            select new UnitResponse
+            {
+                Id = unit.Id,
+                PropertyId = unit.PropertyId,
+                UnitNumber = unit.UnitNumber,
+                FloorPlan = unit.FloorPlan,
+                Bedrooms = unit.Bedrooms,
+                Bathrooms = unit.Bathrooms,
+                SquareFeet = unit.SquareFeet,
+                MarketRent = unit.MarketRent,
+                Status = occupancy.IsInTurnover || occupancy.IsOutOfService || occupancy.IsOnManagementHold
+                    ? DerivedUnitStatus.Offline
+                    : occupancy.IsOccupied
+                        ? DerivedUnitStatus.Occupied
+                        : occupancy.HasScheduledMoveIn
+                            ? DerivedUnitStatus.Reserved
+                            : DerivedUnitStatus.Vacant,
+                Notes = unit.Notes,
+                CreatedAt = unit.CreatedAt,
+                UpdatedAt = unit.UpdatedAt,
+            };
+    }
+
+    public async Task<IReadOnlyList<UnitHealthResponse>> ListWithHealthAsync(
+        WorkspaceReadScope scope, int? propertyId, ListQuery query, CancellationToken ct = default)
+    {
+        var page = await ListWithHealthPageAsync(scope, ToUnitHealthListQuery(query, propertyId), ct);
         return page.Items;
     }
 
     public async Task<UnitHealthListResponse> ListWithHealthPageAsync(
-        int portfolioId, UnitHealthListQuery query, CancellationToken ct = default)
+        WorkspaceReadScope scope, UnitHealthListQuery query, CancellationToken ct = default)
     {
-        var q = BuildHealthQuery(portfolioId);
+        var portfolioId = scope.PortfolioId;
+        var authorizedProperties = _db.Properties
+            .AsNoTracking()
+            .WhereAuthorized(
+                _db,
+                scope,
+                CapabilityKeys.RentalsRead,
+                _timeProvider.GetUtcNow().UtcDateTime);
+        var q = BuildHealthQuery(portfolioId)
+            .Where(row => authorizedProperties.Any(property =>
+                property.Id == row.PropertyId && property.PortfolioId == portfolioId));
 
         if (query.PropertyId.HasValue)
         {

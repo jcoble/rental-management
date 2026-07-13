@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
@@ -8,11 +7,13 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
+using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
@@ -105,6 +106,17 @@ public sealed class TenantPortalInviteEndpointTests : IDisposable
         var emailSender = new OutboxAuthEmailSender(
             _ctx.Db, new ConfigurationBuilder().Build(), NullLogger<OutboxAuthEmailSender>.Instance);
 
+        var httpContext = new DefaultHttpContext();
+        httpContext.Items[CanonicalAccessContextHttpItem.Key] = new ActiveAccessContext(
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            UserId: 7,
+            AccessContextId: 1,
+            PortfolioId: PortfolioId,
+            AccessRevision: 1,
+            LastAuthorizedExperience: null,
+            WorkspaceMembershipId: null,
+            DefaultExperience: null);
+
         return new TenantController(
             Mock.Of<ITenantService>(),
             provisioning,
@@ -114,14 +126,7 @@ public sealed class TenantPortalInviteEndpointTests : IDisposable
         {
             ControllerContext = new ControllerContext
             {
-                HttpContext = new DefaultHttpContext
-                {
-                    User = new ClaimsPrincipal(new ClaimsIdentity([
-                        new Claim("portfolioId", PortfolioId.ToString()),
-                        new Claim(ClaimTypes.NameIdentifier, "7"),
-                        new Claim(ClaimTypes.Role, "Admin"),
-                    ], "test")),
-                },
+                HttpContext = httpContext,
             },
         };
     }

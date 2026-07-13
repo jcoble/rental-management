@@ -4,6 +4,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
@@ -26,6 +27,7 @@ public class OwnerStatementServiceTests : IDisposable
     private readonly List<string> _commands = [];
     private readonly RentalCommandDbContext _db;
     private readonly OwnerStatementService _sut;
+    private readonly WorkspaceReadScope _scope;
 
     public OwnerStatementServiceTests()
     {
@@ -50,8 +52,9 @@ public class OwnerStatementServiceTests : IDisposable
             UpdatedAt = DateTime.UtcNow,
         });
         _db.SaveChanges();
+        _scope = _db.SeedAdministratorScope(PortfolioId, nameof(OwnerStatementServiceTests));
 
-        _sut = new OwnerStatementService(_db);
+        _sut = new OwnerStatementService(_db, TimeProvider.System);
     }
 
     public void Dispose()
@@ -86,7 +89,7 @@ public class OwnerStatementServiceTests : IDisposable
 
         _commands.Clear();
 
-        var report = await _sut.GetForOwnerAsync(PortfolioId, owner.Id, Year, CancellationToken.None);
+        var report = await _sut.GetForOwnerAsync(_scope, owner.Id, Year, CancellationToken.None);
 
         report.Should().NotBeNull();
         report!.Properties.Should().HaveCount(2);
@@ -134,6 +137,7 @@ public class OwnerStatementServiceTests : IDisposable
         SeedRent(SeedLease(prop, "L-D"), 2000m, paidInYear: true);
         SeedExpense(prop.Id, 300m);
         SeedOwnerDistribution(owner.Id, 1000m, propertyId: prop.Id);
+        SeedOwnerDistribution(owner.Id, 250m);
         SeedOwnerDistribution(owner.Id, 500m, year: Year - 1, propertyId: prop.Id);
 
         var otherOwner = SeedOwner("Other Owner");
@@ -141,20 +145,60 @@ public class OwnerStatementServiceTests : IDisposable
 
         _commands.Clear();
 
-        var report = await _sut.GetForOwnerAsync(PortfolioId, owner.Id, Year, CancellationToken.None);
+        var report = await _sut.GetForOwnerAsync(_scope, owner.Id, Year, CancellationToken.None);
 
         report.Should().NotBeNull();
         report!.TotalIncome.Should().Be(2000m);
         report.TotalExpenses.Should().Be(300m, "owner payouts are distributions, not operating expenses");
         report.TotalManagementFee.Should().Be(200m);
         report.TotalNetToOwner.Should().Be(1500m);
-        report.TotalDistributed.Should().Be(1000m);
-        report.Undistributed.Should().Be(500m);
+        report.TotalDistributed.Should().Be(1250m,
+            "propertyless distributions are visible when every property for the owner is authorized");
+        report.Undistributed.Should().Be(250m);
 
         _commands.Should().Contain(command =>
             command.Contains("FROM \"OwnerDistributions\"", StringComparison.OrdinalIgnoreCase) &&
             command.Contains("SUM", StringComparison.OrdinalIgnoreCase),
             "recorded owner distributions must be summed in SQL, not materialized and summed in memory");
+    }
+
+    [Fact]
+    public async Task OwnerDistributions_SelectedPropertyScope_IncludesOnlyLinkedAuthorizedProperty()
+    {
+        var owner = SeedOwner("Mixed Scope Holdings");
+        var allowed = SeedProperty(owner.Id, "Allowed Property", managementFeePercent: 1m);
+        SeedRent(SeedLease(allowed, "L-ALLOWED"), 333.33m, paidInYear: true);
+        var decoy = SeedProperty(owner.Id, "Decoy Property", managementFeePercent: 10m);
+        SeedRent(SeedLease(decoy, "L-DECOY"), 5_000m, paidInYear: true);
+
+        SeedOwnerDistribution(owner.Id, 100m, propertyId: allowed.Id);
+        SeedOwnerDistribution(owner.Id, 900m, propertyId: decoy.Id);
+        SeedOwnerDistribution(owner.Id, 700m);
+
+        var selectedScope = SeedSelectedPropertyScope(allowed.Id);
+        _commands.Clear();
+
+        var report = await _sut.GetForOwnerAsync(selectedScope, owner.Id, Year, CancellationToken.None);
+        var summaries = await _sut.ListOwnersWithNetAsync(selectedScope, Year, CancellationToken.None);
+
+        report.Should().NotBeNull();
+        var line = report!.Properties.Should().ContainSingle().Subject;
+        line.PropertyId.Should().Be(allowed.Id);
+        line.ManagementFee.Should().Be(3.33m);
+        report.TotalManagementFee.Should().Be(line.ManagementFee);
+        report.TotalNetToOwner.Should().Be(line.NetToOwner);
+        report.TotalDistributed.Should().Be(100m,
+            "the decoy-property and unattributed distributions are outside selected-property authority");
+
+        var summary = summaries.Should().ContainSingle().Subject;
+        summary.OwnerId.Should().Be(owner.Id);
+        summary.TotalDistributed.Should().Be(100m);
+
+        _commands.Should().Contain(command =>
+            command.Contains("FROM \"OwnerDistributions\"", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("PropertyId", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("SUM", StringComparison.OrdinalIgnoreCase),
+            "distribution property authorization and totals must stay in the translated SQL query");
     }
 
     [Fact]
@@ -173,7 +217,8 @@ public class OwnerStatementServiceTests : IDisposable
         var propB = SeedProperty(owner.Id, "Cent B", managementFeePercent: 1m);
         SeedRent(SeedLease(propB, "L-B"), 333.34m, paidInYear: true);
 
-        var report = await _sut.GetForOwnerAsync(PortfolioId, owner.Id, Year, CancellationToken.None);
+        _commands.Clear();
+        var report = await _sut.GetForOwnerAsync(_scope, owner.Id, Year, CancellationToken.None);
 
         report.Should().NotBeNull();
         var lineA = report!.Properties.Single(p => p.PropertyName == "Cent A");
@@ -187,6 +232,11 @@ public class OwnerStatementServiceTests : IDisposable
         report.TotalIncome.Should().Be(666.67m);
         report.TotalNetToOwner.Should().Be(660.01m);
         report.TotalNetToOwner.Should().Be(lineA.NetToOwner + lineB.NetToOwner);
+
+        _commands.Should().ContainSingle(command =>
+            command.Contains("round", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("sum", StringComparison.OrdinalIgnoreCase),
+            "display-line rounding and report totals must both execute in the database query");
     }
 
     [Fact]
@@ -205,7 +255,7 @@ public class OwnerStatementServiceTests : IDisposable
 
         _commands.Clear();
 
-        var summaries = await _sut.ListOwnersWithNetAsync(PortfolioId, Year, CancellationToken.None);
+        var summaries = await _sut.ListOwnersWithNetAsync(_scope, Year, CancellationToken.None);
 
         summaries.Should().HaveCount(2);
         // Owner1: 2000 income - 500 expenses - 200 mgmt (10%) = 1300.
@@ -243,7 +293,7 @@ public class OwnerStatementServiceTests : IDisposable
 
         _commands.Clear();
 
-        var summaries = await _sut.ListOwnersWithNetAsync(PortfolioId, Year, CancellationToken.None);
+        var summaries = await _sut.ListOwnersWithNetAsync(_scope, Year, CancellationToken.None);
 
         var acme = summaries.Single(s => s.OwnerName == "Acme Holdings");
         acme.NetToOwner.Should().Be(1300m);
@@ -278,7 +328,7 @@ public class OwnerStatementServiceTests : IDisposable
 
         _commands.Clear();
 
-        var total = await _sut.GetTotalNetToOwnersAsync(PortfolioId, Year, CancellationToken.None);
+        var total = await _sut.GetTotalNetToOwnersAsync(_scope, Year, CancellationToken.None);
 
         total.Should().Be(2050m);
         _commands.Should().Contain(command =>
@@ -289,6 +339,74 @@ public class OwnerStatementServiceTests : IDisposable
     }
 
     // ── seed helpers ───────────────────────────────────────────────────────────────────────────
+    private WorkspaceReadScope SeedSelectedPropertyScope(int propertyId)
+    {
+        var now = DateTime.UtcNow;
+        var email = $"owner-statement-selected-{Guid.NewGuid():N}@example.test";
+        var user = new ApplicationUser
+        {
+            UserName = email,
+            NormalizedUserName = email.ToUpperInvariant(),
+            Email = email,
+            NormalizedEmail = email.ToUpperInvariant(),
+            DisplayName = "Selected Property Owner Reporter",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = now,
+        };
+        var accessContext = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = accessContext,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = PortfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role => role.Key == RoleProfileKeys.PropertyManager).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.SelectedProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+        {
+            MembershipRoleAssignment = assignment,
+            PortfolioId = PortfolioId,
+            PropertyId = propertyId,
+        });
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            User = user,
+            ActiveAccessContext = accessContext,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+
+        _db.AddRange(assignment, session);
+        _db.SaveChanges();
+
+        return new WorkspaceReadScope(
+            PortfolioId, user.Id, session.Id, accessContext.Id, accessContext.AccessRevision);
+    }
+
     private OwnerEntity SeedOwner(string name)
     {
         var owner = new OwnerEntity

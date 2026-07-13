@@ -10,6 +10,7 @@ using Moq;
 using RentalCommand.Api.Data;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auth;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
@@ -134,6 +135,13 @@ public sealed class CanonicalRegistrationBootstrapTests : IDisposable
         (await _sqlite.Db.OwnerUserAccesses.SingleAsync(access =>
             access.AccessContextId == context.Id && access.ApplicationUserId == user.Id))
             .OwnerEntityId.Should().Be(owner.Id);
+        var suppliedTemplates = await _sqlite.Db.WorkspaceNoticeTemplateVersions
+            .Where(template => template.PortfolioId == context.PortfolioId)
+            .ToListAsync();
+        suppliedTemplates.Should().HaveCount(5);
+        suppliedTemplates.Should().OnlyContain(template =>
+            template.Version == 1 && template.BasedOnSystemTemplateVersionId > 0 &&
+            template.CreatedByUserId == user.Id);
 
         var loggedIn = await auth.LoginAsync(user.Email!, "Password123!");
 
@@ -150,9 +158,6 @@ public sealed class CanonicalRegistrationBootstrapTests : IDisposable
         IAccessEnvelopeQuery envelopes,
         ICanonicalAccessTokenService canonicalTokens)
     {
-        var migration = new Mock<IUserMigrationService>();
-        migration.Setup(service => service.RequiresPasswordResetAsync(It.IsAny<ApplicationUser>()))
-            .ReturnsAsync(false);
         return new AuthService(
             _users,
             CreateSignInManager(_users),
@@ -167,7 +172,6 @@ public sealed class CanonicalRegistrationBootstrapTests : IDisposable
                 FamilyAbsoluteLifetimeDays = 30,
                 SessionLifetimeDays = 30,
             }),
-            migration.Object,
             Mock.Of<IAuthEmailSender>(),
             _sqlite.Db,
             Mock.Of<IAuditTrailService>(),
@@ -175,7 +179,9 @@ public sealed class CanonicalRegistrationBootstrapTests : IDisposable
                 _users,
                 _sqlite.Db,
                 new RlsExecutionContext(),
-                TimeProvider.System),
+                TimeProvider.System,
+                new InitialWorkspaceAuthorityProvisioner(_sqlite.Db, TimeProvider.System),
+                new NotificationFoundationService(_sqlite.Db, TimeProvider.System)),
             new RlsExecutionContext(),
             NullLogger<AuthService>.Instance,
             TimeProvider.System);

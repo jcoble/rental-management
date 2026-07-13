@@ -6,7 +6,7 @@ namespace RentalCommand.Api.Controllers;
 
 /// <summary>
 /// Read-only portfolio analytics — KPIs and trends for the web dashboard.
-/// All data is scoped to the caller's portfolio via the JWT <c>portfolioId</c> claim.
+/// All data is scoped to the caller's server-validated workspace context.
 /// No create / update / delete operations exist here.
 /// </summary>
 [ApiController]

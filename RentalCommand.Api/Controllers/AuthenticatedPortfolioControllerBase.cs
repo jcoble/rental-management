@@ -88,6 +88,24 @@ public abstract class AuthenticatedPortfolioControllerBase : ControllerBase
     }
 
     /// <summary>
+    /// Attempts to consume the database-validated access context while preserving fail-closed
+    /// controller paths that return <c>Forbid()</c> when canonical middleware state is absent.
+    /// </summary>
+    protected bool TryGetActiveAccessContext(out ActiveAccessContext accessContext)
+    {
+        try
+        {
+            accessContext = GetActiveAccessContext();
+            return true;
+        }
+        catch (MissingAuthContextException)
+        {
+            accessContext = null!;
+            return false;
+        }
+    }
+
+    /// <summary>
     /// True when the validated context has a Team membership. This is only a relationship-shape
     /// signal; endpoint admission still belongs to canonical capability authorization.
     /// </summary>

@@ -4,7 +4,7 @@ import {
 	capabilityKeysForExperience,
 	userFromAccessEnvelope,
 	type AccessEnvelope
-} from '$lib/types/user';
+} from '../types/user.ts';
 
 const access: AccessEnvelope = {
 	identity: { userId: 17, displayName: 'Morgan Manager', email: 'morgan@example.test' },
@@ -28,8 +28,8 @@ describe('canonical access envelope', () => {
 	it('derives shell identity without recreating legacy roles', () => {
 		const user = userFromAccessEnvelope(access);
 		assert.equal(user.id, 17);
-		assert.equal(user.portfolioId, 8);
-		assert.deepEqual(user.roles, []);
+		assert.equal(user.displayName, 'Morgan Manager');
+		assert.equal(user.email, 'morgan@example.test');
 	});
 
 	it('keeps navigation capabilities isolated by active experience', () => {

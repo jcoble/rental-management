@@ -6,8 +6,8 @@ namespace RentalCommand.Api.Controllers;
 
 /// <summary>
 /// Landlord-facing threaded messenger. Conversations are scoped by topic — a tenant can have multiple
-/// threads, each with its own back-and-forth history. All operations are portfolio-scoped via the JWT
-/// <c>portfolioId</c> claim. Tenants use the conversation endpoints on <see cref="PortalController"/>.
+/// threads, each with its own back-and-forth history. All operations use the server-validated
+/// canonical workspace context. Tenants use the conversation endpoints on <see cref="PortalController"/>.
 /// </summary>
 [ApiController]
 [Route("api/v1/conversations")]

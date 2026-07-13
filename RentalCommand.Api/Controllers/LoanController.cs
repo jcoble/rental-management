@@ -6,7 +6,7 @@ namespace RentalCommand.Api.Controllers;
 
 /// <summary>
 /// CRUD for per-property loans (mortgages) within the caller's portfolio, plus read access to a
-/// loan's amortization schedule. Scope comes from the JWT <c>portfolioId</c> claim; list supports
+/// loan's amortization schedule. Scope comes from the server-validated workspace context; list supports
 /// <c>?propertyId&amp;skip&amp;take&amp;search&amp;sort&amp;from&amp;to</c>. Removal is a soft-delete.
 /// </summary>
 [ApiController]

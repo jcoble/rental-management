@@ -26,10 +26,6 @@ describe('unit-scoped lease creation helpers', () => {
 		assert.equal(form.unitId, '23');
 		assert.equal(form.monthlyRent, '1600');
 		assert.equal(form.status, 'Active');
-		assert.equal(form.rentTrackingStartMode, 'ForwardOnly');
-		assert.equal(form.openingBalanceAmount, '');
-		assert.equal(form.openingBalanceAsOfDate, '');
-		assert.equal(form.openingBalanceNote, '');
 	});
 
 	it('blocks the add-lease flow when the unit already has an occupying lease', () => {

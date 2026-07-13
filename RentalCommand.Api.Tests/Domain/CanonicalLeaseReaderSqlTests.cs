@@ -411,11 +411,17 @@ public sealed class CanonicalLeaseReaderSqlTests
             db,
             new AuditDescriber(),
             new AuditDiffBuilder(),
-            Mock.Of<RentalCommand.Core.Time.IAppTimeZoneProvider>());
+            Mock.Of<RentalCommand.Core.Time.IAppTimeZoneProvider>(),
+            TimeProvider.System);
 
-        var dashboardSql = dashboard.BuildTenantAccountActivityRefsQuery(17, [81, 82])
+        var dashboardSql = dashboard.BuildRecentActivityProjectionQuery(ReadScope())
             .ToQueryString();
-        var auditSql = audit.BuildTenantAccountUnitRefsQuery(17, [81, 82])
+        var auditSql = audit.BuildPageProjectionQuery(
+                ReadScope(),
+                operation: null,
+                entityType: nameof(RentalCommand.Core.Entities.TenantAccount),
+                entityId: null,
+                query: new ListQuery { Take = 20 })
             .ToQueryString();
 
         foreach (var sql in new[] { dashboardSql, auditSql })
@@ -423,18 +429,25 @@ public sealed class CanonicalLeaseReaderSqlTests
             sql.Should().Contain("TenantAccounts");
             sql.Should().Contain("LeaseManagements");
             sql.Should().Contain("UnitId");
-            sql.Should().Contain("= ANY", "Npgsql translates membership over a parameterized id set to PostgreSQL ANY");
             sql.Should().NotContain("\"Payments\"");
             sql.Should().NotContain("\"Leases\"");
         }
 
+        dashboardSql.Should().Contain("AuditLogs");
+        dashboardSql.Should().Contain("AuthSessions");
+        dashboardSql.Should().Contain("reports.read");
         dashboardSql.Should().Contain("AccountNumber");
+        auditSql.Should().Contain("AuditLogs");
+        auditSql.Should().Contain("LIMIT");
     }
 
     private static LeaseManagementQueryService NewLeaseManagementQueryService(RentalCommandDbContext db) =>
         new(db, TimeProvider.System);
 
     private static LeaseManagementReadContext ReadAccess() =>
+        new(17, 5, Guid.Parse("77777777-7777-7777-7777-777777777777"), 12, 3);
+
+    private static RentalCommand.Core.Authorization.WorkspaceReadScope ReadScope() =>
         new(17, 5, Guid.Parse("77777777-7777-7777-7777-777777777777"), 12, 3);
 
     private static RentalCommandDbContext NewContext() =>

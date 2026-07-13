@@ -1,11 +1,13 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -27,17 +29,24 @@ public class PropertyService : IPropertyService
         _timeProvider = timeProvider;
     }
 
-    public async Task<IReadOnlyList<PropertyResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
+    public async Task<IReadOnlyList<PropertyResponse>> ListAsync(
+        WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default)
     {
-        var page = await ListPageAsync(portfolioId, ToPropertyListQuery(query), ct);
+        var page = await ListPageAsync(scope, ToPropertyListQuery(query), ct);
         return page.Items;
     }
 
-    public async Task<PropertyListResponse> ListPageAsync(int portfolioId, PropertyListQuery query, CancellationToken ct = default)
+    public async Task<PropertyListResponse> ListPageAsync(
+        WorkspaceReadScope scope, PropertyListQuery query, CancellationToken ct = default)
     {
+        var portfolioId = scope.PortfolioId;
         var q = _db.Properties
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId);
+            .WhereAuthorized(
+                _db,
+                scope,
+                CapabilityKeys.RentalsRead,
+                _timeProvider.GetUtcNow().UtcDateTime);
 
         if (!string.IsNullOrWhiteSpace(query.Search))
         {

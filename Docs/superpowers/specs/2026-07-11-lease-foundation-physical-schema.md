@@ -1100,7 +1100,7 @@ Delete outright:
 - current lease-tied `Payments` / `Payment` charge-receipt hybrid (retain application-fee income only by moving it to the appropriate application/operating-income model, not by keeping nullable Lease compatibility);
 - current `SecurityDepositHoldings` JSON/mutable-total shape;
 - current lease-keyed `PaymentTransactions` and `AutopayEnrollments` shapes;
-- mutable `LeaseStatus`, `PaymentStatus`, `RentTrackingStartMode`, and `SecurityDepositStatus` source enums;
+- mutable `LeaseStatus`, `PaymentStatus`, legacy rent-generation mode, and `SecurityDepositStatus` source enums;
 - `Lease` e-sign columns and `SignatureRequest.LeaseId`;
 - `Unit.Status` as occupancy truth;
 - every FK/index/query filter/view column that references old `LeaseId` or old `Payments`.
@@ -1346,7 +1346,7 @@ This is the minimum known inventory from the `deb73962` tree. Implementation mus
 ### Domain and data
 
 - delete/replace `RentalCommand.Core/Entities/Lease.cs`, `LeaseTenant.cs`, `Payment.cs`, `OpeningBalance.cs`, `SecurityDepositHolding.cs`, `AutopayEnrollment.cs`, and the lease-keyed shape of `PaymentTransaction.cs`;
-- delete/replace `LeaseStatus.cs`, `PaymentStatus.cs`, `RentTrackingStartMode.cs`, and `SecurityDepositStatus.cs` as writable source state;
+- delete/replace `LeaseStatus.cs`, `PaymentStatus.cs`, the legacy rent-generation enum, and `SecurityDepositStatus.cs` as writable source state;
 - replace Lease/Payment DbSets, configurations, filters, indexes, and navigations in `RentalCommand.Data/RentalCommandDbContext.cs` and the final model snapshot;
 - replace `SignatureRequest.LeaseId` and native e-sign command/handler assumptions in `RentalCommand.Core/Esign` and `RentalCommand.Data/Esign`;
 - replace string `StoredFile.EntityType = "Lease"` legal-document authority with typed links/artifacts;
@@ -1385,7 +1385,7 @@ class LeaseTenant
 DbSet<Lease>
 LeaseStatus
 PaymentStatus
-RentTrackingStartMode
+legacy rent-generation mode
 \.LeaseId\b
 EntityType == "Lease"
 EntityType = "Lease"

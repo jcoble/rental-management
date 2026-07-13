@@ -1,6 +1,6 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text.Json;
-using Microsoft.EntityFrameworkCore;
 using PdfSharp.Drawing;
 using PdfSharp.Drawing.Layout;
 using PdfSharp.Fonts;
@@ -8,19 +8,26 @@ using PdfSharp.Pdf.IO;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
-using RentalCommand.Data;
+using RentalCommand.Core.Leasing;
 
 namespace RentalCommand.Api.Services.Domain;
 
 public sealed record LeaseAgreementRenderResult(
     byte[] PdfBytes,
-    int? DocumentTemplateId,
-    int? DocumentTemplateVersion,
+    int DocumentSourceVersionId,
     string? TemplateFieldSnapshotJson);
 
 public interface ILeaseAgreementRenderer
 {
-    Task<LeaseAgreementRenderResult> RenderAsync(int portfolioId, LeaseAgreementRenderData data, CancellationToken ct = default);
+    Task<LeaseAgreementRenderResult> RenderAsync(
+        int portfolioId, int actorUserId, LeaseAgreementRenderData data, CancellationToken ct = default);
+
+    Task<LeaseAgreementRenderResult> RenderExactAsync(
+        int portfolioId,
+        int documentSourceVersionId,
+        LeaseAgreementRenderData data,
+        Func<byte[]> builtInPdfFactory,
+        CancellationToken ct = default);
 }
 
 /// <summary>
@@ -34,38 +41,52 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
     private static readonly object FontResolverLock = new();
     private static readonly LatoFontResolver FontResolver = new();
 
-    private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _storage;
     private readonly ILeaseAgreementPdfGenerator _fallbackPdf;
+    private readonly ILegalDocumentSourceVersionResolver _sourceVersions;
     private readonly ILogger<LeaseAgreementRenderer> _logger;
 
     public LeaseAgreementRenderer(
-        RentalCommandDbContext db,
         IFileStorage storage,
         ILeaseAgreementPdfGenerator fallbackPdf,
+        ILegalDocumentSourceVersionResolver sourceVersions,
         ILogger<LeaseAgreementRenderer> logger)
     {
-        _db = db;
         _storage = storage;
         _fallbackPdf = fallbackPdf;
+        _sourceVersions = sourceVersions;
         _logger = logger;
     }
 
     public async Task<LeaseAgreementRenderResult> RenderAsync(
         int portfolioId,
+        int actorUserId,
         LeaseAgreementRenderData data,
         CancellationToken ct = default)
     {
-        var template = await ResolveActiveOverlayTemplateAsync(portfolioId, data.PropertyId, ct);
-        if (template?.OriginalStoredFile is null)
+        var resolvedSource = await _sourceVersions.ResolveActiveOverlayAsync(
+            portfolioId,
+            data.PropertyId,
+            actorUserId,
+            DateTime.UtcNow,
+            ct);
+        if (resolvedSource?.OriginalStoragePath is null)
         {
-            return new LeaseAgreementRenderResult(_fallbackPdf.Generate(data), null, null, null);
+            var builtInSourceId = await ResolveBuiltInSourceAsync(portfolioId, actorUserId, ct);
+            return new LeaseAgreementRenderResult(_fallbackPdf.Generate(data), builtInSourceId, null);
         }
+
+        var templateSnapshot = JsonSerializer.Deserialize<AuthoredTemplateSnapshot>(
+                resolvedSource.SnapshotPayload,
+                JsonOptions)
+            ?? throw new InvalidOperationException(
+                $"Legal-document source {resolvedSource.DocumentSourceVersionId} has no template snapshot.");
+        var allFields = templateSnapshot.Fields.Select(ToTemplateField).ToArray();
 
         byte[] originalBytes;
         try
         {
-            await using var original = await _storage.DownloadAsync(template.OriginalStoredFile.FilePath, ct);
+            await using var original = await _storage.DownloadAsync(resolvedSource.OriginalStoragePath, ct);
             using var ms = new MemoryStream();
             await original.CopyToAsync(ms, ct);
             originalBytes = ms.ToArray();
@@ -74,40 +95,136 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
         {
             _logger.LogWarning(
                 ex,
-                "Lease template {TemplateId} source PDF is unavailable; falling back to built-in agreement.",
-                template.Id);
-            return new LeaseAgreementRenderResult(_fallbackPdf.Generate(data), null, null, null);
+                "Lease template source {DocumentSourceVersionId} PDF is unavailable; falling back to built-in agreement.",
+                resolvedSource.DocumentSourceVersionId);
+            var builtInSourceId = await ResolveBuiltInSourceAsync(portfolioId, actorUserId, ct);
+            return new LeaseAgreementRenderResult(_fallbackPdf.Generate(data), builtInSourceId, null);
         }
 
-        var renderedBytes = RenderOverlayPreview(originalBytes, template.Fields, data);
         var valueMap = BuildValueMap(data);
+        var renderableFields = allFields
+            .Where(field => field.Kind == DocumentTemplateFieldKind.Whiteout
+                || (field.SignerRole == DocumentTemplateSignerRole.None
+                    && field.Kind != DocumentTemplateFieldKind.Signature
+                    && field.Kind != DocumentTemplateFieldKind.Initial
+                    && field.Kind != DocumentTemplateFieldKind.DateSigned
+                    && (!string.IsNullOrWhiteSpace(ResolveValue(field, valueMap)))))
+            .ToArray();
+        var renderedBytes = RenderOverlayPreview(originalBytes, renderableFields, data);
+        var fieldSnapshot = SnapshotFields(allFields, valueMap);
         return new LeaseAgreementRenderResult(
             renderedBytes,
-            template.Id,
-            template.Version,
-            SnapshotFields(template.Fields, valueMap));
+            resolvedSource.DocumentSourceVersionId,
+            fieldSnapshot);
     }
 
-    private async Task<DocumentTemplate?> ResolveActiveOverlayTemplateAsync(
+    public async Task<LeaseAgreementRenderResult> RenderExactAsync(
         int portfolioId,
-        int propertyId,
-        CancellationToken ct)
+        int documentSourceVersionId,
+        LeaseAgreementRenderData data,
+        Func<byte[]> builtInPdfFactory,
+        CancellationToken ct = default)
     {
-        return await _db.DocumentTemplates
-            .AsNoTracking()
-            .Include(t => t.OriginalStoredFile)
-            .Include(t => t.Fields)
-            .Where(t => t.PortfolioId == portfolioId
-                && t.Kind == DocumentTemplateKind.Lease
-                && t.Status == DocumentTemplateStatus.Active
-                && t.RenderMode == DocumentTemplateRenderMode.Overlay
-                && t.OriginalStoredFileId != null
-                && t.DefaultForPortfolio
-                && (t.PropertyId == propertyId || t.PropertyId == null))
-            .OrderByDescending(t => t.PropertyId == propertyId ? 1 : 0)
-            .ThenByDescending(t => t.UpdatedAtUtc)
-            .ThenByDescending(t => t.Id)
-            .FirstOrDefaultAsync(ct);
+        ArgumentNullException.ThrowIfNull(builtInPdfFactory);
+        var source = await _sourceVersions.ResolveExactAsync(portfolioId, documentSourceVersionId, ct)
+            ?? throw new InvalidOperationException(
+                $"Legal-document source {documentSourceVersionId} is unavailable in this portfolio.");
+
+        if (source.SourceKind == LegalDocumentSourceKind.BuiltInRenderer)
+        {
+            return new LeaseAgreementRenderResult(
+                builtInPdfFactory(), source.DocumentSourceVersionId, null);
+        }
+
+        if (string.IsNullOrWhiteSpace(source.SourceStoragePath))
+        {
+            throw new InvalidOperationException(
+                $"Legal-document source {documentSourceVersionId} has no immutable PDF bytes.");
+        }
+
+        byte[] sourceBytes;
+        await using (var original = await _storage.DownloadAsync(source.SourceStoragePath, ct))
+        {
+            using var buffer = new MemoryStream();
+            await original.CopyToAsync(buffer, ct);
+            sourceBytes = buffer.ToArray();
+        }
+
+        EnsureImmutableSourceBytes(source, sourceBytes);
+
+        if (source.SourceKind == LegalDocumentSourceKind.ImportedExternalDocument)
+        {
+            return new LeaseAgreementRenderResult(sourceBytes, source.DocumentSourceVersionId, null);
+        }
+
+        var templateSnapshot = JsonSerializer.Deserialize<AuthoredTemplateSnapshot>(
+                source.SnapshotPayload,
+                JsonOptions)
+            ?? throw new InvalidOperationException(
+                $"Legal-document source {documentSourceVersionId} has no template snapshot.");
+        if (!string.Equals(
+                templateSnapshot.RenderMode,
+                nameof(DocumentTemplateRenderMode.Overlay),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return new LeaseAgreementRenderResult(sourceBytes, source.DocumentSourceVersionId, null);
+        }
+        var allFields = templateSnapshot.Fields.Select(ToTemplateField).ToArray();
+        var valueMap = BuildValueMap(data);
+        var renderableFields = allFields
+            .Where(field => field.Kind == DocumentTemplateFieldKind.Whiteout
+                || (field.SignerRole == DocumentTemplateSignerRole.None
+                    && field.Kind != DocumentTemplateFieldKind.Signature
+                    && field.Kind != DocumentTemplateFieldKind.Initial
+                    && field.Kind != DocumentTemplateFieldKind.DateSigned
+                    && !string.IsNullOrWhiteSpace(ResolveValue(field, valueMap))))
+            .ToArray();
+        return new LeaseAgreementRenderResult(
+            RenderOverlayPreview(sourceBytes, renderableFields, data),
+            source.DocumentSourceVersionId,
+            SnapshotFields(allFields, valueMap));
+    }
+
+    private static void EnsureImmutableSourceBytes(
+        ResolvedExactLegalDocumentSourceVersion source,
+        byte[] sourceBytes)
+    {
+        var expectedHash = source.SourceContentSha256 ?? source.SourceArtifactContentSha256;
+        if (source.SourceKind == LegalDocumentSourceKind.ImportedExternalDocument)
+        {
+            if (source.SourceStoredFileId is null || source.SourceLegalDocumentArtifactId is null
+                || !LegalDocumentIssuanceBinding.IsSha256(source.SourceContentSha256)
+                || !LegalDocumentIssuanceBinding.IsSha256(source.SourceArtifactContentSha256))
+            {
+                throw new InvalidOperationException(
+                    $"Imported legal-document source {source.DocumentSourceVersionId} has no complete immutable artifact identity.");
+            }
+
+            if (!LegalDocumentIssuanceBinding.Matches(
+                    source.SourceContentSha256!, source.SourceArtifactContentSha256!))
+            {
+                throw new InvalidOperationException(
+                    $"Imported legal-document source {source.DocumentSourceVersionId} conflicts with artifact {source.SourceLegalDocumentArtifactId}.");
+            }
+        }
+
+        if (expectedHash is null)
+        {
+            return;
+        }
+
+        if (!LegalDocumentIssuanceBinding.IsSha256(expectedHash))
+        {
+            throw new InvalidOperationException(
+                $"Legal-document source {source.DocumentSourceVersionId} has an invalid immutable content hash.");
+        }
+
+        var actualHash = Convert.ToHexString(SHA256.HashData(sourceBytes)).ToLowerInvariant();
+        if (!LegalDocumentIssuanceBinding.Matches(actualHash, expectedHash))
+        {
+            throw new InvalidOperationException(
+                $"Legal-document source {source.DocumentSourceVersionId} bytes do not match its immutable content hash.");
+        }
     }
 
     internal static byte[] RenderOverlayPreview(
@@ -115,22 +232,8 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
         IReadOnlyList<DocumentTemplateField> fields,
         LeaseAgreementRenderData data)
     {
-        var valueMap = BuildValueMap(data);
-        var renderableFields = fields
-            .Where(f => IsWhiteoutField(f) || (IsAutoFillField(f) && ResolveValue(f, valueMap) is { Length: > 0 }))
-            .OrderBy(f => f.SortOrder)
-            .ThenBy(f => f.Id)
-            .ToList();
-
-        return StampValues(originalBytes, renderableFields, valueMap);
+        return StampValues(originalBytes, fields, BuildValueMap(data));
     }
-
-    private static bool IsAutoFillField(DocumentTemplateField field) =>
-        field.SignerRole == DocumentTemplateSignerRole.None
-            && !IsWhiteoutField(field)
-            && field.Kind is not DocumentTemplateFieldKind.Signature
-                and not DocumentTemplateFieldKind.Initial
-                and not DocumentTemplateFieldKind.DateSigned;
 
     internal static bool IsWhiteoutField(DocumentTemplateField field) =>
         field.Kind == DocumentTemplateFieldKind.Whiteout;
@@ -214,7 +317,7 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
         return string.IsNullOrWhiteSpace(field.DefaultText) ? null : field.DefaultText.Trim();
     }
 
-    private static IReadOnlyDictionary<string, string> BuildValueMap(LeaseAgreementRenderData data)
+    internal static IReadOnlyDictionary<string, string> BuildValueMap(LeaseAgreementRenderData data)
     {
         return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -243,10 +346,7 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
         IReadOnlyList<DocumentTemplateField> fields,
         IReadOnlyDictionary<string, string> valueMap)
     {
-        var snapshot = fields
-            .OrderBy(f => f.SortOrder)
-            .ThenBy(f => f.Id)
-            .Select(f => new
+        var snapshot = fields.Select(f => new
             {
                 f.Id,
                 f.FieldKey,
@@ -267,6 +367,72 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
 
         return JsonSerializer.Serialize(snapshot, JsonOptions);
     }
+
+    private Task<int> ResolveBuiltInSourceAsync(
+        int portfolioId, int actorUserId, CancellationToken ct)
+    {
+        const string businessKey = "built-in:lease-agreement:v1";
+        const string rendererKey = "rental-command-built-in-lease-agreement";
+        const int rendererVersion = 1;
+        return _sourceVersions.ResolveBuiltInAsync(
+            portfolioId,
+            businessKey,
+            rendererKey,
+            rendererVersion,
+            JsonSerializer.Serialize(new
+            {
+                rendererKey,
+                rendererVersion,
+                termsContract = "lease-agreement-render-data-v1",
+            }, JsonOptions),
+            actorUserId,
+            DateTime.UtcNow,
+            ct);
+    }
+
+    private static DocumentTemplateField ToTemplateField(AuthoredTemplateFieldSnapshot field) =>
+        new()
+        {
+            Id = field.Id,
+            FieldKey = field.FieldKey,
+            Label = field.Label,
+            Kind = Enum.Parse<DocumentTemplateFieldKind>(field.Kind),
+            SignerRole = Enum.Parse<DocumentTemplateSignerRole>(field.SignerRole),
+            PageNumber = field.PageNumber,
+            XPct = field.XPct,
+            YPct = field.YPct,
+            WidthPct = field.WidthPct,
+            HeightPct = field.HeightPct,
+            Required = field.Required,
+            Locked = field.Locked,
+            SortOrder = field.SortOrder,
+            DefaultText = field.DefaultText,
+        };
+
+    private sealed record AuthoredTemplateSnapshot(
+        int DocumentTemplateId,
+        int DocumentTemplateVersion,
+        string RenderMode,
+        int? OriginalStoredFileId,
+        int? CompiledStoredFileId,
+        string? DraftHtml,
+        IReadOnlyList<AuthoredTemplateFieldSnapshot> Fields);
+
+    private sealed record AuthoredTemplateFieldSnapshot(
+        int Id,
+        string FieldKey,
+        string Label,
+        string Kind,
+        string SignerRole,
+        int PageNumber,
+        double XPct,
+        double YPct,
+        double WidthPct,
+        double HeightPct,
+        bool Required,
+        bool Locked,
+        int SortOrder,
+        string? DefaultText);
 
     private static void EnsureFontResolver()
     {

@@ -13,27 +13,6 @@ export type AppointmentType = 'Showing' | 'MoveIn' | 'MoveOut' | 'Inspection' | 
 export type AppointmentStatus = 'Scheduled' | 'Confirmed' | 'Completed' | 'Cancelled' | 'NoShow';
 export type InspectionType = 'MoveIn' | 'MoveOut' | 'Routine' | 'AnnualSafety';
 export type InspectionStatus = 'Scheduled' | 'Completed' | 'NeedsFollowUp' | 'Cancelled';
-export type UserRole = 'Admin' | 'Manager' | 'Agent' | 'Owner' | 'Tenant';
-export type PortalMessageStatus = 'Open' | 'InProgress' | 'Resolved' | 'Closed';
-export type MessageStatus = 'Open' | 'InProgress' | 'Resolved' | 'Closed';
-
-export interface Message {
-	id: number;
-	portfolioId: number;
-	propertyId?: number;
-	propertyName?: string;
-	unitId?: number;
-	unitLabel?: string;
-	userAccountId: number;
-	senderName?: string;
-	subject: string;
-	body: string;
-	status: MessageStatus;
-	reply?: string;
-	createdAt: string;
-	updatedAt: string;
-}
-
 export interface Portfolio {
 	id: number;
 	name: string;
@@ -636,9 +615,24 @@ export interface ScheduleEPropertyReport {
 export interface ScheduleEReport {
 	year: number;
 	properties: ScheduleEPropertyReport[];
+	expensesByCategory: ScheduleECategoryAmount[];
 	totalRentalIncome: number;
 	totalExpenses: number;
 	netIncome: number;
+	unallocatedActivity: {
+		canView: boolean;
+		requiresAllocation: boolean;
+		incomeEntryCount: number;
+		rentalIncome: number;
+		expenseCount: number;
+		expensesByCategory: ScheduleECategoryAmount[];
+		totalExpenses: number;
+		netIncome: number;
+		warning: string;
+	};
+	reconciledTotalRentalIncome: number;
+	reconciledTotalExpenses: number;
+	reconciledNetIncome: number;
 }
 
 /** One property's true cash flow for a period (rent − opex − debt service). */
@@ -1455,17 +1449,6 @@ export interface Dashboard {
 	recentActivity: DashboardActivity[];
 }
 
-export interface AuthUser {
-	id: number;
-	portfolioId: number;
-	displayName: string;
-	email: string;
-	role: UserRole;
-	ownerId?: number;
-	tenantId?: number;
-	lastLoginAt?: string;
-}
-
 export type SecurityDepositStatus = 'NotFunded' | 'Held' | 'PartiallyReturned' | 'Returned' | 'Withheld';
 
 /** Canonical security-deposit subledger account for one continuous tenant account. */
@@ -1489,22 +1472,6 @@ export interface SecurityDepositAccount {
 	heldBalance: number;
 	status: SecurityDepositStatus;
 	createdAtUtc: string;
-}
-
-export interface PortalMessage {
-	id: number;
-	portfolioId: number;
-	userAccountId: number;
-	author?: string;
-	authorRole?: UserRole;
-	propertyId?: number;
-	unitId?: number;
-	subject: string;
-	body: string;
-	status: PortalMessageStatus;
-	reply?: string;
-	createdAt: string;
-	updatedAt: string;
 }
 
 /** Matches DocumentDto from GET /api/v1/documents and POST /api/v1/documents. */

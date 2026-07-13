@@ -1,16 +1,23 @@
 using System.Data.Common;
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
+using RentalCommand.Api.Auth;
+using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -21,6 +28,8 @@ public sealed class PortfolioQaServiceTests : IDisposable
     private readonly SqliteConnection _conn;
     private readonly List<string> _commands = [];
     private readonly RentalCommandDbContext _db;
+    private readonly WorkspaceReadScope _scope;
+    private MembershipRoleAssignment _assignment = null!;
 
     public PortfolioQaServiceTests()
     {
@@ -54,10 +63,12 @@ public sealed class PortfolioQaServiceTests : IDisposable
             CreatedAt = DateTime.UtcNow,
         });
         _db.SaveChanges();
+        _scope = SeedAdministratorScope();
         _db.Database.ExecuteSqlRaw("""
             CREATE VIEW "vw_lease_management_lifecycle" AS
             SELECT management."PortfolioId" AS "PortfolioId",
                    management."Id" AS "LeaseManagementId",
+                   management."PropertyId" AS "PropertyId",
                    management."UnitId" AS "UnitId",
                    CASE WHEN agreement."TermEndOn" IS NOT NULL
                              AND agreement."TermEndOn" < date('now')
@@ -117,6 +128,35 @@ public sealed class PortfolioQaServiceTests : IDisposable
             FROM "TenantLedgerEntries" AS entry
             WHERE entry."Direction" = 'Debit'
             """);
+        _db.Database.ExecuteSqlRaw("""
+            CREATE VIEW "vw_unit_occupancy" AS
+            SELECT unit."PortfolioId" AS "PortfolioId",
+                   unit."PropertyId" AS "PropertyId",
+                   unit."Id" AS "UnitId",
+                   CURRENT_TIMESTAMP AS "EffectiveNowUtc",
+                   CASE WHEN management."Id" IS NULL THEN 0 ELSE 1 END AS "IsOccupied",
+                   management."Id" AS "CurrentLeaseManagementId",
+                   0 AS "HasScheduledMoveIn",
+                   NULL AS "NextPlannedPossessionAtUtc",
+                   NULL AS "PlannedLeaseManagementId",
+                   0 AS "IsInTurnover",
+                   0 AS "IsOutOfService",
+                   0 AS "IsOnManagementHold",
+                   0 AS "HasGoverningAgreementWithoutPossession",
+                   0 AS "HasPossessionWithoutGoverningAgreement",
+                   NULL AS "OccupancyExceptionCode"
+            FROM "Units" AS unit
+            LEFT JOIN "LeaseManagements" AS management
+              ON management."PortfolioId" = unit."PortfolioId"
+             AND management."PropertyId" = unit."PropertyId"
+             AND management."UnitId" = unit."Id"
+             AND management."CanceledAtUtc" IS NULL
+             AND management."PossessionGivenAtUtc" IS NOT NULL
+             AND management."PossessionGivenAtUtc" <= CURRENT_TIMESTAMP
+             AND (management."PossessionReturnedAtUtc" IS NULL
+                  OR management."PossessionReturnedAtUtc" > CURRENT_TIMESTAMP)
+            WHERE unit."DeletedAt" IS NULL
+            """);
     }
 
     public void Dispose()
@@ -129,11 +169,13 @@ public sealed class PortfolioQaServiceTests : IDisposable
     public async Task RecentExpensesTool_AggregatesFullFilteredWindowInSql_NotReturnedPageOnly()
     {
         var now = DateTime.UtcNow;
+        var property = SeedProperty(now);
         for (var i = 0; i < 51; i++)
         {
             _db.Expenses.Add(new Expense
             {
                 PortfolioId = PortfolioId,
+                Property = property,
                 Description = $"Repair {i + 1}",
                 Category = ScheduleECategory.Repairs,
                 Status = ExpenseStatus.Paid,
@@ -236,7 +278,7 @@ public sealed class PortfolioQaServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task FinancialSummaryTool_ReturnsPeriodLabelsAndUnmatchedBankContext()
+    public async Task FinancialSummaryTool_ReturnsScopedPeriodLabelsAndExcludesUnassignedBankContext()
     {
         var now = DateTime.UtcNow;
         var connection = new BankConnection
@@ -319,10 +361,7 @@ public sealed class PortfolioQaServiceTests : IDisposable
         root.GetProperty("monthToDate").GetProperty("periodLabel").GetString().Should().Be("June 2026 (so far)");
         root.GetProperty("monthToDate").GetProperty("collected").GetDecimal().Should().Be(1200m);
         root.GetProperty("last30Days").GetProperty("collected").GetDecimal().Should().Be(1200m);
-        root.GetProperty("unmatchedBankDeposits").GetProperty("count").GetInt32().Should().Be(1);
-        root.GetProperty("unmatchedBankDeposits").GetProperty("total").GetDecimal().Should().Be(1200m);
-        root.GetProperty("unmatchedBankDeposits").GetProperty("note").GetString()
-            .Should().Contain("mention separately");
+        root.GetProperty("unassignedBankTransactionsExcluded").GetBoolean().Should().BeTrue();
     }
 
     [Fact]
@@ -418,11 +457,204 @@ public sealed class PortfolioQaServiceTests : IDisposable
         _commands.Should().Contain(sql => sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task SelectedPropertyScope_FiltersRentalsMoneyAndWorkToolsInSql()
+    {
+        var now = DateTime.UtcNow;
+        var allowed = SeedProperty(now);
+        allowed.Name = "Allowed Property";
+        var decoy = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Decoy Property",
+            AddressLine1 = "999 Hidden Ave",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Properties.Add(decoy);
+        await _db.SaveChangesAsync();
+        LimitScopeTo(allowed);
+
+        _db.WorkOrders.AddRange(
+            new WorkOrder
+            {
+                PortfolioId = PortfolioId,
+                PropertyId = allowed.Id,
+                Title = "Allowed work",
+                Description = "Visible",
+                Status = WorkOrderStatus.New,
+                Priority = WorkOrderPriority.Normal,
+                RequestedAt = now,
+                UpdatedAt = now,
+            },
+            new WorkOrder
+            {
+                PortfolioId = PortfolioId,
+                PropertyId = decoy.Id,
+                Title = "Decoy work",
+                Description = "Hidden",
+                Status = WorkOrderStatus.New,
+                Priority = WorkOrderPriority.Normal,
+                RequestedAt = now,
+                UpdatedAt = now,
+            });
+        _db.Expenses.AddRange(
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                PropertyId = allowed.Id,
+                Description = "Allowed expense",
+                Category = ScheduleECategory.Repairs,
+                Status = ExpenseStatus.Paid,
+                Amount = 25m,
+                IncurredAt = now,
+                CreatedAt = now,
+                UpdatedAt = now,
+            },
+            new Expense
+            {
+                PortfolioId = PortfolioId,
+                PropertyId = decoy.Id,
+                Description = "Decoy expense",
+                Category = ScheduleECategory.Repairs,
+                Status = ExpenseStatus.Paid,
+                Amount = 999m,
+                IncurredAt = now,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        await _db.SaveChangesAsync();
+
+        var propertiesJson = await AskToolAsync("list_properties", "{}", "List properties");
+        using var properties = JsonDocument.Parse(propertiesJson);
+        properties.RootElement.GetProperty("count").GetInt32().Should().Be(1);
+        properties.RootElement.GetProperty("properties")[0].GetProperty("name").GetString()
+            .Should().Be("Allowed Property");
+
+        var workJson = await AskToolAsync("list_work_orders", "{}", "List work");
+        using var work = JsonDocument.Parse(workJson);
+        work.RootElement.GetArrayLength().Should().Be(1);
+        work.RootElement[0].GetProperty("title").GetString().Should().Be("Allowed work");
+
+        var expensesJson = await AskToolAsync("list_recent_expenses", "{}", "List expenses");
+        using var expenses = JsonDocument.Parse(expensesJson);
+        expenses.RootElement.GetProperty("count").GetInt32().Should().Be(1);
+        expenses.RootElement.GetProperty("total").GetDecimal().Should().Be(25m);
+        _commands.Should().Contain(sql =>
+            sql.Contains("AuthSessions", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("MembershipRoleAssignmentProperties", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task RevokedSessionScope_ReturnsNoPropertyRows()
+    {
+        SeedProperty(DateTime.UtcNow);
+        var session = await _db.AuthSessions.SingleAsync(session => session.Id == _scope.SessionId);
+        session.Status = AuthSessionStatus.Revoked;
+        session.RevokedAtUtc = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+
+        var json = await AskToolAsync("list_properties", "{}", "List properties");
+        using var document = JsonDocument.Parse(json);
+        document.RootElement.GetProperty("count").GetInt32().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task StaleAccessRevisionScope_ReturnsNoPropertyRows()
+    {
+        SeedProperty(DateTime.UtcNow);
+        var staleScope = _scope with { AccessRevision = _scope.AccessRevision + 1 };
+
+        var json = await AskToolAsync("list_properties", "{}", "List properties", scope: staleScope);
+        using var document = JsonDocument.Parse(json);
+        document.RootElement.GetProperty("count").GetInt32().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ResolvedDeliveryRecipients_UseCurrentUserEmailAndPhoneWithoutOwnerFallback()
+    {
+        SeedProperty(DateTime.UtcNow);
+        var publisher = new CapturingMessagePublisher();
+        var sut = new PortfolioQaService(
+            _db,
+            new ToolEchoLlmProvider("list_properties", "{}"),
+            new ThrowingAccountingService(),
+            publisher,
+            new EmptyKnowledgeBaseService(),
+            NullLogger<PortfolioQaService>.Instance,
+            TimeProvider.System);
+
+        var response = await sut.AskAsync(
+            _scope,
+            "List properties",
+            history: null,
+            delivery: new QaDeliveryOptions(true, true, "portfolio-qa@example.test", "+16145550123"));
+
+        response.DeliveredChannels.Should().BeEquivalentTo("Email", "Sms");
+        publisher.Messages.Should().HaveCount(2);
+        publisher.Messages.Single(message => message.Type == "email").Payload
+            .Should().Contain("portfolio-qa@example.test");
+        using var smsPayload = JsonDocument.Parse(
+            publisher.Messages.Single(message => message.Type == "sms").Payload);
+        smsPayload.RootElement.GetProperty("to").GetString()
+            .Should().Be("+16145550123");
+    }
+
+    [Fact]
+    public async Task AiController_ResolvesDeliveryOnlyFromAuthenticatedApplicationUser()
+    {
+        SeedProperty(DateTime.UtcNow);
+        var user = await _db.Users.SingleAsync(user => user.Id == _scope.UserId);
+        user.Email = "current-user@example.test";
+        user.PhoneNumber = "+16145550999";
+        await _db.SaveChangesAsync();
+
+        var qa = new CapturingPortfolioQaService();
+        var controller = new AiController(
+            Mock.Of<IDailyBriefingService>(),
+            qa,
+            Mock.Of<IAssistantActionService>(),
+            Mock.Of<IFairHousingReviewService>(),
+            Mock.Of<ILlmProvider>(),
+            _db,
+            TimeProvider.System)
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
+        };
+        controller.HttpContext.Items[CanonicalAccessContextHttpItem.Key] = new ActiveAccessContext(
+            _scope.SessionId,
+            _scope.UserId,
+            _scope.AccessContextId,
+            _scope.PortfolioId,
+            _scope.AccessRevision,
+            WorkspaceExperience.Management,
+            await _db.WorkspaceMemberships.Select(membership => (int?)membership.Id).SingleAsync(),
+            WorkspaceExperience.Management);
+
+        var result = await controller.Ask(
+            new AskRequest
+            {
+                Question = "List properties",
+                DeliverViaEmail = true,
+                DeliverViaSms = true,
+            },
+            CancellationToken.None);
+
+        result.Result.Should().BeOfType<OkObjectResult>();
+        qa.Delivery.Should().NotBeNull();
+        qa.Delivery!.ToEmail.Should().Be("current-user@example.test");
+        qa.Delivery.ToSms.Should().Be("+16145550999");
+    }
+
     private async Task<string> AskToolAsync(
         string toolName,
         string argsJson,
         string question,
-        IAccountingService? accounting = null)
+        IAccountingService? accounting = null,
+        WorkspaceReadScope? scope = null)
     {
         _commands.Clear();
         var sut = new PortfolioQaService(
@@ -434,9 +666,76 @@ public sealed class PortfolioQaServiceTests : IDisposable
             NullLogger<PortfolioQaService>.Instance,
             TimeProvider.System);
 
-        var response = await sut.AskAsync(PortfolioId, question, history: null);
+        var response = await sut.AskAsync(scope ?? _scope, question, history: null);
         response.ToolsUsed.Should().ContainSingle().Which.Should().Be(toolName);
         return response.Answer;
+    }
+
+    private WorkspaceReadScope SeedAdministratorScope()
+    {
+        var now = DateTime.UtcNow;
+        var user = _db.Users.Single(user => user.Id == 1);
+        var accessContext = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = accessContext,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = PortfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        _assignment = assignment;
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            User = user,
+            ActiveAccessContext = accessContext,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        _db.AddRange(assignment, session);
+        _db.SaveChanges();
+        return new WorkspaceReadScope(
+            PortfolioId, user.Id, session.Id, accessContext.Id, accessContext.AccessRevision);
+    }
+
+    private void LimitScopeTo(params Property[] properties)
+    {
+        _assignment.ScopeKind = MembershipRoleAssignmentScopeKind.SelectedProperties;
+        _assignment.SelectedProperties.Clear();
+        foreach (var property in properties)
+        {
+            _assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+            {
+                MembershipRoleAssignment = _assignment,
+                PortfolioId = PortfolioId,
+                PropertyId = property.Id,
+            });
+        }
+        _db.SaveChanges();
     }
 
     private LeaseFixture SeedLease(DateTime now)
@@ -511,6 +810,8 @@ public sealed class PortfolioQaServiceTests : IDisposable
             Currency = "USD",
             TermsSchemaVersion = 1,
             TermsPayload = "{}",
+            DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
+                PortfolioId, 1, now),
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
             CreatedByUserId = 1,
@@ -647,24 +948,57 @@ public sealed class PortfolioQaServiceTests : IDisposable
         }
     }
 
+    private sealed class CapturingMessagePublisher : IMessagePublisher
+    {
+        public List<(string Type, string Payload)> Messages { get; } = [];
+
+        public Task PublishAsync<TPayload>(
+            int portfolioId,
+            string messageType,
+            string idempotencyKey,
+            TPayload payload,
+            CancellationToken ct = default)
+        {
+            Messages.Add((messageType, JsonSerializer.Serialize(payload)));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class CapturingPortfolioQaService : IPortfolioQaService
+    {
+        public QaDeliveryOptions? Delivery { get; private set; }
+
+        public Task<AskResponse> AskAsync(
+            WorkspaceReadScope scope,
+            string question,
+            IReadOnlyList<QaTurn>? history,
+            QaDeliveryOptions? delivery = null,
+            CancellationToken ct = default)
+        {
+            Delivery = delivery;
+            return Task.FromResult(new AskResponse(
+                "ok", [], true, 0, "test", DeliveredChannels: null));
+        }
+    }
+
     private sealed class ThrowingAccountingService : IAccountingService
     {
-        public Task<AccountingSummaryResponse> GetSummaryAsync(int portfolioId, CancellationToken ct = default) =>
+        public Task<AccountingSummaryResponse> GetSummaryAsync(WorkspaceReadScope scope, CancellationToken ct = default) =>
             throw new NotSupportedException();
-        public Task<MoneySnapshotResponse> GetSnapshotAsync(int portfolioId, CancellationToken ct = default) =>
+        public Task<MoneySnapshotResponse> GetSnapshotAsync(WorkspaceReadScope scope, CancellationToken ct = default) =>
             throw new NotSupportedException();
-        public Task<PastDueResponse> GetPastDueAsync(int portfolioId, CancellationToken ct = default) =>
+        public Task<PastDueResponse> GetPastDueAsync(WorkspaceReadScope scope, CancellationToken ct = default) =>
             throw new NotSupportedException();
-        public Task<AccountingReportsResponse> GetReportsAsync(int portfolioId, CancellationToken ct = default) =>
+        public Task<AccountingReportsResponse> GetReportsAsync(WorkspaceReadScope scope, CancellationToken ct = default) =>
             throw new NotSupportedException();
         public Task<AccountingTransactionsResponse> GetTransactionsAsync(
-            int portfolioId,
+            WorkspaceReadScope scope,
             AccountingTransactionsQuery query,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
-        public Task<YearEndPacketData> GetYearEndPacketDataAsync(int portfolioId, int year, CancellationToken ct = default) =>
+        public Task<YearEndPacketData> GetYearEndPacketDataAsync(WorkspaceReadScope scope, int year, CancellationToken ct = default) =>
             throw new NotSupportedException();
-        public Task<byte[]> GetYearEndPacketAsync(int portfolioId, int year, CancellationToken ct = default) =>
+        public Task<byte[]> GetYearEndPacketAsync(WorkspaceReadScope scope, int year, CancellationToken ct = default) =>
             throw new NotSupportedException();
     }
 
@@ -679,28 +1013,28 @@ public sealed class PortfolioQaServiceTests : IDisposable
             _snapshot = snapshot;
         }
 
-        public Task<AccountingSummaryResponse> GetSummaryAsync(int portfolioId, CancellationToken ct = default) =>
+        public Task<AccountingSummaryResponse> GetSummaryAsync(WorkspaceReadScope scope, CancellationToken ct = default) =>
             Task.FromResult(_summary);
 
-        public Task<MoneySnapshotResponse> GetSnapshotAsync(int portfolioId, CancellationToken ct = default) =>
+        public Task<MoneySnapshotResponse> GetSnapshotAsync(WorkspaceReadScope scope, CancellationToken ct = default) =>
             Task.FromResult(_snapshot);
 
-        public Task<PastDueResponse> GetPastDueAsync(int portfolioId, CancellationToken ct = default) =>
+        public Task<PastDueResponse> GetPastDueAsync(WorkspaceReadScope scope, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task<AccountingReportsResponse> GetReportsAsync(int portfolioId, CancellationToken ct = default) =>
+        public Task<AccountingReportsResponse> GetReportsAsync(WorkspaceReadScope scope, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
         public Task<AccountingTransactionsResponse> GetTransactionsAsync(
-            int portfolioId,
+            WorkspaceReadScope scope,
             AccountingTransactionsQuery query,
             CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task<YearEndPacketData> GetYearEndPacketDataAsync(int portfolioId, int year, CancellationToken ct = default) =>
+        public Task<YearEndPacketData> GetYearEndPacketDataAsync(WorkspaceReadScope scope, int year, CancellationToken ct = default) =>
             throw new NotSupportedException();
 
-        public Task<byte[]> GetYearEndPacketAsync(int portfolioId, int year, CancellationToken ct = default) =>
+        public Task<byte[]> GetYearEndPacketAsync(WorkspaceReadScope scope, int year, CancellationToken ct = default) =>
             throw new NotSupportedException();
     }
 

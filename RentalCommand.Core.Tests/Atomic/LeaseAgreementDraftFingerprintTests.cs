@@ -22,7 +22,7 @@ public sealed class LeaseAgreementDraftFingerprintTests
     private static EditLeaseAgreementDraftCommand Command(decimal baseRent) => new(
         1, 2, 3, 4, "AGR-2-V1", LeaseAgreementTermType.FixedTerm,
         new DateOnly(2026, 8, 1), new DateOnly(2027, 7, 31), new DateOnly(2026, 8, 1),
-        baseRent, 1, 1250m, 50m, 5, 1, "{\"rent\":true}", 6, 1,
+        baseRent, 1, 1250m, 50m, 5, 1, "{\"rent\":true}", 6,
         [new(9, 10, LeaseLegalSignerRole.PrimaryTenant, "Tenant One", "tenant@example.com", 1, true)],
         11, Guid.Parse("11111111-1111-1111-1111-111111111111"), 12, 13,
         "agreement-draft-edit:1:2:3:key");

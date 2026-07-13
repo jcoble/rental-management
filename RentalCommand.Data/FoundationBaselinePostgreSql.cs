@@ -17,6 +17,7 @@ internal static class FoundationBaselinePostgreSql
         CreateAuditSearchInfrastructure,
         LeaseEffectiveClockSql.CreateEffectiveNowUtc,
         LeaseEffectiveClockSql.CreateBusinessDate,
+        ScheduleEDepreciationFunctionSql.Create,
         LeaseAgreementStatusViewSql.Create,
         LeaseAddendumStatusViewSql.Create,
         TenantChargeBalanceViewSql.Create,
@@ -53,6 +54,7 @@ internal static class FoundationBaselinePostgreSql
         LeaseAgreementStatusViewSql.Drop,
         LeaseEffectiveClockSql.DropBusinessDate,
         LeaseEffectiveClockSql.DropEffectiveNowUtc,
+        ScheduleEDepreciationFunctionSql.Drop,
         DropAuditSearchIndexes,
     ]);
 
@@ -95,6 +97,7 @@ internal static class FoundationBaselinePostgreSql
         "LeaseManagements",
         "LeaseRenewalAddendumDecisions",
         "LegalDocumentArtifacts",
+        "LegalDocumentSourceVersions",
         "ListingPhotos",
         "ListingPublications",
         "Loans",
@@ -198,6 +201,7 @@ internal static class FoundationBaselinePostgreSql
         "SimWorkerCommands",
         "SimulationClocks",
         "SystemNoticeTemplateVersions",
+        "WorkspaceInvitations",
     ];
 
     /// <summary>
@@ -252,7 +256,7 @@ internal static class FoundationBaselinePostgreSql
     {
         "AtomicAuditLogs", "AuditLogs", "NoticeDeliveryEvidence", "RenderedNotices",
         "SecurityDepositEntries", "SignatureAuditEvents", "TenantLedgerAllocations",
-        "TenantLedgerEntries", "WorkspaceNoticeTemplateVersions",
+        "TenantLedgerEntries", "LegalDocumentSourceVersions", "WorkspaceNoticeTemplateVersions",
     };
 
     // Catalogs and supplied system templates are data, not runtime configuration mutation surfaces.
@@ -317,7 +321,7 @@ internal static class FoundationBaselinePostgreSql
         {
             "AccountingConnections", "BankConnections",
             "DeviceTokens", "InspectionTemplateItems", "InspectionTemplates",
-            "MembershipRoleAssignments",
+            "LegalDocumentSourceVersions", "MembershipRoleAssignments",
             "NotificationPreferences", "NotificationSettings", "TenantNoticePolicies",
             "UserAlertPreferences", "WorkspaceAccessContexts", "WorkspaceMemberships",
             "WorkspaceNoticeTemplateVersions",
@@ -363,7 +367,7 @@ internal static class FoundationBaselinePostgreSql
         "TenantPaymentAttempts", "TenantUserAccesses", "Tenants", "UnitOperationalPeriods",
         "Units", "UserAlertPreferences", "VendorDispatches", "VendorRatings",
         "Vendors", "WorkOrderStatusEvents", "WorkOrders", "WorkspaceAccessContexts",
-        "WorkspaceMemberships",
+        "WorkspaceInvitations", "WorkspaceMemberships",
     };
 
     // Engine reads are broad across portfolio data because projection views use security_invoker,
@@ -373,6 +377,7 @@ internal static class FoundationBaselinePostgreSql
         "AspNetUserClaims", "AspNetUserLogins", "AspNetUserTokens",
         "AuthSessionRefreshCredentials", "AuthSessionRefreshTokenFamilies", "AuthSessions",
         "LoginContextSelectionChallenges", "OAuthStates", "PlaidTokenExchangeAttempts",
+        "WorkspaceInvitations",
     };
 
     private static readonly HashSet<string> EngineAppendOnlyTables = new(StringComparer.Ordinal)
@@ -410,7 +415,7 @@ internal static class FoundationBaselinePostgreSql
         "EvictionCaseRespondents", "EvictionCases", "ExternalListingSignals", "InspectionItems",
         "Inspections", "LeaseAddenda", "LeaseAddendumFinancialEffects", "LeaseAddendumSigners",
         "LeaseAgreementSigners", "LeaseManagementParties", "LeaseManagements",
-        "LeaseRenewalAddendumDecisions", "LegalDocumentArtifacts", "ListingPhotos",
+        "LeaseRenewalAddendumDecisions", "LegalDocumentArtifacts", "LegalDocumentSourceVersions", "ListingPhotos",
         "ListingPublications", "LoanPayments", "Loans", "MembershipRoleAssignmentProperties",
         "MembershipRoleAssignments", "NotificationPreferences", "NotificationSettings",
         "OwnerDistributions", "OwnerEntities", "OwnerUserAccesses", "Owners", "PortalMessages",
@@ -454,30 +459,38 @@ internal static class FoundationBaselinePostgreSql
             DO $role$
             BEGIN
               IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rentalcommand_api') THEN
-                CREATE ROLE rentalcommand_api NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+                CREATE ROLE rentalcommand_api NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1;
               ELSIF EXISTS (
-                SELECT 1 FROM pg_roles
-                WHERE rolname = 'rentalcommand_api'
-                  AND (rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls)
+                SELECT 1 FROM pg_roles runtime_role
+                WHERE runtime_role.rolname = 'rentalcommand_api'
+                  AND (runtime_role.rolcanlogin OR runtime_role.rolsuper OR NOT runtime_role.rolinherit
+                    OR runtime_role.rolcreatedb OR runtime_role.rolcreaterole OR runtime_role.rolreplication
+                    OR runtime_role.rolbypassrls OR runtime_role.rolconnlimit <> -1
+                    OR runtime_role.rolvaliduntil IS NOT NULL OR runtime_role.rolconfig IS NOT NULL)
               ) OR EXISTS (
                 SELECT 1
-                FROM pg_auth_members membership
-                JOIN pg_roles member_role ON member_role.oid = membership.member
-                WHERE member_role.rolname = 'rentalcommand_api'
+                FROM pg_roles runtime_role
+                JOIN pg_auth_members inherited_membership
+                  ON inherited_membership.member = runtime_role.oid
+                WHERE runtime_role.rolname = 'rentalcommand_api'
               ) THEN
                 RAISE EXCEPTION 'Existing role rentalcommand_api has incompatible cluster-wide attributes';
               END IF;
               IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rentalcommand_engine') THEN
-                CREATE ROLE rentalcommand_engine NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+                CREATE ROLE rentalcommand_engine NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1;
               ELSIF EXISTS (
-                SELECT 1 FROM pg_roles
-                WHERE rolname = 'rentalcommand_engine'
-                  AND (rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls)
+                SELECT 1 FROM pg_roles runtime_role
+                WHERE runtime_role.rolname = 'rentalcommand_engine'
+                  AND (runtime_role.rolcanlogin OR runtime_role.rolsuper OR NOT runtime_role.rolinherit
+                    OR runtime_role.rolcreatedb OR runtime_role.rolcreaterole OR runtime_role.rolreplication
+                    OR runtime_role.rolbypassrls OR runtime_role.rolconnlimit <> -1
+                    OR runtime_role.rolvaliduntil IS NOT NULL OR runtime_role.rolconfig IS NOT NULL)
               ) OR EXISTS (
                 SELECT 1
-                FROM pg_auth_members membership
-                JOIN pg_roles member_role ON member_role.oid = membership.member
-                WHERE member_role.rolname = 'rentalcommand_engine'
+                FROM pg_roles runtime_role
+                JOIN pg_auth_members inherited_membership
+                  ON inherited_membership.member = runtime_role.oid
+                WHERE runtime_role.rolname = 'rentalcommand_engine'
               ) THEN
                 RAISE EXCEPTION 'Existing role rentalcommand_engine has incompatible cluster-wide attributes';
               END IF;

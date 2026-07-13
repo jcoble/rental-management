@@ -2,7 +2,7 @@
  * Reports Hub API client. The backend (RentalCommand.Api ReportsController) is a thin,
  * read-only reporting layer over existing portfolio data: every report is a pure GET that
  * projects to one of the DTOs in `RentalCommand.Api/DTOs/ReportsDtos.cs`. Portfolio scope is
- * implicit (the JWT `portfolioId` claim), so it never travels as a request parameter.
+ * implicit in the server-validated workspace context, so it never travels as a request parameter.
  *
  * The catalog (`GET /reports/catalog`) drives the UI: it lists every report grouped by category,
  * with the endpoint to call, which params it accepts, and whether it's `external` (served by an

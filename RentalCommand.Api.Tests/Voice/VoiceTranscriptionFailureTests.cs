@@ -1,13 +1,14 @@
-using System.Security.Claims;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
+using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Voice;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
 
 namespace RentalCommand.Api.Tests.Voice;
@@ -59,16 +60,16 @@ public class VoiceTranscriptionFailureTests
 
     private static VoiceController CreateController(IVoiceIntakeService voice)
     {
-        var http = new DefaultHttpContext
-        {
-            User = new ClaimsPrincipal(new ClaimsIdentity(
-                [
-                    new Claim("portfolioId", "42"),
-                    new Claim(ClaimTypes.NameIdentifier, "7"),
-                    new Claim(ClaimTypes.Role, "Admin"),
-                ],
-                "test")),
-        };
+        var http = new DefaultHttpContext();
+        http.Items[CanonicalAccessContextHttpItem.Key] = new ActiveAccessContext(
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            UserId: 7,
+            AccessContextId: 1,
+            PortfolioId: 42,
+            AccessRevision: 1,
+            LastAuthorizedExperience: null,
+            WorkspaceMembershipId: null,
+            DefaultExperience: null);
 
         return new VoiceController(voice)
         {

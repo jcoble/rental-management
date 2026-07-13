@@ -813,7 +813,8 @@ public class NoticeDraftService : INoticeDraftService
             + "Please reply here to accept, decline, or ask any questions.";
 
         var tokens = BuildTokens(context,
-            [(NoticeMergeFields.PortfolioName, portfolioName)]);
+            [(NoticeMergeFields.RenewalStartDate, endOn.AddDays(1).ToString("MMMM d, yyyy")),
+             (NoticeMergeFields.PortfolioName, portfolioName)]);
 
         var draft = await ComposeAsync(
             portfolioId, context, "lease-renewal-offer",
@@ -931,6 +932,7 @@ public class NoticeDraftService : INoticeDraftService
             [(NoticeMergeFields.OverdueAmount, Usd(totalDue)),
              (NoticeMergeFields.RentDueDate, charge.DueOn.ToString("MMMM d, yyyy")),
              (NoticeMergeFields.LateFeeAmount, lateFeeAmount > 0m ? Usd(lateFeeAmount) : ""),
+             (NoticeMergeFields.Today, now.ToString("MMMM d, yyyy", CultureInfo.InvariantCulture)),
              (NoticeMergeFields.PortfolioName, portfolioName)]);
 
         return await ComposeAsync(

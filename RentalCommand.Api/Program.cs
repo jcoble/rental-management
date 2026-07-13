@@ -51,7 +51,6 @@ builder.Services.Configure<FormOptions>(o => o.MultipartBodyLengthLimit = 64_000
 builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection(JwtSettings.SectionName));
 builder.Services.Configure<AtomicAuthSessionCredentialOptions>(
     builder.Configuration.GetSection(AtomicAuthSessionCredentialOptions.SectionName));
-builder.Services.Configure<ApiKeySettings>(builder.Configuration.GetSection(ApiKeySettings.SectionName));
 builder.Services.Configure<SeedSettings>(builder.Configuration.GetSection(SeedSettings.SectionName));
 builder.Services.Configure<RentalCommand.Core.Configuration.PlatformAdminOptions>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.PlatformAdminOptions.SectionName));
@@ -63,8 +62,6 @@ builder.Services.Configure<RentalCommand.Core.Configuration.GoogleAuthOptions>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.GoogleAuthOptions.SectionName));
 builder.Services.Configure<RentalCommand.Core.Configuration.StripeConfig>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.StripeConfig.SectionName));
-builder.Services.Configure<RentalCommand.Core.Configuration.ReportsConfig>(
-    builder.Configuration.GetSection(RentalCommand.Core.Configuration.ReportsConfig.SectionName));
 builder.Services.Configure<RentalCommand.Core.Configuration.ScreeningConfig>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.ScreeningConfig.SectionName));
 builder.Services.Configure<RentalCommand.Core.Configuration.QuickBooksOptions>(
@@ -468,7 +465,7 @@ builder.Services.AddIdentityCore<ApplicationUser>(options =>
     .AddEntityFrameworkStores<RentalCommandDbContext>()
     .AddDefaultTokenProviders();
 
-// --- Authentication: JWT bearer (default) + API key scheme ---
+// --- Authentication: canonical JWT bearer ---
 // Called after AddIdentity so the JWT bearer scheme (not Identity's cookie) is the default.
 builder.Services.AddAuthentication(options =>
     {
@@ -515,14 +512,11 @@ builder.Services.AddAuthentication(options =>
                 return Task.CompletedTask;
             }
         };
-    })
-    .AddScheme<ApiKeyAuthenticationOptions, ApiKeyAuthenticationHandler>(
-        ApiKeyAuthenticationDefaults.AuthenticationScheme, _ => { });
+    });
 
-// Platform super-admin allowlist (F6 / TSK-212): operator endpoints (Engine Health) are gated
-// by a config email list, not a role. Fails closed when the list is empty. The policy logic and
-// its allowlist parsing live in RentalCommand.Api.Auth.PlatformAdminPolicy so the gate and its
-// security test share one source of truth.
+// Platform super-admin allowlist (F6 / TSK-212): operator endpoints resolve the canonical JWT
+// subject to the user's current database email, then evaluate the configured list. The gate fails
+// closed when the list is empty or the subject no longer resolves.
 var platformAdminAllowlist = RentalCommand.Api.Auth.PlatformAdminPolicy.BuildAllowlist(
     builder.Configuration
         .GetSection(RentalCommand.Core.Configuration.PlatformAdminOptions.SectionName)
@@ -540,6 +534,7 @@ builder.Services.AddAuthorization(options =>
 builder.Services.AddSingleton<IAuthorizationPolicyProvider, CapabilityAuthorizationPolicyProvider>();
 builder.Services.AddScoped<IAuthorizationHandler, CapabilityAuthorizationHandler>();
 builder.Services.AddScoped<IAuthorizationHandler, CanonicalManagementAuthorizationHandler>();
+builder.Services.AddScoped<IAuthorizationHandler, PlatformAdminAuthorizationHandler>();
 builder.Services.AddScoped<RentalCommand.Core.Authorization.IActiveAccessContextResolver,
     ActiveAccessContextResolver>();
 builder.Services.AddScoped<RentalCommand.Core.Authorization.IWorkspaceAuthorizationEvaluator,
@@ -562,13 +557,12 @@ builder.Services.AddSingleton(serviceProvider =>
             .Value
             .SigningKey));
 builder.Services.AddScoped<IAtomicAuthSessionCredentialService, AtomicAuthSessionCredentialService>();
-builder.Services.AddScoped<IUserMigrationService, UserMigrationService>();
 builder.Services.AddScoped<IAuthEmailSender, OutboxAuthEmailSender>();
 builder.Services.AddScoped<ICanonicalAccountBootstrapService, CanonicalAccountBootstrapService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IGoogleAuthService, GoogleAuthService>();
-// On-demand tenant portal provisioning: shared by the startup seeder and the staff "grant portal
-// access" endpoint (TenantController) so a tenant added after boot can be given a login without a restart.
+// On-demand tenant portal provisioning for the staff "grant portal access" endpoint. Fresh seed
+// workspaces contain no tenants, and startup never scans existing tenants or creates accounts in a loop.
 builder.Services.AddScoped<ITenantPortalProvisioningService, TenantPortalProvisioningService>();
 builder.Services.AddScoped<IdentitySeeder>();
 builder.Services.AddScoped<DemoDataSeeder>();
@@ -630,9 +624,6 @@ builder.Services.AddDomainServices();
 // --- Outbox message publisher (API-side: enqueues rows; Engine dispatches them) ---
 builder.Services.AddScoped<IMessagePublisher, RentalCommand.Data.Outbox.OutboxMessagePublisher>();
 
-// --- Scheduled owner statement worker (default OFF; set Reports:EmailOwnerStatementsMonthly=true to enable) ---
-builder.Services.AddHostedService<RentalCommand.Api.Services.ScheduledOwnerStatementWorker>();
-
 // --- Stripe payment services (gated — no-ops when Stripe keys are absent) ---
 builder.Services.AddScoped<IStripePaymentService, StripePaymentService>();
 
@@ -655,7 +646,7 @@ builder.Services.AddSimulationClock(builder.Configuration, builder.Environment, 
 
 var app = builder.Build();
 
-// Apply migrations + seed the default admin/roles/portfolio so login works on a fresh database.
+// Apply migrations + seed the default canonical workspace so login works on a fresh database.
 // Migration is idempotent (no-op when already applied); seeding is gated by Seed:Enabled (Development).
 using (var scope = app.Services.CreateScope())
 {
@@ -682,15 +673,6 @@ using (var scope = app.Services.CreateScope())
         await demoSeeder.SeedAsync();
     }
 
-    // One-off self-owner backfill — gives pre-feature portfolios with no owners a primary self-owner.
-    // OFF by default and idempotent. It WRITES owner rows, so it must be explicitly enabled per
-    // environment (set Backfill:SelfOwners=true) and is intentionally NOT run unsupervised on prod.
-    if (app.Configuration.GetValue<bool>("Backfill:SelfOwners", false))
-    {
-        var backfill = scope.ServiceProvider
-            .GetRequiredService<RentalCommand.Api.Services.Domain.SelfOwnerBackfillService>();
-        await backfill.RunAsync();
-    }
 }
 
 // Behind Traefik (TLS terminator) the API receives plain HTTP on :8080, so honor X-Forwarded-Proto
@@ -745,8 +727,8 @@ app.UseExceptionHandler();
 app.UseCors("WebApp");
 
 // Map auth-context failures to a clean 401 instead of a 500. GetPortfolioId()/GetUserId() throw
-// MissingAuthContextException when an authenticated request lacks the portfolioId/sub claim they
-// require (e.g. a token with no portfolio scope) — without this the throw would surface as a 500.
+// MissingAuthContextException when canonical access-context validation cannot establish the
+// required workspace/user coordinates — without this the throw would surface as a 500.
 // NOTE: catch the SPECIFIC type, NOT generic UnauthorizedAccessException — the BCL throws the latter
 // for filesystem permission errors (e.g. an unwritable upload volume), and treating those as 401
 // disguises infra failures as "session expired". Those now propagate to an honest 500.

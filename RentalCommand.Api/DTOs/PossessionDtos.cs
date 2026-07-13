@@ -76,7 +76,6 @@ public sealed class TransferLeaseManagementRequest
     public bool GiveDestinationPossessionNow { get; set; }
     public string? PossessionAgreementExceptionReason { get; set; }
     public int DestinationDocumentTemplateId { get; set; }
-    public int DestinationDocumentTemplateVersion { get; set; }
     public bool CarryTenantBalance { get; set; } = true;
     public bool CarrySecurityDeposit { get; set; } = true;
     public string TransferReason { get; set; } = string.Empty;

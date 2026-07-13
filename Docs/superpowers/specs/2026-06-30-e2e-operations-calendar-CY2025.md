@@ -70,7 +70,7 @@ months, GAP-3): L22 half-March, L20 first month.
 ### January 2025
 | sim_date | actor | action | input artifact(s) | worker dep. |
 |---|---|---|---|---|
-| 2025-01-01 | Dana | **T0 onboarding**: wizard → portfolio + 4 owner entities + 5 users; confirm 19 leases (lease-scan, **RentTrackingStartMode=BackfillFromLeaseStart**) + 11 loans (mortgage-stmt scan → ConfirmAsLoan); PUT notification settings; set each property's `ownerEntityId` explicitly | 19 lease PDFs, 11 mortgage-stmt JPEGs | lease-create back-fills 2023–24 rent synchronously; fire DebtService+RecurringExpense for loan/expense history |
+| 2025-01-01 | Dana | **T0 onboarding**: wizard → portfolio + 4 owner entities + 5 users; confirm 19 agreements against explicit management/account contexts + 11 loans (mortgage-stmt scan → ConfirmAsLoan); PUT notification settings; set each property's `ownerEntityId` explicitly | 19 lease PDFs, 11 mortgage-stmt JPEGs | post bounded historical tenant-account entries; fire DebtService+RecurringExpense for loan/expense history |
 | 2025-01-01 | Engine | **B1** — RentCharge: Jan Rent(Scheduled) ×19 (PeriodKey 2025-01) → Autopay L09+L17→Paid → DebtService ×11 → RecurringExpense: HOA(P11), trash×5, **pest Q1**×5 | — | RentCharge, Autopay, DebtService, RecurringExpense |
 | 2025-01-02 | Priya | Enter annual hazard-insurance premiums, all 13 props (`/expenses`; escrow props `escrow_covered=true`; P03/P08 direct) | — | — |
 | 2025-01-06 | Priya | **B2** — scan 7 Jan rent checks/MOs → ConfirmAsPayment Paid (replaces worker-charge for these lease-months); ACH/Cash/Zelle payers mark-paid | 7 rent-check/MO JPEGs | ScanProcessing |

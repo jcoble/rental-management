@@ -33,8 +33,24 @@ public sealed class TransferLeaseManagementHandler
             throw Unauthorized();
         }
 
+        var destinationPropertyId = await attempt.Persistence.Query<Unit>()
+            .Where(unit => unit.Id == command.DestinationUnitId
+                && unit.PortfolioId == command.PortfolioId && unit.DeletedAt == null)
+            .Select(unit => unit.PropertyId)
+            .SingleAsync(ct);
+        var sourceVersion = await attempt.Leasing.ResolveAuthoredDocumentSourceVersionAsync(
+            command.PortfolioId, destinationPropertyId, 0, command.DestinationDocumentTemplateId,
+            command.CreatedByUserId, times.WallClockUtc, ct);
+        if (!sourceVersion.Resolved)
+        {
+            return Error(command, new AtomicTransferLeaseManagementMutationResult(
+                TransferLeaseManagementOutcome.InvalidTemplate, command.TransferPublicId,
+                0, null, 0, 0, 0, null, 0, null, null, 0, 0,
+                [], [], [], [], [], [], []));
+        }
+
         var mutation = await attempt.Leasing.TransferLeaseManagementAsync(
-            command, times.WallClockUtc, ct);
+            command, sourceVersion.DocumentSourceVersionId, times.WallClockUtc, ct);
         if (mutation.Outcome != TransferLeaseManagementOutcome.Transferred)
         {
             return Error(command, mutation);
@@ -123,7 +139,6 @@ public sealed class TransferLeaseManagementHandler
             || command.TransferPublicId == Guid.Empty
             || command.EffectiveOn == default
             || command.DestinationDocumentTemplateId <= 0
-            || command.DestinationDocumentTemplateVersion <= 0
             || string.IsNullOrWhiteSpace(command.TransferReason)
             || command.TransferReason.Trim().Length > 500
             || (command.GiveDestinationPossessionNow

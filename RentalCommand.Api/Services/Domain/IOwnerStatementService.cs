@@ -1,4 +1,5 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -8,20 +9,13 @@ namespace RentalCommand.Api.Services.Domain;
 /// </summary>
 public interface IOwnerStatementService
 {
-    /// <summary>
-    /// Returns the full owner statement for <paramref name="ownerId"/> for <paramref name="year"/>,
-    /// or <c>null</c> if the owner is not found in the portfolio.
-    /// </summary>
-    Task<OwnerStatementReport?> GetForOwnerAsync(int portfolioId, int ownerId, int year, CancellationToken ct = default);
+    Task<OwnerStatementReport?> GetForOwnerAsync(
+        WorkspaceReadScope scope, int ownerId, int year, CancellationToken ct = default);
 
-    /// <summary>
-    /// Returns one summary entry per owner that has at least one property in the portfolio,
-    /// with that owner's net distribution for <paramref name="year"/>. Used by the picker/list UI.
-    /// </summary>
-    Task<IReadOnlyList<OwnerStatementSummary>> ListOwnersWithNetAsync(int portfolioId, int year, CancellationToken ct = default);
+    Task<IReadOnlyList<OwnerStatementSummary>> ListOwnersWithNetAsync(
+        WorkspaceReadScope scope, int year, CancellationToken ct = default);
 
-    /// <summary>
-    /// Returns the portfolio-level owner net distribution total for <paramref name="year"/>, summed in SQL.
-    /// </summary>
-    Task<decimal> GetTotalNetToOwnersAsync(int portfolioId, int year, CancellationToken ct = default);
+    Task<decimal> GetTotalNetToOwnersAsync(
+        WorkspaceReadScope scope, int year, CancellationToken ct = default);
+
 }

@@ -105,6 +105,13 @@
 			<Button variant="outline" class="mt-4" onclick={() => query.refetch()}>Retry</Button>
 		</div>
 	{:else if view}
+		{#if view.scheduleE.unallocatedActivity.requiresAllocation}
+			<div class="mb-6 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100" data-testid="year-end-unallocated-warning">
+				<p class="font-semibold">Tax activity needs a property before filing</p>
+				<p class="mt-1">{view.scheduleE.unallocatedActivity.incomeEntryCount} income entries ({fmt(view.scheduleE.unallocatedActivity.rentalIncome)}) and {view.scheduleE.unallocatedActivity.expenseCount} expenses ({fmt(view.scheduleE.unallocatedActivity.totalExpenses)}) are excluded from the per-property Schedule E lines until allocated.</p>
+				<p class="mt-2 font-medium">Reconciled tax activity: {fmt(view.scheduleE.reconciledTotalRentalIncome)} income − {fmt(view.scheduleE.reconciledTotalExpenses)} expenses = {fmt(view.scheduleE.reconciledNetIncome)} net.</p>
+			</div>
+		{/if}
 		<!-- The two headline numbers, side by side -->
 		<div class="mb-6 grid gap-4 sm:grid-cols-2" data-testid="year-end-headline">
 			<div class="rounded-xl border border-border bg-card p-5" data-testid="year-end-cash-flow-headline">

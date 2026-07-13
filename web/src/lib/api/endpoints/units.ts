@@ -16,7 +16,7 @@ export interface UnitHealthListResponse {
 
 /**
  * Unit endpoints. Units are portfolio-scoped through their owning property; the API resolves scope from
- * the JWT portfolioId claim, so it is not part of the path (kept only for query-cache keying by callers).
+ * the server-validated workspace context, so it is not part of the path (kept only for query-cache keying by callers).
  */
 export const units = {
 	/** Plain unit list (optionally filtered by property). */

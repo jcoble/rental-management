@@ -62,7 +62,6 @@ public sealed class LeaseUnitTransferContractTests
         GiveDestinationPossessionNow: false,
         PossessionAgreementExceptionReason: null,
         DestinationDocumentTemplateId: 50,
-        DestinationDocumentTemplateVersion: 1,
         CarryTenantBalance: true,
         CarrySecurityDeposit: true,
         TransferReason: "Household moved to another Unit.",

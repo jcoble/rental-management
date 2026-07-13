@@ -7,7 +7,7 @@ using RentalCommand.Data;
 namespace RentalCommand.Api.Controllers;
 
 /// <summary>
-/// CRUD for expenses within the caller's portfolio. Scope comes from the JWT <c>portfolioId</c> claim;
+/// CRUD for expenses within the caller's portfolio. Scope comes from the server-validated workspace context;
 /// list supports <c>?propertyId&amp;unitId&amp;workOrderId&amp;skip&amp;take&amp;search&amp;sort&amp;incurredFrom&amp;incurredTo&amp;dueFrom&amp;dueTo&amp;paidFrom&amp;paidTo</c>. Removal is a soft-delete.
 /// </summary>
 [ApiController]

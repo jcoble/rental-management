@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Mvc;
@@ -15,7 +14,7 @@ namespace RentalCommand.Api.Controllers;
 
 /// <summary>
 /// Landlord-facing review of rental applications submitted via the public no-login link. All routes
-/// are portfolio-scoped via the JWT <c>portfolioId</c> claim. Approving creates a real Tenant.
+/// use the server-validated workspace context. Approving creates a real Tenant.
 /// </summary>
 [ApiController]
 [Route("api/v1/applications")]
@@ -173,7 +172,7 @@ public class ApplicationsController : ManagementControllerBase
         [FromBody] RecordApplicationFeeRequest req,
         CancellationToken ct)
     {
-        if (!TryReadAccessClaims(out var sessionId, out var accessContextId, out var accessRevision))
+        if (!TryReadAccessContext(out var sessionId, out var accessContextId, out var accessRevision))
             return Task.FromResult<IActionResult>(Forbid());
 
         return ExecuteFinanceMutation(
@@ -211,7 +210,7 @@ public class ApplicationsController : ManagementControllerBase
         [FromBody] RefundApplicationFeeRequest req,
         CancellationToken ct)
     {
-        if (!TryReadAccessClaims(out var sessionId, out var accessContextId, out var accessRevision))
+        if (!TryReadAccessContext(out var sessionId, out var accessContextId, out var accessRevision))
             return Task.FromResult<IActionResult>(Forbid());
 
         return ExecuteFinanceMutation(
@@ -303,7 +302,7 @@ public class ApplicationsController : ManagementControllerBase
         }
     }
 
-    private bool TryReadAccessClaims(
+    private bool TryReadAccessContext(
         out Guid sessionId,
         out int accessContextId,
         out long accessRevision)
@@ -311,9 +310,11 @@ public class ApplicationsController : ManagementControllerBase
         sessionId = default;
         accessContextId = default;
         accessRevision = default;
-        return Guid.TryParse(User.FindFirstValue("sid"), out sessionId)
-            && int.TryParse(User.FindFirstValue("ctx"), out accessContextId)
-            && long.TryParse(User.FindFirstValue("ar"), out accessRevision);
+        if (!TryGetActiveAccessContext(out var active)) return false;
+        sessionId = active.SessionId;
+        accessContextId = active.AccessContextId;
+        accessRevision = active.AccessRevision;
+        return true;
     }
 
     [HttpPost("{id:int}/screening/integrated")]

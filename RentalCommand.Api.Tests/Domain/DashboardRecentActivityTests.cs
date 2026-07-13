@@ -3,17 +3,19 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
 /// <summary>
 /// Pins the enriched dashboard "Recent Activity" feed: every row must carry the touched entity's
 /// <c>EntityId</c> (for deep-linking) and a human <c>Label</c> naming the specific record, and the
-/// labels must be resolved with ONE batched, portfolio-scoped query per entity type — never a
-/// per-row lookup (the hard data-access rule).
+/// labels, authorization, ordering, and the row limit must be resolved by ONE translated audit
+/// projection — never a materialize/ID-set/follow-up lookup (the hard data-access rule).
 /// </summary>
 public class DashboardRecentActivityTests : IDisposable
 {
@@ -23,6 +25,7 @@ public class DashboardRecentActivityTests : IDisposable
     private readonly List<string> _executedSql = [];
     private readonly RentalCommandDbContext _db;
     private readonly DashboardService _sut;
+    private readonly WorkspaceReadScope _scope;
 
     public DashboardRecentActivityTests()
     {
@@ -36,6 +39,7 @@ public class DashboardRecentActivityTests : IDisposable
 
         _db = new ReportsServiceTestDbContext(options);
         _db.Database.EnsureCreated();
+        _db.Database.InstallCanonicalLeaseProjectionViewsForSqlite();
 
         _db.Portfolios.Add(new Portfolio
         {
@@ -48,7 +52,71 @@ public class DashboardRecentActivityTests : IDisposable
         });
         _db.SaveChanges();
 
+        _scope = SeedAdministratorScope();
+
         _sut = new DashboardService(_db, new AuditDescriber(), TimeProvider.System);
+    }
+
+    private WorkspaceReadScope SeedAdministratorScope()
+    {
+        var now = DateTime.UtcNow;
+        var user = new ApplicationUser
+        {
+            UserName = "dashboard@example.test",
+            NormalizedUserName = "DASHBOARD@EXAMPLE.TEST",
+            Email = "dashboard@example.test",
+            NormalizedEmail = "DASHBOARD@EXAMPLE.TEST",
+            DisplayName = "Dashboard Test Administrator",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = now,
+        };
+        var accessContext = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = accessContext,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = PortfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            User = user,
+            ActiveAccessContext = accessContext,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+
+        _db.AddRange(assignment, session);
+        _db.SaveChanges();
+
+        return new WorkspaceReadScope(
+            PortfolioId, user.Id, session.Id, accessContext.Id, accessContext.AccessRevision);
     }
 
     public void Dispose()
@@ -62,7 +130,7 @@ public class DashboardRecentActivityTests : IDisposable
     {
         var seeded = SeedActivityGraph();
 
-        var dashboard = await _sut.GetDashboardAsync(PortfolioId);
+        var dashboard = await _sut.GetDashboardAsync(_scope);
 
         dashboard.Should().NotBeNull();
         var byKey = dashboard!.RecentActivity.ToDictionary(r => (r.Type, r.EntityId));
@@ -86,57 +154,117 @@ public class DashboardRecentActivityTests : IDisposable
     }
 
     [Fact]
-    public async Task RecentActivity_LeavesLabelNullForTypesWithoutACheapLabel()
+    public async Task RecentActivity_ExcludesRowsWithoutAnAuthorizedPropertyPath()
     {
         SeedActivityGraph();
 
-        var dashboard = await _sut.GetDashboardAsync(PortfolioId);
+        var dashboard = await _sut.GetDashboardAsync(_scope);
 
         dashboard.Should().NotBeNull();
-        // The unresolved "Conversation" row keeps its id but gets no label (web shows verb-only).
-        var unresolved = dashboard!.RecentActivity.Single(r => r.Type == "Conversation");
-        unresolved.EntityId.Should().Be(999);
-        unresolved.Label.Should().BeNull();
+        dashboard!.RecentActivity.Should().NotContain(r => r.Type == "Conversation");
     }
 
     [Fact]
-    public async Task RecentActivity_ResolvesLabelsWithOneBatchedQueryPerType_NotPerRow()
+    public async Task RecentActivity_Uses_One_Authorized_Projection_With_No_Label_Followups()
     {
-        // Three tenant audit rows in the feed must resolve through a SINGLE Tenants query, not three.
         SeedActivityGraph();
 
         _executedSql.Clear();
-        await _sut.GetDashboardAsync(PortfolioId);
+        await _sut.GetDashboardAsync(_scope);
 
-        // The label lookup is the portfolio-scoped Tenants query whose ids arrive as one IN set. A
-        // per-row resolver would emit three such queries (or three single-id equalities); a batched one
-        // emits exactly one. (The expiring-lease query also touches Tenants, but via a JOIN subquery
-        // without an IN/PortfolioId filter, so it is excluded here.)
-        var tenantLabelQueries = _executedSql
-            .Where(c => c.Contains("FROM \"Tenants\"", StringComparison.OrdinalIgnoreCase)
-                && c.Contains(" IN (", StringComparison.OrdinalIgnoreCase)
-                && c.Contains("\"PortfolioId\"", StringComparison.OrdinalIgnoreCase))
+        var auditQueries = _executedSql
+            .Where(command => command.Contains("FROM \"AuditLogs\"", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        tenantLabelQueries.Should().HaveCount(1,
-            "the three tenant rows must be labelled by one set-based IN-query, not one query per row");
+        auditQueries.Should().ContainSingle(
+            "recent activity plus every correlated label/Unit lookup must execute as one reader command");
+        auditQueries[0].Should().Contain("AuthSessions");
+        auditQueries[0].Should().Contain("CapabilityDefinitions");
+        auditQueries[0].Should().Contain("ORDER BY");
+        auditQueries[0].Should().Contain("LIMIT");
+        auditQueries[0].Should().Contain("Tenants");
+        auditQueries[0].Should().Contain("TenantAccounts");
+    }
+
+    [Fact]
+    public async Task RecentActivity_Applies_SelectedProperty_Scope_Before_Take()
+    {
+        var authorized = SeedActivityGraph();
+        var now = DateTime.UtcNow;
+        var decoyProperty = Property("Out-of-scope decoy", now);
+        var decoyUnit = new Unit
+        {
+            PortfolioId = PortfolioId,
+            Property = decoyProperty,
+            UnitNumber = "D1",
+            MarketRent = 900m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var decoyWorkOrder = new WorkOrder
+        {
+            PortfolioId = PortfolioId,
+            Property = decoyProperty,
+            Unit = decoyUnit,
+            Title = "Unauthorized newest activity",
+            Description = "Must not appear",
+            RequestedAt = now,
+            UpdatedAt = now,
+        };
+        _db.AddRange(decoyProperty, decoyUnit, decoyWorkOrder);
+        _db.SaveChanges();
+        _db.AuditLogs.Add(Audit(
+            nameof(WorkOrder), decoyWorkOrder.Id, AuditLogOperation.Created, now.AddHours(1), 0));
+
+        var assignment = _db.MembershipRoleAssignments
+            .Include(item => item.SelectedProperties)
+            .Single(item => item.WorkspaceMembership!.AccessContextId == _scope.AccessContextId);
+        assignment.ScopeKind = MembershipRoleAssignmentScopeKind.SelectedProperties;
+        assignment.SelectedProperties.Add(new MembershipRoleAssignmentProperty
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = authorized.Property.Id,
+        });
+        _db.SaveChanges();
+
+        var dashboard = await _sut.GetDashboardAsync(_scope);
+
+        dashboard!.RecentActivity.Should().NotContain(row => row.EntityId == decoyWorkOrder.Id &&
+            row.Type == nameof(WorkOrder));
+        dashboard.RecentActivity.Should().Contain(row => row.EntityId == authorized.WorkOrder.Id &&
+            row.Type == nameof(WorkOrder));
+    }
+
+    [Fact]
+    public async Task RecentActivity_FailsClosed_For_Stale_Revision()
+    {
+        SeedActivityGraph();
+
+        var dashboard = await _sut.GetDashboardAsync(
+            _scope with { AccessRevision = _scope.AccessRevision + 1 });
+
+        dashboard!.RecentActivity.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RecentActivity_FailsClosed_For_Revoked_Session()
+    {
+        SeedActivityGraph();
+        var session = _db.AuthSessions.Single(item => item.Id == _scope.SessionId);
+        session.Status = AuthSessionStatus.Revoked;
+        session.RevokedAtUtc = DateTime.UtcNow;
+        _db.SaveChanges();
+
+        var dashboard = await _sut.GetDashboardAsync(_scope);
+
+        dashboard!.RecentActivity.Should().BeEmpty();
     }
 
     private SeededActivityGraph SeedActivityGraph()
     {
         var baseTime = new DateTime(2026, 1, 10, 12, 0, 0, DateTimeKind.Utc);
 
-        var property = new Property
-        {
-            PortfolioId = PortfolioId,
-            Name = "Maple",
-            AddressLine1 = "1 Main",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43219",
-            CreatedAt = baseTime,
-            UpdatedAt = baseTime,
-        };
+        var property = Property("Maple", baseTime);
         var unit = new Unit
         {
             PortfolioId = PortfolioId,
@@ -201,11 +329,18 @@ public class DashboardRecentActivityTests : IDisposable
             UpdatedAt = baseTime,
         };
 
+        relationship.Parties.AddRange(
+        [
+            Party(tenant1, LeaseManagementPartyRole.PrimaryTenant, relationship, actor, baseTime),
+            Party(tenant2, LeaseManagementPartyRole.CoTenant, relationship, actor, baseTime),
+            Party(tenant3, LeaseManagementPartyRole.Occupant, relationship, actor, baseTime),
+        ]);
+
         _db.AddRange(property, unit, tenant1, tenant2, tenant3, actor, relationship, account, workOrder, expense);
         _db.SaveChanges();
 
-        // Nine audit rows (<= the Take(10) cap), newest first by timestamp. One row references an
-        // entity type the resolver does not label ("Conversation") to exercise the verb-only fallback.
+        // Nine property-backed audit rows (<= the Take(10) cap), plus one workspace-global
+        // Conversation row. The latter must fail closed because it has no authorized property path.
         _db.AuditLogs.AddRange(
             Audit("Tenant", tenant1.Id, AuditLogOperation.Created, baseTime, 1),
             Audit("Tenant", tenant2.Id, AuditLogOperation.Updated, baseTime, 2),
@@ -222,11 +357,40 @@ public class DashboardRecentActivityTests : IDisposable
         return new SeededActivityGraph(property, unit, tenant1, tenant2, tenant3, relationship, account, workOrder, expense);
     }
 
+    private static LeaseManagementParty Party(
+        Tenant tenant,
+        LeaseManagementPartyRole role,
+        LeaseManagement relationship,
+        ApplicationUser actor,
+        DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        Tenant = tenant,
+        LeaseManagement = relationship,
+        Role = role,
+        EffectiveFrom = DateOnly.FromDateTime(now.AddDays(-1)),
+        ChangeReason = "Dashboard activity test",
+        CreatedAtUtc = now,
+        CreatedByUser = actor,
+    };
+
     private Tenant Tenant(string first, string last, DateTime now) => new()
     {
         PortfolioId = PortfolioId,
         FirstName = first,
         LastName = last,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+
+    private static Property Property(string name, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        Name = name,
+        AddressLine1 = "1 Main",
+        City = "Columbus",
+        State = "OH",
+        PostalCode = "43219",
         CreatedAt = now,
         UpdatedAt = now,
     };

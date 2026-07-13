@@ -6,6 +6,7 @@ using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -21,18 +22,19 @@ public class UnitServiceListTests : IDisposable
     private readonly List<string> _commands = [];
     private readonly SqliteTestContext _ctx;
     private readonly UnitService _sut;
+    private readonly WorkspaceReadScope _scope;
 
     public UnitServiceListTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
-        SeedCanonicalLeaseReadModel();
+        _scope = SeedCanonicalLeaseReadModel();
         _sut = new UnitService(_ctx.Db, Mock.Of<IDataUpdateService>(), Mock.Of<IAuditTrailService>(), TimeProvider.System);
     }
 
-    private void SeedCanonicalLeaseReadModel()
+    private WorkspaceReadScope SeedCanonicalLeaseReadModel()
     {
         var now = DateTime.UtcNow;
-        _ctx.Db.Users.Add(new ApplicationUser
+        var user = new ApplicationUser
         {
             Id = ActorUserId,
             UserName = "unit-tests@rentalcommand.local",
@@ -41,7 +43,8 @@ public class UnitServiceListTests : IDisposable
             NormalizedEmail = "UNIT-TESTS@RENTALCOMMAND.LOCAL",
             DisplayName = "Unit Test Actor",
             CreatedAt = now,
-        });
+        };
+        _ctx.Db.Users.Add(user);
         _ctx.Db.SaveChanges();
 
         _ctx.Db.Database.ExecuteSqlRaw("""
@@ -100,6 +103,53 @@ public class UnitServiceListTests : IDisposable
                 0 AS "HasReconciliationException"
             FROM "LeaseManagements" lm;
             """);
+
+        var accessContext = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = accessContext,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = PortfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            User = user,
+            ActiveAccessContext = accessContext,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+
+        _ctx.Db.AddRange(assignment, session);
+        _ctx.Db.SaveChanges();
+
+        return new WorkspaceReadScope(
+            PortfolioId, user.Id, session.Id, accessContext.Id, accessContext.AccessRevision);
     }
 
     public void Dispose() => _ctx.Dispose();
@@ -113,7 +163,7 @@ public class UnitServiceListTests : IDisposable
         SeedUnit("D", "Harbor View Apartments", openWorkOrders: 2);
 
         _commands.Clear();
-        var result = await _sut.ListWithHealthPageAsync(PortfolioId, new UnitHealthListQuery
+        var result = await _sut.ListWithHealthPageAsync(_scope, new UnitHealthListQuery
         {
             Sort = "-openWorkOrderCount",
             Skip = 1,
@@ -151,7 +201,7 @@ public class UnitServiceListTests : IDisposable
         _ctx.Db.SaveChanges();
 
         _commands.Clear();
-        var result = await _sut.ListWithHealthPageAsync(PortfolioId, new UnitHealthListQuery
+        var result = await _sut.ListWithHealthPageAsync(_scope, new UnitHealthListQuery
         {
             Status = "Occupied",
             Stage = "Renewal",
@@ -186,7 +236,7 @@ public class UnitServiceListTests : IDisposable
         SeedRelationship(property, unit, tenant, now, now.AddDays(30), noticeGiven: true);
         _ctx.Db.SaveChanges();
 
-        var result = await _sut.ListWithHealthPageAsync(PortfolioId, new UnitHealthListQuery());
+        var result = await _sut.ListWithHealthPageAsync(_scope, new UnitHealthListQuery());
 
         var row = result.Items.Should().ContainSingle(u => u.Id == unit.Id).Subject;
         row.Status.Should().Be(DerivedUnitStatus.Occupied.ToString());
@@ -206,7 +256,7 @@ public class UnitServiceListTests : IDisposable
         _ctx.Db.SaveChanges();
 
         _commands.Clear();
-        var result = await _sut.ListAsync(PortfolioId, null, new UnitListQuery
+        var result = await _sut.ListAsync(_scope, null, new UnitListQuery
         {
             AvailableForLease = true,
             Sort = "unitNumber",
@@ -307,7 +357,7 @@ public class UnitServiceListTests : IDisposable
         _ctx.Db.SaveChanges();
 
         _commands.Clear();
-        var list = await _sut.ListWithHealthPageAsync(PortfolioId, new UnitHealthListQuery());
+        var list = await _sut.ListWithHealthPageAsync(_scope, new UnitHealthListQuery());
         var listSql = _commands.ToList();
         var dashboard = await new UnitDashboardService(_ctx.Db, new AuditDescriber(), new AuditDiffBuilder(), TimeProvider.System)
             .GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
@@ -408,6 +458,8 @@ public class UnitServiceListTests : IDisposable
             Currency = "USD",
             TermsSchemaVersion = 1,
             TermsPayload = "{}",
+            DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
+                PortfolioId, ActorUserId, now),
             CreatedAtUtc = now,
             CreatedByUserId = ActorUserId,
             UpdatedAtUtc = now,

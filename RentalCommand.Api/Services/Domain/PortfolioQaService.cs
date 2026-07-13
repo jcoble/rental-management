@@ -2,10 +2,12 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -37,7 +39,7 @@ public class PortfolioQaService : IPortfolioQaService
             "get_financial_summary",
             "Returns current ledger totals plus month-to-date and trailing-30-day money snapshots. " +
             "Use the returned period labels; do not describe all-time/current-ledger totals as this month. " +
-            "Unmatched bank deposits are included in collected cash and must be mentioned separately.",
+            "Unassigned bank transactions are excluded because they do not have a property authorization target.",
             """{"type":"object","properties":{},"required":[]}"""),
 
         new LlmToolSpec(
@@ -55,7 +57,7 @@ public class PortfolioQaService : IPortfolioQaService
 
         new LlmToolSpec(
             "list_work_orders",
-            "Returns work orders for the portfolio. Pass openOnly=true to see only open " +
+            "Returns work orders for properties the caller may read. Pass openOnly=true to see only open " +
             "(non-completed, non-cancelled, non-archived) orders. Each item includes title, " +
             "status, priority, category, property name, and scheduled/completed dates.",
             """{"type":"object","properties":{"openOnly":{"type":"boolean","description":"When true, exclude Completed, Cancelled, and Archived work orders. Defaults to false."}},"required":[]}"""),
@@ -74,7 +76,7 @@ public class PortfolioQaService : IPortfolioQaService
 
         new LlmToolSpec(
             "list_tenants",
-            "Returns all tenants in the portfolio: first and last name, email, phone, " +
+            "Returns tenants currently occupying properties the caller may read: first and last name, email, phone, " +
             "their current unit number and property name (from current possession, if any), " +
             "and whether they currently belong to an occupying household. " +
             "Use for 'who are my tenants?', 'what is tenant X's phone number?'.",
@@ -82,7 +84,7 @@ public class PortfolioQaService : IPortfolioQaService
 
         new LlmToolSpec(
             "list_properties",
-            "Returns each property in the portfolio: name, city, state, total unit count, " +
+            "Returns each property the caller may read: name, city, state, total unit count, " +
             "occupied unit count, and vacant unit count. " +
             "Use for 'how many units do I have?', 'what is my occupancy?'.",
             """{"type":"object","properties":{},"required":[]}"""),
@@ -112,7 +114,7 @@ public class PortfolioQaService : IPortfolioQaService
 
         new LlmToolSpec(
             "list_vendors",
-            "Returns all vendors in the portfolio: name, service type, phone, and email. " +
+            "Returns vendors linked to work orders on properties the caller may read: name, service type, phone, and email. " +
             "Use for 'who is my plumber?', 'vendor contact info'.",
             """{"type":"object","properties":{},"required":[]}"""),
     ];
@@ -144,18 +146,19 @@ public class PortfolioQaService : IPortfolioQaService
     // ---------------------------------------------------------------------------
 
     public async Task<AskResponse> AskAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         string question,
         IReadOnlyList<QaTurn>? history,
         QaDeliveryOptions? delivery = null,
         CancellationToken ct = default)
     {
+        var portfolioId = scope.PortfolioId;
         // Route product/how-to questions ("how do I record a payment?", "what is a security
         // deposit?") to the knowledge-base path; everything else stays on the live-data tool path.
         // The heuristic is intentionally conservative — when in doubt, answer from data.
         if (LooksLikeHowTo(question))
         {
-            var kbAnswer = await TryAnswerFromDocsAsync(portfolioId, question, delivery, ct);
+            var kbAnswer = await TryAnswerFromDocsAsync(scope, question, delivery, ct);
             if (kbAnswer is not null) return kbAnswer;
             // No relevant docs matched — fall through to the data path so we still try to help.
         }
@@ -241,7 +244,7 @@ public class PortfolioQaService : IPortfolioQaService
                 foreach (var call in result.ToolCalls)
                 {
                     toolsUsed.Add(call.Name);
-                    var toolResult = await ExecuteToolAsync(call, portfolioId, ct);
+                    var toolResult = await ExecuteToolAsync(call, scope, ct);
                     messages.Add(new LlmChatMessage(
                         Role: "tool",
                         Content: toolResult,
@@ -253,7 +256,7 @@ public class PortfolioQaService : IPortfolioQaService
 
             // Final answer path.
             var answer = result.Text ?? "(The assistant returned no text.)";
-            var delivered = await DeliverAsync(portfolioId, question, answer, delivery, ct);
+            var delivered = await DeliverAsync(scope, question, answer, delivery, ct);
             return new AskResponse(
                 Answer: answer,
                 ToolsUsed: toolsUsed.Distinct().ToList(),
@@ -270,7 +273,7 @@ public class PortfolioQaService : IPortfolioQaService
             ?? "The assistant did not produce a final answer within the allowed number of steps.";
 
         var incompleteAnswer = lastText + " (Note: response may be incomplete.)";
-        var deliveredIncomplete = await DeliverAsync(portfolioId, question, incompleteAnswer, delivery, ct);
+        var deliveredIncomplete = await DeliverAsync(scope, question, incompleteAnswer, delivery, ct);
         return new AskResponse(
             Answer: incompleteAnswer,
             ToolsUsed: toolsUsed.Distinct().ToList(),
@@ -340,11 +343,12 @@ public class PortfolioQaService : IPortfolioQaService
     /// never a fabricated answer.
     /// </summary>
     private async Task<AskResponse?> TryAnswerFromDocsAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         string question,
         QaDeliveryOptions? delivery,
         CancellationToken ct)
     {
+        var portfolioId = scope.PortfolioId;
         const int maxSnippets = 5;
         IReadOnlyList<DTOs.KbSnippet> snippets;
         try
@@ -411,7 +415,7 @@ public class PortfolioQaService : IPortfolioQaService
         }
 
         var answer = result.Text!.Trim();
-        var delivered = await DeliverAsync(portfolioId, question, answer, delivery, ct);
+        var delivered = await DeliverAsync(scope, question, answer, delivery, ct);
         return new AskResponse(
             Answer: answer,
             ToolsUsed: [],
@@ -455,16 +459,16 @@ public class PortfolioQaService : IPortfolioQaService
     /// <summary>
     /// Enqueues email/SMS outbox rows carrying the answer when delivery is requested. Mirrors the
     /// existing outbox payload shapes exactly: email = { to, subject, body }, sms = { to, message }.
-    /// Missing recipients are skipped (never throws); a missing phone falls back to the first active
-    /// owner-entity phone in the portfolio. Returns the channels actually queued.
+    /// Missing recipients are skipped (never throws). Returns the channels actually queued.
     /// </summary>
     private async Task<List<string>?> DeliverAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         string question,
         string answer,
         QaDeliveryOptions? delivery,
         CancellationToken ct)
     {
+        var portfolioId = scope.PortfolioId;
         if (delivery is not { AnyRequested: true })
             return null;
 
@@ -498,8 +502,7 @@ public class PortfolioQaService : IPortfolioQaService
 
             if (delivery.ViaSms)
             {
-                // Recipient is never client-supplied — always the portfolio owner's own number.
-                var to = await ResolveDefaultOwnerPhoneAsync(portfolioId, ct);
+                var to = string.IsNullOrWhiteSpace(delivery.ToSms) ? null : delivery.ToSms!.Trim();
                 if (!string.IsNullOrWhiteSpace(to))
                 {
                     await _publisher.PublishAsync(
@@ -534,46 +537,37 @@ public class PortfolioQaService : IPortfolioQaService
         return delivered.Count == 0 ? null : delivered;
     }
 
-    /// <summary>First active (non-deleted) owner-entity phone for the portfolio, if any.</summary>
-    private async Task<string?> ResolveDefaultOwnerPhoneAsync(int portfolioId, CancellationToken ct)
-        => await _db.OwnerEntities
-            .AsNoTracking()
-            .Where(o => o.PortfolioId == portfolioId && o.DeletedAt == null && o.Phone != null && o.Phone != "")
-            .OrderBy(o => o.Id)
-            .Select(o => o.Phone)
-            .FirstOrDefaultAsync(ct);
-
     // ---------------------------------------------------------------------------
     // Tool dispatcher
     // ---------------------------------------------------------------------------
 
     private async Task<string> ExecuteToolAsync(
         LlmToolCall call,
-        int portfolioId,
+        WorkspaceReadScope scope,
         CancellationToken ct)
     {
         try
         {
             return call.Name switch
             {
-                "get_financial_summary"  => await GetFinancialSummaryAsync(portfolioId, ct),
-                "list_overdue_rent"      => await ListOverdueRentAsync(portfolioId, ct),
-                "list_active_leases"     => await ListActiveLeasesAsync(portfolioId, ct),
-                "list_work_orders"       => await ListWorkOrdersAsync(call.ArgumentsJson, portfolioId, ct),
-                "list_expiring_leases"   => await ListExpiringLeasesAsync(call.ArgumentsJson, portfolioId, ct),
-                "list_vacant_units"      => await ListVacantUnitsAsync(portfolioId, ct),
-                "list_tenants"           => await ListTenantsAsync(portfolioId, ct),
-                "list_properties"        => await ListPropertiesAsync(portfolioId, ct),
-                "list_recent_expenses"   => await ListRecentExpensesAsync(call.ArgumentsJson, portfolioId, ct),
-                "list_recent_payments"   => await ListRecentPaymentsAsync(call.ArgumentsJson, portfolioId, ct),
-                "list_upcoming_events"   => await ListUpcomingEventsAsync(call.ArgumentsJson, portfolioId, ct),
-                "list_vendors"           => await ListVendorsAsync(portfolioId, ct),
+                "get_financial_summary"  => await GetFinancialSummaryAsync(scope, ct),
+                "list_overdue_rent"      => await ListOverdueRentAsync(scope, ct),
+                "list_active_leases"     => await ListActiveLeasesAsync(scope, ct),
+                "list_work_orders"       => await ListWorkOrdersAsync(call.ArgumentsJson, scope, ct),
+                "list_expiring_leases"   => await ListExpiringLeasesAsync(call.ArgumentsJson, scope, ct),
+                "list_vacant_units"      => await ListVacantUnitsAsync(scope, ct),
+                "list_tenants"           => await ListTenantsAsync(scope, ct),
+                "list_properties"        => await ListPropertiesAsync(scope, ct),
+                "list_recent_expenses"   => await ListRecentExpensesAsync(call.ArgumentsJson, scope, ct),
+                "list_recent_payments"   => await ListRecentPaymentsAsync(call.ArgumentsJson, scope, ct),
+                "list_upcoming_events"   => await ListUpcomingEventsAsync(call.ArgumentsJson, scope, ct),
+                "list_vendors"           => await ListVendorsAsync(scope, ct),
                 _                        => $"Error: unknown tool '{call.Name}'.",
             };
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Q&A tool {Tool} failed for portfolio {PortfolioId}", call.Name, portfolioId);
+            _logger.LogError(ex, "Q&A tool {Tool} failed for portfolio {PortfolioId}", call.Name, scope.PortfolioId);
             return $"Error: tool '{call.Name}' could not retrieve data right now. Tell the user this information is temporarily unavailable.";
         }
     }
@@ -582,31 +576,16 @@ public class PortfolioQaService : IPortfolioQaService
     // Tool implementations
     // ---------------------------------------------------------------------------
 
-    private async Task<string> GetFinancialSummaryAsync(int portfolioId, CancellationToken ct)
+    private async Task<string> GetFinancialSummaryAsync(WorkspaceReadScope scope, CancellationToken ct)
     {
-        var summary = await _accounting.GetSummaryAsync(portfolioId, ct);
-        var snapshot = await _accounting.GetSnapshotAsync(portfolioId, ct);
-
-        var unmatchedBankDeposits = await _db.BankTransactions
-            .AsNoTracking()
-            .Where(t =>
-                t.PortfolioId == portfolioId &&
-                t.MatchStatus != "Removed" &&
-                t.Amount > 0 &&
-                t.MatchedTenantLedgerEntryId == null)
-            .GroupBy(_ => 1)
-            .Select(g => new
-            {
-                Count = g.Count(),
-                Total = g.Sum(t => t.Amount),
-            })
-            .FirstOrDefaultAsync(ct);
+        var summary = await _accounting.GetSummaryAsync(scope, ct);
+        var snapshot = await _accounting.GetSnapshotAsync(scope, ct);
 
         var result = new
         {
             currentLedger = new
             {
-                scope = "All current recorded payments plus unmatched positive bank deposits; not limited to this month.",
+                scope = "Current recorded payments and balances for authorized properties; not limited to this month.",
                 collected = summary.Payments.Collected,
                 outstanding = summary.Payments.Outstanding,
                 overdue = summary.Payments.Overdue,
@@ -633,12 +612,7 @@ public class PortfolioQaService : IPortfolioQaService
                 amount = snapshot.PastDueAmount,
                 count = snapshot.PastDueCount,
             },
-            unmatchedBankDeposits = new
-            {
-                count = unmatchedBankDeposits?.Count ?? 0,
-                total = unmatchedBankDeposits?.Total ?? 0m,
-                note = "These deposits are included in collected cash until matched or removed; mention separately so users do not mistake them for rent-payment totals.",
-            },
+            unassignedBankTransactionsExcluded = true,
             totalExpenses = summary.TotalExpenses,
             expensesByCategory = summary.ExpensesByCategory
                 .Select(e => new { category = e.CategoryName, total = e.Total, count = e.Count })
@@ -648,8 +622,10 @@ public class PortfolioQaService : IPortfolioQaService
         return JsonSerializer.Serialize(result, _json);
     }
 
-    private async Task<string> ListOverdueRentAsync(int portfolioId, CancellationToken ct)
+    private async Task<string> ListOverdueRentAsync(WorkspaceReadScope scope, CancellationToken ct)
     {
+        var portfolioId = scope.PortfolioId;
+        var authorizedProperties = AuthorizedProperties(scope, CapabilityKeys.MoneyBalancesRead);
         var today = DateOnly.FromDateTime(_timeProvider.UtcNow());
 
         // Cap the tool result like every sibling list tool; both the returned page and the truncation
@@ -663,6 +639,9 @@ public class PortfolioQaService : IPortfolioQaService
             join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
                 on new { account.PortfolioId, account.LeaseManagementId }
                 equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+            join property in authorizedProperties
+                on new { lifecycle.PortfolioId, Id = lifecycle.PropertyId }
+                equals new { property.PortfolioId, property.Id }
             join unit in _db.Units.AsNoTracking()
                 on new { lifecycle.PortfolioId, Id = lifecycle.UnitId }
                 equals new { unit.PortfolioId, unit.Id }
@@ -689,6 +668,7 @@ public class PortfolioQaService : IPortfolioQaService
         var paymentRows = await overdueQuery
             .Take(maxRows)
             .ToListAsync(ct);
+        var pageCount = await overdueQuery.Take(maxRows).CountAsync(ct);
         var truncated = await overdueQuery
             .Skip(maxRows)
             .AnyAsync(ct);
@@ -706,12 +686,14 @@ public class PortfolioQaService : IPortfolioQaService
             })
             .ToList();
 
-        var result = new { count = rows.Count, truncated, overdue = rows };
+        var result = new { count = pageCount, truncated, overdue = rows };
         return JsonSerializer.Serialize(result, _json);
     }
 
-    private async Task<string> ListActiveLeasesAsync(int portfolioId, CancellationToken ct)
+    private async Task<string> ListActiveLeasesAsync(WorkspaceReadScope scope, CancellationToken ct)
     {
+        var portfolioId = scope.PortfolioId;
+        var authorizedProperties = AuthorizedProperties(scope, CapabilityKeys.RentalsRead);
         var rows = await (
             from occupancy in _db.UnitOccupancyProjections.AsNoTracking()
             join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
@@ -723,6 +705,9 @@ public class PortfolioQaService : IPortfolioQaService
             join agreementStatus in _db.LeaseAgreementStatusProjections.AsNoTracking()
                 on new { agreement.PortfolioId, AgreementId = agreement.Id }
                 equals new { agreementStatus.PortfolioId, agreementStatus.AgreementId }
+            join property in authorizedProperties
+                on new { occupancy.PortfolioId, Id = occupancy.PropertyId }
+                equals new { property.PortfolioId, property.Id }
             join unit in _db.Units.AsNoTracking()
                 on new { occupancy.PortfolioId, Id = occupancy.UnitId }
                 equals new { unit.PortfolioId, unit.Id }
@@ -740,14 +725,16 @@ public class PortfolioQaService : IPortfolioQaService
                 startDate = agreement.TermStartOn,
                 endDate = agreement.TermEndOn,
             })
+            .Take(50)
             .ToListAsync(ct);
 
-        return rows.Count == 0
-            ? "[]"
-            : JsonSerializer.Serialize(rows, _json);
+        return JsonSerializer.Serialize(rows, _json);
     }
 
-    private async Task<string> ListWorkOrdersAsync(string argsJson, int portfolioId, CancellationToken ct)
+    private async Task<string> ListWorkOrdersAsync(
+        string argsJson,
+        WorkspaceReadScope scope,
+        CancellationToken ct)
     {
         // Parse optional openOnly flag defensively.
         var openOnly = false;
@@ -773,7 +760,10 @@ public class PortfolioQaService : IPortfolioQaService
 
         var query = _db.WorkOrders
             .AsNoTracking()
-            .Where(w => w.PortfolioId == portfolioId);
+            .Where(w =>
+                w.PortfolioId == scope.PortfolioId &&
+                AuthorizedProperties(scope, CapabilityKeys.WorkRead)
+                    .Any(property => property.Id == w.PropertyId));
 
         if (openOnly)
             query = query.Where(w => openStatuses.Contains(w.Status));
@@ -783,8 +773,8 @@ public class PortfolioQaService : IPortfolioQaService
             .Select(w => new
             {
                 title          = w.Title,
-                status         = w.Status.ToString(),
-                priority       = w.Priority.ToString(),
+                statusCode     = (int)w.Status,
+                priorityCode   = (int)w.Priority,
                 category       = w.Category,
                 propertyName   = w.Property != null ? w.Property.Name : "(unknown)",
                 requestedAt    = w.RequestedAt,
@@ -797,8 +787,8 @@ public class PortfolioQaService : IPortfolioQaService
         var formatted = rows.Select(w => new
         {
             w.title,
-            w.status,
-            w.priority,
+            status = ((WorkOrderStatus)w.statusCode).ToString(),
+            priority = ((WorkOrderPriority)w.priorityCode).ToString(),
             w.category,
             w.propertyName,
             requestedAt = w.requestedAt.ToString("yyyy-MM-dd"),
@@ -806,13 +796,16 @@ public class PortfolioQaService : IPortfolioQaService
             completedAt = w.completedAt.HasValue ? w.completedAt.Value.ToString("yyyy-MM-dd") : null,
         }).ToList();
 
-        return formatted.Count == 0
-            ? "[]"
-            : JsonSerializer.Serialize(formatted, _json);
+        return JsonSerializer.Serialize(formatted, _json);
     }
 
-    private async Task<string> ListExpiringLeasesAsync(string argsJson, int portfolioId, CancellationToken ct)
+    private async Task<string> ListExpiringLeasesAsync(
+        string argsJson,
+        WorkspaceReadScope scope,
+        CancellationToken ct)
     {
+        var portfolioId = scope.PortfolioId;
+        var authorizedProperties = AuthorizedProperties(scope, CapabilityKeys.RentalsRead);
         // Parse optional withinDays (default 60).
         var withinDays = 60;
         if (!string.IsNullOrWhiteSpace(argsJson) && argsJson != "{}")
@@ -838,6 +831,9 @@ public class PortfolioQaService : IPortfolioQaService
             join agreementStatus in _db.LeaseAgreementStatusProjections.AsNoTracking()
                 on new { agreement.PortfolioId, AgreementId = agreement.Id }
                 equals new { agreementStatus.PortfolioId, agreementStatus.AgreementId }
+            join property in authorizedProperties
+                on new { occupancy.PortfolioId, Id = occupancy.PropertyId }
+                equals new { property.PortfolioId, property.Id }
             join unit in _db.Units.AsNoTracking()
                 on new { occupancy.PortfolioId, Id = occupancy.UnitId }
                 equals new { unit.PortfolioId, unit.Id }
@@ -857,21 +853,22 @@ public class PortfolioQaService : IPortfolioQaService
                 endDate = agreement.TermEndOn!.Value,
                 daysLeft = agreement.TermEndOn.Value.DayNumber - agreementStatus.BusinessDate.DayNumber,
             })
+            .Take(50)
             .ToListAsync(ct);
 
-        return rows.Count == 0
-            ? "[]"
-            : JsonSerializer.Serialize(rows, _json);
+        return JsonSerializer.Serialize(rows, _json);
     }
 
-    private async Task<string> ListVacantUnitsAsync(int portfolioId, CancellationToken ct)
+    private async Task<string> ListVacantUnitsAsync(WorkspaceReadScope scope, CancellationToken ct)
     {
+        var portfolioId = scope.PortfolioId;
+        var authorizedProperties = AuthorizedProperties(scope, CapabilityKeys.RentalsRead);
         var rows = await (
             from occupancy in _db.UnitOccupancyProjections.AsNoTracking()
             join unit in _db.Units.AsNoTracking()
                 on new { occupancy.PortfolioId, Id = occupancy.UnitId }
                 equals new { unit.PortfolioId, unit.Id }
-            join property in _db.Properties.AsNoTracking()
+            join property in authorizedProperties
                 on new { occupancy.PortfolioId, Id = occupancy.PropertyId }
                 equals new { property.PortfolioId, property.Id }
             where occupancy.PortfolioId == portfolioId
@@ -889,22 +886,36 @@ public class PortfolioQaService : IPortfolioQaService
                 bedrooms = unit.Bedrooms,
                 bathrooms = unit.Bathrooms,
             })
+            .Take(50)
             .ToListAsync(ct);
 
-        return rows.Count == 0
-            ? "[]"
-            : JsonSerializer.Serialize(rows, _json);
+        return JsonSerializer.Serialize(rows, _json);
     }
 
-    private async Task<string> ListTenantsAsync(int portfolioId, CancellationToken ct)
+    private async Task<string> ListTenantsAsync(WorkspaceReadScope scope, CancellationToken ct)
     {
+        var portfolioId = scope.PortfolioId;
+        var authorizedProperties = AuthorizedProperties(scope, CapabilityKeys.RentalsRead);
         const int maxRows = 50;
 
         // Current Unit context is a correlated SQL subquery over the effective-dated household
         // and the canonical possession projection; legacy Lease.Status is intentionally absent.
-        var tenants = await _db.Tenants
+        var tenantsQuery = _db.Tenants
             .AsNoTracking()
-            .Where(t => t.PortfolioId == portfolioId)
+            .Where(t =>
+                t.PortfolioId == portfolioId &&
+                (from party in _db.LeaseManagementParties
+                 join occupancy in _db.UnitOccupancyProjections
+                     on new { party.PortfolioId, LeaseManagementId = (int?)party.LeaseManagementId }
+                     equals new { occupancy.PortfolioId, LeaseManagementId = occupancy.CurrentLeaseManagementId }
+                 join property in authorizedProperties
+                     on new { occupancy.PortfolioId, Id = occupancy.PropertyId }
+                     equals new { property.PortfolioId, property.Id }
+                 where party.PortfolioId == portfolioId &&
+                       party.TenantId == t.Id &&
+                       party.Role != LeaseManagementPartyRole.Guarantor &&
+                       occupancy.IsOccupied
+                 select party.Id).Any())
             .Select(t => new
             {
                 name         = t.FirstName + " " + t.LastName,
@@ -921,7 +932,7 @@ public class PortfolioQaService : IPortfolioQaService
                     join unit in _db.Units
                         on new { occupancy.PortfolioId, Id = occupancy.UnitId }
                         equals new { unit.PortfolioId, unit.Id }
-                    join property in _db.Properties
+                    join property in authorizedProperties
                         on new { occupancy.PortfolioId, Id = occupancy.PropertyId }
                         equals new { property.PortfolioId, property.Id }
                     where party.PortfolioId == portfolioId
@@ -937,12 +948,12 @@ public class PortfolioQaService : IPortfolioQaService
                         propertyName = property.Name,
                     }).FirstOrDefault(),
             })
-            .OrderBy(t => t.name)
-            .Take(maxRows + 1)
-            .ToListAsync(ct);
+            .OrderBy(t => t.name);
 
-        var truncated = tenants.Count > maxRows;
-        var rows = tenants.Take(maxRows).Select(t => new
+        var tenants = await tenantsQuery.Take(maxRows).ToListAsync(ct);
+        var pageCount = await tenantsQuery.Take(maxRows).CountAsync(ct);
+        var truncated = await tenantsQuery.Skip(maxRows).AnyAsync(ct);
+        var rows = tenants.Select(t => new
         {
             t.name,
             t.email,
@@ -952,15 +963,21 @@ public class PortfolioQaService : IPortfolioQaService
             hasCurrentOccupancy = t.currentOccupancy != null,
         }).ToList();
 
-        var result = new { count = rows.Count, truncated, tenants = rows };
+        var result = new { count = pageCount, truncated, tenants = rows };
         return JsonSerializer.Serialize(result, _json);
     }
 
-    private async Task<string> ListPropertiesAsync(int portfolioId, CancellationToken ct)
+    private async Task<string> ListPropertiesAsync(WorkspaceReadScope scope, CancellationToken ct)
     {
+        var portfolioId = scope.PortfolioId;
         var propertiesQuery = _db.Properties
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId)
+            .Where(property => property.DeletedAt == null)
+            .WhereAuthorized(
+                _db,
+                scope,
+                CapabilityKeys.RentalsRead,
+                _timeProvider.GetUtcNow().UtcDateTime)
             .Select(p => new
             {
                 name         = p.Name,
@@ -993,9 +1010,10 @@ public class PortfolioQaService : IPortfolioQaService
             })
             .FirstOrDefaultAsync(ct);
 
-        var properties = await propertiesQuery
-            .OrderBy(p => p.name)
-            .ToListAsync(ct);
+        const int maxRows = 50;
+        var orderedProperties = propertiesQuery.OrderBy(p => p.name);
+        var properties = await orderedProperties.Take(maxRows).ToListAsync(ct);
+        var truncated = await orderedProperties.Skip(maxRows).AnyAsync(ct);
 
         var result = new
         {
@@ -1003,12 +1021,16 @@ public class PortfolioQaService : IPortfolioQaService
             totalUnits     = totals?.TotalUnits ?? 0,
             totalOccupied  = totals?.TotalOccupied ?? 0,
             totalVacant    = totals?.TotalVacant ?? 0,
+            truncated,
             properties,
         };
         return JsonSerializer.Serialize(result, _json);
     }
 
-    private async Task<string> ListRecentExpensesAsync(string argsJson, int portfolioId, CancellationToken ct)
+    private async Task<string> ListRecentExpensesAsync(
+        string argsJson,
+        WorkspaceReadScope scope,
+        CancellationToken ct)
     {
         // Parse optional withinDays (default 90).
         var withinDays = 90;
@@ -1029,46 +1051,76 @@ public class PortfolioQaService : IPortfolioQaService
 
         var expensesQuery = _db.Expenses
             .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId && e.IncurredAt >= cutoff);
+            .Where(e =>
+                e.PortfolioId == scope.PortfolioId &&
+                e.IncurredAt >= cutoff &&
+                e.PropertyId != null &&
+                AuthorizedProperties(scope, CapabilityKeys.MoneyBalancesRead)
+                    .Any(property => property.Id == e.PropertyId));
 
-        var total = await expensesQuery
+        var aggregate = await expensesQuery
             .GroupBy(_ => 1)
-            .Select(g => (decimal?)g.Sum(e => e.Amount))
-            .FirstOrDefaultAsync(ct) ?? 0m;
+            .Select(g => new
+            {
+                Total = g.Sum(expense => expense.Amount),
+                PageCount = g.Count() > maxRows ? maxRows : g.Count(),
+            })
+            .FirstOrDefaultAsync(ct);
 
-        // Order by the real DateTime column in SQL, then format strings in memory
-        // (Npgsql can't translate DateTime.ToString(format) / enum.ToString()).
-        var entities = await expensesQuery
-            .Include(e => e.Property)
-            .Include(e => e.Vendor)
-            .OrderByDescending(e => e.IncurredAt)
-            .Take(maxRows + 1)
-            .ToListAsync(ct);
+        var orderedExpenses =
+            from expense in expensesQuery
+            join property in _db.Properties.AsNoTracking()
+                on new { expense.PortfolioId, Id = expense.PropertyId }
+                equals new { property.PortfolioId, Id = (int?)property.Id }
+            join vendor in _db.Vendors.AsNoTracking()
+                on new { expense.PortfolioId, Id = expense.VendorId }
+                equals new { vendor.PortfolioId, Id = (int?)vendor.Id }
+                into vendorRows
+            from vendor in vendorRows.DefaultIfEmpty()
+            orderby expense.IncurredAt descending, expense.Id descending
+            select new
+            {
+                expense.IncurredAt,
+                expense.Description,
+                VendorName = vendor != null ? vendor.Name : null,
+                expense.Category,
+                expense.Amount,
+                PropertyName = property.Name,
+                expense.Status,
+            };
 
-        var truncated = entities.Count > maxRows;
-        var rows = entities.Take(maxRows).Select(e => new
+        // Order and page by typed columns in SQL; only date/enum display formatting is in memory.
+        var entities = await orderedExpenses.Take(maxRows).ToListAsync(ct);
+        var truncated = await orderedExpenses.Skip(maxRows).AnyAsync(ct);
+
+        var rows = entities.Select(e => new
         {
             date         = e.IncurredAt.ToString("yyyy-MM-dd"),
             description  = e.Description,
-            vendor       = e.Vendor?.Name,
+            vendor       = e.VendorName,
             category     = e.Category.ToString(),
             amount       = e.Amount,
-            propertyName = e.Property?.Name,
+            propertyName = e.PropertyName,
             status       = e.Status.ToString(),
         }).ToList();
         var result = new
         {
             withinDays,
-            count     = rows.Count,
+            count     = aggregate?.PageCount ?? 0,
             truncated,
-            total,
+            total     = aggregate?.Total ?? 0m,
             expenses  = rows,
         };
         return JsonSerializer.Serialize(result, _json);
     }
 
-    private async Task<string> ListRecentPaymentsAsync(string argsJson, int portfolioId, CancellationToken ct)
+    private async Task<string> ListRecentPaymentsAsync(
+        string argsJson,
+        WorkspaceReadScope scope,
+        CancellationToken ct)
     {
+        var portfolioId = scope.PortfolioId;
+        var authorizedProperties = AuthorizedProperties(scope, CapabilityKeys.MoneyBalancesRead);
         // Parse optional withinDays (default 30).
         var withinDays = 30;
         if (!string.IsNullOrWhiteSpace(argsJson) && argsJson != "{}")
@@ -1094,6 +1146,9 @@ public class PortfolioQaService : IPortfolioQaService
             join management in _db.LeaseManagements.AsNoTracking()
                 on new { account.PortfolioId, Id = account.LeaseManagementId }
                 equals new { management.PortfolioId, management.Id }
+            join property in authorizedProperties
+                on new { management.PortfolioId, Id = management.PropertyId }
+                equals new { property.PortfolioId, property.Id }
             join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
                 on new { management.PortfolioId, LeaseManagementId = management.Id }
                 equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
@@ -1122,20 +1177,23 @@ public class PortfolioQaService : IPortfolioQaService
                     && deposit.EntryType == SecurityDepositEntryType.Receipt),
             };
 
-        var total = await paymentsQuery
+        var aggregate = await paymentsQuery
             .GroupBy(_ => 1)
-            .Select(g => (decimal?)g.Sum(p => p.entry.Amount))
-            .FirstOrDefaultAsync(ct) ?? 0m;
+            .Select(g => new
+            {
+                Total = g.Sum(payment => payment.entry.Amount),
+                PageCount = g.Count() > maxRows ? maxRows : g.Count(),
+            })
+            .FirstOrDefaultAsync(ct);
 
         // Order and cap by the typed ledger date in SQL, then format DateOnly/enums in memory.
-        var entities = await paymentsQuery
+        var orderedPayments = paymentsQuery
             .OrderByDescending(p => p.entry.EffectiveOn)
-            .ThenByDescending(p => p.entry.Id)
-            .Take(maxRows + 1)
-            .ToListAsync(ct);
+            .ThenByDescending(p => p.entry.Id);
+        var entities = await orderedPayments.Take(maxRows).ToListAsync(ct);
+        var truncated = await orderedPayments.Skip(maxRows).AnyAsync(ct);
 
-        var truncated = entities.Count > maxRows;
-        var rows = entities.Take(maxRows).Select(p => new
+        var rows = entities.Select(p => new
         {
             tenantName = p.tenantName ?? "(unknown)",
             p.unitNumber,
@@ -1146,12 +1204,27 @@ public class PortfolioQaService : IPortfolioQaService
                 : p.paymentMethod ?? "PaymentReceipt",
             status = p.providerState?.ToString() ?? "Posted",
         }).ToList();
-        var result = new { withinDays, count = rows.Count, truncated, total, payments = rows };
+        var result = new
+        {
+            withinDays,
+            count = aggregate?.PageCount ?? 0,
+            truncated,
+            total = aggregate?.Total ?? 0m,
+            payments = rows,
+        };
         return JsonSerializer.Serialize(result, _json);
     }
 
-    private async Task<string> ListUpcomingEventsAsync(string argsJson, int portfolioId, CancellationToken ct)
+    private async Task<string> ListUpcomingEventsAsync(
+        string argsJson,
+        WorkspaceReadScope scope,
+        CancellationToken ct)
     {
+        var portfolioId = scope.PortfolioId;
+        var workProperties = AuthorizedProperties(scope, CapabilityKeys.WorkRead);
+        var rentalProperties = AuthorizedProperties(scope, CapabilityKeys.RentalsRead);
+        var showingProperties = AuthorizedProperties(scope, CapabilityKeys.LeasingShowingsManage);
+        var onboardingProperties = AuthorizedProperties(scope, CapabilityKeys.LeasingOnboardingManage);
         // Parse optional withinDays (default 14).
         var withinDays = 14;
         if (!string.IsNullOrWhiteSpace(argsJson) && argsJson != "{}")
@@ -1175,6 +1248,15 @@ public class PortfolioQaService : IPortfolioQaService
             .AsNoTracking()
             .Where(a =>
                 a.PortfolioId == portfolioId &&
+                a.PropertyId != null &&
+                ((a.Type == AppointmentType.Showing &&
+                  showingProperties.Any(property => property.Id == a.PropertyId)) ||
+                 ((a.Type == AppointmentType.MoveIn || a.Type == AppointmentType.MoveOut) &&
+                  onboardingProperties.Any(property => property.Id == a.PropertyId)) ||
+                 ((a.Type == AppointmentType.Inspection || a.Type == AppointmentType.MaintenanceVisit) &&
+                  workProperties.Any(property => property.Id == a.PropertyId)) ||
+                 (a.Type == AppointmentType.OwnerMeeting &&
+                  rentalProperties.Any(property => property.Id == a.PropertyId))) &&
                 a.ScheduledStart >= now &&
                 a.ScheduledStart <= cutoff &&
                 a.Status != AppointmentStatus.Cancelled &&
@@ -1195,6 +1277,7 @@ public class PortfolioQaService : IPortfolioQaService
             .AsNoTracking()
             .Where(i =>
                 i.PortfolioId == portfolioId &&
+                workProperties.Any(property => property.Id == i.PropertyId) &&
                 i.ScheduledFor >= now &&
                 i.ScheduledFor <= cutoff &&
                 i.Status != InspectionStatus.Cancelled &&
@@ -1211,11 +1294,12 @@ public class PortfolioQaService : IPortfolioQaService
                 sortKey      = i.ScheduledFor,
             });
 
-        var eventRows = await appointmentsQuery
-            .Concat(inspectionsQuery)
+        var eventsQuery = appointmentsQuery.Concat(inspectionsQuery);
+        var eventRows = await eventsQuery
             .OrderBy(e => e.sortKey)
             .Take(50)
             .ToListAsync(ct);
+        var eventCount = await eventsQuery.Take(50).CountAsync(ct);
 
         var events = eventRows
             .Select(e => new
@@ -1236,17 +1320,23 @@ public class PortfolioQaService : IPortfolioQaService
             })
             .ToList();
 
-        var result = new { withinDays, count = events.Count, events };
+        var result = new { withinDays, count = eventCount, events };
         return JsonSerializer.Serialize(result, _json);
     }
 
-    private async Task<string> ListVendorsAsync(int portfolioId, CancellationToken ct)
+    private async Task<string> ListVendorsAsync(WorkspaceReadScope scope, CancellationToken ct)
     {
         const int maxRows = 50;
+        var authorizedProperties = AuthorizedProperties(scope, CapabilityKeys.WorkRead);
 
-        var vendors = await _db.Vendors
+        var vendorsQuery = _db.Vendors
             .AsNoTracking()
-            .Where(v => v.PortfolioId == portfolioId)
+            .Where(v =>
+                v.PortfolioId == scope.PortfolioId &&
+                _db.WorkOrders.Any(workOrder =>
+                    workOrder.PortfolioId == scope.PortfolioId &&
+                    workOrder.VendorId == v.Id &&
+                    authorizedProperties.Any(property => property.Id == workOrder.PropertyId)))
             .Select(v => new
             {
                 name        = v.Name,
@@ -1256,15 +1346,26 @@ public class PortfolioQaService : IPortfolioQaService
                 preferred   = v.Preferred,
             })
             .OrderBy(v => v.serviceType)
-            .ThenBy(v => v.name)
-            .Take(maxRows + 1)
-            .ToListAsync(ct);
+            .ThenBy(v => v.name);
 
-        var truncated = vendors.Count > maxRows;
-        var rows = vendors.Take(maxRows).ToList();
-        var result = new { count = rows.Count, truncated, vendors = rows };
+        var rows = await vendorsQuery.Take(maxRows).ToListAsync(ct);
+        var pageCount = await vendorsQuery.Take(maxRows).CountAsync(ct);
+        var truncated = await vendorsQuery.Skip(maxRows).AnyAsync(ct);
+        var result = new { count = pageCount, truncated, vendors = rows };
         return JsonSerializer.Serialize(result, _json);
     }
+
+    private IQueryable<RentalCommand.Core.Entities.Property> AuthorizedProperties(
+        WorkspaceReadScope scope,
+        string capabilityKey) =>
+        _db.Properties
+            .AsNoTracking()
+            .Where(property => property.DeletedAt == null)
+            .WhereAuthorized(
+                _db,
+                scope,
+                capabilityKey,
+                _timeProvider.GetUtcNow().UtcDateTime);
 
     private sealed class UpcomingEventRow
     {

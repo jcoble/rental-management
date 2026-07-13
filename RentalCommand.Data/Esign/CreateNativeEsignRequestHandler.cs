@@ -8,6 +8,7 @@ using RentalCommand.Core.Constants;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Esign;
+using RentalCommand.Core.Leasing;
 using RentalCommand.Data.Leasing;
 
 namespace RentalCommand.Data.Esign;
@@ -37,6 +38,41 @@ public sealed class IssueLeaseAgreementHandler
         {
             throw new DomainValidationException("The Agreement must contain its complete required signer snapshot before issue.");
         }
+        var predecessorId = agreement.ReplacesAgreementId ?? agreement.RenewsAgreementId;
+        if (predecessorId.HasValue)
+        {
+            var predecessorFacts = await attempt.Persistence.Query<LeaseAgreement>()
+                .Where(source => source.Id == predecessorId.Value
+                    && source.PortfolioId == command.PortfolioId
+                    && source.LeaseManagementId == command.LeaseManagementId)
+                .Select(source => new
+                {
+                    InvalidEffectiveDate = agreement.GoverningFromOn <= source.GoverningFromOn,
+                    SuccessorConflict = (source.SupersededByAgreementId != null
+                            && source.SupersededByAgreementId != agreement.Id)
+                        || source.CorrectionsAndRestatements.Any(candidate =>
+                            candidate.Id != agreement.Id
+                            && candidate.DraftCanceledAtUtc == null
+                            && (candidate.VoidedAtUtc == null || candidate.FullyExecutedAtUtc != null))
+                        || source.Renewals.Any(candidate =>
+                            candidate.Id != agreement.Id
+                            && candidate.DraftCanceledAtUtc == null
+                            && (candidate.VoidedAtUtc == null || candidate.FullyExecutedAtUtc != null)),
+                })
+                .SingleOrDefaultAsync(ct)
+                ?? throw new NativeEsignLegalTransitionConflictException(
+                    AtomicLegalExecutionTransitionOutcome.TargetChanged);
+            if (predecessorFacts.InvalidEffectiveDate)
+            {
+                throw new NativeEsignLegalTransitionConflictException(
+                    AtomicLegalExecutionTransitionOutcome.InvalidEffectiveDate);
+            }
+            if (predecessorFacts.SuccessorConflict)
+            {
+                throw new NativeEsignLegalTransitionConflictException(
+                    AtomicLegalExecutionTransitionOutcome.SuccessorConflict);
+            }
+        }
         var suppliedSignerIds = command.Signers.Select(item => item.AgreementSignerId).Order().ToArray();
         var frozenSignerIds = agreement.Signers.Select(item => item.Id).Order().ToArray();
         if (!suppliedSignerIds.SequenceEqual(frozenSignerIds))
@@ -44,12 +80,37 @@ public sealed class IssueLeaseAgreementHandler
             throw new DomainValidationException("The signing packet must match every frozen Agreement signer exactly once.");
         }
 
+        if (command.ExpectedDocumentSourceVersionId != agreement.DocumentSourceVersionId)
+        {
+            throw new DomainValidationException(
+                "The issued PDF was rendered from a different Agreement source version.");
+        }
+        var issuanceFingerprint = LegalDocumentIssuanceBinding.Create(
+            nameof(LeaseAgreement),
+            command.PortfolioId,
+            command.LeaseManagementId,
+            agreement.Id,
+            agreement.DraftRevision,
+            agreement.DocumentSourceVersionId,
+            agreement.TermsSchemaVersion,
+            agreement.TermsPayload,
+            command.ContentSha256,
+            command.FileSize,
+            command.FileName);
+        if (!LegalDocumentIssuanceBinding.Matches(command.IssuanceFingerprint, issuanceFingerprint))
+        {
+            throw new DomainValidationException(
+                "The issued PDF fingerprint does not match the Agreement source, terms, and artifact.");
+        }
+
         var pending = await attempt.Persistence.Query<PendingFileUpload>()
             .SingleOrDefaultAsync(upload => upload.Id == command.PendingUploadId
                 && upload.PortfolioId == command.PortfolioId
+                && upload.ActorScopeId == command.ActorUserId
+                && upload.Purpose == LegalDocumentIssuanceBinding.AgreementUploadPurpose
                 && upload.State == PendingFileUploadState.Prepared
                 && upload.CleanupClaimToken == null
-                && upload.RequestFingerprint == command.RequestFingerprint, ct)
+                && upload.RequestFingerprint == issuanceFingerprint, ct)
             ?? throw new DomainValidationException("The issued PDF admission is missing or changed.");
         if (pending.StoragePath != command.StorageKey || pending.FileName != command.FileName
             || pending.ContentType != "application/pdf" || pending.SizeBytes != command.FileSize)
@@ -80,6 +141,7 @@ public sealed class IssueLeaseAgreementHandler
             ContentType = "application/pdf",
             ByteLength = command.FileSize,
             ContentSha256 = command.ContentSha256,
+            LegalIssuanceFingerprint = issuanceFingerprint,
             CreatedAtUtc = times.WallClockUtc,
             CreatedByUserId = command.ActorUserId,
         };
@@ -188,9 +250,10 @@ public sealed class IssueLeaseAgreementHandler
     {
         if (command.ActorUserId <= 0 || command.AuthSessionId == Guid.Empty || command.AccessContextId <= 0
             || command.ExpectedAccessRevision < 1 || command.ExpectedDraftRevision < 1 || command.FileSize <= 0
-            || command.Signers.Count == 0 || command.ContentSha256.Length != 64
-            || command.ContentSha256.Any(character => !Uri.IsHexDigit(character))
-            || string.IsNullOrWhiteSpace(command.RequestFingerprint)
+            || command.Signers.Count == 0
+            || !LegalDocumentIssuanceBinding.IsSha256(command.ContentSha256)
+            || command.ExpectedDocumentSourceVersionId <= 0
+            || !LegalDocumentIssuanceBinding.IsSha256(command.IssuanceFingerprint)
             || string.IsNullOrWhiteSpace(command.StorageKey) || string.IsNullOrWhiteSpace(command.FileName)
             || string.IsNullOrWhiteSpace(command.Subject) || string.IsNullOrWhiteSpace(command.WebBaseUrl)
             || string.IsNullOrWhiteSpace(command.DeliveryIdempotencyKey) || command.DeliveryIdempotencyKey.Length > 200)

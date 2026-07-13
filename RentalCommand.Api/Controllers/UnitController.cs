@@ -9,8 +9,8 @@ using RentalCommand.Core.Configuration;
 namespace RentalCommand.Api.Controllers;
 
 /// <summary>
-/// CRUD for units. Units are scoped through their owning property's portfolio (the caller's
-/// <c>portfolioId</c> claim). List supports <c>?propertyId&amp;skip&amp;take&amp;search&amp;sort</c>.
+/// CRUD for units. Units are scoped through their owning property's workspace and the caller's
+/// canonical property scope. List supports <c>?propertyId&amp;skip&amp;take&amp;search&amp;sort</c>.
 /// Removal is a soft-delete.
 /// </summary>
 [ApiController]
@@ -46,7 +46,8 @@ public class UnitController : ManagementControllerBase
     public async Task<ActionResult<IReadOnlyList<UnitResponse>>> List(
         [FromQuery] UnitListQuery query, [FromQuery] int? propertyId, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), propertyId, query, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var items = await _service.ListAsync(scope, propertyId, query, ct);
         return Ok(items);
     }
 
@@ -60,7 +61,8 @@ public class UnitController : ManagementControllerBase
     public async Task<ActionResult<IReadOnlyList<UnitHealthResponse>>> ListWithHealth(
         [FromQuery] ListQuery query, [FromQuery] int? propertyId, CancellationToken ct)
     {
-        var items = await _service.ListWithHealthAsync(GetPortfolioId(), propertyId, query, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var items = await _service.ListWithHealthAsync(scope, propertyId, query, ct);
         return Ok(items);
     }
 
@@ -69,7 +71,8 @@ public class UnitController : ManagementControllerBase
     public async Task<ActionResult<UnitHealthListResponse>> ListWithHealthPage(
         [FromQuery] UnitHealthListQuery query, CancellationToken ct)
     {
-        var page = await _service.ListWithHealthPageAsync(GetPortfolioId(), query, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var page = await _service.ListWithHealthPageAsync(scope, query, ct);
         return Ok(page);
     }
 
@@ -78,7 +81,12 @@ public class UnitController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<UnitResponse>> Get(int id, CancellationToken ct)
     {
-        var item = await _service.GetAsync(GetPortfolioId(), id, ct);
+        var portfolioId = GetPortfolioId();
+        if (!await HasCapabilityAsync(
+                CapabilityKeys.RentalsRead,
+                new UnitCapabilityAuthorizationTarget(portfolioId, id),
+                ct)) return Forbid();
+        var item = await _service.GetAsync(portfolioId, id, ct);
         return item == null ? NotFound(new { error = "Unit not found" }) : Ok(item);
     }
 
@@ -92,7 +100,12 @@ public class UnitController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<UnitDashboardResponse>> Dashboard(int id, CancellationToken ct)
     {
-        var dashboard = await _dashboard.GetDashboardAsync(GetPortfolioId(), id, ct);
+        var portfolioId = GetPortfolioId();
+        if (!await HasCapabilityAsync(
+                CapabilityKeys.RentalsRead,
+                new UnitCapabilityAuthorizationTarget(portfolioId, id),
+                ct)) return Forbid();
+        var dashboard = await _dashboard.GetDashboardAsync(portfolioId, id, ct);
         return dashboard == null ? NotFound(new { error = "Unit not found" }) : Ok(dashboard);
     }
 
@@ -287,7 +300,12 @@ public class UnitController : ManagementControllerBase
     public async Task<ActionResult<IReadOnlyList<AuditEntryResponse>>> Timeline(
         int id, [FromQuery] ListQuery query, CancellationToken ct)
     {
-        var items = await _dashboard.GetTimelineAsync(GetPortfolioId(), id, query.NormalizedSkip, query.NormalizedTake, ct);
+        var portfolioId = GetPortfolioId();
+        if (!await HasCapabilityAsync(
+                CapabilityKeys.RentalsRead,
+                new UnitCapabilityAuthorizationTarget(portfolioId, id),
+                ct)) return Forbid();
+        var items = await _dashboard.GetTimelineAsync(portfolioId, id, query.NormalizedSkip, query.NormalizedTake, ct);
         return Ok(items);
     }
 
@@ -296,7 +314,12 @@ public class UnitController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<UnitResponse>> Create([FromBody] CreateUnitRequest request, CancellationToken ct)
     {
-        var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
+        var portfolioId = GetPortfolioId();
+        if (!await HasCapabilityAsync(
+                CapabilityKeys.RentalsManage,
+                new PropertyCapabilityAuthorizationTarget(portfolioId, request.PropertyId),
+                ct)) return Forbid();
+        var created = await _service.CreateAsync(portfolioId, request, ct);
         return created == null
             ? NotFound(new { error = "Property not found in this portfolio" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
@@ -307,7 +330,12 @@ public class UnitController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<UnitResponse>> Update(int id, [FromBody] UpdateUnitRequest request, CancellationToken ct)
     {
-        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, ct);
+        var portfolioId = GetPortfolioId();
+        if (!await HasCapabilityAsync(
+                CapabilityKeys.RentalsManage,
+                new UnitCapabilityAuthorizationTarget(portfolioId, id),
+                ct)) return Forbid();
+        var updated = await _service.UpdateAsync(portfolioId, id, request, ct);
         return updated == null ? NotFound(new { error = "Unit not found" }) : Ok(updated);
     }
 
@@ -316,7 +344,12 @@ public class UnitController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(int id, CancellationToken ct)
     {
-        var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
+        var portfolioId = GetPortfolioId();
+        if (!await HasCapabilityAsync(
+                CapabilityKeys.RentalsManage,
+                new UnitCapabilityAuthorizationTarget(portfolioId, id),
+                ct)) return Forbid();
+        var deleted = await _service.DeleteAsync(portfolioId, id, ct);
         return deleted ? NoContent() : NotFound(new { error = "Unit not found" });
     }
 }

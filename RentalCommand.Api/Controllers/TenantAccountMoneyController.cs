@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Mvc;
@@ -176,15 +175,14 @@ public sealed class TenantAccountMoneyController : AuthenticatedPortfolioControl
             failure = BadRequest(new { error = "A valid Idempotency-Key is required (maximum 200 characters)." });
             return false;
         }
-        if (!Guid.TryParse(User.FindFirstValue("sid"), out var sessionId)
-            || !int.TryParse(User.FindFirstValue("ctx"), out var contextId)
-            || !long.TryParse(User.FindFirstValue("ar"), out var revision))
+        if (!TryGetActiveAccessContext(out var active))
         {
             failure = Forbid();
             return false;
         }
-        envelope = new CommandEnvelope(GetPortfolioId(), GetUserId(), sessionId, contextId,
-            revision, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant());
+        envelope = new CommandEnvelope(active.PortfolioId, active.UserId, active.SessionId,
+            active.AccessContextId, active.AccessRevision,
+            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant());
         return true;
     }
 

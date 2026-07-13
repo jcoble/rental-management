@@ -121,7 +121,14 @@ public class DailyBriefingDeliveryServiceTests : IDisposable
 
         public StubBriefingService(BriefingResponse response) => _response = response;
 
-        public Task<BriefingResponse> ComposeAsync(int portfolioId, CancellationToken ct = default)
+        public Task<BriefingResponse> ComposeAsync(
+            RentalCommand.Core.Authorization.WorkspaceReadScope scope,
+            CancellationToken ct = default)
+            => Task.FromResult(_response);
+
+        public Task<BriefingResponse> ComposeForSystemAutomationAsync(
+            int portfolioId,
+            CancellationToken ct = default)
             => Task.FromResult(_response);
     }
 

@@ -6,10 +6,12 @@ using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -26,6 +28,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
     private readonly RentalCommandDbContext _db;
     private readonly WorkOrderService _workOrders;
     private readonly PropertyService _properties;
+    private readonly WorkspaceReadScope _scope;
 
     public WorkOrderCostsTimingAndProjectionTests()
     {
@@ -38,6 +41,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
 
         _db = new AccountingServiceTestDbContext(options);
         _db.Database.EnsureCreated();
+        _db.Database.InstallCanonicalLeaseProjectionViewsForSqlite();
 
         _db.Portfolios.Add(new Portfolio
         {
@@ -50,6 +54,8 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         });
         _db.SaveChanges();
 
+        _scope = SeedAdministratorScope();
+
         _workOrders = new WorkOrderService(
             _db,
             new NoopDataUpdate(),
@@ -58,6 +64,68 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
             NullLogger<WorkOrderService>.Instance,
             TimeProvider.System);
         _properties = new PropertyService(_db, new NoopDataUpdate(), TimeProvider.System);
+    }
+
+    private WorkspaceReadScope SeedAdministratorScope()
+    {
+        var now = DateTime.UtcNow;
+        var user = new ApplicationUser
+        {
+            UserName = "work-order-projection@example.test",
+            NormalizedUserName = "WORK-ORDER-PROJECTION@EXAMPLE.TEST",
+            Email = "work-order-projection@example.test",
+            NormalizedEmail = "WORK-ORDER-PROJECTION@EXAMPLE.TEST",
+            DisplayName = "Work Order Projection Test Administrator",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = now,
+        };
+        var accessContext = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = accessContext,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = PortfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            User = user,
+            ActiveAccessContext = accessContext,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+
+        _db.AddRange(assignment, session);
+        _db.SaveChanges();
+
+        return new WorkspaceReadScope(
+            PortfolioId, user.Id, session.Id, accessContext.Id, accessContext.AccessRevision);
     }
 
     public void Dispose()
@@ -330,8 +398,8 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
     public async Task PropertyGetAndList_ProjectTypeAndUnitAggregates()
     {
         var property = SeedProperty("Willow Run", PropertyType.MultiFamily);
-        SeedUnit(property.Id, "A");
-        SeedUnit(property.Id, "B");
+        SeedCurrentPossession(property, SeedUnit(property.Id, "A"));
+        SeedCurrentPossession(property, SeedUnit(property.Id, "B"));
         SeedUnit(property.Id, "C");
 
         var detail = await _properties.GetAsync(PortfolioId, property.Id);
@@ -340,7 +408,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         detail.UnitCount.Should().Be(3);
         detail.OccupiedUnits.Should().Be(2);
 
-        var list = await _properties.ListAsync(PortfolioId, new ListQuery());
+        var list = await _properties.ListAsync(_scope, new ListQuery());
         var row = list.Single(p => p.Id == property.Id);
         row.UnitCount.Should().Be(3);
         row.OccupiedUnits.Should().Be(2);
@@ -371,6 +439,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         var now = DateTime.UtcNow;
         var unit = new Unit
         {
+            PortfolioId = PortfolioId,
             PropertyId = propertyId,
             UnitNumber = number,
             CreatedAt = now,
@@ -379,6 +448,26 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         _db.Units.Add(unit);
         _db.SaveChanges();
         return unit;
+    }
+
+    private void SeedCurrentPossession(Property property, Unit unit)
+    {
+        var now = DateTime.UtcNow;
+        _db.LeaseManagements.Add(new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            RelationshipNumber = $"OCC-{unit.Id}",
+            PlannedPossessionAtUtc = now.AddMonths(-1),
+            PossessionGivenAtUtc = now.AddMonths(-1),
+            CreatedAtUtc = now,
+            CreatedByUserId = 1,
+            UpdatedAtUtc = now,
+            RowVersion = Guid.NewGuid(),
+        });
+        _db.SaveChanges();
     }
 
     private Vendor SeedVendor(string name)
@@ -432,6 +521,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         var now = DateTime.UtcNow;
         var unit = new Unit
         {
+            PortfolioId = PortfolioId,
             PropertyId = property.Id,
             UnitNumber = $"U-{tenant.Id}",
             CreatedAt = now,
@@ -447,6 +537,8 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
             PropertyId = property.Id,
             UnitId = unit.Id,
             RelationshipNumber = $"WO-{tenant.Id}",
+            PlannedPossessionAtUtc = now.AddMonths(-1),
+            PossessionGivenAtUtc = now.AddMonths(-1),
             CreatedAtUtc = now,
             CreatedByUserId = 1,
             UpdatedAtUtc = now,

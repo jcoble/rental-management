@@ -65,7 +65,7 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
             if (await AlreadyQueuedAsync(dedupKey, ct))
                 continue;
 
-            var briefing = await _briefing.ComposeAsync(portfolio.Id, ct);
+            var briefing = await _briefing.ComposeForSystemAutomationAsync(portfolio.Id, ct);
             if (!config.DailyBriefing.IncludeEmptyBriefing &&
                 briefing.Bullets.Count == 0 &&
                 string.IsNullOrWhiteSpace(briefing.Summary))

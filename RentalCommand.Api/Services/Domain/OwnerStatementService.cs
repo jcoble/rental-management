@@ -1,7 +1,11 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -9,124 +13,146 @@ namespace RentalCommand.Api.Services.Domain;
 public class OwnerStatementService : IOwnerStatementService
 {
     private readonly RentalCommandDbContext _db;
+    private readonly TimeProvider _timeProvider;
 
-    public OwnerStatementService(RentalCommandDbContext db)
+    public OwnerStatementService(RentalCommandDbContext db, TimeProvider timeProvider)
     {
         _db = db;
+        _timeProvider = timeProvider;
     }
 
     /// <inheritdoc/>
-    public async Task<OwnerStatementReport?> GetForOwnerAsync(
-        int portfolioId, int ownerId, int year, CancellationToken ct = default)
+    public Task<OwnerStatementReport?> GetForOwnerAsync(
+        WorkspaceReadScope scope, int ownerId, int year, CancellationToken ct = default) =>
+        GetForOwnerCoreAsync(
+            scope.PortfolioId,
+            ownerId,
+            year,
+            AuthorizedProperties(scope),
+            ct);
+
+    private async Task<OwnerStatementReport?> GetForOwnerCoreAsync(
+        int portfolioId,
+        int ownerId,
+        int year,
+        IQueryable<Property> authorizedProperties,
+        CancellationToken ct)
     {
-        // ── Verify the owner exists in the portfolio ────────────────────────────────────────────
-        var owner = await _db.OwnerEntities
-            .AsNoTracking()
-            .Where(o => o.PortfolioId == portfolioId && o.Id == ownerId)
-            .Select(o => new { o.Id, o.Name })
-            .FirstOrDefaultAsync(ct);
-
-        if (owner is null)
-            return null;
-
         var (start, end) = YearRange(year);
-        var totalDistributed = await _db.OwnerDistributions
-            .AsNoTracking()
-            .Where(d =>
-                d.PortfolioId == portfolioId &&
-                d.OwnerEntityId == ownerId &&
-                d.Date >= start &&
-                d.Date < end)
-            .SumAsync(d => (decimal?)d.Amount, ct) ?? 0m;
-
-        // ── Property lines ─────────────────────────────────────────────────────────────────────
-        // Filter/sort each owned property and project its receipt-allocation/expense aggregates in SQL.
-        // A second SQL aggregate produces totals from rounded property rows so application code only
-        // formats the bounded property breakdown.
-        var ownerPropertyRows = OwnerPropertyNetRows(portfolioId, year)
-            .Where(row => row.OwnerId == ownerId);
-        var propertyRows = await ownerPropertyRows
-            .OrderBy(row => row.PropertyName)
-            .ToListAsync(ct);
-
-        var statementTotals = await ownerPropertyRows
-            .Select(row => new
-            {
-                RentalIncome = Math.Round(row.RentalIncome, 2),
-                Expenses = Math.Round(row.Expenses, 2),
-                ManagementFee = Math.Round(row.RentalIncome * row.ManagementFeePercent / 100m, 2),
-            })
-            .GroupBy(_ => 1)
-            .Select(group => new
-            {
-                TotalIncome = group.Sum(row => row.RentalIncome),
-                TotalExpenses = group.Sum(row => row.Expenses),
-                TotalManagementFee = group.Sum(row => row.ManagementFee),
-                TotalNetToOwner = group.Sum(row =>
-                    row.RentalIncome - row.Expenses - row.ManagementFee),
-            })
-            .SingleOrDefaultAsync(ct);
-
-        if (propertyRows.Count == 0)
+        var propertyNetRows = OwnerPropertyNetRows(portfolioId, year, authorizedProperties);
+        var roundedPropertyLines = propertyNetRows.Select(row => new OwnerStatementPropertySqlRow
         {
-            return new OwnerStatementReport
+            OwnerId = row.OwnerId,
+            PropertyId = row.PropertyId,
+            PropertyName = row.PropertyName,
+            RentalIncome = SqlNumericFunctions.Round(row.RentalIncome, 2),
+            Expenses = SqlNumericFunctions.Round(row.Expenses, 2),
+            ManagementFee = SqlNumericFunctions.Round(
+                row.RentalIncome * row.ManagementFeePercent / 100m, 2),
+        });
+        var statement = await _db.OwnerEntities
+            .AsNoTracking()
+            .AsSingleQuery()
+            .Where(owner =>
+                owner.PortfolioId == portfolioId &&
+                owner.Id == ownerId &&
+                authorizedProperties.Any(property => property.OwnerEntityId == owner.Id))
+            .Select(owner => new OwnerStatementSqlRow
             {
                 OwnerId = owner.Id,
                 OwnerName = owner.Name,
-                Year = year,
-                Properties = [],
-                TotalIncome = 0m,
-                TotalExpenses = 0m,
-                TotalManagementFee = 0m,
-                TotalNetToOwner = 0m,
-                TotalDistributed = totalDistributed,
-                Undistributed = -totalDistributed,
-            };
-        }
+                TotalIncome = roundedPropertyLines
+                    .Where(row => row.OwnerId == owner.Id)
+                    .Sum(row => (decimal?)row.RentalIncome) ?? 0m,
+                TotalExpenses = roundedPropertyLines
+                    .Where(row => row.OwnerId == owner.Id)
+                    .Sum(row => (decimal?)row.Expenses) ?? 0m,
+                TotalManagementFee = roundedPropertyLines
+                    .Where(row => row.OwnerId == owner.Id)
+                    .Sum(row => (decimal?)row.ManagementFee) ?? 0m,
+                TotalNetToOwner = roundedPropertyLines
+                    .Where(row => row.OwnerId == owner.Id)
+                    .Sum(row => (decimal?)(row.RentalIncome - row.Expenses - row.ManagementFee)) ?? 0m,
+                TotalDistributed = _db.OwnerDistributions
+                    .Where(distribution =>
+                        distribution.PortfolioId == portfolioId &&
+                        distribution.OwnerEntityId == owner.Id &&
+                        distribution.Date >= start &&
+                        distribution.Date < end &&
+                        ((distribution.PropertyId != null &&
+                          authorizedProperties.Any(property =>
+                              property.Id == distribution.PropertyId &&
+                              property.OwnerEntityId == owner.Id)) ||
+                         (distribution.PropertyId == null &&
+                          !_db.Properties.Any(property =>
+                              property.PortfolioId == portfolioId &&
+                              property.OwnerEntityId == owner.Id &&
+                              !authorizedProperties.Any(authorized => authorized.Id == property.Id)))))
+                    .Sum(distribution => (decimal?)distribution.Amount) ?? 0m,
+                Properties = roundedPropertyLines
+                    .Where(row => row.OwnerId == owner.Id)
+                    .OrderBy(row => row.PropertyName)
+                    .Select(row => new OwnerStatementPropertySqlRow
+                    {
+                        OwnerId = row.OwnerId,
+                        PropertyId = row.PropertyId,
+                        PropertyName = row.PropertyName,
+                        RentalIncome = row.RentalIncome,
+                        Expenses = row.Expenses,
+                        ManagementFee = row.ManagementFee,
+                    })
+                    .ToList(),
+            })
+            .SingleOrDefaultAsync(ct);
 
-        // ── Assemble per-property lines ──────────────────────────────────────────────────────────
-        var lines = new List<OwnerStatementPropertyLine>(propertyRows.Count);
+        if (statement is null)
+            return null;
 
-        foreach (var prop in propertyRows)
-        {
-            var income = Math.Round(prop.RentalIncome, 2);
-            var expenses = Math.Round(prop.Expenses, 2);
-            var mgmtFee = Math.Round(income * prop.ManagementFeePercent / 100m, 2);
-            var net = income - expenses - mgmtFee;
+        // The query above performs authorization, filtering, joins, rounding, aggregation, and ordering
+        // in SQL. This mapping only shapes its already-computed display values into the public DTO.
+        var lines = statement.Properties
+            .Select(property => new OwnerStatementPropertyLine(
+                property.PropertyId,
+                property.PropertyName,
+                property.RentalIncome,
+                property.Expenses,
+                property.ManagementFee,
+                property.RentalIncome - property.Expenses - property.ManagementFee))
+            .ToList();
 
-            lines.Add(new OwnerStatementPropertyLine(
-                PropertyId: prop.PropertyId,
-                PropertyName: prop.PropertyName,
-                RentalIncome: income,
-                Expenses: expenses,
-                ManagementFee: mgmtFee,
-                NetToOwner: net));
-        }
-
-        // PostgreSQL sums the rounded per-property values, so the printed property lines and totals foot
-        // exactly without moving any aggregation or owner-distribution join into application memory.
-        var totalNetToOwner = statementTotals?.TotalNetToOwner ?? 0m;
+        var totalDistributed = Math.Round(statement.TotalDistributed, 2);
 
         return new OwnerStatementReport
         {
-            OwnerId = owner.Id,
-            OwnerName = owner.Name,
+            OwnerId = statement.OwnerId,
+            OwnerName = statement.OwnerName,
             Year = year,
             Properties = lines,
-            TotalIncome = statementTotals?.TotalIncome ?? 0m,
-            TotalExpenses = statementTotals?.TotalExpenses ?? 0m,
-            TotalManagementFee = statementTotals?.TotalManagementFee ?? 0m,
-            TotalNetToOwner = totalNetToOwner,
+            TotalIncome = statement.TotalIncome,
+            TotalExpenses = statement.TotalExpenses,
+            TotalManagementFee = statement.TotalManagementFee,
+            TotalNetToOwner = statement.TotalNetToOwner,
             TotalDistributed = totalDistributed,
-            Undistributed = totalNetToOwner - totalDistributed,
+            Undistributed = statement.TotalNetToOwner - totalDistributed,
         };
     }
 
     /// <inheritdoc/>
-    public async Task<IReadOnlyList<OwnerStatementSummary>> ListOwnersWithNetAsync(
-        int portfolioId, int year, CancellationToken ct = default)
+    public Task<IReadOnlyList<OwnerStatementSummary>> ListOwnersWithNetAsync(
+        WorkspaceReadScope scope, int year, CancellationToken ct = default) =>
+        ListOwnersWithNetCoreAsync(
+            scope.PortfolioId,
+            year,
+            AuthorizedProperties(scope),
+            ct);
+
+    private async Task<IReadOnlyList<OwnerStatementSummary>> ListOwnersWithNetCoreAsync(
+        int portfolioId,
+        int year,
+        IQueryable<Property> authorizedProperties,
+        CancellationToken ct)
     {
-        var propertyNetRows = OwnerPropertyNetRows(portfolioId, year);
+        var propertyNetRows = OwnerPropertyNetRows(portfolioId, year, authorizedProperties);
         var (start, end) = YearRange(year);
 
         var summaries = await propertyNetRows
@@ -144,7 +170,16 @@ public class OwnerStatementService : IOwnerStatementService
                         distribution.PortfolioId == portfolioId &&
                         distribution.OwnerEntityId == g.Key.OwnerId &&
                         distribution.Date >= start &&
-                        distribution.Date < end)
+                        distribution.Date < end &&
+                        ((distribution.PropertyId != null &&
+                          authorizedProperties.Any(property =>
+                              property.Id == distribution.PropertyId &&
+                              property.OwnerEntityId == g.Key.OwnerId)) ||
+                         (distribution.PropertyId == null &&
+                          !_db.Properties.Any(property =>
+                              property.PortfolioId == portfolioId &&
+                              property.OwnerEntityId == g.Key.OwnerId &&
+                              !authorizedProperties.Any(authorized => authorized.Id == property.Id)))))
                     .Sum(distribution => (decimal?)distribution.Amount) ?? 0m,
             })
             .OrderBy(o => o.OwnerName)
@@ -161,9 +196,21 @@ public class OwnerStatementService : IOwnerStatementService
     }
 
     /// <inheritdoc/>
-    public async Task<decimal> GetTotalNetToOwnersAsync(int portfolioId, int year, CancellationToken ct = default)
+    public Task<decimal> GetTotalNetToOwnersAsync(
+        WorkspaceReadScope scope, int year, CancellationToken ct = default) =>
+        GetTotalNetToOwnersCoreAsync(
+            scope.PortfolioId,
+            year,
+            AuthorizedProperties(scope),
+            ct);
+
+    private async Task<decimal> GetTotalNetToOwnersCoreAsync(
+        int portfolioId,
+        int year,
+        IQueryable<Property> authorizedProperties,
+        CancellationToken ct)
     {
-        return await OwnerPropertyNetRows(portfolioId, year)
+        return await OwnerPropertyNetRows(portfolioId, year, authorizedProperties)
             .GroupBy(_ => 1)
             .Select(g => g.Sum(p =>
                 p.RentalIncome -
@@ -172,12 +219,14 @@ public class OwnerStatementService : IOwnerStatementService
             .SingleOrDefaultAsync(ct);
     }
 
-    private IQueryable<OwnerPropertyNetRow> OwnerPropertyNetRows(int portfolioId, int year)
+    private IQueryable<OwnerPropertyNetRow> OwnerPropertyNetRows(
+        int portfolioId,
+        int year,
+        IQueryable<Property> authorizedProperties)
     {
         var (startOn, endOn) = YearDateRange(year);
 
-        return _db.Properties
-            .AsNoTracking()
+        return authorizedProperties
             .Where(p =>
                 p.PortfolioId == portfolioId &&
                 p.OwnerEntityId != null &&
@@ -222,6 +271,15 @@ public class OwnerStatementService : IOwnerStatementService
             });
     }
 
+    private IQueryable<Property> AuthorizedProperties(WorkspaceReadScope scope) =>
+        _db.Properties
+            .AsNoTracking()
+            .WhereAuthorized(
+                _db,
+                scope,
+                CapabilityKeys.MoneyOwnerReportsRead,
+                _timeProvider.UtcNow());
+
     private static (DateTime Start, DateTime End) YearRange(int year)
     {
         return (
@@ -243,5 +301,27 @@ public class OwnerStatementService : IOwnerStatementService
         public decimal ManagementFeePercent { get; set; }
         public decimal RentalIncome { get; set; }
         public decimal Expenses { get; set; }
+    }
+
+    private sealed class OwnerStatementSqlRow
+    {
+        public int OwnerId { get; set; }
+        public string OwnerName { get; set; } = string.Empty;
+        public decimal TotalIncome { get; set; }
+        public decimal TotalExpenses { get; set; }
+        public decimal TotalManagementFee { get; set; }
+        public decimal TotalNetToOwner { get; set; }
+        public decimal TotalDistributed { get; set; }
+        public List<OwnerStatementPropertySqlRow> Properties { get; set; } = [];
+    }
+
+    private sealed class OwnerStatementPropertySqlRow
+    {
+        public int OwnerId { get; set; }
+        public int PropertyId { get; set; }
+        public string PropertyName { get; set; } = string.Empty;
+        public decimal RentalIncome { get; set; }
+        public decimal Expenses { get; set; }
+        public decimal ManagementFee { get; set; }
     }
 }

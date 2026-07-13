@@ -23,8 +23,7 @@ public class LeaseAddendum : IAuditable, IPortfolioScoped
     public DateTime? SupersessionRecordedAtUtc { get; set; }
     public int TermsSchemaVersion { get; set; }
     public string TermsPayload { get; set; } = string.Empty;
-    public int DocumentTemplateId { get; set; }
-    public int DocumentTemplateVersion { get; set; }
+    public int DocumentSourceVersionId { get; set; }
     public int? IssuedArtifactId { get; set; }
     public DateTime? IssuedAtUtc { get; set; }
     public int? ExecutedArtifactId { get; set; }
@@ -44,7 +43,7 @@ public class LeaseAddendum : IAuditable, IPortfolioScoped
     public LeaseAgreement? BaseAgreement { get; set; }
     public LeaseAddendum? ReplacesAddendum { get; set; }
     public LeaseAddendum? SupersededByAddendum { get; set; }
-    public DocumentTemplate? DocumentTemplate { get; set; }
+    public LegalDocumentSourceVersion? DocumentSourceVersion { get; set; }
     public LegalDocumentArtifact? IssuedArtifact { get; set; }
     public LegalDocumentArtifact? ExecutedArtifact { get; set; }
     public ApplicationUser? CreatedByUser { get; set; }

@@ -282,6 +282,17 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         };
         db.AddRange(property, unit, tenant, template);
         await db.SaveChangesAsync();
+        var documentSourceVersion = new LegalDocumentSourceVersion
+        {
+            PublicId = Guid.NewGuid(), PortfolioId = portfolio.Id,
+            SourceKind = LegalDocumentSourceKind.AuthoredTemplateSnapshot,
+            BusinessKey = $"template:{template.Id}:v{template.Version}",
+            DocumentTemplateId = template.Id, DocumentTemplateVersion = template.Version,
+            RendererKey = "lease-agreement-overlay", RendererVersion = 1,
+            SnapshotPayload = "{}", CreatedAtUtc = now, CreatedByUserId = user.Id,
+        };
+        db.Add(documentSourceVersion);
+        await db.SaveChangesAsync();
         var relationship = new LeaseManagement
         {
             PortfolioId = portfolio.Id, PropertyId = property.Id, UnitId = unit.Id,
@@ -314,7 +325,7 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             BaseRentAmount = 100m, RentDueDay = 1, SecurityDepositObligation = 0m,
             LateFeeAmount = 0m, GracePeriodDays = 0, Currency = "USD",
             TermsSchemaVersion = 1, TermsPayload = "{}",
-            DocumentTemplateId = template.Id, DocumentTemplateVersion = template.Version,
+            DocumentSourceVersionId = documentSourceVersion.Id,
             CreatedAtUtc = now, UpdatedAtUtc = now, CreatedByUserId = user.Id,
         };
         db.AddRange(account, party, agreement);

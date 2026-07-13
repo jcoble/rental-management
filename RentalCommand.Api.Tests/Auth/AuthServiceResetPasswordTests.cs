@@ -128,7 +128,6 @@ public sealed class AuthServiceResetPasswordTests : IDisposable
             FamilyAbsoluteLifetimeDays = 30,
             SessionLifetimeDays = 30,
         }),
-        Mock.Of<IUserMigrationService>(),
         Mock.Of<IAuthEmailSender>(),
         _ctx.Db,
         new AuditTrailService(_ctx.Db, new AuditScope(), TimeProvider.System),

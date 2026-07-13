@@ -4,6 +4,7 @@ using Npgsql;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 using Testcontainers.PostgreSql;
 using Xunit;
 
@@ -405,6 +406,8 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
             Currency = "USD",
             TermsSchemaVersion = 1,
             TermsPayload = "{}",
+            DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
+                portfolio.Id, actor.Id, now),
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
             CreatedByUserId = actor.Id,

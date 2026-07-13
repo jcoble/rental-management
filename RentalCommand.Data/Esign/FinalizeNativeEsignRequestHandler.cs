@@ -5,6 +5,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Esign;
+using RentalCommand.Core.Leasing;
 
 namespace RentalCommand.Data.Esign;
 
@@ -22,6 +23,9 @@ public sealed class FinalizeNativeEsignRequestHandler
             ?? throw new InvalidOperationException("The canonical signature request no longer exists.");
         if ((request.LeaseAgreement is null) == (request.LeaseAddendum is null))
             throw new DomainValidationException("A signature packet must identify exactly one Agreement or Addendum.");
+        var leaseManagementId = request.LeaseAgreement?.LeaseManagementId
+            ?? request.LeaseAddendum!.LeaseManagementId;
+        await attempt.Locking.AcquireAsync(AtomicLockResource.LeaseManagement, leaseManagementId, ct);
         if (request.Status == SignatureRequestStatus.Completed && request.ExecutedArtifactId.HasValue)
             return new(request.PublicId, request.Id, request.LeaseAgreementId, request.LeaseAddendumId,
                 request.ExecutedArtifactId.Value);
@@ -85,62 +89,62 @@ public sealed class FinalizeNativeEsignRequestHandler
         request.ExecutionClaimToken = null;
         request.ExecutionClaimExpiresAtUtc = null;
         request.LastError = null;
-        if (request.LeaseAgreement is { } agreement)
+        var transition = await attempt.Leasing.ExecuteLegalArtifactTransitionAsync(
+            request.PortfolioId,
+            leaseManagementId,
+            request.LeaseAgreementId,
+            request.LeaseAddendumId,
+            artifact.Id,
+            now,
+            ct);
+        if (transition.Outcome != AtomicLegalExecutionTransitionOutcome.Applied)
         {
-            agreement.ExecutedArtifactId = artifact.Id;
-            agreement.FullyExecutedAtUtc = now;
-            agreement.UpdatedAtUtc = now;
-            var predecessorId = agreement.ReplacesAgreementId ?? agreement.RenewsAgreementId;
-            if (predecessorId.HasValue)
+            throw new NativeEsignLegalTransitionConflictException(request.Id, transition.Outcome);
+        }
+
+        if (request.LeaseAgreementId is { } agreementId)
+        {
+            attempt.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
+                nameof(LeaseAgreement), agreementId, AuditLogOperation.Updated, ActorLabel: "esign-system",
+                NewValues: JsonSerializer.Serialize(new { ExecutedArtifactId = artifact.Id, FullyExecutedAtUtc = now }),
+                ChangeReason: "Finalized immutable executed Agreement artifact."), now);
+            if (transition.PredecessorId is { } predecessorId)
             {
-                var predecessor = await attempt.Persistence.Query<LeaseAgreement>()
-                    .SingleAsync(item => item.Id == predecessorId && item.LeaseManagementId == agreement.LeaseManagementId
-                        && item.PortfolioId == request.PortfolioId, ct);
-                if (predecessor.SupersededByAgreementId.HasValue && predecessor.SupersededByAgreementId != agreement.Id)
-                    throw new DomainValidationException("A different Agreement successor already governs this relationship.");
-                predecessor.SupersededEffectiveOn = agreement.GoverningFromOn;
-                predecessor.SupersededByAgreementId = agreement.Id;
-                predecessor.SupersessionRecordedAtUtc = now;
-                predecessor.UpdatedAtUtc = now;
-                attempt.BindSemanticAudit(predecessor, new AtomicSemanticAudit(request.PortfolioId,
-                    nameof(LeaseAgreement), predecessor.Id, AuditLogOperation.Updated, ActorLabel: "esign-system",
-                    NewValues: JsonSerializer.Serialize(new { predecessor.SupersededEffectiveOn, predecessor.SupersededByAgreementId }),
-                    ChangeReason: "Executed successor Agreement recorded its governing transition."));
+                attempt.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
+                    nameof(LeaseAgreement), predecessorId, AuditLogOperation.Updated, ActorLabel: "esign-system",
+                    NewValues: JsonSerializer.Serialize(new
+                    {
+                        SupersededEffectiveOn = request.LeaseAgreement!.GoverningFromOn,
+                        SupersededByAgreementId = agreementId,
+                    }),
+                    ChangeReason: "Executed successor Agreement recorded its governing transition."), now);
             }
-            attempt.BindSemanticAudit(agreement, new AtomicSemanticAudit(request.PortfolioId,
-                nameof(LeaseAgreement), agreement.Id, AuditLogOperation.Updated, ActorLabel: "esign-system",
-                NewValues: JsonSerializer.Serialize(new { agreement.ExecutedArtifactId, agreement.FullyExecutedAtUtc }),
-                ChangeReason: "Finalized immutable executed Agreement artifact."));
         }
         else
         {
-            var addendum = request.LeaseAddendum!;
-            addendum.ExecutedArtifactId = artifact.Id;
-            addendum.FullyExecutedAtUtc = now;
-            addendum.UpdatedAtUtc = now;
-            if (addendum.ReplacesAddendumId.HasValue)
+            var addendumId = request.LeaseAddendumId!.Value;
+            attempt.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
+                nameof(LeaseAddendum), addendumId, AuditLogOperation.Updated, ActorLabel: "esign-system",
+                NewValues: JsonSerializer.Serialize(new { ExecutedArtifactId = artifact.Id, FullyExecutedAtUtc = now }),
+                ChangeReason: "Finalized immutable executed Addendum artifact."), now);
+        }
+        foreach (var supersededAddendumId in transition.SupersededAddendumIds)
+        {
+            attempt.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
+                nameof(LeaseAddendum), supersededAddendumId, AuditLogOperation.Updated,
+                ActorLabel: "esign-system",
+                ChangeReason: "Applied the executed legal artifact's atomic Addendum supersession transition."), now);
+        }
+        if (request.LeaseAgreement?.ChangeType is LeaseAgreementChangeType.Renewal
+            or LeaseAgreementChangeType.MonthToMonth)
+        {
+            foreach (var reissuedAddendumId in transition.ReissuedAddendumIds)
             {
-                var predecessor = await attempt.Persistence.Query<LeaseAddendum>()
-                    .SingleAsync(item => item.Id == addendum.ReplacesAddendumId
-                        && item.LeaseManagementId == addendum.LeaseManagementId
-                        && item.SeriesPublicId == addendum.SeriesPublicId
-                        && item.PortfolioId == request.PortfolioId, ct);
-                if (predecessor.SupersededByAddendumId.HasValue
-                    && predecessor.SupersededByAddendumId != addendum.Id)
-                    throw new DomainValidationException("A different Addendum correction already supersedes this version.");
-                predecessor.SupersededEffectiveOn = addendum.EffectiveFromOn;
-                predecessor.SupersededByAddendumId = addendum.Id;
-                predecessor.SupersessionRecordedAtUtc = now;
-                predecessor.UpdatedAtUtc = now;
-                attempt.BindSemanticAudit(predecessor, new AtomicSemanticAudit(request.PortfolioId,
-                    nameof(LeaseAddendum), predecessor.Id, AuditLogOperation.Updated, ActorLabel: "esign-system",
-                    NewValues: JsonSerializer.Serialize(new { predecessor.SupersededEffectiveOn, predecessor.SupersededByAddendumId }),
-                    ChangeReason: "Executed Addendum correction recorded its immutable supersession transition."));
+                attempt.StageSemanticEvent(new AtomicSemanticAudit(request.PortfolioId,
+                    nameof(LeaseAddendum), reissuedAddendumId, AuditLogOperation.Updated,
+                    ActorLabel: "esign-system",
+                    ChangeReason: "Activated the fully executed Addendum reissue with its executed base renewal."), now);
             }
-            attempt.BindSemanticAudit(addendum, new AtomicSemanticAudit(request.PortfolioId,
-                nameof(LeaseAddendum), addendum.Id, AuditLogOperation.Updated, ActorLabel: "esign-system",
-                NewValues: JsonSerializer.Serialize(new { addendum.ExecutedArtifactId, addendum.FullyExecutedAtUtc }),
-                ChangeReason: "Finalized immutable executed Addendum artifact."));
         }
 
         attempt.Persistence.Add(new SignatureAuditEvent
@@ -163,8 +167,7 @@ public sealed class FinalizeNativeEsignRequestHandler
             {
                 entityType = request.LeaseAgreementId.HasValue ? nameof(LeaseAgreement) : nameof(LeaseAddendum),
                 entityId = request.LeaseAgreementId ?? request.LeaseAddendumId,
-                leaseManagementId = request.LeaseAgreement?.LeaseManagementId
-                    ?? request.LeaseAddendum!.LeaseManagementId,
+                leaseManagementId,
                 action = request.LeaseAgreementId.HasValue ? "agreement-executed" : "addendum-executed",
             }),
             IdempotencyKey = $"legal-artifact:{request.Id}:executed:{artifact.Id}",

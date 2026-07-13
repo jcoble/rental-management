@@ -9,7 +9,8 @@ public sealed record NativeEsignAddendumSignerCommand(int AddendumSignerId) : IA
 /// <summary>Freezes a draft Agreement, its PDF, and one native signing packet atomically.</summary>
 public sealed record IssueLeaseAgreementCommand(
     Guid PendingUploadId,
-    string RequestFingerprint,
+    int ExpectedDocumentSourceVersionId,
+    string IssuanceFingerprint,
     int PortfolioId,
     int LeaseManagementId,
     int LeaseAgreementId,
@@ -37,7 +38,8 @@ public sealed record IssueLeaseAgreementResult(
 /// <summary>Freezes a draft Addendum, its PDF, and one native signing packet atomically.</summary>
 public sealed record IssueLeaseAddendumCommand(
     Guid PendingUploadId,
-    string RequestFingerprint,
+    int ExpectedDocumentSourceVersionId,
+    string IssuanceFingerprint,
     int PortfolioId,
     int LeaseManagementId,
     int LeaseAddendumId,

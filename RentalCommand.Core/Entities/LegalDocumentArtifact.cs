@@ -16,6 +16,8 @@ public class LegalDocumentArtifact : IAuditable, IPortfolioScoped
     public string ContentType { get; set; } = string.Empty;
     public long ByteLength { get; set; }
     public string ContentSha256 { get; set; } = string.Empty;
+    /// <summary>Canonical source/terms/artifact binding for issued Agreement/Addendum artifacts.</summary>
+    public string? LegalIssuanceFingerprint { get; set; }
     public DateTime CreatedAtUtc { get; set; }
     public int CreatedByUserId { get; set; }
 
