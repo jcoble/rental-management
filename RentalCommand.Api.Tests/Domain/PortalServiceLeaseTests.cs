@@ -2,7 +2,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.TestCommon;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -12,15 +12,15 @@ public sealed class PortalServiceLeaseTests : IDisposable
     private const int AccessContextId = 23;
     private const int TenantId = 41;
 
-    private readonly SqliteTestContext _ctx = new();
+    private readonly RentalCommandDbContext _db = NewContext();
     private readonly PortalService _sut;
 
     public PortalServiceLeaseTests()
     {
-        _sut = new PortalService(_ctx.Db, new NoopLeaseQaService(), TimeProvider.System);
+        _sut = new PortalService(_db, new NoopLeaseQaService(), TimeProvider.System);
     }
 
-    public void Dispose() => _ctx.Dispose();
+    public void Dispose() => _db.Dispose();
 
     [Fact]
     public void BuildLeaseRelationshipQuery_IsOneCanonicalAccessScopedStatement()
@@ -69,4 +69,9 @@ public sealed class PortalServiceLeaseTests : IDisposable
             .GetProperty(nameof(PortalLeaseRelationshipResponse.Agreement))!
             .PropertyType.Should().Be(typeof(PortalLeaseAgreementResponse));
     }
+
+    private static RentalCommandDbContext NewContext() =>
+        new(new DbContextOptionsBuilder<RentalCommandDbContext>()
+            .UseNpgsql("Host=localhost;Database=translation_only;Username=translation_only;Password=translation_only")
+            .Options);
 }
