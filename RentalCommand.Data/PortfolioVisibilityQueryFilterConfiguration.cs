@@ -14,6 +14,7 @@ internal static class PortfolioVisibilityQueryFilterConfiguration
     internal static void ConfigurePortfolioVisibilityQueryFilters(this ModelBuilder modelBuilder)
     {
         ConfigureApplicationFinance(modelBuilder);
+        ConfigureAccounting(modelBuilder);
         ConfigureListings(modelBuilder);
         ConfigureEvictions(modelBuilder);
         ConfigureLeaseRelationships(modelBuilder);
@@ -21,6 +22,12 @@ internal static class PortfolioVisibilityQueryFilterConfiguration
         ConfigureTenantAccounts(modelBuilder);
         ConfigureSignatures(modelBuilder);
         ConfigureNotifications(modelBuilder);
+    }
+
+    private static void ConfigureAccounting(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<AccountingMappingPromotionJob>()
+            .HasQueryFilter(row => row.Portfolio!.DeletedAt == null);
     }
 
     private static void ConfigureApplicationFinance(ModelBuilder modelBuilder)

@@ -12,7 +12,7 @@ internal static class FoundationBaselinePostgreSql
     private const string ApiRole = "rentalcommand_api";
     private const string EngineRole = "rentalcommand_engine";
 
-    internal static IReadOnlyList<string> CreateStatements { get; } =
+    private static readonly Lazy<IReadOnlyList<string>> CreateStatementsValue = new(() =>
     [
         CreateAuditSearchInfrastructure,
         LeaseEffectiveClockSql.CreateEffectiveNowUtc,
@@ -31,9 +31,11 @@ internal static class FoundationBaselinePostgreSql
         BuildRolesAndGrantSql(),
         BuildCreateRlsSql(),
         CreateSandboxGraduationGlobalDeleteGuards,
-    ];
+    ]);
 
-    internal static IReadOnlyList<string> DropStatements { get; } =
+    internal static IReadOnlyList<string> CreateStatements => CreateStatementsValue.Value;
+
+    private static readonly Lazy<IReadOnlyList<string>> DropStatementsValue = new(() =>
     [
         DropSandboxGraduationGlobalDeleteGuards,
         BuildDropRlsSql(),
@@ -52,7 +54,9 @@ internal static class FoundationBaselinePostgreSql
         LeaseEffectiveClockSql.DropBusinessDate,
         LeaseEffectiveClockSql.DropEffectiveNowUtc,
         DropAuditSearchIndexes,
-    ];
+    ]);
+
+    internal static IReadOnlyList<string> DropStatements => DropStatementsValue.Value;
 
     /// <summary>Mapped tables with a required PortfolioId and a direct tenant-isolation policy.</summary>
     internal static IReadOnlyList<string> DirectPortfolioTables { get; } =

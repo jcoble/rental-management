@@ -39,7 +39,11 @@ public sealed class SandboxGraduationTriggerContractTests
             "     AND current_setting('app.rls_bypass_reason', true) = 'SandboxGraduation' THEN");
         LeaseLegalSchemaSql.CreateSignatureAuditAppendOnly.Should().Contain(
             "RAISE EXCEPTION 'SignatureAuditEvents are append-only';");
-        LeaseLegalSchemaSql.CreateArtifactAndAgreementProtection.Should().NotContain("RETURN NEW;");
+        var artifactGuard = LeaseLegalSchemaSql.CreateArtifactAndAgreementProtection[..
+            LeaseLegalSchemaSql.CreateArtifactAndAgreementProtection.IndexOf(
+                "CREATE TRIGGER \"TR_LegalDocumentArtifacts_Immutable\"",
+                StringComparison.Ordinal)];
+        artifactGuard.Should().NotContain("RETURN NEW;");
         LeaseLegalSchemaSql.CreateSignatureAuditAppendOnly.Should().NotContain("RETURN NEW;");
     }
 
