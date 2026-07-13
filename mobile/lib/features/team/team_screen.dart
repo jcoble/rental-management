@@ -1,17 +1,15 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/auth/auth_controller.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
+import '../properties/properties_repository.dart';
 import 'team_repository.dart';
 
-// ── Screen ────────────────────────────────────────────────────────────────────
-
-/// Team management screen — list of members with role + active controls.
-///
-/// FAB opens the invite dialog which reveals a generated password if the API
-/// returns one.
 class TeamScreen extends ConsumerStatefulWidget {
   const TeamScreen({super.key});
 
@@ -20,162 +18,153 @@ class TeamScreen extends ConsumerStatefulWidget {
 }
 
 class _TeamScreenState extends ConsumerState<TeamScreen> {
+  final _searchController = TextEditingController();
+  Timer? _searchDebounce;
+
   @override
   void initState() {
     super.initState();
     Future.microtask(() => ref.read(teamProvider.notifier).load());
   }
 
-  Future<void> _refresh() => ref.read(teamProvider.notifier).refresh();
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    _searchController.dispose();
+    super.dispose();
+  }
 
-  void _showInviteDialog() {
-    showDialog<void>(context: context, builder: (_) => const _InviteDialog());
+  void _search(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 350), () {
+      ref.read(teamProvider.notifier).load(search: value);
+    });
+  }
+
+  Future<void> _showCreateSheet() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => const _CreateTeamMemberSheet(),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final asyncState = ref.watch(teamProvider);
+    final state = ref.watch(teamProvider);
+    final auth = ref.watch(authControllerProvider);
+    final currentUserId = auth is AuthStateAuthenticated ? auth.user.id : null;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Team')),
       floatingActionButton: MobileQuickActionFab(
         heroTag: 'team-fab',
         primaryAction: MobileQuickAction(
-          label: 'Invite member',
+          label: 'Add team member',
           icon: Icons.person_add_outlined,
-          onPressed: _showInviteDialog,
+          onPressed: _showCreateSheet,
         ),
         onChat: () => openMobileAssistant(context),
         onRecord: () => openMobileRecord(context),
         onScan: () => openMobileScan(context),
       ),
       body: RefreshIndicator(
-        onRefresh: _refresh,
-        child: asyncState.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => _ErrorBody(
-            message: e is ApiException ? e.message : e.toString(),
-            onRetry: () => ref.read(teamProvider.notifier).refresh(),
-          ),
-          data: (list) {
-            if (list.isEmpty) {
-              return CustomScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                slivers: [const SliverFillRemaining(child: _EmptyBody())],
-              );
-            }
-            return ListView.separated(
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
-              itemCount: list.length,
-              separatorBuilder: (context, index) => const SizedBox(height: 8),
-              itemBuilder: (_, i) => _MemberCard(member: list[i]),
-            );
-          },
-        ),
-      ),
-    );
-  }
-}
-
-// ── Member Card ───────────────────────────────────────────────────────────────
-
-const _roles = ['Admin', 'Manager', 'Owner', 'Viewer'];
-
-class _MemberCard extends ConsumerWidget {
-  const _MemberCard({required this.member});
-
-  final TeamMember member;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    final notifier = ref.read(teamProvider.notifier);
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            // Avatar
-            CircleAvatar(
-              backgroundColor: member.isActive
-                  ? cs.primaryContainer
-                  : cs.surfaceContainerHighest,
-              child: Text(
-                member.label.isNotEmpty ? member.label[0].toUpperCase() : '?',
-                style: TextStyle(
-                  color: member.isActive
-                      ? cs.onPrimaryContainer
-                      : cs.onSurfaceVariant,
-                  fontWeight: FontWeight.w700,
+        onRefresh: ref.read(teamProvider.notifier).refresh,
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Give each person a clear job and only the rentals or assigned work they need.',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    SearchBar(
+                      controller: _searchController,
+                      leading: const Icon(Icons.search),
+                      hintText: 'Search by name or email',
+                      onChanged: _search,
+                      trailing: [
+                        if (_searchController.text.isNotEmpty)
+                          IconButton(
+                            tooltip: 'Clear search',
+                            onPressed: () {
+                              _searchController.clear();
+                              setState(() {});
+                              _search('');
+                            },
+                            icon: const Icon(Icons.close),
+                          ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
             ),
-            const SizedBox(width: 12),
-
-            // Name + email
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    member.label,
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w600,
-                      color: member.isActive ? null : cs.onSurfaceVariant,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+            ...state.when(
+              loading: () => const [
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+              ],
+              error: (error, _) => [
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: _ErrorBody(
+                    message: error is ApiException
+                        ? error.message
+                        : error.toString(),
+                    onRetry: ref.read(teamProvider.notifier).refresh,
                   ),
-                  if (member.displayName != null)
-                    Text(
-                      member.email,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: cs.onSurfaceVariant,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                ),
+              ],
+              data: (page) {
+                if (page.items.isEmpty) {
+                  return const [
+                    SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: _EmptyBody(),
                     ),
-                  if (!member.isActive)
-                    Text(
-                      'Inactive',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: cs.error,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-
-            // Role dropdown
-            DropdownButton<String>(
-              value: _roles.contains(member.role) ? member.role : null,
-              hint: Text(member.role),
-              underline: const SizedBox.shrink(),
-              style: theme.textTheme.bodySmall?.copyWith(
-                fontWeight: FontWeight.w600,
-                color: cs.primary,
-              ),
-              items: _roles
-                  .map((r) => DropdownMenuItem(value: r, child: Text(r)))
-                  .toList(),
-              onChanged: (v) {
-                if (v != null && v != member.role) {
-                  notifier.updateRole(member.id, v);
+                  ];
                 }
+                return [
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                    sliver: SliverList.separated(
+                      itemCount: page.items.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (_, index) => _MemberCard(
+                        member: page.items[index],
+                        isCurrentUser:
+                            page.items[index].userId == currentUserId,
+                      ),
+                    ),
+                  ),
+                  if (page.hasMore)
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 100),
+                        child: OutlinedButton(
+                          onPressed: ref.read(teamProvider.notifier).loadMore,
+                          child: Text(
+                            'Load more (${page.items.length} of ${page.totalCount})',
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    const SliverToBoxAdapter(child: SizedBox(height: 100)),
+                ];
               },
-            ),
-            const SizedBox(width: 4),
-
-            // Active toggle
-            Switch(
-              value: member.isActive,
-              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              onChanged: (v) => notifier.setActive(member.id, isActive: v),
             ),
           ],
         ),
@@ -184,61 +173,40 @@ class _MemberCard extends ConsumerWidget {
   }
 }
 
-// ── Invite Dialog ─────────────────────────────────────────────────────────────
+class _MemberCard extends ConsumerStatefulWidget {
+  const _MemberCard({required this.member, required this.isCurrentUser});
 
-class _InviteDialog extends ConsumerStatefulWidget {
-  const _InviteDialog();
+  final TeamMember member;
+  final bool isCurrentUser;
 
   @override
-  ConsumerState<_InviteDialog> createState() => _InviteDialogState();
+  ConsumerState<_MemberCard> createState() => _MemberCardState();
 }
 
-class _InviteDialogState extends ConsumerState<_InviteDialog> {
-  final _formKey = GlobalKey<FormState>();
-  final _emailCtrl = TextEditingController();
-  final _nameCtrl = TextEditingController();
-  final _pwCtrl = TextEditingController();
-  String _role = 'Viewer';
+class _MemberCardState extends ConsumerState<_MemberCard> {
   bool _saving = false;
-  String? _error;
-  String? _generatedPassword;
 
-  @override
-  void dispose() {
-    _emailCtrl.dispose();
-    _nameCtrl.dispose();
-    _pwCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _submit() async {
-    if (!(_formKey.currentState?.validate() ?? false)) return;
-    setState(() {
-      _saving = true;
-      _error = null;
-    });
+  Future<void> _changeStatus() async {
+    setState(() => _saving = true);
     try {
-      final result = await ref
-          .read(teamProvider.notifier)
-          .invite(
-            email: _emailCtrl.text.trim(),
-            displayName: _nameCtrl.text.trim().isEmpty
-                ? null
-                : _nameCtrl.text.trim(),
-            role: _role,
-            temporaryPassword: _pwCtrl.text.trim().isEmpty
-                ? null
-                : _pwCtrl.text.trim(),
-          );
-      if (result.generatedPassword != null) {
-        setState(() => _generatedPassword = result.generatedPassword);
-      } else {
-        if (mounted) Navigator.of(context).pop();
+      await ref.read(teamProvider.notifier).changeStatus(widget.member);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              widget.member.isActive
+                  ? 'Team access suspended.'
+                  : 'Team access reactivated.',
+            ),
+          ),
+        );
       }
-    } on ApiException catch (e) {
-      setState(() => _error = e.message);
-    } catch (e) {
-      setState(() => _error = e.toString());
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -246,147 +214,462 @@ class _InviteDialogState extends ConsumerState<_InviteDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    final member = widget.member;
     final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final label = member.displayName.isNotEmpty
+        ? member.displayName
+        : member.email;
 
-    // Show generated password reveal view
-    if (_generatedPassword != null) {
-      return AlertDialog(
-        title: const Text('Member Invited'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              'The account was created. Share this one-time password with the new member — it will not be shown again.',
-            ),
-            const SizedBox(height: 16),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: cs.primaryContainer,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: SelectableText(
-                _generatedPassword!,
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  color: cs.onPrimaryContainer,
-                  fontFamily: 'monospace',
+            Row(
+              children: [
+                CircleAvatar(
+                  backgroundColor: member.isActive
+                      ? colors.primaryContainer
+                      : colors.surfaceContainerHighest,
+                  child: Text(label.isEmpty ? '?' : label[0].toUpperCase()),
                 ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        widget.isCurrentUser ? '$label (you)' : label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      Text(
+                        member.email,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: colors.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                _StatusChip(active: member.isActive),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              member.roleSummary.isEmpty
+                  ? 'No active job assignment'
+                  : member.roleSummary,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
               ),
             ),
-          ],
-        ),
-        actions: [
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Done'),
-          ),
-        ],
-      );
-    }
-
-    return AlertDialog(
-      title: const Text('Invite Team Member'),
-      content: Form(
-        key: _formKey,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextFormField(
-              controller: _emailCtrl,
-              keyboardType: TextInputType.emailAddress,
-              textInputAction: TextInputAction.next,
-              decoration: const InputDecoration(labelText: 'Email'),
-              validator: (v) {
-                if (v == null || v.trim().isEmpty) return 'Required';
-                if (!v.contains('@')) return 'Enter a valid email';
-                return null;
-              },
-            ),
-            const SizedBox(height: 10),
-            TextFormField(
-              controller: _nameCtrl,
-              textInputAction: TextInputAction.next,
-              decoration: const InputDecoration(
-                labelText: 'Display name (optional)',
+            Text(
+              '${member.assignmentCount} ${member.assignmentCount == 1 ? 'assignment' : 'assignments'}',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colors.onSurfaceVariant,
               ),
             ),
             const SizedBox(height: 10),
-            DropdownButtonFormField<String>(
-              initialValue: _role,
-              decoration: const InputDecoration(labelText: 'Role'),
-              items: _roles
-                  .map((r) => DropdownMenuItem(value: r, child: Text(r)))
-                  .toList(),
-              onChanged: (v) {
-                if (v != null) setState(() => _role = v);
-              },
-            ),
-            const SizedBox(height: 10),
-            TextFormField(
-              controller: _pwCtrl,
-              textInputAction: TextInputAction.done,
-              decoration: const InputDecoration(
-                labelText: 'Temporary password (optional)',
-                helperText: 'Leave blank to auto-generate',
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: widget.isCurrentUser || _saving
+                    ? null
+                    : _changeStatus,
+                child: _saving
+                    ? const SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Text(member.isActive ? 'Suspend access' : 'Reactivate'),
               ),
             ),
-            if (_error != null) ...[
-              const SizedBox(height: 8),
-              Text(_error!, style: TextStyle(color: cs.error, fontSize: 13)),
-            ],
           ],
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: _saving ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: _saving ? null : _submit,
-          child: _saving
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Text('Send Invite'),
-        ),
-      ],
     );
   }
 }
 
-// ── Empty / Error ─────────────────────────────────────────────────────────────
+class _StatusChip extends StatelessWidget {
+  const _StatusChip({required this.active});
+
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: active ? colors.primaryContainer : colors.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        active ? 'Active' : 'Suspended',
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: active ? colors.onPrimaryContainer : colors.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+}
+
+class _CreateTeamMemberSheet extends ConsumerStatefulWidget {
+  const _CreateTeamMemberSheet();
+
+  @override
+  ConsumerState<_CreateTeamMemberSheet> createState() =>
+      _CreateTeamMemberSheetState();
+}
+
+class _CreateTeamMemberSheetState
+    extends ConsumerState<_CreateTeamMemberSheet> {
+  final _emailController = TextEditingController();
+  final _nameController = TextEditingController();
+  int _step = 0;
+  String? _roleKey;
+  String _scopeKind = 'SelectedProperties';
+  final Set<int> _propertyIds = {};
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(() => ref.read(propertiesProvider.notifier).load());
+  }
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  bool get _personValid =>
+      _nameController.text.trim().isNotEmpty &&
+      _emailController.text.contains('@');
+  bool get _scopeValid =>
+      _scopeKind != 'SelectedProperties' || _propertyIds.isNotEmpty;
+
+  List<String> _scopesFor(String roleKey) {
+    if (roleKey == 'workspace-administrator') return const ['AllProperties'];
+    if (roleKey == 'maintenance-technician') {
+      return const ['AssignedWorkOrders'];
+    }
+    return const ['SelectedProperties', 'AllProperties'];
+  }
+
+  void _chooseRole(TeamRoleProfile role) {
+    setState(() {
+      _roleKey = role.key;
+      _scopeKind = role.defaultScopeKind;
+      _propertyIds.clear();
+    });
+  }
+
+  Future<void> _submit() async {
+    if (_roleKey == null || !_scopeValid) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      final result = await ref
+          .read(teamProvider.notifier)
+          .createMembership(
+            email: _emailController.text,
+            displayName: _nameController.text,
+            roleProfileKey: _roleKey!,
+            scopeKind: _scopeKind,
+            selectedPropertyIds: _propertyIds.toList(),
+          );
+      if (mounted) {
+        Navigator.of(context).pop();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              result.requiresAccountActivation
+                  ? 'Team member added. Their secure activation email is queued.'
+                  : 'Team access added to the existing account.',
+            ),
+          ),
+        );
+      }
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final roles = ref.watch(teamRoleProfilesProvider);
+    final properties = ref.watch(propertiesProvider);
+    final colors = Theme.of(context).colorScheme;
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: SizedBox(
+        height: MediaQuery.sizeOf(context).height * .88,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 8, 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Add a team member',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Close',
+                    onPressed: _saving ? null : () => Navigator.pop(context),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Stepper(
+                currentStep: _step,
+                onStepTapped: _saving
+                    ? null
+                    : (step) => setState(() => _step = step),
+                controlsBuilder: (context, details) {
+                  final canContinue = switch (_step) {
+                    0 => _personValid,
+                    1 => _roleKey != null,
+                    _ => _scopeValid,
+                  };
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 16),
+                    child: Row(
+                      children: [
+                        FilledButton(
+                          onPressed: !canContinue || _saving
+                              ? null
+                              : _step == 2
+                              ? _submit
+                              : () => setState(() => _step++),
+                          child: _saving
+                              ? const SizedBox.square(
+                                  dimension: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : Text(_step == 2 ? 'Add member' : 'Continue'),
+                        ),
+                        if (_step > 0) ...[
+                          const SizedBox(width: 8),
+                          TextButton(
+                            onPressed: _saving
+                                ? null
+                                : () => setState(() => _step--),
+                            child: const Text('Back'),
+                          ),
+                        ],
+                      ],
+                    ),
+                  );
+                },
+                steps: [
+                  Step(
+                    title: const Text('Person'),
+                    subtitle: const Text('Who are you adding?'),
+                    isActive: _step >= 0,
+                    state: _step > 0 ? StepState.complete : StepState.indexed,
+                    content: Column(
+                      children: [
+                        TextField(
+                          controller: _nameController,
+                          textInputAction: TextInputAction.next,
+                          onChanged: (_) => setState(() {}),
+                          decoration: const InputDecoration(labelText: 'Name'),
+                        ),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: _emailController,
+                          keyboardType: TextInputType.emailAddress,
+                          textInputAction: TextInputAction.done,
+                          onChanged: (_) => setState(() {}),
+                          decoration: const InputDecoration(labelText: 'Email'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Step(
+                    title: const Text('Job'),
+                    subtitle: const Text('What will they do?'),
+                    isActive: _step >= 1,
+                    state: _step > 1 ? StepState.complete : StepState.indexed,
+                    content: roles.when(
+                      loading: () => const CircularProgressIndicator(),
+                      error: (error, _) => Text(
+                        error is ApiException
+                            ? error.message
+                            : error.toString(),
+                        style: TextStyle(color: colors.error),
+                      ),
+                      data: (items) => RadioGroup<String>(
+                        groupValue: _roleKey,
+                        onChanged: (key) {
+                          if (key == null) return;
+                          _chooseRole(
+                            items.firstWhere((role) => role.key == key),
+                          );
+                        },
+                        child: Column(
+                          children: [
+                            for (final role in items)
+                              RadioListTile<String>(
+                                value: role.key,
+                                title: Text(role.displayName),
+                                subtitle: Text(role.description),
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  Step(
+                    title: const Text('Access'),
+                    subtitle: const Text('Where can they work?'),
+                    isActive: _step >= 2,
+                    content: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        RadioGroup<String>(
+                          groupValue: _scopeKind,
+                          onChanged: (value) {
+                            if (value == null) return;
+                            setState(() {
+                              _scopeKind = value;
+                              _propertyIds.clear();
+                            });
+                          },
+                          child: Column(
+                            children: [
+                              for (final scope in _scopesFor(_roleKey ?? ''))
+                                RadioListTile<String>(
+                                  value: scope,
+                                  contentPadding: EdgeInsets.zero,
+                                  title: Text(_scopeLabel(scope)),
+                                  subtitle: Text(_scopeDescription(scope)),
+                                ),
+                            ],
+                          ),
+                        ),
+                        if (_scopeKind == 'SelectedProperties') ...[
+                          const Divider(),
+                          Text(
+                            'Properties',
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                          const SizedBox(height: 6),
+                          properties.when(
+                            loading: () => const CircularProgressIndicator(),
+                            error: (error, _) => Text(
+                              error is ApiException
+                                  ? error.message
+                                  : error.toString(),
+                              style: TextStyle(color: colors.error),
+                            ),
+                            data: (items) => Column(
+                              children: [
+                                for (final property in items)
+                                  CheckboxListTile(
+                                    value: _propertyIds.contains(property.id),
+                                    onChanged: (checked) => setState(() {
+                                      if (checked ?? false) {
+                                        _propertyIds.add(property.id);
+                                      } else {
+                                        _propertyIds.remove(property.id);
+                                      }
+                                    }),
+                                    title: Text(property.name),
+                                    controlAffinity:
+                                        ListTileControlAffinity.leading,
+                                    contentPadding: EdgeInsets.zero,
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
+                        if (_error != null) ...[
+                          const SizedBox(height: 8),
+                          Text(_error!, style: TextStyle(color: colors.error)),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+String _scopeLabel(String scope) => switch (scope) {
+  'AllProperties' => 'All properties',
+  'AssignedWorkOrders' => 'Only assigned work orders',
+  _ => 'Selected properties',
+};
+
+String _scopeDescription(String scope) => switch (scope) {
+  'AllProperties' => 'This job applies across the entire workspace.',
+  'AssignedWorkOrders' => 'They only see work specifically assigned to them.',
+  _ => 'Choose the rentals this person is responsible for.',
+};
 
 class _EmptyBody extends StatelessWidget {
   const _EmptyBody();
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    final colors = Theme.of(context).colorScheme;
     return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.group_outlined, size: 48, color: cs.onSurfaceVariant),
-          const SizedBox(height: 12),
-          Text(
-            'No team members yet',
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(color: cs.onSurfaceVariant),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Tap + to invite someone.',
-            style: TextStyle(color: cs.onSurfaceVariant),
-          ),
-        ],
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.group_outlined,
+              size: 48,
+              color: colors.onSurfaceVariant,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'No matching team members',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Add the people who help run rentals, leasing, or maintenance.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: colors.onSurfaceVariant),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -400,20 +683,16 @@ class _ErrorBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    final colors = Theme.of(context).colorScheme;
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.error_outline, size: 40, color: cs.error),
+            Icon(Icons.error_outline, size: 40, color: colors.error),
             const SizedBox(height: 12),
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: TextStyle(color: cs.error),
-            ),
+            Text(message, textAlign: TextAlign.center),
             const SizedBox(height: 16),
             FilledButton.tonal(onPressed: onRetry, child: const Text('Retry')),
           ],

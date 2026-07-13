@@ -1,145 +1,148 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
 
-// ── Models ────────────────────────────────────────────────────────────────────
-
 class TeamMember {
   const TeamMember({
-    required this.id,
+    required this.userId,
+    required this.accessContextId,
+    required this.workspaceMembershipId,
     required this.email,
-    this.displayName,
-    required this.role,
-    required this.isActive,
-    required this.createdAt,
+    required this.displayName,
+    required this.accessStatus,
+    required this.membershipStatus,
+    required this.accessRevision,
+    required this.assignmentCount,
+    required this.roleSummary,
+    required this.createdAtUtc,
   });
 
-  final int id;
+  final int userId;
+  final int accessContextId;
+  final int workspaceMembershipId;
   final String email;
-  final String? displayName;
-  final String role;
-  final bool isActive;
-  final DateTime createdAt;
+  final String displayName;
+  final String accessStatus;
+  final String membershipStatus;
+  final int accessRevision;
+  final int assignmentCount;
+  final String roleSummary;
+  final DateTime createdAtUtc;
 
-  String get label => displayName ?? email;
-
-  TeamMember copyWith({String? role, bool? isActive}) {
-    return TeamMember(
-      id: id,
-      email: email,
-      displayName: displayName,
-      role: role ?? this.role,
-      isActive: isActive ?? this.isActive,
-      createdAt: createdAt,
-    );
-  }
+  bool get isActive =>
+      accessStatus.toLowerCase() == 'active' &&
+      membershipStatus.toLowerCase() == 'active';
 
   factory TeamMember.fromJson(Map<String, dynamic> json) => TeamMember(
-        id: (json['id'] as num).toInt(),
-        email: json['email'] as String? ?? '',
-        displayName: json['displayName'] as String?,
-        role: json['role'] as String? ?? '',
-        isActive: json['isActive'] as bool? ?? true,
-        createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ??
-            DateTime(0),
+    userId: (json['userId'] as num).toInt(),
+    accessContextId: (json['accessContextId'] as num).toInt(),
+    workspaceMembershipId: (json['workspaceMembershipId'] as num).toInt(),
+    email: json['email'] as String? ?? '',
+    displayName: json['displayName'] as String? ?? '',
+    accessStatus: json['accessStatus'] as String? ?? '',
+    membershipStatus: json['membershipStatus'] as String? ?? '',
+    accessRevision: (json['accessRevision'] as num).toInt(),
+    assignmentCount: (json['assignmentCount'] as num).toInt(),
+    roleSummary: json['roleSummary'] as String? ?? '',
+    createdAtUtc:
+        DateTime.tryParse(json['createdAtUtc'] as String? ?? '') ??
+        DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+  );
+}
+
+class TeamMemberPage {
+  const TeamMemberPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+    required this.search,
+  });
+
+  final List<TeamMember> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+  final String search;
+
+  bool get hasMore => items.length < totalCount;
+
+  factory TeamMemberPage.fromJson(
+    Map<String, dynamic> json, {
+    required String search,
+  }) => TeamMemberPage(
+    items: (json['items'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(TeamMember.fromJson)
+        .toList(growable: false),
+    totalCount: (json['totalCount'] as num?)?.toInt() ?? 0,
+    skip: (json['skip'] as num?)?.toInt() ?? 0,
+    take: (json['take'] as num?)?.toInt() ?? 20,
+    search: search,
+  );
+}
+
+class TeamRoleProfile {
+  const TeamRoleProfile({
+    required this.key,
+    required this.displayName,
+    required this.description,
+    required this.defaultExperience,
+    required this.defaultScopeKind,
+  });
+
+  final String key;
+  final String displayName;
+  final String description;
+  final String defaultExperience;
+  final String defaultScopeKind;
+
+  factory TeamRoleProfile.fromJson(Map<String, dynamic> json) =>
+      TeamRoleProfile(
+        key: json['key'] as String? ?? '',
+        displayName: json['displayName'] as String? ?? '',
+        description: json['description'] as String? ?? '',
+        defaultExperience: json['defaultExperience'] as String? ?? '',
+        defaultScopeKind: json['defaultScopeKind'] as String? ?? '',
       );
 }
 
-class InviteResult {
-  const InviteResult({
-    required this.member,
-    this.generatedPassword,
-  });
+class CreateTeamMemberResult {
+  const CreateTeamMemberResult({required this.requiresAccountActivation});
 
-  final TeamMember member;
-  final String? generatedPassword;
+  final bool requiresAccountActivation;
+
+  factory CreateTeamMemberResult.fromJson(Map<String, dynamic> json) =>
+      CreateTeamMemberResult(
+        requiresAccountActivation:
+            json['requiresAccountActivation'] as bool? ?? false,
+      );
 }
 
-// ── Repository ────────────────────────────────────────────────────────────────
-
-/// Team management API calls.
-///
-/// Endpoints:
-///   GET   /admin/users                    — list [TeamMember]
-///   PATCH /admin/users/{id}/role    { role }
-///   PATCH /admin/users/{id}/active  { isActive }
-///   POST  /admin/users              { email, displayName?, role, temporaryPassword? }
-///       → may include generatedPassword in response
 class TeamRepository {
   TeamRepository(this._dio);
 
+  static const _uuid = Uuid();
   final Dio _dio;
 
-  Future<List<TeamMember>> listMembers() async {
-    try {
-      final response = await _dio.get<List<dynamic>>('/admin/users');
-      final data = response.data ?? [];
-      return data
-          .whereType<Map<String, dynamic>>()
-          .map(TeamMember.fromJson)
-          .toList();
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
-  }
-
-  Future<TeamMember> updateRole(int id, String role) async {
-    try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/admin/users/$id/role',
-        data: {'role': role},
-      );
-      final data = response.data;
-      if (data == null) {
-        throw const ApiException(
-          statusCode: 0,
-          message: 'Empty response from server.',
-        );
-      }
-      return TeamMember.fromJson(data);
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
-  }
-
-  Future<TeamMember> setActive(int id, {required bool isActive}) async {
-    try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/admin/users/$id/active',
-        data: {'isActive': isActive},
-      );
-      final data = response.data;
-      if (data == null) {
-        throw const ApiException(
-          statusCode: 0,
-          message: 'Empty response from server.',
-        );
-      }
-      return TeamMember.fromJson(data);
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
-  }
-
-  Future<InviteResult> inviteMember({
-    required String email,
-    String? displayName,
-    required String role,
-    String? temporaryPassword,
+  Future<TeamMemberPage> listMembers({
+    int skip = 0,
+    int take = 20,
+    String search = '',
   }) async {
     try {
-      final body = <String, dynamic>{
-        'email': email,
-        'role': role,
-        if (displayName != null && displayName.isNotEmpty)
-          'displayName': displayName,
-        if (temporaryPassword != null && temporaryPassword.isNotEmpty)
-          'temporaryPassword': temporaryPassword,
-      };
-      final response =
-          await _dio.post<Map<String, dynamic>>('/admin/users', data: body);
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/team/members',
+        queryParameters: {
+          'skip': skip,
+          'take': take,
+          'sort': '-createdAt',
+          if (search.trim().isNotEmpty) 'search': search.trim(),
+        },
+      );
       final data = response.data;
       if (data == null) {
         throw const ApiException(
@@ -147,86 +150,142 @@ class TeamRepository {
           message: 'Empty response from server.',
         );
       }
-      final member = TeamMember.fromJson(data);
-      final generatedPassword = data['generatedPassword'] as String?;
-      return InviteResult(member: member, generatedPassword: generatedPassword);
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
+      return TeamMemberPage.fromJson(data, search: search.trim());
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<List<TeamRoleProfile>> listRoleProfiles() async {
+    try {
+      final response = await _dio.get<List<dynamic>>('/team/role-profiles');
+      return (response.data ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(TeamRoleProfile.fromJson)
+          .toList(growable: false);
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<CreateTeamMemberResult> createMembership({
+    required String email,
+    required String displayName,
+    required String roleProfileKey,
+    required String scopeKind,
+    required List<int> selectedPropertyIds,
+  }) async {
+    try {
+      final sortedPropertyIds = [...selectedPropertyIds]..sort();
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/team/memberships',
+        options: Options(headers: {'Idempotency-Key': _uuid.v4()}),
+        data: {
+          'email': email.trim(),
+          'displayName': displayName.trim(),
+          'roleProfileKey': roleProfileKey,
+          'scopeKind': scopeKind,
+          'selectedPropertyIds': sortedPropertyIds,
+          'effectiveFromUtc': DateTime.now().toUtc().toIso8601String(),
+        },
+      );
+      final value = response.data?['value'] as Map<String, dynamic>?;
+      if (value == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return CreateTeamMemberResult.fromJson(value);
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<void> changeStatus(TeamMember member) async {
+    try {
+      await _dio.patch<Map<String, dynamic>>(
+        '/team/members/${member.accessContextId}/status',
+        options: Options(headers: {'Idempotency-Key': _uuid.v4()}),
+        data: {
+          'expectedAccessRevision': member.accessRevision,
+          'action': member.isActive ? 'Suspend' : 'Reactivate',
+        },
+      );
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
     }
   }
 }
-
-// ── Providers ─────────────────────────────────────────────────────────────────
 
 final teamRepositoryProvider = Provider<TeamRepository>((ref) {
   return TeamRepository(ref.watch(dioProvider));
 });
 
-class TeamNotifier extends Notifier<AsyncValue<List<TeamMember>>> {
+final teamRoleProfilesProvider = FutureProvider<List<TeamRoleProfile>>((ref) {
+  return ref.watch(teamRepositoryProvider).listRoleProfiles();
+});
+
+class TeamNotifier extends Notifier<AsyncValue<TeamMemberPage>> {
+  static const _pageSize = 20;
+
   @override
-  AsyncValue<List<TeamMember>> build() => const AsyncValue.loading();
+  AsyncValue<TeamMemberPage> build() => const AsyncValue.loading();
 
-  TeamRepository get _repo => ref.read(teamRepositoryProvider);
+  TeamRepository get _repository => ref.read(teamRepositoryProvider);
 
-  Future<void> load() async {
+  Future<void> load({String search = ''}) async {
     state = const AsyncValue.loading();
-    try {
-      final list = await _repo.listMembers();
-      state = AsyncValue.data(list);
-    } on ApiException catch (e) {
-      state = AsyncValue.error(e, StackTrace.current);
-    }
+    state = await AsyncValue.guard(
+      () => _repository.listMembers(take: _pageSize, search: search),
+    );
   }
 
-  Future<void> refresh() => load();
+  Future<void> refresh() => load(search: state.value?.search ?? '');
 
-  void _replace(TeamMember updated) {
-    state.whenData((list) {
-      state = AsyncValue.data([
-        for (final m in list)
-          if (m.id == updated.id) updated else m,
-      ]);
-    });
+  Future<void> loadMore() async {
+    final current = state.value;
+    if (current == null || !current.hasMore) return;
+    final next = await _repository.listMembers(
+      skip: current.items.length,
+      take: _pageSize,
+      search: current.search,
+    );
+    state = AsyncValue.data(
+      TeamMemberPage(
+        items: [...current.items, ...next.items],
+        totalCount: next.totalCount,
+        skip: 0,
+        take: _pageSize,
+        search: current.search,
+      ),
+    );
   }
 
-  Future<void> updateRole(int id, String role) async {
-    try {
-      final updated = await _repo.updateRole(id, role);
-      _replace(updated);
-    } on ApiException catch (e) {
-      state = AsyncValue.error(e, StackTrace.current);
-    }
-  }
-
-  Future<void> setActive(int id, {required bool isActive}) async {
-    try {
-      final updated = await _repo.setActive(id, isActive: isActive);
-      _replace(updated);
-    } on ApiException catch (e) {
-      state = AsyncValue.error(e, StackTrace.current);
-    }
-  }
-
-  Future<InviteResult> invite({
+  Future<CreateTeamMemberResult> createMembership({
     required String email,
-    String? displayName,
-    required String role,
-    String? temporaryPassword,
+    required String displayName,
+    required String roleProfileKey,
+    required String scopeKind,
+    required List<int> selectedPropertyIds,
   }) async {
-    final result = await _repo.inviteMember(
+    final result = await _repository.createMembership(
       email: email,
       displayName: displayName,
-      role: role,
-      temporaryPassword: temporaryPassword,
+      roleProfileKey: roleProfileKey,
+      scopeKind: scopeKind,
+      selectedPropertyIds: [...selectedPropertyIds],
     );
-    state.whenData((list) {
-      state = AsyncValue.data([...list, result.member]);
-    });
+    await refresh();
     return result;
+  }
+
+  Future<void> changeStatus(TeamMember member) async {
+    await _repository.changeStatus(member);
+    await refresh();
   }
 }
 
-final teamProvider =
-    NotifierProvider<TeamNotifier, AsyncValue<List<TeamMember>>>(
+final teamProvider = NotifierProvider<TeamNotifier, AsyncValue<TeamMemberPage>>(
   TeamNotifier.new,
 );
