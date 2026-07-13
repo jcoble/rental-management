@@ -66,7 +66,7 @@ public class UnitServiceListTests : IDisposable
     {
         var now = DateTime.UtcNow;
         var tenant = SeedTenant(now);
-        var (renewalProperty, renewalUnit) = SeedUnitShell("2A", "Cedar Point Flats", UnitStatus.Occupied, now);
+        var (renewalProperty, renewalUnit) = SeedUnitShell("2A", "Cedar Point Flats", now);
         _ctx.Db.Leases.Add(new Lease
         {
             PortfolioId = PortfolioId,
@@ -83,7 +83,7 @@ public class UnitServiceListTests : IDisposable
             UpdatedAt = now,
         });
 
-        var (activeProperty, activeUnit) = SeedUnitShell("3B", "Cedar Point Flats", UnitStatus.Occupied, now);
+        var (activeProperty, activeUnit) = SeedUnitShell("3B", "Cedar Point Flats", now);
         _ctx.Db.Leases.Add(new Lease
         {
             PortfolioId = PortfolioId,
@@ -99,7 +99,7 @@ public class UnitServiceListTests : IDisposable
             CreatedAt = now,
             UpdatedAt = now,
         });
-        SeedUnitShell("4C", "Harbor View Apartments", UnitStatus.Vacant, now);
+        SeedUnitShell("4C", "Harbor View Apartments", now);
         _ctx.Db.SaveChanges();
 
         _commands.Clear();
@@ -133,7 +133,7 @@ public class UnitServiceListTests : IDisposable
     public async Task ListWithHealthPageAsync_NoticeGivenOccupiedUnitDoesNotFallBackToVacant()
     {
         var now = DateTime.UtcNow;
-        var (property, unit) = SeedUnitShell("101", "Westview Four-Plex", UnitStatus.Occupied, now);
+        var (property, unit) = SeedUnitShell("101", "Westview Four-Plex", now);
         var tenant = SeedTenant(now);
         _ctx.Db.Leases.Add(new Lease
         {
@@ -156,7 +156,7 @@ public class UnitServiceListTests : IDisposable
         var result = await _sut.ListWithHealthPageAsync(PortfolioId, new UnitHealthListQuery());
 
         var row = result.Items.Should().ContainSingle(u => u.Id == unit.Id).Subject;
-        row.Status.Should().Be(UnitStatus.Occupied.ToString());
+        row.Status.Should().Be(DerivedUnitStatus.Occupied.ToString());
         row.SimpleStage.Should().Be("Move-Out");
     }
 
@@ -164,9 +164,9 @@ public class UnitServiceListTests : IDisposable
     public async Task ListAsync_AvailableForLeaseReturnsOnlyVacantUnitsWithoutOccupyingLeasesInSql()
     {
         var now = DateTime.UtcNow;
-        var (_, availableUnit) = SeedUnitShell("101", "Available Property", UnitStatus.Vacant, now);
-        SeedUnitShell("102", "Occupied Property", UnitStatus.Occupied, now);
-        var (leasedProperty, leasedUnit) = SeedUnitShell("103", "Leased Property", UnitStatus.Vacant, now);
+        var (_, availableUnit) = SeedUnitShell("101", "Available Property", now);
+        SeedUnitShell("102", "Occupied Property", now);
+        var (leasedProperty, leasedUnit) = SeedUnitShell("103", "Leased Property", now);
         var tenant = SeedTenant(now);
         _ctx.Db.Leases.Add(new Lease
         {
@@ -202,7 +202,7 @@ public class UnitServiceListTests : IDisposable
     public async Task ListWithHealthPageAsync_DocsCountMatchesUnitDashboardRollupDefinition()
     {
         var now = DateTime.UtcNow;
-        var (property, unit) = SeedUnitShell("2A", "Maple Heights", UnitStatus.Occupied, now);
+        var (property, unit) = SeedUnitShell("2A", "Maple Heights", now);
         var tenant = SeedTenant(now);
         var lease = new Lease
         {
@@ -312,7 +312,7 @@ public class UnitServiceListTests : IDisposable
     private void SeedUnit(string unitNumber, string propertyName, int openWorkOrders)
     {
         var now = DateTime.UtcNow;
-        var (property, unit) = SeedUnitShell(unitNumber, propertyName, UnitStatus.Vacant, now);
+        var (property, unit) = SeedUnitShell(unitNumber, propertyName, now);
 
         for (var i = 0; i < openWorkOrders; i++)
         {
@@ -348,7 +348,6 @@ public class UnitServiceListTests : IDisposable
     private (Property Property, Unit Unit) SeedUnitShell(
         string unitNumber,
         string propertyName,
-        UnitStatus status,
         DateTime now)
     {
         var property = new Property
@@ -366,7 +365,6 @@ public class UnitServiceListTests : IDisposable
         {
             Property = property,
             UnitNumber = unitNumber,
-            Status = status,
             MarketRent = 1250m,
             CreatedAt = now,
             UpdatedAt = now,

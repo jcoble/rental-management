@@ -94,7 +94,6 @@ public sealed class UnitCommandCenterAuditTests : IDisposable
         {
             Property = property,
             UnitNumber = "3B",
-            Status = UnitStatus.Vacant,
             MarketRent = marketRent,
             CreatedAt = now,
             UpdatedAt = now,

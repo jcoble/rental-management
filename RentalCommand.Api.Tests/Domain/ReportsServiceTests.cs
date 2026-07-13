@@ -55,7 +55,7 @@ public class ReportsServiceTests : IDisposable
             _db,
             new OwnerStatementService(_db),
             new ScheduleEService(_db),
-            new PropertyDispositionService(_db, new NoopDataUpdateService(), TimeProvider.System),
+            new PropertyDispositionService(_db, new NoopDataUpdateService(), TimeProvider.System, new TestActor()),
             TimeProvider.System);
     }
 
@@ -74,6 +74,13 @@ public class ReportsServiceTests : IDisposable
         public Task BroadcastEntityDeleteAsync(
             int portfolioId, string entityType, int entityId, CancellationToken ct = default)
             => Task.CompletedTask;
+    }
+
+    private sealed class TestActor : ICurrentActor
+    {
+        public int? UserId => 1;
+        public string? ActorLabel => "reports-test";
+        public string? IpAddress => null;
     }
 
     // ── Pure-function unit tests (no DB) ───────────────────────────────────────────────────────────
@@ -741,7 +748,7 @@ public class ReportsServiceTests : IDisposable
         property.PurchasePrice = 300_000m;
         property.LandValue = 60_000m;
         property.InServiceDate = D(2020, 1, 1);
-        var unit = SeedUnit("1", property.Id, UnitStatus.Occupied);
+        var unit = SeedUnit("1", property.Id);
         var lease = SeedLease(property, unit, SeedTenant("Ann", "Acre"), rent: 1_000m,
             start: D(2025, 1, 1), end: D(2026, 1, 1), status: LeaseStatus.Active);
         _db.SaveChanges();
@@ -845,13 +852,13 @@ public class ReportsServiceTests : IDisposable
     public async Task GetOccupancyAsync_CountsOccupiedVacant_AndComputesPercentPerPropertyAndPortfolio()
     {
         var maple = SeedProperty("Maple");
-        SeedUnit("1", maple.Id, UnitStatus.Occupied);
-        SeedUnit("2", maple.Id, UnitStatus.Occupied);
-        SeedUnit("3", maple.Id, UnitStatus.Vacant);
-        SeedUnit("4", maple.Id, UnitStatus.Offline); // counts as not-occupied
+        SeedUnit("1", maple.Id);
+        SeedUnit("2", maple.Id);
+        SeedUnit("3", maple.Id);
+        SeedUnit("4", maple.Id); // counts as not-occupied
 
         var oak = SeedProperty("Oak");
-        SeedUnit("A", oak.Id, UnitStatus.Occupied);
+        SeedUnit("A", oak.Id);
 
         _executedSql.Clear();
 
@@ -1151,7 +1158,7 @@ public class ReportsServiceTests : IDisposable
         return property;
     }
 
-    private Unit SeedUnit(string number, int? propertyId = null, UnitStatus status = UnitStatus.Vacant)
+    private Unit SeedUnit(string number, int? propertyId = null)
     {
         var now = DateTime.UtcNow;
         var unit = new Unit
@@ -1159,7 +1166,6 @@ public class ReportsServiceTests : IDisposable
             PropertyId = propertyId ?? _db.Properties.First().Id,
             UnitNumber = number,
             MarketRent = 1000m,
-            Status = status,
             CreatedAt = now,
             UpdatedAt = now,
         };

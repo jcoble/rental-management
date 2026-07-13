@@ -330,9 +330,9 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
     public async Task PropertyGetAndList_ProjectTypeAndUnitAggregates()
     {
         var property = SeedProperty("Willow Run", PropertyType.MultiFamily);
-        SeedUnit(property.Id, "A", UnitStatus.Occupied);
-        SeedUnit(property.Id, "B", UnitStatus.Occupied);
-        SeedUnit(property.Id, "C", UnitStatus.Vacant);
+        SeedUnit(property.Id, "A");
+        SeedUnit(property.Id, "B");
+        SeedUnit(property.Id, "C");
 
         var detail = await _properties.GetAsync(PortfolioId, property.Id);
         detail.Should().NotBeNull();
@@ -366,14 +366,13 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         return property;
     }
 
-    private Unit SeedUnit(int propertyId, string number, UnitStatus status)
+    private Unit SeedUnit(int propertyId, string number)
     {
         var now = DateTime.UtcNow;
         var unit = new Unit
         {
             PropertyId = propertyId,
             UnitNumber = number,
-            Status = status,
             CreatedAt = now,
             UpdatedAt = now,
         };

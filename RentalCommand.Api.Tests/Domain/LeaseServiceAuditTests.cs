@@ -112,7 +112,6 @@ public sealed class LeaseServiceAuditTests : IDisposable
             Property = property,
             UnitNumber = "1A",
             MarketRent = 1125m,
-            Status = UnitStatus.Occupied,
             CreatedAt = now,
             UpdatedAt = now,
         };

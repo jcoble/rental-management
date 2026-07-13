@@ -237,6 +237,8 @@ public class DemoDataSeeder
 
         var properties = new List<Property>();
         var unitsList   = new List<Unit>();
+        var occupiedUnits = new List<Unit>();
+        var vacantUnits = new List<Unit>();
 
         foreach (var pd in propertyDefs)
         {
@@ -271,17 +273,18 @@ public class DemoDataSeeder
             {
                 var unit = new Unit
                 {
+                    PortfolioId  = portfolioId,
                     PropertyId   = prop.Id,
                     UnitNumber   = ud.num,
                     Bedrooms     = ud.bed,
                     Bathrooms    = ud.bath,
                     SquareFeet   = ud.sqft,
                     MarketRent   = ud.rent,
-                    Status       = ud.vacant ? UnitStatus.Vacant : UnitStatus.Occupied,
                     CreatedAt    = now,
                     UpdatedAt    = now
                 };
                 unitsList.Add(unit);
+                (ud.vacant ? vacantUnits : occupiedUnits).Add(unit);
             }
         }
 
@@ -334,8 +337,6 @@ public class DemoDataSeeder
         // ── 5. Leases ─────────────────────────────────────────────────────────────────
         // Collect occupied units (non-vacant) in order. We have 19 occupied units to match
         // 19 active-lease tenants.
-        var occupiedUnits = unitsList.Where(u => u.Status == UnitStatus.Occupied).ToList();
-
         // Rent amounts per occupied unit index (deterministic, varied $900-$2500)
         static decimal RentForUnit(Unit u) => u.MarketRent; // use the market rent we already set
 
@@ -397,7 +398,6 @@ public class DemoDataSeeder
 
         // 3 expired leases for the last 3 tenants on vacant units that were previously occupied.
         // Use the first 3 vacant units.
-        var vacantUnits = unitsList.Where(u => u.Status == UnitStatus.Vacant).ToList();
         for (int i = 0; i < 3 && i < vacantUnits.Count; i++)
         {
             var unit   = vacantUnits[i];

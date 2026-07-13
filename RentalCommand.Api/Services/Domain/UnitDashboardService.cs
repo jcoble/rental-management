@@ -313,12 +313,12 @@ public class UnitDashboardService : IUnitDashboardService
                 SquareFeet = unit.SquareFeet,
                 MarketRent = unit.MarketRent,
                 Status = occupancy.IsInTurnover || occupancy.IsOutOfService || occupancy.IsOnManagementHold
-                    ? UnitStatus.Offline
+                    ? DerivedUnitStatus.Offline
                     : occupancy.IsOccupied
-                        ? UnitStatus.Occupied
+                        ? DerivedUnitStatus.Occupied
                         : occupancy.HasScheduledMoveIn
-                            ? UnitStatus.Reserved
-                            : UnitStatus.Vacant,
+                            ? DerivedUnitStatus.Reserved
+                            : DerivedUnitStatus.Vacant,
                 Notes = unit.Notes,
                 CreatedAt = unit.CreatedAt,
                 UpdatedAt = unit.UpdatedAt,

@@ -157,7 +157,7 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
         var unit = new Unit
         {
             PortfolioId = PortfolioId, Property = property, UnitNumber = "2A", Bedrooms = 2,
-            Bathrooms = 1.5m, SquareFeet = 925, MarketRent = 1450m, Status = UnitStatus.Vacant,
+            Bathrooms = 1.5m, SquareFeet = 925, MarketRent = 1450m,
             CreatedAt = now, UpdatedAt = now,
         };
         _context.Db.AddRange(property, unit);

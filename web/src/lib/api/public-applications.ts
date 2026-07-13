@@ -12,7 +12,7 @@
  */
 
 import { API_BASE_URL } from '$lib/config';
-import type { UnitStatus } from '$lib/types';
+import type { DerivedUnitStatus } from '$lib/types';
 import { readPublicError } from './public-error.ts';
 
 const PUBLIC_FETCH_TIMEOUT_MS = 30_000;
@@ -31,7 +31,7 @@ export class PublicApiError extends Error {
 export interface PublicApplicationUnit {
 	id: number;
 	unitNumber: string;
-	status: UnitStatus;
+	status: DerivedUnitStatus;
 }
 
 export interface PublicApplicationProperty {

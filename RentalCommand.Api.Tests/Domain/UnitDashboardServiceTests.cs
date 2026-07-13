@@ -156,7 +156,6 @@ public class UnitDashboardServiceTests : IDisposable
         {
             Property = property,
             UnitNumber = "7",
-            Status = UnitStatus.Offline,
             MarketRent = 1400m,
             CreatedAt = now,
             UpdatedAt = now,
@@ -277,7 +276,6 @@ public class UnitDashboardServiceTests : IDisposable
         {
             Property = property,
             UnitNumber = "3B",
-            Status = UnitStatus.Vacant,
             MarketRent = 975m,
             CreatedAt = now,
             UpdatedAt = now,
@@ -367,7 +365,6 @@ public class UnitDashboardServiceTests : IDisposable
         {
             Property = property,
             UnitNumber = "101",
-            Status = UnitStatus.Occupied,
             MarketRent = 1000m,
             CreatedAt = now,
             UpdatedAt = now,
@@ -452,7 +449,6 @@ public class UnitDashboardServiceTests : IDisposable
         {
             Property = property,
             UnitNumber = "5C",
-            Status = UnitStatus.Occupied,
             MarketRent = 1000m,
             CreatedAt = now,
             UpdatedAt = now,
@@ -566,7 +562,6 @@ public class UnitDashboardServiceTests : IDisposable
         {
             Property = property,
             UnitNumber = "2",
-            Status = UnitStatus.Vacant,
             MarketRent = 1100m,
             CreatedAt = now,
             UpdatedAt = now,
@@ -675,7 +670,6 @@ public class UnitDashboardServiceTests : IDisposable
         {
             Property = property,
             UnitNumber = "3B",
-            Status = UnitStatus.Occupied,
             MarketRent = 975m,
             CreatedAt = now,
             UpdatedAt = now,
@@ -726,7 +720,6 @@ public class UnitDashboardServiceTests : IDisposable
         {
             Property = property,
             UnitNumber = "2A",
-            Status = UnitStatus.Occupied,
             MarketRent = 1200m,
             CreatedAt = now,
             UpdatedAt = now,
