@@ -28,7 +28,7 @@ public class InspectionController : ManagementControllerBase
     public async Task<ActionResult<IReadOnlyList<InspectionResponse>>> List(
         [FromQuery] ListQuery query, [FromQuery] int? propertyId, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), propertyId, query, ct);
+        var items = await _service.ListAuthorizedAsync(GetWorkspaceReadScope(), propertyId, query, ct);
         return Ok(items);
     }
 
@@ -37,7 +37,7 @@ public class InspectionController : ManagementControllerBase
     public async Task<ActionResult<InspectionListResponse>> ListPage(
         [FromQuery] ListQuery query, [FromQuery] int? propertyId, CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), propertyId, query, ct);
+        var page = await _service.ListPageAuthorizedAsync(GetWorkspaceReadScope(), propertyId, query, ct);
         return Ok(page);
     }
 
@@ -46,7 +46,7 @@ public class InspectionController : ManagementControllerBase
     [ProducesResponseType(typeof(IReadOnlyList<InspectionTemplateResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<InspectionTemplateResponse>>> Templates(CancellationToken ct)
     {
-        var templates = await _service.ListTemplatesAsync(GetPortfolioId(), ct);
+        var templates = await _service.ListTemplatesAuthorizedAsync(GetWorkspaceReadScope(), ct);
         return Ok(templates);
     }
 
@@ -55,7 +55,7 @@ public class InspectionController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<InspectionTemplateResponse>> Template(int templateId, CancellationToken ct)
     {
-        var template = await _service.GetTemplateAsync(GetPortfolioId(), templateId, ct);
+        var template = await _service.GetTemplateAuthorizedAsync(GetWorkspaceReadScope(), templateId, ct);
         return template == null ? NotFound(new { error = "Inspection checklist template not found" }) : Ok(template);
     }
 
@@ -63,7 +63,11 @@ public class InspectionController : ManagementControllerBase
     [ProducesResponseType(typeof(InspectionTemplateResponse), StatusCodes.Status201Created)]
     public async Task<ActionResult<InspectionTemplateResponse>> CreateTemplate([FromBody] CreateInspectionTemplateRequest request, CancellationToken ct)
     {
-        var created = await _service.CreateTemplateAsync(GetPortfolioId(), request, ct);
+        var created = await _service.CreateTemplateAuthorizedAsync(GetWorkspaceReadScope(), request, ct);
+        if (created == null)
+        {
+            return NotFound(new { error = "Inspection checklist template not found" });
+        }
         return CreatedAtAction(nameof(Template), new { templateId = created.Id }, created);
     }
 
@@ -73,7 +77,7 @@ public class InspectionController : ManagementControllerBase
     public async Task<ActionResult<InspectionTemplateResponse>> UpdateTemplate(
         int templateId, [FromBody] UpdateInspectionTemplateRequest request, CancellationToken ct)
     {
-        var updated = await _service.UpdateTemplateAsync(GetPortfolioId(), templateId, request, ct);
+        var updated = await _service.UpdateTemplateAuthorizedAsync(GetWorkspaceReadScope(), templateId, request, ct);
         return updated == null ? NotFound(new { error = "Inspection checklist template not found" }) : Ok(updated);
     }
 
@@ -82,7 +86,7 @@ public class InspectionController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> DeleteTemplate(int templateId, CancellationToken ct)
     {
-        var deleted = await _service.DeleteTemplateAsync(GetPortfolioId(), templateId, ct);
+        var deleted = await _service.DeleteTemplateAuthorizedAsync(GetWorkspaceReadScope(), templateId, ct);
         return deleted ? NoContent() : NotFound(new { error = "Inspection checklist template not found" });
     }
 
@@ -91,7 +95,7 @@ public class InspectionController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<InspectionDetailResponse>> Get(int id, CancellationToken ct)
     {
-        var item = await _service.GetAsync(GetPortfolioId(), id, ct);
+        var item = await _service.GetAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
         return item == null ? NotFound(new { error = "Inspection not found" }) : Ok(item);
     }
 
@@ -100,7 +104,7 @@ public class InspectionController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<InspectionDetailResponse>> Create([FromBody] CreateInspectionRequest request, CancellationToken ct)
     {
-        var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
+        var created = await _service.CreateAuthorizedAsync(GetWorkspaceReadScope(), request, ct);
         return created == null
             ? NotFound(new { error = "Referenced property, unit, lease relationship, agreement, or template not found in this portfolio" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
@@ -111,7 +115,7 @@ public class InspectionController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<InspectionResponse>> Update(int id, [FromBody] UpdateInspectionRequest request, CancellationToken ct)
     {
-        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, ct);
+        var updated = await _service.UpdateAuthorizedAsync(GetWorkspaceReadScope(), id, request, ct);
         return updated == null ? NotFound(new { error = "Inspection not found" }) : Ok(updated);
     }
 
@@ -122,7 +126,7 @@ public class InspectionController : ManagementControllerBase
     public async Task<ActionResult<InspectionItemResponse>> CreateItem(
         int id, [FromBody] CreateInspectionItemRequest request, CancellationToken ct)
     {
-        var created = await _service.CreateItemAsync(GetPortfolioId(), id, request, ct);
+        var created = await _service.CreateItemAuthorizedAsync(GetWorkspaceReadScope(), id, request, ct);
         return created == null
             ? NotFound(new { error = "Inspection not found" })
             : CreatedAtAction(nameof(Get), new { id }, created);
@@ -135,7 +139,7 @@ public class InspectionController : ManagementControllerBase
     public async Task<ActionResult<InspectionItemResponse>> UpdateItem(
         int id, int itemId, [FromBody] UpdateInspectionItemRequest request, CancellationToken ct)
     {
-        var updated = await _service.UpdateItemAsync(GetPortfolioId(), id, itemId, request, ct);
+        var updated = await _service.UpdateItemAuthorizedAsync(GetWorkspaceReadScope(), id, itemId, request, ct);
         return updated == null ? NotFound(new { error = "Inspection item not found" }) : Ok(updated);
     }
 
@@ -145,7 +149,7 @@ public class InspectionController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> DeleteItem(int id, int itemId, CancellationToken ct)
     {
-        var deleted = await _service.DeleteItemAsync(GetPortfolioId(), id, itemId, ct);
+        var deleted = await _service.DeleteItemAuthorizedAsync(GetWorkspaceReadScope(), id, itemId, ct);
         return deleted ? NoContent() : NotFound(new { error = "Inspection item not found" });
     }
 
@@ -156,7 +160,7 @@ public class InspectionController : ManagementControllerBase
     public async Task<ActionResult<IReadOnlyList<InspectionItemResponse>>> ReorderItems(
         int id, [FromBody] ReorderInspectionItemsRequest request, CancellationToken ct)
     {
-        var items = await _service.ReorderItemsAsync(GetPortfolioId(), id, request, ct);
+        var items = await _service.ReorderItemsAuthorizedAsync(GetWorkspaceReadScope(), id, request, ct);
         return items == null ? NotFound(new { error = "Inspection not found" }) : Ok(items);
     }
 
@@ -170,7 +174,7 @@ public class InspectionController : ManagementControllerBase
     public async Task<ActionResult<InspectionItemResponse>> AttachItemPhoto(
         int id, int itemId, [FromBody] AttachInspectionItemPhotoRequest request, CancellationToken ct)
     {
-        var updated = await _service.AttachItemPhotoAsync(GetPortfolioId(), id, itemId, request.StoredFileId, ct);
+        var updated = await _service.AttachItemPhotoAuthorizedAsync(GetWorkspaceReadScope(), id, itemId, request.StoredFileId, ct);
         return updated == null
             ? NotFound(new { error = "Inspection item or photo file not found in this portfolio" })
             : Ok(updated);
@@ -186,7 +190,7 @@ public class InspectionController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status409Conflict)]
     public async Task<ActionResult<CompleteInspectionResponse>> Complete(int id, CancellationToken ct)
     {
-        var (result, error) = await _service.CompleteAsync(GetPortfolioId(), id, GetUserId(), ct);
+        var (result, error) = await _service.CompleteAuthorizedAsync(GetWorkspaceReadScope(), id, GetUserId(), ct);
         if (result != null)
         {
             return Ok(result);
@@ -202,7 +206,7 @@ public class InspectionController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Report(int id, CancellationToken ct)
     {
-        var file = await _service.GetReportAsync(GetPortfolioId(), id, ct);
+        var file = await _service.GetReportAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
         if (file == null)
         {
             return NotFound(new { error = "Report not available; complete the inspection first." });
@@ -218,7 +222,7 @@ public class InspectionController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(int id, CancellationToken ct)
     {
-        var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
+        var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
         return deleted ? NoContent() : NotFound(new { error = "Inspection not found" });
     }
 }

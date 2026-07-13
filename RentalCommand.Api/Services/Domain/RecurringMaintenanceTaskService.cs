@@ -1,9 +1,12 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -29,11 +32,46 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
         return page.Items;
     }
 
+    public async Task<IReadOnlyList<RecurringMaintenanceTaskResponse>> ListAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int? propertyId,
+        bool? activeOnly,
+        ListQuery query,
+        CancellationToken ct = default)
+    {
+        var page = await ListPageAuthorizedAsync(scope, propertyId, activeOnly, query, ct);
+        return page.Items;
+    }
+
     public async Task<RecurringMaintenanceTaskListResponse> ListPageAsync(int portfolioId, int? propertyId, bool? activeOnly, ListQuery query, CancellationToken ct = default)
     {
         var q = _db.RecurringMaintenanceTasks
             .AsNoTracking()
             .Where(t => t.PortfolioId == portfolioId);
+
+        return await ListPageFromQueryAsync(q, propertyId, activeOnly, query, ct);
+    }
+
+    public Task<RecurringMaintenanceTaskListResponse> ListPageAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int? propertyId,
+        bool? activeOnly,
+        ListQuery query,
+        CancellationToken ct = default) =>
+        ListPageFromQueryAsync(
+            AuthorizedTasks(scope, CapabilityKeys.WorkRead, tracking: false),
+            propertyId,
+            activeOnly,
+            query,
+            ct);
+
+    private static async Task<RecurringMaintenanceTaskListResponse> ListPageFromQueryAsync(
+        IQueryable<RecurringMaintenanceTask> q,
+        int? propertyId,
+        bool? activeOnly,
+        ListQuery query,
+        CancellationToken ct)
+    {
 
         if (propertyId.HasValue)
         {
@@ -93,7 +131,48 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
             .FirstOrDefaultAsync(ct);
     }
 
+    public Task<RecurringMaintenanceTaskResponse?> GetAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        CancellationToken ct = default) =>
+        ProjectResponse(AuthorizedTasks(scope, CapabilityKeys.WorkRead, tracking: false)
+                .Where(task => task.Id == id))
+            .FirstOrDefaultAsync(ct);
+
     public async Task<RecurringMaintenanceTaskResponse?> CreateAsync(int portfolioId, CreateRecurringMaintenanceTaskRequest request, CancellationToken ct = default)
+        => await CreateCoreAsync(portfolioId, request, ct);
+
+    public async Task<RecurringMaintenanceTaskResponse?> CreateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        CreateRecurringMaintenanceTaskRequest request,
+        CancellationToken ct = default)
+    {
+        var response = await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
+        {
+            var propertyAuthorized = await _db.Properties
+                .AsNoTracking()
+                .Where(property => property.Id == request.PropertyId)
+                .WhereAuthorized(_db, scope, [CapabilityKeys.WorkManage], _timeProvider.UtcNow())
+                .AnyAsync(innerCt);
+            return propertyAuthorized
+                ? await CreateCoreAsync(scope.PortfolioId, request, innerCt, broadcast: false)
+                : null;
+        }, ct);
+
+        if (response is not null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                scope.PortfolioId, EntityType, response.Id, response, ct);
+        }
+
+        return response;
+    }
+
+    private async Task<RecurringMaintenanceTaskResponse?> CreateCoreAsync(
+        int portfolioId,
+        CreateRecurringMaintenanceTaskRequest request,
+        CancellationToken ct,
+        bool broadcast = true)
     {
         // Property is required and must be in-portfolio; optional unit/vendor must be too (no cross-tenant linking).
         if (!await _db.EnsurePropertyInPortfolioAsync(portfolioId, request.PropertyId, ct))
@@ -137,14 +216,52 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
         await _db.SaveChangesAsync(ct);
 
         var response = await GetAsync(portfolioId, entity.Id, ct) ?? RecurringMaintenanceTaskResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        }
         return response;
     }
 
     public async Task<RecurringMaintenanceTaskResponse?> UpdateAsync(int portfolioId, int id, UpdateRecurringMaintenanceTaskRequest request, CancellationToken ct = default)
+        => await UpdateCoreAsync(
+            _db.RecurringMaintenanceTasks.Where(task => task.Id == id && task.PortfolioId == portfolioId),
+            portfolioId,
+            request,
+            ct);
+
+    public async Task<RecurringMaintenanceTaskResponse?> UpdateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        UpdateRecurringMaintenanceTaskRequest request,
+        CancellationToken ct = default)
     {
-        var entity = await _db.RecurringMaintenanceTasks
-            .FirstOrDefaultAsync(t => t.Id == id && t.PortfolioId == portfolioId, ct);
+        var response = await _db.ExecuteAuthorizedMutationAsync(innerCt =>
+            UpdateCoreAsync(
+                AuthorizedTasks(scope, CapabilityKeys.WorkManage, tracking: true)
+                    .Where(task => task.Id == id),
+                scope.PortfolioId,
+                request,
+                innerCt,
+                broadcast: false), ct);
+
+        if (response is not null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                scope.PortfolioId, EntityType, response.Id, response, ct);
+        }
+
+        return response;
+    }
+
+    private async Task<RecurringMaintenanceTaskResponse?> UpdateCoreAsync(
+        IQueryable<RecurringMaintenanceTask> tasks,
+        int portfolioId,
+        UpdateRecurringMaintenanceTaskRequest request,
+        CancellationToken ct,
+        bool broadcast = true)
+    {
+        var entity = await tasks.FirstOrDefaultAsync(ct);
         if (entity == null)
         {
             return null;
@@ -179,14 +296,52 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
         await _db.SaveChangesAsync(ct);
 
         var response = await GetAsync(portfolioId, entity.Id, ct) ?? RecurringMaintenanceTaskResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        }
         return response;
     }
 
     public async Task<RecurringMaintenanceTaskResponse?> SetActiveAsync(int portfolioId, int id, bool isActive, CancellationToken ct = default)
+        => await SetActiveCoreAsync(
+            _db.RecurringMaintenanceTasks.Where(task => task.Id == id && task.PortfolioId == portfolioId),
+            portfolioId,
+            isActive,
+            ct);
+
+    public async Task<RecurringMaintenanceTaskResponse?> SetActiveAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        bool isActive,
+        CancellationToken ct = default)
     {
-        var entity = await _db.RecurringMaintenanceTasks
-            .FirstOrDefaultAsync(t => t.Id == id && t.PortfolioId == portfolioId, ct);
+        var response = await _db.ExecuteAuthorizedMutationAsync(innerCt =>
+            SetActiveCoreAsync(
+                AuthorizedTasks(scope, CapabilityKeys.WorkManage, tracking: true)
+                    .Where(task => task.Id == id),
+                scope.PortfolioId,
+                isActive,
+                innerCt,
+                broadcast: false), ct);
+
+        if (response is not null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                scope.PortfolioId, EntityType, response.Id, response, ct);
+        }
+
+        return response;
+    }
+
+    private async Task<RecurringMaintenanceTaskResponse?> SetActiveCoreAsync(
+        IQueryable<RecurringMaintenanceTask> tasks,
+        int portfolioId,
+        bool isActive,
+        CancellationToken ct,
+        bool broadcast = true)
+    {
+        var entity = await tasks.FirstOrDefaultAsync(ct);
         if (entity == null)
         {
             return null;
@@ -197,14 +352,50 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
         await _db.SaveChangesAsync(ct);
 
         var response = await GetAsync(portfolioId, entity.Id, ct) ?? RecurringMaintenanceTaskResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        }
         return response;
     }
 
     public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
+        => await DeleteCoreAsync(
+            _db.RecurringMaintenanceTasks.Where(task => task.Id == id && task.PortfolioId == portfolioId),
+            portfolioId,
+            id,
+            ct);
+
+    public async Task<bool> DeleteAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        CancellationToken ct = default)
     {
-        var entity = await _db.RecurringMaintenanceTasks
-            .FirstOrDefaultAsync(t => t.Id == id && t.PortfolioId == portfolioId, ct);
+        var deleted = await _db.ExecuteAuthorizedMutationAsync(innerCt =>
+            DeleteCoreAsync(
+                AuthorizedTasks(scope, CapabilityKeys.WorkManage, tracking: true)
+                    .Where(task => task.Id == id),
+                scope.PortfolioId,
+                id,
+                innerCt,
+                broadcast: false), ct);
+
+        if (deleted)
+        {
+            await _dataUpdate.BroadcastEntityDeleteAsync(scope.PortfolioId, EntityType, id, ct);
+        }
+
+        return deleted;
+    }
+
+    private async Task<bool> DeleteCoreAsync(
+        IQueryable<RecurringMaintenanceTask> tasks,
+        int portfolioId,
+        int id,
+        CancellationToken ct,
+        bool broadcast = true)
+    {
+        var entity = await tasks.FirstOrDefaultAsync(ct);
         if (entity == null)
         {
             return false;
@@ -215,8 +406,28 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
         entity.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
+        }
         return true;
+    }
+
+    private IQueryable<RecurringMaintenanceTask> AuthorizedTasks(
+        WorkspaceReadScope scope,
+        string capability,
+        bool tracking)
+    {
+        var properties = _db.Properties
+            .AsNoTracking()
+            .WhereAuthorized(_db, scope, [capability], _timeProvider.UtcNow());
+        var tasks = tracking
+            ? _db.RecurringMaintenanceTasks.AsQueryable()
+            : _db.RecurringMaintenanceTasks.AsNoTracking();
+        return tasks.Where(task =>
+            task.PortfolioId == scope.PortfolioId &&
+            properties.Any(property =>
+                property.Id == task.PropertyId && property.PortfolioId == task.PortfolioId));
     }
 
     /// <summary>

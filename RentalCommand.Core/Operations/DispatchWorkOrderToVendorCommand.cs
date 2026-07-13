@@ -10,7 +10,14 @@ public sealed record DispatchWorkOrderToVendorCommand(
     string DestinationPhone,
     string Message,
     int? ChangedByUserId,
-    DateTime DispatchedAtUtc) : IAtomicCommandData;
+    DateTime DispatchedAtUtc,
+    DispatchManagementAccess? ManagementAccess = null) : IAtomicCommandData;
+
+public sealed record DispatchManagementAccess(
+    Guid SessionId,
+    int UserId,
+    int AccessContextId,
+    long AccessRevision) : IAtomicCommandData;
 
 public enum DispatchWorkOrderToVendorOutcome
 {

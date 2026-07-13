@@ -34,6 +34,41 @@ public sealed class NotificationFoundationModelTests
     }
 
     [Fact]
+    public void MorningBriefingAndAccountSecurityRouting_AreWorkspaceOnlyAtTheDatabaseBoundary()
+    {
+        using var db = CreateDb();
+        var designTimeModel = db.GetService<IDesignTimeModel>().Model;
+        var entity = designTimeModel.FindEntityType(typeof(TeamRoutingRule))!;
+
+        entity.GetCheckConstraints().Should().Contain(constraint =>
+            constraint.Name == "CK_TeamRoutingRules_WorkspaceOnlyTopics" &&
+            constraint.Sql.Contains("MorningBriefing") &&
+            constraint.Sql.Contains("AccountAndSecurity"));
+    }
+
+    [Fact]
+    public void WorkspaceRouting_IsUniqueEvenWhenPropertyIdIsNull()
+    {
+        using var db = CreateDb();
+        var designTimeModel = db.GetService<IDesignTimeModel>().Model;
+        var entity = designTimeModel.FindEntityType(typeof(TeamRoutingRule))!;
+
+        entity.GetIndexes().Should().Contain(index =>
+            index.IsUnique &&
+            index.GetDatabaseName() == "IX_TeamRoutingRules_PortfolioId_Topic_Workspace" &&
+            index.GetFilter() == "\"PropertyId\" IS NULL");
+        entity.GetIndexes().Should().Contain(index =>
+            index.IsUnique &&
+            index.Properties.Select(property => property.Name).SequenceEqual(new[]
+            {
+                nameof(TeamRoutingRule.PortfolioId),
+                nameof(TeamRoutingRule.Topic),
+                nameof(TeamRoutingRule.PropertyId),
+            }) &&
+            index.GetFilter() == "\"PropertyId\" IS NOT NULL");
+    }
+
+    [Fact]
     public void TemplateVersions_AreAppendOnlyByWorkspaceSystemKeyAndVersion()
     {
         using var db = CreateDb();

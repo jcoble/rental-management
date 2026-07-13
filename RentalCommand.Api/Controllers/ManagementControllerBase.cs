@@ -82,4 +82,25 @@ public abstract class ManagementControllerBase : AuthenticatedPortfolioControlle
             timeProvider.GetUtcNow().UtcDateTime,
             cancellationToken);
     }
+
+    protected Task<bool> HasAnyCapabilityAsync(
+        IReadOnlyCollection<string> capabilityKeys,
+        WorkspaceAuthorizationTarget target,
+        CancellationToken cancellationToken = default)
+    {
+        var active = GetActiveAccessContext();
+        if (target.PortfolioId != active.PortfolioId)
+        {
+            return Task.FromResult(false);
+        }
+
+        var evaluator = HttpContext.RequestServices.GetRequiredService<IWorkspaceAuthorizationEvaluator>();
+        var timeProvider = HttpContext.RequestServices.GetRequiredService<TimeProvider>();
+        return evaluator.HasAnyCapabilityAsync(
+            active,
+            capabilityKeys,
+            target,
+            timeProvider.GetUtcNow().UtcDateTime,
+            cancellationToken);
+    }
 }

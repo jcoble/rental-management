@@ -155,6 +155,11 @@ public sealed class TenantNoticeWorkItem
     public int PortfolioId { get; set; }
     public int TenantNoticePolicyId { get; set; }
     public int LeaseManagementId { get; set; }
+    /// <summary>
+    /// Exact canonical charge that triggered a rent reminder or past-due notice. Lease-lifecycle
+    /// candidates do not have a ledger entry.
+    /// </summary>
+    public long? TenantLedgerEntryId { get; set; }
     public DateTime DueAtUtc { get; set; }
     public TenantNoticeWorkStatus Status { get; set; } = TenantNoticeWorkStatus.Pending;
     public string BusinessKey { get; set; } = string.Empty;

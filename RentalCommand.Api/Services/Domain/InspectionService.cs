@@ -1,11 +1,15 @@
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
+using NpgsqlTypes;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -17,6 +21,53 @@ public class InspectionService : IInspectionService
     private const string WorkOrderEntityType = "WorkOrder";
     private const int MaxTemplateItems = 100;
     private const int MaxInspectionItems = 100;
+    internal const string InspectionItemOrderValidationSql = """
+        WITH requested AS (
+            SELECT item."ItemId", item."Position"::integer
+            FROM unnest(@itemIds::integer[]) WITH ORDINALITY AS item("ItemId", "Position")
+        ), target_inspection AS (
+            SELECT inspection."Status"
+            FROM "Inspections" inspection
+            WHERE inspection."Id" = @inspectionId
+              AND inspection."PortfolioId" = @portfolioId
+        )
+        SELECT
+            EXISTS(SELECT 1 FROM target_inspection) AS "InspectionExists",
+            COALESCE((SELECT "Status" FROM target_inspection), -1) AS "InspectionStatus",
+            COUNT(*) = COUNT(DISTINCT requested."ItemId")
+              AND COUNT(*) = (
+                  SELECT COUNT(*)
+                  FROM "InspectionItems" existing
+                  WHERE existing."InspectionId" = @inspectionId
+                    AND existing."PortfolioId" = @portfolioId)
+              AND COUNT(*) = COUNT(item."Id") AS "IsValid"
+        FROM requested
+        LEFT JOIN "InspectionItems" item
+          ON item."Id" = requested."ItemId"
+         AND item."InspectionId" = @inspectionId
+         AND item."PortfolioId" = @portfolioId
+        """;
+    internal const string InspectionItemOrderUpdateSql = """
+        WITH requested AS (
+            SELECT item."ItemId", item."Position"::integer - 1 AS "SortOrder"
+            FROM unnest(@itemIds::integer[]) WITH ORDINALITY AS item("ItemId", "Position")
+        ), updated_items AS (
+            UPDATE "InspectionItems" item
+            SET "SortOrder" = requested."SortOrder"
+            FROM requested
+            WHERE item."Id" = requested."ItemId"
+              AND item."InspectionId" = @inspectionId
+              AND item."PortfolioId" = @portfolioId
+            RETURNING item."InspectionId"
+        )
+        UPDATE "Inspections" inspection
+        SET "UpdatedAt" = @updatedAt
+        WHERE inspection."Id" = @inspectionId
+          AND inspection."PortfolioId" = @portfolioId
+          AND EXISTS (SELECT 1 FROM updated_items)
+        """;
+    private static readonly string[] ReadCapabilities = [CapabilityKeys.WorkRead];
+    private static readonly string[] WriteCapabilities = [CapabilityKeys.WorkManage];
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
@@ -41,19 +92,55 @@ public class InspectionService : IInspectionService
         _timeProvider = timeProvider;
     }
 
-    public async Task<IReadOnlyList<InspectionResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
+    // Internal portfolio-id entry points exist only for the focused service tests via
+    // InternalsVisibleTo. Production callers resolve IInspectionService, whose only surface requires
+    // a server-derived WorkspaceReadScope and therefore cannot bypass capability/property checks.
+    internal async Task<IReadOnlyList<InspectionResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
     {
         var page = await ListPageAsync(portfolioId, propertyId, query, ct);
         return page.Items;
     }
 
-    public async Task<InspectionListResponse> ListPageAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
+    internal async Task<InspectionListResponse> ListPageAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
     {
         var q = _db.Inspections
             .AsNoTracking()
             .Include(i => i.Property)
             .Include(i => i.Unit)
             .Where(i => i.PortfolioId == portfolioId);
+
+        return await ListPageFromQueryAsync(q, propertyId, query, ct);
+    }
+
+    public async Task<IReadOnlyList<InspectionResponse>> ListAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int? propertyId,
+        ListQuery query,
+        CancellationToken ct = default)
+    {
+        var page = await ListPageAuthorizedAsync(scope, propertyId, query, ct);
+        return page.Items;
+    }
+
+    public Task<InspectionListResponse> ListPageAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int? propertyId,
+        ListQuery query,
+        CancellationToken ct = default)
+        => ListPageFromQueryAsync(
+            AuthorizedInspections(scope, ReadCapabilities)
+                .Include(i => i.Property)
+                .Include(i => i.Unit),
+            propertyId,
+            query,
+            ct);
+
+    private static async Task<InspectionListResponse> ListPageFromQueryAsync(
+        IQueryable<Inspection> q,
+        int? propertyId,
+        ListQuery query,
+        CancellationToken ct)
+    {
 
         if (propertyId.HasValue)
         {
@@ -95,7 +182,7 @@ public class InspectionService : IInspectionService
         };
     }
 
-    public async Task<InspectionDetailResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
+    internal async Task<InspectionDetailResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {
         var entity = await _db.Inspections
             .AsNoTracking()
@@ -117,7 +204,31 @@ public class InspectionService : IInspectionService
         return InspectionDetailResponse.FromEntity(entity, items);
     }
 
-    public async Task<IReadOnlyList<InspectionTemplateResponse>> ListTemplatesAsync(int portfolioId, CancellationToken ct = default)
+    public async Task<InspectionDetailResponse?> GetAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        CancellationToken ct = default)
+    {
+        var entity = await AuthorizedInspections(scope, ReadCapabilities)
+            .Include(i => i.Property)
+            .Include(i => i.Unit)
+            .FirstOrDefaultAsync(i => i.Id == id, ct);
+        if (entity == null)
+        {
+            return null;
+        }
+
+        var items = await _db.InspectionItems
+            .AsNoTracking()
+            .Where(item => item.InspectionId == id && item.PortfolioId == scope.PortfolioId)
+            .OrderBy(item => item.SortOrder)
+            .ThenBy(item => item.Id)
+            .ToListAsync(ct);
+
+        return InspectionDetailResponse.FromEntity(entity, items);
+    }
+
+    internal async Task<IReadOnlyList<InspectionTemplateResponse>> ListTemplatesAsync(int portfolioId, CancellationToken ct = default)
     {
         // Built-ins (code-defined) first, then any portfolio-custom templates from the DB.
         var result = InspectionTemplateCatalog.BuiltIns
@@ -136,7 +247,14 @@ public class InspectionService : IInspectionService
         return result;
     }
 
-    public async Task<InspectionTemplateResponse?> GetTemplateAsync(int portfolioId, int templateId, CancellationToken ct = default)
+    public async Task<IReadOnlyList<InspectionTemplateResponse>> ListTemplatesAuthorizedAsync(
+        WorkspaceReadScope scope,
+        CancellationToken ct = default)
+        => await HasAllPropertiesAccessAsync(scope, ReadCapabilities, ct)
+            ? await ListTemplatesAsync(scope.PortfolioId, ct)
+            : [];
+
+    internal async Task<InspectionTemplateResponse?> GetTemplateAsync(int portfolioId, int templateId, CancellationToken ct = default)
     {
         if (InspectionTemplateCatalog.IsBuiltInId(templateId))
         {
@@ -148,7 +266,22 @@ public class InspectionService : IInspectionService
         return custom == null ? null : InspectionTemplateResponse.FromEntity(custom);
     }
 
-    public async Task<InspectionTemplateResponse> CreateTemplateAsync(int portfolioId, CreateInspectionTemplateRequest request, CancellationToken ct = default)
+    public async Task<InspectionTemplateResponse?> GetTemplateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int templateId,
+        CancellationToken ct = default)
+        => await HasAllPropertiesAccessAsync(scope, ReadCapabilities, ct)
+            ? await GetTemplateAsync(scope.PortfolioId, templateId, ct)
+            : null;
+
+    internal Task<InspectionTemplateResponse> CreateTemplateAsync(int portfolioId, CreateInspectionTemplateRequest request, CancellationToken ct = default)
+        => CreateTemplateCoreAsync(portfolioId, request, broadcast: true, ct);
+
+    private async Task<InspectionTemplateResponse> CreateTemplateCoreAsync(
+        int portfolioId,
+        CreateInspectionTemplateRequest request,
+        bool broadcast,
+        CancellationToken ct)
     {
         var normalized = NormalizeTemplateRequest(request.Name, request.InspectionType, request.Items);
         var entity = new InspectionTemplate
@@ -165,11 +298,40 @@ public class InspectionService : IInspectionService
         await _db.SaveChangesAsync(ct);
 
         var response = InspectionTemplateResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, TemplateEntityType, entity.Id, response, ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, TemplateEntityType, entity.Id, response, ct);
+        }
         return response;
     }
 
-    public async Task<InspectionTemplateResponse?> UpdateTemplateAsync(int portfolioId, int templateId, UpdateInspectionTemplateRequest request, CancellationToken ct = default)
+    public async Task<InspectionTemplateResponse?> CreateTemplateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        CreateInspectionTemplateRequest request,
+        CancellationToken ct = default)
+    {
+        var response = await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
+            await HasAllPropertiesAccessAsync(scope, WriteCapabilities, innerCt)
+                ? await CreateTemplateCoreAsync(scope.PortfolioId, request, broadcast: false, innerCt)
+                : null,
+            ct);
+        if (response is not null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                scope.PortfolioId, TemplateEntityType, response.Id, response, ct);
+        }
+        return response;
+    }
+
+    internal Task<InspectionTemplateResponse?> UpdateTemplateAsync(int portfolioId, int templateId, UpdateInspectionTemplateRequest request, CancellationToken ct = default)
+        => UpdateTemplateCoreAsync(portfolioId, templateId, request, broadcast: true, ct);
+
+    private async Task<InspectionTemplateResponse?> UpdateTemplateCoreAsync(
+        int portfolioId,
+        int templateId,
+        UpdateInspectionTemplateRequest request,
+        bool broadcast,
+        CancellationToken ct)
     {
         ThrowIfBuiltInTemplateMutation(templateId);
 
@@ -184,21 +346,55 @@ public class InspectionService : IInspectionService
         entity.Name = normalized.Name;
         entity.InspectionType = normalized.InspectionType;
 
-        await using var tx = await _db.Database.BeginTransactionAsync(ct);
+        await using var tx = _db.Database.CurrentTransaction is null
+            ? await _db.Database.BeginTransactionAsync(ct)
+            : null;
         await _db.InspectionTemplateItems
             .Where(i => i.TemplateId == templateId)
             .ExecuteDeleteAsync(ct);
         AddTemplateItems(entity, normalized.Items);
 
         await _db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
+        if (tx is not null)
+        {
+            await tx.CommitAsync(ct);
+        }
 
         var response = InspectionTemplateResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, TemplateEntityType, entity.Id, response, ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, TemplateEntityType, entity.Id, response, ct);
+        }
         return response;
     }
 
-    public async Task<bool> DeleteTemplateAsync(int portfolioId, int templateId, CancellationToken ct = default)
+    public async Task<InspectionTemplateResponse?> UpdateTemplateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int templateId,
+        UpdateInspectionTemplateRequest request,
+        CancellationToken ct = default)
+    {
+        var response = await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
+            await HasAllPropertiesAccessAsync(scope, WriteCapabilities, innerCt)
+                ? await UpdateTemplateCoreAsync(scope.PortfolioId, templateId, request, broadcast: false, innerCt)
+                : null,
+            ct);
+        if (response is not null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                scope.PortfolioId, TemplateEntityType, response.Id, response, ct);
+        }
+        return response;
+    }
+
+    internal Task<bool> DeleteTemplateAsync(int portfolioId, int templateId, CancellationToken ct = default)
+        => DeleteTemplateCoreAsync(portfolioId, templateId, broadcast: true, ct);
+
+    private async Task<bool> DeleteTemplateCoreAsync(
+        int portfolioId,
+        int templateId,
+        bool broadcast,
+        CancellationToken ct)
     {
         ThrowIfBuiltInTemplateMutation(templateId);
 
@@ -212,11 +408,38 @@ public class InspectionService : IInspectionService
         _db.InspectionTemplates.Remove(entity);
         await _db.SaveChangesAsync(ct);
 
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, TemplateEntityType, templateId, ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, TemplateEntityType, templateId, ct);
+        }
         return true;
     }
 
-    public async Task<InspectionDetailResponse?> CreateAsync(int portfolioId, CreateInspectionRequest request, CancellationToken ct = default)
+    public async Task<bool> DeleteTemplateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int templateId,
+        CancellationToken ct = default)
+    {
+        var deleted = await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
+            await HasAllPropertiesAccessAsync(scope, WriteCapabilities, innerCt) &&
+            await DeleteTemplateCoreAsync(scope.PortfolioId, templateId, broadcast: false, innerCt),
+            ct);
+        if (deleted)
+        {
+            await _dataUpdate.BroadcastEntityDeleteAsync(
+                scope.PortfolioId, TemplateEntityType, templateId, ct);
+        }
+        return deleted;
+    }
+
+    internal Task<InspectionDetailResponse?> CreateAsync(int portfolioId, CreateInspectionRequest request, CancellationToken ct = default)
+        => CreateCoreAsync(portfolioId, request, broadcast: true, ct);
+
+    private async Task<InspectionDetailResponse?> CreateCoreAsync(
+        int portfolioId,
+        CreateInspectionRequest request,
+        bool broadcast,
+        CancellationToken ct)
     {
         if (!await _db.EnsurePropertyInPortfolioAsync(portfolioId, request.PropertyId, ct))
         {
@@ -290,11 +513,43 @@ public class InspectionService : IInspectionService
         await _db.SaveChangesAsync(ct);
 
         var response = InspectionDetailResponse.FromEntity(entity, entity.Items);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        }
         return response;
     }
 
-    public async Task<InspectionResponse?> UpdateAsync(int portfolioId, int id, UpdateInspectionRequest request, CancellationToken ct = default)
+    public async Task<InspectionDetailResponse?> CreateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        CreateInspectionRequest request,
+        CancellationToken ct = default)
+    {
+        var response = await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
+        {
+            var allowed = await AuthorizedProperties(scope, WriteCapabilities)
+                .AnyAsync(property => property.Id == request.PropertyId, innerCt);
+            return allowed
+                ? await CreateCoreAsync(scope.PortfolioId, request, broadcast: false, innerCt)
+                : null;
+        }, ct);
+        if (response is not null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                scope.PortfolioId, EntityType, response.Id, response, ct);
+        }
+        return response;
+    }
+
+    internal Task<InspectionResponse?> UpdateAsync(int portfolioId, int id, UpdateInspectionRequest request, CancellationToken ct = default)
+        => UpdateCoreAsync(portfolioId, id, request, broadcast: true, ct);
+
+    private async Task<InspectionResponse?> UpdateCoreAsync(
+        int portfolioId,
+        int id,
+        UpdateInspectionRequest request,
+        bool broadcast,
+        CancellationToken ct)
     {
         var entity = await _db.Inspections
             .FirstOrDefaultAsync(i => i.Id == id && i.PortfolioId == portfolioId, ct);
@@ -350,11 +605,38 @@ public class InspectionService : IInspectionService
         await _db.SaveChangesAsync(ct);
 
         var response = InspectionResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        }
         return response;
     }
 
-    public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
+    public async Task<InspectionResponse?> UpdateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        UpdateInspectionRequest request,
+        CancellationToken ct = default)
+    {
+        var response = await ExecuteForAuthorizedInspectionAsync(
+            scope, id,
+            innerCt => UpdateCoreAsync(scope.PortfolioId, id, request, broadcast: false, innerCt), ct);
+        if (response is not null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                scope.PortfolioId, EntityType, response.Id, response, ct);
+        }
+        return response;
+    }
+
+    internal Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
+        => DeleteCoreAsync(portfolioId, id, broadcast: true, ct);
+
+    private async Task<bool> DeleteCoreAsync(
+        int portfolioId,
+        int id,
+        bool broadcast,
+        CancellationToken ct)
     {
         var entity = await _db.Inspections
             .FirstOrDefaultAsync(i => i.Id == id && i.PortfolioId == portfolioId, ct);
@@ -367,11 +649,29 @@ public class InspectionService : IInspectionService
         _db.Inspections.Remove(entity);
         await _db.SaveChangesAsync(ct);
 
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
+        }
         return true;
     }
 
-    public async Task<InspectionItemResponse?> CreateItemAsync(int portfolioId, int inspectionId, CreateInspectionItemRequest request, CancellationToken ct = default)
+    public async Task<bool> DeleteAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        CancellationToken ct = default)
+    {
+        var deleted = await ExecuteForAuthorizedInspectionAsync(
+            scope, id,
+            innerCt => DeleteCoreAsync(scope.PortfolioId, id, broadcast: false, innerCt), ct);
+        if (deleted)
+        {
+            await _dataUpdate.BroadcastEntityDeleteAsync(scope.PortfolioId, EntityType, id, ct);
+        }
+        return deleted;
+    }
+
+    internal async Task<InspectionItemResponse?> CreateItemAsync(int portfolioId, int inspectionId, CreateInspectionItemRequest request, CancellationToken ct = default)
     {
         var inspection = await _db.Inspections
             .FirstOrDefaultAsync(i => i.Id == inspectionId && i.PortfolioId == portfolioId, ct);
@@ -412,7 +712,16 @@ public class InspectionService : IInspectionService
         return InspectionItemResponse.FromEntity(item);
     }
 
-    public async Task<InspectionItemResponse?> UpdateItemAsync(int portfolioId, int inspectionId, int itemId, UpdateInspectionItemRequest request, CancellationToken ct = default)
+    public Task<InspectionItemResponse?> CreateItemAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int inspectionId,
+        CreateInspectionItemRequest request,
+        CancellationToken ct = default)
+        => ExecuteForAuthorizedInspectionAsync(
+            scope, inspectionId,
+            innerCt => CreateItemAsync(scope.PortfolioId, inspectionId, request, innerCt), ct);
+
+    internal async Task<InspectionItemResponse?> UpdateItemAsync(int portfolioId, int inspectionId, int itemId, UpdateInspectionItemRequest request, CancellationToken ct = default)
     {
         var target = await _db.InspectionItems
             .Where(it => it.Id == itemId && it.InspectionId == inspectionId && it.PortfolioId == portfolioId)
@@ -444,7 +753,17 @@ public class InspectionService : IInspectionService
         return InspectionItemResponse.FromEntity(item);
     }
 
-    public async Task<bool> DeleteItemAsync(int portfolioId, int inspectionId, int itemId, CancellationToken ct = default)
+    public Task<InspectionItemResponse?> UpdateItemAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int inspectionId,
+        int itemId,
+        UpdateInspectionItemRequest request,
+        CancellationToken ct = default)
+        => ExecuteForAuthorizedInspectionAsync(
+            scope, inspectionId,
+            innerCt => UpdateItemAsync(scope.PortfolioId, inspectionId, itemId, request, innerCt), ct);
+
+    internal async Task<bool> DeleteItemAsync(int portfolioId, int inspectionId, int itemId, CancellationToken ct = default)
     {
         var target = await _db.InspectionItems
             .Where(it => it.Id == itemId && it.InspectionId == inspectionId && it.PortfolioId == portfolioId)
@@ -463,19 +782,19 @@ public class InspectionService : IInspectionService
         return true;
     }
 
-    public async Task<IReadOnlyList<InspectionItemResponse>?> ReorderItemsAsync(int portfolioId, int inspectionId, ReorderInspectionItemsRequest request, CancellationToken ct = default)
+    public async Task<bool> DeleteItemAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int inspectionId,
+        int itemId,
+        CancellationToken ct = default)
+        => await ExecuteForAuthorizedInspectionAsync(
+            scope, inspectionId,
+            innerCt => DeleteItemAsync(scope.PortfolioId, inspectionId, itemId, innerCt), ct);
+
+    internal async Task<IReadOnlyList<InspectionItemResponse>?> ReorderItemsAsync(int portfolioId, int inspectionId, ReorderInspectionItemsRequest request, CancellationToken ct = default)
     {
-        var inspection = await _db.Inspections
-            .FirstOrDefaultAsync(i => i.Id == inspectionId && i.PortfolioId == portfolioId, ct);
-        if (inspection == null)
-        {
-            return null;
-        }
-
-        EnsureChecklistItemEditable(inspection.Status);
-
-        var requestedIds = (request.ItemIds ?? []).ToList();
-        if (requestedIds.Count == 0)
+        var requestedIds = (request.ItemIds ?? []).ToArray();
+        if (requestedIds.Length == 0)
         {
             throw new DomainValidationException("Include the checklist questions in the order they should appear.");
         }
@@ -483,43 +802,46 @@ public class InspectionService : IInspectionService
         {
             throw new DomainValidationException("Checklist question ids must be positive.");
         }
-        if (requestedIds.Distinct().Count() != requestedIds.Count)
+        if (requestedIds.Distinct().Count() != requestedIds.Length)
         {
             throw new DomainValidationException("Each checklist question can appear only once in the new order.");
         }
 
-        var items = await _db.InspectionItems
-            .Where(it => it.InspectionId == inspectionId && it.PortfolioId == portfolioId)
-            .OrderBy(it => it.SortOrder)
-            .ThenBy(it => it.Id)
-            .ToListAsync(ct);
+        var validation = await ValidateInspectionItemOrderAsync(
+            portfolioId, inspectionId, requestedIds, ct);
+        if (!validation.InspectionExists)
+        {
+            return null;
+        }
 
-        var itemIds = items.Select(it => it.Id).ToHashSet();
-        if (items.Count != requestedIds.Count || requestedIds.Any(id => !itemIds.Contains(id)))
+        EnsureChecklistItemEditable((InspectionStatus)validation.InspectionStatus);
+        if (!validation.IsValid)
         {
             throw new DomainValidationException("Reorder request must include every checklist question exactly once.");
         }
 
-        var orderById = requestedIds
-            .Select((id, index) => new { id, sortOrder = index })
-            .ToDictionary(row => row.id, row => row.sortOrder);
+        await ApplyInspectionItemOrderAsync(
+            portfolioId, inspectionId, requestedIds, _timeProvider.UtcNow(), ct);
 
-        foreach (var item in items)
-        {
-            item.SortOrder = orderById[item.Id];
-        }
-
-        inspection.UpdatedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
-
-        return items
+        var reordered = await _db.InspectionItems
+            .AsNoTracking()
+            .Where(item => item.InspectionId == inspectionId && item.PortfolioId == portfolioId)
             .OrderBy(it => it.SortOrder)
             .ThenBy(it => it.Id)
-            .Select(InspectionItemResponse.FromEntity)
-            .ToList();
+            .ToListAsync(ct);
+        return reordered.Select(InspectionItemResponse.FromEntity).ToList();
     }
 
-    public async Task<InspectionItemResponse?> AttachItemPhotoAsync(int portfolioId, int inspectionId, int itemId, int storedFileId, CancellationToken ct = default)
+    public Task<IReadOnlyList<InspectionItemResponse>?> ReorderItemsAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int inspectionId,
+        ReorderInspectionItemsRequest request,
+        CancellationToken ct = default)
+        => ExecuteForAuthorizedInspectionAsync(
+            scope, inspectionId,
+            innerCt => ReorderItemsAsync(scope.PortfolioId, inspectionId, request, innerCt), ct);
+
+    internal async Task<InspectionItemResponse?> AttachItemPhotoAsync(int portfolioId, int inspectionId, int itemId, int storedFileId, CancellationToken ct = default)
     {
         var target = await _db.InspectionItems
             .Where(it => it.Id == itemId && it.InspectionId == inspectionId && it.PortfolioId == portfolioId)
@@ -548,7 +870,25 @@ public class InspectionService : IInspectionService
         return InspectionItemResponse.FromEntity(item);
     }
 
-    public async Task<(CompleteInspectionResponse? Result, string? Error)> CompleteAsync(int portfolioId, int id, int userId, CancellationToken ct = default)
+    public Task<InspectionItemResponse?> AttachItemPhotoAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int inspectionId,
+        int itemId,
+        int storedFileId,
+        CancellationToken ct = default)
+        => ExecuteForAuthorizedInspectionAsync(
+            scope, inspectionId,
+            innerCt => AttachItemPhotoAsync(scope.PortfolioId, inspectionId, itemId, storedFileId, innerCt), ct);
+
+    internal Task<(CompleteInspectionResponse? Result, string? Error)> CompleteAsync(int portfolioId, int id, int userId, CancellationToken ct = default)
+        => CompleteCoreAsync(portfolioId, id, userId, broadcast: true, ct);
+
+    private async Task<(CompleteInspectionResponse? Result, string? Error)> CompleteCoreAsync(
+        int portfolioId,
+        int id,
+        int userId,
+        bool broadcast,
+        CancellationToken ct)
     {
         var inspection = await _db.Inspections
             .FirstOrDefaultAsync(i => i.Id == id && i.PortfolioId == portfolioId, ct);
@@ -626,9 +966,12 @@ public class InspectionService : IInspectionService
         var newWorkOrderIds = newWorkOrderLinks
             .Select(link => link.WorkOrder.Id)
             .ToList();
-        foreach (var workOrder in await LoadWorkOrderBroadcastsAsync(portfolioId, newWorkOrderIds, ct))
+        if (broadcast)
         {
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, WorkOrderEntityType, workOrder.Id, workOrder, ct);
+            foreach (var workOrder in await LoadWorkOrderBroadcastsAsync(portfolioId, newWorkOrderIds, ct))
+            {
+                await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, WorkOrderEntityType, workOrder.Id, workOrder, ct);
+            }
         }
 
         // ---- Generate + store the PDF report (commit DB rows first, then blob). ----
@@ -662,9 +1005,40 @@ public class InspectionService : IInspectionService
             CreatedWorkOrderIds = createdWorkOrderIds,
         };
 
-        var response = InspectionResponse.FromEntity(inspection);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, inspection.Id, response, ct);
+        if (broadcast)
+        {
+            var response = InspectionResponse.FromEntity(inspection);
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, inspection.Id, response, ct);
+        }
         return (summary, null);
+    }
+
+    public async Task<(CompleteInspectionResponse? Result, string? Error)> CompleteAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        int userId,
+        CancellationToken ct = default)
+    {
+        var outcome = await ExecuteForAuthorizedInspectionAsync(
+            scope, id,
+            innerCt => CompleteCoreAsync(scope.PortfolioId, id, userId, broadcast: false, innerCt), ct);
+        if (outcome.Result is not null)
+        {
+            foreach (var workOrder in await LoadWorkOrderBroadcastsAsync(
+                         scope.PortfolioId, outcome.Result.CreatedWorkOrderIds, ct))
+            {
+                await _dataUpdate.BroadcastEntityUpdateAsync(
+                    scope.PortfolioId, WorkOrderEntityType, workOrder.Id, workOrder, ct);
+            }
+
+            var inspection = await GetAuthorizedAsync(scope, id, ct);
+            if (inspection is not null)
+            {
+                await _dataUpdate.BroadcastEntityUpdateAsync(
+                    scope.PortfolioId, EntityType, inspection.Id, inspection, ct);
+            }
+        }
+        return outcome;
     }
 
     private static WorkOrder BuildInspectionWorkOrder(
@@ -753,7 +1127,7 @@ public class InspectionService : IInspectionService
         return response;
     }
 
-    public async Task<(Stream Stream, string FileName, string ContentType)?> GetReportAsync(int portfolioId, int id, CancellationToken ct = default)
+    internal async Task<(Stream Stream, string FileName, string ContentType)?> GetReportAsync(int portfolioId, int id, CancellationToken ct = default)
     {
         var inspection = await _db.Inspections
             .AsNoTracking()
@@ -784,9 +1158,98 @@ public class InspectionService : IInspectionService
         return (stream, file.FileName, file.ContentType);
     }
 
+    public async Task<(Stream Stream, string FileName, string ContentType)?> GetReportAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        CancellationToken ct = default)
+    {
+        var allowed = await AuthorizedInspections(scope, ReadCapabilities)
+            .AnyAsync(inspection => inspection.Id == id, ct);
+        return allowed ? await GetReportAsync(scope.PortfolioId, id, ct) : null;
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    private IQueryable<Property> AuthorizedProperties(
+        WorkspaceReadScope scope,
+        IReadOnlyCollection<string> capabilities)
+        => _db.Properties
+            .AsNoTracking()
+            .WhereAuthorized(_db, scope, capabilities, _timeProvider.UtcNow());
+
+    private IQueryable<Inspection> AuthorizedInspections(
+        WorkspaceReadScope scope,
+        IReadOnlyCollection<string> capabilities)
+    {
+        var properties = AuthorizedProperties(scope, capabilities);
+        return _db.Inspections
+            .AsNoTracking()
+            .Where(inspection =>
+                inspection.PortfolioId == scope.PortfolioId &&
+                properties.Any(property =>
+                    property.Id == inspection.PropertyId &&
+                    property.PortfolioId == inspection.PortfolioId));
+    }
+
+    private async Task<bool> HasAllPropertiesAccessAsync(
+        WorkspaceReadScope scope,
+        IReadOnlyCollection<string> capabilities,
+        CancellationToken ct)
+        => await _db.AuthorizedAllPropertyAssignments(
+                scope,
+                capabilities,
+                CapabilityAuthorizationTargetKind.Property,
+                _timeProvider.UtcNow())
+            .AnyAsync(ct);
+
+    private async Task<InspectionItemOrderValidation> ValidateInspectionItemOrderAsync(
+        int portfolioId,
+        int inspectionId,
+        int[] itemIds,
+        CancellationToken ct)
+        => await _db.Database.SqlQueryRaw<InspectionItemOrderValidation>(
+                InspectionItemOrderValidationSql,
+                new NpgsqlParameter("itemIds", NpgsqlDbType.Array | NpgsqlDbType.Integer) { Value = itemIds },
+                new NpgsqlParameter("inspectionId", NpgsqlDbType.Integer) { Value = inspectionId },
+                new NpgsqlParameter("portfolioId", NpgsqlDbType.Integer) { Value = portfolioId })
+            .SingleAsync(ct);
+
+    private Task<int> ApplyInspectionItemOrderAsync(
+        int portfolioId,
+        int inspectionId,
+        int[] itemIds,
+        DateTime updatedAt,
+        CancellationToken ct)
+        => _db.Database.ExecuteSqlRawAsync(
+            InspectionItemOrderUpdateSql,
+            [
+                new NpgsqlParameter("itemIds", NpgsqlDbType.Array | NpgsqlDbType.Integer) { Value = itemIds },
+                new NpgsqlParameter("inspectionId", NpgsqlDbType.Integer) { Value = inspectionId },
+                new NpgsqlParameter("portfolioId", NpgsqlDbType.Integer) { Value = portfolioId },
+                new NpgsqlParameter("updatedAt", NpgsqlDbType.TimestampTz) { Value = updatedAt },
+            ],
+            ct);
+
+    private sealed class InspectionItemOrderValidation
+    {
+        public bool InspectionExists { get; set; }
+        public int InspectionStatus { get; set; }
+        public bool IsValid { get; set; }
+    }
+
+    private async Task<TResult?> ExecuteForAuthorizedInspectionAsync<TResult>(
+        WorkspaceReadScope scope,
+        int inspectionId,
+        Func<CancellationToken, Task<TResult?>> mutation,
+        CancellationToken ct)
+        => await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
+        {
+            var allowed = await AuthorizedInspections(scope, WriteCapabilities)
+                .AnyAsync(inspection => inspection.Id == inspectionId, innerCt);
+            return allowed ? await mutation(innerCt) : default;
+        }, ct);
 
     /// <summary>
     /// Returns the (Area, Label, SortOrder) tuples for a built-in (negative id) or in-portfolio custom

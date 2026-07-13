@@ -12,33 +12,10 @@ import { error, redirect } from '@sveltejs/kit';
 import type { LayoutServerLoad } from './$types';
 import { serverGet } from '$lib/api/server-fetch';
 import type { SandboxState } from '$lib/types';
+import { canAccessRoute, CAPABILITY } from '$lib/auth/experience-policy';
 
 // Routes that are part of the first-login flow itself — never gate these (would loop).
 const ONBOARDING_GATE_PATHS = ['/choose-setup', '/setting-up'];
-
-const ROUTE_CAPABILITIES: Array<[string, string[]]> = [
-	['/admin/users', ['team.read', 'team.manage']],
-	['/settings', ['security.manage', 'billing.manage', 'integrations.manage']],
-	['/onboarding', ['rentals.manage']],
-	['/accounting', ['money.balances.read']],
-	['/deposits', ['money.deposits.manage', 'leasing.deposits.read']],
-	['/reports', ['reports.read', 'money.owner-reports.read']],
-	['/audit', ['reports.read']],
-	['/ai', ['rentals.read', 'work.read', 'leasing.terms.read']],
-	['/owners', ['money.owner-reports.read']],
-	['/properties', ['rentals.read']],
-	['/units', ['rentals.read']],
-	['/tenants', ['rentals.read', 'leasing.onboarding.manage']],
-	['/leases', ['rentals.read', 'leasing.terms.read']],
-	['/lease-templates', ['rentals.manage', 'leasing.agreements.prepare']],
-	['/applications', ['leasing.applications.manage']],
-	['/maintenance', ['work.read', 'maintenance.assigned-work.read']],
-	['/appointments', ['work.read', 'leasing.showings.manage']],
-	['/vendors', ['work.manage']],
-	['/messages', ['rentals.read', 'leasing.onboarding.manage', 'maintenance.assigned-work.converse']],
-	['/notices', ['rentals.manage', 'leasing.onboarding.manage']],
-	['/scan', ['rentals.manage', 'leasing.agreements.prepare', 'maintenance.assigned-work.update']]
-];
 
 export const load: LayoutServerLoad = async ({ locals, url }) => {
 	if (!locals.user) {
@@ -61,17 +38,19 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 	const effectiveCapabilities = new Set(
 		locals.access.navigation.find((entry) => entry.experience === activeExperience)?.capabilityKeys ?? []
 	);
-	const routeRule = ROUTE_CAPABILITIES
-		.filter(([prefix]) => url.pathname === prefix || url.pathname.startsWith(`${prefix}/`))
-		.sort(([left], [right]) => right.length - left.length)[0];
-	if (routeRule && !routeRule[1].some((capability) => effectiveCapabilities.has(capability))) {
+	if (!canAccessRoute(url.pathname, activeExperience, effectiveCapabilities)) {
 		throw error(403, 'This page is not available for your current workspace access.');
 	}
 
 	// First-login Sandbox-vs-Live gate (staff only; portal users already redirected above). Skip the
 	// gate's own pages to avoid a redirect loop. The lookup is one cheap portfolio row and is inert
 	// (returns onboardingChoicePending=false) once the user has chosen.
-	if (locals.accessToken && !ONBOARDING_GATE_PATHS.includes(url.pathname)) {
+	if (
+		locals.accessToken &&
+		activeExperience === 'Management' &&
+		effectiveCapabilities.has(CAPABILITY.rentalsManage) &&
+		!ONBOARDING_GATE_PATHS.includes(url.pathname)
+	) {
 		const { data: sandbox } = await serverGet<SandboxState>(
 			'/portfolio/sandbox-state',
 			locals.accessToken

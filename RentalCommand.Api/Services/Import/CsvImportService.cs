@@ -56,13 +56,14 @@ public sealed class CsvImportService : ICsvImportService
         string.Join(",", ColumnsFor(entityType));
 
     public async Task<CsvImportResult> ImportAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         string entityType,
         Stream csv,
         bool dryRun,
         CsvImportCommandContext? commandContext = null,
         CancellationToken ct = default)
     {
+        var portfolioId = scope.PortfolioId;
         var canonicalType = Canonicalize(entityType); // throws ArgumentException for unsupported types
 
         string text;
@@ -118,7 +119,7 @@ public sealed class CsvImportService : ICsvImportService
                         valid = await TryImportTenantAsync(portfolioId, Cell, dryRun, errors, id => createdId = id, ct);
                         break;
                     case "Property":
-                        valid = await TryImportPropertyAsync(portfolioId, Cell, dryRun, errors, id => createdId = id, ct);
+                        valid = await TryImportPropertyAsync(scope, Cell, dryRun, errors, id => createdId = id, ct);
                         break;
                     case "Unit":
                         valid = await TryImportUnitAsync(portfolioId, Cell, batch, dryRun, errors, id => createdId = id, ct);
@@ -211,7 +212,7 @@ public sealed class CsvImportService : ICsvImportService
     }
 
     private async Task<bool> TryImportPropertyAsync(
-        int portfolioId, Func<string, string?> cell, bool dryRun, List<string> errors, Action<long> setId, CancellationToken ct)
+        WorkspaceReadScope scope, Func<string, string?> cell, bool dryRun, List<string> errors, Action<long> setId, CancellationToken ct)
     {
         var request = new CreatePropertyRequest
         {
@@ -244,7 +245,7 @@ public sealed class CsvImportService : ICsvImportService
 
         if (!dryRun)
         {
-            var created = await _properties.CreateAsync(portfolioId, request, ct);
+            var created = await _properties.CreateAsync(scope, request, ct);
             if (created == null)
             {
                 // CreateAsync only returns null here on an owner/owner-entity scope failure, which a

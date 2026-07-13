@@ -126,7 +126,6 @@ public class AuthService : IAuthService
     private readonly ICanonicalAccountBootstrapService _accountBootstrap;
     private readonly ILogger<AuthService> _logger;
     private readonly TimeProvider _timeProvider;
-    private readonly IRlsExecutionContext _rlsExecutionContext;
 
     public AuthService(
         UserManager<ApplicationUser> userManager,
@@ -140,7 +139,6 @@ public class AuthService : IAuthService
         RentalCommandDbContext db,
         IAuditTrailService audit,
         ICanonicalAccountBootstrapService accountBootstrap,
-        IRlsExecutionContext rlsExecutionContext,
         ILogger<AuthService> logger,
         TimeProvider timeProvider)
     {
@@ -155,7 +153,6 @@ public class AuthService : IAuthService
         _db = db;
         _audit = audit;
         _accountBootstrap = accountBootstrap;
-        _rlsExecutionContext = rlsExecutionContext;
         _logger = logger;
         _timeProvider = timeProvider;
     }
@@ -210,10 +207,8 @@ public class AuthService : IAuthService
         CancellationToken ct = default)
     {
         // Password/external-provider verification and the email-confirmation gate have already
-        // succeeded before entering this method. This lease exists only so the server can discover
-        // the verified user's effective workspace options before a canonical context is selected.
-        using var rlsBypass = _rlsExecutionContext.BeginBypass(
-            RlsBypassReason.CredentialVerifiedContextSelection);
+        // succeeded. The DB exposes only the narrow effective-context option projection here; it
+        // does not grant the runtime API generic cross-workspace table access.
         var now = _timeProvider.UtcNow();
         var contexts = await _contextSelection.ListAsync(user.Id, now, ct);
         if (contexts.Count == 0)
@@ -294,32 +289,15 @@ public class AuthService : IAuthService
             return AuthResult.Fail("Invalid or expired refresh token");
         }
 
-        // Successful possession of the opaque, rotating refresh credential is the admission gate
-        // for resolving its session/context. No legacy portfolio or role claim participates.
-        using var rlsBypass = _rlsExecutionContext.BeginBypass(
-            RlsBypassReason.RefreshCredentialContextResolution);
-        var now = _timeProvider.UtcNow();
-        var session = await (
-                from authSession in _db.AuthSessions.AsNoTracking()
-                join context in _db.WorkspaceAccessContexts.AsNoTracking()
-                    on authSession.ActiveAccessContextId equals context.Id
-                where authSession.Id == rotation.AuthSessionId &&
-                      authSession.UserId == context.UserId &&
-                      authSession.Status == AuthSessionStatus.Active &&
-                      authSession.RevokedAtUtc == null &&
-                      authSession.ExpiresAtUtc > now &&
-                      context.Status == WorkspaceAccessContextStatus.Active &&
-                      context.SuspendedAtUtc == null &&
-                      context.RevokedAtUtc == null
-                select new
-                {
-                    authSession.UserId,
-                    authSession.Id,
-                    ContextId = context.Id,
-                    context.AccessRevision,
-                })
-            .SingleOrDefaultAsync();
-        var user = session is null ? null : await _userManager.FindByIdAsync(session.UserId.ToString());
+        // The atomic rotation transaction validates the live session and effective context and
+        // returns only receipt-safe canonical coordinates. No cross-workspace follow-up read is
+        // needed by the runtime API credential.
+        if (rotation.UserId is null || rotation.AccessContextId is null || rotation.AccessRevision is null)
+        {
+            return AuthResult.Fail("Invalid or expired refresh token");
+        }
+
+        var user = await _userManager.FindByIdAsync(rotation.UserId.Value.ToString());
 
         if (user == null)
         {
@@ -333,9 +311,9 @@ public class AuthService : IAuthService
 
         return await BuildCanonicalAuthResultAsync(
             user,
-            session!.Id,
-            session.ContextId,
-            session.AccessRevision,
+            rotation.AuthSessionId,
+            rotation.AccessContextId.Value,
+            rotation.AccessRevision.Value,
             rotation.ReplacementBearer);
     }
 

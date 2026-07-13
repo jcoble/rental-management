@@ -56,4 +56,21 @@ public sealed class TenantNoticeCandidateGenerationServiceTests
         sql.Should().Contain("ON CONFLICT (\"BusinessKey\") DO NOTHING");
         sql.Should().Contain("clock_timestamp()");
     }
+
+    [Fact]
+    public void CandidateSql_UsesCanonicalChargeProjectionForExactRentAndLateWork()
+    {
+        var sql = TenantNoticeCandidateGenerationService.CandidateInsertSql;
+
+        sql.Should().Contain("\"vw_tenant_charge_balances\"");
+        sql.Should().Contain("'rent-reminder'");
+        sql.Should().Contain("'late-rent-late-fee'");
+        sql.Should().Contain("'RentCharge'");
+        sql.Should().Contain("'LateFeeCharge'");
+        sql.Should().Contain("charge.\"OpenAmount\" > 0");
+        sql.Should().Contain("charge.\"IsPastDue\"");
+        sql.Should().Contain("row_number() OVER");
+        sql.Should().Contain("\"TenantLedgerEntryId\"");
+        sql.Should().Contain(":ledger:");
+    }
 }

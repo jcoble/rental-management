@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
+import '../../core/auth/auth_models.dart';
+import '../../core/auth/mobile_access_policy.dart';
 import '../activity/activity_history_screen.dart';
 import '../ai/ai_tab.dart';
 import '../analytics/insights_screen.dart';
@@ -207,6 +209,7 @@ const rentalDestinations = <MobileDestination>[
     label: 'Properties',
     subtitle: 'Buildings, units and details',
     builder: _propertiesBuilder,
+    capabilityKeys: rentalReadCapabilityKeys,
   ),
   MobileDestination(
     id: MobileDestinationId.owners,
@@ -214,6 +217,7 @@ const rentalDestinations = <MobileDestination>[
     label: 'Owners',
     subtitle: 'Entities, contacts and property assignments',
     builder: _ownersBuilder,
+    capabilityKeys: ownerDirectoryCapabilityKeys,
   ),
   MobileDestination(
     id: MobileDestinationId.units,
@@ -221,6 +225,7 @@ const rentalDestinations = <MobileDestination>[
     label: 'Units',
     subtitle: 'Command centers for each rental',
     builder: _unitsBuilder,
+    capabilityKeys: rentalReadCapabilityKeys,
   ),
   MobileDestination(
     id: MobileDestinationId.tenants,
@@ -228,6 +233,7 @@ const rentalDestinations = <MobileDestination>[
     label: 'Tenants',
     subtitle: 'People and contacts',
     builder: _tenantsBuilder,
+    capabilityKeys: rentalReadCapabilityKeys,
   ),
   MobileDestination(
     id: MobileDestinationId.leases,
@@ -235,6 +241,7 @@ const rentalDestinations = <MobileDestination>[
     label: 'Leases',
     subtitle: 'Agreements and terms',
     builder: _leasesBuilder,
+    capabilityKeys: rentalReadCapabilityKeys,
   ),
   MobileDestination(
     id: MobileDestinationId.applications,
@@ -242,7 +249,27 @@ const rentalDestinations = <MobileDestination>[
     label: 'Applications',
     subtitle: 'Review and approve applicants',
     builder: _applicationsBuilder,
+    capabilityKeys: applicationCapabilityKeys,
   ),
+];
+
+const depositsDestination = MobileDestination(
+  id: MobileDestinationId.deposits,
+  icon: Symbols.shield_rounded,
+  label: 'Deposits',
+  subtitle: 'Holdings, deductions and returns',
+  builder: _depositsBuilder,
+  capabilityKeys: depositCapabilityKeys,
+);
+
+List<MobileDestination> rentalHubDestinationsFor({
+  required WorkspaceExperience experience,
+  required Set<String> capabilities,
+}) => [
+  ...visibleMobileDestinations(rentalDestinations, capabilities),
+  if (experience == WorkspaceExperience.leasing &&
+      depositsDestination.isVisibleFor(capabilities))
+    depositsDestination,
 ];
 
 const moneyHubDestinations = <MobileDestination>[
@@ -252,6 +279,7 @@ const moneyHubDestinations = <MobileDestination>[
     label: 'Portfolio',
     subtitle: 'Occupancy, collections and trends',
     builder: _insightsBuilder,
+    capabilityKeys: reportsCapabilityKeys,
   ),
   MobileDestination(
     id: MobileDestinationId.moneyOverview,
@@ -259,6 +287,7 @@ const moneyHubDestinations = <MobileDestination>[
     label: 'Insights',
     subtitle: 'Collection health and cash movement',
     builder: _moneyInsightsBuilder,
+    capabilityKeys: moneyOverviewCapabilityKeys,
   ),
   MobileDestination(
     id: MobileDestinationId.moneyLedger,
@@ -266,20 +295,16 @@ const moneyHubDestinations = <MobileDestination>[
     label: 'Ledger',
     subtitle: 'Payments and expenses in one feed',
     builder: _moneyLedgerBuilder,
+    capabilityKeys: moneyLedgerCapabilityKeys,
   ),
-  MobileDestination(
-    id: MobileDestinationId.deposits,
-    icon: Symbols.shield_rounded,
-    label: 'Deposits',
-    subtitle: 'Holdings, deductions and returns',
-    builder: _depositsBuilder,
-  ),
+  depositsDestination,
   MobileDestination(
     id: MobileDestinationId.banking,
     icon: Symbols.account_balance_rounded,
     label: 'Banking',
     subtitle: 'Reconciliation and matches',
     builder: _bankingBuilder,
+    capabilityKeys: bankingCapabilityKeys,
   ),
   MobileDestination(
     id: MobileDestinationId.reports,
@@ -287,6 +312,7 @@ const moneyHubDestinations = <MobileDestination>[
     label: 'Reports',
     subtitle: 'Annual owner statements',
     builder: _ownerReportsBuilder,
+    capabilityKeys: reportsCapabilityKeys,
   ),
 ];
 
@@ -297,12 +323,7 @@ const workHubDestinations = <MobileDestination>[
     label: 'Orders',
     subtitle: 'Open repairs and maintenance requests',
     builder: _workOrdersBuilder,
-    capabilityKeys: [
-      'work.read',
-      'work.manage',
-      'maintenance.assigned-work.read',
-      'maintenance.assigned-work.update',
-    ],
+    capabilityKeys: workOrderCapabilityKeys,
   ),
   MobileDestination(
     id: MobileDestinationId.calendar,
@@ -381,6 +402,7 @@ const inboxHubDestinations = <MobileDestination>[
     label: 'Messages',
     subtitle: 'Tenant and vendor conversations',
     builder: _messagesBuilder,
+    capabilityKeys: inboxCapabilityKeys,
   ),
   MobileDestination(
     id: MobileDestinationId.notifications,
@@ -388,6 +410,7 @@ const inboxHubDestinations = <MobileDestination>[
     label: 'Notifications',
     subtitle: 'Unread alerts and system updates',
     builder: _notificationsBuilder,
+    capabilityKeys: inboxCapabilityKeys,
   ),
   MobileDestination(
     id: MobileDestinationId.activityHistory,
@@ -395,8 +418,16 @@ const inboxHubDestinations = <MobileDestination>[
     label: 'Activity history',
     subtitle: 'Mobile audit trail and record changes',
     builder: _activityHistoryBuilder,
+    capabilityKeys: reportsCapabilityKeys,
   ),
 ];
+
+List<MobileDestination> visibleMobileDestinations(
+  Iterable<MobileDestination> destinations,
+  Set<String> capabilities,
+) => destinations
+    .where((destination) => destination.isVisibleFor(capabilities))
+    .toList(growable: false);
 
 const browseDestinationGroups = <MobileDestinationGroup>[
   MobileDestinationGroup(

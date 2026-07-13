@@ -132,9 +132,13 @@ mkdir -p "$data_dir/postgres"
 if [[ ! -f "$credentials_file" ]]; then
   postgres_password="$(openssl rand -hex 24)"
   jwt_secret="$(openssl rand -base64 48 | tr -d '\n')"
+  api_db_password="$(openssl rand -hex 24)"
+  engine_db_password="$(openssl rand -hex 24)"
   cat > "$credentials_file" <<EOF
 POSTGRES_PASSWORD=$postgres_password
 JWT_SECRET_KEY=$jwt_secret
+API_DB_PASSWORD=$api_db_password
+ENGINE_DB_PASSWORD=$engine_db_password
 EOF
   chmod 600 "$credentials_file"
 fi
@@ -143,6 +147,14 @@ fi
 source "$credentials_file"
 : "${POSTGRES_PASSWORD:?persistent preview Postgres password is required}"
 : "${JWT_SECRET_KEY:?persistent preview JWT secret is required}"
+if [[ -z "${API_DB_PASSWORD:-}" || -z "${ENGINE_DB_PASSWORD:-}" ]]; then
+  API_DB_PASSWORD="$(openssl rand -hex 24)"
+  ENGINE_DB_PASSWORD="$(openssl rand -hex 24)"
+  cat >> "$credentials_file" <<EOF
+API_DB_PASSWORD=$API_DB_PASSWORD
+ENGINE_DB_PASSWORD=$ENGINE_DB_PASSWORD
+EOF
+fi
 
 # postgres:16-alpine runs as its postgres user. Preparing the bind mount through
 # the same image avoids relying on host account mappings. Existing database
@@ -158,6 +170,8 @@ ENGINE_IMAGE=rc-preview-engine:$stack_id
 WEB_IMAGE=rc-preview-web:$stack_id
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 JWT_SECRET_KEY=$JWT_SECRET_KEY
+API_DB_PASSWORD=$API_DB_PASSWORD
+ENGINE_DB_PASSWORD=$ENGINE_DB_PASSWORD
 PREVIEW_POSTGRES_DATA=$data_dir/postgres
 WEB_ORIGIN=$web_origin
 PREVIEW_WEB_PORT=$preview_port

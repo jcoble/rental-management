@@ -49,6 +49,26 @@ class MessagesRepository {
     }
   }
 
+  /// The management dashboard's bounded recent-thread projection. Paging and
+  /// ordering are applied by the API/EF query; the client never loads the full
+  /// conversation list and truncates it in memory.
+  Future<List<Conversation>> listRecentConversations({int take = 5}) async {
+    if (tenantMode) return listConversations();
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/conversations/page',
+        queryParameters: {'skip': 0, 'take': take, 'sort': '-lastMessageAt'},
+      );
+      final items = response.data?['items'];
+      return (items is List ? items : const [])
+          .whereType<Map<String, dynamic>>()
+          .map(Conversation.fromJson)
+          .toList(growable: false);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   /// GET /conversations/{id} → full thread with messages (asc).
   Future<Conversation> getConversation(int id) async {
     try {

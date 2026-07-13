@@ -3,11 +3,13 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -69,11 +71,51 @@ public class WorkOrderService : IWorkOrderService
         return page.Items;
     }
 
+    public async Task<IReadOnlyList<WorkOrderResponse>> ListAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int? propertyId,
+        int? unitId,
+        int? vendorId,
+        ListQuery query,
+        CancellationToken ct = default)
+    {
+        var page = await ListPageAuthorizedAsync(
+            scope,
+            ToWorkOrderListQuery(query, propertyId, unitId, vendorId),
+            ct);
+        return page.Items;
+    }
+
     public async Task<WorkOrderListResponse> ListPageAsync(int portfolioId, WorkOrderListQuery query, CancellationToken ct = default)
     {
         var q = _db.WorkOrders
             .AsNoTracking()
             .Where(w => w.PortfolioId == portfolioId);
+
+        return await ListPageFromQueryAsync(q, query, ct);
+    }
+
+    public Task<WorkOrderListResponse> ListPageAuthorizedAsync(
+        WorkspaceReadScope scope,
+        WorkOrderListQuery query,
+        CancellationToken ct = default)
+    {
+        var q = _db.WorkOrders
+            .AsNoTracking()
+            .WhereAuthorized(
+                _db,
+                scope,
+                new[] { CapabilityKeys.WorkRead },
+                _timeProvider.UtcNow());
+
+        return ListPageFromQueryAsync(q, query, ct);
+    }
+
+    private static async Task<WorkOrderListResponse> ListPageFromQueryAsync(
+        IQueryable<WorkOrder> q,
+        WorkOrderListQuery query,
+        CancellationToken ct)
+    {
 
         if (query.PropertyId.HasValue)
         {
@@ -249,13 +291,45 @@ public class WorkOrderService : IWorkOrderService
 
     public async Task<WorkOrderDetailResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {
-        var entity = await _db.WorkOrders
+        var q = _db.WorkOrders
             .AsNoTracking()
             .Include(w => w.Property)
             .Include(w => w.Unit)
             .Include(w => w.Vendor)
             .Include(w => w.Tenant)
-            .FirstOrDefaultAsync(w => w.Id == id && w.PortfolioId == portfolioId, ct);
+            .Where(w => w.Id == id && w.PortfolioId == portfolioId);
+
+        return await GetFromQueryAsync(q, portfolioId, id, ct);
+    }
+
+    public Task<WorkOrderDetailResponse?> GetAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        CancellationToken ct = default)
+    {
+        var q = _db.WorkOrders
+            .AsNoTracking()
+            .Where(w => w.Id == id)
+            .WhereAuthorized(
+                _db,
+                scope,
+                new[] { CapabilityKeys.WorkRead },
+                _timeProvider.UtcNow())
+            .Include(w => w.Property)
+            .Include(w => w.Unit)
+            .Include(w => w.Vendor)
+            .Include(w => w.Tenant);
+
+        return GetFromQueryAsync(q, scope.PortfolioId, id, ct);
+    }
+
+    private async Task<WorkOrderDetailResponse?> GetFromQueryAsync(
+        IQueryable<WorkOrder> q,
+        int portfolioId,
+        int id,
+        CancellationToken ct)
+    {
+        var entity = await q.FirstOrDefaultAsync(ct);
         if (entity == null)
         {
             return null;
@@ -290,7 +364,62 @@ public class WorkOrderService : IWorkOrderService
         return response;
     }
 
-    public async Task<WorkOrderResponse?> CreateAsync(int portfolioId, CreateWorkOrderRequest request, int? changedByUserId = null, string? changedByLabel = null, CancellationToken ct = default)
+    public async Task<WorkOrderResponse?> CreateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        CreateWorkOrderRequest request,
+        int? changedByUserId = null,
+        string? changedByLabel = null,
+        CancellationToken ct = default)
+    {
+        var created = await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
+        {
+            var canCreateInProperty = await _db.Properties
+                .AsNoTracking()
+                .Where(property => property.Id == request.PropertyId)
+                .WhereAuthorized(
+                    _db,
+                    scope,
+                    new[] { CapabilityKeys.WorkManage },
+                    _timeProvider.UtcNow())
+                .AnyAsync(innerCt);
+            if (!canCreateInProperty)
+            {
+                return null;
+            }
+
+            return await CreateFromPortfolioAsync(
+                scope.PortfolioId,
+                request,
+                changedByUserId,
+                changedByLabel,
+                innerCt,
+                broadcast: false);
+        }, ct);
+
+        if (created is not null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                scope.PortfolioId, EntityType, created.Id, created, ct);
+        }
+
+        return created;
+    }
+
+    public Task<WorkOrderResponse?> CreateAsync(
+        int portfolioId,
+        CreateWorkOrderRequest request,
+        int? changedByUserId = null,
+        string? changedByLabel = null,
+        CancellationToken ct = default) =>
+        CreateFromPortfolioAsync(portfolioId, request, changedByUserId, changedByLabel, ct);
+
+    private async Task<WorkOrderResponse?> CreateFromPortfolioAsync(
+        int portfolioId,
+        CreateWorkOrderRequest request,
+        int? changedByUserId,
+        string? changedByLabel,
+        CancellationToken ct,
+        bool broadcast = true)
     {
         // Verify the referenced property (required) and optional unit/tenant/lease/vendor are in scope.
         if (!await _db.EnsurePropertyInPortfolioAsync(portfolioId, request.PropertyId, ct))
@@ -386,7 +515,10 @@ public class WorkOrderService : IWorkOrderService
 
         var response = WorkOrderResponse.FromEntity(entity);
         await HydrateDisplayNamesAsync(portfolioId, response, ct);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        }
         return response;
     }
 
@@ -496,8 +628,65 @@ public class WorkOrderService : IWorkOrderService
 
     public async Task<WorkOrderResponse?> UpdateAsync(int portfolioId, int id, UpdateWorkOrderRequest request, int? changedByUserId = null, string? changedByLabel = null, CancellationToken ct = default)
     {
-        var entity = await _db.WorkOrders
-            .FirstOrDefaultAsync(w => w.Id == id && w.PortfolioId == portfolioId, ct);
+        var q = _db.WorkOrders
+            .Where(w => w.Id == id && w.PortfolioId == portfolioId);
+
+        return await UpdateFromQueryAsync(
+            q,
+            portfolioId,
+            request,
+            changedByUserId,
+            changedByLabel,
+            ct);
+    }
+
+    public async Task<WorkOrderResponse?> UpdateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        UpdateWorkOrderRequest request,
+        int? changedByUserId = null,
+        string? changedByLabel = null,
+        CancellationToken ct = default)
+    {
+        var response = await _db.ExecuteAuthorizedMutationAsync(innerCt =>
+        {
+            var q = _db.WorkOrders
+                .Where(workOrder => workOrder.Id == id)
+                .WhereAuthorized(
+                    _db,
+                    scope,
+                    new[] { CapabilityKeys.WorkManage },
+                    _timeProvider.UtcNow());
+
+            return UpdateFromQueryAsync(
+                q,
+                scope.PortfolioId,
+                request,
+                changedByUserId,
+                changedByLabel,
+                innerCt,
+                broadcast: false);
+        }, ct);
+
+        if (response is not null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                scope.PortfolioId, EntityType, response.Id, response, ct);
+        }
+
+        return response;
+    }
+
+    private async Task<WorkOrderResponse?> UpdateFromQueryAsync(
+        IQueryable<WorkOrder> q,
+        int portfolioId,
+        UpdateWorkOrderRequest request,
+        int? changedByUserId,
+        string? changedByLabel,
+        CancellationToken ct,
+        bool broadcast = true)
+    {
+        var entity = await q.FirstOrDefaultAsync(ct);
         if (entity == null)
         {
             return null;
@@ -677,7 +866,10 @@ public class WorkOrderService : IWorkOrderService
 
         var response = WorkOrderResponse.FromEntity(entity);
         await HydrateDisplayNamesAsync(portfolioId, response, ct);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        }
         return response;
     }
 
@@ -786,8 +978,46 @@ public class WorkOrderService : IWorkOrderService
 
     public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
     {
-        var entity = await _db.WorkOrders
-            .FirstOrDefaultAsync(w => w.Id == id && w.PortfolioId == portfolioId, ct);
+        var q = _db.WorkOrders
+            .Where(w => w.Id == id && w.PortfolioId == portfolioId);
+
+        return await DeleteFromQueryAsync(q, portfolioId, id, ct);
+    }
+
+    public async Task<bool> DeleteAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        CancellationToken ct = default)
+    {
+        var deleted = await _db.ExecuteAuthorizedMutationAsync(innerCt =>
+        {
+            var q = _db.WorkOrders
+                .Where(workOrder => workOrder.Id == id)
+                .WhereAuthorized(
+                    _db,
+                    scope,
+                    new[] { CapabilityKeys.WorkManage },
+                    _timeProvider.UtcNow());
+
+            return DeleteFromQueryAsync(q, scope.PortfolioId, id, innerCt, broadcast: false);
+        }, ct);
+
+        if (deleted)
+        {
+            await _dataUpdate.BroadcastEntityDeleteAsync(scope.PortfolioId, EntityType, id, ct);
+        }
+
+        return deleted;
+    }
+
+    private async Task<bool> DeleteFromQueryAsync(
+        IQueryable<WorkOrder> q,
+        int portfolioId,
+        int id,
+        CancellationToken ct,
+        bool broadcast = true)
+    {
+        var entity = await q.FirstOrDefaultAsync(ct);
         if (entity == null)
         {
             return false;
@@ -799,7 +1029,10 @@ public class WorkOrderService : IWorkOrderService
         entity.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
 
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
+        if (broadcast)
+        {
+            await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
+        }
         return true;
     }
 }

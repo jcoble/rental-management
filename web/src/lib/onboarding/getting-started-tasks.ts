@@ -61,10 +61,8 @@ export interface GettingStartedSignals {
 	unitCount: number;
 	tenantCount: number;
 	leaseCount: number;
-	/** A dedicated alert email is set (separate from the login email). */
-	hasNotificationEmail: boolean;
-	/** SignalWire / SMS provider credentials are configured. */
-	hasTexting: boolean;
+	/** Server-projected readiness for the user's personal alert setup. */
+	hasPersonalAlerts: boolean;
 	/**
 	 * The user deliberately switched on an automation that defaults OFF (rent charges or late fees).
 	 * Lease-expiry reminders are intentionally excluded — they default ON, so counting them would
@@ -113,7 +111,7 @@ export const GETTING_STARTED_TASKS: GettingStartedTask[] = [
 		label: 'Name your rental business',
 		eli5: wizardExplanation(
 			'portfolio',
-			'Give your whole operation a name — it shows on every report and reminder. Just use what you call your rentals.'
+			'Give your whole operation a name — it shows on every report and reminder. Just use what you call your rentals.',
 		),
 		icon: Building,
 		route: '/settings',
@@ -132,7 +130,7 @@ export const GETTING_STARTED_TASKS: GettingStartedTask[] = [
 		label: 'Confirm who owns the properties',
 		eli5: wizardExplanation(
 			'owner',
-			'The owner is the person or company that legally holds the property — used later on owner reports and tax forms. We start this off as you; add co-owners or an LLC anytime.'
+			'The owner is the person or company that legally holds the property — used later on owner reports and tax forms. We start this off as you; add co-owners or an LLC anytime.',
 		),
 		icon: UserCircle2,
 		route: '/owners',
@@ -146,7 +144,7 @@ export const GETTING_STARTED_TASKS: GettingStartedTask[] = [
 		label: 'Add your first property',
 		eli5: wizardExplanation(
 			'property',
-			'A property is one building or address. Add it once, then put the rentable units inside it.'
+			'A property is one building or address. Add it once, then put the rentable units inside it.',
 		),
 		icon: Home,
 		route: '/properties',
@@ -173,7 +171,7 @@ export const GETTING_STARTED_TASKS: GettingStartedTask[] = [
 		label: 'Add your tenants',
 		eli5: wizardExplanation(
 			'tenants',
-			'Tenants are the people who rent from you. Adding their email or phone lets the app send them reminders.'
+			'Tenants are the people who rent from you. Adding their email or phone lets the app send them reminders.',
 		),
 		icon: Users,
 		route: '/tenants',
@@ -187,7 +185,7 @@ export const GETTING_STARTED_TASKS: GettingStartedTask[] = [
 		label: 'Create the first lease',
 		eli5: wizardExplanation(
 			'lease',
-			'A lease ties a tenant to a unit and sets the rent, dates, and deposit. This is what drives rent charges and reminders.'
+			'A lease ties a tenant to a unit and sets the rent, dates, and deposit. This is what drives rent charges and reminders.',
 		),
 		icon: FileText,
 		route: '/leases',
@@ -198,17 +196,17 @@ export const GETTING_STARTED_TASKS: GettingStartedTask[] = [
 	},
 	{
 		key: 'notifications',
-		label: 'Set where alerts go',
+		label: 'Choose your personal alerts',
 		eli5: wizardExplanation(
 			'notifications',
-			'Pick the email where rent reminders and your daily briefing land. Leave it blank to use your login email.'
+			'Choose whether your signed-in account receives alerts in the app, by mobile push, by email, or by SMS.',
 		),
 		icon: Bell,
 		route: '/settings',
 		hash: 'notifications',
 		coach: 'settings-notifications',
 		core: false,
-		isComplete: (s) => s.hasNotificationEmail,
+		isComplete: (s) => s.hasPersonalAlerts,
 	},
 	{
 		// No matching wizard step: automations are configured in Settings, not the wizard, so this
@@ -223,11 +221,9 @@ export const GETTING_STARTED_TASKS: GettingStartedTask[] = [
 		core: false,
 		isComplete: (s) => s.hasAutomations,
 	},
-	// NOTE: "Connect texting (SignalWire)" was intentionally removed from the getting-started checklist
-	// (A13) — it's the most technical setup in the app (Project ID / Space URL / API Token / a purchased
-	// From number) and is optional/advanced, so it doesn't belong in the newcomer checklist. It remains
-	// fully available in Settings → Messaging (and as the optional `texting` wizard step). The `hasTexting`
-	// signal stays on GettingStartedSignals because the data hook still reads it for the "settled" gate.
+	// SMS-provider setup remains available in Settings → Messaging. It is intentionally separate from
+	// this checklist and from My alerts because provider credentials configure delivery infrastructure,
+	// not a user's personal channel choices.
 ];
 
 /** The must-do spine (portfolio → lease). */
@@ -270,14 +266,14 @@ export interface GettingStartedProgress {
 export function isTaskDone(
 	task: GettingStartedTask,
 	signals: GettingStartedSignals,
-	manualDone: ReadonlySet<string>
+	manualDone: ReadonlySet<string>,
 ): boolean {
 	return task.isComplete(signals) || manualDone.has(task.key);
 }
 
 export function computeProgress(
 	signals: GettingStartedSignals,
-	manualDone: ReadonlySet<string>
+	manualDone: ReadonlySet<string>,
 ): GettingStartedProgress {
 	const done = (t: GettingStartedTask) => isTaskDone(t, signals, manualDone);
 	const core = CORE_GETTING_STARTED_TASKS;

@@ -1,46 +1,50 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:rental_command/core/auth/auth_controller.dart';
+import 'package:rental_command/core/auth/auth_models.dart';
 import 'package:rental_command/features/home/mobile_quick_action_fab.dart';
 
 void main() {
-  testWidgets('quick action FAB expands into chat record and scan actions', (
-    tester,
-  ) async {
-    var chatCount = 0;
-    var recordCount = 0;
-    var scanCount = 0;
+  testWidgets(
+    'quick action FAB expands into scan record and assistant actions',
+    (tester) async {
+      var chatCount = 0;
+      var recordCount = 0;
+      var scanCount = 0;
 
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          floatingActionButton: MobileQuickActionFab(
-            onChat: () => chatCount++,
-            onRecord: () => recordCount++,
-            onScan: () => scanCount++,
+      await tester.pumpWidget(
+        _authenticatedApp(
+          home: Scaffold(
+            floatingActionButton: MobileQuickActionFab(
+              onChat: () => chatCount++,
+              onRecord: () => recordCount++,
+              onScan: () => scanCount++,
+            ),
           ),
         ),
-      ),
-    );
+      );
 
-    expect(find.text('Chat'), findsNothing);
-    expect(find.text('Record'), findsNothing);
-    expect(find.text('Scan'), findsNothing);
+      expect(find.text('Assistant'), findsNothing);
+      expect(find.text('Record'), findsNothing);
+      expect(find.text('Scan / Add'), findsNothing);
 
-    await tester.tap(find.byTooltip('Open quick actions'));
-    await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Scan / Add'));
+      await tester.pumpAndSettle();
 
-    expect(find.text('Chat'), findsOneWidget);
-    expect(find.text('Record'), findsOneWidget);
-    expect(find.text('Scan'), findsOneWidget);
+      expect(find.text('Assistant'), findsOneWidget);
+      expect(find.text('Record'), findsOneWidget);
+      expect(find.text('Scan / Add'), findsOneWidget);
 
-    await tester.tap(find.text('Record'));
-    await tester.pumpAndSettle();
+      await tester.tap(find.text('Record'));
+      await tester.pumpAndSettle();
 
-    expect(recordCount, 1);
-    expect(chatCount, 0);
-    expect(scanCount, 0);
-    expect(find.text('Record'), findsNothing);
-  });
+      expect(recordCount, 1);
+      expect(chatCount, 0);
+      expect(scanCount, 0);
+      expect(find.text('Record'), findsNothing);
+    },
+  );
 
   testWidgets('quick action FAB keeps an existing page action in the menu', (
     tester,
@@ -48,7 +52,7 @@ void main() {
     var primaryCount = 0;
 
     await tester.pumpWidget(
-      MaterialApp(
+      _authenticatedApp(
         home: Scaffold(
           floatingActionButton: MobileQuickActionFab(
             primaryAction: MobileQuickAction(
@@ -64,18 +68,90 @@ void main() {
       ),
     );
 
-    await tester.tap(find.byTooltip('Open quick actions'));
+    await tester.tap(find.byTooltip('Scan / Add'));
     await tester.pumpAndSettle();
 
     expect(find.text('New work order'), findsOneWidget);
-    expect(find.text('Chat'), findsOneWidget);
+    expect(find.text('Assistant'), findsOneWidget);
     expect(find.text('Record'), findsOneWidget);
-    expect(find.text('Scan'), findsOneWidget);
+    expect(find.text('Scan / Add'), findsOneWidget);
 
     await tester.tap(find.text('New work order'));
     await tester.pumpAndSettle();
 
     expect(primaryCount, 1);
+  });
+
+  testWidgets('leasing scan capability hides record and assistant actions', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _authenticatedApp(
+        capabilities: const {'leasing.agreements.prepare'},
+        home: Scaffold(
+          floatingActionButton: MobileQuickActionFab(
+            onChat: () {},
+            onRecord: () {},
+            onScan: () {},
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byTooltip('Scan / Add'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Scan / Add'), findsOneWidget);
+    expect(find.text('Record'), findsNothing);
+    expect(find.text('Assistant'), findsNothing);
+  });
+
+  testWidgets('expense capability shows scan and record but not assistant', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _authenticatedApp(
+        capabilities: const {'money.expenses.manage'},
+        home: Scaffold(
+          floatingActionButton: MobileQuickActionFab(
+            onChat: () {},
+            onRecord: () {},
+            onScan: () {},
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byTooltip('Scan / Add'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Scan / Add'), findsOneWidget);
+    expect(find.text('Record'), findsOneWidget);
+    expect(find.text('Assistant'), findsNothing);
+  });
+
+  testWidgets('reports capability shows assistant without scan or record', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _authenticatedApp(
+        capabilities: const {'reports.read'},
+        home: Scaffold(
+          floatingActionButton: MobileQuickActionFab(
+            onChat: () {},
+            onRecord: () {},
+            onScan: () {},
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byTooltip('Open quick actions'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Assistant'), findsOneWidget);
+    expect(find.text('Scan / Add'), findsNothing);
+    expect(find.text('Record'), findsNothing);
   });
 
   testWidgets(
@@ -86,7 +162,7 @@ void main() {
       var primaryCount = 0;
 
       await tester.pumpWidget(
-        MaterialApp(
+        _authenticatedApp(
           home: Scaffold(
             body: MobileQuickActionScope(
               controller: controller,
@@ -120,14 +196,14 @@ void main() {
 
       expect(find.byType(FloatingActionButton), findsOneWidget);
 
-      await tester.tap(find.byTooltip('Open quick actions'));
+      await tester.tap(find.byTooltip('Scan / Add'));
       await tester.pumpAndSettle();
 
       expect(find.byType(FloatingActionButton), findsOneWidget);
       expect(find.text('New work order'), findsOneWidget);
-      expect(find.text('Chat'), findsOneWidget);
+      expect(find.text('Assistant'), findsOneWidget);
       expect(find.text('Record'), findsOneWidget);
-      expect(find.text('Scan'), findsOneWidget);
+      expect(find.text('Scan / Add'), findsOneWidget);
 
       await tester.tap(find.text('New work order'));
       await tester.pumpAndSettle();
@@ -144,7 +220,7 @@ void main() {
     addTearDown(controller.dispose);
 
     await tester.pumpWidget(
-      MaterialApp(
+      _authenticatedApp(
         home: Scaffold(
           body: MobileQuickActionScope(
             controller: controller,
@@ -224,7 +300,7 @@ void main() {
     var showDetailAction = false;
 
     await tester.pumpWidget(
-      MaterialApp(
+      _authenticatedApp(
         home: StatefulBuilder(
           builder: (context, setHostState) => Scaffold(
             body: MobileQuickActionScope(
@@ -297,14 +373,75 @@ void main() {
 
     expect(controller.primaryAction?.label, 'Add vendor');
 
-    await tester.tap(find.byTooltip('Open quick actions'));
+    await tester.tap(find.byTooltip('Scan / Add'));
     await tester.pumpAndSettle();
 
     expect(find.byType(FloatingActionButton), findsOneWidget);
     expect(find.text('Add vendor'), findsOneWidget);
     expect(find.text('Rate vendor'), findsNothing);
-    expect(find.text('Chat'), findsOneWidget);
+    expect(find.text('Assistant'), findsOneWidget);
     expect(find.text('Record'), findsOneWidget);
-    expect(find.text('Scan'), findsOneWidget);
+    expect(find.text('Scan / Add'), findsOneWidget);
   });
+}
+
+const _fullActionCapabilities = <String>{
+  'money.expenses.manage',
+  'reports.read',
+  'rentals.manage',
+};
+
+Widget _authenticatedApp({
+  required Widget home,
+  Set<String> capabilities = _fullActionCapabilities,
+}) {
+  return ProviderScope(
+    overrides: [
+      authControllerProvider.overrideWith(
+        () => _StaticAuthController(_authenticatedState(capabilities)),
+      ),
+    ],
+    child: MaterialApp(home: home),
+  );
+}
+
+AuthStateAuthenticated _authenticatedState(Set<String> capabilities) {
+  const experience = WorkspaceExperience.management;
+  return AuthStateAuthenticated(
+    const AuthUser(
+      id: 1,
+      email: 'test@example.test',
+      displayName: 'Test user',
+      emailVerified: true,
+    ),
+    AccessEnvelope(
+      identity: const AccessIdentity(userId: 1, displayName: 'Test user'),
+      selectedContext: const SelectedAccessContext(
+        accessContextId: 1,
+        portfolioId: 1,
+        workspaceName: 'Test workspace',
+        accessRevision: 1,
+        activeExperience: experience,
+      ),
+      defaultExperience: experience,
+      availableExperiences: const [experience],
+      assignments: const [],
+      navigation: [
+        NavigationCapabilities(
+          experience: experience,
+          capabilityKeys: capabilities.toList(growable: false),
+        ),
+      ],
+    ),
+    activeExperience: experience,
+  );
+}
+
+class _StaticAuthController extends AuthController {
+  _StaticAuthController(this.initialState);
+
+  final AuthState initialState;
+
+  @override
+  AuthState build() => initialState;
 }

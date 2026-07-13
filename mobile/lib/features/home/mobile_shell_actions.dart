@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
+import '../../core/api/api_exception.dart';
 import '../../core/auth/auth_controller.dart';
+import '../../core/auth/mobile_access_policy.dart';
 import '../../core/auth/auth_models.dart';
 import '../../core/auth/auth_repository.dart';
 import '../notifications/notifications_repository.dart';
@@ -18,6 +20,11 @@ class MobileNotificationBell extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final auth = ref.watch(authControllerProvider);
+    if (auth is! AuthStateAuthenticated ||
+        (!auth.isTenantExperience && !canOpenInboxHub(auth.capabilities))) {
+      return const SizedBox.shrink();
+    }
     final count = ref
         .watch(unreadCountProvider)
         .maybeWhen(data: (c) => c, orElse: () => 0);
@@ -51,14 +58,15 @@ class MobileAccountMenu extends ConsumerWidget {
     final auth = ref.watch(authControllerProvider);
     if (auth is! AuthStateAuthenticated) return const SizedBox.shrink();
     final capabilities = auth.capabilities;
-    final canOpenGettingStarted = capabilities.contains('rentals.manage');
+    final managementMode =
+        auth.activeExperience == WorkspaceExperience.management;
+    final canOpenGettingStarted =
+        managementMode && capabilities.contains('rentals.manage');
     final canOpenTeam =
-        capabilities.contains('team.read') ||
-        capabilities.contains('team.manage');
-    final canOpenSettings =
-        capabilities.contains('security.manage') ||
-        capabilities.contains('billing.manage') ||
-        capabilities.contains('integrations.manage');
+        managementMode &&
+        (capabilities.contains('team.read') ||
+            capabilities.contains('team.manage'));
+    final canOpenSettings = canManageOwnMobileAlerts(auth.activeExperience);
 
     return IconButton(
       tooltip: 'Account',
@@ -99,7 +107,7 @@ class MobileAccountMenu extends ConsumerWidget {
                     _AccountMenuRow(
                       icon: Symbols.settings_rounded,
                       label: 'Settings',
-                      subtitle: 'Notifications and security',
+                      subtitle: 'My alerts and account',
                       onTap: () => closeAndOpen(settingsDestination),
                     ),
                   const Divider(height: 20),
@@ -122,8 +130,31 @@ class MobileAccountMenu extends ConsumerWidget {
   }
 }
 
-class _AccessSelectors extends ConsumerWidget {
+class _AccessSelectors extends ConsumerStatefulWidget {
   const _AccessSelectors();
+
+  @override
+  ConsumerState<_AccessSelectors> createState() => _AccessSelectorsState();
+}
+
+class _AccessSelectorsState extends ConsumerState<_AccessSelectors> {
+  bool _selectionInFlight = false;
+
+  Future<void> _runSelection(Future<void> Function() selection) async {
+    if (_selectionInFlight) return;
+    setState(() => _selectionInFlight = true);
+    try {
+      await selection();
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _selectionInFlight = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -150,12 +181,18 @@ class _AccessSelectors extends ConsumerWidget {
                   ),
                 )
                 .toList(growable: false),
-            onChanged: (value) {
-              if (value != null &&
-                  value != auth.access.selectedContext.accessContextId) {
-                ref.read(authControllerProvider.notifier).selectContext(value);
-              }
-            },
+            onChanged: _selectionInFlight
+                ? null
+                : (value) async {
+                    if (value != null &&
+                        value != auth.access.selectedContext.accessContextId) {
+                      await _runSelection(
+                        () => ref
+                            .read(authControllerProvider.notifier)
+                            .selectContext(value),
+                      );
+                    }
+                  },
           ),
         if (showContext && showExperience) const SizedBox(height: 12),
         if (showExperience)
@@ -170,13 +207,17 @@ class _AccessSelectors extends ConsumerWidget {
                   ),
                 )
                 .toList(growable: false),
-            onChanged: (value) {
-              if (value != null) {
-                ref
-                    .read(authControllerProvider.notifier)
-                    .selectExperience(value);
-              }
-            },
+            onChanged: _selectionInFlight
+                ? null
+                : (value) async {
+                    if (value != null && value != auth.activeExperience) {
+                      await _runSelection(
+                        () => ref
+                            .read(authControllerProvider.notifier)
+                            .selectExperience(value),
+                      );
+                    }
+                  },
           ),
         const Divider(height: 20),
       ],

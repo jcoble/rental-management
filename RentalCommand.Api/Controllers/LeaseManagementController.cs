@@ -153,13 +153,8 @@ public sealed class LeaseManagementController : ManagementControllerBase
         {
             return Forbid();
         }
-        if (!await _queryService.CanReadAsync(access, leaseManagementId, ct))
-        {
-            return NotFound(new { error = "Lease management relationship not found" });
-        }
-
-        var answer = await _qa.AskAsync(
-            GetPortfolioId(), leaseManagementId, request.Question.Trim(), ct);
+        var answer = await _qa.AskManagementAsync(
+            access, leaseManagementId, request.Question.Trim(), ct);
         return answer is null
             ? NotFound(new { error = "No governing agreement document is available." })
             : Ok(answer);

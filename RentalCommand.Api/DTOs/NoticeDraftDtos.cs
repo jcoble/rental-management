@@ -35,12 +35,12 @@ public class GenerateNoticeDraftsResponse
 }
 
 /// <summary>
-/// Optional scoping for notice generation. With no fields set, drafts are generated portfolio-wide for
-/// every applicable relationship/open charge. Supplying <see cref="RecipientTenantId"/>,
+/// Optional scoping for the set-based generation command. With no fields set, drafts are generated
+/// portfolio-wide for every due enabled policy. Supplying <see cref="RecipientTenantId"/>,
 /// <see cref="LeaseManagementId"/>, <see cref="TenantAccountId"/>, or
 /// <see cref="TenantLedgerEntryId"/> narrows generation to that server-validated scope;
-/// supplying <see cref="NoticeType"/> generates only that type and forces it for renewal/move-out even
-/// when outside the usual trigger window (the landlord asked for it).
+/// supplying <see cref="NoticeType"/> generates only that type. A lifecycle type explicitly requested
+/// in a selected tenant/relationship/account scope is allowed outside its scheduled lead window.
 /// </summary>
 public class GenerateNoticeDraftsRequest
 {

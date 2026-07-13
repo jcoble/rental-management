@@ -46,14 +46,12 @@ public sealed class SwitchAuthSessionContextHandler
         }
 
         var selected = await attempt.Persistence.Query<WorkspaceAccessContext>()
-            .WhereEffectiveAccess(
-                attempt.Persistence.Query<WorkspaceMembership>(),
-                attempt.Persistence.Query<MembershipRoleAssignment>(),
-                attempt.Persistence.Query<OwnerUserAccess>(),
-                attempt.Persistence.Query<EffectiveTenantAccessProjection>(),
-                command.UserId,
-                command.ChangedAtUtc)
-            .Where(item => item.Id == command.SelectedAccessContextId)
+            .Where(item => item.Id == command.SelectedAccessContextId &&
+                item.UserId == command.UserId &&
+                AccessAuthorityDbFunctions.IsEffective(
+                    item.Id,
+                    command.UserId,
+                    command.ChangedAtUtc))
             .Select(item => new { item.Id, item.PortfolioId, item.AccessRevision })
             .SingleOrDefaultAsync(ct)
             ?? throw new UnauthorizedAccessException("The selected access context is unavailable.");

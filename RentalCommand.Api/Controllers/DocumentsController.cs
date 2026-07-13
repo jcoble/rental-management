@@ -10,8 +10,10 @@ using RentalCommand.Api.Scanning;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Documents;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Api.Controllers;
@@ -126,6 +128,14 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         if (!TryParseTarget(normalizedEntityType, out var target))
             return BadRequest(new { error = $"entityType '{normalizedEntityType}' is not a supported document target." });
         var isStaff = HasWorkspaceMembership();
+        WorkspaceReadScope? staffScope = null;
+        if (isStaff)
+        {
+            if (!TryReadWorkspaceScope(out var scope) ||
+                !await StaffMayAccessTargetAsync(scope, target, entityId, write: true, ct))
+                return NotFound(new { error = "The referenced record was not found in your portfolio." });
+            staffScope = scope;
+        }
         var tenantId = isStaff ? null : await ResolveTenantIdAsync(portfolioId, ct);
         if (!isStaff && (!tenantId.HasValue || target != StoredDocumentTarget.WorkOrder))
             return NotFound(new { error = "The referenced record was not found in your portfolio." });
@@ -199,6 +209,7 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
             GetUserId(),
             tenantId,
             isStaff,
+            staffScope,
             clientOperationId,
             requestFingerprint,
             contentSha256,
@@ -237,8 +248,16 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
 
         // Tenant guard: a tenant may only list documents for a WorkOrder they own. Returning an empty
         // list (rather than 403) keeps the response shape identical for any non-owned/foreign entity.
-        if (!await TenantMayAccessEntityAsync(normalizedEntityType, entityId, portfolioId, ct))
+        if (HasWorkspaceMembership())
+        {
+            if (!TryReadWorkspaceScope(out var scope) ||
+                !await StaffMayAccessTargetAsync(scope, target, entityId, write: false, ct))
+                return Ok(Array.Empty<DocumentDto>());
+        }
+        else if (!await TenantMayAccessEntityAsync(normalizedEntityType, entityId, portfolioId, ct))
+        {
             return Ok(Array.Empty<DocumentDto>());
+        }
 
         var docs = await _documents.ListAsync(portfolioId, normalizedEntityType, entityId, ct);
         return Ok(docs);
@@ -261,8 +280,17 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         // Tenant guard: a tenant may only download a document attached to a WorkOrder they own. Without
         // this, any tenant could stream every document in the portfolio by id (other tenants' lease PDFs,
         // ID scans, owner financials). 404 (not 403) so a foreign id is indistinguishable from a missing one.
-        if (!await TenantMayAccessEntityAsync(row.EntityType, row.EntityId, portfolioId, ct))
+        if (HasWorkspaceMembership())
+        {
+            if (!TryParseTarget(row.EntityType ?? string.Empty, out var target) ||
+                !TryReadWorkspaceScope(out var scope) ||
+                !await StaffMayAccessTargetAsync(scope, target, row.EntityId ?? 0, write: false, ct))
+                return NotFound(new { error = "Document not found." });
+        }
+        else if (!await TenantMayAccessEntityAsync(row.EntityType, row.EntityId, portfolioId, ct))
+        {
             return NotFound(new { error = "Document not found." });
+        }
 
         Stream stream;
         try
@@ -333,6 +361,16 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
 
         var portfolioId = GetPortfolioId();
         var isStaff = HasWorkspaceMembership();
+        WorkspaceReadScope? staffScope = null;
+        if (isStaff)
+        {
+            var row = await _documents.FindAsync(portfolioId, id, ct);
+            if (row is null || !TryParseTarget(row.EntityType ?? string.Empty, out var target) ||
+                !TryReadWorkspaceScope(out var scope) ||
+                !await StaffMayAccessTargetAsync(scope, target, row.EntityId ?? 0, write: true, ct))
+                return NotFound(new { error = "Document not found." });
+            staffScope = scope;
+        }
         var tenantId = isStaff ? null : await ResolveTenantIdAsync(portfolioId, ct);
         var deleted = await _documents.DeleteAsync(
             portfolioId,
@@ -340,6 +378,7 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
             GetUserId(),
             tenantId,
             isStaff,
+            staffScope,
             clientOperationId,
             ct);
         return deleted ? NoContent() : NotFound(new { error = "Document not found." });
@@ -390,6 +429,56 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
             .OrderBy(access => access.LeaseManagementPartyId)
             .Select(access => (int?)access.TenantId)
             .FirstOrDefaultAsync(ct);
+    }
+
+    private Task<bool> StaffMayAccessTargetAsync(
+        WorkspaceReadScope scope,
+        StoredDocumentTarget target,
+        long entityId,
+        bool write,
+        CancellationToken ct)
+    {
+        var capability = target switch
+        {
+            StoredDocumentTarget.Property or StoredDocumentTarget.Unit or StoredDocumentTarget.Tenant =>
+                write ? CapabilityKeys.RentalsManage : CapabilityKeys.RentalsRead,
+            StoredDocumentTarget.LeaseAgreement => CapabilityKeys.LeasingAgreementsPrepare,
+            StoredDocumentTarget.Expense =>
+                write ? CapabilityKeys.MoneyExpensesManage : CapabilityKeys.MoneyBalancesRead,
+            StoredDocumentTarget.WorkOrder or StoredDocumentTarget.Appointment or StoredDocumentTarget.Inspection =>
+                write ? CapabilityKeys.WorkManage : CapabilityKeys.WorkRead,
+            StoredDocumentTarget.Vendor => write ? CapabilityKeys.WorkManage : CapabilityKeys.WorkRead,
+            _ => null,
+        };
+        if (capability is null) return Task.FromResult(false);
+
+        var properties = _db.Properties.AsNoTracking()
+            .WhereAuthorized(_db, scope, capability, DateTime.UtcNow);
+        return target switch
+        {
+            StoredDocumentTarget.Property => properties.AnyAsync(property => property.Id == entityId, ct),
+            StoredDocumentTarget.Unit => _db.Units.AsNoTracking().AnyAsync(unit =>
+                unit.Id == entityId && properties.Any(property => property.Id == unit.PropertyId), ct),
+            StoredDocumentTarget.Tenant => _db.LeaseManagementParties.AsNoTracking().AnyAsync(party =>
+                party.TenantId == entityId &&
+                properties.Any(property => property.Id == party.LeaseManagement!.PropertyId), ct),
+            StoredDocumentTarget.LeaseAgreement => _db.LeaseAgreements.AsNoTracking().AnyAsync(agreement =>
+                agreement.Id == entityId &&
+                properties.Any(property => property.Id == agreement.LeaseManagement!.PropertyId), ct),
+            StoredDocumentTarget.Expense => _db.Expenses.AsNoTracking().AnyAsync(expense =>
+                expense.Id == entityId && properties.Any(property => property.Id == expense.PropertyId), ct),
+            StoredDocumentTarget.WorkOrder => _db.WorkOrders.AsNoTracking().AnyAsync(workOrder =>
+                workOrder.Id == entityId && properties.Any(property => property.Id == workOrder.PropertyId), ct),
+            StoredDocumentTarget.Appointment => _db.Appointments.AsNoTracking().AnyAsync(appointment =>
+                appointment.Id == entityId && properties.Any(property => property.Id == appointment.PropertyId), ct),
+            StoredDocumentTarget.Inspection => _db.Inspections.AsNoTracking().AnyAsync(inspection =>
+                inspection.Id == entityId && properties.Any(property => property.Id == inspection.PropertyId), ct),
+            StoredDocumentTarget.Vendor => _db.Vendors.AsNoTracking().AnyAsync(vendor =>
+                vendor.Id == entityId && vendor.PortfolioId == scope.PortfolioId &&
+                _db.AuthorizedWorkspaceAssignments(
+                    scope, [capability], CapabilityAuthorizationTargetKind.Property, DateTime.UtcNow).Any(), ct),
+            _ => Task.FromResult(false),
+        };
     }
 
 

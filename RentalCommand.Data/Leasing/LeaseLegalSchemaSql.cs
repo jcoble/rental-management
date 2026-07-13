@@ -357,7 +357,7 @@ internal static class LeaseLegalSchemaSql
         AS $function$
         BEGIN
           IF TG_OP = 'DELETE'
-             AND current_setting('app.rls_bypass_reason', true) = 'SandboxGraduation' THEN
+             AND rc_sandbox_graduation_allows(OLD."PortfolioId") THEN
             RETURN OLD;
           END IF;
 
@@ -375,7 +375,7 @@ internal static class LeaseLegalSchemaSql
         AS $function$
         BEGIN
           IF TG_OP = 'DELETE' THEN
-            IF current_setting('app.rls_bypass_reason', true) = 'SandboxGraduation' THEN
+            IF rc_sandbox_graduation_allows(OLD."PortfolioId") THEN
               RETURN OLD;
             END IF;
 
@@ -446,7 +446,7 @@ internal static class LeaseLegalSchemaSql
         AS $function$
         BEGIN
           IF TG_OP = 'DELETE' THEN
-            IF current_setting('app.rls_bypass_reason', true) = 'SandboxGraduation' THEN
+            IF rc_sandbox_graduation_allows(OLD."PortfolioId") THEN
               RETURN OLD;
             END IF;
 
@@ -667,7 +667,7 @@ internal static class LeaseLegalSchemaSql
           new_parent_issued timestamp with time zone;
         BEGIN
           IF TG_OP = 'DELETE'
-             AND current_setting('app.rls_bypass_reason', true) = 'SandboxGraduation' THEN
+             AND rc_sandbox_graduation_allows(OLD."PortfolioId") THEN
             RETURN OLD;
           END IF;
 
@@ -714,7 +714,7 @@ internal static class LeaseLegalSchemaSql
           new_parent_issued timestamp with time zone;
         BEGIN
           IF TG_OP = 'DELETE'
-             AND current_setting('app.rls_bypass_reason', true) = 'SandboxGraduation' THEN
+             AND rc_sandbox_graduation_allows((to_jsonb(OLD) ->> 'PortfolioId')::integer) THEN
             RETURN OLD;
           END IF;
 
@@ -826,7 +826,7 @@ internal static class LeaseLegalSchemaSql
         AS $function$
         BEGIN
           IF TG_OP = 'DELETE'
-             AND current_setting('app.rls_bypass_reason', true) = 'SandboxGraduation' THEN
+             AND rc_sandbox_graduation_allows(OLD."PortfolioId") THEN
             RETURN OLD;
           END IF;
 

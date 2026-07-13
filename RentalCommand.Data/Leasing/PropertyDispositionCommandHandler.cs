@@ -114,7 +114,9 @@ public sealed class CreatePropertyDispositionHandler
                         && assignment.SelectedProperties.Any(scope =>
                             scope.PropertyId == property.Id && scope.PortfolioId == command.PortfolioId)))
                 && assignment.RoleProfile!.Capabilities.Any(capability =>
-                    capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage))), ct);
+                    capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage
+                    && capability.CapabilityDefinition.AuthorizationTargetKind
+                        == CapabilityAuthorizationTargetKind.Property))), ct);
         if (!authorized)
             throw new UnauthorizedAccessException("The property is not authorized in the current workspace scope.");
     }

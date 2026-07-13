@@ -1,13 +1,21 @@
 <script lang="ts">
 	import { createQuery } from '@tanstack/svelte-query';
+	import { useQueryClient } from '@tanstack/svelte-query';
+	import { goto } from '$app/navigation';
 	import { auth } from '$lib/api/endpoints/auth';
-	import { adoptAccessSession } from '$lib/api/client';
-	import { getAuthState, selectExperience } from '$lib/stores/auth.svelte';
+	import { adoptAccessEnvelope, adoptAccessSession } from '$lib/api/client';
+	import { getAuthState } from '$lib/stores/auth.svelte';
+	import { safeLandingForAccess } from '$lib/auth/experience-policy';
+	import { signalRService } from '$lib/realtime/signalr';
+	import { CLIENT_HUB_URL } from '$lib/config';
+	import type { WorkspaceExperience } from '$lib/types/user';
+	import { beginAccessTransition, endAccessTransition } from '$lib/auth/access-transition-state';
 	import { ChevronDown, Building2 } from '@lucide/svelte';
 
 	let { collapsed = false }: { collapsed?: boolean } = $props();
 
 	const authState = getAuthState();
+	const queryClient = useQueryClient();
 
 	const contextsQuery = createQuery(() => ({
 		queryKey: ['access-contexts'],
@@ -17,6 +25,7 @@
 
 	let open = $state(false);
 	let switching = $state(false);
+	let switchError = $state<string | null>(null);
 	const access = $derived(authState.accessEnvelope);
 	const choices = $derived(contextsQuery.data ?? []);
 	const canSwitch = $derived(choices.length > 1);
@@ -24,13 +33,61 @@
 	async function selectContext(id: number) {
 		if (id === access?.selectedContext.accessContextId || switching) return;
 		switching = true;
+		switchError = null;
+		beginAccessTransition();
 		try {
+			await signalRService.disconnect();
 			const result = await auth.selectContext(id);
+			const landing = safeLandingForAccess(result.access);
+			if (!landing) throw new Error('No authorized landing is available for that workspace.');
 			await adoptAccessSession(result.accessToken, result.accessTokenExpiration, result.access);
 			open = false;
+			await goto(landing, { replaceState: true, invalidateAll: true });
+			await signalRService.connect(CLIENT_HUB_URL);
+		} catch (error) {
+			await signalRService.connect(CLIENT_HUB_URL);
+			switchError = error instanceof Error ? error.message : 'Could not switch workspaces.';
 		} finally {
+			endAccessTransition();
 			switching = false;
 		}
+	}
+
+	async function handleExperienceChange(experience: WorkspaceExperience) {
+		if (experience === authState.activeExperience || switching || !access) return;
+		const plannedLanding = safeLandingForAccess(access, experience);
+		if (!plannedLanding) {
+			switchError = 'That work area does not have an available page for this account.';
+			return;
+		}
+
+		switching = true;
+		switchError = null;
+		beginAccessTransition();
+		try {
+			// Stop old-experience events before changing the server-side selection. The access-change
+			// callback then purges queries and singleton stores before this safe navigation.
+			await signalRService.disconnect();
+			const nextAccess = await auth.selectExperience(experience);
+			const landing = safeLandingForAccess(nextAccess);
+			if (!landing) throw new Error('No authorized landing is available for that work area.');
+			await adoptAccessEnvelope(nextAccess);
+			open = false;
+			await goto(landing, { replaceState: true, invalidateAll: true });
+			await signalRService.connect(CLIENT_HUB_URL);
+		} catch (error) {
+			// A failed selection leaves the existing shell usable and restores realtime best-effort.
+			await signalRService.connect(CLIENT_HUB_URL);
+			switchError = error instanceof Error ? error.message : 'Could not switch work areas.';
+			void queryClient.invalidateQueries();
+		} finally {
+			endAccessTransition();
+			switching = false;
+		}
+	}
+
+	function experienceHasLanding(experience: WorkspaceExperience): boolean {
+		return access ? safeLandingForAccess(access, experience) !== null : false;
 	}
 
 	function handleClickOutside(e: MouseEvent) {
@@ -92,15 +149,20 @@
 		<select
 			id="active-experience"
 			value={authState.activeExperience ?? ''}
-			onchange={(event) =>
-				void selectExperience(
-					event.currentTarget.value as import('$lib/types/user').WorkspaceExperience
-				)}
+			disabled={switching}
+			aria-describedby={switchError ? 'active-experience-error' : undefined}
+			onchange={(event) => void handleExperienceChange(event.currentTarget.value as WorkspaceExperience)}
 			class="m3-field-surface h-9 w-full px-3 text-sm text-foreground"
+			data-testid="active-experience-select"
 		>
 			{#each access?.availableExperiences ?? [] as experience}
-				<option value={experience}>{experience}</option>
+				<option value={experience} disabled={!experienceHasLanding(experience)}>{experience}</option>
 			{/each}
 		</select>
+		{#if switchError}
+			<p id="active-experience-error" class="mt-1 text-xs text-destructive" role="alert">
+				{switchError}
+			</p>
+		{/if}
 	</div>
 {/if}

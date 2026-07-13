@@ -5,6 +5,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -88,6 +89,93 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         CancellationToken ct = default) =>
         BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
             .AnyAsync(management => management.Id == leaseManagementId, ct);
+
+    public Task<LeaseQaAgreementFacts?> GetLeaseQaAgreementAsync(
+        LeaseManagementReadContext access,
+        int leaseManagementId,
+        CancellationToken ct = default) =>
+        BuildLeaseQaAgreementQuery(access, leaseManagementId).SingleOrDefaultAsync(ct);
+
+    internal IQueryable<LeaseQaAgreementFacts> BuildLeaseQaAgreementQuery(
+        LeaseManagementReadContext access,
+        int leaseManagementId) =>
+        from management in BuildAuthorizedManagementQuery(access, CapabilityKeys.RentalsRead)
+        join status in _db.LeaseAgreementStatusProjections.AsNoTracking()
+            on new { management.PortfolioId, LeaseManagementId = management.Id }
+            equals new { status.PortfolioId, status.LeaseManagementId }
+        join agreement in _db.LeaseAgreements.AsNoTracking()
+            on new { status.PortfolioId, AgreementId = status.AgreementId }
+            equals new { agreement.PortfolioId, AgreementId = agreement.Id }
+        where management.Id == leaseManagementId
+            && status.IsGoverning
+            && agreement.FullyExecutedAtUtc != null
+            && agreement.VoidedAtUtc == null
+            && agreement.ExecutedArtifact != null
+            && agreement.ExecutedArtifact.ArtifactKind == LegalDocumentArtifactKind.ExecutedAgreement
+            && agreement.ExecutedArtifact.StoredFile != null
+            && agreement.ExecutedArtifact.StoredFile.PortfolioId == access.PortfolioId
+            && agreement.ExecutedArtifact.StoredFile.DeletedAt == null
+        select new LeaseQaAgreementFacts(
+            agreement.Id,
+            agreement.LeaseManagementId,
+            agreement.AgreementNumber,
+            agreement.TermStartOn,
+            agreement.TermEndOn,
+            agreement.BaseRentAmount,
+            agreement.SecurityDepositObligation,
+            agreement.LateFeeAmount,
+            agreement.RentDueDay,
+            agreement.TermsPayload,
+            agreement.ExecutedArtifact!.StoredFileId,
+            agreement.ExecutedArtifact.StoredFile!.FileName);
+
+    public async Task<IReadOnlyList<int>> ListAuthorizedAgreementIssueSignerIdsAsync(
+        LeaseManagementReadContext access,
+        int leaseManagementId,
+        int leaseAgreementId,
+        CancellationToken ct = default) =>
+        await BuildAuthorizedAgreementIssueSignerQuery(access, leaseManagementId, leaseAgreementId)
+            .ToArrayAsync(ct);
+
+    internal IQueryable<int> BuildAuthorizedAgreementIssueSignerQuery(
+        LeaseManagementReadContext access,
+        int leaseManagementId,
+        int leaseAgreementId) =>
+        BuildAgreementPreparationManagementQuery(access)
+            .Where(management => management.Id == leaseManagementId)
+            .SelectMany(management => management.Agreements)
+            .Where(agreement => agreement.Id == leaseAgreementId)
+            .SelectMany(agreement => agreement.Signers)
+            .OrderBy(signer => signer.SigningOrder)
+            .ThenBy(signer => signer.Id)
+            .Select(signer => signer.Id);
+
+    public async Task<IReadOnlyList<int>> ListAuthorizedAddendumIssueSignerIdsAsync(
+        LeaseManagementReadContext access,
+        int leaseManagementId,
+        int leaseAddendumId,
+        CancellationToken ct = default) =>
+        await BuildAuthorizedAddendumIssueSignerQuery(access, leaseManagementId, leaseAddendumId)
+            .ToArrayAsync(ct);
+
+    internal IQueryable<int> BuildAuthorizedAddendumIssueSignerQuery(
+        LeaseManagementReadContext access,
+        int leaseManagementId,
+        int leaseAddendumId) =>
+        BuildAgreementPreparationManagementQuery(access)
+            .Where(management => management.Id == leaseManagementId)
+            .SelectMany(management => management.Addenda)
+            .Where(addendum => addendum.Id == leaseAddendumId)
+            .SelectMany(addendum => addendum.Signers)
+            .OrderBy(signer => signer.SigningOrder)
+            .ThenBy(signer => signer.Id)
+            .Select(signer => signer.Id);
+
+    private IQueryable<LeaseManagement> BuildAgreementPreparationManagementQuery(
+        LeaseManagementReadContext access) =>
+        BuildAuthorizedManagementQuery(
+            access,
+            [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingAgreementsPrepare]);
 
     public async Task<ReturnPossessionContextResponse> GetReturnPossessionContextAsync(
         LeaseManagementReadContext access,
@@ -1275,49 +1363,24 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
 
     internal IQueryable<LeaseManagement> BuildAuthorizedManagementQuery(
         LeaseManagementReadContext access,
-        string capabilityKey)
+        string capabilityKey) =>
+        BuildAuthorizedManagementQuery(access, [capabilityKey]);
+
+    internal IQueryable<LeaseManagement> BuildAuthorizedManagementQuery(
+        LeaseManagementReadContext access,
+        IReadOnlyCollection<string> capabilityKeys)
     {
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        return _db.LeaseManagements.AsNoTracking().Where(management =>
-            management.PortfolioId == access.PortfolioId
-            && _db.AuthSessions.AsNoTracking().Any(session =>
-                session.Id == access.SessionId
-                && session.UserId == access.UserId
-                && session.ActiveAccessContextId == access.AccessContextId
-                && session.Status == AuthSessionStatus.Active
-                && session.RevokedAtUtc == null
-                && session.ExpiresAtUtc > utcNow
-                && session.ActiveAccessContext != null
-                && session.ActiveAccessContext.UserId == access.UserId
-                && session.ActiveAccessContext.PortfolioId == access.PortfolioId
-                && session.ActiveAccessContext.AccessRevision == access.AccessRevision
-                && session.ActiveAccessContext.Status == WorkspaceAccessContextStatus.Active
-                && session.ActiveAccessContext.SuspendedAtUtc == null
-                && session.ActiveAccessContext.RevokedAtUtc == null
-                && session.ActiveAccessContext.Membership != null
-                && session.ActiveAccessContext.Membership.PortfolioId == access.PortfolioId
-                && session.ActiveAccessContext.Membership.Status == WorkspaceMembershipStatus.Active
-                && session.ActiveAccessContext.Membership.SuspendedAtUtc == null
-                && session.ActiveAccessContext.Membership.RevokedAtUtc == null
-                && session.ActiveAccessContext.Membership.EffectiveFromUtc <= utcNow
-                && (session.ActiveAccessContext.Membership.EffectiveToUtc == null
-                    || session.ActiveAccessContext.Membership.EffectiveToUtc > utcNow)
-                && session.ActiveAccessContext.Membership.RoleAssignments.Any(assignment =>
-                    assignment.PortfolioId == access.PortfolioId
-                    && assignment.Status == MembershipRoleAssignmentStatus.Active
-                    && assignment.SuspendedAtUtc == null
-                    && assignment.RevokedAtUtc == null
-                    && assignment.EffectiveFromUtc <= utcNow
-                    && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > utcNow)
-                    && assignment.RoleProfile!.Capabilities.Any(profileCapability =>
-                        profileCapability.CapabilityDefinition!.Key == capabilityKey
-                        && profileCapability.CapabilityDefinition.AuthorizationTargetKind
-                            == CapabilityAuthorizationTargetKind.Property)
-                    && (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
-                        || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
-                            && assignment.SelectedProperties.Any(scope =>
-                                scope.PortfolioId == access.PortfolioId
-                                && scope.PropertyId == management.PropertyId))))));
+        return _db.LeaseManagements.AsNoTracking().WhereAuthorized(
+            _db,
+            new WorkspaceReadScope(
+                access.PortfolioId,
+                access.UserId,
+                access.SessionId,
+                access.AccessContextId,
+                access.AccessRevision),
+            capabilityKeys,
+            utcNow);
     }
 
     private static IQueryable<LeaseManagementSummaryResponse> ApplySort(

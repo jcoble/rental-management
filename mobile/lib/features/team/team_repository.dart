@@ -132,6 +132,7 @@ class TeamRepository {
     int skip = 0,
     int take = 20,
     String search = '',
+    String sort = '-createdAt',
   }) async {
     try {
       final response = await _dio.get<Map<String, dynamic>>(
@@ -139,7 +140,7 @@ class TeamRepository {
         queryParameters: {
           'skip': skip,
           'take': take,
-          'sort': '-createdAt',
+          'sort': sort,
           if (search.trim().isNotEmpty) 'search': search.trim(),
         },
       );

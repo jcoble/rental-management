@@ -5,6 +5,7 @@
 
 import { error, redirect } from '@sveltejs/kit';
 import type { LayoutServerLoad } from './$types';
+import { canAccessRoute } from '$lib/auth/experience-policy';
 
 export const load: LayoutServerLoad = async ({ locals, url }) => {
 	if (!locals.user) {
@@ -16,7 +17,7 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 	const capabilities = new Set(
 		locals.access?.navigation.find((item) => item.experience === activeExperience)?.capabilityKeys ?? []
 	);
-	if (!capabilities.has('team.manage') && !capabilities.has('security.manage')) {
+	if (!activeExperience || !canAccessRoute(url.pathname, activeExperience, capabilities)) {
 		throw error(403, 'Workspace administration access required');
 	}
 

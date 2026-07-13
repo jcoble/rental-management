@@ -64,6 +64,7 @@ public class ImportController : ManagementControllerBase
 
         try
         {
+            if (!TryReadWorkspaceScope(out var scope)) return Forbid();
             CsvImportCommandContext? commandContext = null;
             if (!dryRun && IsPaymentType(entityType))
             {
@@ -80,7 +81,7 @@ public class ImportController : ManagementControllerBase
             }
 
             var result = await _import.ImportAsync(
-                GetPortfolioId(), entityType, csv, dryRun, commandContext, ct);
+                scope, entityType, csv, dryRun, commandContext, ct);
             return Ok(result);
         }
         catch (ArgumentException ex)

@@ -51,6 +51,10 @@ WEB_URL="${WEB_URL:-https://$WEB_PUBLIC_HOST:$WEB_PORT}"
 export App__WebBaseUrl="${App__WebBaseUrl:-$WEB_URL}"
 
 CONN_STR="Host=localhost;Port=$PG_PORT;Database=$PG_DB;Username=$PG_USER;Password=$PG_PASSWORD"
+API_DB_PASSWORD="${API_DB_PASSWORD:-rentalcommand_api_dev}"
+ENGINE_DB_PASSWORD="${ENGINE_DB_PASSWORD:-rentalcommand_engine_dev}"
+API_CONN_STR="Host=localhost;Port=$PG_PORT;Database=$PG_DB;Username=rentalcommand_api;Password=$API_DB_PASSWORD"
+ENGINE_CONN_STR="Host=localhost;Port=$PG_PORT;Database=$PG_DB;Username=rentalcommand_engine;Password=$ENGINE_DB_PASSWORD"
 
 API_PID=""
 ENGINE_PID=""
@@ -166,11 +170,8 @@ fi
 ensure_database_exists
 
 # ─── .NET environment ────────────────────────────────────────────────────────
-# The owner/migrator DB credential comes from .NET User Secrets in Development. Runtime
-# connections immediately SET ROLE to their NOLOGIN API/Engine role. Do NOT export
-# ConnectionStrings__DefaultConnection here or it would override the secret. Set
-# it once with:
-#   dotnet user-secrets set "ConnectionStrings:DefaultConnection" "<conn>" --project RentalCommand.Api
+# The owner credential is passed only to the one-shot migration command below. API and Engine use
+# distinct direct restricted logins and never receive the owner connection string.
 export ASPNETCORE_ENVIRONMENT=Development
 export DOTNET_ENVIRONMENT=Development
 export MSBUILDDISABLENODEREUSE="${MSBUILDDISABLENODEREUSE:-1}"
@@ -240,14 +241,22 @@ echo "Building .NET hosts serially..."
 dotnet build RentalCommand.Engine
 dotnet build RentalCommand.Api
 
+echo "Applying migrations with the one-shot schema owner..."
+ConnectionStrings__MigratorConnection="$CONN_STR" \
+ConnectionStrings__DefaultConnection="$API_CONN_STR" \
+ConnectionStrings__EngineConnection="$ENGINE_CONN_STR" \
+    dotnet run --no-build --project RentalCommand.Api -- --migrate-only
+
 # ─── Engine (background worker) ──────────────────────────────────────────────
 echo "Starting Engine (RentalCommand.Engine)..."
-dotnet run --no-build --project RentalCommand.Engine > /tmp/rentalcommand-engine.log 2>&1 &
+ConnectionStrings__DefaultConnection="$ENGINE_CONN_STR" \
+    dotnet run --no-build --project RentalCommand.Engine > /tmp/rentalcommand-engine.log 2>&1 &
 ENGINE_PID=$!
 
 # ─── API ─────────────────────────────────────────────────────────────────────
 echo "Starting API on $API_HTTPS_URL..."
-dotnet run --no-build --project RentalCommand.Api -- --urls "$API_HTTPS_URL;$API_HTTP_URL" \
+ConnectionStrings__DefaultConnection="$API_CONN_STR" \
+    dotnet run --no-build --project RentalCommand.Api -- --urls "$API_HTTPS_URL;$API_HTTP_URL" \
     > /tmp/rentalcommand-api.log 2>&1 &
 API_PID=$!
 

@@ -820,9 +820,13 @@ internal static class LeasePartyAccessCommandSupport
                                     scope.PropertyId == relationship.PropertyId
                                     && scope.PortfolioId == command.PortfolioId)))
                         && (assignment.RoleProfile!.Capabilities.Any(capability =>
-                                capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage)
+                                capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage
+                                && capability.CapabilityDefinition.AuthorizationTargetKind
+                                    == CapabilityAuthorizationTargetKind.Property)
                             || assignment.RoleProfile.Capabilities.Any(capability =>
-                                capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingOnboardingManage)))));
+                                capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingOnboardingManage
+                                && capability.CapabilityDefinition.AuthorizationTargetKind
+                                    == CapabilityAuthorizationTargetKind.Property)))));
     }
 
     internal static async Task AuthorizeReplayAsync<TCommand>(

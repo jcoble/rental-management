@@ -29,7 +29,8 @@ public class RecurringMaintenanceController : ManagementControllerBase
     public async Task<ActionResult<IReadOnlyList<RecurringMaintenanceTaskResponse>>> List(
         [FromQuery] ListQuery query, [FromQuery] int? propertyId, [FromQuery] bool? activeOnly, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), propertyId, activeOnly, query, ct);
+        var items = await _service.ListAuthorizedAsync(
+            GetWorkspaceReadScope(), propertyId, activeOnly, query, ct);
         return Ok(items);
     }
 
@@ -38,7 +39,8 @@ public class RecurringMaintenanceController : ManagementControllerBase
     public async Task<ActionResult<RecurringMaintenanceTaskListResponse>> ListPage(
         [FromQuery] ListQuery query, [FromQuery] int? propertyId, [FromQuery] bool? activeOnly, CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), propertyId, activeOnly, query, ct);
+        var page = await _service.ListPageAuthorizedAsync(
+            GetWorkspaceReadScope(), propertyId, activeOnly, query, ct);
         return Ok(page);
     }
 
@@ -47,7 +49,7 @@ public class RecurringMaintenanceController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<RecurringMaintenanceTaskResponse>> Get(int id, CancellationToken ct)
     {
-        var item = await _service.GetAsync(GetPortfolioId(), id, ct);
+        var item = await _service.GetAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
         return item == null ? NotFound(new { error = "Recurring maintenance task not found" }) : Ok(item);
     }
 
@@ -56,7 +58,7 @@ public class RecurringMaintenanceController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<RecurringMaintenanceTaskResponse>> Create([FromBody] CreateRecurringMaintenanceTaskRequest request, CancellationToken ct)
     {
-        var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
+        var created = await _service.CreateAuthorizedAsync(GetWorkspaceReadScope(), request, ct);
         return created == null
             ? NotFound(new { error = "Referenced property, unit, or vendor not found in this portfolio" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
@@ -67,7 +69,7 @@ public class RecurringMaintenanceController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<RecurringMaintenanceTaskResponse>> Update(int id, [FromBody] UpdateRecurringMaintenanceTaskRequest request, CancellationToken ct)
     {
-        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, ct);
+        var updated = await _service.UpdateAuthorizedAsync(GetWorkspaceReadScope(), id, request, ct);
         return updated == null
             ? NotFound(new { error = "Recurring maintenance task not found, or referenced unit/vendor not in this portfolio" })
             : Ok(updated);
@@ -78,7 +80,8 @@ public class RecurringMaintenanceController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<RecurringMaintenanceTaskResponse>> ToggleActive(int id, [FromBody] ToggleRecurringMaintenanceTaskActiveRequest request, CancellationToken ct)
     {
-        var updated = await _service.SetActiveAsync(GetPortfolioId(), id, request.IsActive, ct);
+        var updated = await _service.SetActiveAuthorizedAsync(
+            GetWorkspaceReadScope(), id, request.IsActive, ct);
         return updated == null ? NotFound(new { error = "Recurring maintenance task not found" }) : Ok(updated);
     }
 
@@ -87,7 +90,7 @@ public class RecurringMaintenanceController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(int id, CancellationToken ct)
     {
-        var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
+        var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
         return deleted ? NoContent() : NotFound(new { error = "Recurring maintenance task not found" });
     }
 }

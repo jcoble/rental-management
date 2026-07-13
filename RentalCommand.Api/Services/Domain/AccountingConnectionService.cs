@@ -10,7 +10,6 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Models.Accounting;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
-using RentalCommand.Api.Data;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -61,7 +60,6 @@ public class AccountingConnectionService
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AccountingConnectionService> _logger;
     private readonly IAtomicUnitOfWork _atomic;
-    private readonly IRlsExecutionContext _rlsExecutionContext;
 
     public AccountingConnectionService(
         RentalCommandDbContext db,
@@ -71,7 +69,6 @@ public class AccountingConnectionService
         AccountingImportService importService,
         TimeProvider timeProvider,
         IAtomicUnitOfWork atomic,
-        IRlsExecutionContext rlsExecutionContext,
         ILogger<AccountingConnectionService> logger)
     {
         _db = db;
@@ -82,7 +79,6 @@ public class AccountingConnectionService
         _timeProvider = timeProvider;
         _logger = logger;
         _atomic = atomic;
-        _rlsExecutionContext = rlsExecutionContext;
     }
 
     /// <summary>
@@ -166,100 +162,10 @@ public class AccountingConnectionService
                 "Connection request expired or invalid, please try again");
         }
 
-        AccountingConnection conn;
-        int portfolioId;
-        AccountingProvider provider;
-        using (_rlsExecutionContext.BeginBypass(RlsBypassReason.AccountingOAuthCallback))
-        {
-            // The opaque, high-entropy, single-use state is the callback's only admission token.
-            // Its conditional delete is the transaction-scoped claim: a concurrent callback waits
-            // on the same row and observes zero affected rows before any provider exchange begins.
-            await using var transaction = await _db.Database.BeginTransactionAsync(ct);
-            var callbackNow = DateTime.UtcNow;
-            var stateRow = await _db.OAuthStates
-                .AsNoTracking()
-                .Where(state => state.StateToken == callback.State && state.ExpiresAt >= callbackNow)
-                .SingleOrDefaultAsync(ct);
-
-            if (stateRow == null)
-            {
-                throw new InvalidOperationException(
-                    "Connection request expired or invalid, please try again");
-            }
-
-            var claimed = await _db.OAuthStates
-                .Where(state => state.Id == stateRow.Id &&
-                                state.StateToken == callback.State &&
-                                state.ExpiresAt >= callbackNow)
-                .ExecuteDeleteAsync(ct);
-            if (claimed != 1)
-            {
-                throw new InvalidOperationException(
-                    "Connection request expired or invalid, please try again");
-            }
-
-            portfolioId = stateRow.PortfolioId;
-            provider = stateRow.Provider;
-            var redirectUri = stateRow.RedirectUri;
-
-            // The exchange must reuse the SAME redirect URI sent at authorize (stored on the state row).
-            var settings = _settingsResolver.Resolve(provider, redirectUri);
-            var prov = _providerResolver.Resolve(provider);
-            var result = await prov.ExchangeCodeAsync(settings, callback, ct);
-
-            // Lazy-create the connection on callback (no setup modal for OAuth providers).
-            conn = await _db.AccountingConnections
-                .SingleOrDefaultAsync(
-                    candidate => candidate.PortfolioId == portfolioId && candidate.Provider == provider,
-                    ct)
-                ?? new AccountingConnection
-                {
-                    PortfolioId = portfolioId,
-                    Provider = provider,
-                    Status = AccountingConnectionStatus.Pending,
-                    NextPullAtUtc = _timeProvider.UtcNow(),
-                    CreatedAt = _timeProvider.UtcNow(),
-                };
-            if (conn.Id == 0)
-            {
-                _db.AccountingConnections.Add(conn);
-            }
-
-            // AC-4: encrypt at rest, plaintext never persisted.
-            conn.AccessTokenCipherText = ProtectNullable(result.AccessToken);
-            conn.RefreshTokenCipherText = ProtectNullable(result.RefreshToken);
-            conn.TokenExpiresAt = result.ExpiresAtUtc;
-            conn.ExternalAccountId = result.ExternalAccountId;
-            conn.CompanyName = result.CompanyName;
-            conn.Status = AccountingConnectionStatus.Connected;
-            conn.TokenGeneration++;
-            conn.TokenRotationState = AccountingTokenRotationState.Idle;
-            conn.TokenRotationClaimOwner = null;
-            conn.TokenRotationClaimToken = null;
-            conn.TokenRotationClaimExpiresAtUtc = null;
-            conn.PullClaimOwner = null;
-            conn.PullClaimToken = null;
-            conn.PullClaimExpiresAtUtc = null;
-            conn.LastError = null;
-            conn.NextPullAtUtc = _timeProvider.UtcNow().AddMinutes(15);
-            conn.ConnectedAt ??= _timeProvider.UtcNow();
-            conn.DisconnectedAt = null;
-            conn.UpdatedAt = _timeProvider.UtcNow();
-
-            await _db.SaveChangesAsync(ct);
-            await transaction.CommitAsync(ct);
-        }
-
-        _logger.LogInformation(
-            "AccountingConnection {ConnectionId} now Connected for portfolio {PortfolioId} ({Provider})",
-            conn.Id, portfolioId, provider);
-
-        // Import-on-connect: kick an initial pull so the landlord's money flows in immediately rather
-        // than waiting for the first scheduled worker cycle. Best-effort — a failure here must never
-        // fail the connect (the connection is already Connected; the worker will retry on its cadence).
-        await RunInitialPullAsync(conn, ct);
-
-        return (portfolioId, provider);
+        ct.ThrowIfCancellationRequested();
+        await Task.CompletedTask;
+        throw new AccountingNotConfiguredException(
+            "Accounting OAuth callbacks are temporarily unavailable while callback admission is moved to a database-validated command.");
     }
 
     /// <summary>

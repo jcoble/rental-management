@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../auth/auth_controller.dart';
-import '../auth/auth_models.dart';
+import '../auth/mobile_access_policy.dart';
 import '../voice/voice_command.dart';
 import '../../features/auth/forgot_password_screen.dart';
 import '../../features/auth/login_screen.dart';
@@ -11,7 +11,6 @@ import '../../features/auth/register_screen.dart';
 import '../../features/auth/reset_password_screen.dart';
 import '../../features/auth/verify_email_screen.dart';
 import '../../features/home/home_shell.dart';
-import '../../features/home/mobile_destination.dart';
 import '../../features/home/mobile_domain_hub.dart';
 import '../../features/onboarding/onboarding_choice_screen.dart';
 import '../../features/onboarding/onboarding_live_setup_screen.dart';
@@ -23,7 +22,12 @@ import '../../features/notifications/notifications_inbox_screen.dart';
 import '../../features/owners/owners_list_screen.dart';
 import '../../features/payments/payment_detail_screen.dart';
 import '../../features/scan/scan_review_screen.dart';
+import '../../features/settings/my_alerts_screen.dart';
+import '../../features/settings/settings_screen.dart';
+import '../../features/settings/team_routing_screen.dart';
+import '../../features/settings/tenant_notices_screen.dart';
 import '../../features/units/unit_command_center_screen.dart';
+import 'mobile_access_denied_screen.dart';
 
 const _loginPath = '/login';
 const _registerPath = '/register';
@@ -34,6 +38,9 @@ const _homePath = '/';
 const _chooseSetupPath = '/choose-setup';
 const _settingUpPath = '/setting-up';
 const _liveSetupPath = '/live-setup';
+const _accessDeniedPath = '/access-denied';
+
+final rootNavigatorKey = GlobalKey<NavigatorState>();
 
 /// Routes an unauthenticated user is allowed to sit on without being bounced
 /// back to `/login`.
@@ -62,63 +69,11 @@ bool _isVoiceDeepLink(Uri uri) =>
     parseVoiceCommand(uri) != null;
 
 bool _canOpenRoute(AuthStateAuthenticated auth, String path) {
-  if (path == _homePath ||
-      _publicAuthPaths.contains(path) ||
-      _onboardingGatePaths.contains(path) ||
-      path == _liveSetupPath) {
-    return true;
-  }
-
-  if (auth.activeExperience == WorkspaceExperience.tenant) {
-    return path == '/notifications' || path.startsWith('/messages/');
-  }
-
-  final capabilities = auth.capabilities;
-  bool hasAny(Iterable<String> keys) => keys.any(capabilities.contains);
-  if (path == '/rentals' || path == '/owners' || path.startsWith('/units/')) {
-    return hasAny(const [
-      'rentals.read',
-      'rentals.manage',
-      'leasing.listings.manage',
-      'leasing.applications.manage',
-    ]);
-  }
-  if (path == '/work') {
-    return canOpenWorkHub(capabilities);
-  }
-  if (path.startsWith('/work-orders/')) {
-    return canOpenWorkOrders(capabilities);
-  }
-  if (path == '/money' ||
-      path.startsWith('/tenant-accounts/') ||
-      path.startsWith('/expenses/')) {
-    return hasAny(const [
-      'money.balances.read',
-      'money.payments.manage',
-      'money.expenses.manage',
-      'money.owner-reports.read',
-    ]);
-  }
-  if (path == '/inbox' ||
-      path == '/notifications' ||
-      path.startsWith('/messages/')) {
-    return hasAny(const [
-      'rentals.read',
-      'work.read',
-      'leasing.applications.manage',
-      'maintenance.assigned-work.converse',
-    ]);
-  }
-  if (path.startsWith('/scan/')) {
-    return hasAny(const [
-      'rentals.manage',
-      'work.manage',
-      'money.payments.manage',
-      'money.expenses.manage',
-      'leasing.agreements.prepare',
-    ]);
-  }
-  return false;
+  return canOpenMobilePath(
+    experience: auth.activeExperience,
+    capabilities: auth.capabilities,
+    path: path,
+  );
 }
 
 /// Application router with auth-based redirect guard.
@@ -138,6 +93,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
   ref.onDispose(authNotifier.dispose);
 
   return GoRouter(
+    navigatorKey: rootNavigatorKey,
     initialLocation: _homePath,
     refreshListenable: authNotifier,
     redirect: (BuildContext context, GoRouterState state) {
@@ -166,13 +122,18 @@ final appRouterProvider = Provider<GoRouter>((ref) {
 
       // First-login Sandbox-vs-Live gate: an undecided account is kept on the choice/seeding
       // screens until it chooses. This catches login landing, deep links and cold starts alike.
-      if (authState is AuthStateAuthenticated && authState.onboardingPending) {
+      if (authState is AuthStateAuthenticated &&
+          authState.onboardingPending &&
+          canUseManagementOnboarding(
+            experience: authState.activeExperience,
+            capabilities: authState.capabilities,
+          )) {
         return onGatePage ? null : _chooseSetupPath;
       }
 
       if (authState is AuthStateAuthenticated &&
           !_canOpenRoute(authState, state.matchedLocation)) {
-        return _homePath;
+        return _accessDeniedPath;
       }
 
       // Decided (or returning) user must not linger on the auth pages or the onboarding gate.
@@ -212,6 +173,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         ),
       ),
       GoRoute(path: _homePath, builder: (context, state) => const HomeShell()),
+      GoRoute(
+        path: _accessDeniedPath,
+        builder: (context, state) =>
+            MobileAccessDeniedScreen(onReturn: () => context.go(_homePath)),
+      ),
 
       // ── First-login Sandbox-vs-Live gate ──────────────────────────────────
       GoRoute(
@@ -292,6 +258,22 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/inbox',
         builder: (context, state) => const InboxHubScreen(),
+      ),
+      GoRoute(
+        path: '/settings',
+        builder: (context, state) => const SettingsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/notifications/my-alerts',
+        builder: (context, state) => const MyAlertsScreen(),
+      ),
+      GoRoute(
+        path: '/settings/notifications/team-routing',
+        builder: (context, state) => const TeamRoutingScreen(),
+      ),
+      GoRoute(
+        path: '/settings/notifications/tenant-notices',
+        builder: (context, state) => const TenantNoticesScreen(),
       ),
     ],
     errorBuilder: (context, state) =>

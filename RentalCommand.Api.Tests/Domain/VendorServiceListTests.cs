@@ -6,6 +6,7 @@ using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
@@ -19,10 +20,12 @@ public class VendorServiceListTests : IDisposable
     private readonly List<string> _commands = [];
     private readonly SqliteTestContext _ctx;
     private readonly VendorService _sut;
+    private readonly WorkspaceReadScope _scope;
 
     public VendorServiceListTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(VendorServiceListTests));
         _sut = new VendorService(
             _ctx.Db,
             Mock.Of<IDataUpdateService>(),
@@ -41,7 +44,7 @@ public class VendorServiceListTests : IDisposable
         SeedVendor("Delta Cleaning", "Cleaning");
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new ListQuery
+        var result = await _sut.ListPageAsync(_scope, new ListQuery
         {
             Sort = "name",
             Skip = 1,
@@ -65,7 +68,7 @@ public class VendorServiceListTests : IDisposable
     [Fact]
     public async Task CreateAsync_ReturnsStructuredAddressFields()
     {
-        var created = await _sut.CreateAsync(PortfolioId, new CreateVendorRequest
+        var created = await _sut.CreateAsync(_scope, new CreateVendorRequest
         {
             Name = "Acme HVAC",
             ServiceType = "HVAC",
@@ -76,7 +79,7 @@ public class VendorServiceListTests : IDisposable
             PostalCode = "43215",
         });
 
-        created.Website.Should().Be("https://acme.example.test");
+        created!.Website.Should().Be("https://acme.example.test");
         created.AddressLine1.Should().Be("123 Service Rd");
         created.City.Should().Be("Columbus");
         created.State.Should().Be("OH");
@@ -96,7 +99,7 @@ public class VendorServiceListTests : IDisposable
         SeedVendor("Acme HVAC", "HVAC");
         var vendorId = await _ctx.Db.Vendors.Select(v => v.Id).SingleAsync();
 
-        var updated = await _sut.UpdateAsync(PortfolioId, vendorId, new UpdateVendorRequest
+        var updated = await _sut.UpdateAsync(_scope, vendorId, new UpdateVendorRequest
         {
             Website = "https://repair.example.test",
             AddressLine1 = "456 Repair Ave",

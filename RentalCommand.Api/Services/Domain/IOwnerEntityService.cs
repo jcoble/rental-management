@@ -1,4 +1,5 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -8,13 +9,13 @@ namespace RentalCommand.Api.Services.Domain;
 /// </summary>
 public interface IOwnerEntityService
 {
-    Task<IReadOnlyList<OwnerEntityResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default);
-    Task<OwnerEntityListResponse> ListPageAsync(int portfolioId, ListQuery query, CancellationToken ct = default);
-    Task<OwnerEntityResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
-    Task<OwnerEntityResponse> CreateAsync(int portfolioId, CreateOwnerEntityRequest request, CancellationToken ct = default);
-    Task<OwnerEntityResponse?> UpdateAsync(int portfolioId, int id, UpdateOwnerEntityRequest request, CancellationToken ct = default);
+    Task<IReadOnlyList<OwnerEntityResponse>> ListAsync(WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default);
+    Task<OwnerEntityListResponse> ListPageAsync(WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default);
+    Task<OwnerEntityResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default);
+    Task<OwnerEntityResponse?> CreateAsync(WorkspaceReadScope scope, CreateOwnerEntityRequest request, CancellationToken ct = default);
+    Task<OwnerEntityResponse?> UpdateAsync(WorkspaceReadScope scope, int id, UpdateOwnerEntityRequest request, CancellationToken ct = default);
     Task<bool> DeleteAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         int id,
         DeleteOwnerEntityOptions? options = null,
         CancellationToken ct = default);

@@ -163,21 +163,21 @@ public class RecurringMaintenanceServiceTests : IDisposable
     private RecurringMaintenanceService BuildService(bool enable)
     {
         var now = DateTime.UtcNow;
-        var settings = _ctx.Db.NotificationSettings.SingleOrDefault(row => row.PortfolioId == PortfolioId);
+        var settings = _ctx.Db.AutomationSettings.SingleOrDefault(row => row.PortfolioId == PortfolioId);
         if (settings is null)
         {
-            _ctx.Db.NotificationSettings.Add(new NotificationSettings
+            _ctx.Db.AutomationSettings.Add(new AutomationSettings
             {
                 PortfolioId = PortfolioId,
                 EnableRecurringMaintenance = enable,
-                CreatedAt = now,
-                UpdatedAt = now,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
             });
         }
         else
         {
             settings.EnableRecurringMaintenance = enable;
-            settings.UpdatedAt = now;
+            settings.UpdatedAtUtc = now;
         }
         _ctx.Db.SaveChanges();
 

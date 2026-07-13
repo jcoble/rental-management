@@ -9,11 +9,13 @@ using Npgsql;
 using RentalCommand.Api.Extensions;
 using RentalCommand.Api.Scanning;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Services.Sms;
 using RentalCommand.Api.Simulation;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Notifications;
 using RentalCommand.Engine.HealthChecks;
 using RentalCommand.Engine.Services;
 using RentalCommand.Engine.Workers;
@@ -35,8 +37,16 @@ if (!string.IsNullOrWhiteSpace(dataProtectionKeysPath))
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
     ?? throw new InvalidOperationException(
         "Missing connection string 'DefaultConnection'. Set it in appsettings.json or via configuration.");
-var migratorConnectionString = builder.Configuration.GetConnectionString("MigratorConnection")
-    ?? connectionString;
+if (!string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("MigratorConnection")))
+{
+    throw new InvalidOperationException(
+        "ConnectionStrings:MigratorConnection must not be available to the long-running Engine process.");
+}
+
+RentalCommand.Data.Security.RuntimeDatabaseRoleProvisioner.ValidateRuntimeConnectionString(
+    connectionString,
+    RentalCommand.Data.Security.DatabaseRuntimeIdentity.EngineRole,
+    allowDevelopmentDefault: builder.Environment.IsDevelopment());
 
 // Unified audit trail: the Engine has no HttpContext, so it attributes audit rows to "system".
 // The scoped interceptor is resolved from the same scope as the DbContext (the (sp, options)
@@ -47,9 +57,8 @@ builder.Services.AddScoped<RentalCommand.Core.Interfaces.IAuditScope,
     RentalCommand.Data.Auditing.AuditScope>();
 builder.Services.AddScoped<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>();
 
-// Row-Level Security backstop (audit M-1): the Engine operates across all portfolios, so its RLS
-// interceptor always sets app.is_admin = true (no HTTP context, no single portfolio). It sets the
-// same session GUCs the tenant_isolation policies read, mirroring EdiPlatform's Engine.
+// The Engine's direct restricted database identity is the sole cross-workspace authority. It never
+// receives or sets a mutable administrator/bypass flag.
 builder.Services.AddSingleton<RentalCommand.Engine.Data.EngineRlsInterceptor>();
 builder.Services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
 builder.Services.AddAtomicCommandHandler<
@@ -203,22 +212,16 @@ builder.Services.Configure<StripeConfig>(builder.Configuration.GetSection(Stripe
 builder.Services.AddScoped<IAutopayChargeService, AutopayChargeService>();
 builder.Services.AddScoped<ILateFeeService, LateFeeService>();
 builder.Services.AddScoped<ITenantNoticeCandidateGenerationService, TenantNoticeCandidateGenerationService>();
+builder.Services.AddScoped<ITenantNoticeDraftSetStore, TenantNoticeDraftSetStore>();
 builder.Services.AddScoped<IDailyBriefingService, DailyBriefingService>();
 builder.Services.AddScoped<IDailyBriefingDeliveryService, DailyBriefingDeliveryService>();
-builder.Services.AddScoped<INotificationSettingsService, NotificationSettingsService>();
+builder.Services.AddScoped<IMessagingProviderSettingsResolver, MessagingProviderSettingsResolver>();
 
-// Lease Lifecycle Autopilot: proactively draft renewal/late/move-out notices for one-tap approval.
-// Reuses the Api's NoticeDraftService (LLM copy + de-dup idempotency) — the same code the manual
-// "Generate" button runs. ConversationService is its constructor dependency (only used by the
-// approve path, which the worker never invokes; the Engine already provides IDataUpdateService).
-// ConversationService's own constructor needs IFairHousingReviewService, so the Engine MUST register
-// it too. Development host builds validate the whole DI graph on Build(), so a missing registration
-// here crashes the entire Engine on boot — killing every worker (outbox/scan dispatch, debt service,
-// late-fee sweep, notices), not just the notice path. FairHousingReviewService's only dependency is
-// ILlmProvider, which the Engine already registers for scan extraction, so this adds no further graph.
+// Tenant-notice work is drafted by one PostgreSQL set command, then Auto policies use the same
+// canonical approval/outbox command as the API. The Engine does not use the manual draft façade.
 builder.Services.AddScoped<IFairHousingReviewService, FairHousingReviewService>();
 builder.Services.AddScoped<IConversationService, ConversationService>();
-builder.Services.AddScoped<INoticeDraftService, NoticeDraftService>();
+builder.Services.AddScoped<INotificationFoundationService, NotificationFoundationService>();
 builder.Services.AddScoped<INoticeDraftGenerationService, NoticeDraftGenerationService>();
 
 // Accounting-integration pull worker dependencies (provider-agnostic). The Engine does not call
@@ -280,41 +283,9 @@ builder.Services.AddHealthChecks()
 
 var host = builder.Build();
 
-// --- Self-migrate ---
-// The Engine applies EF Core migrations itself so it no longer depends on the API having
-// created the schema. Both the API and Engine self-migrate on startup, so the migration runs
-// under a shared PostgreSQL advisory lock (DatabaseMigrator) — concurrent MigrateAsync calls
-// would otherwise race on a fresh batch and crash one process. Done BEFORE acquiring the worker
-// advisory lock so the schema (incl. the heartbeat table the watchdog reads) exists first.
-{
-    var migrateLogger = host.Services.GetRequiredService<ILogger<Program>>();
-    const int maxMigrateAttempts = 30;
-    for (var attempt = 1; attempt <= maxMigrateAttempts; attempt++)
-    {
-        try
-        {
-            var migrationOptions = new DbContextOptionsBuilder<RentalCommandDbContext>()
-                .UseNpgsql(migratorConnectionString)
-                .Options;
-            await using var migrationDb = new RentalCommandDbContext(migrationOptions);
-            // Advisory-locked so the Engine and API don't apply a fresh migration batch concurrently.
-            await DatabaseMigrator.MigrateWithLockAsync(migrationDb);
-            migrateLogger.LogInformation("Engine applied database migrations (or none pending).");
-            break;
-        }
-        catch (Exception ex) when (attempt < maxMigrateAttempts)
-        {
-            migrateLogger.LogWarning(
-                "Database not ready for migration yet (attempt {Attempt}/{Max}): {Message}. Retrying in 2s…",
-                attempt, maxMigrateAttempts, ex.Message);
-            await Task.Delay(TimeSpan.FromSeconds(2));
-        }
-    }
-}
-
 // --- Single-instance safety: PostgreSQL advisory lock ---
-// The dedicated non-pooled connection assumes the Engine runtime role before issuing SQL. A new
-// Engine waits for the prior holder instead of retaining owner authority merely to terminate it.
+// The dedicated non-pooled connection already uses the direct restricted Engine login. A new Engine
+// waits for the prior holder instead of retaining owner authority merely to terminate it.
 var logger = host.Services.GetRequiredService<ILogger<Program>>();
 
 var lockConnString = new NpgsqlConnectionStringBuilder(connectionString) { Pooling = false }.ToString();
@@ -329,11 +300,9 @@ for (var attempt = 1; attempt <= maxDbAttempts; attempt++)
     {
         lockConnection = new NpgsqlConnection(lockConnString);
         await lockConnection.OpenAsync();
-        await using (var roleCmd = lockConnection.CreateCommand())
-        {
-            roleCmd.CommandText = "SET ROLE rentalcommand_engine";
-            await roleCmd.ExecuteNonQueryAsync();
-        }
+        await RentalCommand.Data.Security.DatabaseRuntimeIdentity.ValidateOpenedConnectionAsync(
+            lockConnection,
+            RentalCommand.Data.Security.DatabaseRuntimeIdentity.EngineRole);
         break;
     }
     catch (Exception ex) when (attempt < maxDbAttempts)

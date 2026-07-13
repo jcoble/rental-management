@@ -10,31 +10,31 @@ import 'notices_repository.dart';
 const _noticeTypeChoices =
     <({String type, String label, String hint, IconData icon})>[
       (
-        type: 'RentReminder',
+        type: 'rent-reminder',
         label: 'Rent reminder (coming due)',
         hint: 'Friendly heads-up that rent is coming due.',
         icon: Icons.event_available_outlined,
       ),
       (
-        type: 'RenewalOffer',
+        type: 'lease-renewal-offer',
         label: 'Lease renewal offer',
         hint: 'Offer to extend the lease for another term.',
         icon: Icons.event_repeat_outlined,
       ),
       (
-        type: 'MonthToMonthConversion',
+        type: 'month-to-month-offer',
         label: 'Convert to month-to-month',
         hint: 'Offer to continue month-to-month after the lease ends.',
         icon: Icons.sync_alt_outlined,
       ),
       (
-        type: 'MoveOutReminder',
+        type: 'lease-non-renewal',
         label: 'Lease expiration / move-out',
         hint: 'Let them know the lease is ending and coordinate move-out.',
         icon: Icons.logout_outlined,
       ),
       (
-        type: 'LateRentNotice',
+        type: 'late-rent-late-fee',
         label: 'Late rent / late fee',
         hint: 'Remind the tenant about an overdue balance.',
         icon: Icons.warning_amber_outlined,
@@ -110,10 +110,7 @@ Future<void> showCreateTenantNoticeFlow(
   try {
     drafts = await ref
         .read(noticesRepositoryProvider)
-        .generateScoped(
-          recipientTenantId,
-          noticeType: choice,
-        );
+        .generateScoped(recipientTenantId, noticeType: choice);
   } on ApiException catch (e) {
     messenger
       ..hideCurrentSnackBar()
@@ -125,8 +122,9 @@ Future<void> showCreateTenantNoticeFlow(
 
   if (drafts.isEmpty) {
     final why = switch (choice) {
-      'LateRentNotice' => 'No overdue payment to base a late-rent notice on.',
-      'RentReminder' || 'MonthToMonthConversion' =>
+      'late-rent-late-fee' =>
+        'No overdue payment to base a late-rent notice on.',
+      'rent-reminder' || 'month-to-month-offer' =>
         'This tenant needs an active lease to create that notice.',
       _ => 'There is already an open draft of this notice for this tenant.',
     };

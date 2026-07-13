@@ -54,7 +54,7 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
         }, CancellationToken.None);
 
         result.Result.Should().BeOfType<BadRequestObjectResult>();
-        service.Verify(s => s.CreateAsync(It.IsAny<int>(), It.IsAny<CreateWorkOrderRequest>(),
+        service.Verify(s => s.CreateAuthorizedAsync(It.IsAny<WorkspaceReadScope>(), It.IsAny<CreateWorkOrderRequest>(),
             It.IsAny<int?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -90,7 +90,7 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
         }, CancellationToken.None);
 
         result.Result.Should().BeOfType<BadRequestObjectResult>();
-        service.Verify(s => s.UpdateAsync(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<UpdateWorkOrderRequest>(),
+        service.Verify(s => s.UpdateAuthorizedAsync(It.IsAny<WorkspaceReadScope>(), It.IsAny<int>(), It.IsAny<UpdateWorkOrderRequest>(),
             It.IsAny<int?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -98,7 +98,7 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
     public async Task Create_ValidWindow_ReachesService()
     {
         var service = new Mock<IWorkOrderService>();
-        service.Setup(s => s.CreateAsync(It.IsAny<int>(), It.IsAny<CreateWorkOrderRequest>(),
+        service.Setup(s => s.CreateAuthorizedAsync(It.IsAny<WorkspaceReadScope>(), It.IsAny<CreateWorkOrderRequest>(),
                 It.IsAny<int?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new WorkOrderResponse { Id = 11, Title = "Valid window" });
         var controller = CreateController(service.Object);
@@ -113,7 +113,7 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
         }, CancellationToken.None);
 
         result.Result.Should().BeOfType<CreatedAtActionResult>();
-        service.Verify(s => s.CreateAsync(It.IsAny<int>(), It.IsAny<CreateWorkOrderRequest>(),
+        service.Verify(s => s.CreateAuthorizedAsync(It.IsAny<WorkspaceReadScope>(), It.IsAny<CreateWorkOrderRequest>(),
             It.IsAny<int?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -122,7 +122,7 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
     {
         // A window-end with no start is a partial shape; the invariant only fires when both are present.
         var service = new Mock<IWorkOrderService>();
-        service.Setup(s => s.CreateAsync(It.IsAny<int>(), It.IsAny<CreateWorkOrderRequest>(),
+        service.Setup(s => s.CreateAuthorizedAsync(It.IsAny<WorkspaceReadScope>(), It.IsAny<CreateWorkOrderRequest>(),
                 It.IsAny<int?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new WorkOrderResponse { Id = 12, Title = "End only" });
         var controller = CreateController(service.Object);

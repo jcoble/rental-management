@@ -22,6 +22,15 @@ public interface ILeaseManagementQueryService
     Task<bool> CanReadAsync(
         LeaseManagementReadContext access, int leaseManagementId,
         CancellationToken ct = default);
+    Task<LeaseQaAgreementFacts?> GetLeaseQaAgreementAsync(
+        LeaseManagementReadContext access, int leaseManagementId,
+        CancellationToken ct = default);
+    Task<IReadOnlyList<int>> ListAuthorizedAgreementIssueSignerIdsAsync(
+        LeaseManagementReadContext access, int leaseManagementId, int leaseAgreementId,
+        CancellationToken ct = default);
+    Task<IReadOnlyList<int>> ListAuthorizedAddendumIssueSignerIdsAsync(
+        LeaseManagementReadContext access, int leaseManagementId, int leaseAddendumId,
+        CancellationToken ct = default);
     Task<ReturnPossessionContextResponse> GetReturnPossessionContextAsync(
         LeaseManagementReadContext access, int leaseManagementId,
         CancellationToken ct = default);
@@ -72,3 +81,21 @@ public sealed record LegalArtifactFileReference(
     string StorageKey,
     string FileName,
     string ContentType);
+
+/// <summary>
+/// Exact governing Agreement facts admitted by the same SQL statement that proves the staff
+/// session, access revision, RentalsRead capability, and owning-property scope.
+/// </summary>
+public sealed record LeaseQaAgreementFacts(
+    int LeaseAgreementId,
+    int LeaseManagementId,
+    string AgreementNumber,
+    DateOnly TermStartOn,
+    DateOnly? TermEndOn,
+    decimal BaseRentAmount,
+    decimal SecurityDepositObligation,
+    decimal LateFeeAmount,
+    short RentDueDay,
+    string TermsPayload,
+    int ExecutedStoredFileId,
+    string ExecutedFileName);

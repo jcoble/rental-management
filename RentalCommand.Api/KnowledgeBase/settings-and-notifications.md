@@ -3,39 +3,73 @@ title: Settings and Notifications
 category: Settings
 slug: settings-and-notifications
 order: 1
-summary: Set up your portfolio details, choose how you get notified, and configure automation and messaging.
-keywords: settings, notifications, email, sms, text, signalwire, daily briefing delivery, automation, late fees, rent charges, broadcast, time zone, messaging defaults
+summary: Understand personal alerts, team responsibility routing, and tenant notice delivery.
+keywords: settings, notifications, alerts, team routing, tenant notices, templates, email, sms, mobile push, in-app, recipients, automation
 ---
 
-The **Settings** page is where you configure your portfolio and decide how Rental Command keeps you informed.
+Rental Command separates notifications by **who receives them**. This prevents a personal alert preference from accidentally changing a tenant notice or a coworker's delivery.
 
-## Portfolio basics
+## My alerts
 
-At the top, set your **portfolio name**, description, **management company**, **time zone**, and status. Time zone matters because it drives due dates and when daily messages go out. Click **Save Settings** when done.
+**My alerts** applies only to the signed-in account. Each team member chooses their own channels:
 
-## Notification email
+- **In-app** appears in the Rental Command notification bell and inbox.
+- **Mobile push** goes to mobile devices registered to that account. It does not mean browser web push.
+- **Email** goes to the email shown on the account.
+- **SMS** goes to the phone number shown on the account when workspace texting is available.
 
-Set the email address where notification emails should go. Leave it blank to use your login email.
+Turning off one of these channels does not disable the event itself, change another team member's preferences, or change tenant delivery.
 
-## How you get notified
+## Team routing
 
-A simple grid lets you choose, for each kind of update, whether you want it **In-app** (the bell at the top), by **Email**, or by **Text (SMS)**. The update types include rent reminders, late fees, lease expiry/renewal, rent confirmations, lease notices, and the daily briefing.
+**Team routing** answers: “Which team member is responsible for this kind of update?” It is managed separately from channel preferences.
 
-## Automation and delivery
+Routing topics include rent and money, applications and leasing, work orders, owner statements and decisions, account and security events, and the **Morning Briefing**. A saved rule shows:
 
-Turn on the automations you want and set their timing:
+- its scope, such as all properties or a selected property;
+- every named recipient;
+- the reason each person receives that topic; and
+- whether Workspace Administrators are the fallback when nobody is named.
 
-- **Auto-post rent charges** (with how many days' lead time).
-- **Auto-assess late fees** (after a grace period).
-- **Lease expiry reminders** (how many days before lease end).
-- **Send tenant notices** — lets automations text/email tenants when set up.
+Named recipients must be active members of the current workspace. Their actual delivery channels come from **their own My alerts** choices. Tenant channels are never inherited from Team routing.
 
-This is also where you enter **SignalWire** details (Project ID, Space URL, From Number, API Token) to enable **text messaging**, and set up the **daily briefing** delivery — whether to send it, the local send hour, and the SMS/email recipients. Provider secrets are stored encrypted. Click **Save Delivery Settings**.
+The Morning Briefing is the scheduled landlord/team rundown of rent, lease, appointment, inspection, and urgent work that needs attention. It remains workspace-wide because every recipient sees only records allowed by that person's active capabilities and property scope. Notification managers can pause or resume it, choose its local send hour, decide whether all-clear days should send, and name its responsible recipient. The recipient's own **My alerts** choices determine whether it arrives by email, SMS, or mobile push.
 
-## Messaging defaults
+Only users with notification-management access can change Team routing. Property assignment and role scope still apply when the underlying record is loaded or acted on.
 
-Choose which channels are pre-checked when you send a tenant a new message. The portal inbox is always included; these just set the email/text defaults, and you can change them per message. (Texting tenants requires SMS to be set up.)
+## Tenant notices
 
-## Broadcast a notice
+**Tenant notices** controls delivery to people in a lease-management relationship. Each automation is independent; there is no master “send tenant notices” switch.
 
-Use **Broadcast Notification** to send an in-app announcement (with a severity) to everyone in the portfolio — for example, "Swimming pool closed today." It shows in their notification bell and tenant dashboard.
+The supplied automations are:
+
+- rent reminder;
+- lease renewal offer;
+- month-to-month offer;
+- lease expiration or non-renewal; and
+- past-due rent or late-fee notice.
+
+Every automation has one mode:
+
+- **Off** — creates no draft and sends nothing.
+- **Draft for review** — prepares a draft for an authorized team member.
+- **Send automatically** — uses the saved policy only when its operational and legal requirements are satisfied.
+
+Each policy separately chooses timing, tenant channels, eligible relationship roles, and what happens after a delivery failure. A primary tenant, co-tenant, guarantor, and occupant are not interchangeable. Legal notices never include an occupant merely because the person lives in the unit, and a guarantor must be explicitly eligible for legal delivery.
+
+## Supplied templates and versions
+
+Rental Command supplies complete starting copy for every tenant-notice automation. You edit that copy instead of beginning with an empty message.
+
+Saving an edit creates a new immutable workspace template version. Older versions remain available as history, and an already prepared notice stays tied to the exact template version used to render it. **Restore current supplied default** also creates a new version; it does not erase prior customization.
+
+Legal templates require a reviewed jurisdiction before automatic delivery is available. This is a workflow safeguard, not legal advice; the workspace administrator remains responsible for confirming the notice and timing for the applicable jurisdiction.
+
+## Who can change what?
+
+- Any signed-in staff or owner account can change **My alerts** for itself.
+- A user with notification-management access can change **Team routing** and **Tenant notices**.
+- Tenant portal notification preferences are managed in the tenant experience, not the staff settings area.
+- Channel selection never bypasses record access, property scope, or role capabilities.
+
+If a channel has no valid destination—for example, SMS is selected but the recipient has no phone number—the system does not invent one. Tenant notice failure behavior determines whether delivery stops for review, retries and keeps a draft, or retries and records failure.

@@ -8,7 +8,6 @@
 
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
-import { auth } from '$lib/api/endpoints/auth';
 import type { AccessEnvelope, User, WorkspaceExperience } from '$lib/types/user';
 import { capabilityKeysForExperience } from '$lib/types/user';
 import { realNow } from '$lib/dev/real-time';
@@ -83,18 +82,8 @@ export function updateToken(newToken: string, expiration: Date, access?: AccessE
 export function setAccessEnvelope(access: AccessEnvelope) {
 	assertClientWrite('setAccessEnvelope');
 	accessEnvelope = access;
-	if (!activeExperience || !access.availableExperiences.includes(activeExperience)) {
-		activeExperience = access.selectedContext.activeExperience;
-	}
-}
-
-export async function selectExperience(experience: WorkspaceExperience) {
-	assertClientWrite('selectExperience');
-	if (!accessEnvelope?.availableExperiences.includes(experience)) {
-		throw new Error('That experience is not available in the selected workspace.');
-	}
-	const access = await auth.selectExperience(experience);
-	setAccessEnvelope(access);
+	// The server-selected experience is authoritative. Keeping an older still-available value here
+	// makes a successful experience switch render the previous shell until the next full reload.
 	activeExperience = access.selectedContext.activeExperience;
 }
 

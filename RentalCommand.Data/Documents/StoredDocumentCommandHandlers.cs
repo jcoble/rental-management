@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Documents;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 
@@ -138,11 +139,19 @@ public sealed class DeleteStoredDocumentHandler
         StoredFile? row;
         if (command.IsStaff)
         {
-            row = await attempt.Persistence.Query<StoredFile>()
-                .SingleOrDefaultAsync(file =>
-                    file.Id == command.StoredFileId
-                    && file.PortfolioId == command.PortfolioId,
-                    ct);
+            var target = await attempt.Persistence.Query<StoredFile>()
+                .Where(file => file.Id == command.StoredFileId && file.PortfolioId == command.PortfolioId)
+                .Select(file => new { file.EntityType, file.EntityId })
+                .SingleOrDefaultAsync(ct);
+            row = target is not null && target.EntityId.HasValue &&
+                  Enum.TryParse<StoredDocumentTarget>(target.EntityType, true, out var parsed) &&
+                  command.ManagementAccess is { } access &&
+                  await StoredDocumentAuthorization.StaffTargetExistsAsync(
+                      command.PortfolioId, parsed, target.EntityId.Value, access,
+                      command.DeletedAtUtc, attempt.Persistence, ct)
+                ? await attempt.Persistence.Query<StoredFile>().SingleAsync(file =>
+                    file.Id == command.StoredFileId && file.PortfolioId == command.PortfolioId, ct)
+                : null;
         }
         else if (command.TenantId.HasValue)
         {
@@ -251,39 +260,127 @@ internal static class StoredDocumentAuthorization
                 ct);
         }
 
-        return command.Target switch
+        return command.ManagementAccess is not { } access
+            ? Task.FromResult(false)
+            : StaffTargetExistsAsync(
+                command.PortfolioId,
+                command.Target,
+                command.EntityId,
+                access,
+                command.UploadedAtUtc,
+                persistence,
+                ct);
+    }
+
+    internal static Task<bool> StaffTargetExistsAsync(
+        int portfolioId,
+        StoredDocumentTarget target,
+        long entityId,
+        StoredDocumentManagementAccess access,
+        DateTime utcNow,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        var capability = target switch
         {
-            StoredDocumentTarget.Property => persistence.Query<Property>().AnyAsync(
-                entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),
+            StoredDocumentTarget.Property or StoredDocumentTarget.Unit or StoredDocumentTarget.Tenant =>
+                CapabilityKeys.RentalsManage,
+            StoredDocumentTarget.LeaseAgreement => CapabilityKeys.LeasingAgreementsPrepare,
+            StoredDocumentTarget.Expense => CapabilityKeys.MoneyExpensesManage,
+            StoredDocumentTarget.WorkOrder or StoredDocumentTarget.Appointment or StoredDocumentTarget.Inspection or
+                StoredDocumentTarget.Vendor => CapabilityKeys.WorkManage,
+            _ => null,
+        };
+        if (capability is null) return Task.FromResult(false);
+        var assignments = AuthorizedAssignments(persistence, portfolioId, access, capability, utcNow);
+
+        return target switch
+        {
+            StoredDocumentTarget.Property => persistence.Query<Property>().AnyAsync(entity =>
+                entity.Id == entityId && entity.PortfolioId == portfolioId && assignments.Any(assignment =>
+                    assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                    assignment.SelectedProperties.Any(selected =>
+                        selected.PortfolioId == portfolioId && selected.PropertyId == entity.Id)), ct),
             StoredDocumentTarget.Unit => persistence.Query<Unit>().AnyAsync(
-                entity => entity.Id == command.EntityId
+                entity => entity.Id == entityId
                     && entity.Property != null
-                    && entity.Property.PortfolioId == command.PortfolioId, ct),
-            StoredDocumentTarget.Tenant => persistence.Query<Tenant>().AnyAsync(
-                entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),
+                    && entity.Property.PortfolioId == portfolioId
+                    && assignments.Any(assignment =>
+                        assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                        assignment.SelectedProperties.Any(selected => selected.PortfolioId == portfolioId &&
+                            selected.PropertyId == entity.PropertyId)), ct),
+            StoredDocumentTarget.Tenant => persistence.Query<LeaseManagementParty>().AnyAsync(party =>
+                party.TenantId == entityId && party.PortfolioId == portfolioId &&
+                assignments.Any(assignment =>
+                    assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                    assignment.SelectedProperties.Any(selected => selected.PortfolioId == portfolioId &&
+                        selected.PropertyId == party.LeaseManagement!.PropertyId)), ct),
             StoredDocumentTarget.LeaseAgreement => persistence.Query<LeaseAgreement>().AnyAsync(
-                entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),
-            StoredDocumentTarget.LegalDocumentArtifact => persistence.Query<LegalDocumentArtifact>().AnyAsync(
-                entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),
-            StoredDocumentTarget.TenantAccount => persistence.Query<TenantAccount>().AnyAsync(
-                entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),
-            StoredDocumentTarget.TenantLedgerEntry => persistence.Query<TenantLedgerEntry>().AnyAsync(
-                entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),
+                entity => entity.Id == entityId && entity.PortfolioId == portfolioId &&
+                    assignments.Any(assignment =>
+                        assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                        assignment.SelectedProperties.Any(selected => selected.PortfolioId == portfolioId &&
+                            selected.PropertyId == entity.LeaseManagement!.PropertyId)), ct),
             StoredDocumentTarget.Expense => persistence.Query<Expense>().AnyAsync(
-                entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),
+                entity => entity.Id == entityId && entity.PortfolioId == portfolioId &&
+                    assignments.Any(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                        assignment.SelectedProperties.Any(selected => selected.PortfolioId == portfolioId &&
+                            selected.PropertyId == entity.PropertyId)), ct),
             StoredDocumentTarget.Vendor => persistence.Query<Vendor>().AnyAsync(
-                entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),
+                entity => entity.Id == entityId && entity.PortfolioId == portfolioId &&
+                    assignments.Any(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties), ct),
             StoredDocumentTarget.WorkOrder => persistence.Query<WorkOrder>().AnyAsync(
-                entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),
+                entity => entity.Id == entityId && entity.PortfolioId == portfolioId &&
+                    assignments.Any(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                        assignment.SelectedProperties.Any(selected => selected.PortfolioId == portfolioId &&
+                            selected.PropertyId == entity.PropertyId)), ct),
             StoredDocumentTarget.Appointment => persistence.Query<Appointment>().AnyAsync(
-                entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),
+                entity => entity.Id == entityId && entity.PortfolioId == portfolioId &&
+                    assignments.Any(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                        assignment.SelectedProperties.Any(selected => selected.PortfolioId == portfolioId &&
+                            selected.PropertyId == entity.PropertyId)), ct),
             StoredDocumentTarget.Inspection => persistence.Query<Inspection>().AnyAsync(
-                entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),
-            StoredDocumentTarget.SecurityDepositAccount => persistence.Query<SecurityDepositAccount>().AnyAsync(
-                entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),
-            StoredDocumentTarget.OwnerEntity => persistence.Query<OwnerEntity>().AnyAsync(
-                entity => entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct),
+                entity => entity.Id == entityId && entity.PortfolioId == portfolioId &&
+                    assignments.Any(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                        assignment.SelectedProperties.Any(selected => selected.PortfolioId == portfolioId &&
+                            selected.PropertyId == entity.PropertyId)), ct),
             _ => Task.FromResult(false),
         };
     }
+
+    private static IQueryable<MembershipRoleAssignment> AuthorizedAssignments(
+        IAtomicPersistenceSession persistence,
+        int portfolioId,
+        StoredDocumentManagementAccess access,
+        string capability,
+        DateTime utcNow) =>
+        persistence.Query<MembershipRoleAssignment>().Where(assignment =>
+            assignment.PortfolioId == portfolioId &&
+            assignment.Status == MembershipRoleAssignmentStatus.Active &&
+            assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null &&
+            assignment.EffectiveFromUtc <= utcNow &&
+            (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > utcNow) &&
+            assignment.WorkspaceMembership != null &&
+            assignment.WorkspaceMembership.AccessContextId == access.AccessContextId &&
+            assignment.WorkspaceMembership.PortfolioId == portfolioId &&
+            assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active &&
+            assignment.WorkspaceMembership.SuspendedAtUtc == null &&
+            assignment.WorkspaceMembership.RevokedAtUtc == null &&
+            assignment.WorkspaceMembership.EffectiveFromUtc <= utcNow &&
+            (assignment.WorkspaceMembership.EffectiveToUtc == null ||
+             assignment.WorkspaceMembership.EffectiveToUtc > utcNow) &&
+            assignment.WorkspaceMembership.AccessContext != null &&
+            assignment.WorkspaceMembership.AccessContext.UserId == access.UserId &&
+            assignment.WorkspaceMembership.AccessContext.AccessRevision == access.AccessRevision &&
+            assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active &&
+            persistence.Query<AuthSession>().Any(session =>
+                session.Id == access.SessionId && session.UserId == access.UserId &&
+                session.ActiveAccessContextId == access.AccessContextId &&
+                session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null &&
+                session.ExpiresAtUtc > utcNow) &&
+            assignment.RoleProfile != null && assignment.RoleProfile.Capabilities.Any(profileCapability =>
+                profileCapability.CapabilityDefinition != null &&
+                profileCapability.CapabilityDefinition.Key == capability &&
+                profileCapability.CapabilityDefinition.AuthorizationTargetKind ==
+                    CapabilityAuthorizationTargetKind.Property));
 }

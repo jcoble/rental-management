@@ -80,7 +80,7 @@ class SignalRService {
 					// websocket handshake doesn't fail auth on a stale JWT.
 					if (browser && isTokenExpired(60)) {
 						try {
-							await refreshToken();
+							await refreshToken('signalr');
 						} catch {
 							/* fall back to the current token */
 						}

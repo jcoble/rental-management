@@ -68,7 +68,11 @@ public sealed record AtomicAuthSessionRotationOutcome(
     Guid AuthSessionId,
     Guid RefreshTokenFamilyId,
     string? ReplacementBearer,
-    AtomicCommandDisposition? Disposition);
+    AtomicCommandDisposition? Disposition,
+    int? UserId = null,
+    int? AccessContextId = null,
+    int? PortfolioId = null,
+    long? AccessRevision = null);
 
 public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCredentialService
 {
@@ -244,7 +248,11 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
             mayReturnReplacement
                 ? _tokens.CreateBearer(value.ReplacementCredentialId!.Value)
                 : null,
-            outcome.Disposition);
+            outcome.Disposition,
+            value.UserId,
+            value.AccessContextId,
+            value.PortfolioId,
+            value.AccessRevision);
     }
 
     public async Task<SwitchAuthSessionContextResult> SwitchContextAsync(

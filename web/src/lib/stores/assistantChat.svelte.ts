@@ -27,6 +27,7 @@ export type AssistantChatMessage = {
 };
 
 class AssistantChatStore {
+	#accessGeneration = 0;
 	isOpen = $state(false);
 	isLoading = $state(false);
 	writeModeEnabled = $state(false);
@@ -50,6 +51,15 @@ class AssistantChatStore {
 		this.error = null;
 	}
 
+	resetForAccessChange() {
+		this.#accessGeneration++;
+		this.isOpen = false;
+		this.isLoading = false;
+		this.writeModeEnabled = false;
+		this.messages = [];
+		this.error = null;
+	}
+
 	setWriteMode(enabled: boolean) {
 		this.writeModeEnabled = enabled;
 	}
@@ -57,6 +67,7 @@ class AssistantChatStore {
 	async send(message: string) {
 		const text = message.trim();
 		if (!text || this.isLoading) return;
+		const accessGeneration = this.#accessGeneration;
 
 		const userMessage: AssistantChatMessage = {
 			id: crypto.randomUUID(),
@@ -83,6 +94,7 @@ class AssistantChatStore {
 		try {
 			if (looksLikeAssistantActionCommand(text)) {
 				const response = await ai.draftAction(text, this.writeModeEnabled);
+				if (accessGeneration !== this.#accessGeneration) return;
 				this.messages = this.messages.map((m) =>
 					m.id === assistantMessage.id
 						? {
@@ -97,6 +109,7 @@ class AssistantChatStore {
 				);
 			} else {
 				const response = await ai.ask(text, history);
+				if (accessGeneration !== this.#accessGeneration) return;
 				this.messages = this.messages.map((m) =>
 					m.id === assistantMessage.id
 						? { ...m, content: response.answer, isLoading: false }
@@ -104,6 +117,7 @@ class AssistantChatStore {
 				);
 			}
 		} catch (err) {
+			if (accessGeneration !== this.#accessGeneration) return;
 			const message = err instanceof Error ? err.message : 'Assistant failed to respond.';
 			this.error = message;
 			this.messages = this.messages.map((m) =>
@@ -112,18 +126,20 @@ class AssistantChatStore {
 					: m
 			);
 		} finally {
-			this.isLoading = false;
+			if (accessGeneration === this.#accessGeneration) this.isLoading = false;
 		}
 	}
 
 	async executeAction(messageId: string) {
 		const target = this.messages.find((m) => m.id === messageId);
 		if (!target?.actionDraft || target.isExecutingAction) return;
+		const accessGeneration = this.#accessGeneration;
 
 		this.#patch(messageId, { isExecutingAction: true, actionNote: null });
 
 		try {
 			const response = await ai.executeAction(target.actionDraft, this.writeModeEnabled);
+			if (accessGeneration !== this.#accessGeneration) return;
 			this.#patch(messageId, {
 				content: response.message,
 				actionStatus: response.status,
@@ -132,6 +148,7 @@ class AssistantChatStore {
 				actionDraft: response.status === 'Created' ? null : target.actionDraft,
 			});
 		} catch (err) {
+			if (accessGeneration !== this.#accessGeneration) return;
 			const note = err instanceof Error ? err.message : 'Action failed.';
 			this.#patch(messageId, { isExecutingAction: false, actionNote: note });
 		}
@@ -147,6 +164,7 @@ class AssistantChatStore {
 		if (!target || target.role !== 'assistant' || !target.question || target.deliveringChannel) {
 			return;
 		}
+		const accessGeneration = this.#accessGeneration;
 
 		const question = target.question;
 		const history: QaTurn[] = this.messages
@@ -161,6 +179,7 @@ class AssistantChatStore {
 
 		try {
 			const response = await ai.ask(question, history, delivery);
+			if (accessGeneration !== this.#accessGeneration) return;
 			const delivered = response.deliveredChannels ?? [];
 			const ok =
 				channel === 'email'
@@ -175,6 +194,7 @@ class AssistantChatStore {
 					: "Couldn't text — no phone on file.";
 			this.#patch(messageId, { deliveringChannel: null, deliveryNote: note });
 		} catch (err) {
+			if (accessGeneration !== this.#accessGeneration) return;
 			const note = err instanceof Error ? err.message : 'Delivery failed.';
 			this.#patch(messageId, { deliveringChannel: null, deliveryNote: note });
 		}

@@ -26,10 +26,12 @@ internal static class FoundationBaselinePostgreSql
         UnitOccupancyViewSql.Create,
         LeaseManagementLifecycleViewSql.Create,
         LeaseReconciliationExceptionViewSql.Create,
+        MorningBriefingCandidateViewSql.Create,
         RelationshipAccessProjectionSql.Create,
         AccessEnvelopeViewSql.Create,
         AccountingParkedTransactionViewSql.Create,
         BuildRolesAndGrantSql(),
+        CreateRlsAuthorityFunctions,
         BuildCreateRlsSql(),
         CreateSandboxGraduationGlobalDeleteGuards,
     ]);
@@ -40,11 +42,13 @@ internal static class FoundationBaselinePostgreSql
     [
         DropSandboxGraduationGlobalDeleteGuards,
         BuildDropRlsSql(),
+        DropRlsAuthorityFunctions,
         BuildRevokeRoleGrantsSql(),
         AccountingParkedTransactionViewSql.Drop,
         AccessEnvelopeViewSql.Drop,
         RelationshipAccessProjectionSql.Drop,
         LeaseReconciliationExceptionViewSql.Drop,
+        MorningBriefingCandidateViewSql.Drop,
         LeaseManagementLifecycleViewSql.Drop,
         UnitOccupancyViewSql.Drop,
         SecurityDepositBalanceViewSql.Drop,
@@ -106,9 +110,9 @@ internal static class FoundationBaselinePostgreSql
         "MembershipRoleAssignments",
         "NoticeDeliveryEvidence",
         "NoticeDrafts",
-        "NotificationPreferences",
+        "AutomationSettings",
+        "MessagingProviderSettings",
         "Notifications",
-        "NotificationSettings",
         "OAuthStates",
         "OwnerDistributions",
         "OwnerEntities",
@@ -236,6 +240,7 @@ internal static class FoundationBaselinePostgreSql
         "vw_unit_occupancy",
         "vw_lease_management_lifecycle",
         "vw_lease_reconciliation_exceptions",
+        "vw_morning_briefing_candidates",
         "vw_effective_owner_access",
         "vw_effective_tenant_access",
         "vw_access_envelopes",
@@ -322,7 +327,7 @@ internal static class FoundationBaselinePostgreSql
             "AccountingConnections", "BankConnections",
             "DeviceTokens", "InspectionTemplateItems", "InspectionTemplates",
             "LegalDocumentSourceVersions", "MembershipRoleAssignments",
-            "NotificationPreferences", "NotificationSettings", "TenantNoticePolicies",
+            "AutomationSettings", "MessagingProviderSettings", "TenantNoticePolicies",
             "UserAlertPreferences", "WorkspaceAccessContexts", "WorkspaceMemberships",
             "WorkspaceNoticeTemplateVersions",
         };
@@ -355,7 +360,7 @@ internal static class FoundationBaselinePostgreSql
         "LeaseManagementParties", "LeaseManagements", "LeaseRenewalAddendumDecisions",
         "LegalDocumentArtifacts", "ListingPhotos", "ListingPublications", "LoanPayments", "Loans",
         "LoginContextSelectionChallenges", "MembershipRoleAssignments", "NoticeDrafts",
-        "NotificationPreferences", "NotificationSettings", "Notifications", "OutboxMessages",
+        "AutomationSettings", "MessagingProviderSettings", "Notifications", "OutboxMessages",
         "OwnerDistributions", "OwnerEntities", "OwnerUserAccesses", "Owners", "PendingFileUploads",
         "PlaidTokenExchangeAttempts", "PortalMessages", "Portfolios", "Properties",
         "PropertyDispositions", "ProviderInboxEvents", "QueuedJobs", "RecurringExpenses",
@@ -417,7 +422,7 @@ internal static class FoundationBaselinePostgreSql
         "LeaseAgreementSigners", "LeaseManagementParties", "LeaseManagements",
         "LeaseRenewalAddendumDecisions", "LegalDocumentArtifacts", "LegalDocumentSourceVersions", "ListingPhotos",
         "ListingPublications", "LoanPayments", "Loans", "MembershipRoleAssignmentProperties",
-        "MembershipRoleAssignments", "NotificationPreferences", "NotificationSettings",
+        "MembershipRoleAssignments", "AutomationSettings", "MessagingProviderSettings",
         "OwnerDistributions", "OwnerEntities", "OwnerUserAccesses", "Owners", "PortalMessages",
         "Portfolios", "Properties", "PropertyDispositions", "QueuedJobs", "RentalApplications",
         "RentalListings", "RoleProfileCapabilities", "RoleProfiles", "SimulationClocks",
@@ -433,6 +438,7 @@ internal static class FoundationBaselinePostgreSql
         "vw_lease_agreement_status", "vw_lease_addendum_status", "vw_tenant_charge_balances",
         "vw_tenant_account_balances", "vw_security_deposit_balances", "vw_unit_occupancy",
         "vw_lease_management_lifecycle", "vw_lease_reconciliation_exceptions",
+        "vw_morning_briefing_candidates",
         "vw_effective_tenant_access", "vw_accounting_parked_transactions",
     };
 
@@ -459,11 +465,11 @@ internal static class FoundationBaselinePostgreSql
             DO $role$
             BEGIN
               IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rentalcommand_api') THEN
-                CREATE ROLE rentalcommand_api NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1;
+                CREATE ROLE rentalcommand_api LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1;
               ELSIF EXISTS (
                 SELECT 1 FROM pg_roles runtime_role
                 WHERE runtime_role.rolname = 'rentalcommand_api'
-                  AND (runtime_role.rolcanlogin OR runtime_role.rolsuper OR NOT runtime_role.rolinherit
+                  AND (NOT runtime_role.rolcanlogin OR runtime_role.rolsuper OR runtime_role.rolinherit
                     OR runtime_role.rolcreatedb OR runtime_role.rolcreaterole OR runtime_role.rolreplication
                     OR runtime_role.rolbypassrls OR runtime_role.rolconnlimit <> -1
                     OR runtime_role.rolvaliduntil IS NOT NULL OR runtime_role.rolconfig IS NOT NULL)
@@ -472,16 +478,17 @@ internal static class FoundationBaselinePostgreSql
                 FROM pg_roles runtime_role
                 JOIN pg_auth_members inherited_membership
                   ON inherited_membership.member = runtime_role.oid
+                  OR inherited_membership.roleid = runtime_role.oid
                 WHERE runtime_role.rolname = 'rentalcommand_api'
               ) THEN
                 RAISE EXCEPTION 'Existing role rentalcommand_api has incompatible cluster-wide attributes';
               END IF;
               IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rentalcommand_engine') THEN
-                CREATE ROLE rentalcommand_engine NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1;
+                CREATE ROLE rentalcommand_engine LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT -1;
               ELSIF EXISTS (
                 SELECT 1 FROM pg_roles runtime_role
                 WHERE runtime_role.rolname = 'rentalcommand_engine'
-                  AND (runtime_role.rolcanlogin OR runtime_role.rolsuper OR NOT runtime_role.rolinherit
+                  AND (NOT runtime_role.rolcanlogin OR runtime_role.rolsuper OR runtime_role.rolinherit
                     OR runtime_role.rolcreatedb OR runtime_role.rolcreaterole OR runtime_role.rolreplication
                     OR runtime_role.rolbypassrls OR runtime_role.rolconnlimit <> -1
                     OR runtime_role.rolvaliduntil IS NOT NULL OR runtime_role.rolconfig IS NOT NULL)
@@ -490,18 +497,44 @@ internal static class FoundationBaselinePostgreSql
                 FROM pg_roles runtime_role
                 JOIN pg_auth_members inherited_membership
                   ON inherited_membership.member = runtime_role.oid
+                  OR inherited_membership.roleid = runtime_role.oid
                 WHERE runtime_role.rolname = 'rentalcommand_engine'
               ) THEN
                 RAISE EXCEPTION 'Existing role rentalcommand_engine has incompatible cluster-wide attributes';
+              END IF;
+              IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rentalcommand_rls_authority') THEN
+                CREATE ROLE rentalcommand_rls_authority NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION BYPASSRLS CONNECTION LIMIT -1;
+              ELSIF EXISTS (
+                SELECT 1 FROM pg_roles runtime_role
+                WHERE runtime_role.rolname = 'rentalcommand_rls_authority'
+                  AND (runtime_role.rolcanlogin OR runtime_role.rolsuper OR runtime_role.rolinherit
+                    OR runtime_role.rolcreatedb OR runtime_role.rolcreaterole OR runtime_role.rolreplication
+                    OR NOT runtime_role.rolbypassrls OR runtime_role.rolconnlimit <> -1
+                    OR runtime_role.rolvaliduntil IS NOT NULL OR runtime_role.rolconfig IS NOT NULL)
+              ) OR EXISTS (
+                SELECT 1
+                FROM pg_roles runtime_role
+                JOIN pg_auth_members inherited_membership
+                  ON inherited_membership.member = runtime_role.oid
+                  OR inherited_membership.roleid = runtime_role.oid
+                WHERE runtime_role.rolname = 'rentalcommand_rls_authority'
+              ) THEN
+                RAISE EXCEPTION 'Existing role rentalcommand_rls_authority has incompatible cluster-wide attributes';
               END IF;
             END
             $role$;
             """,
             "DO $grant$ BEGIN EXECUTE format('GRANT CONNECT ON DATABASE %I TO rentalcommand_api', current_database()); END $grant$;",
             "DO $grant$ BEGIN EXECUTE format('GRANT CONNECT ON DATABASE %I TO rentalcommand_engine', current_database()); END $grant$;",
-            "DO $grant$ BEGIN EXECUTE format('GRANT rentalcommand_api, rentalcommand_engine TO %I', current_user); END $grant$;",
             "GRANT USAGE ON SCHEMA public TO rentalcommand_api;",
             "GRANT USAGE ON SCHEMA public TO rentalcommand_engine;",
+            "GRANT USAGE ON SCHEMA public TO rentalcommand_rls_authority;",
+            "GRANT SELECT ON TABLE \"AuthSessions\", \"WorkspaceAccessContexts\", \"WorkspaceMemberships\" TO rentalcommand_rls_authority;",
+            "GRANT SELECT ON TABLE \"MembershipRoleAssignments\", \"RoleProfileCapabilities\", \"CapabilityDefinitions\", \"RoleProfiles\", \"OwnerUserAccesses\", \"Portfolios\" TO rentalcommand_rls_authority;",
+            "GRANT SELECT ON TABLE \"vw_effective_tenant_access\" TO rentalcommand_rls_authority;",
+            "GRANT INSERT ON TABLE \"Portfolios\", \"OwnerEntities\", \"WorkspaceAccessContexts\", \"WorkspaceMemberships\", \"MembershipRoleAssignments\", \"OwnerUserAccesses\", \"AutomationSettings\", \"UserAlertPreferences\", \"TeamRoutingRules\", \"WorkspaceNoticeTemplateVersions\", \"TenantNoticePolicies\" TO rentalcommand_rls_authority;",
+            "GRANT SELECT ON TABLE \"AspNetUsers\", \"SystemNoticeTemplateVersions\", \"WorkspaceNoticeTemplateVersions\" TO rentalcommand_rls_authority;",
+            "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO rentalcommand_rls_authority;",
         };
 
         statements.AddRange(MappedTables.Select(table =>
@@ -532,6 +565,13 @@ internal static class FoundationBaselinePostgreSql
         statements.Add(BuildSequenceGrantSql(EngineRole, MappedTables.Where(table => EngineOperations(table).HasFlag(TableOperation.Insert)), revoke: true));
         statements.Add("REVOKE USAGE ON SCHEMA public FROM rentalcommand_api;");
         statements.Add("REVOKE USAGE ON SCHEMA public FROM rentalcommand_engine;");
+        statements.Add("REVOKE SELECT ON TABLE \"AuthSessions\", \"WorkspaceAccessContexts\", \"WorkspaceMemberships\" FROM rentalcommand_rls_authority;");
+        statements.Add("REVOKE SELECT ON TABLE \"MembershipRoleAssignments\", \"RoleProfileCapabilities\", \"CapabilityDefinitions\", \"RoleProfiles\", \"OwnerUserAccesses\", \"Portfolios\" FROM rentalcommand_rls_authority;");
+        statements.Add("REVOKE SELECT ON TABLE \"vw_effective_tenant_access\" FROM rentalcommand_rls_authority;");
+        statements.Add("REVOKE INSERT ON TABLE \"Portfolios\", \"OwnerEntities\", \"WorkspaceAccessContexts\", \"WorkspaceMemberships\", \"MembershipRoleAssignments\", \"OwnerUserAccesses\", \"AutomationSettings\", \"UserAlertPreferences\", \"TeamRoutingRules\", \"WorkspaceNoticeTemplateVersions\", \"TenantNoticePolicies\" FROM rentalcommand_rls_authority;");
+        statements.Add("REVOKE SELECT ON TABLE \"AspNetUsers\", \"SystemNoticeTemplateVersions\", \"WorkspaceNoticeTemplateVersions\" FROM rentalcommand_rls_authority;");
+        statements.Add("REVOKE USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public FROM rentalcommand_rls_authority;");
+        statements.Add("REVOKE USAGE ON SCHEMA public FROM rentalcommand_rls_authority;");
         statements.Add("DO $revoke$ BEGIN EXECUTE format('REVOKE CONNECT ON DATABASE %I FROM rentalcommand_api', current_database()); END $revoke$;");
         statements.Add("DO $revoke$ BEGIN EXECUTE format('REVOKE CONNECT ON DATABASE %I FROM rentalcommand_engine', current_database()); END $revoke$;");
 
@@ -563,6 +603,401 @@ internal static class FoundationBaselinePostgreSql
         statements.Add(BuildInspectionTemplateItemPoliciesSql());
         return string.Join(Environment.NewLine, statements);
     }
+
+    /// <summary>
+    /// Validates an ordinary API request against canonical session/access rows. The function owner
+    /// is a NOLOGIN role so FORCE RLS cannot recursively filter the two authority tables while the
+    /// runtime API, Engine, and authority logins remain unable to assume the role.
+    /// </summary>
+    private const string CreateRlsAuthorityFunctions = """
+        CREATE OR REPLACE FUNCTION rc_api_scope_allows(target_portfolio_id integer)
+        RETURNS boolean
+        LANGUAGE sql
+        STABLE
+        SECURITY DEFINER
+        SET search_path = pg_catalog, public
+        AS $function$
+          SELECT CASE
+            WHEN session_user = 'rentalcommand_engine' THEN TRUE
+            WHEN session_user IS DISTINCT FROM 'rentalcommand_api' OR target_portfolio_id IS NULL OR target_portfolio_id <= 0 THEN FALSE
+            ELSE EXISTS (
+              SELECT 1
+              FROM public."AuthSessions" session
+              JOIN public."WorkspaceAccessContexts" access_context
+                ON access_context."Id" = session."ActiveAccessContextId"
+               AND access_context."UserId" = session."UserId"
+              LEFT JOIN public."WorkspaceMemberships" membership
+                ON membership."AccessContextId" = access_context."Id"
+              WHERE session."Id" = NULLIF(current_setting('app.auth_session_id', true), '')::uuid
+                AND session."UserId" = NULLIF(current_setting('app.current_user_id', true), '')::integer
+                AND access_context."Id" = NULLIF(current_setting('app.current_access_context_id', true), '')::integer
+                AND access_context."PortfolioId" = target_portfolio_id
+                AND access_context."AccessRevision" = NULLIF(current_setting('app.access_revision', true), '')::bigint
+                AND session."Status" = 'Active'
+                AND session."RevokedAtUtc" IS NULL
+                AND session."ExpiresAtUtc" > CURRENT_TIMESTAMP
+                AND access_context."Status" = 'Active'
+                AND access_context."SuspendedAtUtc" IS NULL
+                AND access_context."RevokedAtUtc" IS NULL
+                AND (membership."Id" IS NULL OR (
+                  membership."Status" = 'Active'
+                  AND membership."PortfolioId" = target_portfolio_id
+                  AND membership."EffectiveFromUtc" <= CURRENT_TIMESTAMP
+                  AND (membership."EffectiveToUtc" IS NULL OR membership."EffectiveToUtc" > CURRENT_TIMESTAMP)
+                  AND membership."SuspendedAtUtc" IS NULL
+                  AND membership."RevokedAtUtc" IS NULL
+                ))
+            )
+          END;
+        $function$;
+
+        ALTER FUNCTION rc_api_scope_allows(integer) OWNER TO rentalcommand_rls_authority;
+        REVOKE ALL ON FUNCTION rc_api_scope_allows(integer) FROM PUBLIC;
+        GRANT EXECUTE ON FUNCTION rc_api_scope_allows(integer)
+          TO rentalcommand_api, rentalcommand_engine;
+
+        CREATE OR REPLACE FUNCTION rc_sandbox_graduation_allows(target_portfolio_id integer)
+        RETURNS boolean
+        LANGUAGE sql
+        STABLE
+        SECURITY DEFINER
+        SET search_path = pg_catalog, public
+        AS $function$
+          SELECT session_user = 'rentalcommand_api'
+             AND target_portfolio_id IS NOT NULL
+             AND target_portfolio_id > 0
+             AND public.rc_api_scope_allows(target_portfolio_id)
+             AND EXISTS (
+               SELECT 1
+               FROM public."Portfolios" portfolio
+               JOIN public."WorkspaceAccessContexts" access_context
+                 ON access_context."Id" = NULLIF(current_setting('app.current_access_context_id', true), '')::integer
+                AND access_context."PortfolioId" = portfolio."Id"
+               JOIN public."WorkspaceMemberships" membership
+                 ON membership."AccessContextId" = access_context."Id"
+                AND membership."PortfolioId" = portfolio."Id"
+               JOIN public."MembershipRoleAssignments" assignment
+                 ON assignment."WorkspaceMembershipId" = membership."Id"
+                AND assignment."PortfolioId" = portfolio."Id"
+               JOIN public."RoleProfileCapabilities" role_capability
+                 ON role_capability."RoleProfileId" = assignment."RoleProfileId"
+               JOIN public."CapabilityDefinitions" capability
+                 ON capability."Id" = role_capability."CapabilityDefinitionId"
+               WHERE portfolio."Id" = target_portfolio_id
+                 AND portfolio."IsSandbox"
+                 AND portfolio."DeletedAt" IS NULL
+                 AND membership."Status" = 'Active'
+                 AND membership."SuspendedAtUtc" IS NULL
+                 AND membership."RevokedAtUtc" IS NULL
+                 AND membership."EffectiveFromUtc" <= CURRENT_TIMESTAMP
+                 AND (membership."EffectiveToUtc" IS NULL OR membership."EffectiveToUtc" > CURRENT_TIMESTAMP)
+                 AND assignment."Status" = 'Active'
+                 AND assignment."SuspendedAtUtc" IS NULL
+                 AND assignment."RevokedAtUtc" IS NULL
+                 AND assignment."EffectiveFromUtc" <= CURRENT_TIMESTAMP
+                 AND (assignment."EffectiveToUtc" IS NULL OR assignment."EffectiveToUtc" > CURRENT_TIMESTAMP)
+                 AND capability."Key" = 'account.destructive-actions');
+        $function$;
+
+        ALTER FUNCTION rc_sandbox_graduation_allows(integer) OWNER TO rentalcommand_rls_authority;
+        REVOKE ALL ON FUNCTION rc_sandbox_graduation_allows(integer) FROM PUBLIC;
+        GRANT EXECUTE ON FUNCTION rc_sandbox_graduation_allows(integer)
+          TO rentalcommand_api;
+
+        CREATE OR REPLACE FUNCTION rc_access_context_is_effective(
+          target_access_context_id integer,
+          target_user_id integer,
+          effective_at_utc timestamp with time zone)
+        RETURNS boolean
+        LANGUAGE sql
+        STABLE
+        SECURITY DEFINER
+        SET search_path = pg_catalog, public
+        AS $function$
+          SELECT EXISTS (
+            SELECT 1
+            FROM public."WorkspaceAccessContexts" context
+            WHERE context."Id" = target_access_context_id
+              AND context."UserId" = target_user_id
+              AND context."Status" = 'Active'
+              AND context."SuspendedAtUtc" IS NULL
+              AND context."RevokedAtUtc" IS NULL
+              AND (EXISTS (
+                    SELECT 1
+                    FROM public."WorkspaceMemberships" membership
+                    WHERE membership."AccessContextId" = context."Id"
+                      AND membership."PortfolioId" = context."PortfolioId"
+                      AND membership."Status" = 'Active'
+                      AND membership."SuspendedAtUtc" IS NULL
+                      AND membership."RevokedAtUtc" IS NULL
+                      AND membership."EffectiveFromUtc" <= effective_at_utc
+                      AND (membership."EffectiveToUtc" IS NULL OR membership."EffectiveToUtc" > effective_at_utc)
+                      AND EXISTS (
+                        SELECT 1 FROM public."MembershipRoleAssignments" assignment
+                        WHERE assignment."WorkspaceMembershipId" = membership."Id"
+                          AND assignment."PortfolioId" = membership."PortfolioId"
+                          AND assignment."Status" = 'Active'
+                          AND assignment."SuspendedAtUtc" IS NULL
+                          AND assignment."RevokedAtUtc" IS NULL
+                          AND assignment."EffectiveFromUtc" <= effective_at_utc
+                          AND (assignment."EffectiveToUtc" IS NULL OR assignment."EffectiveToUtc" > effective_at_utc)))
+                OR EXISTS (
+                    SELECT 1 FROM public."OwnerUserAccesses" owner_access
+                    WHERE owner_access."AccessContextId" = context."Id"
+                      AND owner_access."ApplicationUserId" = context."UserId"
+                      AND owner_access."PortfolioId" = context."PortfolioId"
+                      AND owner_access."RevokedAtUtc" IS NULL
+                      AND owner_access."EffectiveFromUtc" <= effective_at_utc
+                      AND (owner_access."EffectiveToUtc" IS NULL OR owner_access."EffectiveToUtc" > effective_at_utc))
+                OR EXISTS (
+                    SELECT 1 FROM public."vw_effective_tenant_access" tenant_access
+                    WHERE tenant_access."AccessContextId" = context."Id"
+                      AND tenant_access."UserId" = context."UserId"
+                      AND tenant_access."PortfolioId" = context."PortfolioId")));
+        $function$;
+
+        ALTER FUNCTION rc_access_context_is_effective(integer, integer, timestamp with time zone)
+          OWNER TO rentalcommand_rls_authority;
+        REVOKE ALL ON FUNCTION rc_access_context_is_effective(integer, integer, timestamp with time zone) FROM PUBLIC;
+        GRANT EXECUTE ON FUNCTION rc_access_context_is_effective(integer, integer, timestamp with time zone)
+          TO rentalcommand_api;
+
+        CREATE OR REPLACE FUNCTION rc_list_effective_access_contexts(
+          target_user_id integer,
+          effective_at_utc timestamp with time zone)
+        RETURNS TABLE (
+          "AccessContextId" integer,
+          "PortfolioId" integer,
+          "WorkspaceName" text,
+          "AccessRevision" bigint,
+          "DefaultExperience" text,
+          "TotalEffectiveContexts" integer)
+        LANGUAGE sql
+        STABLE
+        SECURITY DEFINER
+        SET search_path = pg_catalog, public
+        AS $function$
+          WITH effective_contexts AS (
+            SELECT context."Id", context."PortfolioId", context."AccessRevision",
+                   portfolio."Name",
+                   membership."Id" AS "MembershipId",
+                   membership."DefaultExperience"
+            FROM public."WorkspaceAccessContexts" context
+            JOIN public."Portfolios" portfolio
+              ON portfolio."Id" = context."PortfolioId" AND portfolio."DeletedAt" IS NULL
+            LEFT JOIN public."WorkspaceMemberships" membership
+              ON membership."AccessContextId" = context."Id"
+             AND membership."PortfolioId" = context."PortfolioId"
+             AND membership."Status" = 'Active'
+             AND membership."SuspendedAtUtc" IS NULL
+             AND membership."RevokedAtUtc" IS NULL
+             AND membership."EffectiveFromUtc" <= effective_at_utc
+             AND (membership."EffectiveToUtc" IS NULL OR membership."EffectiveToUtc" > effective_at_utc)
+            WHERE context."UserId" = target_user_id
+              AND context."Status" = 'Active'
+              AND context."SuspendedAtUtc" IS NULL
+              AND context."RevokedAtUtc" IS NULL
+              AND ((membership."Id" IS NOT NULL AND EXISTS (
+                    SELECT 1 FROM public."MembershipRoleAssignments" assignment
+                    WHERE assignment."WorkspaceMembershipId" = membership."Id"
+                      AND assignment."PortfolioId" = membership."PortfolioId"
+                      AND assignment."Status" = 'Active'
+                      AND assignment."SuspendedAtUtc" IS NULL
+                      AND assignment."RevokedAtUtc" IS NULL
+                      AND assignment."EffectiveFromUtc" <= effective_at_utc
+                      AND (assignment."EffectiveToUtc" IS NULL OR assignment."EffectiveToUtc" > effective_at_utc)))
+                OR EXISTS (
+                    SELECT 1 FROM public."OwnerUserAccesses" owner_access
+                    WHERE owner_access."AccessContextId" = context."Id"
+                      AND owner_access."ApplicationUserId" = context."UserId"
+                      AND owner_access."PortfolioId" = context."PortfolioId"
+                      AND owner_access."RevokedAtUtc" IS NULL
+                      AND owner_access."EffectiveFromUtc" <= effective_at_utc
+                      AND (owner_access."EffectiveToUtc" IS NULL OR owner_access."EffectiveToUtc" > effective_at_utc))
+                OR EXISTS (
+                    SELECT 1 FROM public."vw_effective_tenant_access" tenant_access
+                    WHERE tenant_access."AccessContextId" = context."Id"
+                      AND tenant_access."UserId" = context."UserId"
+                      AND tenant_access."PortfolioId" = context."PortfolioId"))
+          ), options AS (
+            SELECT effective_context."Id" AS "AccessContextId",
+                   effective_context."PortfolioId",
+                   effective_context."Name"::text AS "WorkspaceName",
+                   effective_context."AccessRevision",
+                   COALESCE(
+                     CASE WHEN effective_context."MembershipId" IS NOT NULL THEN
+                       COALESCE(
+                         (SELECT role_profile."DefaultExperience"
+                          FROM public."MembershipRoleAssignments" assignment
+                          JOIN public."RoleProfiles" role_profile ON role_profile."Id" = assignment."RoleProfileId"
+                          WHERE assignment."WorkspaceMembershipId" = effective_context."MembershipId"
+                            AND assignment."PortfolioId" = effective_context."PortfolioId"
+                            AND assignment."Status" = 'Active'
+                            AND assignment."SuspendedAtUtc" IS NULL
+                            AND assignment."RevokedAtUtc" IS NULL
+                            AND assignment."EffectiveFromUtc" <= effective_at_utc
+                            AND (assignment."EffectiveToUtc" IS NULL OR assignment."EffectiveToUtc" > effective_at_utc)
+                          ORDER BY CASE role_profile."DefaultExperience"
+                            WHEN 'Management' THEN 1 WHEN 'Leasing' THEN 2
+                            WHEN 'Maintenance' THEN 3 WHEN 'Owner' THEN 4 ELSE 5 END
+                          LIMIT 1),
+                         effective_context."DefaultExperience")
+                     END,
+                     CASE WHEN EXISTS (
+                       SELECT 1 FROM public."OwnerUserAccesses" owner_access
+                       WHERE owner_access."AccessContextId" = effective_context."Id"
+                         AND owner_access."ApplicationUserId" = target_user_id
+                         AND owner_access."PortfolioId" = effective_context."PortfolioId"
+                         AND owner_access."RevokedAtUtc" IS NULL
+                         AND owner_access."EffectiveFromUtc" <= effective_at_utc
+                         AND (owner_access."EffectiveToUtc" IS NULL OR owner_access."EffectiveToUtc" > effective_at_utc))
+                     THEN 'Owner' ELSE 'Tenant' END)::text AS "DefaultExperience"
+            FROM effective_contexts effective_context)
+          SELECT options.*, count(*) OVER ()::integer AS "TotalEffectiveContexts"
+          FROM options
+          ORDER BY options."WorkspaceName", options."AccessContextId";
+        $function$;
+
+        ALTER FUNCTION rc_list_effective_access_contexts(integer, timestamp with time zone)
+          OWNER TO rentalcommand_rls_authority;
+        REVOKE ALL ON FUNCTION rc_list_effective_access_contexts(integer, timestamp with time zone) FROM PUBLIC;
+        GRANT EXECUTE ON FUNCTION rc_list_effective_access_contexts(integer, timestamp with time zone)
+          TO rentalcommand_api;
+
+        CREATE OR REPLACE FUNCTION rc_bootstrap_initial_workspace(
+          target_user_id integer,
+          portfolio_name text,
+          management_company_name text,
+          owner_name text,
+          owner_email text,
+          created_at_utc timestamp with time zone)
+        RETURNS TABLE ("PortfolioId" integer, "AccessContextId" integer)
+        LANGUAGE plpgsql
+        SECURITY DEFINER
+        SET search_path = pg_catalog, public
+        AS $function$
+        DECLARE
+          new_portfolio_id integer;
+          new_owner_entity_id integer;
+          new_access_context_id integer;
+          new_membership_id integer;
+        BEGIN
+          IF session_user IS DISTINCT FROM 'rentalcommand_api' THEN
+            RAISE EXCEPTION 'Initial workspace bootstrap is API-only' USING ERRCODE = '42501';
+          END IF;
+          IF target_user_id IS NULL OR target_user_id <= 0
+             OR NOT EXISTS (SELECT 1 FROM public."AspNetUsers" user_row WHERE user_row."Id" = target_user_id) THEN
+            RAISE EXCEPTION 'Initial workspace bootstrap requires a persisted user' USING ERRCODE = '23503';
+          END IF;
+          IF EXISTS (SELECT 1 FROM public."WorkspaceAccessContexts" context WHERE context."UserId" = target_user_id) THEN
+            RAISE EXCEPTION 'User already belongs to a workspace' USING ERRCODE = '23505';
+          END IF;
+
+          INSERT INTO public."Portfolios"
+            ("Name", "ManagementCompanyName", "TimeZone", "Status", "Currency", "Settings",
+             "IsSandbox", "CreatedAt", "UpdatedAt")
+          VALUES
+            (portfolio_name, management_company_name, 'America/New_York', 1, 'USD',
+             '{"onboarding":{"choice":"pending"}}', FALSE, created_at_utc, created_at_utc)
+          RETURNING "Id" INTO new_portfolio_id;
+
+          INSERT INTO public."OwnerEntities"
+            ("PortfolioId", "OwnerEntityType", "Name", "Email", "IsPrimary", "CreatedAt", "UpdatedAt")
+          VALUES
+            (new_portfolio_id, 0, owner_name, NULLIF(owner_email, ''), TRUE, created_at_utc, created_at_utc)
+          RETURNING "Id" INTO new_owner_entity_id;
+
+          INSERT INTO public."WorkspaceAccessContexts"
+            ("UserId", "PortfolioId", "Status", "AccessRevision", "LastAuthorizedExperience",
+             "CreatedAtUtc", "UpdatedAtUtc")
+          VALUES
+            (target_user_id, new_portfolio_id, 'Active', 1, 'Management', created_at_utc, created_at_utc)
+          RETURNING "Id" INTO new_access_context_id;
+
+          INSERT INTO public."WorkspaceMemberships"
+            ("AccessContextId", "PortfolioId", "Status", "DefaultExperience", "EffectiveFromUtc",
+             "CreatedAtUtc", "UpdatedAtUtc")
+          VALUES
+            (new_access_context_id, new_portfolio_id, 'Active', 'Management', created_at_utc,
+             created_at_utc, created_at_utc)
+          RETURNING "Id" INTO new_membership_id;
+
+          INSERT INTO public."MembershipRoleAssignments"
+            ("WorkspaceMembershipId", "PortfolioId", "RoleProfileId", "Status", "ScopeKind",
+             "EffectiveFromUtc", "CreatedAtUtc", "UpdatedAtUtc")
+          VALUES
+            (new_membership_id, new_portfolio_id, 1, 'Active', 'AllProperties', created_at_utc,
+             created_at_utc, created_at_utc);
+
+          INSERT INTO public."OwnerUserAccesses"
+            ("PortfolioId", "AccessContextId", "ApplicationUserId", "OwnerEntityId", "EffectiveFromUtc",
+             "GrantedAtUtc", "GrantedByUserId", "Reason")
+          VALUES
+            (new_portfolio_id, new_access_context_id, target_user_id, new_owner_entity_id, created_at_utc,
+             created_at_utc, target_user_id, 'Initial workspace owner relationship');
+
+          INSERT INTO public."AutomationSettings"
+            ("PortfolioId", "EnableRentCharges", "RentChargeLeadDays", "EnableLateFees", "LateFeeGraceDays",
+             "EnableLeaseExpiryReminders", "LeaseExpiryReminderDays", "EnableRecurringMaintenance",
+             "EnableMorningBriefing", "MorningBriefingSendHourLocal", "MorningBriefingIncludeEmpty",
+             "CreatedAtUtc", "UpdatedAtUtc")
+          VALUES
+            (new_portfolio_id, FALSE, 5, FALSE, 5, TRUE, 60, TRUE, TRUE, 8, FALSE,
+             created_at_utc, created_at_utc);
+
+          INSERT INTO public."UserAlertPreferences"
+            ("PortfolioId", "UserId", "EnableInApp", "EnableMobilePush", "EnableEmail", "EnableSms",
+             "CreatedAtUtc", "UpdatedAtUtc")
+          VALUES
+            (new_portfolio_id, target_user_id, TRUE, TRUE, TRUE, FALSE, created_at_utc, created_at_utc);
+
+          INSERT INTO public."TeamRoutingRules"
+            ("PortfolioId", "Topic", "UseWorkspaceAdministratorFallback", "CreatedAtUtc", "UpdatedAtUtc")
+          VALUES
+            (new_portfolio_id, 'MorningBriefing', TRUE, created_at_utc, created_at_utc);
+
+          INSERT INTO public."WorkspaceNoticeTemplateVersions"
+            ("PortfolioId", "SystemKey", "Version", "BasedOnSystemTemplateVersionId", "IsCustomized",
+             "Subject", "Body", "JurisdictionCode", "CreatedByUserId", "CreatedAtUtc")
+          SELECT new_portfolio_id, system."SystemKey", system."Version", system."Id", FALSE,
+                 system."Subject", system."Body", system."JurisdictionCode", target_user_id, created_at_utc
+          FROM public."SystemNoticeTemplateVersions" system
+          WHERE system."Version" = 1;
+
+          INSERT INTO public."TenantNoticePolicies"
+            ("PortfolioId", "AutomationKey", "Mode", "Classification", "LeadDays", "SendHourLocal",
+             "SendTenantPortal", "SendMobilePush", "SendEmail", "SendSms", "IncludePrimaryTenant",
+             "IncludeCoTenant", "IncludeEligibleGuarantor", "IncludeOccupant", "FailureBehavior",
+             "WorkspaceNoticeTemplateVersionId", "CreatedAtUtc", "UpdatedAtUtc")
+          SELECT workspace."PortfolioId", workspace."SystemKey", 'Draft', system."Classification",
+                 CASE WHEN workspace."SystemKey" IN
+                   ('lease-renewal-offer', 'month-to-month-offer', 'lease-non-renewal') THEN 60 ELSE 5 END,
+                 9, TRUE, FALSE, TRUE, FALSE, TRUE, TRUE, FALSE, FALSE, 'StopAndRequireReview',
+                 workspace."Id", created_at_utc, created_at_utc
+          FROM public."WorkspaceNoticeTemplateVersions" workspace
+          JOIN public."SystemNoticeTemplateVersions" system
+            ON system."Id" = workspace."BasedOnSystemTemplateVersionId"
+          WHERE workspace."PortfolioId" = new_portfolio_id;
+
+          RETURN QUERY SELECT new_portfolio_id, new_access_context_id;
+        END;
+        $function$;
+
+        ALTER FUNCTION rc_bootstrap_initial_workspace(integer, text, text, text, text, timestamp with time zone)
+          OWNER TO rentalcommand_rls_authority;
+        REVOKE ALL ON FUNCTION rc_bootstrap_initial_workspace(integer, text, text, text, text, timestamp with time zone)
+          FROM PUBLIC;
+        GRANT EXECUTE ON FUNCTION rc_bootstrap_initial_workspace(integer, text, text, text, text, timestamp with time zone)
+          TO rentalcommand_api;
+        """;
+
+    private const string DropRlsAuthorityFunctions = """
+        DROP FUNCTION IF EXISTS rc_bootstrap_initial_workspace(integer, text, text, text, text, timestamp with time zone);
+        DROP FUNCTION IF EXISTS rc_list_effective_access_contexts(integer, timestamp with time zone);
+        DROP FUNCTION IF EXISTS rc_access_context_is_effective(integer, integer, timestamp with time zone);
+        DROP FUNCTION IF EXISTS rc_sandbox_graduation_allows(integer);
+        DROP FUNCTION IF EXISTS rc_api_scope_allows(integer);
+        """;
 
     private static string BuildDropRlsSql()
     {
@@ -606,7 +1041,7 @@ internal static class FoundationBaselinePostgreSql
         CREATE POLICY tenant_insert ON {Quote(table)} FOR INSERT WITH CHECK {ordinaryPredicate};
         CREATE POLICY tenant_update ON {Quote(table)} FOR UPDATE USING {ordinaryPredicate} WITH CHECK {ordinaryPredicate};
         CREATE POLICY tenant_delete ON {Quote(table)} FOR DELETE USING
-          ({sandboxDeletePredicate} AND current_setting('app.rls_bypass_reason', true) = 'SandboxGraduation');
+          ({sandboxDeletePredicate});
         """;
 
     private static bool RequiresSandboxGraduationDelete(string table) =>
@@ -621,7 +1056,7 @@ internal static class FoundationBaselinePostgreSql
           target_portfolio_id integer;
           row_portfolio_id integer;
         BEGIN
-          IF current_setting('app.rls_bypass_reason', true) IS DISTINCT FROM 'SandboxGraduation' THEN
+          IF session_user IS DISTINCT FROM 'rentalcommand_api' THEN
             RAISE EXCEPTION '% may be deleted only during sandbox graduation', TG_TABLE_NAME
               USING ERRCODE = '42501';
           END IF;
@@ -629,6 +1064,11 @@ internal static class FoundationBaselinePostgreSql
           target_portfolio_id := NULLIF(current_setting('app.current_portfolio_id', true), '')::integer;
           IF target_portfolio_id IS NULL OR target_portfolio_id <= 0 THEN
             RAISE EXCEPTION 'Sandbox graduation requires an explicit portfolio scope'
+              USING ERRCODE = '42501';
+          END IF;
+
+          IF NOT rc_sandbox_graduation_allows(target_portfolio_id) THEN
+            RAISE EXCEPTION 'Caller is not authorized to graduate sandbox portfolio %', target_portfolio_id
               USING ERRCODE = '42501';
           END IF;
 
@@ -674,36 +1114,30 @@ internal static class FoundationBaselinePostgreSql
         DROP FUNCTION IF EXISTS rc_require_sandbox_graduation_delete();
         """;
 
-    private const string PortfolioPredicate =
-        "(\"PortfolioId\" = NULLIF(current_setting('app.current_portfolio_id', true), '')::int " +
-        "OR current_setting('app.is_admin', true) = 'true')";
+    private const string PortfolioPredicate = "rc_api_scope_allows(\"PortfolioId\")";
 
     private const string DirectSandboxGraduationPredicate =
-        "\"PortfolioId\" = NULLIF(current_setting('app.current_portfolio_id', true), '')::int";
+        "rc_sandbox_graduation_allows(\"PortfolioId\")";
 
     private const string NullablePortfolioReadPredicate =
-        "(\"PortfolioId\" = NULLIF(current_setting('app.current_portfolio_id', true), '')::int " +
-        "OR \"PortfolioId\" IS NULL " +
-        "OR current_setting('app.is_admin', true) = 'true')";
+        "(\"PortfolioId\" IS NULL OR rc_api_scope_allows(\"PortfolioId\"))";
 
     private const string NullablePortfolioWritePredicate =
-        "(\"PortfolioId\" = NULLIF(current_setting('app.current_portfolio_id', true), '')::int " +
-        "OR pg_has_role(current_user, 'rentalcommand_engine', 'USAGE'))";
+        "(\"PortfolioId\" IS NOT NULL AND rc_api_scope_allows(\"PortfolioId\"))";
 
-    private const string PortfolioSelfPredicate =
-        "(\"Id\" = NULLIF(current_setting('app.current_portfolio_id', true), '')::int " +
-        "OR current_setting('app.is_admin', true) = 'true')";
+    private const string PortfolioSelfPredicate = "rc_api_scope_allows(\"Id\")";
 
     private static string ChildPredicate(ChildPolicy policy) =>
-        "(current_setting('app.is_admin', true) = 'true' OR EXISTS (SELECT 1 FROM " +
+        "EXISTS (SELECT 1 FROM " +
         $"{Quote(policy.ParentTable)} AS parent WHERE parent.\"Id\" = " +
-        $"{Quote(policy.Table)}.{Quote(policy.ForeignKey)}))";
+        $"{Quote(policy.Table)}.{Quote(policy.ForeignKey)} " +
+        "AND rc_api_scope_allows(parent.\"PortfolioId\"))";
 
     private static string ChildSandboxGraduationPredicate(ChildPolicy policy) =>
         "EXISTS (SELECT 1 FROM " +
         $"{Quote(policy.ParentTable)} AS parent WHERE parent.\"Id\" = " +
         $"{Quote(policy.Table)}.{Quote(policy.ForeignKey)} " +
-        "AND parent.\"PortfolioId\" = NULLIF(current_setting('app.current_portfolio_id', true), '')::int)";
+        "AND rc_sandbox_graduation_allows(parent.\"PortfolioId\"))";
 
     private static string BuildInspectionTemplatePoliciesSql() => $"""
         ALTER TABLE "InspectionTemplates" ENABLE ROW LEVEL SECURITY;
@@ -728,24 +1162,26 @@ internal static class FoundationBaselinePostgreSql
         DROP POLICY IF EXISTS tenant_update ON "InspectionTemplateItems";
         DROP POLICY IF EXISTS tenant_delete ON "InspectionTemplateItems";
         CREATE POLICY tenant_select ON "InspectionTemplateItems" FOR SELECT USING
-          (pg_has_role(current_user, 'rentalcommand_engine', 'USAGE') OR EXISTS
-            (SELECT 1 FROM "InspectionTemplates" parent WHERE parent."Id" = "InspectionTemplateItems"."TemplateId"));
+          (EXISTS
+            (SELECT 1 FROM "InspectionTemplates" parent
+             WHERE parent."Id" = "InspectionTemplateItems"."TemplateId"
+               AND (parent."PortfolioId" IS NULL OR rc_api_scope_allows(parent."PortfolioId"))));
         CREATE POLICY tenant_insert ON "InspectionTemplateItems" FOR INSERT WITH CHECK
-          (pg_has_role(current_user, 'rentalcommand_engine', 'USAGE') OR EXISTS
+          (EXISTS
             (SELECT 1 FROM "InspectionTemplates" parent WHERE parent."Id" = "InspectionTemplateItems"."TemplateId"
-             AND parent."PortfolioId" = NULLIF(current_setting('app.current_portfolio_id', true), '')::int));
+             AND parent."PortfolioId" IS NOT NULL AND rc_api_scope_allows(parent."PortfolioId")));
         CREATE POLICY tenant_update ON "InspectionTemplateItems" FOR UPDATE USING
-          (pg_has_role(current_user, 'rentalcommand_engine', 'USAGE') OR EXISTS
+          (EXISTS
             (SELECT 1 FROM "InspectionTemplates" parent WHERE parent."Id" = "InspectionTemplateItems"."TemplateId"
-             AND parent."PortfolioId" = NULLIF(current_setting('app.current_portfolio_id', true), '')::int))
+             AND parent."PortfolioId" IS NOT NULL AND rc_api_scope_allows(parent."PortfolioId")))
           WITH CHECK
-          (pg_has_role(current_user, 'rentalcommand_engine', 'USAGE') OR EXISTS
+          (EXISTS
             (SELECT 1 FROM "InspectionTemplates" parent WHERE parent."Id" = "InspectionTemplateItems"."TemplateId"
-             AND parent."PortfolioId" = NULLIF(current_setting('app.current_portfolio_id', true), '')::int));
+             AND parent."PortfolioId" IS NOT NULL AND rc_api_scope_allows(parent."PortfolioId")));
         CREATE POLICY tenant_delete ON "InspectionTemplateItems" FOR DELETE USING
-          (pg_has_role(current_user, 'rentalcommand_engine', 'USAGE') OR EXISTS
+          (EXISTS
             (SELECT 1 FROM "InspectionTemplates" parent WHERE parent."Id" = "InspectionTemplateItems"."TemplateId"
-             AND parent."PortfolioId" = NULLIF(current_setting('app.current_portfolio_id', true), '')::int));
+             AND parent."PortfolioId" IS NOT NULL AND rc_api_scope_allows(parent."PortfolioId")));
         """;
 
     private static TableOperation ApiOperations(string table)
@@ -761,6 +1197,10 @@ internal static class FoundationBaselinePostgreSql
                         : throw new InvalidOperationException(
                             $"Mapped table {table} has no explicit API grant classification.");
 
+        // Sandbox graduation is a normal authenticated API command whose DELETE authority is
+        // admitted row-by-row by rc_sandbox_graduation_allows. The login receives no alternate
+        // role or bypass credential; outside that one canonical capability-checked sandbox scope,
+        // FORCE RLS (or the global-table delete guards) still rejects every durable delete.
         return SandboxGraduationDeleteTables.Contains(table)
             ? baseOperations | TableOperation.Delete
             : baseOperations;

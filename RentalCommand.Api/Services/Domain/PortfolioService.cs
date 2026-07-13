@@ -81,6 +81,15 @@ public class PortfolioService : IPortfolioService
                 UnitCount = _db.Units.Count(unit => unit.Property != null && unit.Property.PortfolioId == p.Id),
                 TenantCount = _db.Tenants.Count(tenant => tenant.PortfolioId == p.Id),
                 LeaseCount = _db.LeaseManagements.Count(management => management.PortfolioId == p.Id),
+                HasNotificationEmail = _db.UserAlertPreferences.Any(pref =>
+                    pref.PortfolioId == p.Id && pref.EnableEmail),
+                HasTexting = _db.MessagingProviderSettings.Any(settings =>
+                    settings.PortfolioId == p.Id &&
+                    settings.SmsProvider != null && settings.SmsProvider != string.Empty),
+                HasAutomations = _db.AutomationSettings.Any(settings =>
+                    settings.PortfolioId == p.Id &&
+                    (settings.EnableRentCharges || settings.EnableLateFees ||
+                     settings.EnableRecurringMaintenance || settings.EnableMorningBriefing)),
             })
             .FirstOrDefaultAsync(ct);
 
@@ -88,26 +97,6 @@ public class PortfolioService : IPortfolioService
         {
             return null;
         }
-
-        var notificationSettings = await _db.NotificationSettings
-            .AsNoTracking()
-            .Where(settings => settings.PortfolioId == portfolioId)
-            .Select(settings => new
-            {
-                settings.EnableRentCharges,
-                settings.EnableLateFees,
-                HasDailyBriefingEmail = settings.DailyBriefingEmailRecipientsCipherText != null
-                    && settings.DailyBriefingEmailRecipientsCipherText != string.Empty,
-                HasSmsCredentialA = (settings.SmsCredentialACipherText != null
-                    && settings.SmsCredentialACipherText != string.Empty),
-                HasSmsCredentialB = (settings.SmsCredentialBCipherText != null
-                    && settings.SmsCredentialBCipherText != string.Empty),
-            })
-            .FirstOrDefaultAsync(ct);
-
-        var hasEmailPreference = await _db.NotificationPreferences
-            .AsNoTracking()
-            .AnyAsync(pref => pref.PortfolioId == portfolioId && pref.EnableEmail, ct);
 
         return new GettingStartedSignalsResponse
         {
@@ -118,13 +107,9 @@ public class PortfolioService : IPortfolioService
             UnitCount = summary.UnitCount,
             TenantCount = summary.TenantCount,
             LeaseCount = summary.LeaseCount,
-            HasNotificationEmail = ReadNotificationEmail(summary.Settings) != null
-                || hasEmailPreference
-                || notificationSettings?.HasDailyBriefingEmail == true,
-            HasTexting = notificationSettings?.HasSmsCredentialA == true
-                || notificationSettings?.HasSmsCredentialB == true,
-            HasAutomations = notificationSettings?.EnableRentCharges == true
-                || notificationSettings?.EnableLateFees == true,
+            HasNotificationEmail = summary.HasNotificationEmail,
+            HasTexting = summary.HasTexting,
+            HasAutomations = summary.HasAutomations,
             IsSandbox = summary.IsSandbox,
         };
     }

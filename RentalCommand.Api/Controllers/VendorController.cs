@@ -26,7 +26,8 @@ public class VendorController : ManagementControllerBase
     [ProducesResponseType(typeof(IReadOnlyList<VendorResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<VendorResponse>>> List([FromQuery] ListQuery query, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), query, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var items = await _service.ListAsync(scope, query, ct);
         return Ok(items);
     }
 
@@ -34,7 +35,8 @@ public class VendorController : ManagementControllerBase
     [ProducesResponseType(typeof(VendorListResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<VendorListResponse>> ListPage([FromQuery] ListQuery query, CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), query, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var page = await _service.ListPageAsync(scope, query, ct);
         return Ok(page);
     }
 
@@ -43,7 +45,8 @@ public class VendorController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<VendorResponse>> Get(int id, CancellationToken ct)
     {
-        var item = await _service.GetAsync(GetPortfolioId(), id, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var item = await _service.GetAsync(scope, id, ct);
         return item == null ? NotFound(new { error = "Vendor not found" }) : Ok(item);
     }
 
@@ -51,7 +54,9 @@ public class VendorController : ManagementControllerBase
     [ProducesResponseType(typeof(VendorResponse), StatusCodes.Status201Created)]
     public async Task<ActionResult<VendorResponse>> Create([FromBody] CreateVendorRequest request, CancellationToken ct)
     {
-        var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var created = await _service.CreateAsync(scope, request, ct);
+        if (created == null) return NotFound(new { error = "Vendor not found" });
         return CreatedAtAction(nameof(Get), new { id = created.Id }, created);
     }
 
@@ -60,7 +65,8 @@ public class VendorController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<VendorResponse>> Update(int id, [FromBody] UpdateVendorRequest request, CancellationToken ct)
     {
-        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var updated = await _service.UpdateAsync(scope, id, request, ct);
         return updated == null ? NotFound(new { error = "Vendor not found" }) : Ok(updated);
     }
 
@@ -69,7 +75,8 @@ public class VendorController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(int id, CancellationToken ct)
     {
-        var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var deleted = await _service.DeleteAsync(scope, id, ct);
         return deleted ? NoContent() : NotFound(new { error = "Vendor not found" });
     }
 
@@ -79,7 +86,8 @@ public class VendorController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<VendorRatingResponse>> Rate(int id, [FromBody] CreateVendorRatingRequest request, CancellationToken ct)
     {
-        var created = await _dispatch.RateAsync(GetPortfolioId(), id, request, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var created = await _dispatch.RateAsync(scope, id, request, ct);
         return created == null
             ? NotFound(new { error = "Vendor not found" })
             : CreatedAtAction(nameof(Scorecard), new { id }, created);
@@ -98,8 +106,9 @@ public class VendorController : ManagementControllerBase
         [FromBody] RequestVendorW9Request request,
         CancellationToken ct)
     {
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
         var result = await _service.RequestW9Async(
-            GetPortfolioId(), id, request.ClientOperationId, GetUserId(), ct);
+            scope, id, request.ClientOperationId, GetUserId(), ct);
         return result.Outcome switch
         {
             RequestW9Outcome.Queued => Ok(new { queued = true, sentTo = result.Phone }),
@@ -117,7 +126,8 @@ public class VendorController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<VendorScorecardResponse>> Scorecard(int id, CancellationToken ct)
     {
-        var card = await _dispatch.GetScorecardAsync(GetPortfolioId(), id, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var card = await _dispatch.GetScorecardAsync(scope, id, ct);
         return card == null ? NotFound(new { error = "Vendor not found" }) : Ok(card);
     }
 }

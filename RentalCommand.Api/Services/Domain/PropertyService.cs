@@ -133,11 +133,13 @@ public class PropertyService : IPropertyService
         AvailableForLease = (query as PropertyListQuery)?.AvailableForLease,
     };
 
-    public async Task<PropertyResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
+    public async Task<PropertyResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default)
     {
+        var portfolioId = scope.PortfolioId;
         var row = await _db.Properties
             .AsNoTracking()
-            .Where(p => p.Id == id && p.PortfolioId == portfolioId)
+            .WhereAuthorized(_db, scope, CapabilityKeys.RentalsRead, _timeProvider.UtcNow())
+            .Where(p => p.Id == id)
             .Select(p => new ProjectedProperty(
                 p,
                 p.OwnerEntity != null ? p.OwnerEntity.Name : (p.Owner != null ? p.Owner.Name : null),
@@ -163,17 +165,29 @@ public class PropertyService : IPropertyService
         return response;
     }
 
-    public async Task<PropertyResponse?> CreateAsync(int portfolioId, CreatePropertyRequest request, CancellationToken ct = default)
+    public Task<PropertyResponse?> CreateAsync(
+        WorkspaceReadScope scope, CreatePropertyRequest request, CancellationToken ct = default) =>
+        _db.ExecuteAuthorizedMutationAsync(async token =>
     {
+        var portfolioId = scope.PortfolioId;
+        if (!await _db.AuthorizedWorkspaceAssignments(
+                scope,
+                [CapabilityKeys.RentalsManage],
+                CapabilityAuthorizationTargetKind.Property,
+                _timeProvider.UtcNow()).AnyAsync(token))
+        {
+            return null;
+        }
+
         // Verify any supplied owner/owner-entity references belong to the caller's portfolio (no cross-tenant linking).
         if (request.OwnerId.HasValue &&
-            !await _db.EnsureOwnerInPortfolioAsync(portfolioId, request.OwnerId.Value, ct))
+            !await _db.EnsureOwnerInPortfolioAsync(portfolioId, request.OwnerId.Value, token))
         {
             return null;
         }
 
         if (request.OwnerEntityId.HasValue &&
-            !await _db.EnsureOwnerEntityInPortfolioAsync(portfolioId, request.OwnerEntityId.Value, ct))
+            !await _db.EnsureOwnerEntityInPortfolioAsync(portfolioId, request.OwnerEntityId.Value, token))
         {
             return null;
         }
@@ -186,7 +200,7 @@ public class PropertyService : IPropertyService
             ownerEntityId = await _db.OwnerEntities
                 .Where(oe => oe.PortfolioId == portfolioId && oe.IsPrimary)
                 .Select(oe => (int?)oe.Id)
-                .FirstOrDefaultAsync(ct);
+                .FirstOrDefaultAsync(token);
         }
 
         var now = _timeProvider.UtcNow();
@@ -222,31 +236,35 @@ public class PropertyService : IPropertyService
         }
 
         _db.Properties.Add(entity);
-        await _db.SaveChangesAsync(ct);
+        await _db.SaveChangesAsync(token);
 
         var response = PropertyResponse.FromEntity(entity, canonicalUnit == null ? 0 : 1, 0);
         response.OwnerName = entity.OwnerEntity?.Name ?? entity.Owner?.Name;
         if (canonicalUnit != null)
         {
             var canonicalUnitResponse = await BuildCanonicalUnitResponseQuery(portfolioId, canonicalUnit.Id)
-                .SingleAsync(ct);
+                .SingleAsync(token);
             await _dataUpdate.BroadcastEntityUpdateAsync(
                 portfolioId,
                 UnitEntityType,
                 canonicalUnit.Id,
                 canonicalUnitResponse,
-                ct);
+                token);
         }
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, token);
         return response;
-    }
+    }, ct);
 
-    public async Task<PropertyResponse?> UpdateAsync(int portfolioId, int id, UpdatePropertyRequest request, CancellationToken ct = default)
+    public Task<PropertyResponse?> UpdateAsync(
+        WorkspaceReadScope scope, int id, UpdatePropertyRequest request, CancellationToken ct = default) =>
+        _db.ExecuteAuthorizedMutationAsync(async token =>
     {
+        var portfolioId = scope.PortfolioId;
         var entity = await _db.Properties
+            .WhereAuthorized(_db, scope, CapabilityKeys.RentalsManage, _timeProvider.UtcNow())
             .Include(p => p.Owner)
             .Include(p => p.OwnerEntity)
-            .FirstOrDefaultAsync(p => p.Id == id && p.PortfolioId == portfolioId, ct);
+            .FirstOrDefaultAsync(p => p.Id == id, token);
         if (entity == null)
         {
             return null;
@@ -254,13 +272,13 @@ public class PropertyService : IPropertyService
 
         // Verify any supplied owner/owner-entity references belong to the caller's portfolio (no cross-tenant linking).
         if (request.OwnerId.HasValue &&
-            !await _db.EnsureOwnerInPortfolioAsync(portfolioId, request.OwnerId.Value, ct))
+            !await _db.EnsureOwnerInPortfolioAsync(portfolioId, request.OwnerId.Value, token))
         {
             return null;
         }
 
         if (request.OwnerEntityId.HasValue &&
-            !await _db.EnsureOwnerEntityInPortfolioAsync(portfolioId, request.OwnerEntityId.Value, ct))
+            !await _db.EnsureOwnerEntityInPortfolioAsync(portfolioId, request.OwnerEntityId.Value, token))
         {
             return null;
         }
@@ -270,7 +288,7 @@ public class PropertyService : IPropertyService
 
         if (request.Status == PropertyStatus.Inactive && entity.Status != PropertyStatus.Inactive)
         {
-            var guard = await BuildPropertyDeletionGuardQuery(portfolioId, id).SingleAsync(ct);
+            var guard = await BuildPropertyDeletionGuardQuery(portfolioId, id).SingleAsync(token);
             if (guard.HasOccupiedUnit)
             {
                 throw new DomainValidationException(
@@ -316,8 +334,8 @@ public class PropertyService : IPropertyService
             entity,
             previousCanonicalUnitNumber,
             now,
-            ct);
-        await _db.SaveChangesAsync(ct);
+            token);
+        await _db.SaveChangesAsync(token);
 
         // Re-read the unit aggregates in SQL (single scalar query) so the broadcast row carries the
         // same counts the list/detail show — the edit doesn't change unit membership, but keeping the
@@ -331,29 +349,41 @@ public class PropertyService : IPropertyService
                 Occupied = _db.UnitOccupancyProjections.Count(occupancy =>
                     occupancy.PortfolioId == portfolioId && occupancy.PropertyId == p.Id && occupancy.IsOccupied),
             })
-            .FirstOrDefaultAsync(ct);
+            .FirstOrDefaultAsync(token);
 
         var response = PropertyResponse.FromEntity(entity, counts?.UnitCount ?? 0, counts?.Occupied ?? 0);
         response.OwnerName = entity.OwnerEntity?.Name ?? entity.Owner?.Name;
         if (touchedCanonicalUnit != null)
         {
             var canonicalUnitResponse = await BuildCanonicalUnitResponseQuery(portfolioId, touchedCanonicalUnit.Id)
-                .SingleAsync(ct);
+                .SingleAsync(token);
             await _dataUpdate.BroadcastEntityUpdateAsync(
                 portfolioId,
                 UnitEntityType,
                 touchedCanonicalUnit.Id,
                 canonicalUnitResponse,
-                ct);
+                token);
         }
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, token);
         return response;
-    }
+    }, ct);
 
-    public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
+    public Task<bool> DeleteAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default) =>
+        _db.ExecuteAuthorizedMutationAsync(async token =>
     {
+        var portfolioId = scope.PortfolioId;
+        if (!await _db.AuthorizedWorkspaceAssignments(
+                scope,
+                [CapabilityKeys.RentalsManage],
+                CapabilityAuthorizationTargetKind.Property,
+                _timeProvider.UtcNow()).AnyAsync(token))
+        {
+            return false;
+        }
+
         var entity = await _db.Properties
-            .FirstOrDefaultAsync(p => p.Id == id && p.PortfolioId == portfolioId, ct);
+            .WhereAuthorized(_db, scope, CapabilityKeys.RentalsManage, _timeProvider.UtcNow())
+            .FirstOrDefaultAsync(p => p.Id == id, token);
         if (entity == null)
         {
             return false;
@@ -368,17 +398,17 @@ public class PropertyService : IPropertyService
         // Unit has no independently trusted portfolio scope — the parent
         // property was already confirmed in-portfolio above, so PropertyId == id is correctly scoped.
         var liveUnitCount = await _db.Units
-            .CountAsync(u => u.PropertyId == id, ct);
+            .CountAsync(u => u.PropertyId == id, token);
         Unit? canonicalUnitToDelete = null;
         if (liveUnitCount > 0)
         {
             if (liveUnitCount == 1 && IsPropertyUnitType(entity.PropertyType))
             {
                 var unit = await _db.Units
-                    .FirstAsync(u => u.PropertyId == id, ct);
+                    .FirstAsync(u => u.PropertyId == id, token);
                 if (string.Equals(unit.UnitNumber, CanonicalUnitNumber(entity.Name), StringComparison.Ordinal))
                 {
-                    await EnsureUnitHasNoHistoryAsync(portfolioId, unit.Id, ct);
+                    await EnsureUnitHasNoHistoryAsync(portfolioId, unit.Id, token);
                     canonicalUnitToDelete = unit;
                 }
             }
@@ -392,7 +422,7 @@ public class PropertyService : IPropertyService
             }
         }
 
-        await EnsurePropertyHasNoHistoryAsync(portfolioId, id, ct);
+        await EnsurePropertyHasNoHistoryAsync(portfolioId, id, token);
 
         var now = _timeProvider.UtcNow();
         if (canonicalUnitToDelete != null)
@@ -402,15 +432,15 @@ public class PropertyService : IPropertyService
         }
         entity.DeletedAt = now;
         entity.UpdatedAt = now;
-        await _db.SaveChangesAsync(ct);
+        await _db.SaveChangesAsync(token);
 
         if (canonicalUnitToDelete != null)
         {
-            await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, UnitEntityType, canonicalUnitToDelete.Id, ct);
+            await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, UnitEntityType, canonicalUnitToDelete.Id, token);
         }
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
+        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, token);
         return true;
-    }
+    }, ct);
 
     private async Task<Unit?> EnsureCanonicalUnitAsync(
         Property property,

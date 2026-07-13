@@ -12,9 +12,12 @@ using RentalCommand.Data.Notifications;
 namespace RentalCommand.Data.Conversations;
 
 public sealed class SendConversationMessageHandler
-    : IAtomicCommandHandler<SendConversationMessageCommand, SendConversationMessageResult>
+    : IAtomicCommandHandler<SendConversationMessageCommand, SendConversationMessageResult>,
+      IAtomicReplayAuthorizer<SendConversationMessageCommand>
 {
     private const int PreviewMaxLength = 280;
+    private static readonly string[] ManagementCapabilities =
+        [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage];
 
     public async Task<SendConversationMessageResult> HandleAsync(
         SendConversationMessageCommand command,
@@ -32,14 +35,20 @@ public sealed class SendConversationMessageHandler
         if (command.ConversationId is { } conversationId)
         {
             await attempt.Locking.AcquireAsync(AtomicLockResource.Conversation, conversationId, ct);
-            var existing = await attempt.Persistence.Query<Conversation>()
+            var conversationQuery = attempt.Persistence.Query<Conversation>()
                 .Include(candidate => candidate.Tenant)
-                .SingleOrDefaultAsync(
-                    candidate => candidate.Id == conversationId
-                        && candidate.PortfolioId == command.PortfolioId
-                        && (command.SenderRole != ConversationSenderRole.Tenant
-                            || candidate.TenantId == command.TenantId),
-                    ct);
+                .Where(candidate => candidate.Id == conversationId
+                    && candidate.PortfolioId == command.PortfolioId
+                    && (command.SenderRole != ConversationSenderRole.Tenant
+                        || candidate.TenantId == command.TenantId));
+            if (command.SenderRole == ConversationSenderRole.Landlord && command.ManagementAccess is not null)
+            {
+                var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+                conversationQuery = WhereManagementAuthorized(
+                    conversationQuery, attempt.Persistence, command, now);
+            }
+
+            var existing = await conversationQuery.SingleOrDefaultAsync(ct);
             if (existing?.Tenant is null)
             {
                 return NotFound();
@@ -60,10 +69,18 @@ public sealed class SendConversationMessageHandler
         }
         else
         {
-            var target = await attempt.Persistence.Query<Tenant>()
-                .SingleOrDefaultAsync(candidate => candidate.Id == command.TenantId
+            var tenantQuery = attempt.Persistence.Query<Tenant>()
+                .Where(candidate => candidate.Id == command.TenantId
                     && candidate.PortfolioId == command.PortfolioId
-                    && candidate.DeletedAt == null, ct);
+                    && candidate.DeletedAt == null);
+            if (command.SenderRole == ConversationSenderRole.Landlord && command.ManagementAccess is not null)
+            {
+                var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+                tenantQuery = WhereManagementAuthorizedForStart(
+                    tenantQuery, attempt.Persistence, command, times.WallClockUtc, times.BusinessDate);
+            }
+
+            var target = await tenantQuery.SingleOrDefaultAsync(ct);
             if (target is null)
             {
                 return NotFound();
@@ -74,6 +91,7 @@ public sealed class SendConversationMessageHandler
             {
                 PortfolioId = command.PortfolioId,
                 TenantId = tenant.Id,
+                PropertyId = command.PropertyId,
                 Subject = command.Subject,
                 StartedByLandlord = command.SenderRole == ConversationSenderRole.Landlord,
                 CreatedAt = command.CreatedAtUtc,
@@ -170,6 +188,163 @@ public sealed class SendConversationMessageHandler
             conversation.Id,
             message.Id,
             notifications.Select(notification => notification.Id).ToArray());
+    }
+
+    public async Task AuthorizeReplayAsync(
+        SendConversationMessageCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        if (command.SenderRole != ConversationSenderRole.Landlord || command.ManagementAccess is null)
+        {
+            return;
+        }
+
+        bool authorized;
+        if (command.ConversationId is { } conversationId)
+        {
+            var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+            authorized = await WhereManagementAuthorized(
+                    persistence.Query<Conversation>().Where(conversation =>
+                        conversation.Id == conversationId &&
+                        conversation.PortfolioId == command.PortfolioId),
+                    persistence,
+                    command,
+                    now)
+                .AnyAsync(ct);
+        }
+        else
+        {
+            var times = await persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+            authorized = await WhereManagementAuthorizedForStart(
+                    persistence.Query<Tenant>().Where(tenant =>
+                        tenant.Id == command.TenantId &&
+                        tenant.PortfolioId == command.PortfolioId &&
+                        tenant.DeletedAt == null),
+                    persistence,
+                    command,
+                    times.WallClockUtc,
+                    times.BusinessDate)
+                .AnyAsync(ct);
+        }
+
+        if (!authorized)
+        {
+            throw new UnauthorizedAccessException(
+                "The current workspace access no longer authorizes this conversation command.");
+        }
+    }
+
+    private static IQueryable<Conversation> WhereManagementAuthorized(
+        IQueryable<Conversation> conversations,
+        IAtomicPersistenceSession persistence,
+        SendConversationMessageCommand command,
+        DateTime utcNow)
+    {
+        var allProperties = AuthorizedAssignments(persistence, command, utcNow)
+            .Where(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties);
+        var authorizedProperties = AuthorizedProperties(persistence, command, utcNow);
+
+        return conversations.Where(conversation =>
+            (conversation.PropertyId == null && allProperties.Any()) ||
+            (conversation.PropertyId != null && authorizedProperties.Any(property =>
+                property.Id == conversation.PropertyId &&
+                property.PortfolioId == conversation.PortfolioId)));
+    }
+
+    private static IQueryable<Tenant> WhereManagementAuthorizedForStart(
+        IQueryable<Tenant> tenants,
+        IAtomicPersistenceSession persistence,
+        SendConversationMessageCommand command,
+        DateTime utcNow,
+        DateOnly businessDate)
+    {
+        var currentRelationships = persistence.Query<LeaseManagementParty>()
+            .Where(party =>
+                party.PortfolioId == command.PortfolioId &&
+                party.Role != LeaseManagementPartyRole.Guarantor &&
+                party.LeaseManagement != null &&
+                party.LeaseManagement.CanceledAtUtc == null &&
+                party.LeaseManagement.PossessionReturnedAtUtc == null &&
+                party.EffectiveFrom <= businessDate &&
+                (party.EffectiveThrough == null || party.EffectiveThrough >= businessDate));
+
+        if (command.PropertyId is { } propertyId)
+        {
+            var authorizedProperties = AuthorizedProperties(persistence, command, utcNow)
+                .Where(property => property.Id == propertyId);
+            return tenants.Where(tenant =>
+                authorizedProperties.Any() &&
+                currentRelationships.Any(party =>
+                    party.TenantId == tenant.Id &&
+                    party.LeaseManagement!.PropertyId == propertyId));
+        }
+
+        var allProperties = AuthorizedAssignments(persistence, command, utcNow)
+            .Where(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties);
+        return tenants.Where(tenant =>
+            allProperties.Any() &&
+            !currentRelationships.Any(party => party.TenantId == tenant.Id));
+    }
+
+    private static IQueryable<Property> AuthorizedProperties(
+        IAtomicPersistenceSession persistence,
+        SendConversationMessageCommand command,
+        DateTime utcNow)
+    {
+        var assignments = AuthorizedAssignments(persistence, command, utcNow);
+        return persistence.Query<Property>().Where(property =>
+            property.PortfolioId == command.PortfolioId &&
+            assignments.Any(assignment =>
+                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
+                 assignment.SelectedProperties.Any(selected =>
+                     selected.PortfolioId == property.PortfolioId &&
+                     selected.PropertyId == property.Id))));
+    }
+
+    private static IQueryable<MembershipRoleAssignment> AuthorizedAssignments(
+        IAtomicPersistenceSession persistence,
+        SendConversationMessageCommand command,
+        DateTime utcNow)
+    {
+        var access = command.ManagementAccess
+            ?? throw new InvalidOperationException("Management access is required for this query.");
+        return persistence.Query<MembershipRoleAssignment>().Where(assignment =>
+            assignment.PortfolioId == command.PortfolioId &&
+            assignment.Status == MembershipRoleAssignmentStatus.Active &&
+            assignment.SuspendedAtUtc == null &&
+            assignment.RevokedAtUtc == null &&
+            assignment.EffectiveFromUtc <= utcNow &&
+            (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > utcNow) &&
+            assignment.WorkspaceMembership != null &&
+            assignment.WorkspaceMembership.AccessContextId == access.AccessContextId &&
+            assignment.WorkspaceMembership.PortfolioId == command.PortfolioId &&
+            assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active &&
+            assignment.WorkspaceMembership.SuspendedAtUtc == null &&
+            assignment.WorkspaceMembership.RevokedAtUtc == null &&
+            assignment.WorkspaceMembership.EffectiveFromUtc <= utcNow &&
+            (assignment.WorkspaceMembership.EffectiveToUtc == null ||
+             assignment.WorkspaceMembership.EffectiveToUtc > utcNow) &&
+            assignment.WorkspaceMembership.AccessContext != null &&
+            assignment.WorkspaceMembership.AccessContext.UserId == access.UserId &&
+            assignment.WorkspaceMembership.AccessContext.AccessRevision == access.AccessRevision &&
+            assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active &&
+            assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null &&
+            assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null &&
+            persistence.Query<AuthSession>().Any(session =>
+                session.Id == access.SessionId &&
+                session.UserId == access.UserId &&
+                session.ActiveAccessContextId == access.AccessContextId &&
+                session.Status == AuthSessionStatus.Active &&
+                session.RevokedAtUtc == null &&
+                session.ExpiresAtUtc > utcNow) &&
+            assignment.RoleProfile != null &&
+            assignment.RoleProfile.Capabilities.Any(profileCapability =>
+                profileCapability.CapabilityDefinition != null &&
+                ManagementCapabilities.Contains(profileCapability.CapabilityDefinition.Key) &&
+                profileCapability.CapabilityDefinition.AuthorizationTargetKind ==
+                    CapabilityAuthorizationTargetKind.Property));
     }
 
     private static async Task<List<Notification>> CreateStaffNotificationsAsync(

@@ -1,4 +1,5 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -17,12 +18,20 @@ public interface IConversationService
     Task<IReadOnlyList<ConversationSummary>> ListAsync(int portfolioId, CancellationToken ct = default);
     Task<ConversationListResponse> ListPageAsync(int portfolioId, ListQuery query, CancellationToken ct = default);
     Task<int> GetUnreadCountAsync(int portfolioId, CancellationToken ct = default);
+    Task<IReadOnlyList<ConversationSummary>> ListAuthorizedAsync(
+        WorkspaceReadScope scope, CancellationToken ct = default);
+    Task<ConversationListResponse> ListPageAuthorizedAsync(
+        WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default);
+    Task<int> GetUnreadCountAuthorizedAsync(
+        WorkspaceReadScope scope, CancellationToken ct = default);
 
     /// <summary>
     /// Fetch one conversation with its full message history (ascending). Resets the landlord's unread
     /// count to 0 (mark-read). Returns null when not found in the portfolio.
     /// </summary>
     Task<ConversationDetail?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
+    Task<ConversationDetail?> GetAuthorizedAsync(
+        WorkspaceReadScope scope, int id, CancellationToken ct = default);
 
     /// <summary>
     /// Open a new topic thread with a tenant and send the first (landlord) message, fanning out to
@@ -39,6 +48,10 @@ public interface IConversationService
     Task<ConversationDetail?> StartAsync(
         int portfolioId, int tenantId, string subject, string body, List<string> channels,
         string operationKey, bool acknowledgedFairHousingReview = false, CancellationToken ct = default);
+    Task<ConversationDetail?> StartAuthorizedAsync(
+        WorkspaceReadScope scope, int tenantId, int? propertyId, string subject, string body,
+        List<string> channels, string operationKey, bool acknowledgedFairHousingReview = false,
+        CancellationToken ct = default);
 
     /// <summary>
     /// Append a landlord message to an existing conversation, bumping the tenant's unread count and
@@ -46,6 +59,9 @@ public interface IConversationService
     /// </summary>
     Task<ConversationDetail?> PostMessageAsync(
         int portfolioId, int id, string body, List<string> channels, string operationKey,
+        CancellationToken ct = default);
+    Task<ConversationDetail?> PostMessageAuthorizedAsync(
+        WorkspaceReadScope scope, int id, string body, List<string> channels, string operationKey,
         CancellationToken ct = default);
 
     // --- Tenant ---

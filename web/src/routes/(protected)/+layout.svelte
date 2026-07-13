@@ -9,6 +9,7 @@
 	import { signalRService } from '$lib/realtime/signalr';
 	import { useInvalidateOnSignalR } from '$lib/realtime/invalidate';
 	import { CLIENT_HUB_URL } from '$lib/config';
+	import { resetAccessDependentClientState } from '$lib/auth/access-transition';
 	import AppShell from '$lib/components/AppShell.svelte';
 	import CoachOverlay from '$lib/components/onboarding/CoachOverlay.svelte';
 	import CoachTrigger from '$lib/components/onboarding/CoachTrigger.svelte';
@@ -32,9 +33,19 @@
 	// Bridge SignalR data-update events to TanStack Query invalidation (wired once).
 	const queryClient = useQueryClient();
 	const disconnectQueryBridge = useInvalidateOnSignalR(queryClient);
-	setAccessRecoveryCallback(async () => {
+	setAccessRecoveryCallback(async (access, reason) => {
+		if (reason === 'refresh-signalr') {
+			// The in-progress handshake is already binding the refreshed token. Purge and refresh page
+			// data, but do not stop/start that same connection recursively.
+			resetAccessDependentClientState(queryClient, access);
+			await invalidateAll();
+			return;
+		}
 		await signalRService.disconnect();
-		queryClient.clear();
+		resetAccessDependentClientState(queryClient, access);
+		// Experience switching owns its navigation so the current, newly forbidden route is never
+		// reloaded between the access mutation and its capability-safe landing.
+		if (reason !== 'refresh') return;
 		await invalidateAll();
 		await signalRService.connect(CLIENT_HUB_URL);
 	});

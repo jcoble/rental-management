@@ -13,6 +13,7 @@ public static class SqliteLeaseProjectionViews
     public static void InstallCanonicalLeaseProjectionViewsForSqlite(this DatabaseFacade database)
     {
         database.ExecuteSqlRaw("""
+            DROP VIEW IF EXISTS "vw_morning_briefing_candidates";
             DROP VIEW IF EXISTS "vw_lease_management_lifecycle";
             DROP VIEW IF EXISTS "vw_unit_occupancy";
             DROP VIEW IF EXISTS "vw_lease_agreement_status";
@@ -548,6 +549,139 @@ public static class SqliteLeaseProjectionViews
                 0 AS "HasPossessionWithoutGoverningAgreement",
                 0 AS "HasReconciliationException"
             FROM "LeaseManagements" AS management;
+
+            CREATE VIEW "vw_morning_briefing_candidates" AS
+            SELECT work."PortfolioId", work."PropertyId", work."UnitId",
+                   'work.read' AS "RequiredCapability", 1 AS "SortOrder", 0 AS "SeverityOrder",
+                   'Maintenance' AS "Category", 'WorkOrder' AS "EntityType", work."Id" AS "EntityId",
+                   work."Title" AS "TitleText", work."Description" AS "DetailText",
+                   NULL AS "LeaseNumber", NULL AS "UnitNumber", NULL AS "TenantName",
+                   property."Name" AS "PropertyName", 0.0 AS "Amount",
+                   work."RequestedAt" AS "EventDateTime", NULL AS "EventDateOnly", 0 AS "TypeValue"
+            FROM "WorkOrders" AS work
+            JOIN "Properties" AS property
+              ON property."Id" = work."PropertyId"
+             AND property."PortfolioId" = work."PortfolioId"
+            WHERE work."Priority" = 3
+              AND work."Status" NOT IN (4, 5, 7)
+              AND work."DeletedAt" IS NULL
+
+            UNION ALL
+
+            SELECT charge."PortfolioId", lifecycle."PropertyId", lifecycle."UnitId",
+                   'money.balances.read', 2, 1, 'RentLate', 'TenantAccount', account."Id",
+                   NULL, NULL, COALESCE(agreement."AgreementNumber", account."AccountNumber"),
+                   unit."UnitNumber", lifecycle."CurrentPrimaryTenantName", property."Name",
+                   SUM(charge."OpenAmount"), NULL, charge."DueOn", 0
+            FROM "vw_tenant_charge_balances" AS charge
+            JOIN "TenantAccounts" AS account
+              ON account."Id" = charge."TenantAccountId"
+             AND account."PortfolioId" = charge."PortfolioId"
+            JOIN "vw_lease_management_lifecycle" AS lifecycle
+              ON lifecycle."LeaseManagementId" = account."LeaseManagementId"
+             AND lifecycle."PortfolioId" = account."PortfolioId"
+            JOIN "Units" AS unit
+              ON unit."Id" = lifecycle."UnitId"
+             AND unit."PortfolioId" = lifecycle."PortfolioId"
+            JOIN "Properties" AS property
+              ON property."Id" = lifecycle."PropertyId"
+             AND property."PortfolioId" = lifecycle."PortfolioId"
+            LEFT JOIN "LeaseAgreements" AS agreement
+              ON agreement."Id" = lifecycle."CurrentAgreementId"
+             AND agreement."PortfolioId" = lifecycle."PortfolioId"
+            WHERE charge."DueOn" IS NOT NULL
+              AND charge."OpenAmount" > 0
+              AND lifecycle."Lifecycle" IN ('Occupied', 'Ending')
+            GROUP BY charge."PortfolioId", lifecycle."PropertyId", lifecycle."UnitId", account."Id",
+                     agreement."AgreementNumber", account."AccountNumber", unit."UnitNumber",
+                     lifecycle."CurrentPrimaryTenantName", property."Name", charge."DueOn"
+
+            UNION ALL
+
+            SELECT charge."PortfolioId", lifecycle."PropertyId", lifecycle."UnitId",
+                   'money.balances.read', 3, 2, 'RentDue', 'TenantAccount', account."Id",
+                   NULL, NULL, COALESCE(agreement."AgreementNumber", account."AccountNumber"),
+                   unit."UnitNumber", lifecycle."CurrentPrimaryTenantName", property."Name",
+                   SUM(charge."OpenAmount"), NULL, charge."DueOn", 0
+            FROM "vw_tenant_charge_balances" AS charge
+            JOIN "TenantAccounts" AS account
+              ON account."Id" = charge."TenantAccountId"
+             AND account."PortfolioId" = charge."PortfolioId"
+            JOIN "vw_lease_management_lifecycle" AS lifecycle
+              ON lifecycle."LeaseManagementId" = account."LeaseManagementId"
+             AND lifecycle."PortfolioId" = account."PortfolioId"
+            JOIN "Units" AS unit
+              ON unit."Id" = lifecycle."UnitId"
+             AND unit."PortfolioId" = lifecycle."PortfolioId"
+            JOIN "Properties" AS property
+              ON property."Id" = lifecycle."PropertyId"
+             AND property."PortfolioId" = lifecycle."PortfolioId"
+            LEFT JOIN "LeaseAgreements" AS agreement
+              ON agreement."Id" = lifecycle."CurrentAgreementId"
+             AND agreement."PortfolioId" = lifecycle."PortfolioId"
+            WHERE charge."EntryType" = 'RentCharge'
+              AND charge."DueOn" IS NOT NULL
+              AND charge."OpenAmount" > 0
+              AND lifecycle."Lifecycle" IN ('Occupied', 'Ending')
+            GROUP BY charge."PortfolioId", lifecycle."PropertyId", lifecycle."UnitId", account."Id",
+                     agreement."AgreementNumber", account."AccountNumber", unit."UnitNumber",
+                     lifecycle."CurrentPrimaryTenantName", property."Name", charge."DueOn"
+
+            UNION ALL
+
+            SELECT appointment."PortfolioId", appointment."PropertyId", appointment."UnitId",
+                   CASE appointment."Type"
+                     WHEN 0 THEN 'leasing.showings.manage'
+                     WHEN 1 THEN 'leasing.onboarding.manage'
+                     WHEN 2 THEN 'leasing.onboarding.manage'
+                     WHEN 3 THEN 'work.read'
+                     WHEN 4 THEN 'work.read'
+                     ELSE 'rentals.read'
+                   END,
+                   4, 2, 'Appointment', 'Appointment', appointment."Id", appointment."Title", NULL,
+                   NULL, NULL, NULL, property."Name", 0.0, appointment."ScheduledStart", NULL,
+                   appointment."Type"
+            FROM "Appointments" AS appointment
+            JOIN "Properties" AS property
+              ON property."Id" = appointment."PropertyId"
+             AND property."PortfolioId" = appointment."PortfolioId"
+            WHERE appointment."PropertyId" IS NOT NULL
+              AND appointment."Status" IN (0, 1)
+
+            UNION ALL
+
+            SELECT inspection."PortfolioId", inspection."PropertyId", inspection."UnitId",
+                   'work.read', 5, 2, 'Inspection', 'Inspection', inspection."Id", NULL, NULL,
+                   NULL, NULL, NULL, property."Name", 0.0, inspection."ScheduledFor", NULL,
+                   inspection."Type"
+            FROM "Inspections" AS inspection
+            JOIN "Properties" AS property
+              ON property."Id" = inspection."PropertyId"
+             AND property."PortfolioId" = inspection."PortfolioId"
+            WHERE inspection."Status" = 0
+
+            UNION ALL
+
+            SELECT status."PortfolioId", lifecycle."PropertyId", lifecycle."UnitId",
+                   'rentals.read', 6, 1, 'LeaseExpiring', 'LeaseAgreement', agreement."Id", NULL, NULL,
+                   agreement."AgreementNumber", unit."UnitNumber", lifecycle."CurrentPrimaryTenantName",
+                   property."Name", 0.0, NULL, agreement."TermEndOn", 0
+            FROM "vw_lease_agreement_status" AS status
+            JOIN "LeaseAgreements" AS agreement
+              ON agreement."Id" = status."AgreementId"
+             AND agreement."PortfolioId" = status."PortfolioId"
+            JOIN "vw_lease_management_lifecycle" AS lifecycle
+              ON lifecycle."LeaseManagementId" = status."LeaseManagementId"
+             AND lifecycle."PortfolioId" = status."PortfolioId"
+            JOIN "Units" AS unit
+              ON unit."Id" = lifecycle."UnitId"
+             AND unit."PortfolioId" = lifecycle."PortfolioId"
+            JOIN "Properties" AS property
+              ON property."Id" = lifecycle."PropertyId"
+             AND property."PortfolioId" = lifecycle."PortfolioId"
+            WHERE status."IsGoverning" = 1
+              AND lifecycle."Lifecycle" IN ('Occupied', 'Ending')
+              AND agreement."TermEndOn" IS NOT NULL;
             """);
     }
 }

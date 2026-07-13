@@ -45,20 +45,20 @@
 	);
 
 	const FORCEABLE_NOTICE_TYPES: { type: string; label: string }[] = [
-		{ type: 'RentReminder', label: 'Rent reminder (coming due)' },
-		{ type: 'RenewalOffer', label: 'Lease renewal offer' },
-		{ type: 'MonthToMonthConversion', label: 'Convert to month-to-month' },
-		{ type: 'MoveOutReminder', label: 'Lease expiration / move-out' },
-		{ type: 'LateRentNotice', label: 'Late rent / late fee' },
+		{ type: 'rent-reminder', label: 'Rent reminder (coming due)' },
+		{ type: 'lease-renewal-offer', label: 'Lease renewal offer' },
+		{ type: 'month-to-month-offer', label: 'Offer month-to-month' },
+		{ type: 'lease-non-renewal', label: 'Lease expiration / non-renewal' },
+		{ type: 'late-rent-late-fee', label: 'Past-due rent / late fee' },
 	];
 
 	function noticeTypeLabel(type: string) {
 		switch (type) {
-			case 'RentReminder': return 'Rent reminder';
-			case 'RenewalOffer': return 'Renewal offer';
-			case 'MonthToMonthConversion': return 'Month-to-month conversion';
-			case 'MoveOutReminder': return 'Move-out reminder';
-			case 'LateRentNotice': return 'Late rent / late fee';
+			case 'rent-reminder': return 'Rent reminder';
+			case 'lease-renewal-offer': return 'Lease renewal offer';
+			case 'month-to-month-offer': return 'Month-to-month offer';
+			case 'lease-non-renewal': return 'Lease expiration / non-renewal';
+			case 'late-rent-late-fee': return 'Past-due rent / late fee';
 			default: return type;
 		}
 	}

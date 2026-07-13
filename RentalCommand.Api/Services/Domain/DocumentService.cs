@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Documents;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
@@ -109,6 +110,7 @@ public sealed class DocumentService : IDocumentService
         int userId,
         int? tenantId,
         bool isStaff,
+        WorkspaceReadScope? staffScope,
         string clientOperationId,
         string requestFingerprint,
         string contentSha256,
@@ -144,7 +146,14 @@ public sealed class DocumentService : IDocumentService
                     storagePath,
                     contentType,
                     sizeBytes,
-                    _timeProvider.UtcNow()),
+                    _timeProvider.UtcNow(),
+                    staffScope is { } access
+                        ? new StoredDocumentManagementAccess(
+                            access.SessionId,
+                            access.UserId,
+                            access.AccessContextId,
+                            access.AccessRevision)
+                        : null),
                 CreateCodec,
                 ct);
 
@@ -172,6 +181,7 @@ public sealed class DocumentService : IDocumentService
         int userId,
         int? tenantId,
         bool isStaff,
+        WorkspaceReadScope? staffScope,
         string clientOperationId,
         CancellationToken ct = default)
     {
@@ -187,7 +197,14 @@ public sealed class DocumentService : IDocumentService
                 tenantId,
                 isStaff,
                 normalizedOperationId,
-                _timeProvider.UtcNow()),
+                _timeProvider.UtcNow(),
+                staffScope is { } access
+                    ? new StoredDocumentManagementAccess(
+                        access.SessionId,
+                        access.UserId,
+                        access.AccessContextId,
+                        access.AccessRevision)
+                    : null),
             DeleteCodec,
             ct);
         return outcome.Value.Outcome == StoredDocumentMutationOutcome.Deleted;

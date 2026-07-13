@@ -40,7 +40,8 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
         [FromQuery] ListQuery query,
         CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), kind, status, propertyId, query, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var items = await _service.ListAsync(scope, kind, status, propertyId, query, ct);
         return Ok(items);
     }
 
@@ -53,7 +54,8 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
         [FromQuery] ListQuery query,
         CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), kind, status, propertyId, query, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var page = await _service.ListPageAsync(scope, kind, status, propertyId, query, ct);
         return Ok(page);
     }
 
@@ -70,7 +72,8 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<DocumentTemplateResponse>> Get(int id, CancellationToken ct)
     {
-        var template = await _service.GetAsync(GetPortfolioId(), id, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var template = await _service.GetAsync(scope, id, ct);
         return template is null ? NotFound(new { error = "Document template not found" }) : Ok(template);
     }
 
@@ -80,7 +83,8 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> PreviewLeasePdf(int id, int leaseAgreementId, CancellationToken ct)
     {
-        var result = await _service.PreviewLeasePdfAsync(GetPortfolioId(), id, leaseAgreementId, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var result = await _service.PreviewLeasePdfAsync(scope, id, leaseAgreementId, ct);
         return result.Outcome switch
         {
             DocumentTemplateOperationOutcome.Success => File(
@@ -100,7 +104,8 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
         [FromBody] CreateDocumentTemplateRequest request,
         CancellationToken ct)
     {
-        var result = await _service.CreateAsync(GetPortfolioId(), request, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var result = await _service.CreateAsync(scope, request, ct);
         if (result.Outcome == DocumentTemplateOperationOutcome.Invalid)
         {
             return BadRequest(new { error = result.Error });
@@ -153,8 +158,9 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
         }
 
         await using var stream = file.OpenReadStream();
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
         var result = await _service.UploadPdfAsync(
-            GetPortfolioId(),
+            scope,
             stream,
             fileName,
             contentType,
@@ -182,7 +188,8 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
         [FromBody] UpdateDocumentTemplateRequest request,
         CancellationToken ct)
     {
-        var result = await _service.UpdateAsync(GetPortfolioId(), id, request, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var result = await _service.UpdateAsync(scope, id, request, ct);
         return Map(result);
     }
 
@@ -195,7 +202,8 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
         [FromBody] CreateDocumentTemplateFieldRequest request,
         CancellationToken ct)
     {
-        var result = await _service.AddFieldAsync(GetPortfolioId(), id, request, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var result = await _service.AddFieldAsync(scope, id, request, ct);
         return result.Outcome switch
         {
             DocumentTemplateOperationOutcome.Success => CreatedAtAction(nameof(Get), new { id }, result.Value),
@@ -215,7 +223,8 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
         [FromBody] UpdateDocumentTemplateFieldRequest request,
         CancellationToken ct)
     {
-        var result = await _service.UpdateFieldAsync(GetPortfolioId(), id, fieldId, request, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var result = await _service.UpdateFieldAsync(scope, id, fieldId, request, ct);
         return Map(result);
     }
 
@@ -224,7 +233,8 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> DeleteField(int id, int fieldId, CancellationToken ct)
     {
-        var result = await _service.DeleteFieldAsync(GetPortfolioId(), id, fieldId, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var result = await _service.DeleteFieldAsync(scope, id, fieldId, ct);
         return result.Outcome switch
         {
             DocumentTemplateOperationOutcome.Success => NoContent(),

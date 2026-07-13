@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 
@@ -42,7 +43,7 @@ public class TenantController : ManagementControllerBase
     [ProducesResponseType(typeof(IReadOnlyList<TenantResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<TenantResponse>>> List([FromQuery] TenantListQuery query, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), query, ct);
+        var items = await _service.ListAuthorizedAsync(GetWorkspaceReadScope(), query, ct);
         return Ok(items);
     }
 
@@ -50,7 +51,7 @@ public class TenantController : ManagementControllerBase
     [ProducesResponseType(typeof(TenantListResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<TenantListResponse>> ListPage([FromQuery] TenantListQuery query, CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), query, ct);
+        var page = await _service.ListPageAuthorizedAsync(GetWorkspaceReadScope(), query, ct);
         return Ok(page);
     }
 
@@ -59,7 +60,7 @@ public class TenantController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<TenantResponse>> Get(int id, CancellationToken ct)
     {
-        var item = await _service.GetAsync(GetPortfolioId(), id, ct);
+        var item = await _service.GetAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
         return item == null ? NotFound(new { error = "Tenant not found" }) : Ok(item);
     }
 
@@ -67,7 +68,12 @@ public class TenantController : ManagementControllerBase
     [ProducesResponseType(typeof(TenantResponse), StatusCodes.Status201Created)]
     public async Task<ActionResult<TenantResponse>> Create([FromBody] CreateTenantRequest request, CancellationToken ct)
     {
-        var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
+        var created = await _service.CreateAuthorizedAsync(GetWorkspaceReadScope(), request, ct);
+        if (created is null)
+        {
+            return Forbid();
+        }
+
         return CreatedAtAction(nameof(Get), new { id = created.Id }, created);
     }
 
@@ -76,7 +82,7 @@ public class TenantController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<TenantResponse>> Update(int id, [FromBody] UpdateTenantRequest request, CancellationToken ct)
     {
-        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, ct);
+        var updated = await _service.UpdateAuthorizedAsync(GetWorkspaceReadScope(), id, request, ct);
         return updated == null ? NotFound(new { error = "Tenant not found" }) : Ok(updated);
     }
 
@@ -85,7 +91,7 @@ public class TenantController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(int id, CancellationToken ct)
     {
-        var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
+        var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
         return deleted ? NoContent() : NotFound(new { error = "Tenant not found" });
     }
 
@@ -102,7 +108,8 @@ public class TenantController : ManagementControllerBase
     public async Task<ActionResult<PortalAccessResponse>> SetPortalAccess(
         int id, [FromBody] SetPortalAccessRequest request, CancellationToken ct)
     {
-        var result = await _portalProvisioning.SetPortalAccessAsync(id, GetPortfolioId(), request.Enabled, ct);
+        var result = await _portalProvisioning.SetPortalAccessAuthorizedAsync(
+            GetWorkspaceReadScope(), id, request.Enabled, ct);
 
         return result.Outcome switch
         {
@@ -135,7 +142,8 @@ public class TenantController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<PortalInviteResponse>> SendPortalInvite(int id, CancellationToken ct)
     {
-        var result = await _portalProvisioning.EnsurePortalAccountForTenantAsync(id, GetPortfolioId(), ct);
+        var result = await _portalProvisioning.EnsurePortalAccountForTenantAuthorizedAsync(
+            GetWorkspaceReadScope(), id, ct);
 
         switch (result.Status)
         {

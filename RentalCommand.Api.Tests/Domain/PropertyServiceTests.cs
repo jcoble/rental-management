@@ -129,7 +129,7 @@ public class PropertyServiceTests : IDisposable
     [InlineData(PropertyType.Townhome)]
     public async Task CreateAsync_CreatesCanonicalUnitForPropertyUnitTypes(PropertyType propertyType)
     {
-        var created = await _sut.CreateAsync(PortfolioId, NewProperty("293 Mallard Point Dr", propertyType));
+        var created = await _sut.CreateAsync(_scope, NewProperty("293 Mallard Point Dr", propertyType));
 
         created.Should().NotBeNull();
         created!.UnitCount.Should().Be(1);
@@ -145,7 +145,7 @@ public class PropertyServiceTests : IDisposable
     [InlineData(PropertyType.Commercial)]
     public async Task CreateAsync_DoesNotCreateCanonicalUnitForUnitizedPropertyTypes(PropertyType propertyType)
     {
-        var created = await _sut.CreateAsync(PortfolioId, NewProperty("Westview Four-Plex", propertyType));
+        var created = await _sut.CreateAsync(_scope, NewProperty("Westview Four-Plex", propertyType));
 
         created.Should().NotBeNull();
         created!.UnitCount.Should().Be(0);
@@ -158,7 +158,7 @@ public class PropertyServiceTests : IDisposable
         var property = SeedProperty("Standalone Home", PropertyType.MultiFamily);
 
         var updated = await _sut.UpdateAsync(
-            PortfolioId,
+            _scope,
             property.Id,
             new UpdatePropertyRequest { PropertyType = PropertyType.SingleFamily });
 
@@ -170,10 +170,10 @@ public class PropertyServiceTests : IDisposable
     [Fact]
     public async Task UpdateAsync_RenamesExistingCanonicalUnitWhenPropertyNameChanges()
     {
-        var created = await _sut.CreateAsync(PortfolioId, NewProperty("Old Home Name", PropertyType.SingleFamily));
+        var created = await _sut.CreateAsync(_scope, NewProperty("Old Home Name", PropertyType.SingleFamily));
 
         var updated = await _sut.UpdateAsync(
-            PortfolioId,
+            _scope,
             created!.Id,
             new UpdatePropertyRequest { Name = "New Home Name" });
 
@@ -197,7 +197,7 @@ public class PropertyServiceTests : IDisposable
         await _ctx.Db.SaveChangesAsync();
 
         var updated = await _sut.UpdateAsync(
-            PortfolioId,
+            _scope,
             property.Id,
             new UpdatePropertyRequest { Name = "Renamed Home" });
 
@@ -226,7 +226,7 @@ public class PropertyServiceTests : IDisposable
         _ctx.Db.SaveChanges();
 
         var updated = await _sut.UpdateAsync(
-            PortfolioId,
+            _scope,
             property.Id,
             new UpdatePropertyRequest { ClearOwnerEntity = true });
 
@@ -235,7 +235,7 @@ public class PropertyServiceTests : IDisposable
         _ctx.Db.Properties.Single(p => p.Id == property.Id).OwnerEntityId.Should().BeNull();
 
         var ownerService = new OwnerEntityService(_ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
-        (await ownerService.DeleteAsync(PortfolioId, owner.Id)).Should().BeTrue();
+        (await ownerService.DeleteAsync(_scope, owner.Id)).Should().BeTrue();
     }
 
     [Fact]
@@ -243,25 +243,25 @@ public class PropertyServiceTests : IDisposable
     {
         var property = SeedPropertyWithUnit(out _);
 
-        var act = async () => await _sut.DeleteAsync(PortfolioId, property.Id);
+        var act = async () => await _sut.DeleteAsync(_scope, property.Id);
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.Message.Should().Contain("Remove the unit");
-        (await _sut.GetAsync(PortfolioId, property.Id))
+        (await _sut.GetAsync(_scope, property.Id))
             .Should().NotBeNull("a property with live units must not be deleted");
     }
 
     [Fact]
     public async Task DeleteAsync_SoftDeletesEmptyCanonicalUnitForPropertyUnitTypes()
     {
-        var created = await _sut.CreateAsync(PortfolioId, NewProperty("Empty House", PropertyType.SingleFamily));
+        var created = await _sut.CreateAsync(_scope, NewProperty("Empty House", PropertyType.SingleFamily));
         created.Should().NotBeNull();
         var unit = _ctx.Db.Units.Single(u => u.PropertyId == created!.Id);
 
-        var deleted = await _sut.DeleteAsync(PortfolioId, created!.Id);
+        var deleted = await _sut.DeleteAsync(_scope, created!.Id);
 
         deleted.Should().BeTrue();
-        (await _sut.GetAsync(PortfolioId, created.Id)).Should().BeNull();
+        (await _sut.GetAsync(_scope, created.Id)).Should().BeNull();
         _ctx.Db.Units.IgnoreQueryFilters().Single(u => u.Id == unit.Id).DeletedAt.Should().NotBeNull();
     }
 
@@ -282,7 +282,7 @@ public class PropertyServiceTests : IDisposable
         unit.DeletedAt = DateTime.UtcNow;
         _ctx.Db.SaveChanges();
 
-        var act = async () => await _sut.DeleteAsync(PortfolioId, property.Id);
+        var act = async () => await _sut.DeleteAsync(_scope, property.Id);
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.Message.Should().Contain("work order");
@@ -307,7 +307,7 @@ public class PropertyServiceTests : IDisposable
         unit.DeletedAt = DateTime.UtcNow;
         _ctx.Db.SaveChanges();
 
-        var act = async () => await _sut.DeleteAsync(PortfolioId, property.Id);
+        var act = async () => await _sut.DeleteAsync(_scope, property.Id);
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.Message.Should().Contain("expense");
@@ -331,7 +331,7 @@ public class PropertyServiceTests : IDisposable
         unit.DeletedAt = DateTime.UtcNow;
         _ctx.Db.SaveChanges();
 
-        var act = async () => await _sut.DeleteAsync(PortfolioId, property.Id);
+        var act = async () => await _sut.DeleteAsync(_scope, property.Id);
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.Message.Should().Contain("application");
@@ -344,10 +344,10 @@ public class PropertyServiceTests : IDisposable
         SeedProperties("Standalone");
         var property = _ctx.Db.Properties.Single(p => p.Name == "Standalone");
 
-        var deleted = await _sut.DeleteAsync(PortfolioId, property.Id);
+        var deleted = await _sut.DeleteAsync(_scope, property.Id);
 
         deleted.Should().BeTrue();
-        (await _sut.GetAsync(PortfolioId, property.Id))
+        (await _sut.GetAsync(_scope, property.Id))
             .Should().BeNull("a property with no children is soft-deleted");
     }
 

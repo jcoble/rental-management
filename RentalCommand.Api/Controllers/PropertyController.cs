@@ -44,12 +44,8 @@ public class PropertyController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<PropertyResponse>> Get(int id, CancellationToken ct)
     {
-        var portfolioId = GetPortfolioId();
-        if (!await HasCapabilityAsync(
-                CapabilityKeys.RentalsRead,
-                new PropertyCapabilityAuthorizationTarget(portfolioId, id),
-                ct)) return Forbid();
-        var item = await _service.GetAsync(portfolioId, id, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var item = await _service.GetAsync(scope, id, ct);
         return item == null ? NotFound(new { error = "Property not found" }) : Ok(item);
     }
 
@@ -58,12 +54,8 @@ public class PropertyController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<PropertyResponse>> Create([FromBody] CreatePropertyRequest request, CancellationToken ct)
     {
-        var portfolioId = GetPortfolioId();
-        if (!await HasCapabilityAsync(
-                CapabilityKeys.AccountDestructiveActions,
-                new WorkspaceCapabilityAuthorizationTarget(portfolioId),
-                ct)) return Forbid();
-        var created = await _service.CreateAsync(portfolioId, request, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var created = await _service.CreateAsync(scope, request, ct);
         return created == null
             ? NotFound(new { error = "Referenced owner or owner entity not found in this portfolio" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
@@ -74,12 +66,8 @@ public class PropertyController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<PropertyResponse>> Update(int id, [FromBody] UpdatePropertyRequest request, CancellationToken ct)
     {
-        var portfolioId = GetPortfolioId();
-        if (!await HasCapabilityAsync(
-                CapabilityKeys.RentalsManage,
-                new PropertyCapabilityAuthorizationTarget(portfolioId, id),
-                ct)) return Forbid();
-        var updated = await _service.UpdateAsync(portfolioId, id, request, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var updated = await _service.UpdateAsync(scope, id, request, ct);
         return updated == null ? NotFound(new { error = "Property not found" }) : Ok(updated);
     }
 
@@ -88,12 +76,8 @@ public class PropertyController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(int id, CancellationToken ct)
     {
-        var portfolioId = GetPortfolioId();
-        if (!await HasCapabilityAsync(
-                CapabilityKeys.AccountDestructiveActions,
-                new WorkspaceCapabilityAuthorizationTarget(portfolioId),
-                ct)) return Forbid();
-        var deleted = await _service.DeleteAsync(portfolioId, id, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var deleted = await _service.DeleteAsync(scope, id, ct);
         return deleted ? NoContent() : NotFound(new { error = "Property not found" });
     }
 }

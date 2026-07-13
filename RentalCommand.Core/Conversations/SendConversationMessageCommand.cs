@@ -15,7 +15,20 @@ public sealed record SendConversationMessageCommand(
     string Body,
     ConversationSenderRole SenderRole,
     IReadOnlyList<string> RequestedChannels,
-    DateTime CreatedAtUtc) : IAtomicCommandData;
+    DateTime CreatedAtUtc,
+    int? PropertyId = null,
+    ConversationManagementAccess? ManagementAccess = null) : IAtomicCommandData;
+
+/// <summary>
+/// Server-derived management authorization coordinates. They are revalidated by the atomic handler
+/// against the current database session, revision, capability, and property scope before a landlord
+/// message is written or a completed receipt is replayed.
+/// </summary>
+public sealed record ConversationManagementAccess(
+    Guid SessionId,
+    int UserId,
+    int AccessContextId,
+    long AccessRevision) : IAtomicCommandData;
 
 public enum SendConversationMessageOutcome
 {

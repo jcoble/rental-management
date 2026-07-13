@@ -129,12 +129,34 @@ JwtSecretGuard.Validate(jwtSettings.SecretKey, builder.Environment.IsDevelopment
 // (sp, options) overload), so it can read the per-request ICurrentActor / IAuditScope.
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
     ?? throw new InvalidOperationException("Missing connection string 'DefaultConnection'.");
-var migratorConnectionString = builder.Configuration.GetConnectionString("MigratorConnection")
-    ?? connectionString;
+var migratorConnectionString = builder.Configuration.GetConnectionString("MigratorConnection");
+var migrateOnly = args.Any(argument =>
+    string.Equals(argument, "--migrate-only", StringComparison.OrdinalIgnoreCase));
+string? engineConnectionStringForMigration = null;
+
+if (migrateOnly)
+{
+    migratorConnectionString ??= throw new InvalidOperationException(
+        "The one-shot migration process requires ConnectionStrings:MigratorConnection.");
+    engineConnectionStringForMigration = builder.Configuration.GetConnectionString("EngineConnection")
+        ?? throw new InvalidOperationException(
+            "The one-shot migration process requires ConnectionStrings:EngineConnection.");
+}
+else if (!string.IsNullOrWhiteSpace(migratorConnectionString))
+{
+    throw new InvalidOperationException(
+        "ConnectionStrings:MigratorConnection must not be available to the long-running API process.");
+}
+
+if (!migrateOnly)
+{
+    RentalCommand.Data.Security.RuntimeDatabaseRoleProvisioner.ValidateRuntimeConnectionString(
+        connectionString,
+        RentalCommand.Data.Security.DatabaseRuntimeIdentity.ApiRole,
+        allowDevelopmentDefault: builder.Environment.IsDevelopment());
+}
 
 builder.Services.AddHttpContextAccessor();
-builder.Services.AddSingleton<RentalCommand.Api.Data.IRlsExecutionContext,
-    RentalCommand.Api.Data.RlsExecutionContext>();
 
 // Converted commands opt into the atomic executor. Both interceptors are attached to the shared
 // context during this unmerged rewrite: the legacy audit interceptor stands down only while an
@@ -461,17 +483,19 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Applications.ApplicationFinanceMutationResult,
     RentalCommand.Data.Applications.RefundApplicationFeeHandler>();
 
-// Row-Level Security backstop (audit M-1): a connection interceptor sets the per-request
-// app.current_portfolio_id / app.is_admin session GUCs that the tenant_isolation policies read, so
-// tenant isolation is enforced at the DB layer in addition to the app-layer PortfolioId filters.
-// Registered alongside the audit interceptor on the same DbContext.
+// Row-Level Security backstop: the interceptor supplies only compact canonical session coordinates.
+// PostgreSQL revalidates them against live session/access rows before admitting portfolio scope.
 builder.Services.AddSingleton<RentalCommand.Api.Data.RlsConnectionInterceptor>();
 builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
-    options.UseNpgsql(connectionString)
+{
+    options.UseNpgsql(migrateOnly ? migratorConnectionString! : connectionString)
         .UseAtomicPersistenceKernel(sp)
-        .AddInterceptors(
-            sp.GetRequiredService<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>(),
-            sp.GetRequiredService<RentalCommand.Api.Data.RlsConnectionInterceptor>()));
+        .AddInterceptors(sp.GetRequiredService<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>());
+    if (!migrateOnly)
+    {
+        options.AddInterceptors(sp.GetRequiredService<RentalCommand.Api.Data.RlsConnectionInterceptor>());
+    }
+});
 
 // --- ASP.NET Identity (int keys) ---
 builder.Services.AddIdentityCore<ApplicationUser>(options =>
@@ -670,33 +694,30 @@ builder.Services.AddSimulationClock(builder.Configuration, builder.Environment, 
 
 var app = builder.Build();
 
-// Apply migrations + seed the default canonical workspace so login works on a fresh database.
-// Migration is idempotent (no-op when already applied); seeding is gated by Seed:Enabled (Development).
-using (var scope = app.Services.CreateScope())
+if (migrateOnly)
 {
-    using var rlsBypass = scope.ServiceProvider
-        .GetRequiredService<RentalCommand.Api.Data.IRlsExecutionContext>()
-        .BeginBypass(RentalCommand.Api.Data.RlsBypassReason.StartupMigrationAndSeed);
-    // Advisory-locked so the API and Engine (both self-migrate on startup) don't race on a fresh batch.
     var migrationOptions = new DbContextOptionsBuilder<RentalCommandDbContext>()
-        .UseNpgsql(migratorConnectionString)
+        .UseNpgsql(migratorConnectionString!)
         .Options;
     await using (var migrationDb = new RentalCommandDbContext(migrationOptions))
     {
         await DatabaseMigrator.MigrateWithLockAsync(migrationDb);
     }
 
-    var seeder = scope.ServiceProvider.GetRequiredService<IdentitySeeder>();
-    await seeder.SeedAsync();
+    await RentalCommand.Data.Security.RuntimeDatabaseRoleProvisioner.ProvisionAsync(
+        migratorConnectionString!,
+        connectionString,
+        engineConnectionStringForMigration!,
+        allowDevelopmentDefaults: builder.Environment.IsDevelopment());
 
-    // Demo data seeder — creates realistic interlinked data for portfolio 1 when enabled.
-    // Idempotent: skips immediately if any properties already exist for portfolio 1.
+    await using var seedScope = app.Services.CreateAsyncScope();
+    await seedScope.ServiceProvider.GetRequiredService<IdentitySeeder>().SeedAsync();
     if (app.Configuration.GetValue<bool>("Seed:DemoData", false))
     {
-        var demoSeeder = scope.ServiceProvider.GetRequiredService<DemoDataSeeder>();
-        await demoSeeder.SeedAsync();
+        await seedScope.ServiceProvider.GetRequiredService<DemoDataSeeder>().SeedAsync();
     }
 
+    return;
 }
 
 // Behind Traefik (TLS terminator) the API receives plain HTTP on :8080, so honor X-Forwarded-Proto

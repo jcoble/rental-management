@@ -23,7 +23,6 @@ public sealed class CanonicalAccessContextMiddleware
     public async Task InvokeAsync(
         HttpContext httpContext,
         IActiveAccessContextResolver resolver,
-        IRlsExecutionContext rlsExecutionContext,
         TimeProvider timeProvider)
     {
         var principal = httpContext.User;
@@ -40,17 +39,13 @@ public sealed class CanonicalAccessContextMiddleware
 
             try
             {
-                ActiveAccessContext active;
-                using (rlsExecutionContext.BeginBypass(RlsBypassReason.CanonicalJwtAuthorityResolution))
-                {
-                    active = await resolver.ResolveAsync(
-                        sessionId,
-                        userId,
-                        accessContextId,
-                        accessRevision,
-                        timeProvider.GetUtcNow().UtcDateTime,
-                        httpContext.RequestAborted);
-                }
+                var active = await resolver.ResolveAsync(
+                    sessionId,
+                    userId,
+                    accessContextId,
+                    accessRevision,
+                    timeProvider.GetUtcNow().UtcDateTime,
+                    httpContext.RequestAborted);
 
                 httpContext.Items[CanonicalAccessContextHttpItem.Key] = active;
             }

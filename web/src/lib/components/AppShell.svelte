@@ -65,6 +65,7 @@
 	import ThemeModeToggle from '$lib/components/shared/ThemeModeToggle.svelte';
 	import ScanLauncher from '$lib/components/scan/ScanLauncher.svelte';
 	import BrandMark from '$lib/components/BrandMark.svelte';
+	import { canAccessRoute, CAPABILITY, safeLandingForAccess } from '$lib/auth/experience-policy';
 
 	let { children }: { children: import('svelte').Snippet } = $props();
 
@@ -88,8 +89,6 @@
 		href: string;
 		label: string;
 		icon: typeof Building;
-		capabilities?: string[];
-		experiences?: WorkspaceExperience[];
 	};
 
 	type NavGroup = {
@@ -102,9 +101,9 @@
 	// Pinned single links above all groups (IA Wave 1 §4.2): the dashboard + the flagship
 	// "Scan / Edit" action, one tap away and outside any group.
 	const pinnedNavItems: NavItem[] = [
-		{ href: '/', label: 'Dashboard', icon: LayoutDashboard, experiences: ['Management'] },
-		{ href: '/onboarding', label: 'Guided Setup', icon: ClipboardList, capabilities: ['rentals.manage'] },
-		{ href: '/scan', label: 'Scan / Edit', icon: ScanLine, capabilities: ['rentals.manage', 'leasing.agreements.prepare', 'maintenance.assigned-work.update'] }
+		{ href: '/', label: 'Dashboard', icon: LayoutDashboard },
+		{ href: '/onboarding', label: 'Guided Setup', icon: ClipboardList },
+		{ href: '/scan', label: 'Scan / Edit', icon: ScanLine }
 	];
 
 	// Grouped navigation (IA Wave 1 §4.2): four landlord-noun groups in frequency order —
@@ -116,9 +115,9 @@
 			label: 'Money',
 			icon: Wallet,
 			items: [
-				{ href: '/accounting', label: 'Money', icon: Calculator, capabilities: ['money.balances.read'] },
-				{ href: '/deposits', label: 'Security Deposits', icon: PiggyBank, capabilities: ['money.deposits.manage', 'leasing.deposits.read'] },
-				{ href: '/reports', label: 'Reports', icon: BarChart3, capabilities: ['reports.read', 'money.owner-reports.read'] }
+				{ href: '/accounting', label: 'Money', icon: Calculator },
+				{ href: '/deposits', label: 'Security Deposits', icon: PiggyBank },
+				{ href: '/reports', label: 'Reports', icon: BarChart3 }
 			]
 		},
 		{
@@ -126,12 +125,12 @@
 			label: 'Rentals',
 			icon: Briefcase,
 			items: [
-				{ href: '/properties', label: 'Properties', icon: Building, capabilities: ['rentals.read'] },
-				{ href: '/units', label: 'Units', icon: Home, capabilities: ['rentals.read'] },
-				{ href: '/tenants', label: 'Tenants', icon: Users, capabilities: ['rentals.read', 'leasing.onboarding.manage'] },
-				{ href: '/leases', label: 'Leases', icon: FileText, capabilities: ['rentals.read', 'leasing.terms.read'] },
-				{ href: '/lease-templates', label: 'Lease Templates', icon: Upload, capabilities: ['rentals.manage', 'leasing.agreements.prepare'] },
-				{ href: '/applications', label: 'Applications', icon: ClipboardList, capabilities: ['leasing.applications.manage'] }
+				{ href: '/properties', label: 'Properties', icon: Building },
+				{ href: '/units', label: 'Units', icon: Home },
+				{ href: '/tenants', label: 'Tenants', icon: Users },
+				{ href: '/leases', label: 'Leases', icon: FileText },
+				{ href: '/lease-templates', label: 'Lease Templates', icon: Upload },
+				{ href: '/applications', label: 'Applications', icon: ClipboardList }
 			]
 		},
 		{
@@ -141,9 +140,9 @@
 			items: [
 				// A6: one professional term for the "things to fix" concept — "Work Orders" — used
 				// consistently across the staff nav, the page heading, and the dashboard.
-				{ href: '/maintenance', label: 'Work Orders', icon: Wrench, capabilities: ['work.read', 'maintenance.assigned-work.read'] },
-				{ href: '/appointments', label: 'Appointments', icon: Calendar, capabilities: ['work.read', 'leasing.showings.manage'] },
-				{ href: '/vendors', label: 'Vendors', icon: Contact, capabilities: ['work.manage'] }
+				{ href: '/maintenance', label: 'Work Orders', icon: Wrench },
+				{ href: '/appointments', label: 'Appointments', icon: Calendar },
+				{ href: '/vendors', label: 'Vendors', icon: Contact }
 			]
 		},
 		{
@@ -151,8 +150,8 @@
 			label: 'Inbox',
 			icon: MessageSquare,
 			items: [
-				{ href: '/messages', label: 'Messages', icon: MessageSquare, capabilities: ['rentals.read', 'leasing.onboarding.manage', 'maintenance.assigned-work.converse'] },
-				{ href: '/notices', label: 'Tenant notices', icon: BellRing, capabilities: ['rentals.manage', 'leasing.onboarding.manage'] }
+				{ href: '/messages', label: 'Messages', icon: MessageSquare },
+				{ href: '/notices', label: 'Tenant notices', icon: BellRing }
 			]
 		}
 	];
@@ -163,7 +162,7 @@
 	// A4: ONE AI entry point. "Ask" (→ /ai) is the single doorway to the assistant; the redundant
 	// floating AssistantBubble was removed from this shell so there aren't multiple competing doorways.
 	const bottomRailItems: NavItem[] = [
-		{ href: '/ai', label: 'Ask', icon: Sparkles, capabilities: ['rentals.read', 'work.read', 'leasing.terms.read'] },
+		{ href: '/ai', label: 'Ask', icon: Sparkles },
 		{ href: '/docs', label: 'Help', icon: BookOpen }
 	];
 
@@ -174,10 +173,11 @@
 		label: 'Settings',
 		icon: Settings,
 		items: [
-			{ href: '/settings', label: 'Settings', icon: Settings, capabilities: ['security.manage', 'billing.manage', 'integrations.manage'] },
-			{ href: '/admin/users', label: 'Team', icon: Shield, capabilities: ['team.read', 'team.manage'] },
-			{ href: '/owners', label: 'Owners', icon: BadgeDollarSign, capabilities: ['money.owner-reports.read'] },
-			{ href: '/audit', label: 'Activity history', icon: History, capabilities: ['reports.read'] }
+			{ href: '/settings/notifications/my-alerts', label: 'My alerts', icon: BellRing },
+			{ href: '/settings', label: 'Settings', icon: Settings },
+			{ href: '/admin/users', label: 'Team', icon: Shield },
+			{ href: '/owners', label: 'Owners', icon: BadgeDollarSign },
+			{ href: '/audit', label: 'Activity history', icon: History }
 		]
 	};
 
@@ -205,6 +205,7 @@
 		'/notices': 'campaign',
 		'/ai': 'auto_awesome',
 		'/docs': 'menu_book',
+		'/settings/notifications/my-alerts': 'notifications',
 		'/settings': 'settings',
 		'/admin/users': 'shield',
 		'/owners': 'account_balance',
@@ -236,6 +237,13 @@
 	));
 	let portalUser = $derived(activeExperience === 'Tenant');
 	const userSecurityHref = $derived(portalUser ? '/portal/security' : '/settings/security');
+	const homeHref = $derived(currentAccess ? (safeLandingForAccess(currentAccess) ?? '/logout') : '/');
+	const canOpenGuidedSetup = $derived(
+		canAccessRoute('/onboarding', activeExperience, activeCapabilities)
+	);
+	const canOpenSettings = $derived(
+		canAccessRoute('/settings', activeExperience, activeCapabilities)
+	);
 
 	const portalNavItems: NavItem[] = [
 		{ href: '/portal', label: 'Dashboard', icon: Home },
@@ -253,9 +261,7 @@
 	const commandCenterTitleItem: NavItem = { href: '/units/', label: 'Command Center', icon: Home };
 
 	function itemVisible(item: NavItem): boolean {
-		if (item.experiences && (!activeExperience || !item.experiences.includes(activeExperience))) return false;
-		if (!item.capabilities || item.capabilities.length === 0) return true;
-		return item.capabilities.some((capability) => activeCapabilities.has(capability));
+		return canAccessRoute(item.href, activeExperience, activeCapabilities);
 	}
 
 	// Staff groups filtered to the items the current user may see; empty groups dropped.
@@ -270,7 +276,7 @@
 
 	// Command Center (the per-unit drill-down) is surfaced as its own pinned entry below Scan / Edit;
 	// staff-only, gated to the same roles as the Units nav item.
-	let canSeeCommandCenter = $derived(activeCapabilities.has('rentals.read'));
+	let canSeeCommandCenter = $derived(canAccessRoute('/units/1', activeExperience, activeCapabilities));
 
 	// Bottom-rail standalone links (Assistant, Help).
 	let visibleBottomRail = $derived.by(() => bottomRailItems.filter(itemVisible));
@@ -453,12 +459,12 @@
 	const isStaffSession = $derived(activeExperience !== 'Tenant' && activeCapabilities.size > 0);
 	const showStaffHeader = $derived(!portalUser);
 	const canReadMessages = $derived(
-		['rentals.read', 'leasing.onboarding.manage', 'maintenance.assigned-work.converse'].some(
+		[CAPABILITY.rentalsRead, CAPABILITY.leasingOnboardingManage, CAPABILITY.assignedWorkConverse].some(
 			(key) => activeCapabilities.has(key)
 		)
 	);
 	const canReadAppointments = $derived(
-		['work.read', 'leasing.showings.manage'].some((key) => activeCapabilities.has(key))
+		[CAPABILITY.workRead, CAPABILITY.leasingShowingsManage].some((key) => activeCapabilities.has(key))
 	);
 
 	const unreadMessagesQuery = createQuery(() => ({
@@ -613,11 +619,11 @@
 		<!-- Logo / Brand -->
 		<div class="flex h-14 items-center gap-2 border-b border-sidebar-border px-4">
 			{#if sidebarCollapsed && !isMobile}
-				<a href="/" class="flex w-full items-center justify-center">
+				<a href={homeHref} class="flex w-full items-center justify-center">
 					<BrandMark class="h-7 w-7 shadow-sm" alt="Rental Command" />
 				</a>
 			{:else}
-				<a href="/" class="flex items-center gap-2">
+				<a href={homeHref} class="flex items-center gap-2">
 					<BrandMark class="h-7 w-7 shadow-sm" />
 					<span class="truncate font-semibold tracking-tight text-foreground">Rental Command</span>
 				</a>
@@ -625,7 +631,7 @@
 		</div>
 
 		<!-- Portfolio Selector -->
-		{#if !portalUser}
+		{#if !portalUser || (currentAccess?.availableExperiences.length ?? 0) > 1}
 			<div class="border-b border-sidebar-border py-2">
 				<PortfolioSelector collapsed={sidebarCollapsed && !isMobile} />
 			</div>
@@ -726,13 +732,15 @@
 							</div>
 						</DropdownMenuLabel>
 						<DropdownMenuSeparator />
-						{#if !portalUser}
+						{#if canOpenGuidedSetup}
 							<DropdownMenuItem data-testid="user-menu-guided-setup-collapsed">
 								<a href="/onboarding?from=account-menu" class="flex w-full items-center gap-2">
 									<ClipboardList class="h-4 w-4" />
 									Guided Setup
 								</a>
 							</DropdownMenuItem>
+						{/if}
+						{#if canOpenSettings}
 							<DropdownMenuItem data-testid="user-menu-settings">
 								<a href="/settings" class="flex w-full items-center gap-2">
 									<Settings class="h-4 w-4" />
@@ -783,13 +791,15 @@
 							</div>
 						</DropdownMenuLabel>
 						<DropdownMenuSeparator />
-						{#if !portalUser}
+						{#if canOpenGuidedSetup}
 							<DropdownMenuItem data-testid="user-menu-guided-setup">
 								<a href="/onboarding?from=account-menu" class="flex w-full items-center gap-2">
 									<ClipboardList class="h-4 w-4" />
 									Guided Setup
 								</a>
 							</DropdownMenuItem>
+						{/if}
+						{#if canOpenSettings}
 							<DropdownMenuItem data-testid="user-menu-settings">
 								<a href="/settings" class="flex w-full items-center gap-2">
 									<Settings class="h-4 w-4" />

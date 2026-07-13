@@ -495,13 +495,21 @@ public sealed class PrepareMoveInHandler
                                     scope.PropertyId == candidate.PropertyId
                                     && scope.PortfolioId == command.PortfolioId)))
                         && (assignment.RoleProfile!.Capabilities.Any(capability =>
-                                capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage)
+                                capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage
+                                && capability.CapabilityDefinition.AuthorizationTargetKind
+                                    == CapabilityAuthorizationTargetKind.Property)
                             || (assignment.RoleProfile.Capabilities.Any(capability =>
-                                    capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingApplicationsManage)
+                                    capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingApplicationsManage
+                                    && capability.CapabilityDefinition.AuthorizationTargetKind
+                                        == CapabilityAuthorizationTargetKind.Property)
                                 && assignment.RoleProfile.Capabilities.Any(capability =>
-                                    capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingAgreementsPrepare)
+                                    capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingAgreementsPrepare
+                                    && capability.CapabilityDefinition.AuthorizationTargetKind
+                                        == CapabilityAuthorizationTargetKind.Property)
                                 && assignment.RoleProfile.Capabilities.Any(capability =>
-                                    capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingOnboardingManage))))));
+                                    capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingOnboardingManage
+                                    && capability.CapabilityDefinition.AuthorizationTargetKind
+                                        == CapabilityAuthorizationTargetKind.Property))))));
     }
 
     private static void ValidateAuthorizationShape(PrepareMoveInCommand command)

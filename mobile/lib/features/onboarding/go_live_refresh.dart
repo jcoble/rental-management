@@ -18,7 +18,7 @@ import '../payments/payments_repository.dart';
 import '../properties/properties_repository.dart';
 import '../recurring_maintenance/recurring_maintenance_repository.dart';
 import '../scan/scan_repository.dart';
-import '../settings/notification_settings_repository.dart';
+import '../settings/notification_foundation_repository.dart';
 import '../team/team_repository.dart';
 import '../tenants/tenants_repository.dart';
 import '../vendors/vendors_repository.dart';
@@ -72,7 +72,7 @@ void refreshPortfolioDataAfterGoLive(WidgetRef ref) {
   ref.read(accountingSummaryProvider.notifier).refresh();
   ref.read(recurringMaintenanceProvider.notifier).refresh();
   ref.read(ownerSummariesProvider.notifier).refresh();
-  ref.read(notificationSettingsProvider.notifier).refresh();
+  ref.invalidate(myAlertsProvider);
   ref.read(teamProvider.notifier).refresh();
   ref.read(propertiesForWoProvider.notifier).load();
 }

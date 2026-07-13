@@ -29,8 +29,8 @@ public sealed class TestScheduledAutomationClaimStore(RentalCommandDbContext db)
         var (ids, token) = BatchIdentity(claims);
         return await db.RecurringMaintenanceTasks.Where(row => ids.Contains(row.Id) &&
             row.WorkerClaimToken == token && row.IsActive && row.NextDueDate <= todayUtc &&
-            (!db.NotificationSettings.Any(settings => settings.PortfolioId == row.PortfolioId) ||
-             db.NotificationSettings.Any(settings =>
+            (!db.AutomationSettings.Any(settings => settings.PortfolioId == row.PortfolioId) ||
+             db.AutomationSettings.Any(settings =>
                  settings.PortfolioId == row.PortfolioId && settings.EnableRecurringMaintenance)))
             .ToListAsync(ct);
     }
@@ -56,8 +56,8 @@ public sealed class TestScheduledAutomationClaimStore(RentalCommandDbContext db)
         var nowUtc = DateTime.UtcNow;
         var rows = await db.RecurringMaintenanceTasks.Where(row => row.IsActive && row.NextDueDate <= todayUtc &&
                 (row.WorkerClaimToken == null || row.WorkerClaimExpiresAtUtc <= nowUtc) &&
-                (!db.NotificationSettings.Any(settings => settings.PortfolioId == row.PortfolioId) ||
-                 db.NotificationSettings.Any(settings =>
+                (!db.AutomationSettings.Any(settings => settings.PortfolioId == row.PortfolioId) ||
+                 db.AutomationSettings.Any(settings =>
                      settings.PortfolioId == row.PortfolioId && settings.EnableRecurringMaintenance)))
             .OrderBy(row => row.NextDueDate).ThenBy(row => row.Id).Take(batchSize).ToListAsync(ct);
         return await AssignAsync(rows.Select(row => (row.Id, row.PortfolioId, (Action<Guid>)(token =>

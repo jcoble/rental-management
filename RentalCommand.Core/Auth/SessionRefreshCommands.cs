@@ -135,4 +135,8 @@ public sealed record SessionRefreshMutationResult(
     Guid AuthSessionId,
     Guid RefreshTokenFamilyId,
     Guid CredentialId,
-    Guid? ReplacementCredentialId = null) : IAtomicResultData;
+    Guid? ReplacementCredentialId = null,
+    int? UserId = null,
+    int? AccessContextId = null,
+    int? PortfolioId = null,
+    long? AccessRevision = null) : IAtomicResultData;

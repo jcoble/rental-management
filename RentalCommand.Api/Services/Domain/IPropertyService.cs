@@ -14,8 +14,8 @@ public interface IPropertyService
         WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default);
     Task<PropertyListResponse> ListPageAsync(
         WorkspaceReadScope scope, PropertyListQuery query, CancellationToken ct = default);
-    Task<PropertyResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
-    Task<PropertyResponse?> CreateAsync(int portfolioId, CreatePropertyRequest request, CancellationToken ct = default);
-    Task<PropertyResponse?> UpdateAsync(int portfolioId, int id, UpdatePropertyRequest request, CancellationToken ct = default);
-    Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default);
+    Task<PropertyResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default);
+    Task<PropertyResponse?> CreateAsync(WorkspaceReadScope scope, CreatePropertyRequest request, CancellationToken ct = default);
+    Task<PropertyResponse?> UpdateAsync(WorkspaceReadScope scope, int id, UpdatePropertyRequest request, CancellationToken ct = default);
+    Task<bool> DeleteAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default);
 }

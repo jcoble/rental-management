@@ -344,9 +344,13 @@ internal static class PossessionCommandAuthorization
                         && assignment.SelectedProperties.Any(scope =>
                             scope.PropertyId == relationship.PropertyId && scope.PortfolioId == portfolioId)))
                 && (assignment.RoleProfile!.Capabilities.Any(capability =>
-                        capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage)
+                        capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage
+                        && capability.CapabilityDefinition.AuthorizationTargetKind
+                            == CapabilityAuthorizationTargetKind.Property)
                     || assignment.RoleProfile.Capabilities.Any(capability =>
-                        capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingOnboardingManage)))));
+                        capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingOnboardingManage
+                        && capability.CapabilityDefinition.AuthorizationTargetKind
+                            == CapabilityAuthorizationTargetKind.Property)))));
     }
 
     internal static IQueryable<Unit> AuthorizedUnits(IAtomicPersistenceSession persistence,
@@ -365,9 +369,13 @@ internal static class PossessionCommandAuthorization
                         && assignment.SelectedProperties.Any(scope =>
                             scope.PropertyId == unit.PropertyId && scope.PortfolioId == portfolioId)))
                 && (assignment.RoleProfile!.Capabilities.Any(capability =>
-                        capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage)
+                        capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage
+                        && capability.CapabilityDefinition.AuthorizationTargetKind
+                            == CapabilityAuthorizationTargetKind.Property)
                     || assignment.RoleProfile.Capabilities.Any(capability =>
-                        capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingOnboardingManage)))));
+                        capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingOnboardingManage
+                        && capability.CapabilityDefinition.AuthorizationTargetKind
+                            == CapabilityAuthorizationTargetKind.Property)))));
     }
 
     private static IQueryable<WorkspaceMembership> AuthorizedMemberships(

@@ -1,5 +1,6 @@
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Documents;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Data.Documents;
 
@@ -48,6 +49,7 @@ public interface IDocumentService
         int userId,
         int? tenantId,
         bool isStaff,
+        WorkspaceReadScope? staffScope,
         string clientOperationId,
         string requestFingerprint,
         string contentSha256,
@@ -73,6 +75,7 @@ public interface IDocumentService
         int userId,
         int? tenantId,
         bool isStaff,
+        WorkspaceReadScope? staffScope,
         string clientOperationId,
         CancellationToken ct = default);
 }

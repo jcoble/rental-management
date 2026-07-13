@@ -29,6 +29,8 @@ class TokenStore {
   // can intermittently stall for seconds. Read once, then serve from memory.
   String? _accessToken;
   bool _accessLoaded = false;
+  Map<String, dynamic>? _accessEnvelope;
+  bool _accessEnvelopeLoaded = false;
 
   Future<String?> getAccessToken() async {
     if (_accessLoaded) return _accessToken;
@@ -47,14 +49,27 @@ class TokenStore {
   Future<String?> getRefreshToken() => _storage.read(key: _keyRefreshToken);
 
   Future<Map<String, dynamic>?> getAccessEnvelope() async {
+    if (_accessEnvelopeLoaded) {
+      final cached = _accessEnvelope;
+      return cached == null ? null : Map<String, dynamic>.from(cached);
+    }
     final raw = await _storage.read(key: _keyAccessEnvelope);
-    if (raw == null || raw.isEmpty) return null;
+    _accessEnvelopeLoaded = true;
+    if (raw == null || raw.isEmpty) {
+      _accessEnvelope = null;
+      return null;
+    }
     final decoded = jsonDecode(raw);
-    return decoded is Map<String, dynamic> ? decoded : null;
+    _accessEnvelope = decoded is Map<String, dynamic> ? decoded : null;
+    final cached = _accessEnvelope;
+    return cached == null ? null : Map<String, dynamic>.from(cached);
   }
 
-  Future<void> saveAccessEnvelope(Map<String, dynamic> access) =>
-      _storage.write(key: _keyAccessEnvelope, value: jsonEncode(access));
+  Future<void> saveAccessEnvelope(Map<String, dynamic> access) {
+    _accessEnvelope = Map<String, dynamic>.from(access);
+    _accessEnvelopeLoaded = true;
+    return _storage.write(key: _keyAccessEnvelope, value: jsonEncode(access));
+  }
 
   Future<void> saveTokens({
     required String accessToken,
@@ -71,6 +86,8 @@ class TokenStore {
   Future<void> clearTokens() async {
     _accessToken = null;
     _accessLoaded = true;
+    _accessEnvelope = null;
+    _accessEnvelopeLoaded = true;
     await Future.wait([
       _storage.delete(key: _keyAccessToken),
       _storage.delete(key: _keyRefreshToken),

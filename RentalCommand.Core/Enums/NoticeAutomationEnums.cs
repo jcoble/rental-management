@@ -44,6 +44,7 @@ public enum TeamRoutingTopic
     WorkOrders,
     OwnerStatementsAndDecisions,
     AccountAndSecurity,
+    MorningBriefing,
 }
 
 public enum TenantNoticeWorkStatus

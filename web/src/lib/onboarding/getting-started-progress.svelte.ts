@@ -60,7 +60,8 @@ export function clearManualDone(portfolioId: number): void {
 /**
  * Has this portfolio's checklist been "settled" — everything (core + optional) seen done at least once?
  * Used as a cheap, persisted gate so the dashboard's hot path can skip the optional-only queries
- * (notification email/settings, sandbox state) for a fully-set-up landlord. Cleared by "start over".
+ * (personal-alert readiness, automation state, sandbox state) for a fully-set-up landlord. Cleared
+ * by "start over".
  */
 export function isChecklistSettled(portfolioId: number): boolean {
 	if (!browser || portfolioId <= 0) return false;

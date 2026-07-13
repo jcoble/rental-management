@@ -1,0 +1,279 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:rental_command/core/auth/auth_models.dart';
+import 'package:rental_command/core/auth/mobile_access_policy.dart';
+import 'package:rental_command/features/home/mobile_destination.dart';
+import 'package:rental_command/features/home/mobile_domain_navigation.dart';
+
+void main() {
+  const propertyManagerCapabilities = <String>{
+    'rentals.read',
+    'rentals.manage',
+    'work.read',
+    'work.manage',
+    'reports.read',
+    'money.balances.read',
+    'money.charges.manage',
+    'money.payments.manage',
+    'money.expenses.manage',
+    'money.deposits.manage',
+    'money.owner-reports.read',
+    'money.reconciliation.operate',
+    'responsibility.assign-existing-member',
+  };
+
+  const leasingCapabilities = <String>{
+    'rentals.read',
+    'leasing.listings.manage',
+    'leasing.applications.manage',
+    'leasing.showings.manage',
+    'leasing.agreements.prepare',
+    'leasing.onboarding.manage',
+    'leasing.terms.read',
+    'leasing.deposits.read',
+  };
+
+  test(
+    'canonical property manager capabilities expose matching destinations',
+    () {
+      expect(
+        _visibleIds(rentalDestinations, propertyManagerCapabilities),
+        const {
+          MobileDestinationId.properties,
+          MobileDestinationId.owners,
+          MobileDestinationId.units,
+          MobileDestinationId.tenants,
+          MobileDestinationId.leases,
+        },
+      );
+      expect(
+        _visibleIds(moneyHubDestinations, propertyManagerCapabilities),
+        const {
+          MobileDestinationId.insights,
+          MobileDestinationId.moneyOverview,
+          MobileDestinationId.moneyLedger,
+          MobileDestinationId.deposits,
+          MobileDestinationId.banking,
+          MobileDestinationId.reports,
+        },
+      );
+      expect(
+        _visibleIds(inboxHubDestinations, propertyManagerCapabilities),
+        const {
+          MobileDestinationId.messages,
+          MobileDestinationId.notifications,
+          MobileDestinationId.activityHistory,
+        },
+      );
+    },
+  );
+
+  test('leasing sees rental work but not management Money or Owner routes', () {
+    expect(
+      rentalHubDestinationsFor(
+        experience: WorkspaceExperience.leasing,
+        capabilities: leasingCapabilities,
+      ).map((destination) => destination.id).toSet(),
+      const {
+        MobileDestinationId.properties,
+        MobileDestinationId.units,
+        MobileDestinationId.tenants,
+        MobileDestinationId.leases,
+        MobileDestinationId.applications,
+        MobileDestinationId.deposits,
+      },
+    );
+    expect(
+      canOpenMobilePath(
+        experience: WorkspaceExperience.leasing,
+        capabilities: leasingCapabilities,
+        path: '/rentals',
+      ),
+      isTrue,
+    );
+    expect(
+      canOpenMobilePath(
+        experience: WorkspaceExperience.leasing,
+        capabilities: leasingCapabilities,
+        path: '/money',
+      ),
+      isFalse,
+    );
+    expect(
+      canOpenMobilePath(
+        experience: WorkspaceExperience.leasing,
+        capabilities: leasingCapabilities,
+        path: '/owners',
+      ),
+      isFalse,
+    );
+  });
+
+  test('leasing deposit-only access is reachable without the Money hub', () {
+    const capabilities = {'leasing.deposits.read'};
+
+    expect(
+      canOpenRentalsHubForExperience(
+        experience: WorkspaceExperience.leasing,
+        capabilities: capabilities,
+      ),
+      isTrue,
+    );
+    expect(
+      rentalHubDestinationsFor(
+        experience: WorkspaceExperience.leasing,
+        capabilities: capabilities,
+      ).map((destination) => destination.id),
+      [MobileDestinationId.deposits],
+    );
+    expect(
+      canOpenMobilePath(
+        experience: WorkspaceExperience.leasing,
+        capabilities: capabilities,
+        path: '/money',
+      ),
+      isFalse,
+    );
+  });
+
+  test('canonical action capabilities gate scan record and assistant', () {
+    expect(canUseGlobalScan({'leasing.agreements.prepare'}), isTrue);
+    expect(canUseVoiceRecord({'leasing.agreements.prepare'}), isFalse);
+    expect(canUseAssistant({'leasing.agreements.prepare'}), isFalse);
+
+    expect(canUseGlobalScan({'money.expenses.manage'}), isTrue);
+    expect(canUseVoiceRecord({'money.expenses.manage'}), isTrue);
+    expect(canUseAssistant({'money.expenses.manage'}), isFalse);
+
+    expect(canUseGlobalScan({'reports.read'}), isFalse);
+    expect(canUseVoiceRecord({'reports.read'}), isFalse);
+    expect(canUseAssistant({'reports.read'}), isTrue);
+  });
+
+  test('owner experience cannot inherit management routes', () {
+    for (final path in [
+      '/rentals',
+      '/owners',
+      '/money',
+      '/work',
+      '/inbox',
+      '/choose-setup',
+      '/setting-up',
+      '/live-setup',
+    ]) {
+      expect(
+        canOpenMobilePath(
+          experience: WorkspaceExperience.owner,
+          capabilities: propertyManagerCapabilities,
+          path: path,
+        ),
+        isFalse,
+        reason: 'Owner must not open $path through overlapping capabilities.',
+      );
+    }
+
+    expect(
+      canOpenMobilePath(
+        experience: WorkspaceExperience.owner,
+        capabilities: const {},
+        path: '/',
+      ),
+      isTrue,
+    );
+    expect(
+      canOpenMobilePath(
+        experience: WorkspaceExperience.owner,
+        capabilities: const {},
+        path: '/settings',
+      ),
+      isTrue,
+    );
+    expect(
+      canOpenMobilePath(
+        experience: WorkspaceExperience.owner,
+        capabilities: const {},
+        path: '/settings/notifications/my-alerts',
+      ),
+      isTrue,
+    );
+  });
+
+  test('notification settings separate personal and administrator access', () {
+    for (final experience in [
+      WorkspaceExperience.management,
+      WorkspaceExperience.leasing,
+      WorkspaceExperience.maintenance,
+      WorkspaceExperience.owner,
+    ]) {
+      expect(
+        canOpenMobilePath(
+          experience: experience,
+          capabilities: const {},
+          path: '/settings/notifications/my-alerts',
+        ),
+        isTrue,
+      );
+      expect(
+        canOpenMobilePath(
+          experience: experience,
+          capabilities: const {},
+          path: '/settings/notifications/team-routing',
+        ),
+        isFalse,
+      );
+      expect(
+        canOpenMobilePath(
+          experience: experience,
+          capabilities: const {'notifications.manage'},
+          path: '/settings/notifications/tenant-notices',
+        ),
+        isTrue,
+      );
+    }
+
+    expect(
+      canOpenMobilePath(
+        experience: WorkspaceExperience.tenant,
+        capabilities: const {'notifications.manage'},
+        path: '/settings/notifications/my-alerts',
+      ),
+      isFalse,
+    );
+  });
+
+  test('workspace setup is management-only and capability-gated', () {
+    for (final path in ['/choose-setup', '/setting-up', '/live-setup']) {
+      expect(
+        canOpenMobilePath(
+          experience: WorkspaceExperience.management,
+          capabilities: const {'rentals.manage'},
+          path: path,
+        ),
+        isTrue,
+      );
+      expect(
+        canOpenMobilePath(
+          experience: WorkspaceExperience.leasing,
+          capabilities: const {'rentals.manage'},
+          path: path,
+        ),
+        isFalse,
+      );
+      expect(
+        canOpenMobilePath(
+          experience: WorkspaceExperience.maintenance,
+          capabilities: const {},
+          path: path,
+        ),
+        isFalse,
+      );
+    }
+  });
+}
+
+Set<MobileDestinationId> _visibleIds(
+  Iterable<MobileDestination> destinations,
+  Set<String> capabilities,
+) => visibleMobileDestinations(
+  destinations,
+  capabilities,
+).map((destination) => destination.id).toSet();

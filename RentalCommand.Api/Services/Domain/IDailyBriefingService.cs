@@ -6,5 +6,4 @@ namespace RentalCommand.Api.Services.Domain;
 public interface IDailyBriefingService
 {
     Task<BriefingResponse> ComposeAsync(WorkspaceReadScope scope, CancellationToken ct = default);
-    Task<BriefingResponse> ComposeForSystemAutomationAsync(int portfolioId, CancellationToken ct = default);
 }

@@ -86,5 +86,92 @@ void main() {
         );
       }
     });
+
+    test(
+      'ordinary token expiry may replay a mutation in the same authority',
+      () {
+        expect(
+          AuthInterceptor.canReplayRequestAfterRefresh(
+            method: 'POST',
+            requestStartAccess: _accessEnvelope(),
+            refreshedAccess: _accessEnvelope(),
+            staleRevisionRecovery: false,
+          ),
+          isTrue,
+        );
+      },
+    );
+
+    test(
+      'mutation cannot cross workspace revision or experience boundaries',
+      () {
+        for (final refreshed in [
+          _accessEnvelope(accessContextId: 22),
+          _accessEnvelope(accessRevision: 8),
+          _accessEnvelope(activeExperience: 'Leasing'),
+        ]) {
+          expect(
+            AuthInterceptor.canReplayRequestAfterRefresh(
+              method: 'PATCH',
+              requestStartAccess: _accessEnvelope(),
+              refreshedAccess: refreshed,
+              staleRevisionRecovery: false,
+            ),
+            isFalse,
+          );
+        }
+      },
+    );
+
+    test('stale-revision recovery never replays mutations automatically', () {
+      expect(
+        AuthInterceptor.canReplayRequestAfterRefresh(
+          method: 'DELETE',
+          requestStartAccess: _accessEnvelope(),
+          refreshedAccess: _accessEnvelope(accessRevision: 8),
+          staleRevisionRecovery: true,
+        ),
+        isFalse,
+      );
+    });
+
+    test('reads may recover after an authority change', () {
+      expect(
+        AuthInterceptor.canReplayRequestAfterRefresh(
+          method: 'GET',
+          requestStartAccess: _accessEnvelope(),
+          refreshedAccess: _accessEnvelope(accessContextId: 22),
+          staleRevisionRecovery: false,
+        ),
+        isTrue,
+      );
+    });
+
+    test('missing request-start authority fails closed for mutations', () {
+      expect(
+        AuthInterceptor.canReplayRequestAfterRefresh(
+          method: 'POST',
+          requestStartAccess: null,
+          refreshedAccess: _accessEnvelope(),
+          staleRevisionRecovery: false,
+        ),
+        isFalse,
+      );
+    });
   });
 }
+
+Map<String, dynamic> _accessEnvelope({
+  int accessContextId = 11,
+  int accessRevision = 7,
+  String activeExperience = 'Management',
+}) => {
+  'identity': {'userId': 5, 'displayName': 'Test user'},
+  'selectedContext': {
+    'accessContextId': accessContextId,
+    'portfolioId': 3,
+    'workspaceName': 'Test workspace',
+    'accessRevision': accessRevision,
+    'activeExperience': activeExperience,
+  },
+};

@@ -255,14 +255,14 @@ public sealed class ScheduledTenantChargeAtomicCommandTests : IAsyncLifetime
             };
             db.Portfolios.Add(portfolio);
             await db.SaveChangesAsync();
-            db.NotificationSettings.Add(new NotificationSettings
+            db.AutomationSettings.Add(new AutomationSettings
             {
                 PortfolioId = portfolio.Id,
                 EnableRentCharges = true,
                 EnableLateFees = true,
                 RentChargeLeadDays = 0,
-                CreatedAt = frozenAtUtc,
-                UpdatedAt = frozenAtUtc,
+                CreatedAtUtc = frozenAtUtc,
+                UpdatedAtUtc = frozenAtUtc,
             });
             db.SimulationClocks.Add(new SimulationClock
             {

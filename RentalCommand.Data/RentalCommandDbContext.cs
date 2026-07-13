@@ -70,6 +70,8 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
         Set<SecurityDepositBalanceProjection>();
     public DbSet<TenantChargeBalanceProjection> TenantChargeBalanceProjections =>
         Set<TenantChargeBalanceProjection>();
+    public DbSet<MorningBriefingCandidateProjection> MorningBriefingCandidateProjections =>
+        Set<MorningBriefingCandidateProjection>();
     public DbSet<LegalDocumentArtifact> LegalDocumentArtifacts => Set<LegalDocumentArtifact>();
     public DbSet<LegalDocumentSourceVersion> LegalDocumentSourceVersions => Set<LegalDocumentSourceVersion>();
     public DbSet<LeaseAgreement> LeaseAgreements => Set<LeaseAgreement>();
@@ -110,8 +112,8 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
     public DbSet<Conversation> Conversations => Set<Conversation>();
     public DbSet<ConversationMessage> ConversationMessages => Set<ConversationMessage>();
     public DbSet<Notification> Notifications => Set<Notification>();
-    public DbSet<NotificationSettings> NotificationSettings => Set<NotificationSettings>();
-    public DbSet<NotificationPreference> NotificationPreferences => Set<NotificationPreference>();
+    public DbSet<AutomationSettings> AutomationSettings => Set<AutomationSettings>();
+    public DbSet<MessagingProviderSettings> MessagingProviderSettings => Set<MessagingProviderSettings>();
     public DbSet<UserAlertPreference> UserAlertPreferences => Set<UserAlertPreference>();
     public DbSet<TeamRoutingRule> TeamRoutingRules => Set<TeamRoutingRule>();
     public DbSet<TeamRoutingRuleRecipient> TeamRoutingRuleRecipients => Set<TeamRoutingRuleRecipient>();
@@ -201,10 +203,12 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
         base.OnModelCreating(modelBuilder);
         modelBuilder.HasPostgresExtension("pg_trgm");
         modelBuilder.ConfigureWorkspaceAccessKernel();
+        AccessAuthorityDbFunctions.Configure(modelBuilder);
         modelBuilder.ConfigureLeaseRelationshipKernel();
         modelBuilder.ConfigureLeaseLegalArtifacts();
         modelBuilder.ConfigureTenantAccountKernel();
         modelBuilder.ConfigureLeaseLifecycleProjections();
+        modelBuilder.ConfigureMorningBriefingCandidateProjection();
         modelBuilder.ConfigureAccountStatusProjections();
         ScheduleEDepreciationDbFunction.Configure(modelBuilder);
         SqlNumericFunctions.Configure(modelBuilder);
@@ -296,11 +300,11 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.Property(e => e.NewValues).HasColumnType("jsonb");
             entity.Property(e => e.Operation).HasConversion<int>();
             entity.HasIndex(e => new
-                {
-                    e.CommandType,
-                    e.CommandIdempotencyKey,
-                    e.MutationOrdinal,
-                })
+            {
+                e.CommandType,
+                e.CommandIdempotencyKey,
+                e.MutationOrdinal,
+            })
                 .IsUnique();
             entity.HasIndex(e => new { e.PortfolioId, e.Timestamp });
             entity.HasIndex(e => new { e.EntityType, e.EntityId });
@@ -574,33 +578,29 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-        modelBuilder.Entity<NotificationSettings>(entity =>
+        modelBuilder.Entity<AutomationSettings>(entity =>
         {
             entity.HasKey(e => e.Id);
-            // Pluggable SMS provider (BYO): provider name + generic encrypted credential slots.
+            entity.Property(e => e.EnableLeaseExpiryReminders).HasDefaultValue(true);
+            entity.Property(e => e.EnableRecurringMaintenance).HasDefaultValue(true);
+            entity.Property(e => e.EnableMorningBriefing).HasDefaultValue(true);
+            entity.Property(e => e.RentChargeLeadDays).HasDefaultValue(5);
+            entity.Property(e => e.LateFeeGraceDays).HasDefaultValue(5);
+            entity.Property(e => e.LeaseExpiryReminderDays).HasDefaultValue(60);
+            entity.Property(e => e.MorningBriefingSendHourLocal).HasDefaultValue(8);
+            entity.HasIndex(e => e.PortfolioId).IsUnique();
+            entity.HasOne(e => e.Portfolio).WithMany().HasForeignKey(e => e.PortfolioId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<MessagingProviderSettings>(entity =>
+        {
+            entity.HasKey(e => e.Id);
             entity.Property(e => e.SmsProvider).HasMaxLength(32);
             entity.Property(e => e.SmsCredentialACipherText).HasMaxLength(4000);
             entity.Property(e => e.SmsCredentialBCipherText).HasMaxLength(4000);
             entity.Property(e => e.SmsCredentialCCipherText).HasMaxLength(4000);
             entity.Property(e => e.SmsFromNumberCipherText).HasMaxLength(4000);
-            entity.Property(e => e.DailyBriefingSmsRecipientsCipherText).HasMaxLength(4000);
-            entity.Property(e => e.DailyBriefingEmailRecipientsCipherText).HasMaxLength(4000);
-            entity.Property(e => e.EnableLeaseExpiryReminders).HasDefaultValue(true);
-            entity.Property(e => e.EnableRecurringMaintenance).HasDefaultValue(true);
-            entity.Property(e => e.RentChargeLeadDays).HasDefaultValue(5);
-            entity.Property(e => e.LateFeeGraceDays).HasDefaultValue(5);
-            entity.Property(e => e.LeaseExpiryReminderDays).HasDefaultValue(60);
-            // Per-portfolio now (was a single global row). One settings row per portfolio.
             entity.HasIndex(e => e.PortfolioId).IsUnique();
-        });
-
-        modelBuilder.Entity<NotificationPreference>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            // Stored as the string enum name to match the app-wide string-enum convention and to keep
-            // the unique key stable if the enum is ever reordered.
-            entity.Property(e => e.NotificationType).HasConversion<string>().HasMaxLength(40);
-            entity.HasIndex(e => new { e.PortfolioId, e.NotificationType }).IsUnique();
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)
@@ -617,10 +617,19 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
 
         modelBuilder.Entity<TeamRoutingRule>(entity =>
         {
+            entity.ToTable(table => table.HasCheckConstraint(
+                "CK_TeamRoutingRules_WorkspaceOnlyTopics",
+                "\"PropertyId\" IS NULL OR \"Topic\" NOT IN ('AccountAndSecurity', 'MorningBriefing')"));
             entity.HasKey(e => e.Id);
             entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
             entity.Property(e => e.Topic).HasConversion<string>().HasMaxLength(50);
-            entity.HasIndex(e => new { e.PortfolioId, e.Topic, e.PropertyId }).IsUnique();
+            entity.HasIndex(e => new { e.PortfolioId, e.Topic })
+                .HasDatabaseName("IX_TeamRoutingRules_PortfolioId_Topic_Workspace")
+                .HasFilter("\"PropertyId\" IS NULL")
+                .IsUnique();
+            entity.HasIndex(e => new { e.PortfolioId, e.Topic, e.PropertyId })
+                .HasFilter("\"PropertyId\" IS NOT NULL")
+                .IsUnique();
             entity.HasOne(e => e.Portfolio).WithMany().HasForeignKey(e => e.PortfolioId).OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(e => e.Property).WithMany().HasForeignKey(e => e.PropertyId).OnDelete(DeleteBehavior.Cascade);
         });
@@ -730,6 +739,8 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.Property(e => e.ClaimOwner).HasMaxLength(200);
             entity.HasIndex(e => e.BusinessKey).IsUnique();
             entity.HasIndex(e => new { e.Status, e.DueAtUtc, e.ClaimExpiresAtUtc, e.Id });
+            entity.HasIndex(e => new { e.PortfolioId, e.TenantLedgerEntryId })
+                .HasFilter("\"TenantLedgerEntryId\" IS NOT NULL");
             entity.HasOne(e => e.Policy).WithMany()
                 .HasForeignKey(e => new { e.TenantNoticePolicyId, e.PortfolioId })
                 .HasPrincipalKey(e => new { e.Id, e.PortfolioId }).OnDelete(DeleteBehavior.Cascade);
@@ -990,8 +1001,15 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.HasIndex(e => e.LeaseAddendumId);
             entity.HasIndex(e => e.TenantLedgerEntryId);
             entity.HasIndex(e => e.Status);
-            entity.HasIndex(e => new { e.PortfolioId, e.LeaseManagementId, e.NoticeType, e.Status });
-            entity.HasIndex(e => new { e.PortfolioId, e.TenantLedgerEntryId, e.NoticeType, e.Status });
+            entity.HasIndex(e => new { e.PortfolioId, e.TenantLedgerEntryId, e.NoticeType })
+                .IsUnique()
+                .HasFilter("\"TenantLedgerEntryId\" IS NOT NULL AND \"Status\" IN ('Draft','Approved')")
+                .HasDatabaseName("UX_NoticeDrafts_OpenLedgerNotice");
+            entity.HasIndex(e => new
+                { e.PortfolioId, e.LeaseManagementId, e.LeaseAgreementId, e.NoticeType })
+                .IsUnique()
+                .HasFilter("\"TenantLedgerEntryId\" IS NULL AND \"LeaseAgreementId\" IS NOT NULL AND \"Status\" IN ('Draft','Approved')")
+                .HasDatabaseName("UX_NoticeDrafts_OpenAgreementNotice");
             entity.HasIndex(e => e.TenantNoticePolicyId);
             entity.HasIndex(e => e.WorkspaceNoticeTemplateVersionId);
             entity.HasIndex(e => e.RenderedNoticeId).IsUnique();
@@ -2266,7 +2284,8 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
         modelBuilder.Entity<DeviceToken>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<Inspection>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<Notification>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
-        modelBuilder.Entity<NotificationPreference>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<AutomationSettings>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<MessagingProviderSettings>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<Owner>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<PortalMessage>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<QueuedJob>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);

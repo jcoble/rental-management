@@ -6,13 +6,13 @@ namespace RentalCommand.Engine.Tests.Data;
 public sealed class EngineRlsInterceptorTests
 {
     [Fact]
-    public void SessionInitialization_AssumesEngineRoleBeforeSettingRlsState()
+    public void SessionInitialization_ClearsRequestCoordinatesWithoutRoleAssumptionOrAdminFlags()
     {
         EngineRlsInterceptor.SessionInitializationSql
-            .Should().StartWith("SET ROLE rentalcommand_engine;");
+            .Should().NotContain("SET ROLE");
         EngineRlsInterceptor.SessionInitializationSql
-            .Should().Contain("SET app.current_portfolio_id = '0';");
+            .Should().Contain("app.current_portfolio_id");
         EngineRlsInterceptor.SessionInitializationSql
-            .Should().Contain("SET app.is_admin = 'true';");
+            .Should().NotContain("app.is_admin");
     }
 }

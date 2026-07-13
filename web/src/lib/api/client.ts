@@ -17,8 +17,17 @@
 
 import { browser } from '$app/environment';
 import { CLIENT_API_BASE_URL } from '$lib/config';
-import { getAuthState, updateToken, clearAuth, isTokenExpired } from '$lib/stores/auth.svelte';
+import {
+	getAuthState,
+	updateToken,
+	clearAuth,
+	isTokenExpired,
+	setAccessEnvelope
+} from '$lib/stores/auth.svelte';
 import { createSingleFlightWithReuse } from '$lib/utils/single-flight';
+import type { AccessEnvelope } from '$lib/types/user';
+import { isAccessTransitionInProgress } from '$lib/auth/access-transition-state';
+import { accessEnvelopeAuthorityChanged } from '$lib/auth/access-envelope-change';
 
 export const API_BASE_URL = CLIENT_API_BASE_URL;
 
@@ -26,21 +35,36 @@ const REFRESH_FETCH_TIMEOUT_MS = 10_000;
 const API_FETCH_TIMEOUT_MS = 20_000;
 const ACCESS_REFRESH_HEADER = 'x-access-envelope-refresh';
 
-let accessRecoveryCallback: (() => Promise<void> | void) | null = null;
-let accessRecoveryFlight: Promise<void> | null = null;
+export type AccessChangeReason =
+	| 'context'
+	| 'experience'
+	| 'refresh'
+	| 'refresh-signalr';
+export type TokenRefreshSource = 'api' | 'signalr';
 
-/** Shell-owned cache/realtime cleanup invoked after a stale access revision is refreshed. */
-export function setAccessRecoveryCallback(callback: (() => Promise<void> | void) | null): void {
+let accessRecoveryCallback:
+	| ((access: AccessEnvelope, reason: AccessChangeReason) => Promise<void> | void)
+	| null = null;
+
+/** Shell-owned cache/realtime cleanup invoked whenever the effective access view changes. */
+export function setAccessRecoveryCallback(
+	callback: ((access: AccessEnvelope, reason: AccessChangeReason) => Promise<void> | void) | null
+): void {
 	accessRecoveryCallback = callback;
 }
 
 export async function adoptAccessSession(
 	accessToken: string,
 	accessTokenExpiration: string,
-	access: import('$lib/types/user').AccessEnvelope
+	access: AccessEnvelope
 ): Promise<void> {
 	updateToken(accessToken, new Date(accessTokenExpiration), access);
-	await accessRecoveryCallback?.();
+	await accessRecoveryCallback?.(access, 'context');
+}
+
+export async function adoptAccessEnvelope(access: AccessEnvelope): Promise<void> {
+	setAccessEnvelope(access);
+	await accessRecoveryCallback?.(access, 'experience');
 }
 
 /** Structured error mirroring a StandardErrorResponse entry. */
@@ -145,7 +169,7 @@ function fallbackHttpErrorMessage(response: Response): string {
  * Refresh the access token via the same-origin proxy endpoint, then update the
  * client auth store. Deduplicated so concurrent 401s share one refresh.
  */
-async function performTokenRefresh(): Promise<void> {
+async function performTokenRefresh(source: TokenRefreshSource = 'api'): Promise<void> {
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), REFRESH_FETCH_TIMEOUT_MS);
 	const response = await fetch('/api/auth/refresh', {
@@ -158,8 +182,20 @@ async function performTokenRefresh(): Promise<void> {
 		throw new ApiError(response.status, 'Token refresh failed');
 	}
 
-	const data = await response.json();
+	const data = (await response.json()) as {
+		accessToken: string;
+		accessTokenExpiration: string;
+		access: AccessEnvelope;
+	};
+	const previousAccess = getAuthState().accessEnvelope;
+	const authorityChanged = accessEnvelopeAuthorityChanged(previousAccess, data.access);
 	updateToken(data.accessToken, new Date(data.accessTokenExpiration), data.access);
+	if (authorityChanged) {
+		await accessRecoveryCallback?.(
+			data.access,
+			source === 'signalr' ? 'refresh-signalr' : 'refresh'
+		);
+	}
 }
 
 /**
@@ -182,14 +218,9 @@ export const refreshToken = createSingleFlightWithReuse(
 );
 
 async function recoverStaleAccess(): Promise<void> {
-	if (accessRecoveryFlight) return accessRecoveryFlight;
-	accessRecoveryFlight = (async () => {
-		await refreshToken();
-		await accessRecoveryCallback?.();
-	})().finally(() => {
-		accessRecoveryFlight = null;
-	});
-	return accessRecoveryFlight;
+	// The refresh operation itself compares the old/new authority coordinates and performs the
+	// single-flight recovery before resolving. Do not invoke the callback again here.
+	await refreshToken();
 }
 
 function isMutation(method: string | undefined): boolean {
@@ -245,6 +276,19 @@ function buildErrorFromBody(response: Response, errorData: unknown): ApiError {
 /** Low-level authenticated fetch. Throws {@link ApiError} on non-2xx. */
 export async function fetchApi<T>(endpoint: string, options: FetchOptions = {}): Promise<T> {
 	const { requireAuth = true, timeoutMs = API_FETCH_TIMEOUT_MS, ...fetchOptions } = options;
+	if (
+		browser &&
+		isAccessTransitionInProgress() &&
+		isMutation(fetchOptions.method) &&
+		endpoint !== '/auth/experience/select' &&
+		endpoint !== '/auth/contexts/select'
+	) {
+		throw new ApiError(
+			409,
+			'Your work area is changing. Wait for the new page before submitting this action.',
+			'ACCESS_TRANSITION_IN_PROGRESS'
+		);
+	}
 	const headers: Record<string, string> = {
 		...(fetchOptions.headers as Record<string, string>)
 	};

@@ -24,7 +24,7 @@ public class CapitalAssetsController : ManagementControllerBase
     public async Task<ActionResult<IReadOnlyList<CapitalAssetResponse>>> List(
         [FromQuery] CapitalAssetListQuery query, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), query, ct);
+        var items = await _service.ListAuthorizedAsync(GetWorkspaceReadScope(), query, ct);
         return Ok(items);
     }
 
@@ -33,7 +33,7 @@ public class CapitalAssetsController : ManagementControllerBase
     public async Task<ActionResult<CapitalAssetListResponse>> ListPage(
         [FromQuery] CapitalAssetListQuery query, CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), query, ct);
+        var page = await _service.ListPageAuthorizedAsync(GetWorkspaceReadScope(), query, ct);
         return Ok(page);
     }
 
@@ -43,7 +43,7 @@ public class CapitalAssetsController : ManagementControllerBase
     public async Task<ActionResult<CapitalAssetResponse>> Get(
         int id, [FromQuery] int? year, CancellationToken ct)
     {
-        var item = await _service.GetAsync(GetPortfolioId(), id, year, ct);
+        var item = await _service.GetAuthorizedAsync(GetWorkspaceReadScope(), id, year, ct);
         return item is null ? NotFound(new { error = "Capital asset not found" }) : Ok(item);
     }
 
@@ -53,7 +53,7 @@ public class CapitalAssetsController : ManagementControllerBase
     public async Task<ActionResult<CapitalAssetResponse>> Create(
         [FromBody] CreateCapitalAssetRequest request, CancellationToken ct)
     {
-        var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
+        var created = await _service.CreateAuthorizedAsync(GetWorkspaceReadScope(), request, ct);
         return created is null
             ? NotFound(new { error = "Referenced property or unit not found in this portfolio" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
@@ -65,7 +65,7 @@ public class CapitalAssetsController : ManagementControllerBase
     public async Task<ActionResult<CapitalAssetResponse>> Update(
         int id, [FromBody] UpdateCapitalAssetRequest request, CancellationToken ct)
     {
-        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, ct);
+        var updated = await _service.UpdateAuthorizedAsync(GetWorkspaceReadScope(), id, request, ct);
         return updated is null ? NotFound(new { error = "Capital asset not found" }) : Ok(updated);
     }
 
@@ -74,7 +74,7 @@ public class CapitalAssetsController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(int id, CancellationToken ct)
     {
-        var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
+        var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
         return deleted ? NoContent() : NotFound(new { error = "Capital asset not found" });
     }
 }

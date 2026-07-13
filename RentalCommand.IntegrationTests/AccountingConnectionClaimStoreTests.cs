@@ -713,7 +713,7 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
             TimeProvider.System, NullLogger<AccountingImportService>.Instance);
         return new AccountingConnectionService(
             db, _dataProtection, providerResolver, settingsResolver, import,
-            TimeProvider.System, null!, new RentalCommand.Api.Data.RlsExecutionContext(),
+            TimeProvider.System, null!,
             NullLogger<AccountingConnectionService>.Instance);
     }
 

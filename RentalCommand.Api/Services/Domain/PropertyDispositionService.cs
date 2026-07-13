@@ -5,17 +5,21 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Services;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
 public class PropertyDispositionService : IPropertyDispositionService
 {
     private const string EntityType = "PropertyDisposition";
+    private static readonly string[] ReadCapabilities = [CapabilityKeys.MoneyOwnerReportsRead];
+    private static readonly string[] WriteCapabilities = [CapabilityKeys.RentalsManage];
 
     private readonly RentalCommandDbContext _db;
     private static readonly AtomicJsonResultCodec<CreatePropertyDispositionResult> CreateCodec =
@@ -47,8 +51,25 @@ public class PropertyDispositionService : IPropertyDispositionService
 
     public async Task<PropertyDispositionListResponse> ListPageAsync(
         int portfolioId, PropertyDispositionListQuery query, CancellationToken ct = default)
+        => await ListPageFromQueryAsync(
+            _db.PropertyDispositions.AsNoTracking().Where(item => item.PortfolioId == portfolioId),
+            query,
+            ct);
+
+    public async Task<IReadOnlyList<PropertyDispositionResponse>> ListAuthorizedAsync(
+        WorkspaceReadScope scope, PropertyDispositionListQuery query, CancellationToken ct = default)
+        => (await ListPageAuthorizedAsync(scope, query, ct)).Items;
+
+    public Task<PropertyDispositionListResponse> ListPageAuthorizedAsync(
+        WorkspaceReadScope scope, PropertyDispositionListQuery query, CancellationToken ct = default)
+        => ListPageFromQueryAsync(AuthorizedDispositions(scope, ReadCapabilities), query, ct);
+
+    private async Task<PropertyDispositionListResponse> ListPageFromQueryAsync(
+        IQueryable<PropertyDisposition> dispositions,
+        PropertyDispositionListQuery query,
+        CancellationToken ct)
     {
-        var filtered = BuildListQuery(portfolioId, query);
+        var filtered = BuildListQuery(dispositions, query);
         var totalCount = await filtered.CountAsync(ct);
         var rows = await ProjectRows(ApplySort(filtered, query))
             .Skip(query.NormalizedSkip)
@@ -73,6 +94,15 @@ public class PropertyDispositionService : IPropertyDispositionService
             .FirstOrDefaultAsync(ct);
 
         return row is null ? null : ToResponse(row);
+    }
+
+    public async Task<PropertyDispositionResponse?> GetAuthorizedAsync(
+        WorkspaceReadScope scope, int id, CancellationToken ct = default)
+    {
+        var row = await ProjectRows(
+                AuthorizedDispositions(scope, ReadCapabilities).Where(item => item.Id == id))
+            .FirstOrDefaultAsync(ct);
+        return row == null ? null : ToResponse(row);
     }
 
     public async Task<PropertyDispositionResponse?> CreateAsync(
@@ -105,9 +135,43 @@ public class PropertyDispositionService : IPropertyDispositionService
 
     public async Task<PropertyDispositionResponse?> UpdateAsync(
         int portfolioId, int id, UpdatePropertyDispositionRequest request, CancellationToken ct = default)
+        => await UpdateCoreAsync(
+            portfolioId,
+            _db.PropertyDispositions.Where(item => item.PortfolioId == portfolioId),
+            id,
+            request,
+            broadcast: true,
+            ct);
+
+    public async Task<PropertyDispositionResponse?> UpdateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        UpdatePropertyDispositionRequest request,
+        CancellationToken ct = default)
     {
-        var entity = await _db.PropertyDispositions
-            .FirstOrDefaultAsync(d => d.Id == id && d.PortfolioId == portfolioId, ct);
+        var response = await _db.ExecuteAuthorizedMutationAsync(
+            innerCt => UpdateCoreAsync(
+                scope.PortfolioId,
+                AuthorizedDispositions(scope, WriteCapabilities, tracking: true),
+                id,
+                request,
+                broadcast: false,
+                innerCt),
+            ct);
+        if (response != null)
+            await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, id, response, ct);
+        return response;
+    }
+
+    private async Task<PropertyDispositionResponse?> UpdateCoreAsync(
+        int portfolioId,
+        IQueryable<PropertyDisposition> dispositions,
+        int id,
+        UpdatePropertyDispositionRequest request,
+        bool broadcast,
+        CancellationToken ct)
+    {
+        var entity = await dispositions.FirstOrDefaultAsync(d => d.Id == id, ct);
         if (entity is null)
             return null;
 
@@ -121,14 +185,45 @@ public class PropertyDispositionService : IPropertyDispositionService
         await _db.SaveChangesAsync(ct);
 
         var response = await GetAsync(portfolioId, entity.Id, ct) ?? PropertyDispositionResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        if (broadcast)
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
     }
 
     public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
+        => await DeleteCoreAsync(
+            portfolioId,
+            _db.PropertyDispositions.Where(item => item.PortfolioId == portfolioId),
+            id,
+            broadcast: true,
+            ct);
+
+    public async Task<bool> DeleteAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        CancellationToken ct = default)
     {
-        var entity = await _db.PropertyDispositions
-            .FirstOrDefaultAsync(d => d.Id == id && d.PortfolioId == portfolioId, ct);
+        var deleted = await _db.ExecuteAuthorizedMutationAsync(
+            innerCt => DeleteCoreAsync(
+                scope.PortfolioId,
+                AuthorizedDispositions(scope, WriteCapabilities, tracking: true),
+                id,
+                broadcast: false,
+                innerCt),
+            ct);
+        if (deleted)
+            await _dataUpdate.BroadcastEntityDeleteAsync(scope.PortfolioId, EntityType, id, ct);
+        return deleted;
+    }
+
+    private async Task<bool> DeleteCoreAsync(
+        int portfolioId,
+        IQueryable<PropertyDisposition> dispositions,
+        int id,
+        bool broadcast,
+        CancellationToken ct)
+    {
+        var entity = await dispositions.FirstOrDefaultAsync(d => d.Id == id, ct);
         if (entity is null)
             return false;
 
@@ -137,15 +232,16 @@ public class PropertyDispositionService : IPropertyDispositionService
         entity.UpdatedAt = now;
         await _db.SaveChangesAsync(ct);
 
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
+        if (broadcast)
+            await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
         return true;
     }
 
-    private IQueryable<PropertyDisposition> BuildListQuery(int portfolioId, PropertyDispositionListQuery query)
+    private static IQueryable<PropertyDisposition> BuildListQuery(
+        IQueryable<PropertyDisposition> dispositions,
+        PropertyDispositionListQuery query)
     {
-        var q = _db.PropertyDispositions
-            .AsNoTracking()
-            .Where(d => d.PortfolioId == portfolioId);
+        var q = dispositions;
 
         if (query.PropertyId.HasValue)
             q = q.Where(d => d.PropertyId == query.PropertyId.Value);
@@ -258,6 +354,23 @@ public class PropertyDispositionService : IPropertyDispositionService
     {
         var trimmed = value?.Trim();
         return string.IsNullOrEmpty(trimmed) ? null : trimmed;
+    }
+
+    private IQueryable<PropertyDisposition> AuthorizedDispositions(
+        WorkspaceReadScope scope,
+        IReadOnlyCollection<string> capabilities,
+        bool tracking = false)
+    {
+        var authorizedProperties = _db.Properties.AsNoTracking()
+            .WhereAuthorized(_db, scope, capabilities, _timeProvider.UtcNow());
+        var dispositions = tracking
+            ? _db.PropertyDispositions
+            : _db.PropertyDispositions.AsNoTracking();
+        return dispositions.Where(disposition =>
+            disposition.PortfolioId == scope.PortfolioId &&
+            authorizedProperties.Any(property =>
+                property.Id == disposition.PropertyId &&
+                property.PortfolioId == disposition.PortfolioId));
     }
 
     private sealed class DispositionRow

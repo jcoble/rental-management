@@ -75,6 +75,14 @@ public class StartConversationRequest : IValidatableObject
     [Range(1, int.MaxValue)]
     public int TenantId { get; set; }
 
+    /// <summary>
+    /// Property context for the thread. Required when the tenant has more than one current rental
+    /// relationship; omitted only when the server can derive exactly one canonical property or the
+    /// caller has workspace-wide access to an unattached tenant.
+    /// </summary>
+    [Range(1, int.MaxValue)]
+    public int? PropertyId { get; set; }
+
     /// <summary>The conversation topic.</summary>
     [Required]
     [MaxLength(200)]

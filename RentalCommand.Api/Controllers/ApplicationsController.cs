@@ -55,7 +55,7 @@ public class ApplicationsController : ManagementControllerBase
     public async Task<ActionResult<IReadOnlyList<ApplicationResponse>>> List(
         [FromQuery] string? status, [FromQuery] int? unitId, [FromQuery] ListQuery query, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), status, query, unitId, ct);
+        var items = await _service.ListAuthorizedAsync(GetWorkspaceReadScope(), status, query, unitId, ct);
         return Ok(items);
     }
 
@@ -64,7 +64,7 @@ public class ApplicationsController : ManagementControllerBase
     public async Task<ActionResult<ApplicationListResponse>> ListPage(
         [FromQuery] string? status, [FromQuery] int? unitId, [FromQuery] ListQuery query, CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), status, query, unitId, ct);
+        var page = await _service.ListPageAuthorizedAsync(GetWorkspaceReadScope(), status, query, unitId, ct);
         return Ok(page);
     }
 
@@ -73,7 +73,7 @@ public class ApplicationsController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<ApplicationResponse>> Get(int id, CancellationToken ct)
     {
-        var item = await _service.GetAsync(GetPortfolioId(), id, ct);
+        var item = await _service.GetAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
         return item == null ? NotFound(new { error = "Application not found" }) : Ok(item);
     }
 
@@ -87,7 +87,8 @@ public class ApplicationsController : ManagementControllerBase
         [FromBody] UpdateApplicationRequest request,
         CancellationToken ct)
     {
-        var item = await _service.UpdateAsync(GetPortfolioId(), id, request, GetUserId(), ct);
+        var item = await _service.UpdateAuthorizedAsync(
+            GetWorkspaceReadScope(), id, request, GetUserId(), ct);
         return item == null ? NotFound(new { error = "Application not found" }) : Ok(item);
     }
 
@@ -95,8 +96,16 @@ public class ApplicationsController : ManagementControllerBase
     [HttpGet("{id:int}/scan")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public Task<IActionResult> GetScan(int id, [FromQuery] bool thumb = false, CancellationToken ct = default)
-        => ServeEntityScanAsync(_db, _files, "Application", id, thumb, ct);
+    public async Task<IActionResult> GetScan(
+        int id, [FromQuery] bool thumb = false, CancellationToken ct = default)
+    {
+        if (!await CanManageScreeningAsync(id, ct))
+        {
+            return Forbid();
+        }
+
+        return await ServeEntityScanAsync(_db, _files, "Application", id, thumb, ct);
+    }
 
     /// <summary>Approves the application and creates a Tenant from its data.</summary>
     [HttpPost("{id:int}/approve")]
@@ -107,7 +116,8 @@ public class ApplicationsController : ManagementControllerBase
     {
         try
         {
-            var result = await _service.ApproveAsync(GetPortfolioId(), id, GetUserId(), ct);
+            var result = await _service.ApproveAuthorizedAsync(
+                GetWorkspaceReadScope(), id, GetUserId(), ct);
             return result == null ? NotFound(new { error = "Application not found" }) : Ok(result);
         }
         catch (InvalidOperationException ex)
@@ -124,7 +134,8 @@ public class ApplicationsController : ManagementControllerBase
     {
         try
         {
-            var result = await _service.DeclineAsync(GetPortfolioId(), id, GetUserId(), body?.Reason, ct);
+            var result = await _service.DeclineAuthorizedAsync(
+                GetWorkspaceReadScope(), id, GetUserId(), body?.Reason, ct);
             return result == null ? NotFound(new { error = "Application not found" }) : Ok(result);
         }
         catch (InvalidOperationException ex)
@@ -141,7 +152,8 @@ public class ApplicationsController : ManagementControllerBase
     {
         try
         {
-            var result = await _service.WithdrawAsync(GetPortfolioId(), id, GetUserId(), ct);
+            var result = await _service.WithdrawAuthorizedAsync(
+                GetWorkspaceReadScope(), id, GetUserId(), ct);
             return result == null ? NotFound(new { error = "Application not found" }) : Ok(result);
         }
         catch (InvalidOperationException ex)
@@ -155,7 +167,8 @@ public class ApplicationsController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(int id, CancellationToken ct)
     {
-        var deleted = await _service.DeleteAsync(GetPortfolioId(), id, GetUserId(), ct);
+        var deleted = await _service.DeleteAuthorizedAsync(
+            GetWorkspaceReadScope(), id, GetUserId(), ct);
         return deleted ? NoContent() : NotFound(new { error = "Application not found" });
     }
 
@@ -438,7 +451,16 @@ public class ApplicationsController : ManagementControllerBase
     [ProducesResponseType(typeof(ApplicationLinkResult), StatusCodes.Status200OK)]
     public async Task<ActionResult<ApplicationLinkResult>> GenerateLink(CancellationToken ct)
     {
-        var result = await _service.GenerateLinkAsync(GetPortfolioId(), ct);
+        var portfolioId = GetPortfolioId();
+        if (!await HasCapabilityAsync(
+                CapabilityKeys.LeasingApplicationsManage,
+                new PortfolioWidePropertyCapabilityAuthorizationTarget(portfolioId),
+                ct))
+        {
+            return Forbid();
+        }
+
+        var result = await _service.GenerateLinkAsync(portfolioId, ct);
         return Ok(result);
     }
 

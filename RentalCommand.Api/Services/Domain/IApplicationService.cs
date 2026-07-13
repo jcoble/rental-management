@@ -1,4 +1,5 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -39,10 +40,20 @@ public interface IApplicationService
     Task<IReadOnlyList<ApplicationResponse>> ListAsync(
         int portfolioId, string? status, ListQuery query, int? unitId = null, CancellationToken ct = default);
 
+    Task<IReadOnlyList<ApplicationResponse>> ListAuthorizedAsync(
+        WorkspaceReadScope scope, string? status, ListQuery query, int? unitId = null,
+        CancellationToken ct = default);
+
     Task<ApplicationListResponse> ListPageAsync(
         int portfolioId, string? status, ListQuery query, int? unitId = null, CancellationToken ct = default);
 
+    Task<ApplicationListResponse> ListPageAuthorizedAsync(
+        WorkspaceReadScope scope, string? status, ListQuery query, int? unitId = null,
+        CancellationToken ct = default);
+
     Task<ApplicationResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
+    Task<ApplicationResponse?> GetAuthorizedAsync(
+        WorkspaceReadScope scope, int id, CancellationToken ct = default);
 
     /// <summary>
     /// Corrects landlord-editable applicant details while the application is still Submitted or
@@ -55,18 +66,33 @@ public interface IApplicationService
         int userId,
         CancellationToken ct = default);
 
+    Task<ApplicationResponse?> UpdateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        UpdateApplicationRequest request,
+        int userId,
+        CancellationToken ct = default);
+
     /// <summary>
     /// Approves an application and creates a Tenant from its data. Returns <c>null</c> when the
     /// application is not found in the portfolio; throws <see cref="InvalidOperationException"/> when
     /// it is not in an approvable state.
     /// </summary>
     Task<ApproveApplicationResult?> ApproveAsync(int portfolioId, int id, int userId, CancellationToken ct = default);
+    Task<ApproveApplicationResult?> ApproveAuthorizedAsync(
+        WorkspaceReadScope scope, int id, int userId, CancellationToken ct = default);
 
     Task<ApplicationResponse?> DeclineAsync(int portfolioId, int id, int userId, string? reason, CancellationToken ct = default);
+    Task<ApplicationResponse?> DeclineAuthorizedAsync(
+        WorkspaceReadScope scope, int id, int userId, string? reason, CancellationToken ct = default);
 
     Task<ApplicationResponse?> WithdrawAsync(int portfolioId, int id, int userId, CancellationToken ct = default);
+    Task<ApplicationResponse?> WithdrawAuthorizedAsync(
+        WorkspaceReadScope scope, int id, int userId, CancellationToken ct = default);
 
     Task<bool> DeleteAsync(int portfolioId, int id, int userId, CancellationToken ct = default);
+    Task<bool> DeleteAuthorizedAsync(
+        WorkspaceReadScope scope, int id, int userId, CancellationToken ct = default);
 
     /// <summary>Generates or rotates the portfolio's public application token and returns the apply link.</summary>
     Task<ApplicationLinkResult> GenerateLinkAsync(int portfolioId, CancellationToken ct = default);

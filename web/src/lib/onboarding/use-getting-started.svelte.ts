@@ -50,8 +50,7 @@ export function useGettingStarted(): UseGettingStarted {
 			unitCount: data?.unitCount ?? 0,
 			tenantCount: data?.tenantCount ?? 0,
 			leaseCount: data?.leaseCount ?? 0,
-			hasNotificationEmail: data?.hasNotificationEmail ?? false,
-			hasTexting: data?.hasTexting ?? false,
+			hasPersonalAlerts: data?.hasNotificationEmail ?? false,
 			hasAutomations: data?.hasAutomations ?? false,
 		};
 	}
@@ -71,8 +70,8 @@ export function useGettingStarted(): UseGettingStarted {
 		if (pid <= 0 || settled) return;
 		if (!ready()) return;
 		const s = signals();
-		// Mirrors the checklist's "all tasks done" rule. Texting (SignalWire) was removed from the
-		// checklist (A13), so it no longer gates the settled flag — only the tasks the checklist shows.
+		// Mirrors the checklist's "all tasks done" rule. Messaging-provider setup is intentionally
+		// separate, so it does not gate the settled flag — only the tasks the checklist shows.
 		const allDone =
 			s.portfolioNamed &&
 			s.ownerCount > 0 &&
@@ -80,7 +79,7 @@ export function useGettingStarted(): UseGettingStarted {
 			s.unitCount > 0 &&
 			s.tenantCount > 0 &&
 			s.leaseCount > 0 &&
-			s.hasNotificationEmail &&
+			s.hasPersonalAlerts &&
 			s.hasAutomations;
 		if (allDone) {
 			markChecklistSettled(pid);

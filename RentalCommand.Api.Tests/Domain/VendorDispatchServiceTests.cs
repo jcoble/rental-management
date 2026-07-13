@@ -8,6 +8,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Operations;
@@ -29,6 +30,7 @@ public class VendorDispatchServiceTests : IDisposable
 
     private readonly SqliteTestContext _ctx = new();
     private readonly ServiceProvider _services;
+    private readonly WorkspaceReadScope _scope;
 
     public VendorDispatchServiceTests()
     {
@@ -47,6 +49,7 @@ public class VendorDispatchServiceTests : IDisposable
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseSqlite(_ctx.ConnectionString).UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider();
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(VendorDispatchServiceTests));
     }
 
     public void Dispose()
@@ -434,10 +437,10 @@ public class VendorDispatchServiceTests : IDisposable
 
         var sut = CreateDispatchSut();
 
-        await sut.RateAsync(PortfolioId, vendor.Id, new CreateVendorRatingRequest { Stars = 5, Comment = "Great" });
-        await sut.RateAsync(PortfolioId, vendor.Id, new CreateVendorRatingRequest { Stars = 3 });
+        await sut.RateAsync(_scope, vendor.Id, new CreateVendorRatingRequest { Stars = 5, Comment = "Great" });
+        await sut.RateAsync(_scope, vendor.Id, new CreateVendorRatingRequest { Stars = 3 });
 
-        var card = await sut.GetScorecardAsync(PortfolioId, vendor.Id);
+        var card = await sut.GetScorecardAsync(_scope, vendor.Id);
         card.Should().NotBeNull();
         card!.RatingCount.Should().Be(2);
         card.AverageRating.Should().Be(4.00m);
@@ -467,7 +470,7 @@ public class VendorDispatchServiceTests : IDisposable
             "+16145550199", "DONE", new DateTime(2026, 06, 03, 14, 0, 0, DateTimeKind.Utc));
 
         _ctx.Db.ChangeTracker.Clear();
-        var card = await CreateDispatchSut().GetScorecardAsync(PortfolioId, vendor.Id);
+        var card = await CreateDispatchSut().GetScorecardAsync(_scope, vendor.Id);
         card!.JobsCompleted.Should().Be(1);
         card.AvgResponseHours.Should().Be(2.00m);
     }

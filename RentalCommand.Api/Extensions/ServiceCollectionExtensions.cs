@@ -1,6 +1,7 @@
 using RentalCommand.Api.Scanning;
 using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Services.Sms;
 using RentalCommand.Api.Services.Voice;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
@@ -106,8 +107,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPortalService, PortalService>();
         services.AddScoped<IConversationService, ConversationService>();
         services.AddScoped<INotificationService, NotificationService>();
-        services.AddScoped<INotificationSettingsService, NotificationSettingsService>();
+        services.AddScoped<IMessagingProviderSettingsResolver, MessagingProviderSettingsResolver>();
         services.AddScoped<INotificationFoundationService, NotificationFoundationService>();
+        services.AddScoped<RentalCommand.Data.Notifications.ITenantNoticeDraftSetStore,
+            RentalCommand.Data.Notifications.TenantNoticeDraftSetStore>();
         // Pluggable SMS providers + resolver (BYO per-portfolio, platform-env fallback). Shared with
         // the Engine outbox path; the API uses it for the synchronous "send test SMS" verify endpoint.
         services.AddSmsProviders();

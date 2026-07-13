@@ -1,4 +1,5 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -11,6 +12,25 @@ namespace RentalCommand.Api.Services.Domain;
 /// </summary>
 public interface IRecurringMaintenanceTaskService
 {
+    Task<IReadOnlyList<RecurringMaintenanceTaskResponse>> ListAuthorizedAsync(
+        WorkspaceReadScope scope, int? propertyId, bool? activeOnly, ListQuery query,
+        CancellationToken ct = default);
+    Task<RecurringMaintenanceTaskListResponse> ListPageAuthorizedAsync(
+        WorkspaceReadScope scope, int? propertyId, bool? activeOnly, ListQuery query,
+        CancellationToken ct = default);
+    Task<RecurringMaintenanceTaskResponse?> GetAuthorizedAsync(
+        WorkspaceReadScope scope, int id, CancellationToken ct = default);
+    Task<RecurringMaintenanceTaskResponse?> CreateAuthorizedAsync(
+        WorkspaceReadScope scope, CreateRecurringMaintenanceTaskRequest request,
+        CancellationToken ct = default);
+    Task<RecurringMaintenanceTaskResponse?> UpdateAuthorizedAsync(
+        WorkspaceReadScope scope, int id, UpdateRecurringMaintenanceTaskRequest request,
+        CancellationToken ct = default);
+    Task<RecurringMaintenanceTaskResponse?> SetActiveAuthorizedAsync(
+        WorkspaceReadScope scope, int id, bool isActive, CancellationToken ct = default);
+    Task<bool> DeleteAuthorizedAsync(
+        WorkspaceReadScope scope, int id, CancellationToken ct = default);
+
     Task<IReadOnlyList<RecurringMaintenanceTaskResponse>> ListAsync(int portfolioId, int? propertyId, bool? activeOnly, ListQuery query, CancellationToken ct = default);
     Task<RecurringMaintenanceTaskListResponse> ListPageAsync(int portfolioId, int? propertyId, bool? activeOnly, ListQuery query, CancellationToken ct = default);
     Task<RecurringMaintenanceTaskResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);

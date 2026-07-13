@@ -427,9 +427,13 @@ internal static class LeaseAgreementDraftCommandSupport
                                 scope.PropertyId == relationship.PropertyId
                                 && scope.PortfolioId == command.PortfolioId)))
                     && (assignment.RoleProfile!.Capabilities.Any(capability =>
-                            capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage)
+                            capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage
+                            && capability.CapabilityDefinition.AuthorizationTargetKind
+                                == CapabilityAuthorizationTargetKind.Property)
                         || assignment.RoleProfile.Capabilities.Any(capability =>
-                            capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingAgreementsPrepare)))));
+                            capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingAgreementsPrepare
+                            && capability.CapabilityDefinition.AuthorizationTargetKind
+                                == CapabilityAuthorizationTargetKind.Property)))));
     }
 
     internal static async Task AuthorizeReplayAsync<TCommand>(

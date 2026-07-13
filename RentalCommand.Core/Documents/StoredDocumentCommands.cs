@@ -31,6 +31,12 @@ public enum StoredDocumentMutationOutcome
     NotFound,
 }
 
+public sealed record StoredDocumentManagementAccess(
+    Guid SessionId,
+    int UserId,
+    int AccessContextId,
+    long AccessRevision);
+
 /// <summary>
 /// Persists one already-uploaded blob as a general document. Blob I/O is deliberately excluded from
 /// this command. A durable pending-upload admission owns the deterministic blob key until this command
@@ -51,7 +57,8 @@ public sealed record CreateStoredDocumentCommand(
     string StoragePath,
     string ContentType,
     long SizeBytes,
-    DateTime UploadedAtUtc) : IAtomicCommandData;
+    DateTime UploadedAtUtc,
+    StoredDocumentManagementAccess? ManagementAccess = null) : IAtomicCommandData;
 
 public sealed record CreateStoredDocumentResult(
     StoredDocumentMutationOutcome Outcome,
@@ -75,7 +82,8 @@ public sealed record DeleteStoredDocumentCommand(
     int? TenantId,
     bool IsStaff,
     string ClientOperationId,
-    DateTime DeletedAtUtc) : IAtomicCommandData;
+    DateTime DeletedAtUtc,
+    StoredDocumentManagementAccess? ManagementAccess = null) : IAtomicCommandData;
 
 public sealed record DeleteStoredDocumentResult(
     StoredDocumentMutationOutcome Outcome,
