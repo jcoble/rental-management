@@ -522,7 +522,6 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
             Property = property,
             UnitNumber = "1",
             MarketRent = 1275m,
-            Status = UnitStatus.Vacant,
             CreatedAt = now,
             UpdatedAt = now,
         };

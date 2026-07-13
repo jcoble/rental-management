@@ -56,7 +56,7 @@ public class DashboardOccupancyDefinitionTests : IDisposable
     }
 
     [Fact]
-    public async Task Occupancy_CountsUnitStatusOccupied_NotActiveLeasePresence()
+    public async Task Occupancy_CountsCanonicalPossession_NotLegacyLeasePresence()
     {
         var now = DateTime.UtcNow;
         var property = new Property
@@ -75,13 +75,13 @@ public class DashboardOccupancyDefinitionTests : IDisposable
 
         // Occupied-status unit WITHOUT any active lease — the exact case that diverged. Under the unified
         // definition this still counts as occupied.
-        AddUnit(property.Id, UnitStatus.Occupied);
+        AddUnit(property.Id);
         // Occupied-status unit WITH an active lease — counts as occupied either way.
-        var leasedUnit = AddUnit(property.Id, UnitStatus.Occupied);
+        var leasedUnit = AddUnit(property.Id);
         AddActiveLease(property.Id, leasedUnit.Id);
         // Reserved and Vacant units — neither is occupied.
-        AddUnit(property.Id, UnitStatus.Reserved);
-        AddUnit(property.Id, UnitStatus.Vacant);
+        AddUnit(property.Id);
+        AddUnit(property.Id);
 
         var dashboard = await _sut.GetDashboardAsync(PortfolioId);
 
@@ -94,7 +94,7 @@ public class DashboardOccupancyDefinitionTests : IDisposable
         occ.OccupancyRate.Should().Be(50.0);
     }
 
-    private Unit AddUnit(int propertyId, UnitStatus status)
+    private Unit AddUnit(int propertyId)
     {
         var now = DateTime.UtcNow;
         var unit = new Unit
@@ -102,7 +102,6 @@ public class DashboardOccupancyDefinitionTests : IDisposable
             PropertyId = propertyId,
             UnitNumber = Guid.NewGuid().ToString("N")[..6],
             MarketRent = 1000m,
-            Status = status,
             CreatedAt = now,
             UpdatedAt = now,
         };

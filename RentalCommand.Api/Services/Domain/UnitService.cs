@@ -93,12 +93,12 @@ public class UnitService : IUnitService
             SquareFeet = unit.SquareFeet,
             MarketRent = unit.MarketRent,
             Status = occupancy.IsInTurnover || occupancy.IsOutOfService || occupancy.IsOnManagementHold
-                ? UnitStatus.Offline
+                ? DerivedUnitStatus.Offline
                 : occupancy.IsOccupied
-                    ? UnitStatus.Occupied
+                    ? DerivedUnitStatus.Occupied
                     : occupancy.HasScheduledMoveIn
-                        ? UnitStatus.Reserved
-                        : UnitStatus.Vacant,
+                        ? DerivedUnitStatus.Reserved
+                        : DerivedUnitStatus.Vacant,
             Notes = unit.Notes,
             CreatedAt = unit.CreatedAt,
             UpdatedAt = unit.UpdatedAt,
@@ -130,20 +130,20 @@ public class UnitService : IUnitService
         }
 
         if (!string.IsNullOrWhiteSpace(query.Status) &&
-            Enum.TryParse<UnitStatus>(query.Status, ignoreCase: true, out var status))
+            Enum.TryParse<DerivedUnitStatus>(query.Status, ignoreCase: true, out var status))
         {
             q = status switch
             {
-                UnitStatus.Occupied => q.Where(row => row.IsOccupied
+                DerivedUnitStatus.Occupied => q.Where(row => row.IsOccupied
                     && !row.IsInTurnover
                     && !row.IsOutOfService
                     && !row.IsOnManagementHold),
-                UnitStatus.Reserved => q.Where(row => !row.IsOccupied
+                DerivedUnitStatus.Reserved => q.Where(row => !row.IsOccupied
                     && row.HasScheduledMoveIn
                     && !row.IsInTurnover
                     && !row.IsOutOfService
                     && !row.IsOnManagementHold),
-                UnitStatus.Offline => q.Where(row => row.IsInTurnover || row.IsOutOfService || row.IsOnManagementHold),
+                DerivedUnitStatus.Offline => q.Where(row => row.IsInTurnover || row.IsOutOfService || row.IsOnManagementHold),
                 _ => q.Where(row => !row.IsOccupied
                     && !row.HasScheduledMoveIn
                     && !row.IsInTurnover
@@ -364,14 +364,14 @@ public class UnitService : IUnitService
             : "Vacant";
     }
 
-    private static UnitStatus ResolveUnitStatus(UnitHealthReadRow row) =>
+    private static DerivedUnitStatus ResolveUnitStatus(UnitHealthReadRow row) =>
         row.IsInTurnover || row.IsOutOfService || row.IsOnManagementHold
-            ? UnitStatus.Offline
+            ? DerivedUnitStatus.Offline
             : row.IsOccupied
-                ? UnitStatus.Occupied
+                ? DerivedUnitStatus.Occupied
                 : row.HasScheduledMoveIn
-                    ? UnitStatus.Reserved
-                    : UnitStatus.Vacant;
+                    ? DerivedUnitStatus.Reserved
+                    : DerivedUnitStatus.Vacant;
 
     internal sealed class UnitHealthReadRow
     {

@@ -340,7 +340,6 @@ class _UnitOverviewTab extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final header = dashboard.header;
     final unit = dashboard.unit;
-    final statusLocked = _hasCurrentOccupyingLease(dashboard.currentLease);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
@@ -380,7 +379,7 @@ class _UnitOverviewTab extends ConsumerWidget {
           child: FilledButton.icon(
             icon: const Icon(Icons.edit_outlined),
             label: const Text('Edit unit'),
-            onPressed: () => _showEditUnitSheet(context, ref, statusLocked),
+            onPressed: () => _showEditUnitSheet(context, ref),
           ),
         ),
         const SizedBox(height: 14),
@@ -434,23 +433,14 @@ class _UnitOverviewTab extends ConsumerWidget {
     );
   }
 
-  bool _hasCurrentOccupyingLease(UnitLeaseSummary? lease) {
-    final status = lease?.status.toLowerCase();
-    return status == 'active' || status == 'noticegiven';
-  }
-
   void _showEditUnitSheet(
     BuildContext context,
     WidgetRef ref,
-    bool statusLocked,
   ) {
     showUnitFormSheet(
       context,
       propertyId: dashboard.unit.propertyId,
       unit: dashboard.unit,
-      statusLocked: statusLocked,
-      statusLockMessage:
-          'End, move out, or cancel notice on the current lease before changing unit status.',
       onSaved: (_) {
         ref.invalidate(unitDashboardProvider(dashboard.unit.id));
         ref.invalidate(unitsProvider(dashboard.unit.propertyId));

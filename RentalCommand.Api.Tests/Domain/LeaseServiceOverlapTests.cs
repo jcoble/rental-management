@@ -118,7 +118,6 @@ public sealed class LeaseServiceOverlapTests : IDisposable
     public async Task CreateAsync_ActiveLeaseForNonVacantUnit_ThrowsConflict()
     {
         var (property, unit, tenant) = SeedPropertyUnitTenant();
-        unit.Status = UnitStatus.Occupied;
         _ctx.Db.SaveChanges();
 
         var act = async () => await _sut.CreateAsync(PortfolioId, new CreateLeaseRequest
@@ -152,7 +151,6 @@ public sealed class LeaseServiceOverlapTests : IDisposable
             Property = property,
             UnitNumber = "2",
             MarketRent = 1275m,
-            Status = UnitStatus.Vacant,
             CreatedAt = Date(2026, 1, 1),
             UpdatedAt = Date(2026, 1, 1),
         };
@@ -253,7 +251,6 @@ public sealed class LeaseServiceOverlapTests : IDisposable
             Property = property,
             UnitNumber = "1",
             MarketRent = 1275m,
-            Status = UnitStatus.Vacant,
             CreatedAt = now,
             UpdatedAt = now,
         };

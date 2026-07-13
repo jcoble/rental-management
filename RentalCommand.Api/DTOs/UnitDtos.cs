@@ -1,8 +1,16 @@
 using System.ComponentModel.DataAnnotations;
 using RentalCommand.Core.Entities;
-using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.DTOs;
+
+/// <summary>Presentation-only availability derived from possession and operational periods.</summary>
+public enum DerivedUnitStatus
+{
+    Vacant,
+    Reserved,
+    Occupied,
+    Offline,
+}
 
 /// <summary>Wire shape returned for a <see cref="Unit"/>.</summary>
 public class UnitResponse
@@ -15,7 +23,7 @@ public class UnitResponse
     public decimal Bathrooms { get; set; }
     public int? SquareFeet { get; set; }
     public decimal MarketRent { get; set; }
-    public UnitStatus Status { get; set; }
+    public DerivedUnitStatus Status { get; set; }
     public string? Notes { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
@@ -23,21 +31,6 @@ public class UnitResponse
     /// <summary>Stable selector for frontend tests, e.g. <c>unit-1</c>.</summary>
     public string TestId => $"unit-{Id}";
 
-    public static UnitResponse FromEntity(Unit e) => new()
-    {
-        Id = e.Id,
-        PropertyId = e.PropertyId,
-        UnitNumber = e.UnitNumber,
-        FloorPlan = e.FloorPlan,
-        Bedrooms = e.Bedrooms,
-        Bathrooms = e.Bathrooms,
-        SquareFeet = e.SquareFeet,
-        MarketRent = e.MarketRent,
-        Status = e.Status,
-        Notes = e.Notes,
-        CreatedAt = e.CreatedAt,
-        UpdatedAt = e.UpdatedAt,
-    };
 }
 
 /// <summary>

@@ -1,6 +1,5 @@
 using System.ComponentModel.DataAnnotations;
 using RentalCommand.Core.Entities;
-using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.DTOs;
 
@@ -35,7 +34,7 @@ public class PublicUnitOption
 {
     public int Id { get; set; }
     public string UnitNumber { get; set; } = string.Empty;
-    public UnitStatus Status { get; set; }
+    public DerivedUnitStatus Status { get; set; }
 }
 
 /// <summary>

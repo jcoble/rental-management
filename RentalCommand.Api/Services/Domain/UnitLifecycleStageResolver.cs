@@ -27,16 +27,14 @@ public enum UnitLifecycleStage
 /// related rows (lease, applications, appointments, work orders, rent balance) — never inside the resolver,
 /// which performs no I/O so it stays a pure, testable O(1) function.
 /// </summary>
-/// <param name="UnitStatus">The unit's occupancy status (Vacant/Occupied/Reserved/Offline).</param>
 /// <param name="CurrentLease">In-force Active/NoticeGiven lease or pending signature lease; null when only historical leases remain.</param>
 /// <param name="HasDraftOrPendingLease">True when a lease in {Draft, PendingSignature} exists for the unit (and no Active lease).</param>
 /// <param name="HasOpenApplication">True when an open application {Submitted, UnderReview, Approved} exists that has not yet converted to a lease.</param>
 /// <param name="HasUpcomingShowing">True when a Showing appointment is scheduled in the future.</param>
 /// <param name="HasUpcomingMoveInAppt">True when a MoveIn appointment is scheduled in the future.</param>
-/// <param name="RecentMoveOutSignal">True when there is a make-ready signal: last lease Expired/Terminated recently, a MoveOut inspection done, UnitStatus==Offline, or open work orders on the unit.</param>
+/// <param name="RecentMoveOutSignal">True when there is a make-ready signal from canonical operational periods or related work.</param>
 /// <param name="OutstandingRentBalance">Outstanding (still-owed) rent balance for the unit's current lease, used only to shape the Active next-best-action.</param>
 public sealed record UnitStageInputs(
-    UnitStatus UnitStatus,
     LeaseSnapshot? CurrentLease,
     bool HasDraftOrPendingLease,
     bool HasOpenApplication,

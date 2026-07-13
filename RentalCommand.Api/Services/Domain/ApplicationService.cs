@@ -49,8 +49,8 @@ public sealed class ApplicationService : IApplicationService
         if (portfolio is null)
             return null;
 
-        // Offer active properties (and their non-offline units) so the applicant can pick what they're
-        // applying for. Soft-deleted rows are excluded by the entities' global query filters.
+        // Availability and operational eligibility are derived by PostgreSQL from the canonical
+        // occupancy view. Unit has no mutable availability field.
         var properties = await _db.Properties
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolio.Id && p.Status != PropertyStatus.Inactive)
@@ -62,16 +62,25 @@ public sealed class ApplicationService : IApplicationService
                 AddressLine1 = p.AddressLine1,
                 City = p.City,
                 State = p.State,
-                Units = p.Units
-                    .Where(u => u.Status != UnitStatus.Offline)
-                    .OrderBy(u => u.UnitNumber)
-                    .Select(u => new PublicUnitOption
-                    {
-                        Id = u.Id,
-                        UnitNumber = u.UnitNumber,
-                        Status = u.Status,
-                    })
-                    .ToList(),
+                Units = (from unit in _db.Units
+                         where unit.PortfolioId == portfolio.Id && unit.PropertyId == p.Id
+                         join occupancy in _db.UnitOccupancyProjections
+                             on new { unit.PortfolioId, UnitId = unit.Id }
+                             equals new { occupancy.PortfolioId, occupancy.UnitId }
+                         where !occupancy.IsInTurnover
+                               && !occupancy.IsOutOfService
+                               && !occupancy.IsOnManagementHold
+                         orderby unit.UnitNumber
+                         select new PublicUnitOption
+                         {
+                             Id = unit.Id,
+                             UnitNumber = unit.UnitNumber,
+                             Status = occupancy.IsOccupied
+                                 ? DerivedUnitStatus.Occupied
+                                 : occupancy.HasScheduledMoveIn
+                                     ? DerivedUnitStatus.Reserved
+                                     : DerivedUnitStatus.Vacant,
+                         }).ToList(),
             })
             .ToListAsync(ct);
 

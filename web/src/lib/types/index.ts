@@ -1,7 +1,7 @@
 export type PortfolioStatus = 'Onboarding' | 'Active' | 'Archived';
 export type PropertyType = 'SingleFamily' | 'MultiFamily' | 'Condo' | 'Townhome' | 'Commercial' | 'MixedUse';
 export type PropertyStatus = 'Active' | 'UnderMaintenance' | 'Inactive';
-export type UnitStatus = 'Vacant' | 'Occupied' | 'Reserved' | 'Offline';
+export type DerivedUnitStatus = 'Vacant' | 'Occupied' | 'Reserved' | 'Offline';
 export type LeaseStatus = 'Draft' | 'PendingSignature' | 'Active' | 'NoticeGiven' | 'Expired' | 'Terminated';
 export type EsignStatus = 'None' | 'Sent' | 'Signed' | 'Declined';
 export type PaymentType = 'Rent' | 'SecurityDeposit' | 'LateFee' | 'Utility' | 'Other';
@@ -142,7 +142,7 @@ export interface Unit {
 	bathrooms: number;
 	squareFeet?: number;
 	marketRent: number;
-	status: UnitStatus;
+	status: DerivedUnitStatus;
 	notes?: string;
 	createdAt: string;
 	updatedAt: string;
@@ -260,7 +260,7 @@ export interface UnitHealth {
 	propertyId: number;
 	propertyName: string;
 	unitNumber: string;
-	status: UnitStatus;
+	status: DerivedUnitStatus;
 	marketRent: number;
 	openWorkOrderCount: number;
 	leaseEndsInDays?: number;

@@ -1160,7 +1160,6 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             PortfolioId = workspace.Id,
             Property = leasingProperty,
             UnitNumber = "Lease-1",
-            Status = UnitStatus.Vacant,
             CreatedAt = _now,
             UpdatedAt = _now,
         };
@@ -1169,7 +1168,6 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             PortfolioId = workspace.Id,
             Property = managerProperty,
             UnitNumber = "Manage-1",
-            Status = UnitStatus.Vacant,
             CreatedAt = _now,
             UpdatedAt = _now,
         };

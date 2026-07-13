@@ -1444,10 +1444,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Bathrooms).HasPrecision(4, 1);
             entity.Property(e => e.MarketRent).HasPrecision(18, 2);
             entity.Property(e => e.Notes).HasMaxLength(2000);
-            entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => new { e.PropertyId, e.PortfolioId });
-            entity.HasIndex(e => e.Status);
             // Unique unit number within a property — filtered to live rows so a soft-deleted unit
             // (DeletedAt set) frees its number for reuse instead of permanently occupying the slot.
             entity.HasIndex(e => new { e.PropertyId, e.UnitNumber }).IsUnique().HasFilter("\"DeletedAt\" IS NULL");

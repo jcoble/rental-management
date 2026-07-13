@@ -1,4 +1,3 @@
-using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Core.Entities;
@@ -14,7 +13,6 @@ public class Unit : IPortfolioScoped
     public decimal Bathrooms { get; set; }
     public int? SquareFeet { get; set; }
     public decimal MarketRent { get; set; }
-    public UnitStatus Status { get; set; } = UnitStatus.Vacant;
     public string? Notes { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }

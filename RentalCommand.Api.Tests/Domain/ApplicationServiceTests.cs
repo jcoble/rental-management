@@ -132,7 +132,6 @@ public class ApplicationServiceTests : IDisposable
         {
             PropertyId = property.Id,
             UnitNumber = "A",
-            Status = UnitStatus.Vacant,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         };
@@ -140,7 +139,6 @@ public class ApplicationServiceTests : IDisposable
         {
             PropertyId = property.Id,
             UnitNumber = "B",
-            Status = UnitStatus.Vacant,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         };
@@ -246,7 +244,7 @@ public class ApplicationServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task GetPublicFormInfoAsync_ReturnsUnitStatusesAndFiltersOfflineUnitsDbSide()
+    public async Task GetPublicFormInfoAsync_ReturnsDerivedAvailabilityAndFiltersOfflineUnitsDbSide()
     {
         var property = new Property
         {
@@ -268,7 +266,6 @@ public class ApplicationServiceTests : IDisposable
             {
                 PropertyId = property.Id,
                 UnitNumber = "1A",
-                Status = UnitStatus.Vacant,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,
             },
@@ -276,7 +273,6 @@ public class ApplicationServiceTests : IDisposable
             {
                 PropertyId = property.Id,
                 UnitNumber = "2B",
-                Status = UnitStatus.Occupied,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,
             },
@@ -284,7 +280,6 @@ public class ApplicationServiceTests : IDisposable
             {
                 PropertyId = property.Id,
                 UnitNumber = "3C",
-                Status = UnitStatus.Offline,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,
             });
@@ -296,8 +291,8 @@ public class ApplicationServiceTests : IDisposable
         info.Should().NotBeNull();
         var units = info!.Properties.Should().ContainSingle().Subject.Units;
         units.Select(u => u.UnitNumber).Should().Equal("1A", "2B");
-        units.Single(u => u.UnitNumber == "1A").Status.Should().Be(UnitStatus.Vacant);
-        units.Single(u => u.UnitNumber == "2B").Status.Should().Be(UnitStatus.Occupied);
+        units.Single(u => u.UnitNumber == "1A").Status.Should().Be(DerivedUnitStatus.Vacant);
+        units.Single(u => u.UnitNumber == "2B").Status.Should().Be(DerivedUnitStatus.Occupied);
 
         _commands.Should().HaveCountLessThanOrEqualTo(3);
         _commands.Should().Contain(sql =>
@@ -438,7 +433,6 @@ public class ApplicationServiceTests : IDisposable
             Bedrooms = 2,
             Bathrooms = 1,
             MarketRent = 1450m,
-            Status = UnitStatus.Vacant,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         };

@@ -62,15 +62,12 @@ public class PropertyServiceTests : IDisposable
     {
         var available = SeedPropertyWithUnit(out var availableUnit);
         available.Name = "Available Property";
-        availableUnit.Status = UnitStatus.Vacant;
 
         var occupied = SeedPropertyWithUnit(out var occupiedUnit);
         occupied.Name = "Occupied Property";
-        occupiedUnit.Status = UnitStatus.Occupied;
 
         var activeLease = SeedPropertyWithUnit(out var activeLeaseUnit);
         activeLease.Name = "Active Lease Property";
-        activeLeaseUnit.Status = UnitStatus.Vacant;
         SeedOccupyingLease(activeLease, activeLeaseUnit, LeaseStatus.Active);
         _ctx.Db.SaveChanges();
 
@@ -104,7 +101,6 @@ public class PropertyServiceTests : IDisposable
 
         var unit = _ctx.Db.Units.Single(u => u.PropertyId == created.Id);
         unit.UnitNumber.Should().Be("293 Mallard Point Dr");
-        unit.Status.Should().Be(UnitStatus.Vacant);
         unit.MarketRent.Should().Be(0m);
     }
 
