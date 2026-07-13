@@ -33,7 +33,7 @@ export interface LeaseAgreementHistoryPage {
 	take: number;
 }
 
-function queryString(params: Record<string, unknown>): string {
+function queryString<T extends object>(params: T): string {
 	const query = new URLSearchParams();
 	for (const [key, value] of Object.entries(params)) {
 		if (value !== undefined && value !== null && value !== '') query.set(key, String(value));
@@ -53,7 +53,15 @@ export const leaseManagements = {
 		),
 	ask: (leaseManagementId: number, question: string) =>
 		api.post<LeaseQuestionResponse>(`/lease-managements/${leaseManagementId}/ask`, { question }),
-	agreements: (leaseManagementId: number, params: { skip?: number; take?: number; status?: string } = {}) =>
+	agreements: (
+		leaseManagementId: number,
+		params: {
+			skip?: number;
+			take?: number;
+			status?: string;
+			sort?: string;
+		} = {}
+	) =>
 		api.get<LeaseAgreementHistoryPage>(
 			`/lease-managements/${leaseManagementId}/agreements/page${queryString(params)}`
 		),
