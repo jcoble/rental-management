@@ -90,7 +90,7 @@ public class PortfolioService : IPortfolioService
                 PropertyCount = _db.Properties.Count(property => property.PortfolioId == p.Id),
                 UnitCount = _db.Units.Count(unit => unit.Property != null && unit.Property.PortfolioId == p.Id),
                 TenantCount = _db.Tenants.Count(tenant => tenant.PortfolioId == p.Id),
-                LeaseCount = _db.Leases.Count(lease => lease.PortfolioId == p.Id),
+                LeaseCount = _db.LeaseManagements.Count(management => management.PortfolioId == p.Id),
             })
             .FirstOrDefaultAsync(ct);
 
