@@ -17,6 +17,12 @@ namespace RentalCommand.Api.Controllers;
 [Authorize]
 public abstract class AuthenticatedPortfolioControllerBase : ControllerBase
 {
+    protected static bool TryValidateIdempotencyKey(string? raw, out string key)
+    {
+        key = raw?.Trim() ?? string.Empty;
+        return key.Length is > 0 and <= 128;
+    }
+
     /// <summary>
     /// Portfolio id from the validated active access context. Throws when the context is missing so
     /// a request with no workspace scope can never run a tenant-scoped query with

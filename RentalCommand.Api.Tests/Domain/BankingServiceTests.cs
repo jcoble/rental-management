@@ -350,6 +350,40 @@ public class BankingServiceTests : IAsyncLifetime
             receipt.IdempotencyKey.EndsWith(":property-manager-cross-scope-route")))
             .Should().Be(0);
 
+        var routedOutsideManagerScope = await _sut.RouteTransactionAsync(
+            _scope,
+            transactionId,
+            new RouteBankTransactionRequest
+            {
+                OperationKey = "administrator-route-outside-manager-scope",
+                PropertyId = deniedPropertyId,
+                ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
+            });
+        routedOutsideManagerScope.Should().NotBeNull();
+        routedOutsideManagerScope!.PropertyId.Should().Be(deniedPropertyId);
+
+        var sourceScopeEscape = async () => await _sut.RouteTransactionAsync(
+            propertyManager,
+            transactionId,
+            new RouteBankTransactionRequest
+            {
+                OperationKey = "property-manager-source-scope-escape",
+                PropertyId = allowedPropertyId,
+                ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
+            });
+        await sourceScopeEscape.Should().ThrowAsync<UnauthorizedAccessException>(
+            "a manager cannot pull a bank line out of another manager's property by routing it into their own scope");
+
+        _ctx.Db.ChangeTracker.Clear();
+        (await _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(transaction => transaction.Id == transactionId)
+            .Select(transaction => transaction.PropertyId)
+            .SingleAsync()).Should().Be(deniedPropertyId);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.transaction.route" &&
+            receipt.IdempotencyKey.EndsWith(":property-manager-source-scope-escape")))
+            .Should().Be(0);
+
         var cleared = await _sut.RouteTransactionAsync(
             _scope,
             transactionId,

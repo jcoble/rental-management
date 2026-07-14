@@ -35,6 +35,16 @@ public sealed class ManagementControllerAuthorizationTests
     }
 
     [Fact]
+    public void AssignedWorkUpdate_IsNotBlockedByTheManagementShellPolicy()
+    {
+        typeof(AssignedWorkOrderUpdateController).Should()
+            .BeDerivedFrom<AuthenticatedPortfolioControllerBase>();
+        typeof(AssignedWorkOrderUpdateController).Should()
+            .NotBeDerivedFrom<ManagementControllerBase>(
+                "assigned-work-only technicians are intentionally denied the general Management shell");
+    }
+
+    [Fact]
     public void ThereIsAtLeastOneManagementController() =>
         ManagementControllers().Should().NotBeEmpty();
 
@@ -50,6 +60,35 @@ public sealed class ManagementControllerAuthorizationTests
             attribute.Policy == CanonicalManagementPolicy.Name);
         attributes.Should().OnlyContain(attribute => string.IsNullOrWhiteSpace(attribute.Roles),
             "canonical tokens deliberately contain no Identity role claims");
+    }
+
+    [Fact]
+    public void HttpCapabilityPolicies_AreOnlyUsedForWorkspaceTargetCapabilities()
+    {
+        var capabilityKinds = AccessCatalog.Capabilities.ToDictionary(
+            capability => capability.Key,
+            capability => capability.AuthorizationTargetKind);
+        var controllerTypes = typeof(ManagementControllerBase).Assembly.GetTypes()
+            .Where(type => typeof(Microsoft.AspNetCore.Mvc.ControllerBase).IsAssignableFrom(type));
+
+        var declaredPolicies = controllerTypes.SelectMany(controller =>
+                controller.GetCustomAttributes<AuthorizeAttribute>(inherit: false)
+                    .Select(attribute => (Member: (MemberInfo)controller, attribute.Policy))
+                .Concat(controller.GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                    .SelectMany(method => method.GetCustomAttributes<AuthorizeAttribute>(inherit: false)
+                        .Select(attribute => (Member: (MemberInfo)method, attribute.Policy)))))
+            .Where(item => item.Policy?.StartsWith(CapabilityPolicy.Prefix, StringComparison.Ordinal) == true)
+            .ToList();
+
+        declaredPolicies.Should().NotBeEmpty();
+        foreach (var (member, policy) in declaredPolicies)
+        {
+            var capabilityKey = policy![CapabilityPolicy.Prefix.Length..];
+            capabilityKinds.Should().ContainKey(capabilityKey);
+            capabilityKinds[capabilityKey].Should().Be(
+                CapabilityAuthorizationTargetKind.Workspace,
+                $"{member.DeclaringType?.Name}.{member.Name} is authorized before a property or work-order target can be loaded");
+        }
     }
 
     [Theory]
@@ -69,14 +108,68 @@ public sealed class ManagementControllerAuthorizationTests
     {
         using var sqlite = new SqliteTestContext();
         var db = sqlite.Db;
+        var (active, user) = await SeedAccessAsync(
+            db,
+            "admin@example.test",
+            RoleProfileKeys.WorkspaceAdministrator,
+            WorkspaceExperience.Management,
+            MembershipRoleAssignmentScopeKind.AllProperties);
+        var http = new DefaultHttpContext();
+        http.Items[CanonicalAccessContextHttpItem.Key] = active;
+        var auth = new AuthorizationHandlerContext(
+            [new CanonicalManagementRequirement()],
+            new System.Security.Claims.ClaimsPrincipal(
+                new System.Security.Claims.ClaimsIdentity(
+                    [new System.Security.Claims.Claim("sub", user.Id.ToString())], "Bearer")),
+            http);
+
+        await new CanonicalManagementAuthorizationHandler(db, TimeProvider.System).HandleAsync(auth);
+
+        auth.HasSucceeded.Should().BeTrue();
+        auth.User.IsInRole("Admin").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task AssignedWorkOnlyTechnician_IsDeniedTheManagementShell()
+    {
+        using var sqlite = new SqliteTestContext();
+        var db = sqlite.Db;
+        var (active, user) = await SeedAccessAsync(
+            db,
+            "technician@example.test",
+            RoleProfileKeys.MaintenanceTechnician,
+            WorkspaceExperience.Maintenance,
+            MembershipRoleAssignmentScopeKind.AssignedWorkOrders);
+        var http = new DefaultHttpContext();
+        http.Items[CanonicalAccessContextHttpItem.Key] = active;
+        var auth = new AuthorizationHandlerContext(
+            [new CanonicalManagementRequirement()],
+            new System.Security.Claims.ClaimsPrincipal(
+                new System.Security.Claims.ClaimsIdentity(
+                    [new System.Security.Claims.Claim("sub", user.Id.ToString())], "Bearer")),
+            http);
+
+        await new CanonicalManagementAuthorizationHandler(db, TimeProvider.System).HandleAsync(auth);
+
+        auth.HasSucceeded.Should().BeFalse(
+            "a technician must use assignment-scoped endpoints and never retrieve Management Unit or money projections");
+    }
+
+    private static async Task<(ActiveAccessContext Active, ApplicationUser User)> SeedAccessAsync(
+        RentalCommandDbContext db,
+        string email,
+        string roleProfileKey,
+        WorkspaceExperience experience,
+        MembershipRoleAssignmentScopeKind scopeKind)
+    {
         var now = DateTime.UtcNow;
         var user = new ApplicationUser
         {
-            UserName = "admin@example.test",
-            NormalizedUserName = "ADMIN@EXAMPLE.TEST",
-            Email = "admin@example.test",
-            NormalizedEmail = "ADMIN@EXAMPLE.TEST",
-            DisplayName = "Administrator",
+            UserName = email,
+            NormalizedUserName = email.ToUpperInvariant(),
+            Email = email,
+            NormalizedEmail = email.ToUpperInvariant(),
+            DisplayName = roleProfileKey,
             SecurityStamp = Guid.NewGuid().ToString("N"),
             ConcurrencyStamp = Guid.NewGuid().ToString("N"),
             CreatedAt = now,
@@ -97,42 +190,27 @@ public sealed class ManagementControllerAuthorizationTests
             AccessContext = context,
             PortfolioId = portfolio.Id,
             Status = WorkspaceMembershipStatus.Active,
-            DefaultExperience = WorkspaceExperience.Management,
+            DefaultExperience = experience,
             EffectiveFromUtc = now.AddMinutes(-1),
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
         };
-        var assignment = new MembershipRoleAssignment
+        db.Add(new MembershipRoleAssignment
         {
             WorkspaceMembership = membership,
             PortfolioId = portfolio.Id,
-            RoleProfileId = AccessCatalog.Roles.Single(role =>
-                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            RoleProfileId = AccessCatalog.Roles.Single(role => role.Key == roleProfileKey).Id,
             Status = MembershipRoleAssignmentStatus.Active,
-            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            ScopeKind = scopeKind,
             EffectiveFromUtc = now.AddMinutes(-1),
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
-        };
-        db.Add(assignment);
+        });
         await db.SaveChangesAsync();
         db.ChangeTracker.Clear();
 
-        var active = new ActiveAccessContext(
+        return (new ActiveAccessContext(
             Guid.NewGuid(), user.Id, context.Id, portfolio.Id, 1,
-            WorkspaceExperience.Management, membership.Id, WorkspaceExperience.Management);
-        var http = new DefaultHttpContext();
-        http.Items[CanonicalAccessContextHttpItem.Key] = active;
-        var auth = new AuthorizationHandlerContext(
-            [new CanonicalManagementRequirement()],
-            new System.Security.Claims.ClaimsPrincipal(
-                new System.Security.Claims.ClaimsIdentity(
-                    [new System.Security.Claims.Claim("sub", user.Id.ToString())], "Bearer")),
-            http);
-
-        await new CanonicalManagementAuthorizationHandler(db, TimeProvider.System).HandleAsync(auth);
-
-        auth.HasSucceeded.Should().BeTrue();
-        auth.User.IsInRole("Admin").Should().BeFalse();
+            experience, membership.Id, experience), user);
     }
 }

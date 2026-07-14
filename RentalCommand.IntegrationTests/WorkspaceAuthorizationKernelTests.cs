@@ -209,22 +209,64 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         await using var db = NewContext();
         var active = await ResolveAsync(db, presentedRevision: 7);
         var evaluator = new WorkspaceAuthorizationEvaluator(db);
+        var propertyTarget = PropertyTarget(_managerPropertyId);
+        var workspaceTarget = new WorkspaceCapabilityAuthorizationTarget(_portfolioId);
 
-        (await evaluator.HasCapabilityAsync(
-            active, CapabilityKeys.MoneyPaymentsManage, PropertyTarget(_managerPropertyId), _now)).Should().BeTrue();
-        (await evaluator.HasCapabilityAsync(
-            active, CapabilityKeys.MoneyReconciliationOperate, PropertyTarget(_managerPropertyId), _now)).Should().BeTrue();
-        (await evaluator.HasCapabilityAsync(
-            active, CapabilityKeys.ResponsibilityAssignExistingMember, PropertyTarget(_managerPropertyId), _now)).Should().BeTrue();
+        var operationalCapabilities = new[]
+        {
+            CapabilityKeys.RentalsRead,
+            CapabilityKeys.RentalsManage,
+            CapabilityKeys.WorkRead,
+            CapabilityKeys.WorkManage,
+            CapabilityKeys.ReportsRead,
+            CapabilityKeys.MoneyBalancesRead,
+            CapabilityKeys.MoneyChargesManage,
+            CapabilityKeys.MoneyPaymentsManage,
+            CapabilityKeys.MoneyExpensesManage,
+            CapabilityKeys.MoneyDepositsManage,
+            CapabilityKeys.MoneyOwnerReportsRead,
+            CapabilityKeys.MoneyReconciliationOperate,
+            CapabilityKeys.ResponsibilityAssignExistingMember,
+        };
+        foreach (var capability in operationalCapabilities)
+        {
+            (await evaluator.HasCapabilityAsync(active, capability, propertyTarget, _now))
+                .Should().BeTrue($"Property Managers need {capability} for assigned-property operations");
+        }
 
-        (await evaluator.HasCapabilityAsync(
-            active, CapabilityKeys.BankConnectionsManage, PropertyTarget(_managerPropertyId), _now)).Should().BeFalse();
-        (await evaluator.HasCapabilityAsync(
-            active, CapabilityKeys.PayoutsManage, PropertyTarget(_managerPropertyId), _now)).Should().BeFalse();
-        (await evaluator.HasCapabilityAsync(
-            active, CapabilityKeys.IntegrationsManage, PropertyTarget(_managerPropertyId), _now)).Should().BeFalse();
-        (await evaluator.HasCapabilityAsync(
-            active, CapabilityKeys.TeamManage, PropertyTarget(_managerPropertyId), _now)).Should().BeFalse();
+        var administratorCapabilities = new[]
+        {
+            CapabilityKeys.TeamRead,
+            CapabilityKeys.TeamManage,
+            CapabilityKeys.SecurityManage,
+            CapabilityKeys.BillingManage,
+            CapabilityKeys.IntegrationsManage,
+            CapabilityKeys.DataExport,
+            CapabilityKeys.BankConnectionsManage,
+            CapabilityKeys.PayoutsManage,
+            CapabilityKeys.MoneyDisbursementsManage,
+            CapabilityKeys.MoneyReconciliationDestructive,
+            CapabilityKeys.AccountDestructiveActions,
+            CapabilityKeys.NotificationsManage,
+        };
+        foreach (var capability in administratorCapabilities)
+        {
+            (await evaluator.HasCapabilityAsync(active, capability, workspaceTarget, _now))
+                .Should().BeFalse($"Property Managers must not receive workspace authority through {capability}");
+        }
+
+        foreach (var capability in new[]
+                 {
+                     CapabilityKeys.ReportsRead,
+                     CapabilityKeys.MoneyBalancesRead,
+                     CapabilityKeys.MoneyPaymentsManage,
+                     CapabilityKeys.MoneyOwnerReportsRead,
+                 })
+        {
+            (await evaluator.HasCapabilityAsync(active, capability, PropertyTarget(_leasingPropertyId), _now))
+                .Should().BeFalse(
+                    $"the independently scoped Leasing Agent assignment must not leak {capability}");
+        }
     }
 
     [SkippableFact]
@@ -365,15 +407,30 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             CapabilityKeys.RentalsRead,
             PropertyTarget(_unscopedPropertyId),
             _now)).Should().BeTrue();
-        (await evaluator.HasCapabilityAsync(
-            active,
-            CapabilityKeys.TeamManage,
-            new WorkspaceCapabilityAuthorizationTarget(_portfolioId),
-            _now)).Should().BeTrue();
+        var workspaceTarget = new WorkspaceCapabilityAuthorizationTarget(_portfolioId);
+        foreach (var capability in new[]
+                 {
+                     CapabilityKeys.TeamRead,
+                     CapabilityKeys.TeamManage,
+                     CapabilityKeys.SecurityManage,
+                     CapabilityKeys.BillingManage,
+                     CapabilityKeys.IntegrationsManage,
+                     CapabilityKeys.DataExport,
+                     CapabilityKeys.BankConnectionsManage,
+                     CapabilityKeys.PayoutsManage,
+                     CapabilityKeys.MoneyDisbursementsManage,
+                     CapabilityKeys.MoneyReconciliationDestructive,
+                     CapabilityKeys.AccountDestructiveActions,
+                     CapabilityKeys.NotificationsManage,
+                 })
+        {
+            (await evaluator.HasCapabilityAsync(active, capability, workspaceTarget, _now))
+                .Should().BeTrue($"Workspace Administrators retain {capability}");
+        }
         (await evaluator.HasCapabilityAsync(
             active,
             CapabilityKeys.RentalsRead,
-            new WorkspaceCapabilityAuthorizationTarget(_portfolioId),
+            workspaceTarget,
             _now)).Should().BeFalse(
             "property-scoped capabilities cannot be widened by supplying a workspace target");
 

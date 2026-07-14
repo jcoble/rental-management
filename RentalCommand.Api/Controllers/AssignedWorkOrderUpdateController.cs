@@ -9,7 +9,7 @@ namespace RentalCommand.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/work-orders/{workOrderId:int}/assigned-update")]
-public sealed class AssignedWorkOrderUpdateController : ManagementControllerBase
+public sealed class AssignedWorkOrderUpdateController : AuthenticatedPortfolioControllerBase
 {
     private static readonly AtomicJsonResultCodec<UpdateAssignedWorkOrderResult> Codec =
         new("assigned-work-order.update.v1");
