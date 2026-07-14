@@ -1,4 +1,5 @@
 import { api, fetchApi } from '../client';
+import { idempotentMutation } from '../idempotency';
 import type { DocCitation } from './docs';
 
 export type { DocCitation } from './docs';
@@ -136,11 +137,17 @@ export const ai = {
 			writeModeEnabled
 		}),
 	executeAction: (draft: AssistantActionDraft, writeModeEnabled: boolean) =>
-		api.post<AssistantActionExecuteResponse>('/ai/actions/execute', {
-			draft,
-			writeModeEnabled,
-			confirmed: true
-		}),
+		idempotentMutation(`assistant:expense:${JSON.stringify(draft)}`, (key) =>
+			api.post<AssistantActionExecuteResponse>(
+				'/ai/actions/execute',
+				{
+					draft,
+					writeModeEnabled,
+					confirmed: true
+				},
+				{ headers: { 'Idempotency-Key': key } }
+			)
+		),
 	chat: (message: string) => api.post<AiChatResponse>('/ai/chat', { message }),
 	fairHousingCheck: (text: string) =>
 		api.post<FairHousingReviewResult>('/ai/fair-housing-check', { text }),

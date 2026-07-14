@@ -14,19 +14,15 @@ namespace RentalCommand.Api.Services.Domain;
 /// <inheritdoc cref="IExpenseService"/>
 public class ExpenseService : IExpenseService
 {
-    private const string EntityType = "Expense";
-
     private readonly RentalCommandDbContext _db;
-    private readonly IDataUpdateService _dataUpdate;
     private readonly IFileStorage _files;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork? _atomic;
+    private readonly IAtomicUnitOfWork _atomic;
 
-    public ExpenseService(RentalCommandDbContext db, IDataUpdateService dataUpdate, IFileStorage files,
-        TimeProvider timeProvider, IAtomicUnitOfWork? atomic = null)
+    public ExpenseService(RentalCommandDbContext db, IFileStorage files,
+        TimeProvider timeProvider, IAtomicUnitOfWork atomic)
     {
         _db = db;
-        _dataUpdate = dataUpdate;
         _files = files;
         _timeProvider = timeProvider;
         _atomic = atomic;
@@ -57,7 +53,7 @@ public class ExpenseService : IExpenseService
         CancellationToken ct = default)
     {
         var filtered = BuildListQuery(portfolioId, propertyId, unitId, workOrderId, workOrderLinkedOnly, query);
-        return await BuildPageAsync(filtered, portfolioId, query, ct);
+        return await BuildPageAsync(filtered, query, ct);
     }
 
     public Task<ExpenseListResponse> ListPageAsync(
@@ -73,24 +69,24 @@ public class ExpenseService : IExpenseService
             _db.Expenses.AsNoTracking().WhereMoneyAuthorized(
                 _db, scope, CapabilityKeys.MoneyBalancesRead, _timeProvider.UtcNow()),
             scope.PortfolioId, propertyId, unitId, workOrderId, workOrderLinkedOnly, query);
-        return BuildPageAsync(filtered, scope.PortfolioId, query, ct);
+        return BuildPageAsync(filtered, query, ct);
     }
 
     private async Task<ExpenseListResponse> BuildPageAsync(
-        IQueryable<Expense> filtered, int portfolioId, ListQuery query, CancellationToken ct)
+        IQueryable<Expense> filtered, ListQuery query, CancellationToken ct)
     {
         var totalCount = await filtered.CountAsync(ct);
 
-        var items = await ApplySort(filtered, query)
+        var items = await MoneyResponseProjection.ExpenseList(
+                ApplySort(filtered, query),
+                _db.StoredFiles.AsNoTracking())
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
-        var results = await MapExpenseResponsesAsync(portfolioId, items, ct);
-
         return new ExpenseListResponse
         {
-            Items = results,
+            Items = items,
             TotalCount = totalCount,
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,
@@ -224,36 +220,6 @@ public class ExpenseService : IExpenseService
             _ => query.SortDescending ? q.OrderByDescending(e => e.CreatedAt) : q.OrderBy(e => e.CreatedAt),
         };
 
-    private async Task<List<ExpenseResponse>> MapExpenseResponsesAsync(int portfolioId, IReadOnlyCollection<Expense> items, CancellationToken ct)
-    {
-        // One batched query for all expense ids in this page — avoids N+1.
-        var expenseIds = items.Select(e => (long)e.Id).ToList();
-        var filesByExpenseId = await _db.StoredFiles
-            .AsNoTracking()
-            .Where(f =>
-                f.PortfolioId == portfolioId &&
-                f.EntityType == "Expense" &&
-                f.EntityId != null &&
-                expenseIds.Contains(f.EntityId.Value) &&
-                f.DeletedAt == null)
-            .GroupBy(f => f.EntityId!.Value)
-            .Select(g => new { EntityId = g.Key, ContentType = g.OrderByDescending(f => f.UploadedAt).First().ContentType })
-            .ToDictionaryAsync(x => x.EntityId, x => x.ContentType, ct);
-
-        var results = items.Select(e =>
-        {
-            var response = ExpenseResponse.FromEntity(e);
-            if (filesByExpenseId.TryGetValue(e.Id, out var ct2))
-            {
-                response.HasReceipt = true;
-                response.ReceiptIsImage = ct2.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
-            }
-            return response;
-        }).ToList();
-
-        return results;
-    }
-
     public Task<ExpenseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default) =>
         GetAsync(_db.Expenses.AsNoTracking(), portfolioId, id, ct);
 
@@ -266,56 +232,16 @@ public class ExpenseService : IExpenseService
     private async Task<ExpenseResponse?> GetAsync(
         IQueryable<Expense> expenses, int portfolioId, int id, CancellationToken ct)
     {
-        var response = await expenses
-            .Where(e => e.Id == id && e.PortfolioId == portfolioId)
-            .Select(e => new ExpenseResponse
-            {
-                Id = e.Id,
-                PortfolioId = e.PortfolioId,
-                PropertyId = e.PropertyId,
-                UnitId = e.UnitId,
-                VendorId = e.VendorId,
-                WorkOrderId = e.WorkOrderId,
-                CapitalizedAssetId = e.CapitalizedAssetId,
-                Category = e.Category,
-                Description = e.Description,
-                Status = e.Status,
-                Amount = e.Amount,
-                IncurredAt = e.IncurredAt,
-                DueDate = e.DueDate,
-                PaidAt = e.PaidAt,
-                BillableToOwner = e.BillableToOwner,
-                Notes = e.Notes,
-                CreatedAt = e.CreatedAt,
-                UpdatedAt = e.UpdatedAt,
-                Subtotal = e.Subtotal,
-                TaxAmount = e.TaxAmount,
-                ReceiptData = e.ReceiptData,
-                PaymentMethod = e.PaymentMethod,
-                CardLast4 = e.CardLast4,
-                DocumentKind = e.DocumentKind,
-                PropertyName = e.Property == null ? null : e.Property.Name,
-                UnitNumber = e.Unit == null ? null : e.Unit.UnitNumber,
-                VendorName = e.Vendor == null ? null : e.Vendor.Name,
-                LineItems = e.LineItems
-                    .OrderBy(li => li.LineNumber)
-                    .ThenBy(li => li.Id)
-                    .Select(li => new ExpenseLineItemResponse
-                    {
-                        Description = li.Description,
-                        Quantity = li.Quantity,
-                        UnitPrice = li.UnitPrice,
-                        Amount = li.Amount,
-                        LineNumber = li.LineNumber,
-                    })
-                    .ToList(),
-            })
+        var response = await MoneyResponseProjection.ExpenseDetails(
+                expenses.Where(expense => expense.Id == id && expense.PortfolioId == portfolioId),
+                _db.StoredFiles.AsNoTracking())
             .FirstOrDefaultAsync(ct);
 
         if (response == null)
             return null;
 
-        var storedFile = await _db.FindLatestAvailableEntityFileAsync(_files, portfolioId, EntityType, response.Id, ct);
+        var storedFile = await _db.FindLatestAvailableEntityFileAsync(
+            _files, portfolioId, nameof(Expense), response.Id, ct);
 
         if (storedFile != null)
         {
@@ -326,259 +252,41 @@ public class ExpenseService : IExpenseService
         return response;
     }
 
-    public async Task<ExpenseResponse?> CreateAsync(int portfolioId, CreateExpenseRequest request, CancellationToken ct = default)
-    {
-        // Verify any supplied property/unit/vendor/work-order references belong to the caller's portfolio (no cross-tenant linking).
-        if (request.PropertyId.HasValue &&
-            !await _db.EnsurePropertyInPortfolioAsync(portfolioId, request.PropertyId.Value, ct))
-        {
-            return null;
-        }
-
-        if (request.UnitId.HasValue &&
-            !await _db.EnsureUnitInPortfolioAsync(portfolioId, request.UnitId.Value, request.PropertyId, ct))
-        {
-            return null;
-        }
-
-        if (request.VendorId.HasValue &&
-            !await _db.EnsureVendorInPortfolioAsync(portfolioId, request.VendorId.Value, ct))
-        {
-            return null;
-        }
-
-        if (request.WorkOrderId.HasValue &&
-            !await _db.EnsureWorkOrderInPortfolioAsync(portfolioId, request.WorkOrderId.Value, ct))
-        {
-            return null;
-        }
-
-        var now = _timeProvider.UtcNow();
-        var entity = new Expense
-        {
-            PortfolioId = portfolioId,
-            PropertyId = request.PropertyId,
-            UnitId = request.UnitId,
-            VendorId = request.VendorId,
-            WorkOrderId = request.WorkOrderId,
-            Category = request.Category,
-            Description = request.Description,
-            Status = request.Status,
-            Amount = request.Amount,
-            IncurredAt = request.IncurredAt.ToUtc(),
-            DueDate = request.DueDate.ToUtc(),
-            PaidAt = request.PaidAt.ToUtc(),
-            BillableToOwner = request.BillableToOwner,
-            Notes = request.Notes,
-            Subtotal = request.Subtotal,
-            TaxAmount = request.TaxAmount,
-            ReceiptData = request.ReceiptData,
-            PaymentMethod = request.PaymentMethod,
-            CardLast4 = request.CardLast4,
-            DocumentKind = request.DocumentKind,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        // Promote scanned receipt line items to queryable child rows (cascade-deleted with the expense).
-        foreach (var li in request.LineItems)
-        {
-            entity.LineItems.Add(new ExpenseLineItem
-            {
-                Description = li.Description ?? string.Empty,
-                Quantity = li.Quantity,
-                UnitPrice = li.UnitPrice,
-                Amount = li.Amount,
-                LineNumber = li.LineNumber,
-            });
-        }
-
-        _db.Expenses.Add(entity);
-        await _db.SaveChangesAsync(ct);
-
-        var response = ExpenseResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
-    }
-
     public async Task<ExpenseResponse?> CreateAsync(
         WorkspaceReadScope scope, CreateExpenseRequest request, string idempotencyKey, CancellationToken ct = default)
     {
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
             AtomicMoneyDomain.Expense, AtomicMoneyOperation.Create, 0, idempotencyKey, request);
-        var outcome = await Atomic.ExecuteAsync(
+        var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         if (!outcome.Value.Found) return null;
-        var response = await GetAsync(scope.PortfolioId, outcome.Value.EntityId, ct);
-        if (response is not null)
-            await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, response.Id, response, ct);
-        return response;
-    }
-
-    public async Task<ExpenseResponse?> UpdateAsync(int portfolioId, int id, UpdateExpenseRequest request, CancellationToken ct = default)
-    {
-        IQueryable<Expense> expenseQuery = _db.Expenses;
-        if (request.LineItems is not null)
-        {
-            expenseQuery = expenseQuery.Include(e => e.LineItems);
-        }
-
-        var entity = await expenseQuery.FirstOrDefaultAsync(e => e.Id == id && e.PortfolioId == portfolioId, ct);
-        if (entity == null)
-        {
-            return null;
-        }
-
-        // Verify any supplied property/unit/vendor/work-order references belong to the caller's portfolio (no cross-tenant linking).
-        if (request.PropertyId.HasValue &&
-            !await _db.EnsurePropertyInPortfolioAsync(portfolioId, request.PropertyId.Value, ct))
-        {
-            return null;
-        }
-
-        if (request.UnitId.HasValue &&
-            !await _db.EnsureUnitInPortfolioAsync(portfolioId, request.UnitId.Value, request.PropertyId, ct))
-        {
-            return null;
-        }
-
-        if (request.VendorId.HasValue &&
-            !await _db.EnsureVendorInPortfolioAsync(portfolioId, request.VendorId.Value, ct))
-        {
-            return null;
-        }
-
-        if (request.WorkOrderId.HasValue &&
-            !await _db.EnsureWorkOrderInPortfolioAsync(portfolioId, request.WorkOrderId.Value, ct))
-        {
-            return null;
-        }
-
-        if (request.PropertyId.HasValue) entity.PropertyId = request.PropertyId;
-        if (request.UnitId.HasValue) entity.UnitId = request.UnitId;
-        if (request.VendorId.HasValue) entity.VendorId = request.VendorId;
-        if (request.WorkOrderId.HasValue) entity.WorkOrderId = request.WorkOrderId;
-        if (request.Category.HasValue) entity.Category = request.Category.Value;
-        if (request.Description != null) entity.Description = request.Description;
-        if (request.Status.HasValue) entity.Status = request.Status.Value;
-        if (request.Amount.HasValue) entity.Amount = request.Amount.Value;
-        if (request.IncurredAt.HasValue) entity.IncurredAt = request.IncurredAt.Value.ToUtc();
-        if (request.DueDate.HasValue) entity.DueDate = request.DueDate.ToUtc();
-        if (request.PaidAt.HasValue) entity.PaidAt = request.PaidAt.ToUtc();
-        if (request.BillableToOwner.HasValue) entity.BillableToOwner = request.BillableToOwner.Value;
-        if (request.Notes != null) entity.Notes = request.Notes;
-        if (request.Subtotal.HasValue) entity.Subtotal = request.Subtotal;
-        if (request.TaxAmount.HasValue) entity.TaxAmount = request.TaxAmount;
-        if (request.ClearReceiptData == true) entity.ReceiptData = null;
-        else if (request.ReceiptData != null) entity.ReceiptData = request.ReceiptData;
-
-        // When the caller provides a LineItems list (even empty), REPLACE all existing rows.
-        // A null LineItems means "leave existing rows untouched".
-        if (request.LineItems is not null)
-        {
-            _db.ExpenseLineItems.RemoveRange(entity.LineItems);
-            entity.LineItems.Clear();
-
-            for (int i = 0; i < request.LineItems.Count; i++)
-            {
-                var li = request.LineItems[i];
-                entity.LineItems.Add(new ExpenseLineItem
-                {
-                    Description = li.Description ?? string.Empty,
-                    Quantity = li.Quantity,
-                    UnitPrice = li.UnitPrice,
-                    Amount = li.Amount,
-                    LineNumber = i + 1,
-                });
-            }
-        }
-
-        entity.UpdatedAt = _timeProvider.UtcNow();
-
-        await _db.SaveChangesAsync(ct);
-
-        var response = await GetAsync(portfolioId, id, ct) ?? ExpenseResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
+        return ReadSnapshot<ExpenseResponse>(outcome.Value);
     }
 
     public async Task<ExpenseResponse?> UpdateAsync(
         WorkspaceReadScope scope, int id, UpdateExpenseRequest request, string idempotencyKey, CancellationToken ct = default)
     {
-        if (await GetAsync(scope, id, ct) is null)
-            return null;
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
             AtomicMoneyDomain.Expense, AtomicMoneyOperation.Update, id, idempotencyKey, request);
-        var outcome = await Atomic.ExecuteAsync(
+        var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         if (!outcome.Value.Found) return null;
-        var response = await GetAsync(scope.PortfolioId, id, ct);
-        if (response is not null)
-            await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, id, response, ct);
-        return response;
-    }
-
-    public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
-    {
-        var entity = await _db.Expenses
-            .FirstOrDefaultAsync(e => e.Id == id && e.PortfolioId == portfolioId, ct);
-        if (entity == null)
-        {
-            return false;
-        }
-
-        entity.DeletedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
-
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
-        return true;
+        return ReadSnapshot<ExpenseResponse>(outcome.Value);
     }
 
     public async Task<bool> DeleteAsync(
         WorkspaceReadScope scope, int id, string idempotencyKey, CancellationToken ct = default)
     {
-        var visible = await GetAsync(scope, id, ct) is not null;
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
             AtomicMoneyDomain.Expense, AtomicMoneyOperation.Delete, id, idempotencyKey, new object());
-        AtomicCommandOutcome<AtomicMoneyMutationResult> outcome;
-        try
-        {
-            outcome = await Atomic.ExecuteAsync(
-                AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
-        }
-        catch (UnauthorizedAccessException) when (!visible)
-        {
-            return false;
-        }
-        if (outcome.Value.Applied)
-            await _dataUpdate.BroadcastEntityDeleteAsync(scope.PortfolioId, EntityType, id, ct);
-        return visible || outcome.Disposition == AtomicCommandDisposition.Replayed
-            ? outcome.Value.Found
-            : false;
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        return outcome.Value.Found;
     }
 
-    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
-        "Scoped expense mutations require the atomic persistence kernel.");
-
-    private async Task<bool> HasExpenseTargetCapabilityAsync(
-        WorkspaceReadScope scope, int? propertyId, int? unitId, int? workOrderId,
-        string capabilityKey, CancellationToken ct)
-    {
-        var now = _timeProvider.UtcNow();
-        if (propertyId is null && unitId is null && workOrderId is null)
-        {
-            return await _db.AuthorizedAllPropertyAssignments(
-                    scope, capabilityKey, CapabilityAuthorizationTargetKind.Property, now)
-                .AnyAsync(ct);
-        }
-
-        var properties = _db.Properties.AsNoTracking().WhereAuthorized(_db, scope, capabilityKey, now);
-        return await properties.AnyAsync(property =>
-            (propertyId == null || property.Id == propertyId) &&
-            (unitId == null || _db.Units.Any(unit =>
-                unit.Id == unitId && unit.PortfolioId == scope.PortfolioId && unit.PropertyId == property.Id)) &&
-            (workOrderId == null || _db.WorkOrders.Any(workOrder =>
-                workOrder.Id == workOrderId && workOrder.PortfolioId == scope.PortfolioId &&
-                workOrder.PropertyId == property.Id)), ct);
-    }
+    private static TResponse ReadSnapshot<TResponse>(AtomicMoneyMutationResult result) where TResponse : class =>
+        result.ResponseJson is { Length: > 0 } json
+            ? System.Text.Json.JsonSerializer.Deserialize<TResponse>(json)
+                ?? throw new AtomicReceiptInvariantException("The money receipt snapshot is invalid.")
+            : throw new AtomicReceiptInvariantException("The money receipt snapshot is missing.");
 }

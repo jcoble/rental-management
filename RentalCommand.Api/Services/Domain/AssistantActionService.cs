@@ -62,6 +62,7 @@ public sealed partial class AssistantActionService : IAssistantActionService
     public async Task<AssistantActionExecuteResponse> ExecuteAsync(
         WorkspaceReadScope scope,
         AssistantActionExecuteRequest request,
+        string idempotencyKey,
         CancellationToken ct = default)
     {
         if (!request.WriteModeEnabled)
@@ -119,7 +120,7 @@ public sealed partial class AssistantActionService : IAssistantActionService
         }
 
         var created = await _expenses.CreateAsync(
-            scope.PortfolioId,
+            scope,
             new CreateExpenseRequest
             {
                 PropertyId = expense.PropertyId,
@@ -131,6 +132,7 @@ public sealed partial class AssistantActionService : IAssistantActionService
                 PaidAt = expense.PaidAt,
                 Notes = BuildNotes(expense.Notes),
             },
+            idempotencyKey,
             ct);
 
         if (created is null)

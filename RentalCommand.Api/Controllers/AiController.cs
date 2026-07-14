@@ -100,8 +100,11 @@ public class AiController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<AssistantActionExecuteResponse>> ExecuteAction(
         [FromBody] AssistantActionExecuteRequest req,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(idempotencyKey) || idempotencyKey.Length > 128)
+            return BadRequest("Idempotency-Key is required and must be at most 128 characters.");
         if (req.Draft is null) return BadRequest("Draft is required.");
         if (req.Draft.Expense?.PropertyId is not int propertyId) return Forbid();
 
@@ -114,7 +117,7 @@ public class AiController : ManagementControllerBase
             return Forbid();
         }
 
-        return Ok(await _actions.ExecuteAsync(scope, req, ct));
+        return Ok(await _actions.ExecuteAsync(scope, req, idempotencyKey, ct));
     }
 
     /// <summary>
