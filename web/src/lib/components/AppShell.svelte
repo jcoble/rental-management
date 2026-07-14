@@ -479,20 +479,11 @@
 	const upcomingApptsQuery = createQuery(() => ({
 		queryKey: ['header-upcoming-appointments', getCurrentPortfolioId()],
 		enabled: isStaffSession && !portalUser && canReadAppointments,
-		queryFn: () => appointmentsApi.list(getCurrentPortfolioId(), { take: 100 }),
+		queryFn: () => appointmentsApi.scheduleSummary(),
 		staleTime: 60_000,
 		refetchInterval: 120_000
 	}));
-	let upcomingAppts = $derived.by(() => {
-		const list = upcomingApptsQuery.data ?? [];
-		const now = Date.now();
-		const horizon = now + 7 * 24 * 60 * 60 * 1000;
-		return list.filter((a) => {
-			if (a.status === 'Cancelled' || a.status === 'Completed' || a.status === 'NoShow') return false;
-			const t = new Date(a.scheduledStart).getTime();
-			return t >= now && t <= horizon;
-		}).length;
-	});
+	let upcomingAppts = $derived(upcomingApptsQuery.data?.nextSevenDaysCount ?? 0);
 </script>
 
 <NavigationLoader />

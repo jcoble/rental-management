@@ -17,6 +17,8 @@ public class AppointmentService : IAppointmentService
     private const string EntityType = "Appointment";
     private static readonly string[] ReadCapabilities =
         [CapabilityKeys.RentalsRead, CapabilityKeys.LeasingShowingsManage];
+    private static readonly string[] ScheduleSummaryReadCapabilities =
+        [CapabilityKeys.WorkRead, CapabilityKeys.LeasingShowingsManage];
     private static readonly string[] WriteCapabilities =
         [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingShowingsManage];
 
@@ -71,6 +73,53 @@ public class AppointmentService : IAppointmentService
             ReadCapabilities,
             _timeProvider.UtcNow());
         return ListPageFromQueryAsync(authorized, query, ct);
+    }
+
+    public async Task<AppointmentScheduleSummaryResponse> GetScheduleSummaryAuthorizedAsync(
+        WorkspaceReadScope scope,
+        CancellationToken ct = default)
+    {
+        var windowStartUtc = _timeProvider.UtcNow();
+        var windowEndUtc = windowStartUtc.AddDays(7);
+
+        // One translated statement owns session/access/capability/property authorization, the
+        // half-open date window, eligible statuses, and COUNT(*). A zero-row GROUP BY result is
+        // normalized only after PostgreSQL has completed the aggregate; appointments are never
+        // materialized for the shell.
+        return await BuildScheduleSummaryQuery(scope, windowStartUtc, windowEndUtc)
+            .SingleOrDefaultAsync(ct)
+            ?? new AppointmentScheduleSummaryResponse
+            {
+                NextSevenDaysCount = 0,
+                WindowStartUtc = windowStartUtc,
+                WindowEndUtc = windowEndUtc,
+            };
+    }
+
+    internal IQueryable<AppointmentScheduleSummaryResponse> BuildScheduleSummaryQuery(
+        WorkspaceReadScope scope,
+        DateTime windowStartUtc,
+        DateTime windowEndUtc)
+    {
+        var authorized = AuthorizedAppointments(
+            _db.Appointments.AsNoTracking(),
+            scope,
+            ScheduleSummaryReadCapabilities,
+            windowStartUtc);
+
+        return authorized
+            .Where(appointment =>
+                (appointment.Status == AppointmentStatus.Scheduled ||
+                 appointment.Status == AppointmentStatus.Confirmed) &&
+                appointment.ScheduledStart >= windowStartUtc &&
+                appointment.ScheduledStart < windowEndUtc)
+            .GroupBy(_ => 1)
+            .Select(group => new AppointmentScheduleSummaryResponse
+            {
+                NextSevenDaysCount = group.Count(),
+                WindowStartUtc = windowStartUtc,
+                WindowEndUtc = windowEndUtc,
+            });
     }
 
     private static async Task<AppointmentListResponse> ListPageFromQueryAsync(
