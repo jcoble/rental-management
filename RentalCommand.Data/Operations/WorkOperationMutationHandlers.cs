@@ -373,14 +373,14 @@ internal static class StaffOperationAuthorization
         int portfolioId, StaffOperationActor actor, string capability,
         IAtomicPersistenceSession persistence, DateTime now)
     {
-        return persistence.Query<Property>().AsNoTracking().Where(property =>
+        return persistence.Query<Property>().Where(property =>
             property.PortfolioId == portfolioId &&
-            persistence.Query<WorkspaceAccessContext>().AsNoTracking().Any(context =>
+            persistence.Query<WorkspaceAccessContext>().Any(context =>
                 context.Id == actor.AccessContextId && context.UserId == actor.UserId &&
                 context.PortfolioId == portfolioId && context.AccessRevision == actor.AccessRevision &&
                 context.Status == WorkspaceAccessContextStatus.Active && context.SuspendedAtUtc == null &&
                 context.RevokedAtUtc == null &&
-                persistence.Query<AuthSession>().AsNoTracking().Any(session =>
+                persistence.Query<AuthSession>().Any(session =>
                     session.Id == actor.AuthSessionId && session.UserId == actor.UserId &&
                     session.ActiveAccessContextId == context.Id && session.Status == AuthSessionStatus.Active &&
                     session.RevokedAtUtc == null && session.ExpiresAtUtc > now) &&
@@ -405,7 +405,7 @@ internal static class StaffOperationAuthorization
         int portfolioId, StaffOperationActor actor, string capability,
         IAtomicPersistenceSession persistence, DateTime now)
     {
-        return persistence.Query<MembershipRoleAssignment>().AsNoTracking().Where(assignment =>
+        return persistence.Query<MembershipRoleAssignment>().Where(assignment =>
             assignment.PortfolioId == portfolioId && assignment.WorkspaceMembership != null &&
             assignment.WorkspaceMembership.AccessContext != null &&
             assignment.WorkspaceMembership.AccessContext.Id == actor.AccessContextId &&
@@ -423,7 +423,7 @@ internal static class StaffOperationAuthorization
             assignment.RoleProfile!.Capabilities.Any(item =>
                 item.CapabilityDefinition!.Key == capability &&
                 item.CapabilityDefinition.AuthorizationTargetKind == CapabilityAuthorizationTargetKind.Property) &&
-            persistence.Query<AuthSession>().AsNoTracking().Any(session =>
+            persistence.Query<AuthSession>().Any(session =>
                 session.Id == actor.AuthSessionId && session.UserId == actor.UserId &&
                 session.ActiveAccessContextId == actor.AccessContextId &&
                 session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null &&

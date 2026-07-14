@@ -505,21 +505,18 @@ internal static class ScreeningCommandSupport
         DateTime securityNowUtc,
         bool tracking)
     {
-        var applications = tracking
-            ? persistence.Query<RentalApplication>()
-            : persistence.Query<RentalApplication>().AsNoTracking();
-        var assignments = persistence.Query<MembershipRoleAssignment>().AsNoTracking();
-        return applications.Where(application =>
+        var assignments = persistence.Query<MembershipRoleAssignment>();
+        var query = persistence.Query<RentalApplication>().Where(application =>
             application.Id == applicationId
             && application.PortfolioId == portfolioId
-            && persistence.Query<AuthSession>().AsNoTracking().Any(session =>
+            && persistence.Query<AuthSession>().Any(session =>
                 session.Id == authSessionId
                 && session.UserId == actorUserId
                 && session.ActiveAccessContextId == accessContextId
                 && session.Status == AuthSessionStatus.Active
                 && session.RevokedAtUtc == null
                 && session.ExpiresAtUtc > securityNowUtc)
-            && persistence.Query<WorkspaceAccessContext>().AsNoTracking().Any(context =>
+            && persistence.Query<WorkspaceAccessContext>().Any(context =>
                 context.Id == accessContextId
                 && context.UserId == actorUserId
                 && context.PortfolioId == portfolioId
@@ -527,7 +524,7 @@ internal static class ScreeningCommandSupport
                 && context.Status == WorkspaceAccessContextStatus.Active
                 && context.SuspendedAtUtc == null
                 && context.RevokedAtUtc == null)
-            && persistence.Query<WorkspaceMembership>().AsNoTracking().Any(membership =>
+            && persistence.Query<WorkspaceMembership>().Any(membership =>
                 membership.AccessContextId == accessContextId
                 && membership.PortfolioId == portfolioId
                 && membership.Status == WorkspaceMembershipStatus.Active
@@ -553,6 +550,7 @@ internal static class ScreeningCommandSupport
                             && assignment.SelectedProperties.Any(selected =>
                                 selected.PortfolioId == portfolioId
                                 && selected.PropertyId == application.PropertyId))))));
+        return tracking ? query : query.AsNoTracking();
     }
 
     internal static Task<bool> IsAuthorizedAsync(
