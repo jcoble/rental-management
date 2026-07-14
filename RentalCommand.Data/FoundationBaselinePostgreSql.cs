@@ -85,6 +85,7 @@ internal static class FoundationBaselinePostgreSql
         "CapitalAssets",
         "Conversations",
         "DeviceTokens",
+        "DocumentTemplateFields",
         "DocumentTemplates",
         "EvictionCaseEvents",
         "EvictionCaseRespondents",
@@ -178,7 +179,6 @@ internal static class FoundationBaselinePostgreSql
     internal static IReadOnlyList<ChildPolicy> ChildPortfolioTables { get; } =
     [
         new("ConversationMessages", "Conversations", "ConversationId"),
-        new("DocumentTemplateFields", "DocumentTemplates", "DocumentTemplateId"),
         new("ExpenseLineItems", "Expenses", "ExpenseId"),
         new("InspectionTemplateItems", "InspectionTemplates", "TemplateId"),
     ];

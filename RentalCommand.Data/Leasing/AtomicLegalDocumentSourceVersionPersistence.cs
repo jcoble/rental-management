@@ -114,6 +114,7 @@ internal sealed partial class AtomicLeaseMutationPersistence
                                ORDER BY field."SortOrder", field."Id")
                            FROM "DocumentTemplateFields" AS field
                            WHERE field."DocumentTemplateId" = template."Id"
+                             AND field."PortfolioId" = template."PortfolioId"
                        ), '[]'::jsonb)
                    ) AS snapshot_payload
             FROM "DocumentTemplates" AS template

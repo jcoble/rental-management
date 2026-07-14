@@ -227,9 +227,10 @@ public sealed class SandboxService : ISandboxService
         await _db.InspectionItems.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.DocumentTemplateFields.IgnoreQueryFilters()
-            .Where(e => _db.DocumentTemplates.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId &&
+                _db.DocumentTemplates.IgnoreQueryFilters()
                 .Any(parent => parent.Id == e.DocumentTemplateId
-                    && parent.PortfolioId == portfolioId
+                    && parent.PortfolioId == e.PortfolioId
                     && parent.IsSandboxSeeded))
             .ExecuteDeleteAsync(ct);
         await _db.ConversationMessages.IgnoreQueryFilters()

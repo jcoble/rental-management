@@ -516,6 +516,7 @@ public class SandboxServiceTests : IDisposable
         };
         template.Fields.Add(new DocumentTemplateField
         {
+            PortfolioId = template.PortfolioId,
             FieldKey = isSandboxSeeded ? "demo.tenantName" : "tenant.fullName",
             Label = "Tenant full name",
             Kind = DocumentTemplateFieldKind.Text,

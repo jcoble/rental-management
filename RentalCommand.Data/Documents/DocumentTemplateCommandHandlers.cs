@@ -254,6 +254,7 @@ public sealed class AddDocumentTemplateFieldHandler
 
         var field = new DocumentTemplateField
         {
+            PortfolioId = command.PortfolioId,
             DocumentTemplateId = template.Id,
             FieldKey = command.FieldKey.Trim(),
             Label = command.Label.Trim(),
@@ -425,7 +426,9 @@ internal static class DocumentTemplateCommandSupport
             ? persistence.Query<DocumentTemplateField>()
             : persistence.Query<DocumentTemplateField>().AsNoTracking();
         return from template in templates
-               join field in fields on template.Id equals field.DocumentTemplateId
+               join field in fields
+                   on new { template.Id, template.PortfolioId }
+                   equals new { Id = field.DocumentTemplateId, field.PortfolioId }
                select new DocumentTemplateFieldTarget(template, field);
     }
 
@@ -512,7 +515,8 @@ internal static class DocumentTemplateCommandSupport
         IAtomicPersistenceSession persistence, int portfolioId, int templateId, int fieldId, CancellationToken ct) =>
         (from template in persistence.Query<DocumentTemplate>().AsNoTracking()
          join field in persistence.Query<DocumentTemplateField>().AsNoTracking()
-             on template.Id equals field.DocumentTemplateId
+             on new { template.Id, template.PortfolioId }
+             equals new { Id = field.DocumentTemplateId, field.PortfolioId }
          where template.PortfolioId == portfolioId && template.Id == templateId && field.Id == fieldId
          select new DocumentTemplateFieldSnapshot(
              field.Id, field.DocumentTemplateId, field.FieldKey, field.Label, field.Kind,
@@ -549,7 +553,8 @@ internal static class DocumentTemplateCommandSupport
 
     internal static string FieldValues(DocumentTemplateField field) => JsonSerializer.Serialize(new
     {
-        field.FieldKey, field.Label, field.Kind, field.SignerRole, field.PageNumber,
+        field.PortfolioId, field.DocumentTemplateId, field.FieldKey, field.Label,
+        field.Kind, field.SignerRole, field.PageNumber,
         field.XPct, field.YPct, field.WidthPct, field.HeightPct, field.Required,
         field.Locked, field.SortOrder, field.DefaultText,
     });

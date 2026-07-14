@@ -81,7 +81,7 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
                 JsonOptions)
             ?? throw new InvalidOperationException(
                 $"Legal-document source {resolvedSource.DocumentSourceVersionId} has no template snapshot.");
-        var allFields = templateSnapshot.Fields.Select(ToTemplateField).ToArray();
+        var allFields = templateSnapshot.Fields.Select(field => ToTemplateField(portfolioId, field)).ToArray();
 
         byte[] originalBytes;
         try
@@ -169,7 +169,7 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
         {
             return new LeaseAgreementRenderResult(sourceBytes, source.DocumentSourceVersionId, null);
         }
-        var allFields = templateSnapshot.Fields.Select(ToTemplateField).ToArray();
+        var allFields = templateSnapshot.Fields.Select(field => ToTemplateField(portfolioId, field)).ToArray();
         var valueMap = BuildValueMap(data);
         var renderableFields = allFields
             .Where(field => field.Kind == DocumentTemplateFieldKind.Whiteout
@@ -390,10 +390,13 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
             ct);
     }
 
-    private static DocumentTemplateField ToTemplateField(AuthoredTemplateFieldSnapshot field) =>
+    private static DocumentTemplateField ToTemplateField(
+        int portfolioId,
+        AuthoredTemplateFieldSnapshot field) =>
         new()
         {
             Id = field.Id,
+            PortfolioId = portfolioId,
             FieldKey = field.FieldKey,
             Label = field.Label,
             Kind = Enum.Parse<DocumentTemplateFieldKind>(field.Kind),
