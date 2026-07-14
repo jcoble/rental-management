@@ -523,7 +523,7 @@ public class InspectionService : IInspectionService
         IReadOnlyCollection<string> capabilities)
         => _db.Properties
             .AsNoTracking()
-            .WhereAuthorized(_db, scope, capabilities, _timeProvider.UtcNow());
+            .WhereAuthorized(_db, scope, capabilities, _timeProvider.GetUtcNow().UtcDateTime);
 
     private IQueryable<Inspection> AuthorizedInspections(
         WorkspaceReadScope scope,
@@ -547,7 +547,7 @@ public class InspectionService : IInspectionService
                 scope,
                 capabilities,
                 CapabilityAuthorizationTargetKind.Property,
-                _timeProvider.UtcNow())
+                _timeProvider.GetUtcNow().UtcDateTime)
             .AnyAsync(ct);
 
     private async Task<int?> EnsureInspectionReportAsync(
