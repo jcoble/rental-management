@@ -21,11 +21,11 @@ public interface IInspectionService
     Task<InspectionDetailResponse?> CreateAuthorizedAsync(WorkspaceReadScope scope, CreateInspectionRequest request, string operationKey, CancellationToken ct = default);
     Task<InspectionResponse?> UpdateAuthorizedAsync(WorkspaceReadScope scope, int id, UpdateInspectionRequest request, string operationKey, CancellationToken ct = default);
     Task<bool> DeleteAuthorizedAsync(WorkspaceReadScope scope, int id, string operationKey, CancellationToken ct = default);
-    Task<InspectionItemResponse?> CreateItemAuthorizedAsync(WorkspaceReadScope scope, int inspectionId, CreateInspectionItemRequest request, CancellationToken ct = default);
-    Task<InspectionItemResponse?> UpdateItemAuthorizedAsync(WorkspaceReadScope scope, int inspectionId, int itemId, UpdateInspectionItemRequest request, CancellationToken ct = default);
-    Task<bool> DeleteItemAuthorizedAsync(WorkspaceReadScope scope, int inspectionId, int itemId, CancellationToken ct = default);
-    Task<IReadOnlyList<InspectionItemResponse>?> ReorderItemsAuthorizedAsync(WorkspaceReadScope scope, int inspectionId, ReorderInspectionItemsRequest request, CancellationToken ct = default);
-    Task<InspectionItemResponse?> AttachItemPhotoAuthorizedAsync(WorkspaceReadScope scope, int inspectionId, int itemId, int storedFileId, CancellationToken ct = default);
-    Task<(CompleteInspectionResponse? Result, string? Error)> CompleteAuthorizedAsync(WorkspaceReadScope scope, int id, int userId, CancellationToken ct = default);
+    Task<InspectionItemResponse?> CreateItemAuthorizedAsync(WorkspaceReadScope scope, int inspectionId, CreateInspectionItemRequest request, string operationKey, CancellationToken ct = default);
+    Task<InspectionItemResponse?> UpdateItemAuthorizedAsync(WorkspaceReadScope scope, int inspectionId, int itemId, UpdateInspectionItemRequest request, string operationKey, CancellationToken ct = default);
+    Task<bool> DeleteItemAuthorizedAsync(WorkspaceReadScope scope, int inspectionId, int itemId, string operationKey, CancellationToken ct = default);
+    Task<IReadOnlyList<InspectionItemResponse>?> ReorderItemsAuthorizedAsync(WorkspaceReadScope scope, int inspectionId, ReorderInspectionItemsRequest request, string operationKey, CancellationToken ct = default);
+    Task<InspectionItemResponse?> AttachItemPhotoAuthorizedAsync(WorkspaceReadScope scope, int inspectionId, int itemId, int storedFileId, string operationKey, CancellationToken ct = default);
+    Task<(CompleteInspectionResponse? Result, string? Error)> CompleteAuthorizedAsync(WorkspaceReadScope scope, int id, int userId, string operationKey, CancellationToken ct = default);
     Task<(Stream Stream, string FileName, string ContentType)?> GetReportAuthorizedAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default);
 }

@@ -127,6 +127,7 @@ public interface IAtomicWriteAttempt
     IAtomicCoreCsvImportPersistence CoreCsvImports { get; }
     IAtomicNotificationPersistence Notifications { get; }
     IAtomicPaymentCsvImportPersistence PaymentCsvImports { get; }
+    IAtomicInspectionPersistence Inspections { get; }
 
     /// <summary>Flushes tracked business rows while the owner transaction remains open.</summary>
     Task<AtomicBusinessFlush> FlushBusinessAsync(CancellationToken ct = default);
@@ -183,6 +184,27 @@ public interface IAtomicNotificationPersistence
 }
 
 public sealed record AtomicListingPhotoOrderResult(bool IsValid, bool HasChanges);
+
+/// <summary>Kernel-owned set-based inspection mutations that cannot be expressed as tracked rows.</summary>
+public interface IAtomicInspectionPersistence
+{
+    /// <summary>
+    /// Validates and applies one exact checklist permutation in PostgreSQL. The inspection touch and
+    /// every item position change remain in the caller's receipt transaction.
+    /// </summary>
+    Task<AtomicInspectionItemOrderResult> ReorderItemsAsync(
+        int portfolioId,
+        int inspectionId,
+        int[] itemIds,
+        DateTime updatedAtUtc,
+        CancellationToken ct = default);
+}
+
+public sealed record AtomicInspectionItemOrderResult(
+    bool InspectionExists,
+    int InspectionStatus,
+    bool IsValid,
+    bool HasChanges);
 
 /// <summary>One parsed Unit CSV row admitted to the database-owned bulk import.</summary>
 public sealed record AtomicUnitImportRow(
@@ -530,6 +552,7 @@ public enum AtomicLockResource
     Vendor = 24,
     Inspection = 25,
     InspectionTemplate = 26,
+    InspectionItem = 27,
 }
 
 public enum AtomicScanDraftClaimOutcome
