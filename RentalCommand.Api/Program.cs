@@ -253,6 +253,18 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Operations.OperationMutationResult,
     RentalCommand.Data.Operations.CreateTenantWorkOrderHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.CreateAppointmentCommand,
+    RentalCommand.Core.Operations.OperationMutationResult,
+    RentalCommand.Data.Operations.CreateAppointmentHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.UpdateAppointmentCommand,
+    RentalCommand.Core.Operations.OperationMutationResult,
+    RentalCommand.Data.Operations.UpdateAppointmentHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.DeleteAppointmentCommand,
+    RentalCommand.Core.Operations.OperationMutationResult,
+    RentalCommand.Data.Operations.DeleteAppointmentHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Esign.IssueLeaseAgreementCommand,
     RentalCommand.Core.Esign.IssueLeaseAgreementResult,
     RentalCommand.Data.Esign.IssueLeaseAgreementHandler>();

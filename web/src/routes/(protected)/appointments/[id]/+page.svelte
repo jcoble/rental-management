@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { appointments } from '$lib/api/endpoints/appointments';
+	import type { Appointment } from '$lib/types';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
@@ -113,7 +114,7 @@
 	// ── Delete ────────────────────────────────────────────────────────────────
 	let showDelete = $state(false);
 	const deleteMutation = createMutation(() => ({
-		mutationFn: (apptId: number) => appointments.delete(apptId),
+		mutationFn: (appointment: Appointment) => appointments.delete(appointment.id, appointment.propertyId),
 		onSuccess: () => {
 			showSuccess('Appointment deleted.');
 			goto('/appointments');
@@ -297,6 +298,6 @@
 	message={appt ? `Delete "${appt.title}"?` : ''}
 	busy={deleteMutation.isPending}
 	testid="appointment-delete"
-	onconfirm={() => appt && deleteMutation.mutate(appt.id)}
+	onconfirm={() => appt && deleteMutation.mutate(appt)}
 	oncancel={() => (showDelete = false)}
 />

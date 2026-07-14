@@ -206,7 +206,7 @@
 	}));
 
 	const deleteMutation = createMutation(() => ({
-		mutationFn: (id: number) => appointments.delete(id),
+		mutationFn: (appointment: Appointment) => appointments.delete(appointment.id, appointment.propertyId),
 		onSuccess: () => {
 			showSuccess('Appointment deleted.');
 			deleteTarget = null;
@@ -619,6 +619,6 @@
 	message={deleteTarget ? `Delete "${deleteTarget.title}"?` : ''}
 	busy={deleteMutation.isPending}
 	testid="appointment-delete"
-	onconfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+	onconfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget)}
 	oncancel={() => (deleteTarget = null)}
 />

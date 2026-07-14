@@ -47,10 +47,8 @@ class _AppointmentDetailScreenState
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      builder: (_) => AppointmentFormSheet(
-        existing: current,
-        onSaved: _refresh,
-      ),
+      builder: (_) =>
+          AppointmentFormSheet(existing: current, onSaved: _refresh),
     );
   }
 
@@ -62,13 +60,13 @@ class _AppointmentDetailScreenState
       await _refresh();
     } on ApiException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     }
   }
 
-  Future<void> _confirmDelete(int id) async {
+  Future<void> _confirmDelete(Appointment appointment) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -92,21 +90,25 @@ class _AppointmentDetailScreenState
     try {
       await ref
           .read(appointmentsRepositoryProvider)
-          .deleteAppointment(id);
+          .deleteAppointment(
+            appointment.id,
+            propertyId: appointment.propertyId,
+          );
       if (!mounted) return;
       Navigator.of(context).pop();
     } on ApiException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final detailAsync =
-        ref.watch(appointmentDetailProvider(widget.appointment.id));
+    final detailAsync = ref.watch(
+      appointmentDetailProvider(widget.appointment.id),
+    );
     final theme = Theme.of(context);
 
     return Scaffold(
@@ -125,7 +127,7 @@ class _AppointmentDetailScreenState
                     IconButton(
                       icon: const Icon(Icons.delete_outline),
                       tooltip: 'Delete',
-                      onPressed: () => _confirmDelete(appt.id),
+                      onPressed: () => _confirmDelete(appt),
                     ),
                   ],
                 ),
@@ -187,8 +189,9 @@ class _DetailBody extends StatelessWidget {
                     Expanded(
                       child: Text(
                         appt.title,
-                        style: theme.textTheme.titleLarge
-                            ?.copyWith(fontWeight: FontWeight.w700),
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -235,8 +238,9 @@ class _DetailBody extends StatelessWidget {
                 children: [
                   Text(
                     'Details',
-                    style: theme.textTheme.titleSmall
-                        ?.copyWith(fontWeight: FontWeight.w700),
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                   const SizedBox(height: 12),
                   if (appt.propertyName != null)
@@ -246,14 +250,11 @@ class _DetailBody extends StatelessWidget {
                   if (appt.tenantName != null)
                     _DetailRow(label: 'Tenant', value: appt.tenantName!),
                   if (appt.prospectName != null)
-                    _DetailRow(
-                        label: 'Prospect', value: appt.prospectName!),
+                    _DetailRow(label: 'Prospect', value: appt.prospectName!),
                   if (appt.prospectEmail != null)
-                    _DetailRow(
-                        label: 'Email', value: appt.prospectEmail!),
+                    _DetailRow(label: 'Email', value: appt.prospectEmail!),
                   if (appt.assignedTo != null)
-                    _DetailRow(
-                        label: 'Assigned to', value: appt.assignedTo!),
+                    _DetailRow(label: 'Assigned to', value: appt.assignedTo!),
                 ],
               ),
             ),
@@ -271,8 +272,9 @@ class _DetailBody extends StatelessWidget {
                 children: [
                   Text(
                     'Notes',
-                    style: theme.textTheme.titleSmall
-                        ?.copyWith(fontWeight: FontWeight.w700),
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                   const SizedBox(height: 8),
                   Text(appt.notes!, style: theme.textTheme.bodyMedium),
@@ -287,8 +289,9 @@ class _DetailBody extends StatelessWidget {
         if (actions.isNotEmpty) ...[
           Text(
             'Quick actions',
-            style: theme.textTheme.titleSmall
-                ?.copyWith(fontWeight: FontWeight.w700),
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
           ),
           const SizedBox(height: 8),
           Wrap(
@@ -311,14 +314,16 @@ class _DetailBody extends StatelessWidget {
         // Timestamps
         Text(
           'Created ${formatAppointmentDateTime(appt.createdAt)}',
-          style: theme.textTheme.bodySmall
-              ?.copyWith(color: colorScheme.onSurfaceVariant),
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: colorScheme.onSurfaceVariant,
+          ),
         ),
         const SizedBox(height: 2),
         Text(
           'Last updated ${formatAppointmentDateTime(appt.updatedAt)}',
-          style: theme.textTheme.bodySmall
-              ?.copyWith(color: colorScheme.onSurfaceVariant),
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: colorScheme.onSurfaceVariant,
+          ),
         ),
         const SizedBox(height: 24),
       ],
@@ -427,8 +432,7 @@ class _LabeledRow extends StatelessWidget {
         Expanded(
           child: Text(
             label,
-            style: TextStyle(
-                fontSize: 13, color: colorScheme.onSurfaceVariant),
+            style: TextStyle(fontSize: 13, color: colorScheme.onSurfaceVariant),
           ),
         ),
       ],
@@ -465,8 +469,9 @@ class _DetailRow extends StatelessWidget {
           Expanded(
             child: Text(
               value,
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(fontWeight: FontWeight.w600),
+              style: theme.textTheme.bodySmall?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ],
@@ -528,10 +533,7 @@ class _ErrorBody extends StatelessWidget {
               style: TextStyle(color: colorScheme.error),
             ),
             const SizedBox(height: 16),
-            FilledButton.tonal(
-              onPressed: onRetry,
-              child: const Text('Retry'),
-            ),
+            FilledButton.tonal(onPressed: onRetry, child: const Text('Retry')),
           ],
         ),
       ),
