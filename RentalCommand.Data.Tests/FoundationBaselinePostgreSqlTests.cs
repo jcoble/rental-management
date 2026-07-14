@@ -82,6 +82,16 @@ public sealed class FoundationBaselinePostgreSqlTests
     }
 
     [Fact]
+    public void NotificationReadState_IsApiOnlyUserStateAndIsNotGrantedToTheEngine()
+    {
+        FoundationBaselinePostgreSql.DirectPortfolioTables.Should().Contain("NotificationReadStates");
+        CreateSql.Should().Contain(
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE \"NotificationReadStates\" TO rentalcommand_api;");
+        CreateSql.Should().NotContain(
+            "ON TABLE \"NotificationReadStates\" TO rentalcommand_engine;");
+    }
+
+    [Fact]
     public void SandboxGraduation_AddsDeleteWithoutWeakeningAppendOnlyRows()
     {
         CreateSql.Should().Contain(
