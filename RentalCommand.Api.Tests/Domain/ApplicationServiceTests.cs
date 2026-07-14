@@ -227,7 +227,7 @@ public class ApplicationServiceTests : IDisposable
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.StatusCode.Should().Be(409);
-        ex.Which.Message.Should().Contain("application #1");
+        ex.Which.Message.Should().Contain("already exists");
         (await _db.RentalApplications.CountAsync()).Should().Be(1);
     }
 
@@ -255,7 +255,7 @@ public class ApplicationServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task SubmitAsync_ForeignPropertyId_IsDroppedNotLeaked()
+    public async Task SubmitAsync_ForeignPropertyId_IsRejectedWithoutLeakingOrPersisting()
     {
         // A property in a DIFFERENT portfolio must never attach to this submission (IDOR guard).
         _db.Properties.Add(new Property
@@ -280,11 +280,12 @@ public class ApplicationServiceTests : IDisposable
             ConsentGiven = true,
         };
 
-        var result = await _sut.SubmitAsync(Token, request, null, Guid.NewGuid().ToString("N"));
+        var act = () => _sut.SubmitAsync(Token, request, null, Guid.NewGuid().ToString("N"));
 
-        result.Should().NotBeNull();
-        var saved = await _db.RentalApplications.SingleAsync();
-        saved.PropertyId.Should().BeNull("a property from another portfolio must be dropped");
+        var error = await act.Should().ThrowAsync<DomainValidationException>();
+        error.Which.Message.Should().Be("Selected property was not found.");
+        (await _db.RentalApplications.CountAsync()).Should().Be(0,
+            "a property from another portfolio must reject the complete submission");
     }
 
     [Fact]
@@ -670,7 +671,7 @@ public class ApplicationServiceTests : IDisposable
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.Message.Should().Contain("qa.applicant.001@example.local");
-        ex.Which.Message.Should().Contain($"application #{existing.Id}");
+        ex.Which.Message.Should().Contain("already exists");
         (await _db.RentalApplications.CountAsync()).Should().Be(1);
     }
 
