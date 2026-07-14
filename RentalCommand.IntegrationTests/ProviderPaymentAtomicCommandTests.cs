@@ -7,6 +7,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Outbox;
 using RentalCommand.Core.Payments;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
@@ -24,6 +25,8 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
 {
     private static readonly AtomicJsonResultCodec<RecordVerifiedProviderPaymentEventResult> EventCodec =
         new("record-verified-provider-payment-event-result.v1");
+    private static readonly AtomicJsonResultCodec<ReconcileClaimedProviderPaymentEventResult> ReconcileCodec =
+        new("reconcile-claimed-provider-payment-event-result.v1");
 
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
@@ -55,6 +58,10 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             RecordVerifiedProviderPaymentEventCommand,
             RecordVerifiedProviderPaymentEventResult,
             RecordVerifiedProviderPaymentEventHandler>();
+        services.AddAtomicCommandHandler<
+            ReconcileClaimedProviderPaymentEventCommand,
+            ReconcileClaimedProviderPaymentEventResult,
+            ReconcileClaimedProviderPaymentEventHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider));
@@ -229,6 +236,141 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             row.ProviderObjectId == paymentIntentId)).Should().Be(2);
     }
 
+    [SkippableFact]
+    public async Task ProviderInbox_TakeoverFencesStaleCompletionAndFailure_AndRecoversOnce()
+    {
+        SkipIfNoDocker();
+        var scenario = await SeedScenarioAsync("provider-inbox-fencing");
+        const string succeededObjectId = "pi_fenced_success";
+        const string failedObjectId = "pi_fenced_failure";
+        long succeededAttemptId;
+        long failedAttemptId;
+        long succeededEventId;
+        long failedEventId;
+
+        await using (var db = NewContext())
+        {
+            var succeededAttempt = Attempt(scenario, "provider-inbox-success", succeededObjectId,
+                TenantPaymentAttemptState.Submitted);
+            var failedAttempt = Attempt(scenario, "provider-inbox-failure", failedObjectId,
+                TenantPaymentAttemptState.Submitted);
+            db.TenantPaymentAttempts.AddRange(succeededAttempt, failedAttempt);
+            await db.SaveChangesAsync();
+            succeededAttemptId = succeededAttempt.Id;
+            failedAttemptId = failedAttempt.Id;
+
+            var databaseNow = await db.Database
+                .SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"")
+                .SingleAsync();
+            var succeededEvent = ProviderEvent(
+                "evt_fenced_success", succeededObjectId, ProviderPaymentEventKind.Succeeded, databaseNow);
+            var failedEvent = ProviderEvent(
+                "evt_fenced_failure", failedObjectId, ProviderPaymentEventKind.Failed, databaseNow);
+            db.ProviderInboxEvents.AddRange(succeededEvent, failedEvent);
+            await db.SaveChangesAsync();
+            succeededEventId = succeededEvent.Id;
+            failedEventId = failedEvent.Id;
+        }
+
+        ProviderInboxClaim[] staleClaims;
+        await using (var db = NewContext())
+        {
+            staleClaims = (await new ProviderInboxClaimStore(db)
+                    .ClaimAsync("worker-a", TimeSpan.FromMinutes(2), 10))
+                .ToArray();
+            staleClaims.Should().HaveCount(2);
+            staleClaims.Select(claim => claim.ClaimToken).Should().OnlyHaveUniqueItems();
+        }
+
+        await using (var db = NewContext())
+        {
+            (await new ProviderInboxClaimStore(db)
+                    .ClaimAsync("worker-b", TimeSpan.FromMinutes(2), 10))
+                .Should().BeEmpty("an unexpired claim token has one owner");
+            await db.Database.ExecuteSqlInterpolatedAsync($$"""
+                UPDATE "ProviderInboxEvents"
+                SET "ClaimExpiresAtUtc" = clock_timestamp() - interval '1 second'
+                WHERE "Id" IN ({{succeededEventId}}, {{failedEventId}})
+                """);
+        }
+
+        ProviderInboxClaim[] currentClaims;
+        await using (var db = NewContext())
+        {
+            currentClaims = (await new ProviderInboxClaimStore(db)
+                    .ClaimAsync("worker-b", TimeSpan.FromMinutes(2), 10))
+                .ToArray();
+            currentClaims.Should().HaveCount(2);
+            currentClaims.Select(claim => claim.ClaimToken)
+                .Should().NotIntersectWith(staleClaims.Select(claim => claim.ClaimToken));
+            currentClaims.Should().OnlyContain(claim => claim.ClaimOwner == "worker-b");
+        }
+
+        foreach (var staleClaim in staleClaims)
+        {
+            await FluentActions.Awaiting(() => ReconcileAsync(staleClaim))
+                .Should().ThrowAsync<AtomicReceiptInvariantException>(
+                    "a reclaimed event cannot be completed or failed by its former token owner");
+        }
+
+        await using (var verify = NewContext())
+        {
+            (await verify.TenantPaymentAttempts.SingleAsync(row => row.Id == succeededAttemptId))
+                .State.Should().Be(TenantPaymentAttemptState.Submitted);
+            (await verify.TenantPaymentAttempts.SingleAsync(row => row.Id == failedAttemptId))
+                .State.Should().Be(TenantPaymentAttemptState.Submitted);
+            (await verify.TenantLedgerEntries.CountAsync(row =>
+                row.ProviderPaymentAttemptId == succeededAttemptId)).Should().Be(0);
+        }
+
+        var currentSucceeded = currentClaims.Single(claim => claim.Id == succeededEventId);
+        var currentFailed = currentClaims.Single(claim => claim.Id == failedEventId);
+        (await ReconcileAsync(currentSucceeded)).Value.Outcome
+            .Should().Be(ReconcileProviderPaymentEventOutcome.Applied);
+        (await ReconcileAsync(currentFailed)).Value.Outcome
+            .Should().Be(ReconcileProviderPaymentEventOutcome.Applied);
+
+        var duplicateCommand = new RecordVerifiedProviderPaymentEventCommand(
+            "stripe", "evt_fenced_success", "payment_intent.succeeded", "{}", succeededObjectId,
+            ProviderPaymentEventKind.Succeeded, 100m, "USD", null, DateTime.UtcNow, DateTime.UtcNow);
+        var duplicate = await Atomic.ExecuteAsync(
+            new AtomicCommandIdentity("payments.provider-event.record", "stripe:evt_fenced_success"),
+            duplicateCommand, EventCodec);
+        var replay = await Atomic.ExecuteAsync(
+            new AtomicCommandIdentity("payments.provider-event.record", "stripe:evt_fenced_success"),
+            duplicateCommand, EventCodec);
+        duplicate.Value.Outcome.Should().Be(RecordProviderPaymentEventOutcome.Duplicate);
+        replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replay.Value.ProviderInboxEventId.Should().Be(succeededEventId);
+
+        await using (var verify = NewContext())
+        {
+            (await verify.ProviderInboxEvents.CountAsync(row =>
+                row.Provider == "stripe" && row.ProviderEventId == "evt_fenced_success"))
+                .Should().Be(1);
+            (await verify.ProviderInboxEvents.CountAsync(row =>
+                (row.Id == succeededEventId || row.Id == failedEventId)
+                && row.ProcessedAtUtc != null
+                && row.ClaimOwner == null
+                && row.ClaimToken == null
+                && row.ClaimExpiresAtUtc == null))
+                .Should().Be(2, "only the replacement tokens finalize and release the durable events");
+            (await verify.TenantPaymentAttempts.SingleAsync(row => row.Id == succeededAttemptId))
+                .State.Should().Be(TenantPaymentAttemptState.Succeeded);
+            (await verify.TenantPaymentAttempts.SingleAsync(row => row.Id == failedAttemptId))
+                .State.Should().Be(TenantPaymentAttemptState.Failed);
+            (await verify.TenantLedgerEntries.CountAsync(row =>
+                row.ProviderPaymentAttemptId == succeededAttemptId)).Should().Be(1);
+            (await verify.OutboxMessages.CountAsync(row =>
+                row.IdempotencyKey == OutboxIdempotency.Create(
+                    "provider-receipt", succeededAttemptId.ToString())))
+                .Should().Be(1);
+            (await verify.AuditLogs.CountAsync(row =>
+                row.EntityType == nameof(TenantAccount) && row.EntityId == scenario.AccountId))
+                .Should().Be(2, "each canonical terminal attempt produces one audit event");
+        }
+    }
+
     private async Task<Scenario> SeedScenarioAsync(string suffix)
     {
         var now = DateTime.UtcNow;
@@ -375,6 +517,36 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         UpdatedAtUtc = DateTime.UtcNow,
         CreatedByUserId = scenario.UserId,
     };
+
+    private static ProviderInboxEvent ProviderEvent(
+        string eventId,
+        string providerObjectId,
+        ProviderPaymentEventKind eventKind,
+        DateTime databaseNow) => new()
+    {
+        Provider = "stripe",
+        ProviderEventId = eventId,
+        EventType = eventKind == ProviderPaymentEventKind.Succeeded
+            ? "payment_intent.succeeded"
+            : "payment_intent.payment_failed",
+        Payload = "{}",
+        ProviderObjectId = providerObjectId,
+        EventKind = eventKind,
+        Amount = 100m,
+        Currency = "USD",
+        FailureReason = eventKind == ProviderPaymentEventKind.Failed ? "Provider declined payment." : null,
+        OccurredAtUtc = databaseNow,
+        ReceivedAtUtc = databaseNow,
+        NextAttemptAtUtc = databaseNow,
+    };
+
+    private Task<AtomicCommandOutcome<ReconcileClaimedProviderPaymentEventResult>> ReconcileAsync(
+        ProviderInboxClaim claim) => Atomic.ExecuteAsync(
+        new AtomicCommandIdentity(
+            "payments.provider-inbox.reconcile", $"{claim.Id}:{claim.ClaimToken:N}"),
+        new ReconcileClaimedProviderPaymentEventCommand(
+            claim.Id, claim.ClaimOwner, claim.ClaimToken, DateTime.UtcNow),
+        ReconcileCodec);
 
     private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();
 
