@@ -20,6 +20,12 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
 {
     private static readonly AtomicJsonResultCodec<UpdateAssignedWorkOrderResult> UpdateCodec =
         new("assigned-work-order.update.v1");
+    private static readonly AtomicJsonResultCodec<RecordTechnicianWorkEntryResult> EntryCodec =
+        new("technician-work-entry.v1");
+    private static readonly AtomicJsonResultCodec<SendTechnicianAssignmentMessageResult> MessageCodec =
+        new("technician-assignment-message.v1");
+    private static readonly AtomicJsonResultCodec<MarkTechnicianAssignmentConversationReadResult> ReadCodec =
+        new("technician-assignment-conversation-read.v1");
     private readonly MigratedPostgreSqlFixture _fixture;
     private MigratedPostgreSqlTestContext _context = null!;
     private ServiceProvider _services = null!;
@@ -35,6 +41,12 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
         services.AddAtomicCommandHandler<UpdateAssignedWorkOrderCommand, UpdateAssignedWorkOrderResult,
             UpdateAssignedWorkOrderHandler>();
+        services.AddAtomicCommandHandler<RecordTechnicianWorkEntryCommand, RecordTechnicianWorkEntryResult,
+            RecordTechnicianWorkEntryHandler>();
+        services.AddAtomicCommandHandler<SendTechnicianAssignmentMessageCommand,
+            SendTechnicianAssignmentMessageResult, SendTechnicianAssignmentMessageHandler>();
+        services.AddAtomicCommandHandler<MarkTechnicianAssignmentConversationReadCommand,
+            MarkTechnicianAssignmentConversationReadResult, MarkTechnicianAssignmentConversationReadHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(_context.ConnectionString).UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider(new ServiceProviderOptions
@@ -121,6 +133,88 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             receipt.IdempotencyKey.EndsWith(":unassigned-update-denied"))).Should().Be(0);
     }
 
+    [Fact]
+    public async Task AssignedTechnician_EntryMessageAndReadMutations_RejectUnassignedAndStaleAuthority()
+    {
+        var scenario = await SeedScenarioAsync();
+        var entry = new RecordTechnicianWorkEntryCommand(
+            scenario.PortfolioId, scenario.UserId, scenario.SessionId, scenario.AccessContextId,
+            scenario.AccessRevision, scenario.AssignedWorkOrderId, TechnicianWorkEntryKind.Note,
+            "Verified assigned entry", null, null, null, DateTime.UtcNow, "assigned-entry");
+        var message = new SendTechnicianAssignmentMessageCommand(
+            scenario.PortfolioId, scenario.UserId, scenario.SessionId, scenario.AccessContextId,
+            scenario.AccessRevision, scenario.AssignedWorkOrderId, "Assigned technician update.",
+            "assigned-message");
+        var read = new MarkTechnicianAssignmentConversationReadCommand(
+            scenario.PortfolioId, scenario.UserId, scenario.SessionId, scenario.AccessContextId,
+            scenario.AccessRevision, scenario.AssignedWorkOrderId, "assigned-read");
+
+        await Atomic.ExecuteAsync(new AtomicCommandIdentity(
+            "technician-work-entry.record", $"{scenario.PortfolioId}:{scenario.AssignedWorkOrderId}:assigned-entry"),
+            entry, EntryCodec);
+        await Atomic.ExecuteAsync(new AtomicCommandIdentity(
+            "technician-assignment-message.send", $"{scenario.PortfolioId}:{scenario.AssignedWorkOrderId}:assigned-message"),
+            message, MessageCodec);
+        await Atomic.ExecuteAsync(new AtomicCommandIdentity(
+            "technician-assignment-conversation.read", $"{scenario.PortfolioId}:{scenario.AssignedWorkOrderId}:assigned-read"),
+            read, ReadCodec);
+
+        _context.Db.ChangeTracker.Clear();
+        (await _context.Db.TechnicianWorkEntries.AsNoTracking().CountAsync(item =>
+            item.WorkOrderId == scenario.AssignedWorkOrderId && item.Note == "Verified assigned entry"))
+            .Should().Be(1);
+        (await _context.Db.ConversationMessages.AsNoTracking().CountAsync(item =>
+            item.ConversationId == scenario.ConversationId &&
+            item.SenderRole == ConversationSenderRole.Technician &&
+            item.Body == "Assigned technician update."))
+            .Should().Be(1);
+        (await _context.Db.Conversations.AsNoTracking()
+            .Where(item => item.Id == scenario.ConversationId)
+            .Select(item => item.TechnicianUnreadCount)
+            .SingleAsync()).Should().Be(0);
+
+        await AssertDeniedAsync(new AtomicCommandIdentity(
+                "technician-work-entry.record", $"{scenario.PortfolioId}:{scenario.UnassignedWorkOrderId}:unassigned-entry"),
+            entry with { WorkOrderId = scenario.UnassignedWorkOrderId, DeliveryIdempotencyKey = "unassigned-entry" },
+            EntryCodec);
+        await AssertDeniedAsync(new AtomicCommandIdentity(
+                "technician-assignment-message.send", $"{scenario.PortfolioId}:{scenario.UnassignedWorkOrderId}:unassigned-message"),
+            message with { WorkOrderId = scenario.UnassignedWorkOrderId, DeliveryIdempotencyKey = "unassigned-message" },
+            MessageCodec);
+        await AssertDeniedAsync(new AtomicCommandIdentity(
+                "technician-assignment-conversation.read", $"{scenario.PortfolioId}:{scenario.UnassignedWorkOrderId}:unassigned-read"),
+            read with { WorkOrderId = scenario.UnassignedWorkOrderId, DeliveryIdempotencyKey = "unassigned-read" },
+            ReadCodec);
+        await AssertDeniedAsync(new AtomicCommandIdentity(
+                "technician-work-entry.record", $"{scenario.PortfolioId}:{scenario.AssignedWorkOrderId}:stale-entry"),
+            entry with
+            {
+                ActorAccessRevision = scenario.AccessRevision + 1,
+                DeliveryIdempotencyKey = "stale-entry",
+            },
+            EntryCodec);
+
+        _context.Db.ChangeTracker.Clear();
+        (await _context.Db.TechnicianWorkEntries.AsNoTracking().AnyAsync(item =>
+            item.WorkOrderId == scenario.UnassignedWorkOrderId)).Should().BeFalse();
+        (await _context.Db.Conversations.AsNoTracking().AnyAsync(item =>
+            item.WorkOrderId == scenario.UnassignedWorkOrderId)).Should().BeFalse();
+        (await _context.Db.AtomicCommandReceipts.AsNoTracking().CountAsync(receipt =>
+            receipt.IdempotencyKey.Contains("unassigned-") || receipt.IdempotencyKey.Contains("stale-entry")))
+            .Should().Be(0);
+    }
+
+    private async Task AssertDeniedAsync<TCommand, TResult>(
+        AtomicCommandIdentity identity,
+        TCommand command,
+        IAtomicResultCodec<TResult> codec)
+        where TCommand : notnull, IAtomicCommandData
+        where TResult : notnull, IAtomicResultData
+    {
+        var act = async () => await Atomic.ExecuteAsync(identity, command, codec);
+        await act.Should().ThrowAsync<UnauthorizedAccessException>();
+    }
+
     private IAtomicUnitOfWork Atomic => _services.GetRequiredService<IAtomicUnitOfWork>();
 
     private async Task<Scenario> SeedScenarioAsync()
@@ -149,7 +243,16 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             CreatedAt = now,
             UpdatedAt = now,
         };
-        db.AddRange(user, property);
+        var tenant = new Tenant
+        {
+            PortfolioId = 1,
+            FirstName = "Assigned",
+            LastName = "Tenant",
+            Email = "assigned-technician-tenant@example.test",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.AddRange(user, property, tenant);
         await db.SaveChangesAsync();
 
         var context = new WorkspaceAccessContext
@@ -196,8 +299,8 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         db.AddRange(assignment, session);
         await db.SaveChangesAsync();
 
-        var assigned = WorkOrder(property.Id, "Assigned repair", now);
-        var unassigned = WorkOrder(property.Id, "Unassigned repair", now);
+        var assigned = WorkOrder(property.Id, tenant.Id, "Assigned repair", now);
+        var unassigned = WorkOrder(property.Id, tenant.Id, "Unassigned repair", now);
         db.AddRange(assigned, unassigned);
         await db.SaveChangesAsync();
         db.WorkOrderResponsibilities.Add(new WorkOrderResponsibility
@@ -215,15 +318,35 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
             AssignedReason = "Integration proof assignment",
             AssignedAtUtc = now.AddSeconds(-1),
         });
+        var conversation = new Conversation
+        {
+            PortfolioId = 1,
+            TenantId = tenant.Id,
+            PropertyId = property.Id,
+            WorkOrderId = assigned.Id,
+            Subject = "Assigned repair",
+            CreatedAt = now,
+            LastMessageAt = now,
+            LastMessagePreview = "Office update",
+            TechnicianUnreadCount = 2,
+        };
+        conversation.Messages.Add(new ConversationMessage
+        {
+            SenderRole = ConversationSenderRole.Landlord,
+            Body = "Office update",
+            CreatedAt = now,
+        });
+        db.Conversations.Add(conversation);
         await db.SaveChangesAsync();
         return new Scenario(1, user.Id, session.Id, context.Id, context.AccessRevision,
-            assigned.Id, assigned.UpdatedAt, unassigned.Id, unassigned.UpdatedAt);
+            assigned.Id, assigned.UpdatedAt, unassigned.Id, unassigned.UpdatedAt, conversation.Id);
     }
 
-    private static WorkOrder WorkOrder(int propertyId, string title, DateTime now) => new()
+    private static WorkOrder WorkOrder(int propertyId, int tenantId, string title, DateTime now) => new()
     {
         PortfolioId = 1,
         PropertyId = propertyId,
+        TenantId = tenantId,
         Title = title,
         Description = title,
         Category = "General",
@@ -248,7 +371,8 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         int AssignedWorkOrderId,
         DateTime AssignedUpdatedAt,
         int UnassignedWorkOrderId,
-        DateTime UnassignedUpdatedAt);
+        DateTime UnassignedUpdatedAt,
+        int ConversationId);
 }
 
 [CollectionDefinition(Name, DisableParallelization = true)]
