@@ -127,8 +127,12 @@ public class ExpenseController : ManagementControllerBase
     [ProducesResponseType(typeof(CapitalAssetResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<CapitalAssetResponse>> Capitalize(
-        int id, [FromBody] CapitalizeExpenseRequest request, CancellationToken ct)
+        int id, [FromBody] CapitalizeExpenseRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
         var scope = GetWorkspaceReadScope();
         var visible = await _service.GetAsync(scope, id, ct);
         if (visible?.PropertyId is not int propertyId)
@@ -139,7 +143,7 @@ public class ExpenseController : ManagementControllerBase
                     scope.PortfolioId, propertyId), ct))
             return StatusCode(403, new { error = "You can view this expense but cannot capitalize it." });
         var created = await _capitalAssets.CapitalizeExpenseAuthorizedAsync(
-            GetWorkspaceReadScope(), id, request, ct);
+            GetWorkspaceReadScope(), id, request, operationKey, ct);
         return created is null
             ? NotFound(new { error = "Expense not found, already capitalized, or not linked to a property" })
             : CreatedAtAction("Get", "CapitalAssets", new { id = created.Id }, created);

@@ -1,8 +1,11 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 
 enum DepreciationMethod {
   straightLine('StraightLine', 'Straight-line'),
@@ -195,9 +198,14 @@ class CapitalAssetsRepository {
     required Map<String, dynamic> data,
   }) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/capital-assets',
-        data: {...data, 'propertyId': propertyId},
+      final payload = {...data, 'propertyId': propertyId};
+      final response = await IdempotentMutation.run(
+        'capital-assets:create:${jsonEncode(payload)}',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/capital-assets',
+          data: payload,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -214,9 +222,13 @@ class CapitalAssetsRepository {
 
   Future<CapitalAsset> updateAsset(int id, Map<String, dynamic> data) async {
     try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/capital-assets/$id',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'capital-assets:update:$id:${jsonEncode(data)}',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/capital-assets/$id',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -233,7 +245,13 @@ class CapitalAssetsRepository {
 
   Future<void> deleteAsset(int id) async {
     try {
-      await _dio.delete<dynamic>('/capital-assets/$id');
+      await IdempotentMutation.run(
+        'capital-assets:delete:$id',
+        (key) => _dio.delete<dynamic>(
+          '/capital-assets/$id',
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

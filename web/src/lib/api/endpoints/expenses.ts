@@ -58,9 +58,13 @@ export const expenses = {
 			api.patch<Expense>(`/expenses/${id}`, data, {
 				headers: { 'Idempotency-Key': key }
 			})
-		),
+	),
 	capitalize: (id: number, data: CapitalizeExpenseRequest) =>
-		api.post<CapitalAsset>(`/expenses/${id}/capitalize`, data),
+		idempotentMutation(`expenses:capitalize:${id}:${JSON.stringify(data)}`, (key) =>
+			api.post<CapitalAsset>(`/expenses/${id}/capitalize`, data, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
 	delete: (id: number) =>
 		idempotentMutation(`expenses:delete:${id}`, (key) =>
 			api.delete(`/expenses/${id}`, { headers: { 'Idempotency-Key': key } })

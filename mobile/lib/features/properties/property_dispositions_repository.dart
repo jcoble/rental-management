@@ -1,8 +1,11 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 
 class PropertyDisposition {
   const PropertyDisposition({
@@ -158,9 +161,14 @@ class PropertyDispositionsRepository {
     required Map<String, dynamic> data,
   }) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/property-dispositions',
-        data: {...data, 'propertyId': propertyId},
+      final payload = {...data, 'propertyId': propertyId};
+      final response = await IdempotentMutation.run(
+        'property-dispositions:create:${jsonEncode(payload)}',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/property-dispositions',
+          data: payload,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -180,9 +188,13 @@ class PropertyDispositionsRepository {
     Map<String, dynamic> data,
   ) async {
     try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/property-dispositions/$id',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'property-dispositions:update:$id:${jsonEncode(data)}',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/property-dispositions/$id',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -199,7 +211,13 @@ class PropertyDispositionsRepository {
 
   Future<void> deleteDisposition(int id) async {
     try {
-      await _dio.delete<dynamic>('/property-dispositions/$id');
+      await IdempotentMutation.run(
+        'property-dispositions:delete:$id',
+        (key) => _dio.delete<dynamic>(
+          '/property-dispositions/$id',
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
