@@ -62,7 +62,7 @@ void main() {
       'lib/features/money/overdue_screen.dart',
     ).readAsStringSync();
 
-    expect(source, contains('UnitCommandCenterTab.ledger'));
+    expect(source, contains('UnitCommandCenterTab.money'));
     expect(source, contains('showRecordTenantReceiptSheet('));
     expect(source, contains('initialAmount: account.pastDueAmount'));
     expect(

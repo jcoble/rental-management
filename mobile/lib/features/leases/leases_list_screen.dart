@@ -54,7 +54,8 @@ class _LeasesListScreenState extends ConsumerState<LeasesListScreen> {
     openUnitCommandCenter(
       context,
       unitId: management.unitId,
-      initialTab: UnitCommandCenterTab.lease,
+      initialTab: UnitCommandCenterTab.tenantLease,
+      initialView: UnitCommandCenterView.agreements,
       leaseManagementId: management.id,
     );
   }
@@ -69,7 +70,8 @@ class _LeasesListScreenState extends ConsumerState<LeasesListScreen> {
     openUnitCommandCenter(
       context,
       unitId: result.unitId,
-      initialTab: UnitCommandCenterTab.lease,
+      initialTab: UnitCommandCenterTab.tenantLease,
+      initialView: UnitCommandCenterView.agreements,
       leaseManagementId: result.leaseManagementId,
     );
   }

@@ -36,7 +36,7 @@
 
 	function ledgerUrl(view: LedgerView) {
 		const url = new URL(`/units/${unitId}`, page.url.origin);
-		url.searchParams.set('tab', 'ledger');
+		url.searchParams.set('tab', 'money');
 		url.searchParams.set('ledger', view);
 		return `${url.pathname}${url.search}`;
 	}
@@ -45,7 +45,7 @@
 		const next: LedgerView = value === 'expenses' ? 'expenses' : 'rent';
 		activeLedgerView = next;
 		const url = new URL(page.url);
-		url.searchParams.set('tab', 'ledger');
+		url.searchParams.set('tab', 'money');
 		url.searchParams.set('ledger', next);
 		if (next === 'rent') {
 			url.searchParams.delete('expense');
@@ -100,13 +100,13 @@
 		<Tabs.Content value="rent" class="mt-4" data-testid="ledger-rent-panel">
 			<RentTab
 				{dashboard}
-				tabQuery="ledger"
+				tabQuery="money"
 				ledgerQuery="rent"
 				onScan={() => onScan({ type: 'Payment', propertyId: dashboard.unit.propertyId, unitId: dashboard.unit.id, leaseManagementId: dashboard.currentLease?.leaseManagementId ?? undefined, tenantAccountId: dashboard.currentLease?.tenantAccountId ?? undefined, returnTo: ledgerUrl('rent') })}
 			/>
 		</Tabs.Content>
 		<Tabs.Content value="expenses" class="mt-4" data-testid="ledger-expenses-panel">
-			<ExpensesTab {dashboard} tabQuery="ledger" ledgerQuery="expenses" {onScan} />
+			<ExpensesTab {dashboard} tabQuery="money" ledgerQuery="expenses" {onScan} />
 		</Tabs.Content>
 	</Tabs.Root>
 </div>

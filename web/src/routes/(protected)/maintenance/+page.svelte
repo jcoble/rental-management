@@ -737,7 +737,7 @@
 	</DataGrid>
 
 	<div class="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
-		<Card.Root class="gap-0 py-0">
+		<Card.Root id="inspections" class="scroll-mt-6 gap-0 py-0">
 			<Card.Header class="border-b border-border px-4 py-3">
 				<Card.Title class="text-base font-semibold">Inspections</Card.Title>
 			</Card.Header>

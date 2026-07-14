@@ -17,15 +17,15 @@
 	// tab where that stage's work is done, so the stepper doubles as navigation (analog of EdiPlatform's
 	// order workflow stepper).
 	const STAGES: { key: UnitLifecycleStage; label: string; tab: string }[] = [
-		{ key: 'Ready', label: 'Ready', tab: 'overview' },
-		{ key: 'Listed', label: 'Listed', tab: 'overview' },
-		{ key: 'Applicant', label: 'Applicant', tab: 'overview' },
-		{ key: 'Lease', label: 'Lease', tab: 'lease' },
-		{ key: 'MoveIn', label: 'Move-In', tab: 'lease' },
-		{ key: 'Active', label: 'Active', tab: 'ledger' },
-		{ key: 'Renewal', label: 'Renewal', tab: 'lease' },
-		{ key: 'MoveOut', label: 'Move-Out', tab: 'turnover' },
-		{ key: 'Turnover', label: 'Turnover', tab: 'turnover' },
+		{ key: 'Ready', label: 'Ready', tab: 'summary' },
+		{ key: 'Listed', label: 'Listed', tab: 'leasing' },
+		{ key: 'Applicant', label: 'Applicant', tab: 'leasing' },
+		{ key: 'Lease', label: 'Lease', tab: 'tenant-lease' },
+		{ key: 'MoveIn', label: 'Move-In', tab: 'tenant-lease' },
+		{ key: 'Active', label: 'Active', tab: 'money' },
+		{ key: 'Renewal', label: 'Renewal', tab: 'tenant-lease' },
+		{ key: 'MoveOut', label: 'Move-Out', tab: 'maintenance' },
+		{ key: 'Turnover', label: 'Turnover', tab: 'maintenance' },
 	];
 
 	const currentIndex = $derived(Math.max(0, STAGES.findIndex((s) => s.key === stage)));

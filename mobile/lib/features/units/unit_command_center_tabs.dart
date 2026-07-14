@@ -1,22 +1,40 @@
 enum UnitCommandCenterTab {
-  overview,
+  summary,
+  leasing,
+  tenantLease,
+  money,
+  maintenance,
+  documentsHistory,
+}
+
+enum UnitCommandCenterView {
   listing,
-  lease,
   applications,
-  ledger,
-  tenants,
+  agreements,
+  residents,
+  workOrders,
   turnover,
-  work,
+  documents,
+  history,
+}
+
+class UnitCommandCenterDestination {
+  const UnitCommandCenterDestination({required this.tab, this.view});
+
+  final UnitCommandCenterTab tab;
+  final UnitCommandCenterView? view;
 }
 
 class UnitCommandCenterRouteTarget {
   const UnitCommandCenterRouteTarget({
     required this.unitId,
     required this.initialTab,
+    this.initialView,
   });
 
   final int unitId;
   final UnitCommandCenterTab initialTab;
+  final UnitCommandCenterView? initialView;
 }
 
 UnitCommandCenterRouteTarget? parseUnitCommandCenterRoute(String route) {
@@ -29,26 +47,112 @@ UnitCommandCenterRouteTarget? parseUnitCommandCenterRoute(String route) {
   final unitId = int.tryParse(segments[1]);
   if (unitId == null || unitId <= 0) return null;
 
+  final destination = unitCommandCenterDestinationFromName(
+    uri.queryParameters['tab'],
+    uri.queryParameters['view'],
+  );
   return UnitCommandCenterRouteTarget(
     unitId: unitId,
-    initialTab: unitCommandCenterTabFromName(uri.queryParameters['tab']),
+    initialTab: destination.tab,
+    initialView: destination.view,
   );
 }
 
-UnitCommandCenterTab unitCommandCenterTabFromName(String? raw) {
-  switch (raw?.trim().toLowerCase()) {
+UnitCommandCenterTab unitCommandCenterTabFromName(String? raw) =>
+    unitCommandCenterDestinationFromName(raw, null).tab;
+
+UnitCommandCenterDestination unitCommandCenterDestinationFromName(
+  String? rawTab,
+  String? rawView,
+) {
+  final tab = rawTab?.trim().toLowerCase();
+  final view = rawView?.trim().toLowerCase();
+
+  UnitCommandCenterDestination canonical(
+    UnitCommandCenterTab area,
+    UnitCommandCenterView? defaultView,
+    Map<String, UnitCommandCenterView> validViews,
+  ) {
+    return UnitCommandCenterDestination(
+      tab: area,
+      view: validViews[view] ?? defaultView,
+    );
+  }
+
+  switch (tab) {
+    case 'leasing':
+      return canonical(
+        UnitCommandCenterTab.leasing,
+        UnitCommandCenterView.listing,
+        {
+          'listing': UnitCommandCenterView.listing,
+          'applications': UnitCommandCenterView.applications,
+        },
+      );
+    case 'tenant-lease':
+    case 'tenantlease':
+      return canonical(
+        UnitCommandCenterTab.tenantLease,
+        UnitCommandCenterView.agreements,
+        {
+          'agreements': UnitCommandCenterView.agreements,
+          'lease': UnitCommandCenterView.agreements,
+          'residents': UnitCommandCenterView.residents,
+          'tenants': UnitCommandCenterView.residents,
+        },
+      );
+    case 'money':
+      return const UnitCommandCenterDestination(
+        tab: UnitCommandCenterTab.money,
+      );
+    case 'maintenance':
+      return canonical(
+        UnitCommandCenterTab.maintenance,
+        UnitCommandCenterView.workOrders,
+        {
+          'work-orders': UnitCommandCenterView.workOrders,
+          'work': UnitCommandCenterView.workOrders,
+          'turnover': UnitCommandCenterView.turnover,
+        },
+      );
+    case 'documents-history':
+    case 'documentshistory':
+      return canonical(
+        UnitCommandCenterTab.documentsHistory,
+        UnitCommandCenterView.documents,
+        {
+          'documents': UnitCommandCenterView.documents,
+          'history': UnitCommandCenterView.history,
+          'timeline': UnitCommandCenterView.history,
+        },
+      );
     case 'listing':
     case 'listings':
     case 'zillow':
-      return UnitCommandCenterTab.listing;
-    case 'lease':
-    case 'leases':
-      return UnitCommandCenterTab.lease;
+      return const UnitCommandCenterDestination(
+        tab: UnitCommandCenterTab.leasing,
+        view: UnitCommandCenterView.listing,
+      );
     case 'app':
     case 'apps':
     case 'application':
     case 'applications':
-      return UnitCommandCenterTab.applications;
+      return const UnitCommandCenterDestination(
+        tab: UnitCommandCenterTab.leasing,
+        view: UnitCommandCenterView.applications,
+      );
+    case 'lease':
+    case 'leases':
+      return const UnitCommandCenterDestination(
+        tab: UnitCommandCenterTab.tenantLease,
+        view: UnitCommandCenterView.agreements,
+      );
+    case 'tenant':
+    case 'tenants':
+      return const UnitCommandCenterDestination(
+        tab: UnitCommandCenterTab.tenantLease,
+        view: UnitCommandCenterView.residents,
+      );
     case 'ledger':
     case 'rent':
     case 'rents':
@@ -56,23 +160,41 @@ UnitCommandCenterTab unitCommandCenterTabFromName(String? raw) {
     case 'payments':
     case 'expense':
     case 'expenses':
-      return UnitCommandCenterTab.ledger;
-    case 'tenant':
-    case 'tenants':
-      return UnitCommandCenterTab.tenants;
-    case 'maintenance':
+      return const UnitCommandCenterDestination(
+        tab: UnitCommandCenterTab.money,
+      );
     case 'work':
     case 'work-orders':
     case 'workorders':
-      return UnitCommandCenterTab.work;
+      return const UnitCommandCenterDestination(
+        tab: UnitCommandCenterTab.maintenance,
+        view: UnitCommandCenterView.workOrders,
+      );
     case 'turnover':
     case 'make-ready':
     case 'makeready':
     case 'move-out':
     case 'moveout':
-      return UnitCommandCenterTab.turnover;
+      return const UnitCommandCenterDestination(
+        tab: UnitCommandCenterTab.maintenance,
+        view: UnitCommandCenterView.turnover,
+      );
+    case 'documents':
+      return const UnitCommandCenterDestination(
+        tab: UnitCommandCenterTab.documentsHistory,
+        view: UnitCommandCenterView.documents,
+      );
+    case 'timeline':
+    case 'history':
+      return const UnitCommandCenterDestination(
+        tab: UnitCommandCenterTab.documentsHistory,
+        view: UnitCommandCenterView.history,
+      );
+    case 'summary':
     case 'overview':
     default:
-      return UnitCommandCenterTab.overview;
+      return const UnitCommandCenterDestination(
+        tab: UnitCommandCenterTab.summary,
+      );
   }
 }

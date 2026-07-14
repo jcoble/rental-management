@@ -11,6 +11,7 @@ import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
 import '../../core/auth/mobile_access_policy.dart';
 import '../../core/models/work_order.dart';
+import '../activity/activity_history_screen.dart';
 import '../applications/application_detail_screen.dart';
 import '../applications/applications_models.dart';
 import '../home/mobile_domain_navigation.dart';
@@ -36,7 +37,8 @@ class UnitCommandCenterLoaderScreen extends ConsumerWidget {
   const UnitCommandCenterLoaderScreen({
     super.key,
     required this.unitId,
-    this.initialTab = UnitCommandCenterTab.overview,
+    this.initialTab = UnitCommandCenterTab.summary,
+    this.initialView,
     this.initialLeaseManagementId,
     this.initialApplication,
     this.initialWorkOrder,
@@ -45,6 +47,7 @@ class UnitCommandCenterLoaderScreen extends ConsumerWidget {
 
   final int unitId;
   final UnitCommandCenterTab initialTab;
+  final UnitCommandCenterView? initialView;
   final int? initialLeaseManagementId;
   final RentalApplication? initialApplication;
   final WorkOrder? initialWorkOrder;
@@ -74,6 +77,7 @@ class UnitCommandCenterLoaderScreen extends ConsumerWidget {
         final screen = UnitCommandCenterScreen(
           dashboard: dashboard,
           initialTab: initialTab,
+          initialView: initialView,
           initialLeaseManagementId: initialLeaseManagementId,
           initialApplication: initialApplication,
           initialWorkOrder: initialWorkOrder,
@@ -90,11 +94,12 @@ class UnitCommandCenterLoaderScreen extends ConsumerWidget {
   }
 }
 
-class UnitCommandCenterScreen extends StatelessWidget {
+class UnitCommandCenterScreen extends StatefulWidget {
   const UnitCommandCenterScreen({
     super.key,
     required this.dashboard,
-    this.initialTab = UnitCommandCenterTab.overview,
+    this.initialTab = UnitCommandCenterTab.summary,
+    this.initialView,
     this.initialLeaseManagementId,
     this.initialApplication,
     this.initialWorkOrder,
@@ -103,94 +108,341 @@ class UnitCommandCenterScreen extends StatelessWidget {
 
   final UnitDashboard dashboard;
   final UnitCommandCenterTab initialTab;
+  final UnitCommandCenterView? initialView;
   final int? initialLeaseManagementId;
   final RentalApplication? initialApplication;
   final WorkOrder? initialWorkOrder;
   final int? selectedTenantId;
 
   @override
+  State<UnitCommandCenterScreen> createState() =>
+      _UnitCommandCenterScreenState();
+}
+
+class _UnitCommandCenterScreenState extends State<UnitCommandCenterScreen> {
+  late final ValueNotifier<UnitCommandCenterView?> _activeView;
+
+  @override
+  void initState() {
+    super.initState();
+    _activeView = ValueNotifier(_startingView);
+  }
+
+  UnitCommandCenterView? get _startingView {
+    if (widget.initialView != null) return widget.initialView;
+    if (widget.initialApplication != null) {
+      return UnitCommandCenterView.applications;
+    }
+    if (widget.selectedTenantId != null) {
+      return UnitCommandCenterView.residents;
+    }
+    if (widget.initialWorkOrder != null) {
+      return UnitCommandCenterView.workOrders;
+    }
+    return switch (widget.initialTab) {
+      UnitCommandCenterTab.leasing => UnitCommandCenterView.listing,
+      UnitCommandCenterTab.tenantLease => UnitCommandCenterView.agreements,
+      UnitCommandCenterTab.maintenance => UnitCommandCenterView.workOrders,
+      UnitCommandCenterTab.documentsHistory => UnitCommandCenterView.documents,
+      _ => null,
+    };
+  }
+
+  @override
+  void dispose() {
+    _activeView.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final unit = dashboard.unit;
-    final property = dashboard.propertyName.trim().isEmpty
+    final unit = widget.dashboard.unit;
+    final property = widget.dashboard.propertyName.trim().isEmpty
         ? 'Property'
-        : dashboard.propertyName.trim();
+        : widget.dashboard.propertyName.trim();
     final usesDomainHeader = MobileDomainHeaderScope.maybeOf(context) != null;
     const unitTabs = TabBar(
       isScrollable: true,
       tabAlignment: TabAlignment.start,
       tabs: [
-        Tab(text: 'Overview'),
-        Tab(text: 'Listing'),
-        Tab(text: 'Lease'),
-        Tab(text: 'Apps'),
-        Tab(text: 'Ledger'),
-        Tab(text: 'Tenants'),
-        Tab(text: 'Turnover'),
-        Tab(text: 'Work'),
+        Tab(text: 'Summary'),
+        Tab(text: 'Leasing'),
+        Tab(text: 'Tenant & lease'),
+        Tab(text: 'Money'),
+        Tab(text: 'Maintenance'),
+        Tab(text: 'Documents & history'),
       ],
     );
     final tabView = TabBarView(
       children: [
-        _UnitOverviewTab(dashboard: dashboard),
-        _UnitListingTab(dashboard: dashboard),
-        _UnitLeaseTab(
-          dashboard: dashboard,
-          selectedLeaseManagementId: initialLeaseManagementId,
+        _UnitOverviewTab(dashboard: widget.dashboard),
+        _UnitAreaTabs(
+          area: UnitCommandCenterTab.leasing,
+          labels: const ['Listing', 'Applications'],
+          views: const [
+            UnitCommandCenterView.listing,
+            UnitCommandCenterView.applications,
+          ],
+          initialView: _startingView,
+          activeView: _activeView,
+          children: [
+            _UnitListingTab(dashboard: widget.dashboard),
+            _UnitApplicationsTab(application: widget.initialApplication),
+          ],
         ),
-        _UnitApplicationsTab(application: initialApplication),
-        _UnitLedgerTab(dashboard: dashboard),
-        _UnitTenantsTab(
-          dashboard: dashboard,
-          selectedTenantId: selectedTenantId,
+        _UnitAreaTabs(
+          area: UnitCommandCenterTab.tenantLease,
+          labels: const ['Agreement', 'Residents'],
+          views: const [
+            UnitCommandCenterView.agreements,
+            UnitCommandCenterView.residents,
+          ],
+          initialView: _startingView,
+          activeView: _activeView,
+          children: [
+            _UnitLeaseTab(
+              dashboard: widget.dashboard,
+              selectedLeaseManagementId: widget.initialLeaseManagementId,
+            ),
+            _UnitTenantsTab(
+              dashboard: widget.dashboard,
+              selectedTenantId: widget.selectedTenantId,
+            ),
+          ],
         ),
-        _UnitTurnoverTab(dashboard: dashboard),
-        _UnitWorkTab(dashboard: dashboard, selectedWorkOrder: initialWorkOrder),
+        _UnitLedgerTab(dashboard: widget.dashboard),
+        _UnitAreaTabs(
+          area: UnitCommandCenterTab.maintenance,
+          labels: const ['Work orders', 'Turnover'],
+          views: const [
+            UnitCommandCenterView.workOrders,
+            UnitCommandCenterView.turnover,
+          ],
+          initialView: _startingView,
+          activeView: _activeView,
+          header: const _UnitMaintenanceShortcuts(),
+          children: [
+            _UnitWorkTab(
+              dashboard: widget.dashboard,
+              selectedWorkOrder: widget.initialWorkOrder,
+            ),
+            _UnitTurnoverTab(dashboard: widget.dashboard),
+          ],
+        ),
+        _UnitAreaTabs(
+          area: UnitCommandCenterTab.documentsHistory,
+          labels: const ['Documents', 'History'],
+          views: const [
+            UnitCommandCenterView.documents,
+            UnitCommandCenterView.history,
+          ],
+          initialView: _startingView,
+          activeView: _activeView,
+          children: [
+            _UnitDocumentsTab(dashboard: widget.dashboard),
+            ActivityHistoryScreen(
+              entityType: 'Unit',
+              entityId: widget.dashboard.unit.id,
+              title: 'Unit history',
+              subtitle: _unitLabel(widget.dashboard.unit.unitNumber),
+              embedded: true,
+            ),
+          ],
+        ),
       ],
     );
 
     return DefaultTabController(
       length: UnitCommandCenterTab.values.length,
-      initialIndex: initialTab.index,
-      child: Scaffold(
-        appBar: usesDomainHeader
-            ? null
-            : AppBar(
-                title: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
+      initialIndex: widget.initialTab.index,
+      child: _UnitViewScope(
+        activeView: _activeView,
+        child: Scaffold(
+          appBar: usesDomainHeader
+              ? null
+              : AppBar(
+                  title: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(_unitLabel(unit.unitNumber)),
+                      Text(
+                        property,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                  bottom: unitTabs,
+                ),
+          body: usesDomainHeader
+              ? Column(
                   children: [
-                    Text(_unitLabel(unit.unitNumber)),
-                    Text(
-                      property,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    Material(
+                      color: Theme.of(context).colorScheme.surface,
+                      child: const Align(
+                        alignment: Alignment.centerLeft,
+                        child: unitTabs,
                       ),
                     ),
+                    Expanded(child: tabView),
                   ],
-                ),
-                bottom: unitTabs,
-              ),
-        body: usesDomainHeader
-            ? Column(
-                children: [
-                  Material(
-                    color: Theme.of(context).colorScheme.surface,
-                    child: const Align(
-                      alignment: Alignment.centerLeft,
-                      child: unitTabs,
-                    ),
-                  ),
-                  Expanded(child: tabView),
-                ],
-              )
-            : tabView,
-        floatingActionButton: _UnitWorkOrderQuickActionFab(
-          dashboard: dashboard,
-          selectedWorkOrder: initialWorkOrder,
+                )
+              : tabView,
+          floatingActionButton: _UnitWorkOrderQuickActionFab(
+            dashboard: widget.dashboard,
+            selectedWorkOrder: widget.initialWorkOrder,
+            activeView: _activeView,
+          ),
+          floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
         ),
-        floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+      ),
+    );
+  }
+}
+
+class _UnitViewScope extends InheritedWidget {
+  const _UnitViewScope({required this.activeView, required super.child});
+
+  final ValueNotifier<UnitCommandCenterView?> activeView;
+
+  static ValueNotifier<UnitCommandCenterView?>? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_UnitViewScope>()?.activeView;
+
+  @override
+  bool updateShouldNotify(_UnitViewScope oldWidget) =>
+      !identical(activeView, oldWidget.activeView);
+}
+
+class _UnitAreaTabs extends StatefulWidget {
+  const _UnitAreaTabs({
+    required this.area,
+    required this.labels,
+    required this.views,
+    required this.children,
+    required this.activeView,
+    this.initialView,
+    this.header,
+  }) : assert(labels.length == views.length),
+       assert(views.length == children.length);
+
+  final UnitCommandCenterTab area;
+  final List<String> labels;
+  final List<UnitCommandCenterView> views;
+  final List<Widget> children;
+  final ValueNotifier<UnitCommandCenterView?> activeView;
+  final UnitCommandCenterView? initialView;
+  final Widget? header;
+
+  @override
+  State<_UnitAreaTabs> createState() => _UnitAreaTabsState();
+}
+
+class _UnitAreaTabsState extends State<_UnitAreaTabs>
+    with SingleTickerProviderStateMixin {
+  late final TabController _controller;
+  TabController? _outerController;
+
+  @override
+  void initState() {
+    super.initState();
+    final requested = widget.views.indexOf(widget.initialView);
+    _controller = TabController(
+      length: widget.views.length,
+      initialIndex: requested < 0 ? 0 : requested,
+      vsync: this,
+    )..addListener(_syncActiveView);
+    widget.activeView.addListener(_applyRequestedView);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final outer = DefaultTabController.maybeOf(context);
+    if (identical(outer, _outerController)) return;
+    _outerController?.removeListener(_syncActiveView);
+    _outerController = outer;
+    _outerController?.addListener(_syncActiveView);
+    _syncActiveView();
+  }
+
+  @override
+  void dispose() {
+    _outerController?.removeListener(_syncActiveView);
+    widget.activeView.removeListener(_applyRequestedView);
+    _controller
+      ..removeListener(_syncActiveView)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _syncActiveView() {
+    if (_outerController?.index != widget.area.index) return;
+    final next = widget.views[_controller.index];
+    if (widget.activeView.value != next) widget.activeView.value = next;
+  }
+
+  void _applyRequestedView() {
+    final requested = widget.views.indexOf(widget.activeView.value);
+    if (requested >= 0 && requested != _controller.index) {
+      _controller.animateTo(requested);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        if (widget.header != null) widget.header!,
+        Material(
+          color: Theme.of(context).colorScheme.surfaceContainerLow,
+          child: TabBar(
+            controller: _controller,
+            tabs: [for (final label in widget.labels) Tab(text: label)],
+          ),
+        ),
+        Expanded(
+          child: TabBarView(controller: _controller, children: widget.children),
+        ),
+      ],
+    );
+  }
+}
+
+class _UnitMaintenanceShortcuts extends StatelessWidget {
+  const _UnitMaintenanceShortcuts();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: OutlinedButton.icon(
+              icon: const Icon(Symbols.fact_check_rounded),
+              label: const Text('Inspections'),
+              onPressed: () => mobileShellNavigatorOf(context)?.openTab(
+                MobileShellTabId.work,
+                destination: MobileDestinationId.inspections,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: OutlinedButton.icon(
+              icon: const Icon(Symbols.event_repeat_rounded),
+              label: const Text('Recurring'),
+              onPressed: () => mobileShellNavigatorOf(context)?.openTab(
+                MobileShellTabId.work,
+                destination: MobileDestinationId.automations,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -199,10 +451,12 @@ class UnitCommandCenterScreen extends StatelessWidget {
 class _UnitWorkOrderQuickActionFab extends ConsumerStatefulWidget {
   const _UnitWorkOrderQuickActionFab({
     required this.dashboard,
+    required this.activeView,
     this.selectedWorkOrder,
   });
 
   final UnitDashboard dashboard;
+  final ValueListenable<UnitCommandCenterView?> activeView;
   final WorkOrder? selectedWorkOrder;
 
   @override
@@ -232,11 +486,14 @@ class _UnitWorkOrderQuickActionFabState
       _scopeController?.clearPrimaryAction(_quickActionOwner);
       _scopeController = nextScope;
     }
+    widget.activeView.removeListener(_handleTabChanged);
+    widget.activeView.addListener(_handleTabChanged);
   }
 
   @override
   void dispose() {
     _tabController?.removeListener(_handleTabChanged);
+    widget.activeView.removeListener(_handleTabChanged);
     _scopeController?.clearPrimaryAction(_quickActionOwner);
     super.dispose();
   }
@@ -267,7 +524,8 @@ class _UnitWorkOrderQuickActionFabState
     );
     final index =
         _tabController?.index ?? DefaultTabController.of(context).index;
-    if (index == UnitCommandCenterTab.work.index &&
+    if (index == UnitCommandCenterTab.maintenance.index &&
+        widget.activeView.value == UnitCommandCenterView.workOrders &&
         widget.selectedWorkOrder == null &&
         canManageWork) {
       return MobileQuickAction(
@@ -277,7 +535,9 @@ class _UnitWorkOrderQuickActionFabState
       );
     }
 
-    if (index == UnitCommandCenterTab.turnover.index && canManageWork) {
+    if (index == UnitCommandCenterTab.maintenance.index &&
+        widget.activeView.value == UnitCommandCenterView.turnover &&
+        canManageWork) {
       return MobileQuickAction(
         label: 'New turnover task',
         icon: Icons.add,
@@ -286,7 +546,7 @@ class _UnitWorkOrderQuickActionFabState
     }
 
     final lease = widget.dashboard.currentLease;
-    if (index == UnitCommandCenterTab.ledger.index &&
+    if (index == UnitCommandCenterTab.money.index &&
         lease?.tenantAccountId != null &&
         canRecordReceipts) {
       return MobileQuickAction(
@@ -2013,6 +2273,38 @@ class _UnitWorkTab extends StatelessWidget {
   }
 }
 
+class _UnitDocumentsTab extends StatelessWidget {
+  const _UnitDocumentsTab({required this.dashboard});
+
+  final UnitDashboard dashboard;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: FilledButton.icon(
+            icon: const Icon(Symbols.document_scanner_rounded),
+            label: const Text('Scan document'),
+            onPressed: () => openMobileScan(
+              context,
+              propertyId: dashboard.unit.propertyId,
+              unitId: dashboard.unit.id,
+              leaseManagementId: dashboard.currentLease?.leaseManagementId,
+              tenantAccountId: dashboard.currentLease?.tenantAccountId,
+              sourceLabel: 'Unit · Documents',
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        _DocumentsSection(items: dashboard.overview.pendingDocs),
+      ],
+    );
+  }
+}
+
 class _PaymentsSection extends StatelessWidget {
   const _PaymentsSection({required this.items});
 
@@ -2176,6 +2468,7 @@ class _ActionPanel extends StatelessWidget {
     if (target == null) return;
 
     if (target.unitId == currentUnitId) {
+      _UnitViewScope.maybeOf(context)?.value = target.initialView;
       DefaultTabController.of(context).animateTo(target.initialTab.index);
       return;
     }
@@ -2183,6 +2476,7 @@ class _ActionPanel extends StatelessWidget {
     Widget detailBuilder(BuildContext _) => UnitCommandCenterLoaderScreen(
       unitId: target.unitId,
       initialTab: target.initialTab,
+      initialView: target.initialView,
     );
 
     final shellNavigator = mobileShellNavigatorOf(context);

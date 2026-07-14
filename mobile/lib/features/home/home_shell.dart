@@ -305,6 +305,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
         detailBuilder: (_) => UnitCommandCenterLoaderScreen(
           unitId: unitTarget.unitId,
           initialTab: unitTarget.initialTab,
+          initialView: unitTarget.initialView,
         ),
       );
       return true;

@@ -125,12 +125,12 @@
 
 	// Selecting a row is a real navigation step (no replaceState) so Back returns to the list.
 	function openApp(id: number) {
-		goto('/units/' + unitId + '?tab=applications&app=' + id, { keepFocus: true, noScroll: true });
+		goto('/units/' + unitId + '?tab=leasing&view=applications&app=' + id, { keepFocus: true, noScroll: true });
 	}
 
 	// Clearing the selection drops ?app= (replaceState — it's a peer of the list, not a new history step).
 	function clearSelection() {
-		goto('/units/' + unitId + '?tab=applications', { replaceState: true, keepFocus: true, noScroll: true });
+		goto('/units/' + unitId + '?tab=leasing&view=applications', { replaceState: true, keepFocus: true, noScroll: true });
 	}
 </script>
 

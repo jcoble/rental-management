@@ -447,7 +447,8 @@ class _LeaseSummaryTile extends StatelessWidget {
     openUnitCommandCenter(
       context,
       unitId: lease.unitId,
-      initialTab: UnitCommandCenterTab.lease,
+      initialTab: UnitCommandCenterTab.tenantLease,
+      initialView: UnitCommandCenterView.agreements,
       leaseManagementId: lease.id,
       tenantId: lease.primaryTenantId,
     );

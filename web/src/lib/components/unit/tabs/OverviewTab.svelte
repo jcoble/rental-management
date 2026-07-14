@@ -50,7 +50,7 @@
 								</div>
 							{/each}
 						</div>
-						<button type="button" class="shrink-0 text-xs text-primary hover:underline" onclick={() => onOpenTab('lease')}>View lease</button>
+						<button type="button" class="shrink-0 text-xs text-primary hover:underline" onclick={() => onOpenTab('tenant-lease')}>View lease</button>
 					</div>
 				{/if}
 				<dl class="grid grid-cols-2 gap-2 border-t pt-2">
@@ -82,7 +82,7 @@
 					</li>
 				{/each}
 			</ul>
-			<button type="button" class="mt-2 text-xs text-primary hover:underline" onclick={() => onOpenTab('ledger')}>Open ledger</button>
+			<button type="button" class="mt-2 text-xs text-primary hover:underline" onclick={() => onOpenTab('money')}>Open ledger</button>
 		{/if}
 	</DetailCard>
 
@@ -116,7 +116,7 @@
 					</li>
 				{/each}
 			</ul>
-			<button type="button" class="mt-2 text-xs text-primary hover:underline" onclick={() => onOpenTab('documents')}>Open documents</button>
+			<button type="button" class="mt-2 text-xs text-primary hover:underline" onclick={() => onOpenTab('documents-history')}>Open documents</button>
 		{/if}
 	</DetailCard>
 

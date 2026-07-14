@@ -67,7 +67,8 @@ void _openLeaseDetail(BuildContext context, LeaseManagementSummary management) {
   openUnitCommandCenter(
     context,
     unitId: management.unitId,
-    initialTab: UnitCommandCenterTab.lease,
+    initialTab: UnitCommandCenterTab.tenantLease,
+    initialView: UnitCommandCenterView.agreements,
     leaseManagementId: management.id,
   );
 }
@@ -76,7 +77,7 @@ void _openUnitOverview(BuildContext context, Unit unit) {
   openUnitCommandCenter(
     context,
     unitId: unit.id,
-    initialTab: UnitCommandCenterTab.overview,
+    initialTab: UnitCommandCenterTab.summary,
   );
 }
 

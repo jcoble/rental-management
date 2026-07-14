@@ -175,7 +175,8 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
       openUnitCommandCenter(
         context,
         unitId: unitId,
-        initialTab: UnitCommandCenterTab.work,
+        initialTab: UnitCommandCenterTab.maintenance,
+        initialView: UnitCommandCenterView.workOrders,
         workOrder: wo,
       );
       return;
@@ -206,7 +207,8 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final auth = ref.watch(authControllerProvider);
-    final canManageWork = auth is AuthStateAuthenticated &&
+    final canManageWork =
+        auth is AuthStateAuthenticated &&
         auth.capabilities.contains('work.manage');
 
     return Scaffold(
@@ -218,11 +220,13 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
       ),
       floatingActionButton: MobileQuickActionFab(
         heroTag: 'work-orders-fab',
-        primaryAction: canManageWork ? MobileQuickAction(
-          label: 'New work order',
-          icon: Icons.add,
-          onPressed: () => _showCreateSheet(context),
-        ) : null,
+        primaryAction: canManageWork
+            ? MobileQuickAction(
+                label: 'New work order',
+                icon: Icons.add,
+                onPressed: () => _showCreateSheet(context),
+              )
+            : null,
         onChat: () => openMobileAssistant(context),
         onRecord: () => openMobileRecord(context),
         onScan: () => openAuthorizedMobileScan(context, ref),

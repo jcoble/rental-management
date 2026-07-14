@@ -218,12 +218,17 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/units/:id',
-        builder: (context, state) => UnitCommandCenterLoaderScreen(
-          unitId: _idParam(state),
-          initialTab: unitCommandCenterTabFromName(
+        builder: (context, state) {
+          final destination = unitCommandCenterDestinationFromName(
             state.uri.queryParameters['tab'],
-          ),
-        ),
+            state.uri.queryParameters['view'],
+          );
+          return UnitCommandCenterLoaderScreen(
+            unitId: _idParam(state),
+            initialTab: destination.tab,
+            initialView: destination.view,
+          );
+        },
       ),
       GoRoute(
         path: '/money',

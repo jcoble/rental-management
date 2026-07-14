@@ -35,7 +35,8 @@ void main() {
           child: MaterialApp(
             home: UnitCommandCenterScreen(
               dashboard: _unitDashboard(),
-              initialTab: UnitCommandCenterTab.work,
+              initialTab: UnitCommandCenterTab.maintenance,
+              initialView: UnitCommandCenterView.workOrders,
             ),
           ),
         ),

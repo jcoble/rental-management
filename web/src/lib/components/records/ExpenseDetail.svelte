@@ -469,7 +469,7 @@
 					<p class="mb-1 text-xs font-medium text-muted-foreground">Unit</p>
 					{#if expense.unitId}
 						<a
-							href="/units/{expense.unitId}?tab=ledger&ledger=expenses"
+							href="/units/{expense.unitId}?tab=money&ledger=expenses"
 							class="block min-h-10 rounded-md py-2 text-sm font-medium text-primary underline-offset-4 hover:underline"
 							data-testid="expense-detail-unit-link"
 						>

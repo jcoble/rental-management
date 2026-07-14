@@ -12,7 +12,7 @@ export function isTerminalScanReview(status: string | null | undefined, hasInSes
 
 export function shouldDisableScanReviewControls(
 	status: string | null | undefined,
-	hasInSessionConfirmedRecord: boolean
+	hasInSessionConfirmedRecord: boolean,
 ): boolean {
 	return status === 'Pending' || status === 'Processing' || isTerminalScanReview(status, hasInSessionConfirmedRecord);
 }
@@ -43,7 +43,7 @@ export function createdRecordLabel(type: string | null | undefined): string {
 export function createdRecordHref(
 	type: string | null | undefined,
 	id: number | null | undefined,
-	context: CreatedRecordLinkContext = {}
+	context: CreatedRecordLinkContext = {},
 ): string {
 	if (!type || !id) return '/accounting';
 	const { unitId, tenantAccountId, leaseManagementId } = context;
@@ -57,7 +57,7 @@ export function createdRecordHref(
 		if (leaseManagementId && leaseManagementId > 0) {
 			return recordHref('leaseManagement', { id: leaseManagementId, unitId });
 		}
-		return unitId && unitId > 0 ? `/units/${unitId}?tab=lease` : '/leases';
+		return unitId && unitId > 0 ? `/units/${unitId}?tab=tenant-lease&view=agreements` : '/leases';
 	}
 	if (type === 'Application' || type === 'RentalApplication') return recordHref('application', { id, unitId });
 	// A Loan has no standalone detail page; the fallback takes the user back to the accounting hub.

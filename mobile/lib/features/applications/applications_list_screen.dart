@@ -88,7 +88,8 @@ class _ApplicationsListScreenState
       openUnitCommandCenter(
         context,
         unitId: unitId,
-        initialTab: UnitCommandCenterTab.applications,
+        initialTab: UnitCommandCenterTab.leasing,
+        initialView: UnitCommandCenterView.applications,
         application: app,
       );
       return;

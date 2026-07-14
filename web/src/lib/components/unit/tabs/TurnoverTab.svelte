@@ -63,7 +63,7 @@
 		<Button
 			size="sm"
 			class="gap-2"
-			onclick={() => onScan({ type: 'Expense', returnTo: `/units/${dashboard.unit.id}?tab=turnover` })}
+			onclick={() => onScan({ type: 'Expense', returnTo: `/units/${dashboard.unit.id}?tab=maintenance&view=turnover` })}
 			data-testid="turnover-scan-receipt"
 		>
 			<ReceiptText class="h-4 w-4" />

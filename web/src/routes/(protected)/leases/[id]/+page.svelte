@@ -221,7 +221,7 @@
 			description={`${summary.propertyName}${summary.unitNumber ? ` · ${summary.unitNumber}` : ''} · ${summary.relationshipNumber}`}
 		>
 			{#snippet actions()}
-				<Button href={`/units/${summary.unitId}?tab=lease`} variant="outline" class="gap-2"
+				<Button href={`/units/${summary.unitId}?tab=tenant-lease&view=agreements`} variant="outline" class="gap-2"
 					><Home class="h-4 w-4" /> Open rental</Button
 				>
 			{/snippet}

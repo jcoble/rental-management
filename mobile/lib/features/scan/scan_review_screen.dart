@@ -661,7 +661,8 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
             destination: MobileDestinationId.units,
             detailBuilder: (_) => UnitCommandCenterLoaderScreen(
               unitId: unitId,
-              initialTab: UnitCommandCenterTab.lease,
+              initialTab: UnitCommandCenterTab.tenantLease,
+              initialView: UnitCommandCenterView.agreements,
             ),
           );
           revealMobileShellIfDetached(context);
@@ -672,7 +673,8 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
           MaterialPageRoute<void>(
             builder: (_) => UnitCommandCenterLoaderScreen(
               unitId: unitId,
-              initialTab: UnitCommandCenterTab.lease,
+              initialTab: UnitCommandCenterTab.tenantLease,
+              initialView: UnitCommandCenterView.agreements,
             ),
           ),
         );
