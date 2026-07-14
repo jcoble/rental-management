@@ -155,7 +155,9 @@ public sealed class AtomicCoreCsvImportHandler
                     && assignment.RevokedAtUtc == null
                     && assignment.EffectiveFromUtc <= now
                     && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now)
-                    && assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
+                    && (command.Domain == AtomicCoreCsvImportDomain.Expense
+                        || command.Domain == AtomicCoreCsvImportDomain.Loan
+                        || assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties)
                     && assignment.RoleProfile!.Capabilities.Any(grant =>
                         allowedCapabilities.Contains(grant.CapabilityDefinition!.Key)
                         && grant.CapabilityDefinition.AuthorizationTargetKind ==
