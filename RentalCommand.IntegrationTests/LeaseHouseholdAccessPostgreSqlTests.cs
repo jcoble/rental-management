@@ -34,7 +34,7 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
         _context = await _fixture.CreateContextAsync();
         var services = new ServiceCollection();
         services.AddSingleton(TimeProvider.System);
-        services.AddSingleton<IPasswordHasher<ApplicationUser>, PasswordHasher<ApplicationUser>>();
+        services.AddSingleton<ILookupNormalizer, UpperInvariantLookupNormalizer>();
         services.AddScoped<ICurrentActor, TestActor>();
         services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
         services.AddAtomicCommandHandler<GrantTenantUserAccessCommand, LeasePartyMutationResult,
@@ -148,9 +148,88 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
             .Should().Be(1);
     }
 
+    [Fact]
+    public async Task ConcurrentRelationshipGrants_ForSameNormalizedEmail_ConvergeOnOnePasswordlessIdentity()
+    {
+        var scenario = await SeedScenarioAsync(
+            "Shared.Resident@example.test",
+            "shared.resident@example.test");
+        var firstCommand = new GrantTenantUserAccessCommand(
+            scenario.PortfolioId,
+            scenario.FirstRelationshipId,
+            scenario.FirstPartyId,
+            "Grant first resident relationship",
+            "https://rentalcommand.test",
+            scenario.ActorUserId,
+            scenario.SessionId,
+            scenario.AccessContextId,
+            scenario.AccessRevision,
+            "same-email-first");
+        var secondCommand = new GrantTenantUserAccessCommand(
+            scenario.PortfolioId,
+            scenario.SecondRelationshipId,
+            scenario.SecondPartyId,
+            "Grant second resident relationship",
+            "https://rentalcommand.test",
+            scenario.ActorUserId,
+            scenario.SessionId,
+            scenario.AccessContextId,
+            scenario.AccessRevision,
+            "same-email-second");
+        var firstIdentity = new AtomicCommandIdentity(
+            "leasing.household-access.grant",
+            $"{scenario.PortfolioId}:{scenario.FirstRelationshipId}:{scenario.FirstPartyId}:same-email-first");
+        var secondIdentity = new AtomicCommandIdentity(
+            "leasing.household-access.grant",
+            $"{scenario.PortfolioId}:{scenario.SecondRelationshipId}:{scenario.SecondPartyId}:same-email-second");
+
+        var outcomes = await Task.WhenAll(
+            Atomic.ExecuteAsync(firstIdentity, firstCommand, GrantCodec),
+            Atomic.ExecuteAsync(secondIdentity, secondCommand, GrantCodec));
+
+        outcomes.Select(outcome => outcome.Disposition)
+            .Should().OnlyContain(disposition => disposition == AtomicCommandDisposition.Executed);
+        outcomes.Select(outcome => outcome.Value.Outcome)
+            .Should().OnlyContain(outcome => outcome == LeasePartyMutationOutcome.Applied);
+
+        _context.Db.ChangeTracker.Clear();
+        var identity = await _context.Db.Users.AsNoTracking()
+            .Where(user => user.NormalizedEmail == "SHARED.RESIDENT@EXAMPLE.TEST")
+            .Select(user => new { user.Id, user.PasswordHash, user.EmailConfirmed })
+            .SingleAsync();
+        identity.PasswordHash.Should().BeNull();
+        identity.EmailConfirmed.Should().BeFalse();
+
+        var grantedPartyIds = await _context.Db.TenantUserAccesses.AsNoTracking()
+            .Where(access => access.PortfolioId == scenario.PortfolioId
+                && access.ApplicationUserId == identity.Id
+                && access.RevokedAtUtc == null)
+            .OrderBy(access => access.LeaseManagementPartyId)
+            .Select(access => access.LeaseManagementPartyId)
+            .ToListAsync();
+        grantedPartyIds.Should().Equal(scenario.FirstPartyId, scenario.SecondPartyId);
+
+        var activationMessages = await _context.Db.OutboxMessages.AsNoTracking()
+            .Where(message => message.IdempotencyKey.EndsWith(":portal-activation-v2"))
+            .Select(message => message.Payload)
+            .ToListAsync();
+        activationMessages.Should().ContainSingle();
+        activationMessages[0].Should().Contain("/forgot-password?email=");
+        activationMessages[0].ToLowerInvariant().Should().NotContain("temporary password");
+        activationMessages[0].ToLowerInvariant().Should().NotContain("resettoken");
+
+        (await _context.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == firstIdentity.CommandType
+            && (receipt.IdempotencyKey == firstIdentity.IdempotencyKey
+                || receipt.IdempotencyKey == secondIdentity.IdempotencyKey)))
+            .Should().Be(2);
+    }
+
     private IAtomicUnitOfWork Atomic => _services.GetRequiredService<IAtomicUnitOfWork>();
 
-    private async Task<Scenario> SeedScenarioAsync()
+    private async Task<Scenario> SeedScenarioAsync(
+        string firstResidentEmail = "first-resident@example.test",
+        string secondResidentEmail = "second-resident@example.test")
     {
         var now = DateTime.UtcNow;
         var db = _context.Db;
@@ -229,8 +308,8 @@ public sealed class LeaseHouseholdAccessPostgreSqlTests : IAsyncLifetime
 
         var firstRelationship = Relationship(property.Id, firstUnit.Id, actor.Id, "1", now);
         var secondRelationship = Relationship(property.Id, secondUnit.Id, actor.Id, "2", now);
-        var firstTenant = Tenant("First", "Resident", "first-resident@example.test", now);
-        var secondTenant = Tenant("Second", "Resident", "second-resident@example.test", now);
+        var firstTenant = Tenant("First", "Resident", firstResidentEmail, now);
+        var secondTenant = Tenant("Second", "Resident", secondResidentEmail, now);
         db.AddRange(firstRelationship, secondRelationship, firstTenant, secondTenant);
         await db.SaveChangesAsync();
         var businessDate = DateOnly.FromDateTime(now);
