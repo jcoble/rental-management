@@ -14,6 +14,9 @@
 	import { parseScanContext } from '$lib/scan/scan-context';
 	import { SCAN_HISTORY_FILTERS, formatScanHistoryEmptyMessage, resolveScanHistoryFilter, type ScanHistoryFilter } from '$lib/scans/scan-history-filters';
 	import { createdRecordHref } from '$lib/scans/scan-review-state';
+	import { hasCapability } from '$lib/stores/auth.svelte';
+	import { workOrders } from '$lib/api/endpoints/workOrders';
+	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 
 	const PAGE_SIZE = 20;
 
@@ -43,6 +46,15 @@
 	});
 
 	const scanContext = $derived(parseScanContext(page.url.searchParams));
+	const portfolioId = $derived(getCurrentPortfolioId());
+	const assignedTechnicianOnly = $derived(
+		hasCapability('maintenance.assigned-work.update') && !hasCapability('work.manage')
+	);
+	const assignedWorkOrdersQuery = createQuery(() => ({
+		queryKey: ['assigned-work-order-scan-picker'],
+		queryFn: () => workOrders.listPage(portfolioId, { openOnly: true, take: 100 }),
+		enabled: assignedTechnicianOnly && !scanContext.workOrderId
+	}));
 
 	const scansQuery = createQuery(() => ({
 		queryKey: ['scans', activeFilter, 'page', gridSort, gridPage, PAGE_SIZE],
@@ -159,20 +171,32 @@
 			<h1 class="text-2xl font-bold">Scan / Add</h1>
 			<p class="text-sm text-muted-foreground">Upload a photo or PDF and the computer pulls out the details for you to confirm.</p>
 		</div>
-		<Button variant="outline" class="gap-2" href="/scan/batch" data-testid="scan-bulk-import-leases">
+		{#if !assignedTechnicianOnly}<Button variant="outline" class="gap-2" href="/scan/batch" data-testid="scan-bulk-import-leases">
 			<Layers class="h-4 w-4" />
 			Bulk import leases
-		</Button>
+		</Button>{/if}
 	</div>
 
 	<!-- Primary front door: guided, pre-filled new-rental-from-your-lease flow -->
-	<a href="/scan/new-rental" class="mb-6 block rounded-lg border border-accent/40 bg-accent/5 p-4 hover:bg-accent/10" data-testid="scan-new-rental-cta">
+	{#if !assignedTechnicianOnly}<a href="/scan/new-rental" class="mb-6 block rounded-lg border border-accent/40 bg-accent/5 p-4 hover:bg-accent/10" data-testid="scan-new-rental-cta">
 		<p class="text-sm font-semibold text-foreground">New rental from your lease</p>
 		<p class="text-xs text-muted-foreground">Snap or upload a lease → we pre-fill the property, unit, tenant, and lease for you to review.</p>
-	</a>
+	</a>{/if}
 
 	<div class="mb-6 border-b pb-6">
-		<ScanCapturePanel context={scanContext} />
+		{#if assignedTechnicianOnly && !scanContext.workOrderId}
+			<h2 class="mb-2 text-base font-semibold">Choose an assigned work order</h2>
+			<p class="mb-4 text-sm text-muted-foreground">Your scan will be attached to the work order you choose.</p>
+			<div class="grid gap-2">
+				{#each assignedWorkOrdersQuery.data?.items ?? [] as workOrder}
+					<Button variant="outline" class="justify-start" onclick={() => goto(`/scan?type=WorkOrder&workOrderId=${workOrder.id}`)}>{workOrder.title}</Button>
+				{:else}
+					<p class="text-sm text-muted-foreground">No current assigned work orders.</p>
+				{/each}
+			</div>
+		{:else}
+			<ScanCapturePanel context={scanContext} />
+		{/if}
 	</div>
 
 	<!-- Recent lease imports -->

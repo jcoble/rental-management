@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Operations;
 
 namespace RentalCommand.Data.Tests;
 
@@ -67,7 +68,46 @@ public sealed class WorkOrderResponsibilityModelTests
             .Should().Contain("WorkOrderResponsibilities");
         createSql.Should().Contain("EX_WorkOrderResponsibilities_NoMemberOverlap");
         createSql.Should().Contain("EX_WorkOrderResponsibilities_NoPrimaryOverlap");
+        createSql.Should().Contain("CK_WorkOrderResponsibilities_Kind");
+        createSql.Should().Contain("\"Kind\" IN ('Primary', 'Supporting')");
+        createSql.Should().Contain("CK_WorkOrderResponsibilities_AssignedFacts");
+        createSql.Should().Contain("\"AssignedAtUtc\" = \"EffectiveFromUtc\"");
+        createSql.Should().Contain("length(btrim(\"AssignedReason\")) > 0");
+        createSql.Should().Contain("length(btrim(\"EndedReason\")) > 0");
         createSql.Should().Contain("TR_WorkOrderResponsibilities_AppendPreserved");
         createSql.Should().Contain("ALTER TABLE \"WorkOrderResponsibilities\" ENABLE ROW LEVEL SECURITY");
+    }
+
+    [Fact]
+    public void AssignedUpdate_ExposesRequiredConcurrencyAndTypedStaleContract()
+    {
+        typeof(UpdateAssignedWorkOrderCommand).GetProperty(nameof(UpdateAssignedWorkOrderCommand.ExpectedUpdatedAtUtc))
+            .Should().NotBeNull();
+        Enum.GetNames<UpdateAssignedWorkOrderOutcome>()
+            .Should().BeEquivalentTo(nameof(UpdateAssignedWorkOrderOutcome.Applied),
+                nameof(UpdateAssignedWorkOrderOutcome.Stale));
+        typeof(UpdateAssignedWorkOrderResult).GetProperty(nameof(UpdateAssignedWorkOrderResult.Outcome))
+            .Should().NotBeNull();
+    }
+
+    [Fact]
+    public void AssignedUpdate_HandlerFencesStaleWritesAndReauthorizesReplay()
+    {
+        var source = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "RentalCommand.Data",
+            "Operations", "WorkOrderResponsibilityMutationHandlers.cs"));
+
+        source.Should().Contain("workOrder.UpdatedAt != command.ExpectedUpdatedAtUtc");
+        source.Should().Contain("UpdateAssignedWorkOrderOutcome.Stale");
+        source.Should().Contain("IAtomicReplayAuthorizer<UpdateAssignedWorkOrderCommand>");
+        source.Should().Contain("AuthorizeAndLoadAsync(command, persistence, now, tracking: false");
+        source.Should().Contain("resultingStatus != WorkOrderStatus.Completed");
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !Directory.Exists(Path.Combine(directory.FullName, "RentalCommand.Data")))
+            directory = directory.Parent;
+        return directory?.FullName ?? throw new DirectoryNotFoundException("Repository root not found.");
     }
 }

@@ -881,14 +881,18 @@
 			<div class="ml-auto flex items-center gap-1">
 				{#if showStaffHeader}
 					<!-- Scan / Edit -->
-					<ScanLauncher
+					{#if activeCapabilities.has('maintenance.assigned-work.update') && !activeCapabilities.has('work.manage')}
+						<Button href="/scan" variant="ghost" class="m3-state-layer relative size-9 p-0 text-muted-foreground" aria-label="Scan / Edit" data-testid="header-scan">
+							<ScanLine class="h-4 w-4" />
+						</Button>
+					{:else}<ScanLauncher
 						triggerLabel=""
 						ariaLabel="Scan / Edit"
 						tooltip="Scan / Edit"
 						testid="header-scan"
 						triggerVariant="ghost"
 						triggerClass="m3-state-layer relative size-9 p-0 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-					/>
+					/>{/if}
 
 					<!-- Messages -->
 					<a

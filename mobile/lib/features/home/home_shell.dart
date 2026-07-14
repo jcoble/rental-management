@@ -120,7 +120,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
   ];
 
   void _openAssistant() => openMobileAssistant(context);
-  void _openCapture() => openMobileScan(context);
+  void _openCapture() => openAuthorizedMobileScan(context, ref);
   void _openRecord() => openMobileRecord(context);
 
   void _registerDomain(MobileShellTabId tab, MobileDomainNavigator controller) {

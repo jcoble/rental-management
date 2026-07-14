@@ -30,6 +30,7 @@
 		workOrderStatusActionTargets,
 	} from '$lib/maintenance/work-order-dispatch';
 	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
+	import { hasCapability } from '$lib/stores/auth.svelte';
 
 	let {
 		workOrderId,
@@ -60,6 +61,71 @@
 	}));
 
 	const wo = $derived(workOrderQuery.data);
+	const canManageWork = $derived(hasCapability('work.manage'));
+	const canAssignWork = $derived(hasCapability('responsibility.assign-existing-member'));
+
+	const responsibilitiesQuery = createQuery(() => ({
+		queryKey: ['work-order-responsibilities', workOrderId],
+		queryFn: () => workOrders.responsibilities(workOrderId),
+		enabled: workOrderId > 0,
+	}));
+	const candidatesQuery = createQuery(() => ({
+		queryKey: ['work-order-responsibility-candidates', workOrderId],
+		queryFn: () => workOrders.responsibilityCandidates(workOrderId),
+		enabled: workOrderId > 0 && canAssignWork,
+	}));
+	const currentPrimary = $derived(
+		(responsibilitiesQuery.data ?? []).find((item) => item.kind === 'Primary' && !item.effectiveToUtc) ?? null
+	);
+	let selectedCandidateId = $state('');
+	let assignmentReason = $state('Assigned by property manager');
+
+	function responsibilityExpectations(candidateIds: number[]) {
+		return [...new Set(candidateIds)].map((accessContextId) => {
+			const candidate = (candidatesQuery.data ?? []).find((item) => item.accessContextId === accessContextId);
+			if (!candidate) throw new Error('Refresh the technician list before changing responsibility.');
+			return { accessContextId, expectedRevision: candidate.accessRevision };
+		});
+	}
+
+	const assignResponsibilityMutation = createMutation(() => ({
+		mutationFn: () => {
+			const candidate = (candidatesQuery.data ?? []).find(
+				(item) => item.membershipRoleAssignmentId === Number(selectedCandidateId)
+			);
+			if (!candidate) throw new Error('Choose a technician.');
+			const contexts = [candidate.accessContextId];
+			if (currentPrimary?.accessContextId) contexts.push(currentPrimary.accessContextId);
+			return workOrders.assignResponsibility(workOrderId, {
+				workspaceMembershipId: candidate.workspaceMembershipId,
+				membershipRoleAssignmentId: candidate.membershipRoleAssignmentId,
+				kind: 'Primary',
+				expectedCurrentPrimaryResponsibilityId: currentPrimary?.id ?? null,
+				accessRevisionExpectations: responsibilityExpectations(contexts),
+				reason: assignmentReason.trim()
+			});
+		},
+		onSuccess: () => { showSuccess('Technician responsibility updated.'); invalidateResponsibility(); },
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	const closeResponsibilityMutation = createMutation(() => ({
+		mutationFn: () => {
+			if (!currentPrimary?.accessContextId) throw new Error('No current technician assignment.');
+			return workOrders.closeResponsibility(workOrderId, currentPrimary.id, {
+				accessRevisionExpectations: responsibilityExpectations([currentPrimary.accessContextId]),
+				reason: 'Unassigned by property manager'
+			});
+		},
+		onSuccess: () => { showSuccess('Technician unassigned.'); invalidateResponsibility(); },
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	function invalidateResponsibility() {
+		queryClient.invalidateQueries({ queryKey: ['work-order-responsibilities', workOrderId] });
+		queryClient.invalidateQueries({ queryKey: ['work-order-responsibility-candidates', workOrderId] });
+		invalidate();
+	}
 
 	$effect(() => {
 		if (isMismatchedUnitSelection(wo, expectedUnitId)) onUnitMismatch?.();
@@ -175,7 +241,13 @@
 
 	const statusMutation = createMutation(() => ({
 		mutationFn: ({ id: woId, status, note }: { id: number; status: string; note?: string }) =>
-			workOrders.updateStatus(woId, status, note),
+			canManageWork
+				? workOrders.updateStatus(woId, status, note)
+				: workOrders.updateAssigned(woId, {
+						status,
+						technicianNote: note,
+						expectedUpdatedAtUtc: wo?.updatedAt
+					}),
 		onSuccess: () => {
 			showSuccess('Status updated.');
 			pendingStatus = null;
@@ -343,6 +415,35 @@
 	{:else if !wo}
 		<p class="py-8 text-center text-sm text-muted-foreground" data-testid="work-order-detail-not-found">Work order not found.</p>
 	{:else}
+		<Card.Root class="mb-6" data-testid="work-order-responsibility-card">
+			<Card.Header>
+				<Card.Title>Technician responsibility</Card.Title>
+				<Card.Description>
+					{currentPrimary ? `${currentPrimary.memberDisplayName} is responsible for this work order.` : 'No technician is currently assigned.'}
+				</Card.Description>
+			</Card.Header>
+			{#if canAssignWork}
+				<Card.Content class="flex flex-wrap items-end gap-3">
+					<label class="grid min-w-64 gap-1 text-sm">Technician
+						<select class="h-10 rounded-md border bg-background px-3" bind:value={selectedCandidateId}>
+							<option value="">Choose a technician</option>
+							{#each candidatesQuery.data ?? [] as candidate}
+								<option value={String(candidate.membershipRoleAssignmentId)}>{candidate.memberDisplayName}</option>
+							{/each}
+						</select>
+					</label>
+					<label class="grid min-w-64 flex-1 gap-1 text-sm">Reason
+						<input class="h-10 rounded-md border bg-background px-3" bind:value={assignmentReason} maxlength="1000" />
+					</label>
+					<Button onclick={() => assignResponsibilityMutation.mutate()} disabled={!selectedCandidateId || !assignmentReason.trim() || assignResponsibilityMutation.isPending}>
+						{currentPrimary ? 'Reassign' : 'Assign'}
+					</Button>
+					{#if currentPrimary}
+						<Button variant="outline" onclick={() => closeResponsibilityMutation.mutate()} disabled={closeResponsibilityMutation.isPending}>Unassign</Button>
+					{/if}
+				</Card.Content>
+			{/if}
+		</Card.Root>
 		<!-- Header -->
 		<div class="mb-6 flex flex-wrap items-start justify-between gap-4">
 			<div class="space-y-2">
@@ -398,7 +499,7 @@
 						</Button>
 					{/each}
 					<!-- Text a vendor the job (they reply DONE to close it) -->
-					{#if wo.status !== 'Completed' && wo.status !== 'Cancelled'}
+					{#if canManageWork && wo.status !== 'Completed' && wo.status !== 'Cancelled'}
 						<Button
 							variant="outline"
 							size="sm"
@@ -410,7 +511,7 @@
 						</Button>
 					{/if}
 					<!-- Rate the vendor once the job is done -->
-					{#if wo.status === 'Completed' && wo.vendorId}
+					{#if canManageWork && wo.status === 'Completed' && wo.vendorId}
 						<Button
 							variant="outline"
 							size="sm"
@@ -421,7 +522,7 @@
 							Rate this vendor
 						</Button>
 					{/if}
-					<Button
+					{#if canManageWork}<Button
 						variant="outline"
 						size="sm"
 						data-testid="work-order-edit"
@@ -429,8 +530,8 @@
 					>
 						<Pencil class="h-4 w-4" />
 						Edit
-					</Button>
-					<Button
+					</Button>{/if}
+					{#if canManageWork}<Button
 						variant="outline"
 						size="sm"
 						class="hover:text-destructive"
@@ -439,7 +540,7 @@
 					>
 						<Trash2 class="h-4 w-4" />
 						Delete
-					</Button>
+					</Button>{/if}
 				{/if}
 			</div>
 		</div>

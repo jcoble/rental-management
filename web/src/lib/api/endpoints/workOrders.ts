@@ -15,6 +15,29 @@ export interface WorkOrderListResponse {
 	take: number;
 }
 
+export interface WorkOrderResponsibility {
+	id: string;
+	workOrderId: number;
+	workspaceMembershipId: number | null;
+	membershipRoleAssignmentId: number | null;
+	accessContextId: number | null;
+	memberDisplayName: string;
+	roleProfileName: string;
+	kind: 'Primary' | 'Supporting';
+	effectiveFromUtc: string;
+	effectiveToUtc: string | null;
+	canManage: boolean;
+}
+
+export interface WorkOrderResponsibilityCandidate {
+	workspaceMembershipId: number;
+	membershipRoleAssignmentId: number;
+	accessContextId: number;
+	accessRevision: number;
+	memberDisplayName: string;
+	roleProfileName: string;
+}
+
 export const workOrders = {
 	list: (portfolioId: number, params?: WorkOrderListParams) => {
 		return api.get<WorkOrder[]>(buildWorkOrderListPath(portfolioId, params));
@@ -30,6 +53,24 @@ export const workOrders = {
 	// An optional statusNote (≤2000 chars) is recorded on the timeline when the status changes.
 	updateStatus: (id: number, status: string, statusNote?: string) =>
 		api.patch<WorkOrderDetail>(`/work-orders/${id}`, statusNote ? { status, statusNote } : { status }),
+	updateAssigned: (id: number, data: Record<string, unknown>) =>
+		api.patch(`/work-orders/${id}/assigned-update`, data, {
+			headers: { 'Idempotency-Key': crypto.randomUUID() }
+		}),
+	responsibilities: (id: number) =>
+		api.get<WorkOrderResponsibility[]>(`/work-orders/${id}/responsibilities`),
+	responsibilityCandidates: (id: number, search = '') =>
+		api.get<WorkOrderResponsibilityCandidate[]>(
+			`/work-orders/${id}/responsibilities/candidates?search=${encodeURIComponent(search)}`
+		),
+	assignResponsibility: (id: number, data: Record<string, unknown>) =>
+		api.put(`/work-orders/${id}/responsibilities/current`, data, {
+			headers: { 'Idempotency-Key': crypto.randomUUID() }
+		}),
+	closeResponsibility: (id: number, responsibilityId: string, data: Record<string, unknown>) =>
+		api.post(`/work-orders/${id}/responsibilities/${responsibilityId}/close`, data, {
+			headers: { 'Idempotency-Key': crypto.randomUUID() }
+		}),
 	// Assign + text a vendor the job. The vendor replies DONE to auto-close it.
 	// Throws ApiError (400) when the chosen vendor has no phone number on file.
 	dispatch: (id: number, data: { vendorId: number; note?: string }) =>

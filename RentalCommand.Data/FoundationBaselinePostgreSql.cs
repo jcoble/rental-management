@@ -635,12 +635,16 @@ internal static class FoundationBaselinePostgreSql
           CONSTRAINT "PK_WorkOrderResponsibilities" PRIMARY KEY ("Id"),
           CONSTRAINT "CK_WorkOrderResponsibilities_EffectivePeriod"
             CHECK ("EffectiveToUtc" IS NULL OR "EffectiveToUtc" > "EffectiveFromUtc"),
+          CONSTRAINT "CK_WorkOrderResponsibilities_Kind"
+            CHECK ("Kind" IN ('Primary', 'Supporting')),
+          CONSTRAINT "CK_WorkOrderResponsibilities_AssignedFacts"
+            CHECK ("AssignedAtUtc" = "EffectiveFromUtc" AND length(btrim("AssignedReason")) > 0),
           CONSTRAINT "CK_WorkOrderResponsibilities_EndFacts"
             CHECK (("EffectiveToUtc" IS NULL AND "EndedAtUtc" IS NULL AND "EndedByUserId" IS NULL AND
                     "EndedByAccessContextId" IS NULL AND "EndedReason" IS NULL) OR
                    ("EffectiveToUtc" IS NOT NULL AND "EndedAtUtc" = "EffectiveToUtc" AND
                     "EndedByUserId" IS NOT NULL AND "EndedByAccessContextId" IS NOT NULL AND
-                    "EndedReason" IS NOT NULL)),
+                    "EndedReason" IS NOT NULL AND length(btrim("EndedReason")) > 0)),
           CONSTRAINT "FK_WorkOrderResponsibilities_WorkOrders"
             FOREIGN KEY ("WorkOrderId", "PropertyId", "PortfolioId")
             REFERENCES "WorkOrders" ("Id", "PropertyId", "PortfolioId") ON DELETE RESTRICT,

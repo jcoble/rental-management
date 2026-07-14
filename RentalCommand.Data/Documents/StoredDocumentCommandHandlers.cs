@@ -269,7 +269,8 @@ internal static class StoredDocumentAuthorization
                 access,
                 command.UploadedAtUtc,
                 persistence,
-                ct);
+                ct,
+                allowAssignedWork: true);
     }
 
     internal static Task<bool> StaffTargetExistsAsync(
@@ -279,8 +280,15 @@ internal static class StoredDocumentAuthorization
         StoredDocumentManagementAccess access,
         DateTime utcNow,
         IAtomicPersistenceSession persistence,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool allowAssignedWork = false)
     {
+        if (target == StoredDocumentTarget.WorkOrder)
+            return allowAssignedWork
+                ? AssignedOrManagedWorkOrderExistsAsync(
+                    portfolioId, entityId, access, utcNow, persistence, ct)
+                : ManagedWorkOrderExistsAsync(portfolioId, entityId, access, utcNow, persistence, ct);
+
         var capability = target switch
         {
             StoredDocumentTarget.Property or StoredDocumentTarget.Unit or StoredDocumentTarget.Tenant =>
@@ -348,12 +356,60 @@ internal static class StoredDocumentAuthorization
         };
     }
 
+    private static Task<bool> AssignedOrManagedWorkOrderExistsAsync(int portfolioId, long entityId,
+        StoredDocumentManagementAccess access, DateTime utcNow, IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        var capabilities = new[] { CapabilityKeys.WorkManage, CapabilityKeys.AssignedWorkUpdate };
+        var assignments = AuthorizedAssignments(persistence, portfolioId, access, capabilities, utcNow);
+        return persistence.Query<WorkOrder>().AnyAsync(workOrder =>
+            workOrder.Id == entityId && workOrder.PortfolioId == portfolioId && assignments.Any(assignment =>
+                (assignment.RoleProfile!.Capabilities.Any(item =>
+                     item.CapabilityDefinition!.Key == CapabilityKeys.WorkManage) &&
+                 (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                  assignment.SelectedProperties.Any(selected => selected.PortfolioId == portfolioId &&
+                                                               selected.PropertyId == workOrder.PropertyId))) ||
+                (assignment.RoleProfile.Capabilities.Any(item =>
+                     item.CapabilityDefinition!.Key == CapabilityKeys.AssignedWorkUpdate) &&
+                 assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AssignedWorkOrders &&
+                 persistence.Query<WorkOrderResponsibility>().Any(responsibility =>
+                     responsibility.WorkOrderId == workOrder.Id && responsibility.PortfolioId == portfolioId &&
+                     responsibility.WorkspaceMembershipId == assignment.WorkspaceMembershipId &&
+                     responsibility.MembershipRoleAssignmentId == assignment.Id &&
+                     responsibility.EffectiveFromUtc <= utcNow &&
+                     (responsibility.EffectiveToUtc == null || responsibility.EffectiveToUtc > utcNow)))), ct);
+    }
+
+    private static Task<bool> ManagedWorkOrderExistsAsync(int portfolioId, long entityId,
+        StoredDocumentManagementAccess access, DateTime utcNow, IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        var assignments = AuthorizedAssignments(
+            persistence, portfolioId, access, CapabilityKeys.WorkManage, utcNow);
+        return persistence.Query<WorkOrder>().AnyAsync(workOrder =>
+            workOrder.Id == entityId && workOrder.PortfolioId == portfolioId && assignments.Any(assignment =>
+                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                assignment.SelectedProperties.Any(selected => selected.PortfolioId == portfolioId &&
+                                                             selected.PropertyId == workOrder.PropertyId)), ct);
+    }
+
     private static IQueryable<MembershipRoleAssignment> AuthorizedAssignments(
         IAtomicPersistenceSession persistence,
         int portfolioId,
         StoredDocumentManagementAccess access,
         string capability,
-        DateTime utcNow) =>
+        DateTime utcNow) => AuthorizedAssignments(
+            persistence, portfolioId, access, new[] { capability }, utcNow);
+
+    private static IQueryable<MembershipRoleAssignment> AuthorizedAssignments(
+        IAtomicPersistenceSession persistence,
+        int portfolioId,
+        StoredDocumentManagementAccess access,
+        IReadOnlyCollection<string> capabilities,
+        DateTime utcNow)
+    {
+        var keys = capabilities.Distinct(StringComparer.Ordinal).ToArray();
+        return
         persistence.Query<MembershipRoleAssignment>().Where(assignment =>
             assignment.PortfolioId == portfolioId &&
             assignment.Status == MembershipRoleAssignmentStatus.Active &&
@@ -380,7 +436,11 @@ internal static class StoredDocumentAuthorization
                 session.ExpiresAtUtc > utcNow) &&
             assignment.RoleProfile != null && assignment.RoleProfile.Capabilities.Any(profileCapability =>
                 profileCapability.CapabilityDefinition != null &&
-                profileCapability.CapabilityDefinition.Key == capability &&
-                profileCapability.CapabilityDefinition.AuthorizationTargetKind ==
-                    CapabilityAuthorizationTargetKind.Property));
+                keys.Contains(profileCapability.CapabilityDefinition.Key) &&
+                (profileCapability.CapabilityDefinition.AuthorizationTargetKind ==
+                    CapabilityAuthorizationTargetKind.Property ||
+                 profileCapability.CapabilityDefinition.Key == CapabilityKeys.AssignedWorkUpdate &&
+                 profileCapability.CapabilityDefinition.AuthorizationTargetKind ==
+                    CapabilityAuthorizationTargetKind.WorkOrder)));
+    }
 }

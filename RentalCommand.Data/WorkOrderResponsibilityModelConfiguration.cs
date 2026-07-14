@@ -52,9 +52,15 @@ internal static class WorkOrderResponsibilityModelConfiguration
                     "CK_WorkOrderResponsibilities_EffectivePeriod",
                     "\"EffectiveToUtc\" IS NULL OR \"EffectiveToUtc\" > \"EffectiveFromUtc\"");
                 table.HasCheckConstraint(
+                    "CK_WorkOrderResponsibilities_Kind",
+                    "\"Kind\" IN ('Primary', 'Supporting')");
+                table.HasCheckConstraint(
+                    "CK_WorkOrderResponsibilities_AssignedFacts",
+                    "\"AssignedAtUtc\" = \"EffectiveFromUtc\" AND length(btrim(\"AssignedReason\")) > 0");
+                table.HasCheckConstraint(
                     "CK_WorkOrderResponsibilities_EndFacts",
                     "(\"EffectiveToUtc\" IS NULL AND \"EndedAtUtc\" IS NULL AND \"EndedByUserId\" IS NULL AND \"EndedByAccessContextId\" IS NULL AND \"EndedReason\" IS NULL) OR " +
-                    "(\"EffectiveToUtc\" IS NOT NULL AND \"EndedAtUtc\" = \"EffectiveToUtc\" AND \"EndedByUserId\" IS NOT NULL AND \"EndedByAccessContextId\" IS NOT NULL AND \"EndedReason\" IS NOT NULL)");
+                    "(\"EffectiveToUtc\" IS NOT NULL AND \"EndedAtUtc\" = \"EffectiveToUtc\" AND \"EndedByUserId\" IS NOT NULL AND \"EndedByAccessContextId\" IS NOT NULL AND \"EndedReason\" IS NOT NULL AND length(btrim(\"EndedReason\")) > 0)");
             });
 
             entity.HasOne(responsibility => responsibility.WorkOrder)
