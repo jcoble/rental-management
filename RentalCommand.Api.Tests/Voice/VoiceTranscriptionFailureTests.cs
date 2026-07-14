@@ -40,6 +40,7 @@ public class VoiceTranscriptionFailureTests
                 It.Is<byte[]>(b => b.SequenceEqual(new byte[] { 1, 2, 3 })),
             "audio/webm",
             null,
+            "voice-transcription-failure",
             It.IsAny<CancellationToken>()))
             .ThrowsAsync(new VoiceTranscriptionUnavailableException("Voice transcription is not configured."));
 
@@ -50,7 +51,8 @@ public class VoiceTranscriptionFailureTests
             ContentType = "audio/webm",
         };
 
-        var result = await controller.CreateDraft(file, null, CancellationToken.None);
+        var result = await controller.CreateDraft(
+            file, null, "voice-transcription-failure", CancellationToken.None);
 
         var objectResult = result.Result.Should().BeOfType<ObjectResult>().Subject;
         objectResult.StatusCode.Should().Be(StatusCodes.Status503ServiceUnavailable);

@@ -29,6 +29,8 @@ public class ScanController : ManagementControllerBase
 {
     private static readonly AtomicJsonResultCodec<ConfirmScanDraftResult> ConfirmResultCodec =
         new("scan-confirm.result.v1");
+    private static readonly AtomicJsonResultCodec<ScanDraftMutationResult> DraftMutationCodec =
+        new("scan-draft.mutation.result.v1");
 
     private readonly IScanService _scan;
     private readonly IScanUploadService _uploads;
@@ -847,38 +849,47 @@ public class ScanController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Retry(int id, CancellationToken ct)
+    public async Task<IActionResult> Retry(
+        int id,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(idempotencyKey) || idempotencyKey.Trim().Length > 200)
+            return BadRequest(new { error = "A valid Idempotency-Key is required (maximum 200 characters)." });
+
         var scope = GetWorkspaceReadScope();
-        var outcome = await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
+        var operationDigest = Convert.ToHexString(SHA256.HashData(
+                Encoding.UTF8.GetBytes(idempotencyKey.Trim())))
+            .ToLowerInvariant();
+        var command = new RetryScanDraftCommand(
+            scope.PortfolioId,
+            id,
+            scope.UserId,
+            scope.SessionId,
+            scope.AccessContextId,
+            scope.AccessRevision,
+            $"scan-retry:{scope.PortfolioId}:{id}:{operationDigest}");
+        ScanDraftMutationResult result;
+        try
         {
-            var draft = await _db.ScanDrafts
-                .WhereAuthorizedForReview(
-                    _db, scope, _timeProvider.GetUtcNow().UtcDateTime)
-                .AsTracking()
-                .SingleOrDefaultAsync(d => d.Id == id, innerCt);
-            if (draft is null)
-                return "not-found";
-            if (draft.Status != "Failed")
-                return "invalid-status";
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "scan-draft.retry",
+                    $"{scope.PortfolioId}:{id}:{operationDigest}"),
+                command,
+                DraftMutationCodec,
+                ct);
+            result = outcome.Value;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return NotFound(new { error = "Scan draft not found" });
+        }
 
-            draft.Status = "Pending";
-            draft.ExtractedFields = null;
-            draft.ModelId = null;
-            draft.TokensUsed = null;
-            draft.CostUsd = null;
-            draft.FailureReason = null;
-            draft.ReviewedAt = null;
-            draft.ReviewedBy = null;
-            draft.ConfirmedAt = null;
-            await _db.SaveChangesAsync(innerCt);
-            return "updated";
-        }, ct);
-
-        if (outcome == "updated")
+        if (result.Outcome == ScanDraftMutationOutcome.Applied)
             return Ok();
 
-        return outcome == "invalid-status"
+        return result.Outcome == ScanDraftMutationOutcome.InvalidStatus
             ? BadRequest(new { error = "Only failed scan drafts can be retried." })
             : NotFound(new { error = "Scan draft not found" });
     }

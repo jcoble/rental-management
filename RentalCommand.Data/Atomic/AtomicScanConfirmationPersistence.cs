@@ -25,6 +25,15 @@ internal sealed class AtomicScanConfirmationPersistence : IAtomicScanConfirmatio
         _locking = locking;
     }
 
+    public Task<bool> CanCreateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        string? targetEntityType,
+        int? propertyId,
+        DateTime utcNow,
+        CancellationToken ct = default) =>
+        ScanDraftAuthorizationQuery.CanCreateDraftAsync(
+            _db, scope, targetEntityType, propertyId, utcNow, ct);
+
     public async Task<AtomicScanDraftClaim> TryClaimAsync(
         int portfolioId,
         int draftId,
