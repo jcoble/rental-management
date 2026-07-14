@@ -705,8 +705,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
                     useNearestScope: false,
                     onChat: _openAssistant,
                     onRecord: _openRecord,
-                    onScan:
-                        quickActionController.scanAction ?? _openCapture,
+                    onScan: quickActionController.scanAction ?? _openCapture,
                   );
                 },
               ),
@@ -1322,9 +1321,9 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
                   icon: Icons.build_outlined,
                   title: 'Maintenance',
                   value: 'View requests',
-                  subtitle: data.workOrders.isEmpty
+                  subtitle: data.workOrders.items.isEmpty
                       ? 'No requests'
-                      : data.workOrders.first.title,
+                      : data.workOrders.items.first.title,
                 ),
               ],
             );
@@ -1581,9 +1580,14 @@ class _TenantMaintenanceTab extends ConsumerStatefulWidget {
 }
 
 class _TenantMaintenanceTabState extends ConsumerState<_TenantMaintenanceTab> {
+  static const _workOrderPageSize = 20;
   final _title = TextEditingController();
   final _description = TextEditingController();
+  final _workOrderSearch = TextEditingController();
   String _priority = 'Normal';
+  String _workOrderSearchTerm = '';
+  String _workOrderStatus = 'Open';
+  int _workOrderSkip = 0;
   Uint8List? _photoBytes;
   String? _photoName;
   String? _photoContentType;
@@ -1594,6 +1598,7 @@ class _TenantMaintenanceTabState extends ConsumerState<_TenantMaintenanceTab> {
   void dispose() {
     _title.dispose();
     _description.dispose();
+    _workOrderSearch.dispose();
     super.dispose();
   }
 
@@ -1646,6 +1651,7 @@ class _TenantMaintenanceTabState extends ConsumerState<_TenantMaintenanceTab> {
         );
       }
       ref.invalidate(tenantPortalSnapshotProvider);
+      ref.invalidate(tenantPortalWorkOrdersPageProvider);
       _title.clear();
       _description.clear();
       _photoBytes = null;
@@ -1664,50 +1670,138 @@ class _TenantMaintenanceTabState extends ConsumerState<_TenantMaintenanceTab> {
 
   @override
   Widget build(BuildContext context) {
-    final snapshot = ref.watch(tenantPortalSnapshotProvider);
+    final workOrders = ref.watch(
+      tenantPortalWorkOrdersPageProvider((
+        skip: _workOrderSkip,
+        take: _workOrderPageSize,
+        search: _workOrderSearchTerm,
+        status: _workOrderStatus == 'Open' ? null : _workOrderStatus,
+      )),
+    );
 
     return Scaffold(
       appBar: AppBar(title: const Text('Maintenance')),
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
-          snapshot.maybeWhen(
-            data: (data) {
-              final open = data.workOrders
-                  .where(
-                    (w) => !{
+          TextField(
+            controller: _workOrderSearch,
+            textInputAction: TextInputAction.search,
+            decoration: InputDecoration(
+              labelText: 'Search requests',
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: IconButton(
+                tooltip: 'Search',
+                icon: const Icon(Icons.arrow_forward),
+                onPressed: () => setState(() {
+                  _workOrderSearchTerm = _workOrderSearch.text.trim();
+                  _workOrderSkip = 0;
+                }),
+              ),
+            ),
+            onSubmitted: (value) => setState(() {
+              _workOrderSearchTerm = value.trim();
+              _workOrderSkip = 0;
+            }),
+          ),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<String>(
+            initialValue: _workOrderStatus,
+            decoration: const InputDecoration(labelText: 'Status'),
+            items:
+                const [
+                      'Open',
+                      'New',
+                      'Scheduled',
+                      'InProgress',
+                      'WaitingParts',
+                      'OnHold',
                       'Completed',
                       'Cancelled',
                       'Archived',
-                    }.contains(w.status),
-                  )
-                  .toList();
-              if (open.isEmpty) {
-                return const Text('No open maintenance requests.');
+                    ]
+                    .map(
+                      (value) =>
+                          DropdownMenuItem(value: value, child: Text(value)),
+                    )
+                    .toList(),
+            onChanged: (value) => setState(() {
+              _workOrderStatus = value ?? 'Open';
+              _workOrderSkip = 0;
+            }),
+          ),
+          const SizedBox(height: 12),
+          workOrders.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (error, _) => Card(
+              child: ListTile(
+                leading: const Icon(Icons.error_outline),
+                title: const Text('Requests could not be loaded'),
+                subtitle: Text(error.toString()),
+                trailing: IconButton(
+                  tooltip: 'Retry',
+                  icon: const Icon(Icons.refresh),
+                  onPressed: () =>
+                      ref.invalidate(tenantPortalWorkOrdersPageProvider),
+                ),
+              ),
+            ),
+            data: (page) {
+              if (page.items.isEmpty) {
+                return const Text(
+                  'No maintenance requests match these filters.',
+                );
               }
               return Column(
-                children: open
-                    .map(
-                      (w) => Card(
-                        child: ListTile(
-                          titleAlignment: ListTileTitleAlignment.center,
-                          title: Text(w.title),
-                          subtitle: Text('${w.status} · ${w.priority}'),
-                          trailing: const Icon(Icons.chevron_right),
-                          onTap: () => Navigator.of(context).push<void>(
-                            MaterialPageRoute<void>(
-                              builder: (_) => TenantWorkOrderDetailScreen(
-                                workOrderId: w.id,
-                              ),
+                children: [
+                  for (final workOrder in page.items)
+                    Card(
+                      child: ListTile(
+                        titleAlignment: ListTileTitleAlignment.center,
+                        title: Text(workOrder.title),
+                        subtitle: Text(
+                          '${workOrder.status} · ${workOrder.priority}',
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) => TenantWorkOrderDetailScreen(
+                              workOrderId: workOrder.id,
                             ),
                           ),
                         ),
                       ),
-                    )
-                    .toList(),
+                    ),
+                  if (page.totalCount > page.take)
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        OutlinedButton(
+                          onPressed: page.skip <= 0
+                              ? null
+                              : () => setState(() {
+                                  _workOrderSkip = (_workOrderSkip - page.take)
+                                      .clamp(0, page.totalCount)
+                                      .toInt();
+                                }),
+                          child: const Text('Previous'),
+                        ),
+                        Text(
+                          '${page.skip + 1}–${(page.skip + page.items.length).clamp(0, page.totalCount)} of ${page.totalCount}',
+                        ),
+                        OutlinedButton(
+                          onPressed: page.skip + page.take >= page.totalCount
+                              ? null
+                              : () => setState(() {
+                                  _workOrderSkip += page.take;
+                                }),
+                          child: const Text('Next'),
+                        ),
+                      ],
+                    ),
+                ],
               );
             },
-            orElse: () => const SizedBox.shrink(),
           ),
           const SizedBox(height: 16),
           TextField(

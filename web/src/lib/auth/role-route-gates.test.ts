@@ -70,7 +70,7 @@ test('rental collections keep owners in Rentals and leasing inbox uses canonical
 	assert.doesNotMatch(settings, /href: '\/owners'/);
 	assert.match(
 		leasingListPage,
-		/kind === 'inbox'\) return `\/messages\?\$\{new URLSearchParams\(\{ conversation: String\(item\.id\) \}\)\}`/
+		/kind === 'inbox'\) return `\/leasing\/conversations\/\$\{item\.id\}`/
 	);
-	assert.doesNotMatch(leasingListPage, /kind === 'inbox'\) return `\/messages\/\$\{item\.id\}`/);
+	assert.doesNotMatch(leasingListPage, /kind === 'inbox'\) return `\/messages/);
 });

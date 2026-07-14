@@ -165,6 +165,11 @@ export interface PortalTenantChargeListParams extends PortalListParams {
 	isPastDue?: boolean;
 }
 
+export interface PortalTenantWorkOrderListParams extends PortalListParams {
+	status?: string;
+	openOnly?: boolean;
+}
+
 export interface PortalLeaseAgreement {
 	leaseAgreementId: number;
 	versionNumber: number;
@@ -237,7 +242,8 @@ export const portal = {
 	tenantAccountDeposit: (tenantAccountId: number) =>
 		api.get<PortalTenantAccountDeposit>(`/portal/tenant-accounts/${tenantAccountId}/deposit`),
 	appointments: () => api.get<Appointment[]>('/portal/appointments'),
-	workOrders: () => api.get<WorkOrder[]>('/portal/work-orders'),
+	workOrders: (params: PortalTenantWorkOrderListParams = {}) =>
+		api.get<PortalPage<WorkOrder>>(`/portal/work-orders${queryString(params)}`),
 	/** One of the tenant's own work orders plus its status timeline (404 if not theirs). */
 	workOrder: (id: number) => api.get<WorkOrderDetail>(`/portal/work-orders/${id}`),
 	createTenantWorkOrder: (data: Record<string, unknown>) =>

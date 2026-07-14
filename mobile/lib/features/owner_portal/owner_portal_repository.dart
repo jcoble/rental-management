@@ -145,20 +145,18 @@ class OwnerPortalRepository {
     sort: 'name',
   );
 
-  Future<List<OwnerSummary>> statements(int year) async {
-    try {
-      final response = await _dio.get<List<dynamic>>(
-        '/owner/statements',
-        queryParameters: {'year': year},
-      );
-      return (response.data ?? const [])
-          .whereType<Map<String, dynamic>>()
-          .map(OwnerSummary.fromJson)
-          .toList(growable: false);
-    } on DioException catch (error) {
-      throw ApiException.fromDioException(error);
-    }
-  }
+  Future<OwnerPortalPage<OwnerSummary>> statementsPage({
+    required int year,
+    int skip = 0,
+    int take = 20,
+  }) => _getPage(
+    '/owner/statements',
+    OwnerSummary.fromJson,
+    skip: skip,
+    take: take,
+    sort: 'name',
+    extra: {'year': year},
+  );
 
   Future<OwnerStatement> statement(int ownerEntityId, int year) => _getObject(
     '/owner/statements/$ownerEntityId',

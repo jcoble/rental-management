@@ -39,6 +39,7 @@ describe('experience route policy', () => {
 		assert.equal(canAccessRoute('/properties', 'Leasing', capabilities), false);
 		assert.equal(canAccessRoute('/properties/12', 'Leasing', capabilities), false);
 		assert.equal(canAccessRoute('/leasing/rentals/12', 'Leasing', capabilities), true);
+		assert.equal(canAccessRoute('/profile', 'Leasing', capabilities), true);
 		assert.equal(canAccessRoute('/notices', 'Leasing', capabilities), false);
 		capabilities.add(CAPABILITY.tenantNoticesManage);
 		assert.equal(canAccessRoute('/notices', 'Leasing', capabilities), true);
@@ -47,7 +48,7 @@ describe('experience route policy', () => {
 	});
 
 	it('allows Maintenance assignment routes and denies general rental browsing', () => {
-		const capabilities = new Set([
+		const capabilities = new Set<string>([
 			CAPABILITY.assignedWorkRead,
 			CAPABILITY.assignedWorkConverse
 		]);
@@ -59,6 +60,8 @@ describe('experience route policy', () => {
 		assert.equal(canAccessRoute('/maintenance/42', 'Maintenance', capabilities), false);
 		assert.equal(canAccessRoute('/messages', 'Maintenance', capabilities), false);
 		assert.equal(canAccessRoute('/scan', 'Maintenance', capabilities), false);
+		capabilities.add(CAPABILITY.assignedWorkUpdate);
+		assert.equal(canAccessRoute('/scan', 'Maintenance', capabilities), true);
 		assert.equal(canAccessRoute('/units', 'Maintenance', capabilities), false);
 		assert.equal(canAccessRoute('/accounting', 'Maintenance', capabilities), false);
 	});

@@ -44,6 +44,7 @@ public class WorkOrderStatusTimelineTests : IDisposable
 
         _db = new AccountingServiceTestDbContext(options);
         _db.Database.EnsureCreated();
+        InstallTenantAccessView();
 
         var now = DateTime.UtcNow;
         _db.Portfolios.Add(new Portfolio
@@ -311,12 +312,13 @@ public class WorkOrderStatusTimelineTests : IDisposable
     [Fact]
     public async Task PortalGetWorkOrderDetail_ReturnsTimeline_ForOwningTenant()
     {
-        var (property, tenant) = SeedPropertyAndTenant();
+        var (property, tenant, relationship) = SeedPropertyAndTenant();
         var created = await CreateAsync(
             new CreateWorkOrderRequest
             {
                 PropertyId = property.Id,
                 TenantId = tenant.Id,
+                LeaseManagementId = relationship.Id,
                 Title = "No hot water",
                 Description = "Water heater out",
                 Status = WorkOrderStatus.New,
@@ -325,7 +327,8 @@ public class WorkOrderStatusTimelineTests : IDisposable
         await UpdateAsync(created!.Id,
             new UpdateWorkOrderRequest { Status = WorkOrderStatus.InProgress });
 
-        var detail = await _portal.GetWorkOrderDetailAsync(PortfolioId, tenant.Id, created.Id);
+        var scope = SeedTenantPortalScope(tenant.Id);
+        var detail = await _portal.GetWorkOrderDetailAsync(scope, tenant.Id, created.Id);
 
         detail.Should().NotBeNull();
         detail!.Id.Should().Be(created.Id);
@@ -336,21 +339,75 @@ public class WorkOrderStatusTimelineTests : IDisposable
     [Fact]
     public async Task PortalGetWorkOrderDetail_ReturnsNull_ForAnotherTenantsWorkOrder()
     {
-        var (property, tenant) = SeedPropertyAndTenant();
+        var (property, tenant, relationship) = SeedPropertyAndTenant();
         var created = await CreateAsync(
             new CreateWorkOrderRequest
             {
                 PropertyId = property.Id,
                 TenantId = tenant.Id,
+                LeaseManagementId = relationship.Id,
                 Title = "No hot water",
                 Description = "Water heater out",
                 Status = WorkOrderStatus.New,
             });
 
+        var scope = SeedTenantPortalScope(tenant.Id);
         var foreignTenantId = tenant.Id + 1000;
-        var detail = await _portal.GetWorkOrderDetailAsync(PortfolioId, foreignTenantId, created!.Id);
+        var detail = await _portal.GetWorkOrderDetailAsync(scope, foreignTenantId, created!.Id);
 
         detail.Should().BeNull("a tenant may only read their own work order's timeline");
+    }
+
+    [Fact]
+    public async Task PortalWorkOrderPage_CountsFiltersAndPagesOnlyCurrentRelationship()
+    {
+        var (property, tenant, relationship) = SeedPropertyAndTenant();
+        var first = await CreateAsync(new CreateWorkOrderRequest
+        {
+            PropertyId = property.Id,
+            TenantId = tenant.Id,
+            LeaseManagementId = relationship.Id,
+            Title = "No hot water",
+            Description = "Water heater out",
+            Status = WorkOrderStatus.New,
+        });
+        var second = await CreateAsync(new CreateWorkOrderRequest
+        {
+            PropertyId = property.Id,
+            TenantId = tenant.Id,
+            LeaseManagementId = relationship.Id,
+            Title = "Loose handrail",
+            Description = "Stair rail moves",
+            Status = WorkOrderStatus.InProgress,
+        });
+
+        var (foreignProperty, foreignTenant, foreignRelationship) = SeedPropertyAndTenant();
+        await CreateAsync(new CreateWorkOrderRequest
+        {
+            PropertyId = foreignProperty.Id,
+            TenantId = foreignTenant.Id,
+            LeaseManagementId = foreignRelationship.Id,
+            Title = "Foreign request",
+            Description = "Must not appear",
+            Status = WorkOrderStatus.New,
+        });
+
+        var scope = SeedTenantPortalScope(tenant.Id);
+        var page = await _portal.ListWorkOrdersPageAsync(
+            scope,
+            tenant.Id,
+            new PortalTenantWorkOrderListQuery
+            {
+                OpenOnly = true,
+                Take = 1,
+                Sort = "requestedAt",
+            });
+
+        page.TotalCount.Should().Be(2);
+        page.Items.Should().ContainSingle();
+        page.Items[0].Id.Should().Be(first!.Id);
+        page.Items[0].Id.Should().NotBe(second!.Id);
+        page.Items.Should().OnlyContain(item => item.TenantId == tenant.Id);
     }
 
     private Task<WorkOrderResponse?> CreateAsync(CreateWorkOrderRequest request) =>
@@ -378,7 +435,7 @@ public class WorkOrderStatusTimelineTests : IDisposable
         return property;
     }
 
-    private (Property property, Tenant tenant) SeedPropertyAndTenant()
+    private (Property property, Tenant tenant, LeaseManagement relationship) SeedPropertyAndTenant()
     {
         var property = SeedProperty();
         var now = DateTime.UtcNow;
@@ -406,7 +463,7 @@ public class WorkOrderStatusTimelineTests : IDisposable
             PortfolioId = PortfolioId,
             PropertyId = property.Id,
             UnitId = unit.Id,
-            RelationshipNumber = "Portal-work-order",
+            RelationshipNumber = $"Portal-work-order-{Guid.NewGuid():N}",
             PossessionGivenAtUtc = now.AddMonths(-1),
             PossessionAgreementExceptionReason = "Work-order fixture has no legal-document artifact.",
             PossessionAgreementExceptionAuthorizedByUserId = 1,
@@ -427,7 +484,77 @@ public class WorkOrderStatusTimelineTests : IDisposable
             CreatedByUserId = 1,
         });
         _db.SaveChanges();
-        return (property, tenant);
+        return (property, tenant, relationship);
+    }
+
+    private PortalTenantReadScope SeedTenantPortalScope(int tenantId)
+    {
+        var now = DateTime.UtcNow;
+        var party = _db.LeaseManagementParties.Single(item => item.TenantId == tenantId);
+        var email = $"portal-{Guid.NewGuid():N}@example.test";
+        var user = new ApplicationUser
+        {
+            UserName = email,
+            NormalizedUserName = email.ToUpperInvariant(),
+            Email = email,
+            NormalizedEmail = email.ToUpperInvariant(),
+            DisplayName = "Portal Tenant",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = now,
+        };
+        var context = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        _db.TenantUserAccesses.Add(new TenantUserAccess
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            AccessContext = context,
+            ApplicationUser = user,
+            LeaseManagementPartyId = party.Id,
+            GrantedAtUtc = now,
+            GrantedByUserId = _scope.UserId,
+            Reason = "Portal work-order test",
+        });
+        _db.SaveChanges();
+        return new PortalTenantReadScope(
+            PortfolioId, user.Id, context.Id, context.AccessRevision);
+    }
+
+    private void InstallTenantAccessView()
+    {
+        _db.Database.ExecuteSqlRaw("""
+            DROP VIEW IF EXISTS "vw_effective_tenant_access";
+            CREATE VIEW "vw_effective_tenant_access" AS
+            SELECT context."Id" AS "AccessContextId", context."UserId", context."PortfolioId",
+                   context."AccessRevision", access."Id" AS "TenantUserAccessId",
+                   party."Id" AS "LeaseManagementPartyId", party."TenantId",
+                   party."LeaseManagementId", NULL AS "TenantAccountId",
+                   relationship."PropertyId", relationship."UnitId"
+            FROM "WorkspaceAccessContexts" context
+            JOIN "TenantUserAccesses" access
+              ON access."AccessContextId" = context."Id"
+             AND access."ApplicationUserId" = context."UserId"
+             AND access."PortfolioId" = context."PortfolioId"
+            JOIN "LeaseManagementParties" party
+              ON party."Id" = access."LeaseManagementPartyId"
+             AND party."PortfolioId" = access."PortfolioId"
+            JOIN "LeaseManagements" relationship
+              ON relationship."Id" = party."LeaseManagementId"
+             AND relationship."PortfolioId" = party."PortfolioId"
+            WHERE context."Status" = 'Active'
+              AND context."SuspendedAtUtc" IS NULL
+              AND context."RevokedAtUtc" IS NULL
+              AND access."RevokedAtUtc" IS NULL
+              AND party."EffectiveFrom" <= date('now')
+              AND (party."EffectiveThrough" IS NULL OR party."EffectiveThrough" >= date('now'));
+            """);
     }
 
     private (Property property, Unit occupiedUnit, Unit otherUnit, Tenant tenant) SeedPropertyWithTenantLease()

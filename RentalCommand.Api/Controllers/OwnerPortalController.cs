@@ -42,10 +42,10 @@ public sealed class OwnerPortalController : AuthenticatedPortfolioControllerBase
         _portal.ListPropertiesPageAsync(GetOwnerScope(), query, ct);
 
     [HttpGet("statements")]
-    public Task<IReadOnlyList<OwnerStatementSummary>> Statements(
-        [FromQuery] int? year, CancellationToken ct) =>
-        _statements.ListForOwnerPortalAsync(
-            GetOwnerScope(), year ?? _timeProvider.GetUtcNow().Year, ct);
+    public Task<OwnerStatementSummaryPageResponse> Statements(
+        [FromQuery] int? year, [FromQuery] ListQuery query, CancellationToken ct) =>
+        _statements.ListForOwnerPortalPageAsync(
+            GetOwnerScope(), year ?? _timeProvider.GetUtcNow().Year, query, ct);
 
     [HttpGet("statements/{ownerEntityId:int}")]
     [ProducesResponseType(typeof(OwnerStatementReport), StatusCodes.Status200OK)]

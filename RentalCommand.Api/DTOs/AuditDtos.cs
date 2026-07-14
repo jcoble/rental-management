@@ -111,13 +111,13 @@ public class AuditEntryResponse
     /// <summary>Maps an entity type + id to its web detail route (null when there is no page).</summary>
     internal static string? BuildDetailHref(string entityType, int entityId, int? unitId = null) => entityType switch
     {
-        "TenantAccount" when unitId is > 0 => $"/units/{unitId}?tab=ledger&tenantAccount={entityId}",
+        "TenantAccount" when unitId is > 0 => $"/units/{unitId}?tab=money&tenantAccount={entityId}",
         "TenantAccount" => $"/tenant-accounts/{entityId}",
-        "Expense" when unitId is > 0 => $"/units/{unitId}?tab=ledger&ledger=expenses&expense={entityId}",
+        "Expense" when unitId is > 0 => $"/units/{unitId}?tab=money&ledger=expenses&expense={entityId}",
         "Expense" => $"/accounting/expenses/{entityId}",
-        "LeaseManagement" when unitId is > 0 => $"/units/{unitId}?tab=lease&leaseManagement={entityId}",
+        "LeaseManagement" when unitId is > 0 => $"/units/{unitId}?tab=tenant-lease&view=agreements&leaseManagement={entityId}",
         "LeaseManagement" => $"/lease-managements/{entityId}",
-        "LeaseAgreement" when unitId is > 0 => $"/units/{unitId}?tab=lease&agreement={entityId}",
+        "LeaseAgreement" when unitId is > 0 => $"/units/{unitId}?tab=tenant-lease&view=agreements&agreement={entityId}",
         "LeaseAgreement" => $"/lease-agreements/{entityId}",
         "Tenant" => $"/tenants/{entityId}",
         "Property" => $"/properties/{entityId}",
@@ -127,7 +127,7 @@ public class AuditEntryResponse
         "OwnerEntity" => "/owners",
         "Appointment" => $"/appointments/{entityId}",
         "Inspection" => $"/maintenance/inspections/{entityId}",
-        "RentalApplication" when unitId is > 0 => $"/units/{unitId}?tab=applications&app={entityId}",
+        "RentalApplication" when unitId is > 0 => $"/units/{unitId}?tab=leasing&view=applications&app={entityId}",
         "RentalApplication" => $"/applications/{entityId}",
         _ => null,
     };

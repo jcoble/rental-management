@@ -19,24 +19,10 @@ describe('unit tab routing', () => {
 		});
 	});
 
-	it('maps existing deep links into the consolidated areas', () => {
-		assert.deepEqual(resolveUnitDestination('applications'), {
-			tab: 'leasing',
-			view: 'applications',
-		});
-		assert.deepEqual(resolveUnitDestination('lease'), {
-			tab: 'tenant-lease',
-			view: 'agreements',
-		});
-		assert.deepEqual(resolveUnitDestination('expenses'), { tab: 'money' });
-		assert.deepEqual(resolveUnitDestination('make-ready'), {
-			tab: 'maintenance',
-			view: 'turnover',
-		});
-		assert.deepEqual(resolveUnitDestination('timeline'), {
-			tab: 'documents-history',
-			view: 'history',
-		});
+	it('does not preserve retired tab aliases', () => {
+		for (const retired of ['overview', 'applications', 'lease', 'expenses', 'make-ready', 'timeline']) {
+			assert.deepEqual(resolveUnitDestination(retired), { tab: 'summary' });
+		}
 	});
 
 	it('falls back to Summary for missing or invalid destinations', () => {

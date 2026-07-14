@@ -349,6 +349,31 @@ class AutopayStatus {
   }
 }
 
+class PortalTenantWorkOrderPage {
+  const PortalTenantWorkOrderPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<WorkOrder> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+
+  factory PortalTenantWorkOrderPage.fromJson(Map<String, dynamic> json) {
+    return PortalTenantWorkOrderPage(
+      items: List<Map<String, dynamic>>.from(
+        json['items'] as List<dynamic>? ?? const [],
+      ).map(WorkOrder.fromJson).toList(growable: false),
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? 0,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
 class TenantPortalSnapshot {
   const TenantPortalSnapshot({
     required this.accounts,
@@ -358,7 +383,7 @@ class TenantPortalSnapshot {
   });
 
   final PortalTenantAccountPage accounts;
-  final List<WorkOrder> workOrders;
+  final PortalTenantWorkOrderPage workOrders;
   final List<PortalLeaseRelationship> leases;
   final List<TenantNotification> notifications;
 }
@@ -375,7 +400,14 @@ class TenantPortalRepository {
           '/portal/tenant-accounts/page',
           queryParameters: {'take': 200, 'sort': 'propertyName'},
         ),
-        _dio.get<List<dynamic>>('/portal/work-orders'),
+        _dio.get<Map<String, dynamic>>(
+          '/portal/work-orders',
+          queryParameters: {
+            'openOnly': true,
+            'take': 20,
+            'sort': '-requestedAt',
+          },
+        ),
         _dio.get<List<dynamic>>('/portal/leases'),
         _dio.get<List<dynamic>>(
           '/notifications',
@@ -387,10 +419,9 @@ class TenantPortalRepository {
         accounts: PortalTenantAccountPage.fromJson(
           (results[0].data as Map<String, dynamic>?) ?? const {},
         ),
-        workOrders: ((results[1].data as List<dynamic>?) ?? const [])
-            .whereType<Map<String, dynamic>>()
-            .map(WorkOrder.fromJson)
-            .toList(),
+        workOrders: PortalTenantWorkOrderPage.fromJson(
+          (results[1].data as Map<String, dynamic>?) ?? const {},
+        ),
         leases: ((results[2].data as List<dynamic>?) ?? const [])
             .whereType<Map<String, dynamic>>()
             .map(PortalLeaseRelationship.fromJson)
@@ -474,6 +505,31 @@ class TenantPortalRepository {
         '/portal/tenant-accounts/$tenantAccountId/deposit',
       );
       return PortalTenantAccountDeposit.fromJson(response.data ?? const {});
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<PortalTenantWorkOrderPage> workOrdersPage({
+    int skip = 0,
+    int take = 20,
+    bool openOnly = false,
+    String search = '',
+    String? status,
+  }) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/portal/work-orders',
+        queryParameters: {
+          'skip': skip,
+          'take': take,
+          'sort': '-requestedAt',
+          if (openOnly) 'openOnly': true,
+          if (search.trim().isNotEmpty) 'search': search.trim(),
+          if (status != null && status.isNotEmpty) 'status': status,
+        },
+      );
+      return PortalTenantWorkOrderPage.fromJson(response.data ?? const {});
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -582,21 +638,20 @@ class TenantPortalRepository {
   }
 
   Future<AutopayStatus> autopayCancel(int tenantAccountId) async {
-    return IdempotentMutation.run(
-      'portal:autopay:cancel:$tenantAccountId',
-      (operationKey) async {
-        try {
-          final response = await _dio.post<Map<String, dynamic>>(
-            '/portal/tenant-accounts/$tenantAccountId/autopay/cancel',
-            data: const <String, dynamic>{},
-            options: Options(headers: {'Idempotency-Key': operationKey}),
-          );
-          return AutopayStatus.fromJson(response.data ?? const {});
-        } on DioException catch (e) {
-          throw ApiException.fromDioException(e);
-        }
-      },
-    );
+    return IdempotentMutation.run('portal:autopay:cancel:$tenantAccountId', (
+      operationKey,
+    ) async {
+      try {
+        final response = await _dio.post<Map<String, dynamic>>(
+          '/portal/tenant-accounts/$tenantAccountId/autopay/cancel',
+          data: const <String, dynamic>{},
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        );
+        return AutopayStatus.fromJson(response.data ?? const {});
+      } on DioException catch (e) {
+        throw ApiException.fromDioException(e);
+      }
+    });
   }
 
   Future<void> uploadWorkOrderPhoto({
@@ -632,6 +687,29 @@ final tenantPortalRepositoryProvider = Provider<TenantPortalRepository>((ref) {
 final tenantPortalSnapshotProvider =
     FutureProvider.autoDispose<TenantPortalSnapshot>((ref) {
       return ref.watch(tenantPortalRepositoryProvider).snapshot();
+    });
+
+typedef TenantWorkOrderPageRequest = ({
+  int skip,
+  int take,
+  String search,
+  String? status,
+});
+
+final tenantPortalWorkOrdersPageProvider = FutureProvider.autoDispose
+    .family<PortalTenantWorkOrderPage, TenantWorkOrderPageRequest>((
+      ref,
+      request,
+    ) {
+      return ref
+          .watch(tenantPortalRepositoryProvider)
+          .workOrdersPage(
+            skip: request.skip,
+            take: request.take,
+            openOnly: request.status == null,
+            search: request.search,
+            status: request.status,
+          );
     });
 
 final tenantPortalAccountProvider = FutureProvider.autoDispose

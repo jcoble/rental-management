@@ -94,7 +94,7 @@ test.describe('Unit listing workspace', () => {
 		const unitId = await findListingUnit(request, token);
 		await login(page);
 
-		await page.goto(`/units/${unitId}?tab=listing`);
+		await page.goto(`/units/${unitId}?tab=leasing&view=listing`);
 		await expect(page.getByTestId('unit-page')).toBeVisible({ timeout: 15_000 });
 		await expect(page.getByTestId('unit-listing-tab')).toBeVisible({ timeout: 15_000 });
 
@@ -219,7 +219,7 @@ test.describe('Unit listing workspace', () => {
 		expect(prepare.ok(), `prepare failed: ${prepare.status()}`).toBeTruthy();
 
 		await login(page);
-		await page.goto(`/units/${unitId}?tab=listing`);
+		await page.goto(`/units/${unitId}?tab=leasing&view=listing`);
 		await expect(page.getByText('Listing copy', { exact: true })).toBeVisible({ timeout: 15_000 });
 
 		const save = page.getByRole('button', { name: 'Save', exact: true });

@@ -309,9 +309,11 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     }
 
     [HttpGet("work-orders")]
-    [ProducesResponseType(typeof(IReadOnlyList<WorkOrderResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(PortalTenantWorkOrderPageResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
-    public async Task<ActionResult<IReadOnlyList<WorkOrderResponse>>> WorkOrders(CancellationToken ct)
+    public async Task<ActionResult<PortalTenantWorkOrderPageResponse>> WorkOrders(
+        [FromQuery] PortalTenantWorkOrderListQuery query,
+        CancellationToken ct)
     {
         var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
@@ -319,8 +321,8 @@ public class PortalController : AuthenticatedPortfolioControllerBase
             return Forbid();
         }
 
-        var items = await _service.GetWorkOrdersAsync(GetPortfolioId(), tenantId.Value, ct);
-        return Ok(items);
+        return Ok(await _service.ListWorkOrdersPageAsync(
+            GetTenantReadScope(), tenantId.Value, query, ct));
     }
 
     /// <summary>
@@ -340,7 +342,8 @@ public class PortalController : AuthenticatedPortfolioControllerBase
             return Forbid();
         }
 
-        var item = await _service.GetWorkOrderDetailAsync(GetPortfolioId(), tenantId.Value, id, ct);
+        var item = await _service.GetWorkOrderDetailAsync(
+            GetTenantReadScope(), tenantId.Value, id, ct);
         return item == null ? NotFound(new { error = "Work order not found" }) : Ok(item);
     }
 

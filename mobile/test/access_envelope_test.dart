@@ -62,4 +62,30 @@ void main() {
       'maintenance.assigned-work.read',
     });
   });
+
+  test('unknown active experience fails closed', () {
+    final source = <String, dynamic>{
+      'identity': {
+        'userId': 17,
+        'displayName': 'Morgan Manager',
+        'email': 'morgan@example.test',
+      },
+      'selectedContext': {
+        'accessContextId': 42,
+        'portfolioId': 8,
+        'workspaceName': 'Lakeview Rentals',
+        'accessRevision': 9,
+        'activeExperience': 'FutureExperience',
+      },
+      'defaultExperience': 'Management',
+      'availableExperiences': ['Management'],
+      'assignments': <Map<String, dynamic>>[],
+      'navigation': <Map<String, dynamic>>[],
+    };
+
+    expect(
+      () => AccessEnvelope.fromJson(source),
+      throwsA(isA<FormatException>()),
+    );
+  });
 }

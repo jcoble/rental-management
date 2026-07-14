@@ -116,6 +116,166 @@ class LeasingRental {
   );
 }
 
+class LeasingRentalDetail {
+  const LeasingRentalDetail({
+    required this.propertyId,
+    required this.unitId,
+    required this.propertyName,
+    required this.unitNumber,
+    required this.address,
+    required this.canViewApplications,
+    required this.openApplicationCount,
+    required this.canViewShowings,
+    this.listingId,
+    this.listingStatus,
+    this.listingHeadline,
+    this.listingDescription,
+    this.askingRent,
+    this.securityDeposit,
+    this.availableOn,
+    this.leaseTerms,
+    this.petPolicy,
+    this.nextShowingAtUtc,
+  });
+
+  final int propertyId;
+  final int unitId;
+  final String propertyName;
+  final String unitNumber;
+  final String address;
+  final int? listingId;
+  final String? listingStatus;
+  final String? listingHeadline;
+  final String? listingDescription;
+  final double? askingRent;
+  final double? securityDeposit;
+  final DateTime? availableOn;
+  final String? leaseTerms;
+  final String? petPolicy;
+  final bool canViewApplications;
+  final int openApplicationCount;
+  final bool canViewShowings;
+  final DateTime? nextShowingAtUtc;
+
+  factory LeasingRentalDetail.fromJson(Map<String, dynamic> json) =>
+      LeasingRentalDetail(
+        propertyId: (json['propertyId'] as num).toInt(),
+        unitId: (json['unitId'] as num).toInt(),
+        propertyName: json['propertyName'] as String? ?? '',
+        unitNumber: json['unitNumber'] as String? ?? '',
+        address: json['address'] as String? ?? '',
+        listingId: (json['listingId'] as num?)?.toInt(),
+        listingStatus: json['listingStatus'] as String?,
+        listingHeadline: json['listingHeadline'] as String?,
+        listingDescription: json['listingDescription'] as String?,
+        askingRent: (json['askingRent'] as num?)?.toDouble(),
+        securityDeposit: (json['securityDeposit'] as num?)?.toDouble(),
+        availableOn: _date(json['availableOn']),
+        leaseTerms: json['leaseTerms'] as String?,
+        petPolicy: json['petPolicy'] as String?,
+        canViewApplications: json['canViewApplications'] as bool? ?? false,
+        openApplicationCount:
+            (json['openApplicationCount'] as num?)?.toInt() ?? 0,
+        canViewShowings: json['canViewShowings'] as bool? ?? false,
+        nextShowingAtUtc: _date(json['nextShowingAtUtc']),
+      );
+}
+
+class LeasingAppointmentDetail {
+  const LeasingAppointmentDetail({
+    required this.id,
+    required this.title,
+    required this.status,
+    required this.scheduledStart,
+    this.propertyId,
+    this.unitId,
+    this.rentalApplicationId,
+    this.prospectName,
+    this.prospectEmail,
+    this.propertyName,
+    this.unitNumber,
+    this.scheduledEnd,
+    this.assignedTo,
+    this.notes,
+  });
+
+  final int id;
+  final int? propertyId;
+  final int? unitId;
+  final int? rentalApplicationId;
+  final String title;
+  final String? prospectName;
+  final String? prospectEmail;
+  final String? propertyName;
+  final String? unitNumber;
+  final String status;
+  final DateTime scheduledStart;
+  final DateTime? scheduledEnd;
+  final String? assignedTo;
+  final String? notes;
+
+  factory LeasingAppointmentDetail.fromJson(Map<String, dynamic> json) =>
+      LeasingAppointmentDetail(
+        id: (json['id'] as num).toInt(),
+        propertyId: (json['propertyId'] as num?)?.toInt(),
+        unitId: (json['unitId'] as num?)?.toInt(),
+        rentalApplicationId: (json['rentalApplicationId'] as num?)?.toInt(),
+        title: json['title'] as String? ?? '',
+        prospectName: json['prospectName'] as String?,
+        prospectEmail: json['prospectEmail'] as String?,
+        propertyName: json['propertyName'] as String?,
+        unitNumber: json['unitNumber'] as String?,
+        status: json['status'] as String? ?? '',
+        scheduledStart:
+            _date(json['scheduledStart']) ??
+            DateTime.fromMillisecondsSinceEpoch(0),
+        scheduledEnd: _date(json['scheduledEnd']),
+        assignedTo: json['assignedTo'] as String?,
+        notes: json['notes'] as String?,
+      );
+}
+
+class LeasingMoveInDetail {
+  const LeasingMoveInDetail({
+    required this.id,
+    required this.propertyId,
+    required this.unitId,
+    required this.relationshipNumber,
+    required this.tenantName,
+    required this.propertyName,
+    required this.unitNumber,
+    required this.agreementFullyExecuted,
+    required this.possessionGiven,
+    this.plannedPossessionAtUtc,
+  });
+
+  final int id;
+  final int propertyId;
+  final int unitId;
+  final String relationshipNumber;
+  final String tenantName;
+  final String propertyName;
+  final String unitNumber;
+  final DateTime? plannedPossessionAtUtc;
+  final bool agreementFullyExecuted;
+  final bool possessionGiven;
+
+  factory LeasingMoveInDetail.fromJson(Map<String, dynamic> json) =>
+      LeasingMoveInDetail(
+        id: (json['id'] as num).toInt(),
+        propertyId: (json['propertyId'] as num).toInt(),
+        unitId: (json['unitId'] as num).toInt(),
+        relationshipNumber: json['relationshipNumber'] as String? ?? '',
+        tenantName: json['tenantName'] as String? ?? '',
+        propertyName: json['propertyName'] as String? ?? '',
+        unitNumber: json['unitNumber'] as String? ?? '',
+        plannedPossessionAtUtc: _date(json['plannedPossessionAtUtc']),
+        agreementFullyExecuted:
+            json['agreementFullyExecuted'] as bool? ?? false,
+        possessionGiven: json['possessionGiven'] as bool? ?? false,
+      );
+}
+
 class LeasingCalendarItem {
   const LeasingCalendarItem({
     required this.id,
@@ -260,6 +420,19 @@ class LeasingWorkspaceRepository {
     take: take,
     search: search,
     sort: '-lastMessageAt',
+  );
+
+  Future<LeasingRentalDetail> rental(int unitId) =>
+      _getObject('/leasing/rentals/$unitId', LeasingRentalDetail.fromJson);
+
+  Future<LeasingAppointmentDetail> appointment(int appointmentId) => _getObject(
+    '/leasing/appointments/$appointmentId',
+    LeasingAppointmentDetail.fromJson,
+  );
+
+  Future<LeasingMoveInDetail> moveIn(int leaseManagementId) => _getObject(
+    '/leasing/move-ins/$leaseManagementId',
+    LeasingMoveInDetail.fromJson,
   );
 
   Future<T> _getObject<T>(

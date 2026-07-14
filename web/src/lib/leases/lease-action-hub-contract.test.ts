@@ -86,7 +86,10 @@ describe('canonical lease lifecycle action hub', () => {
 		assert.match(detailPageSource, /> Issued PDF</);
 		assert.match(detailPageSource, /> Executed PDF</);
 		assert.match(detailPageSource, /agreement\.hasSourceScan/);
-		assert.match(detailPageSource, /href=\{`\/units\/\$\{summary\.unitId\}\?tab=tenant-lease&view=agreements`\}/);
+		assert.match(
+			detailPageSource,
+			/href=\{activeExperience === 'Leasing' \? `\/leasing\/rentals\/\$\{summary\.unitId\}` : `\/units\/\$\{summary\.unitId\}`\}/
+		);
 	});
 
 	it('gives and returns possession through canonical idempotent commands', () => {

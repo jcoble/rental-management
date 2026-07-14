@@ -1,10 +1,13 @@
 enum WorkspaceExperience { management, leasing, maintenance, owner, tenant }
 
-WorkspaceExperience _experienceFromJson(Object? value) =>
-    WorkspaceExperience.values.firstWhere(
-      (item) => item.name.toLowerCase() == value.toString().toLowerCase(),
-      orElse: () => WorkspaceExperience.management,
-    );
+WorkspaceExperience _experienceFromJson(Object? value) {
+  final normalized = value is String ? value.trim().toLowerCase() : '';
+  for (final experience in WorkspaceExperience.values) {
+    if (experience.name == normalized) return experience;
+  }
+
+  throw FormatException('Unknown workspace experience: $value');
+}
 
 String _experienceToJson(WorkspaceExperience value) =>
     '${value.name[0].toUpperCase()}${value.name.substring(1)}';

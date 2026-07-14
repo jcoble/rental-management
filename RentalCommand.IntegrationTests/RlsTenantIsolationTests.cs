@@ -52,6 +52,7 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
     private int _isolatedTenantB;
     private RuntimeScopeSeed _scopeA = null!;
     private RuntimeScopeSeed _scopeB = null!;
+    private ResourceScopeSeed _resourceScopes = null!;
 
     public async Task InitializeAsync()
     {
@@ -111,6 +112,7 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
             await ctx.SaveChangesAsync();
             _isolatedTenantA = isolatedA.Id;
             _isolatedTenantB = isolatedB.Id;
+            _resourceScopes = await SeedResourceScopesAsync(ctx, _scopeA);
         }
     }
 
@@ -343,6 +345,79 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
                 "the direct Engine identity has its own cross-workspace policy path");
     }
 
+    [SkippableFact]
+    public async Task Rls_SameWorkspaceResourceScopes_BlockUnrelatedRowsAndWrites()
+    {
+        SkipIfNoDocker();
+
+        await AssertResourceVisibilityAsync(
+            _resourceScopes.SelectedProperty,
+            expectedPropertyCount: 1,
+            expectedWorkOrderId: _resourceScopes.InScopeWorkOrderId,
+            expectedAccountId: _scopeA.TenantAccountId);
+        await AssertResourceVisibilityAsync(
+            _resourceScopes.Owner,
+            expectedPropertyCount: 1,
+            expectedWorkOrderId: _resourceScopes.InScopeWorkOrderId,
+            expectedAccountId: _scopeA.TenantAccountId);
+        await AssertResourceVisibilityAsync(
+            _resourceScopes.Tenant,
+            expectedPropertyCount: 1,
+            expectedWorkOrderId: _resourceScopes.InScopeWorkOrderId,
+            expectedAccountId: _scopeA.TenantAccountId);
+        await AssertResourceVisibilityAsync(
+            _resourceScopes.Technician,
+            expectedPropertyCount: 0,
+            expectedWorkOrderId: _resourceScopes.InScopeWorkOrderId,
+            expectedAccountId: null);
+
+        await using (var selected = await OpenAsApiRoleAsync(_resourceScopes.SelectedProperty))
+        {
+            (await ExecAffectedAsync(selected,
+                $"UPDATE \"Properties\" SET \"Name\" = 'stolen' WHERE \"Id\" = {_resourceScopes.DecoyPropertyId}"))
+                .Should().Be(0, "selected-property authority cannot update a same-workspace decoy");
+            (await ExecAffectedAsync(selected,
+                $"DELETE FROM \"Properties\" WHERE \"Id\" = {_resourceScopes.DecoyPropertyId}"))
+                .Should().Be(0, "ordinary selected-property authority cannot delete a same-workspace decoy");
+
+            var insertDecoy = async () => await ExecAffectedAsync(selected, $"""
+                INSERT INTO "Properties"
+                  ("PortfolioId", "Name", "PropertyType", "Status", "AddressLine1", "City", "State",
+                   "PostalCode", "AccumulatedDepreciation", "CreatedAt", "UpdatedAt")
+                VALUES
+                  ({_scopeA.PortfolioId}, 'out of scope', 1, 1, '9 Other', 'Columbus', 'OH', '43219',
+                   0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """);
+            (await insertDecoy.Should().ThrowAsync<PostgresException>()).Which.SqlState
+                .Should().Be(PostgresErrorCodes.InsufficientPrivilege,
+                    "a selected-property assignment cannot create an unassigned Property");
+        }
+
+        await using (var owner = await OpenAsApiRoleAsync(_resourceScopes.Owner))
+        {
+            (await ExecAffectedAsync(owner,
+                $"UPDATE \"Properties\" SET \"Name\" = 'owner mutation' WHERE \"Id\" = {_scopeA.PropertyId}"))
+                .Should().Be(0, "an Owner relationship is read authority, not Team mutation authority");
+        }
+
+        await using (var tenant = await OpenAsApiRoleAsync(_resourceScopes.Tenant))
+        {
+            (await ExecAffectedAsync(tenant,
+                $"UPDATE \"TenantAccounts\" SET \"CloseNote\" = 'tenant mutation' WHERE \"Id\" = {_scopeA.TenantAccountId}"))
+                .Should().Be(0, "a Tenant relationship cannot rewrite its canonical account row");
+        }
+
+        await using (var technician = await OpenAsApiRoleAsync(_resourceScopes.Technician))
+        {
+            (await ExecAffectedAsync(technician,
+                $"UPDATE \"WorkOrders\" SET \"Status\" = 2 WHERE \"Id\" = {_resourceScopes.InScopeWorkOrderId}"))
+                .Should().Be(1, "assigned-work authority may update the assigned work order");
+            (await ExecAffectedAsync(technician,
+                $"UPDATE \"WorkOrders\" SET \"Status\" = 2 WHERE \"Id\" = {_resourceScopes.DecoyWorkOrderId}"))
+                .Should().Be(0, "assigned-work authority cannot update a same-workspace decoy");
+        }
+    }
+
     // ----- helpers -----
 
     private void SkipIfNoDocker() =>
@@ -369,6 +444,43 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
             $"SET app.access_revision = '{scope.AccessRevision}'; " +
             $"SET app.current_portfolio_id = '{portfolioId}';");
         return conn;
+    }
+
+    private async Task<NpgsqlConnection> OpenAsApiRoleAsync(RuntimeScopeSeed scope)
+    {
+        var conn = await OpenDirectRoleAsync(ApiRole, ApiPassword);
+        await ExecAsync(conn,
+            $"SET app.auth_session_id = '{scope.AuthSessionId}'; " +
+            $"SET app.current_user_id = '{scope.UserId}'; " +
+            $"SET app.current_access_context_id = '{scope.AccessContextId}'; " +
+            $"SET app.access_revision = '{scope.AccessRevision}'; " +
+            $"SET app.current_portfolio_id = '{scope.PortfolioId}';");
+        return conn;
+    }
+
+    private async Task AssertResourceVisibilityAsync(
+        RuntimeScopeSeed scope,
+        int expectedPropertyCount,
+        int expectedWorkOrderId,
+        int? expectedAccountId)
+    {
+        await using var conn = await OpenAsApiRoleAsync(scope);
+        (await ExecScalarIntAsync(conn, "SELECT count(*) FROM \"Properties\""))
+            .Should().Be(expectedPropertyCount);
+        (await ReadIdsAsync(conn, "WorkOrders"))
+            .Should().Equal(expectedWorkOrderId);
+        var accountIds = await ReadIdsAsync(conn, "TenantAccounts");
+        accountIds.Should().Equal(expectedAccountId is null ? [] : [expectedAccountId.Value]);
+    }
+
+    private static async Task<int[]> ReadIdsAsync(NpgsqlConnection conn, string table)
+    {
+        await using var command = conn.CreateCommand();
+        command.CommandText = $"SELECT \"Id\" FROM \"{table}\" ORDER BY \"Id\"";
+        var ids = new List<int>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync()) ids.Add(reader.GetInt32(0));
+        return ids.ToArray();
     }
 
     private async Task<NpgsqlConnection> OpenDirectRoleAsync(string username, string password)
@@ -415,6 +527,283 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
         UpdatedAt = DateTime.UtcNow,
     };
 
+    private static async Task<ResourceScopeSeed> SeedResourceScopesAsync(
+        RentalCommandDbContext ctx,
+        RuntimeScopeSeed primary)
+    {
+        var now = DateTime.UtcNow;
+        var grantingUserId = primary.UserId;
+        var ownerEntity = new OwnerEntity
+        {
+            PortfolioId = primary.PortfolioId,
+            OwnerEntityType = OwnerEntityType.Person,
+            Name = "RLS scoped owner",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        ctx.OwnerEntities.Add(ownerEntity);
+        var primaryProperty = await ctx.Properties.SingleAsync(property => property.Id == primary.PropertyId);
+        primaryProperty.OwnerEntity = ownerEntity;
+
+        var decoyProperty = new Property
+        {
+            PortfolioId = primary.PortfolioId,
+            Name = "Same-workspace decoy",
+            AddressLine1 = "2 Other",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43219",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var decoyUnit = new Unit
+        {
+            PortfolioId = primary.PortfolioId,
+            Property = decoyProperty,
+            UnitNumber = "2",
+            MarketRent = 900m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var decoyTenant = IsolatedTenant(primary.PortfolioId, "same-workspace-decoy");
+        ctx.AddRange(decoyProperty, decoyUnit, decoyTenant);
+        await ctx.SaveChangesAsync();
+
+        var decoyRelationship = new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = primary.PortfolioId,
+            PropertyId = decoyProperty.Id,
+            UnitId = decoyUnit.Id,
+            RelationshipNumber = "RLS-DECOY",
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = grantingUserId,
+            RowVersion = Guid.NewGuid(),
+        };
+        ctx.LeaseManagements.Add(decoyRelationship);
+        await ctx.SaveChangesAsync();
+        var decoyAccount = new TenantAccount
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = primary.PortfolioId,
+            LeaseManagementId = decoyRelationship.Id,
+            AccountNumber = "TA-RLS-DECOY",
+            Currency = "USD",
+            OpenedAtUtc = now,
+            CreatedAtUtc = now,
+            CreatedByUserId = grantingUserId,
+        };
+        var decoyParty = new LeaseManagementParty
+        {
+            PortfolioId = primary.PortfolioId,
+            LeaseManagementId = decoyRelationship.Id,
+            TenantId = decoyTenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(now.AddDays(-1)),
+            ChangeReason = "RLS same-workspace decoy",
+            CreatedAtUtc = now,
+            CreatedByUserId = grantingUserId,
+        };
+        var inScopeWorkOrder = WorkOrderFor(
+            primary.PortfolioId, primary.PropertyId, primary.UnitId, primary.TenantId,
+            primary.LeaseManagementId, "Assigned work");
+        var decoyWorkOrder = WorkOrderFor(
+            primary.PortfolioId, decoyProperty.Id, decoyUnit.Id, decoyTenant.Id,
+            decoyRelationship.Id, "Same-workspace decoy work");
+        ctx.AddRange(decoyAccount, decoyParty, inScopeWorkOrder, decoyWorkOrder);
+        await ctx.SaveChangesAsync();
+
+        var selected = await CreateTeamScopeAsync(
+            ctx, primary, "selected", roleProfileId: 2,
+            MembershipRoleAssignmentScopeKind.SelectedProperties, primary.PropertyId, now);
+        var technician = await CreateTeamScopeAsync(
+            ctx, primary, "technician", roleProfileId: 4,
+            MembershipRoleAssignmentScopeKind.AssignedWorkOrders, selectedPropertyId: null, now);
+        ctx.WorkOrderResponsibilities.Add(new WorkOrderResponsibility
+        {
+            Id = Guid.NewGuid(),
+            PortfolioId = primary.PortfolioId,
+            PropertyId = primary.PropertyId,
+            WorkOrderId = inScopeWorkOrder.Id,
+            WorkspaceMembershipId = technician.WorkspaceMembershipId!.Value,
+            MembershipRoleAssignmentId = technician.RoleAssignmentId!.Value,
+            Kind = WorkOrderResponsibilityKind.Primary,
+            EffectiveFromUtc = now,
+            AssignedByUserId = grantingUserId,
+            AssignedByAccessContextId = primary.AccessContextId,
+            AssignedReason = "RLS assigned-work fixture",
+            AssignedAtUtc = now,
+        });
+
+        var owner = await CreateRelationshipScopeAsync(ctx, primary, "owner", now);
+        ctx.OwnerUserAccesses.Add(new OwnerUserAccess
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = primary.PortfolioId,
+            AccessContextId = owner.Scope.AccessContextId,
+            ApplicationUserId = owner.Scope.UserId,
+            OwnerEntityId = ownerEntity.Id,
+            EffectiveFromUtc = now,
+            GrantedAtUtc = now,
+            GrantedByUserId = grantingUserId,
+            Reason = "RLS Owner fixture",
+        });
+
+        var tenant = await CreateRelationshipScopeAsync(ctx, primary, "tenant", now);
+        var primaryPartyId = await ctx.LeaseManagementParties
+            .Where(party => party.LeaseManagementId == primary.LeaseManagementId
+                && party.TenantId == primary.TenantId)
+            .Select(party => party.Id)
+            .SingleAsync();
+        ctx.TenantUserAccesses.Add(new TenantUserAccess
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = primary.PortfolioId,
+            AccessContextId = tenant.Scope.AccessContextId,
+            ApplicationUserId = tenant.Scope.UserId,
+            LeaseManagementPartyId = primaryPartyId,
+            GrantedAtUtc = now,
+            GrantedByUserId = grantingUserId,
+            Reason = "RLS Tenant fixture",
+        });
+        await ctx.SaveChangesAsync();
+
+        return new ResourceScopeSeed(
+            selected.Scope,
+            technician.Scope,
+            owner.Scope,
+            tenant.Scope,
+            inScopeWorkOrder.Id,
+            decoyWorkOrder.Id,
+            decoyProperty.Id,
+            decoyAccount.Id);
+    }
+
+    private static WorkOrder WorkOrderFor(
+        int portfolioId,
+        int propertyId,
+        int unitId,
+        int tenantId,
+        int leaseManagementId,
+        string title) => new()
+    {
+        PortfolioId = portfolioId,
+        PropertyId = propertyId,
+        UnitId = unitId,
+        TenantId = tenantId,
+        LeaseManagementId = leaseManagementId,
+        Title = title,
+        Description = title,
+        RequestedAt = DateTime.UtcNow,
+        UpdatedAt = DateTime.UtcNow,
+    };
+
+    private static async Task<CreatedScope> CreateTeamScopeAsync(
+        RentalCommandDbContext ctx,
+        RuntimeScopeSeed resource,
+        string tag,
+        int roleProfileId,
+        MembershipRoleAssignmentScopeKind scopeKind,
+        int? selectedPropertyId,
+        DateTime now)
+    {
+        var created = await CreateScopeAsync(ctx, resource, tag, now, withMembership: true);
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembershipId = created.WorkspaceMembershipId!.Value,
+            PortfolioId = resource.PortfolioId,
+            RoleProfileId = roleProfileId,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = scopeKind,
+            EffectiveFromUtc = now,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        ctx.MembershipRoleAssignments.Add(assignment);
+        await ctx.SaveChangesAsync();
+        if (selectedPropertyId is not null)
+        {
+            ctx.MembershipRoleAssignmentProperties.Add(new MembershipRoleAssignmentProperty
+            {
+                MembershipRoleAssignmentId = assignment.Id,
+                PortfolioId = resource.PortfolioId,
+                PropertyId = selectedPropertyId.Value,
+            });
+            await ctx.SaveChangesAsync();
+        }
+        return created with { RoleAssignmentId = assignment.Id };
+    }
+
+    private static Task<CreatedScope> CreateRelationshipScopeAsync(
+        RentalCommandDbContext ctx,
+        RuntimeScopeSeed resource,
+        string tag,
+        DateTime now) => CreateScopeAsync(ctx, resource, tag, now, withMembership: false);
+
+    private static async Task<CreatedScope> CreateScopeAsync(
+        RentalCommandDbContext ctx,
+        RuntimeScopeSeed resource,
+        string tag,
+        DateTime now,
+        bool withMembership)
+    {
+        var user = new ApplicationUser
+        {
+            UserName = $"rls-resource-{tag}@example.test",
+            NormalizedUserName = $"RLS-RESOURCE-{tag.ToUpperInvariant()}@EXAMPLE.TEST",
+            Email = $"rls-resource-{tag}@example.test",
+            NormalizedEmail = $"RLS-RESOURCE-{tag.ToUpperInvariant()}@EXAMPLE.TEST",
+            DisplayName = $"RLS resource {tag}",
+            CreatedAt = now,
+        };
+        ctx.Users.Add(user);
+        await ctx.SaveChangesAsync();
+        var context = new WorkspaceAccessContext
+        {
+            UserId = user.Id,
+            PortfolioId = resource.PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        ctx.WorkspaceAccessContexts.Add(context);
+        await ctx.SaveChangesAsync();
+        WorkspaceMembership? membership = null;
+        if (withMembership)
+        {
+            membership = new WorkspaceMembership
+            {
+                AccessContextId = context.Id,
+                PortfolioId = resource.PortfolioId,
+                Status = WorkspaceMembershipStatus.Active,
+                EffectiveFromUtc = now,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+            };
+            ctx.WorkspaceMemberships.Add(membership);
+        }
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = user.Id,
+            ActiveAccessContextId = context.Id,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        ctx.AuthSessions.Add(session);
+        await ctx.SaveChangesAsync();
+        return new CreatedScope(
+            new RuntimeScopeSeed(
+                resource.PortfolioId, user.Id, context.Id, context.AccessRevision, session.Id,
+                resource.PropertyId, resource.UnitId, resource.TenantId,
+                resource.LeaseManagementId, resource.TenantAccountId),
+            membership?.Id,
+            RoleAssignmentId: null);
+    }
+
     private static async Task<RuntimeScopeSeed> SeedPortfolioWithOverdueChargeAsync(
         RentalCommandDbContext ctx, string name, string tag)
     {
@@ -453,7 +842,7 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
         };
         ctx.WorkspaceAccessContexts.Add(accessContext);
         await ctx.SaveChangesAsync();
-        ctx.WorkspaceMemberships.Add(new WorkspaceMembership
+        var workspaceMembership = new WorkspaceMembership
         {
             AccessContextId = accessContext.Id,
             PortfolioId = portfolio.Id,
@@ -462,7 +851,8 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
             EffectiveFromUtc = now,
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
-        });
+        };
+        ctx.WorkspaceMemberships.Add(workspaceMembership);
         var authSession = new AuthSession
         {
             Id = Guid.NewGuid(),
@@ -474,6 +864,18 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
             ExpiresAtUtc = now.AddHours(1),
         };
         ctx.AuthSessions.Add(authSession);
+        await ctx.SaveChangesAsync();
+        ctx.MembershipRoleAssignments.Add(new MembershipRoleAssignment
+        {
+            WorkspaceMembershipId = workspaceMembership.Id,
+            PortfolioId = portfolio.Id,
+            RoleProfileId = 1,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = now,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        });
         await ctx.SaveChangesAsync();
 
         var property = new Property
@@ -597,7 +999,12 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
             actor.Id,
             accessContext.Id,
             accessContext.AccessRevision,
-            authSession.Id);
+            authSession.Id,
+            property.Id,
+            unit.Id,
+            tenant.Id,
+            relationship.Id,
+            account.Id);
     }
 
     private static PlaidTokenExchangeAttempt PlaidAttempt(int portfolioId, string operationId) => new()
@@ -651,5 +1058,25 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
         int UserId,
         int AccessContextId,
         long AccessRevision,
-        Guid AuthSessionId);
+        Guid AuthSessionId,
+        int PropertyId,
+        int UnitId,
+        int TenantId,
+        int LeaseManagementId,
+        int TenantAccountId);
+
+    private sealed record CreatedScope(
+        RuntimeScopeSeed Scope,
+        int? WorkspaceMembershipId,
+        int? RoleAssignmentId);
+
+    private sealed record ResourceScopeSeed(
+        RuntimeScopeSeed SelectedProperty,
+        RuntimeScopeSeed Technician,
+        RuntimeScopeSeed Owner,
+        RuntimeScopeSeed Tenant,
+        int InScopeWorkOrderId,
+        int DecoyWorkOrderId,
+        int DecoyPropertyId,
+        int DecoyTenantAccountId);
 }

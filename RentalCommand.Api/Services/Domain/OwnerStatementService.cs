@@ -155,13 +155,61 @@ public class OwnerStatementService : IOwnerStatementService
             AuthorizedProperties(scope),
             ct);
 
-    public Task<IReadOnlyList<OwnerStatementSummary>> ListForOwnerPortalAsync(
-        OwnerPortalReadScope scope, int year, CancellationToken ct = default) =>
-        ListOwnersWithNetCoreAsync(
+    public async Task<OwnerStatementSummaryPageResponse> ListForOwnerPortalPageAsync(
+        OwnerPortalReadScope scope,
+        int year,
+        ListQuery query,
+        CancellationToken ct = default)
+    {
+        var summaries = OwnerSummaries(
             scope.PortfolioId,
             year,
-            AuthorizedOwnerPortalProperties(scope),
-            ct);
+            AuthorizedOwnerPortalProperties(scope));
+        var search = query.Search?.Trim();
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            summaries = summaries.Where(summary =>
+                EF.Functions.ILike(summary.OwnerName, $"%{search}%"));
+        }
+
+        summaries = (query.SortField, query.SortDescending) switch
+        {
+            ("nettoowner", false) => summaries
+                .OrderBy(summary => summary.NetToOwner)
+                .ThenBy(summary => summary.OwnerName)
+                .ThenBy(summary => summary.OwnerId),
+            ("nettoowner", true) => summaries
+                .OrderByDescending(summary => summary.NetToOwner)
+                .ThenBy(summary => summary.OwnerName)
+                .ThenBy(summary => summary.OwnerId),
+            ("name", true) => summaries
+                .OrderByDescending(summary => summary.OwnerName)
+                .ThenByDescending(summary => summary.OwnerId),
+            _ => summaries
+                .OrderBy(summary => summary.OwnerName)
+                .ThenBy(summary => summary.OwnerId),
+        };
+
+        var totalCount = await summaries.CountAsync(ct);
+        var items = await summaries
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake)
+            .Select(summary => new OwnerStatementSummary(
+                summary.OwnerId,
+                summary.OwnerName,
+                summary.NetToOwner,
+                summary.TotalDistributed,
+                summary.NetToOwner - summary.TotalDistributed))
+            .ToListAsync(ct);
+
+        return new OwnerStatementSummaryPageResponse
+        {
+            Items = items,
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
+    }
 
     private async Task<IReadOnlyList<OwnerStatementSummary>> ListOwnersWithNetCoreAsync(
         int portfolioId,
@@ -169,47 +217,53 @@ public class OwnerStatementService : IOwnerStatementService
         IQueryable<Property> authorizedProperties,
         CancellationToken ct)
     {
+        return await OwnerSummaries(portfolioId, year, authorizedProperties)
+            .OrderBy(summary => summary.OwnerName)
+            .ThenBy(summary => summary.OwnerId)
+            .Select(summary => new OwnerStatementSummary(
+                summary.OwnerId,
+                summary.OwnerName,
+                summary.NetToOwner,
+                summary.TotalDistributed,
+                summary.NetToOwner - summary.TotalDistributed))
+            .ToListAsync(ct);
+    }
+
+    private IQueryable<OwnerStatementSummarySqlRow> OwnerSummaries(
+        int portfolioId,
+        int year,
+        IQueryable<Property> authorizedProperties)
+    {
         var propertyNetRows = OwnerPropertyNetRows(portfolioId, year, authorizedProperties);
         var (start, end) = YearRange(year);
 
-        var summaries = await propertyNetRows
-            .GroupBy(p => new { p.OwnerId, p.OwnerName })
-            .Select(g => new
+        return propertyNetRows
+            .GroupBy(property => new { property.OwnerId, property.OwnerName })
+            .Select(group => new OwnerStatementSummarySqlRow
             {
-                g.Key.OwnerId,
-                g.Key.OwnerName,
-                NetToOwner = g.Sum(p =>
-                    p.RentalIncome -
-                    p.Expenses -
-                    (p.RentalIncome * p.ManagementFeePercent / 100m)),
+                OwnerId = group.Key.OwnerId,
+                OwnerName = group.Key.OwnerName,
+                NetToOwner = group.Sum(property =>
+                    property.RentalIncome -
+                    property.Expenses -
+                    (property.RentalIncome * property.ManagementFeePercent / 100m)),
                 TotalDistributed = _db.OwnerDistributions
                     .Where(distribution =>
                         distribution.PortfolioId == portfolioId &&
-                        distribution.OwnerEntityId == g.Key.OwnerId &&
+                        distribution.OwnerEntityId == group.Key.OwnerId &&
                         distribution.Date >= start &&
                         distribution.Date < end &&
                         ((distribution.PropertyId != null &&
                           authorizedProperties.Any(property =>
                               property.Id == distribution.PropertyId &&
-                              property.OwnerEntityId == g.Key.OwnerId)) ||
+                              property.OwnerEntityId == group.Key.OwnerId)) ||
                          (distribution.PropertyId == null &&
                           !_db.Properties.Any(property =>
                               property.PortfolioId == portfolioId &&
-                              property.OwnerEntityId == g.Key.OwnerId &&
+                              property.OwnerEntityId == group.Key.OwnerId &&
                               !authorizedProperties.Any(authorized => authorized.Id == property.Id)))))
                     .Sum(distribution => (decimal?)distribution.Amount) ?? 0m,
-            })
-            .OrderBy(o => o.OwnerName)
-            .ToListAsync(ct);
-
-        return summaries
-            .Select(s => new OwnerStatementSummary(
-                s.OwnerId,
-                s.OwnerName,
-                s.NetToOwner,
-                s.TotalDistributed,
-                s.NetToOwner - s.TotalDistributed))
-            .ToList();
+            });
     }
 
     /// <inheritdoc/>
@@ -345,6 +399,14 @@ public class OwnerStatementService : IOwnerStatementService
         public decimal TotalNetToOwner { get; set; }
         public decimal TotalDistributed { get; set; }
         public List<OwnerStatementPropertySqlRow> Properties { get; set; } = [];
+    }
+
+    private sealed class OwnerStatementSummarySqlRow
+    {
+        public int OwnerId { get; set; }
+        public string OwnerName { get; set; } = string.Empty;
+        public decimal NetToOwner { get; set; }
+        public decimal TotalDistributed { get; set; }
     }
 
     private sealed class OwnerStatementPropertySqlRow

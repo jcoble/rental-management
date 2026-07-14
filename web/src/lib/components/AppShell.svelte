@@ -345,7 +345,7 @@
 			: ownerUser
 				? ownerNavItems
 				: leasingUser
-					? leasingNavItems
+					? [...leasingNavItems, { href: '/profile', label: 'Profile', icon: UserRound }]
 					: technicianUser
 						? [...technicianNavItems, { href: '/profile', label: 'Profile', icon: UserRound }]
 						: [
@@ -797,7 +797,7 @@
 							</div>
 						</DropdownMenuLabel>
 						<DropdownMenuSeparator />
-						{#if technicianUser}
+						{#if technicianUser || leasingUser}
 							<DropdownMenuItem data-testid="user-menu-profile-collapsed">
 								<a href="/profile" class="flex w-full items-center gap-2">
 									<UserRound class="h-4 w-4" />
@@ -866,7 +866,7 @@
 							</div>
 						</DropdownMenuLabel>
 						<DropdownMenuSeparator />
-						{#if technicianUser}
+						{#if technicianUser || leasingUser}
 							<DropdownMenuItem data-testid="user-menu-profile">
 								<a href="/profile" class="flex w-full items-center gap-2">
 									<UserRound class="h-4 w-4" />

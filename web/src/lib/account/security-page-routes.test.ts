@@ -33,6 +33,7 @@ test('shared account security action posts change-password directly with the cur
 	assert.match(actionSource, /locals\.accessToken/);
 	assert.match(actionSource, /operationKey = randomUUID\(\)/);
 	assert.match(actionSource, /'Idempotency-Key': operationKey/);
-	assert.match(endpointSource, /operationKey = crypto\.randomUUID\(\)/);
+	assert.match(endpointSource, /crypto\.subtle\.digest/);
+	assert.match(endpointSource, /idempotentMutation\(`auth:change-password:\$\{requestScope\}`/);
 	assert.match(endpointSource, /'Idempotency-Key': operationKey/);
 });

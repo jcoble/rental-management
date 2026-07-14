@@ -16,13 +16,13 @@ public sealed class AuditDetailHrefTests
     {
         AuditEntryResponse.BuildDetailHref("WorkOrder", 42, 5).Should().Be("/units/5?tab=maintenance&wo=42");
         AuditEntryResponse.BuildDetailHref("LeaseManagement", 43, 5)
-            .Should().Be("/units/5?tab=lease&leaseManagement=43");
+            .Should().Be("/units/5?tab=tenant-lease&view=agreements&leaseManagement=43");
         AuditEntryResponse.BuildDetailHref("LeaseAgreement", 44, 5)
-            .Should().Be("/units/5?tab=lease&agreement=44");
+            .Should().Be("/units/5?tab=tenant-lease&view=agreements&agreement=44");
         AuditEntryResponse.BuildDetailHref("TenantAccount", 45, 5)
-            .Should().Be("/units/5?tab=ledger&tenantAccount=45");
-        AuditEntryResponse.BuildDetailHref("Expense", 45, 5).Should().Be("/units/5?tab=ledger&ledger=expenses&expense=45");
-        AuditEntryResponse.BuildDetailHref("RentalApplication", 46, 5).Should().Be("/units/5?tab=applications&app=46");
+            .Should().Be("/units/5?tab=money&tenantAccount=45");
+        AuditEntryResponse.BuildDetailHref("Expense", 45, 5).Should().Be("/units/5?tab=money&ledger=expenses&expense=45");
+        AuditEntryResponse.BuildDetailHref("RentalApplication", 46, 5).Should().Be("/units/5?tab=leasing&view=applications&app=46");
     }
 
     [Fact]

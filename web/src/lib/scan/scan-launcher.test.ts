@@ -28,9 +28,9 @@ describe('scan launcher helpers', () => {
 				tenantLedgerEntryId: 41,
 				rentalListingId: 50,
 				sourceLabel: 'Zillow signed lease import',
-				returnTo: '/units/20?tab=lease'
+				returnTo: '/units/20?tab=tenant-lease&view=agreements'
 			}),
-			'/scan/391?type=LeaseAgreement&propertyId=10&unitId=20&leaseManagementId=30&leaseAgreementId=31&tenantAccountId=40&tenantLedgerEntryId=41&rentalListingId=50&sourceLabel=Zillow+signed+lease+import&returnTo=%2Funits%2F20%3Ftab%3Dlease'
+			'/scan/391?type=LeaseAgreement&propertyId=10&unitId=20&leaseManagementId=30&leaseAgreementId=31&tenantAccountId=40&tenantLedgerEntryId=41&rentalListingId=50&sourceLabel=Zillow+signed+lease+import&returnTo=%2Funits%2F20%3Ftab%3Dtenant-lease%26view%3Dagreements'
 		);
 	});
 

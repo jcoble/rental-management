@@ -758,12 +758,38 @@ public class PortalService : IPortalService
             });
     }
 
-    public async Task<IReadOnlyList<WorkOrderResponse>> GetWorkOrdersAsync(int portfolioId, int tenantId, CancellationToken ct = default)
+    public async Task<PortalTenantWorkOrderPageResponse> ListWorkOrdersPageAsync(
+        PortalTenantReadScope scope,
+        int tenantId,
+        PortalTenantWorkOrderListQuery query,
+        CancellationToken ct = default)
     {
-        return await _db.WorkOrders
+        var rows = BuildWorkOrdersQuery(scope, tenantId, query);
+        var totalCount = await rows.CountAsync(ct);
+        var items = await BuildWorkOrderPageQuery(scope, tenantId, query).ToListAsync(ct);
+
+        return new PortalTenantWorkOrderPageResponse
+        {
+            Items = items,
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
+    }
+
+    internal IQueryable<WorkOrderResponse> BuildWorkOrdersQuery(
+        PortalTenantReadScope scope,
+        int tenantId,
+        PortalTenantWorkOrderListQuery query)
+    {
+        var effectiveRelationships = EffectiveTenantRelationshipQuery(scope, tenantId);
+        var rows = _db.WorkOrders
             .AsNoTracking()
-            .Where(w => w.PortfolioId == portfolioId && w.TenantId == tenantId)
-            .OrderByDescending(w => w.RequestedAt)
+            .Where(w => w.PortfolioId == scope.PortfolioId
+                && w.TenantId == tenantId
+                && w.LeaseManagementId != null
+                && effectiveRelationships.Any(access =>
+                    access.LeaseManagementId == w.LeaseManagementId))
             .Select(w => new WorkOrderResponse
             {
                 Id = w.Id,
@@ -793,19 +819,83 @@ public class PortalService : IPortalService
                 TenantName = w.Tenant == null
                     ? null
                     : (w.Tenant.FirstName + " " + w.Tenant.LastName).Trim(),
-            })
-            .ToListAsync(ct);
+            });
+
+        if (query.Status is { } status)
+        {
+            rows = rows.Where(w => w.Status == status);
+        }
+        else if (query.OpenOnly == true)
+        {
+            rows = rows.Where(w => w.Status != WorkOrderStatus.Completed
+                && w.Status != WorkOrderStatus.Cancelled
+                && w.Status != WorkOrderStatus.Archived);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            var search = $"%{query.Search.Trim()}%";
+            rows = rows.Where(w =>
+                EF.Functions.ILike(w.Title, search)
+                || EF.Functions.ILike(w.Description, search)
+                || (w.PropertyName != null && EF.Functions.ILike(w.PropertyName, search))
+                || (w.UnitNumber != null && EF.Functions.ILike(w.UnitNumber, search)));
+        }
+
+        if (query.From is { } from)
+        {
+            rows = rows.Where(w => w.RequestedAt >= from);
+        }
+        if (query.To is { } to)
+        {
+            var exclusiveEnd = to.Date.AddDays(1);
+            rows = rows.Where(w => w.RequestedAt < exclusiveEnd);
+        }
+
+        return rows;
     }
 
+    internal IQueryable<WorkOrderResponse> BuildWorkOrderPageQuery(
+        PortalTenantReadScope scope,
+        int tenantId,
+        PortalTenantWorkOrderListQuery query) =>
+        ApplyWorkOrderSort(BuildWorkOrdersQuery(scope, tenantId, query), query)
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake);
+
+    private static IOrderedQueryable<WorkOrderResponse> ApplyWorkOrderSort(
+        IQueryable<WorkOrderResponse> rows,
+        PortalTenantWorkOrderListQuery query) =>
+        (query.SortField, query.SortDescending) switch
+        {
+            ("title", false) => rows.OrderBy(w => w.Title).ThenByDescending(w => w.Id),
+            ("title", true) => rows.OrderByDescending(w => w.Title).ThenByDescending(w => w.Id),
+            ("status", false) => rows.OrderBy(w => w.Status).ThenByDescending(w => w.Id),
+            ("status", true) => rows.OrderByDescending(w => w.Status).ThenByDescending(w => w.Id),
+            ("priority", false) => rows.OrderBy(w => w.Priority).ThenByDescending(w => w.Id),
+            ("priority", true) => rows.OrderByDescending(w => w.Priority).ThenByDescending(w => w.Id),
+            ("updatedat", false) => rows.OrderBy(w => w.UpdatedAt).ThenByDescending(w => w.Id),
+            ("updatedat", true) => rows.OrderByDescending(w => w.UpdatedAt).ThenByDescending(w => w.Id),
+            ("requestedat", false) => rows.OrderBy(w => w.RequestedAt).ThenBy(w => w.Id),
+            _ => rows.OrderByDescending(w => w.RequestedAt).ThenByDescending(w => w.Id),
+        };
+
     public async Task<WorkOrderDetailResponse?> GetWorkOrderDetailAsync(
-        int portfolioId, int tenantId, int workOrderId, CancellationToken ct = default)
+        PortalTenantReadScope scope,
+        int tenantId,
+        int workOrderId,
+        CancellationToken ct = default)
     {
         // Ownership is part of the lookup: a work order on another tenant's lease/unit simply isn't
         // found, so we never leak its existence or its timeline. Mirrors the lease-ledger restriction.
-        var workOrder = await _db.WorkOrders
-            .AsNoTracking()
-            .FirstOrDefaultAsync(
-                w => w.Id == workOrderId && w.PortfolioId == portfolioId && w.TenantId == tenantId, ct);
+        var effectiveRelationships = EffectiveTenantRelationshipQuery(scope, tenantId);
+        var workOrder = await _db.WorkOrders.AsNoTracking()
+            .FirstOrDefaultAsync(w => w.Id == workOrderId
+                && w.PortfolioId == scope.PortfolioId
+                && w.TenantId == tenantId
+                && w.LeaseManagementId != null
+                && effectiveRelationships.Any(access =>
+                    access.LeaseManagementId == w.LeaseManagementId), ct);
         if (workOrder is null)
         {
             return null;
@@ -813,7 +903,15 @@ public class PortalService : IPortalService
 
         var events = await _db.WorkOrderStatusEvents
             .AsNoTracking()
-            .Where(e => e.WorkOrderId == workOrderId && e.PortfolioId == portfolioId)
+            .Where(e => e.WorkOrderId == workOrderId
+                && e.PortfolioId == scope.PortfolioId
+                && _db.WorkOrders.Any(candidate =>
+                    candidate.Id == e.WorkOrderId
+                    && candidate.PortfolioId == scope.PortfolioId
+                    && candidate.TenantId == tenantId
+                    && candidate.LeaseManagementId != null
+                    && effectiveRelationships.Any(access =>
+                        access.LeaseManagementId == candidate.LeaseManagementId)))
             .OrderBy(e => e.CreatedAtUtc)
             .ThenBy(e => e.Id)
             .ToListAsync(ct);
@@ -962,5 +1060,16 @@ public class PortalService : IPortalService
             .AsNoTracking()
             .Where(access => access.PortfolioId == portfolioId
                 && access.AccessContextId == accessContextId
+                && access.TenantId == tenantId);
+
+    private IQueryable<RentalCommand.Data.Authorization.EffectiveTenantAccessProjection> EffectiveTenantRelationshipQuery(
+        PortalTenantReadScope scope,
+        int tenantId) =>
+        _db.EffectiveTenantAccess
+            .AsNoTracking()
+            .Where(access => access.PortfolioId == scope.PortfolioId
+                && access.UserId == scope.UserId
+                && access.AccessContextId == scope.AccessContextId
+                && access.AccessRevision == scope.AccessRevision
                 && access.TenantId == tenantId);
 }

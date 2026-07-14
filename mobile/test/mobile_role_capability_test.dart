@@ -101,7 +101,7 @@ void main() {
         capabilities: leasingCapabilities,
         path: '/units/42',
       ),
-      isTrue,
+      isFalse,
     );
     expect(
       canOpenMobilePath(

@@ -74,6 +74,23 @@ public sealed class PortalTenantChargeListQuery : ListQuery
     public bool? IsPastDue { get; set; }
 }
 
+public sealed class PortalTenantWorkOrderListQuery : ListQuery
+{
+    [FromQuery(Name = "status")]
+    public WorkOrderStatus? Status { get; set; }
+
+    [FromQuery(Name = "openOnly")]
+    public bool? OpenOnly { get; set; }
+}
+
+public sealed class PortalTenantWorkOrderPageResponse
+{
+    public IReadOnlyList<WorkOrderResponse> Items { get; init; } = [];
+    public int TotalCount { get; init; }
+    public int Skip { get; init; }
+    public int Take { get; init; }
+}
+
 public sealed class PortalTenantAccountPageResponse
 {
     public IReadOnlyList<PortalTenantAccountResponse> Items { get; init; } = [];

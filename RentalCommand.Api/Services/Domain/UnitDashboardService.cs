@@ -662,16 +662,16 @@ public class UnitDashboardService : IUnitDashboardService
     /// <summary>Deep link for a stage's next-best-action: the relevant unit tab (drawer flows attach there).</summary>
     private static string NextBestActionHref(UnitDashboardStage stage, int unitId, int propertyId, int? tenantId) => stage switch
     {
-        UnitDashboardStage.Ready => $"/units/{unitId}?tab=listing",
-        UnitDashboardStage.Listed => $"/units/{unitId}?tab=overview",
-        UnitDashboardStage.Applicant => $"/units/{unitId}?tab=overview",
-        UnitDashboardStage.Lease => $"/units/{unitId}?tab=lease",
-        UnitDashboardStage.MoveIn => $"/units/{unitId}?tab=lease&action=confirm-move-in",
-        UnitDashboardStage.Active => $"/units/{unitId}?tab=ledger&ledger=rent",
+        UnitDashboardStage.Ready => $"/units/{unitId}?tab=leasing&view=listing",
+        UnitDashboardStage.Listed => $"/units/{unitId}?tab=summary",
+        UnitDashboardStage.Applicant => $"/units/{unitId}?tab=summary",
+        UnitDashboardStage.Lease => $"/units/{unitId}?tab=tenant-lease&view=agreements",
+        UnitDashboardStage.MoveIn => $"/units/{unitId}?tab=tenant-lease&view=agreements&action=confirm-move-in",
+        UnitDashboardStage.Active => $"/units/{unitId}?tab=money&ledger=rent",
         UnitDashboardStage.Renewal when tenantId is int id => $"/tenants/{id}?action=create-notice&noticeType=lease-renewal-offer",
-        UnitDashboardStage.Renewal => $"/units/{unitId}?tab=lease",
-        UnitDashboardStage.MoveOut => $"/units/{unitId}?tab=turnover",
-        UnitDashboardStage.Turnover => $"/units/{unitId}?tab=turnover",
+        UnitDashboardStage.Renewal => $"/units/{unitId}?tab=tenant-lease&view=agreements",
+        UnitDashboardStage.MoveOut => $"/units/{unitId}?tab=maintenance&view=turnover",
+        UnitDashboardStage.Turnover => $"/units/{unitId}?tab=maintenance&view=turnover",
         _ => $"/units/{unitId}",
     };
 
