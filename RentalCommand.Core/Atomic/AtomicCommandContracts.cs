@@ -122,6 +122,7 @@ public interface IAtomicWriteAttempt
     IAtomicTenantMoneyPersistence TenantMoney { get; }
     IAtomicPendingFileUploadPersistence PendingFileUploads { get; }
     IAtomicLeaseMutationPersistence Leasing { get; }
+    IAtomicListingPersistence Listings { get; }
 
     /// <summary>Flushes tracked business rows while the owner transaction remains open.</summary>
     Task<AtomicBusinessFlush> FlushBusinessAsync(CancellationToken ct = default);
@@ -147,6 +148,22 @@ public interface IAtomicWriteAttempt
     /// <summary>Stages an outbox companion for the owner's final flush.</summary>
     void StageOutbox(OutboxMessage message);
 }
+
+/// <summary>Kernel-owned set-based listing mutations that cannot be expressed as tracked rows.</summary>
+public interface IAtomicListingPersistence
+{
+    /// <summary>
+    /// Validates an exact listing photo permutation and applies it in PostgreSQL without
+    /// materializing the manifest or issuing per-photo updates.
+    /// </summary>
+    Task<AtomicListingPhotoOrderResult> ReorderPhotosAsync(
+        int portfolioId,
+        int rentalListingId,
+        int[] photoIds,
+        CancellationToken ct = default);
+}
+
+public sealed record AtomicListingPhotoOrderResult(bool IsValid, bool HasChanges);
 
 /// <summary>
 /// Row-locking persistence boundary for already-bounded scheduled-finance claims. Eligibility is
