@@ -244,8 +244,9 @@ public sealed class AtomicNotificationMutationHandler
                 "Occupants are not eligible for legal notices merely because they reside at the property.");
 
         var persistence = attempt.Persistence;
-        var template = await TemplateResponseQuery(persistence, command.PortfolioId)
-            .SingleOrDefaultAsync(candidate => candidate.Id == request.WorkspaceNoticeTemplateVersionId, ct)
+        var template = await TemplateResponseQuery(
+                persistence, command.PortfolioId, request.WorkspaceNoticeTemplateVersionId)
+            .SingleOrDefaultAsync(ct)
             ?? throw new KeyNotFoundException("Template version is not current for this workspace.");
         if (!string.Equals(template.SystemKey, request.AutomationKey, StringComparison.Ordinal))
             throw new InvalidOperationException("The selected template must match the tenant notice automation.");
@@ -292,8 +293,8 @@ public sealed class AtomicNotificationMutationHandler
             "Tenant notice automation policy updated", operation == AuditLogOperation.Created ? 0 : row.Id));
         await attempt.FlushBusinessAsync(ct);
         StageDataUpdate(attempt, command, nameof(TenantNoticePolicy), row.Id, now);
-        var response = await TenantNoticePolicyResponseQuery(persistence, command.PortfolioId)
-            .SingleAsync(candidate => candidate.Id == row.Id, ct);
+        var response = await TenantNoticePolicyResponseQuery(persistence, command.PortfolioId, row.Id)
+            .SingleAsync(ct);
         return Applied(row.Id, JsonSerializer.Serialize(response));
     }
 
@@ -428,8 +429,8 @@ public sealed class AtomicNotificationMutationHandler
             "Tenant notice policy bound to immutable template version", policy.Id));
         await attempt.FlushBusinessAsync(ct);
         StageDataUpdate(attempt, command, nameof(WorkspaceNoticeTemplateVersion), next.Id, now);
-        var response = await TenantNoticePolicyResponseQuery(persistence, command.PortfolioId)
-            .SingleAsync(candidate => candidate.Id == policy.Id, ct);
+        var response = await TenantNoticePolicyResponseQuery(persistence, command.PortfolioId, policy.Id)
+            .SingleAsync(ct);
         return Applied(next.Id, JsonSerializer.Serialize(response));
     }
 
@@ -870,7 +871,8 @@ public sealed class AtomicNotificationMutationHandler
 
     private static IQueryable<TenantNoticePolicyResponse> TenantNoticePolicyResponseQuery(
         IAtomicPersistenceSession persistence,
-        int portfolioId) =>
+        int portfolioId,
+        int policyId) =>
         from policy in persistence.Query<TenantNoticePolicy>().AsNoTracking()
         join template in persistence.Query<WorkspaceNoticeTemplateVersion>().AsNoTracking()
             on new { TemplateId = policy.WorkspaceNoticeTemplateVersionId, policy.PortfolioId }
@@ -879,7 +881,7 @@ public sealed class AtomicNotificationMutationHandler
             on template.BasedOnSystemTemplateVersionId equals system.Id
         let updateAvailable = persistence.Query<SystemNoticeTemplateVersion>().Any(candidate =>
             candidate.SystemKey == template.SystemKey && candidate.Version > system.Version)
-        where policy.PortfolioId == portfolioId
+        where policy.PortfolioId == portfolioId && policy.Id == policyId
         select new TenantNoticePolicyResponse(policy.Id, policy.AutomationKey, policy.Mode,
             policy.Classification, policy.LeadDays, policy.SendHourLocal, policy.SendTenantPortal,
             policy.SendMobilePush, policy.SendEmail, policy.SendSms, policy.IncludePrimaryTenant,
@@ -898,10 +900,12 @@ public sealed class AtomicNotificationMutationHandler
 
     private static IQueryable<WorkspaceNoticeTemplateResponse> TemplateResponseQuery(
         IAtomicPersistenceSession persistence,
-        int portfolioId) =>
+        int portfolioId,
+        int templateVersionId) =>
         from workspace in LatestTemplateQuery(persistence, portfolioId)
         join system in persistence.Query<SystemNoticeTemplateVersion>().AsNoTracking()
             on workspace.BasedOnSystemTemplateVersionId equals system.Id
+        where workspace.Id == templateVersionId
         let updateAvailable = persistence.Query<SystemNoticeTemplateVersion>().Any(candidate =>
             candidate.SystemKey == workspace.SystemKey && candidate.Version > system.Version)
         select new WorkspaceNoticeTemplateResponse(workspace.Id, workspace.SystemKey, workspace.Version,
