@@ -3,14 +3,19 @@ using System.Data.Common;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Auditing;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -27,13 +32,16 @@ public class InspectionChecklistServiceTests : IDisposable
     private readonly List<string> _executedSql = [];
     private readonly RentalCommandDbContext _db;
     private readonly InspectionService _service;
+    private readonly ServiceProvider _services;
+    private readonly WorkspaceReadScope _scope;
 
     public InspectionChecklistServiceTests()
     {
         // The real QuestPDF generator runs in the completion test; license must be set once.
         QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
 
-        _conn = new SqliteConnection("DataSource=:memory:");
+        var connectionString = $"Data Source=inspection-checklist-{Guid.NewGuid():N};Mode=Memory;Cache=Shared";
+        _conn = new SqliteConnection(connectionString);
         _conn.Open();
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
@@ -55,17 +63,33 @@ public class InspectionChecklistServiceTests : IDisposable
         });
         _db.SaveChanges();
 
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton(TimeProvider.System);
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddAtomicCommandHandler<
+            AtomicInspectionMutationCommand,
+            AtomicInspectionMutationResult,
+            AtomicInspectionMutationHandler>();
+        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+            builder.UseSqlite(connectionString).UseAtomicPersistenceKernel(provider));
+        _services = services.BuildServiceProvider();
+        _scope = _db.SeedAdministratorScope(PortfolioId, nameof(InspectionChecklistServiceTests));
+
         _service = new InspectionService(
             _db,
             new NoopInspectionDataUpdate(),
             new InMemoryFileStorage(),
             new InspectionReportPdfGenerator(),
             NullLogger<InspectionService>.Instance,
-            TimeProvider.System);
+            TimeProvider.System,
+            _services.GetRequiredService<IAtomicUnitOfWork>());
     }
 
     public void Dispose()
     {
+        _services.Dispose();
         _db.Dispose();
         _conn.Dispose();
     }
@@ -285,7 +309,8 @@ public class InspectionChecklistServiceTests : IDisposable
         await _service.UpdateItemAsync(PortfolioId, created.Id, items[2].Id,
             new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass });
 
-        var (summary, error) = await _service.CompleteAsync(PortfolioId, created.Id, userId: 7);
+        var (summary, error) = await _service.CompleteAuthorizedAsync(
+            _scope, created.Id, userId: 7, operationKey: "complete-spawns-work-orders");
 
         error.Should().BeNull();
         summary.Should().NotBeNull();
@@ -354,7 +379,8 @@ public class InspectionChecklistServiceTests : IDisposable
         }
 
         _executedSql.Clear();
-        var (summary, error) = await _service.CompleteAsync(PortfolioId, created.Id, userId: 7);
+        var (summary, error) = await _service.CompleteAuthorizedAsync(
+            _scope, created.Id, userId: 7, operationKey: "complete-batches-work-orders");
 
         error.Should().BeNull();
         summary.Should().NotBeNull();
@@ -383,8 +409,10 @@ public class InspectionChecklistServiceTests : IDisposable
             ScheduledFor = DateTime.UtcNow,
         });
 
-        await _service.CompleteAsync(PortfolioId, created!.Id, userId: 1);
-        var (summary, error) = await _service.CompleteAsync(PortfolioId, created.Id, userId: 1);
+        await _service.CompleteAuthorizedAsync(
+            _scope, created!.Id, userId: 1, operationKey: "complete-already-completed-first");
+        var (summary, error) = await _service.CompleteAuthorizedAsync(
+            _scope, created.Id, userId: 1, operationKey: "complete-already-completed-second");
 
         summary.Should().BeNull();
         error.Should().NotBeNull();
@@ -409,7 +437,8 @@ public class InspectionChecklistServiceTests : IDisposable
         await _service.UpdateItemAsync(PortfolioId, created.Id, item.Id,
             new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass, Note = "Walked before completion" });
 
-        var (summary, error) = await _service.CompleteAsync(PortfolioId, created.Id, userId: 7);
+        var (summary, error) = await _service.CompleteAuthorizedAsync(
+            _scope, created.Id, userId: 7, operationKey: "complete-blocks-item-edits");
         error.Should().BeNull();
         summary.Should().NotBeNull();
 
@@ -444,7 +473,8 @@ public class InspectionChecklistServiceTests : IDisposable
         await _service.UpdateItemAsync(PortfolioId, created.Id, items[0].Id,
             new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass });
 
-        var (summary, error) = await _service.CompleteAsync(PortfolioId, created.Id, userId: 7);
+        var (summary, error) = await _service.CompleteAuthorizedAsync(
+            _scope, created.Id, userId: 7, operationKey: "complete-blocks-structure-changes");
         error.Should().BeNull();
         summary.Should().NotBeNull();
 
@@ -497,7 +527,8 @@ public class InspectionChecklistServiceTests : IDisposable
         await _service.UpdateItemAsync(PortfolioId, created.Id, item.Id,
             new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass });
 
-        var (summary, error) = await _service.CompleteAsync(PortfolioId, created.Id, userId: 7);
+        var (summary, error) = await _service.CompleteAuthorizedAsync(
+            _scope, created.Id, userId: 7, operationKey: "complete-blocks-photo-attachment");
         error.Should().BeNull();
         summary.Should().NotBeNull();
 
@@ -544,7 +575,8 @@ public class InspectionChecklistServiceTests : IDisposable
         await _service.UpdateItemAsync(PortfolioId, created.Id, item.Id,
             new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass });
 
-        var (summary, error) = await _service.CompleteAsync(PortfolioId, created.Id, userId: 7);
+        var (summary, error) = await _service.CompleteAuthorizedAsync(
+            _scope, created.Id, userId: 7, operationKey: "complete-missing-photo-case");
         error.Should().BeNull();
         summary.Should().NotBeNull();
 
@@ -612,6 +644,18 @@ public class InspectionChecklistServiceTests : IDisposable
             var key = $"{Guid.NewGuid():N}_{fileName}";
             _files[key] = ms.ToArray();
             return key;
+        }
+
+        public async Task UploadAtAsync(
+            Stream content,
+            string storagePath,
+            string fileName,
+            string contentType,
+            CancellationToken ct = default)
+        {
+            using var ms = new MemoryStream();
+            await content.CopyToAsync(ms, ct);
+            _files[storagePath] = ms.ToArray();
         }
 
         public Task<Stream> DownloadAsync(string path, CancellationToken ct = default)
