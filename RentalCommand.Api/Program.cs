@@ -197,6 +197,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Api.Services.Import.AtomicCoreCsvImportResult,
     RentalCommand.Api.Services.Import.AtomicCoreCsvImportHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Import.AtomicPaymentCsvImportCommand,
+    RentalCommand.Api.Services.Import.AtomicPaymentCsvImportResult,
+    RentalCommand.Api.Services.Import.AtomicPaymentCsvImportHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Leasing.CreatePropertyDispositionCommand,
     RentalCommand.Core.Leasing.CreatePropertyDispositionResult,
     RentalCommand.Data.Leasing.CreatePropertyDispositionHandler>();
