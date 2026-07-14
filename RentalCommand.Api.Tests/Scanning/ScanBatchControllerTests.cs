@@ -382,7 +382,10 @@ public class ScanBatchControllerTests : IDisposable
 
         var controller = CreateController(Mock.Of<IScanService>());
 
-        var result = await controller.Retry(draft.Id, CancellationToken.None);
+        var result = await controller.Retry(
+            draft.Id,
+            $"scan-retry:{draft.Id}:test-success",
+            CancellationToken.None);
 
         result.Should().BeOfType<OkResult>();
 
@@ -406,7 +409,10 @@ public class ScanBatchControllerTests : IDisposable
         var draft = SeedDraft(batch.Id, "Reviewing");
         var controller = CreateController(Mock.Of<IScanService>());
 
-        var result = await controller.Retry(draft.Id, CancellationToken.None);
+        var result = await controller.Retry(
+            draft.Id,
+            $"scan-retry:{draft.Id}:test-invalid-status",
+            CancellationToken.None);
 
         result.Should().BeOfType<BadRequestObjectResult>();
         _db.ChangeTracker.Clear();
@@ -422,7 +428,10 @@ public class ScanBatchControllerTests : IDisposable
         var foreignDraft = SeedDraft(foreignBatch.Id, "Failed", portfolioId: otherPortfolioId);
         var controller = CreateController(Mock.Of<IScanService>());
 
-        var result = await controller.Retry(foreignDraft.Id, CancellationToken.None);
+        var result = await controller.Retry(
+            foreignDraft.Id,
+            $"scan-retry:{foreignDraft.Id}:test-cross-portfolio",
+            CancellationToken.None);
 
         result.Should().BeOfType<NotFoundObjectResult>();
         _db.ChangeTracker.Clear();
