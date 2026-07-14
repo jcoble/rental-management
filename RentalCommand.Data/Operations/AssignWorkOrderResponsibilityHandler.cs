@@ -204,43 +204,46 @@ public sealed class AssignWorkOrderResponsibilityHandler
         var contexts = persistence.Query<WorkspaceAccessContext>().AsNoTracking();
         var workOrder = await persistence.Query<WorkOrder>()
             .Where(item => item.Id == command.WorkOrderId && item.PortfolioId == command.PortfolioId)
-            .Where(item => contexts.Any(context =>
-                context.Id == command.ActorAccessContextId &&
-                context.UserId == command.ActorUserId &&
-                context.PortfolioId == item.PortfolioId &&
-                context.AccessRevision == command.ActorAccessRevision &&
-                context.Status == WorkspaceAccessContextStatus.Active &&
-                context.SuspendedAtUtc == null &&
-                context.RevokedAtUtc == null &&
-                sessions.Any(session =>
-                    session.Id == command.ActorAuthSessionId &&
-                    session.UserId == command.ActorUserId &&
-                    session.ActiveAccessContextId == context.Id &&
-                    session.Status == AuthSessionStatus.Active &&
-                    session.RevokedAtUtc == null &&
-                    session.ExpiresAtUtc > now) &&
-                context.Membership != null &&
-                context.Membership.Status == WorkspaceMembershipStatus.Active &&
-                context.Membership.SuspendedAtUtc == null &&
-                context.Membership.RevokedAtUtc == null &&
-                context.Membership.EffectiveFromUtc <= now &&
-                (context.Membership.EffectiveToUtc == null || context.Membership.EffectiveToUtc > now) &&
-                context.Membership.RoleAssignments.Any(assignment =>
-                    assignment.Status == MembershipRoleAssignmentStatus.Active &&
-                    assignment.SuspendedAtUtc == null &&
-                    assignment.RevokedAtUtc == null &&
-                    assignment.EffectiveFromUtc <= now &&
-                    (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now) &&
-                    assignment.RoleProfile!.Capabilities.Any(capability =>
-                        capability.CapabilityDefinition!.Key ==
-                            CapabilityKeys.ResponsibilityAssignExistingMember &&
-                        capability.CapabilityDefinition.AuthorizationTargetKind ==
-                            CapabilityAuthorizationTargetKind.Property) &&
-                    (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
-                     (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
-                      assignment.SelectedProperties.Any(selected =>
-                          selected.PropertyId == item.PropertyId &&
-                          selected.PortfolioId == item.PortfolioId)))))))
+            .Where(item =>
+                contexts.Any(context =>
+                    context.Id == command.ActorAccessContextId &&
+                    context.UserId == command.ActorUserId &&
+                    context.PortfolioId == item.PortfolioId &&
+                    context.AccessRevision == command.ActorAccessRevision &&
+                    context.Status == WorkspaceAccessContextStatus.Active &&
+                    context.SuspendedAtUtc == null &&
+                    context.RevokedAtUtc == null &&
+                    sessions.Any(session =>
+                        session.Id == command.ActorAuthSessionId &&
+                        session.UserId == command.ActorUserId &&
+                        session.ActiveAccessContextId == context.Id &&
+                        session.Status == AuthSessionStatus.Active &&
+                        session.RevokedAtUtc == null &&
+                        session.ExpiresAtUtc > now) &&
+                    context.Membership != null &&
+                    context.Membership.Status == WorkspaceMembershipStatus.Active &&
+                    context.Membership.SuspendedAtUtc == null &&
+                    context.Membership.RevokedAtUtc == null &&
+                    context.Membership.EffectiveFromUtc <= now &&
+                    (context.Membership.EffectiveToUtc == null || context.Membership.EffectiveToUtc > now) &&
+                    context.Membership.RoleAssignments.Any(assignment =>
+                        assignment.Status == MembershipRoleAssignmentStatus.Active &&
+                        assignment.SuspendedAtUtc == null &&
+                        assignment.RevokedAtUtc == null &&
+                        assignment.EffectiveFromUtc <= now &&
+                        (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now) &&
+                        assignment.RoleProfile!.Capabilities.Any(capability =>
+                            capability.CapabilityDefinition!.Key ==
+                                CapabilityKeys.ResponsibilityAssignExistingMember &&
+                            capability.CapabilityDefinition.AuthorizationTargetKind ==
+                                CapabilityAuthorizationTargetKind.Property) &&
+                        (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                         (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
+                          assignment.SelectedProperties.Any(selected =>
+                              selected.PropertyId == item.PropertyId &&
+                              selected.PortfolioId == item.PortfolioId))))
+                )
+            )
             .SingleOrDefaultAsync(ct);
         return workOrder ?? throw new UnauthorizedAccessException(
             "The active assignment cannot assign responsibility for this work order.");
