@@ -39,10 +39,26 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { AlertCircle, Building2, Pencil, Plus, Save, Trash2, X, MapPin, Info, ArrowRight } from '@lucide/svelte';
+	import type { WorkspaceExperience } from '$lib/types/user';
+	import { getAuthState } from '$lib/stores/auth.svelte';
+	import { CAPABILITY } from '$lib/auth/experience-policy';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const id = $derived(Number(page.params.id));
+	const authState = getAuthState();
+	const currentAccess = $derived(page.data.access ?? authState.accessEnvelope ?? null);
+	const activeExperience = $derived(authState.activeExperience ?? currentAccess?.selectedContext.activeExperience ?? null);
+	const activeCapabilities = $derived<Set<string>>(new Set<string>(
+		currentAccess?.navigation.find((entry: { experience: WorkspaceExperience; capabilityKeys: string[] }) =>
+			entry.experience === activeExperience)?.capabilityKeys ?? []
+	));
+	const canManageRentals = $derived(
+		activeExperience === 'Management' && activeCapabilities.has(CAPABILITY.rentalsManage)
+	);
+	const canManageMoneyExpenses = $derived(
+		activeExperience === 'Management' && activeCapabilities.has(CAPABILITY.moneyExpensesManage)
+	);
 
 	// ── Queries ────────────────────────────────────────────────────────────────
 	const propertyQuery = createQuery(() => ({
@@ -66,7 +82,7 @@
 	const ownersQuery = createQuery(() => ({
 		queryKey: ['owners', portfolioId],
 		queryFn: () => owners.list(portfolioId, { take: 200 }),
-		enabled: portfolioId > 0,
+		enabled: portfolioId > 0 && canManageRentals,
 	}));
 
 	const property = $derived(propertyQuery.data);
@@ -128,6 +144,7 @@
 	}
 
 	function startEditingProperty() {
+		if (!canManageRentals) return;
 		if (!property) return;
 		propertyForm = {
 			name: property.name,
@@ -158,6 +175,7 @@
 	}
 
 	function submitProperty() {
+		if (!canManageRentals) return;
 		const result = parseForm(propertySchema, propertyForm);
 		const basis = parseForm(propertyBasisSchema, propertyForm);
 		if (result.errors || basis.errors) {
@@ -209,6 +227,7 @@
 	let unitFormErrors = $state<Record<string, string>>({});
 
 	function openAddUnit() {
+		if (!canManageRentals) return;
 		editingUnitId = null;
 		unitForm = { ...emptyUnit };
 		unitFormErrors = {};
@@ -216,6 +235,7 @@
 	}
 
 	function openEditUnit(u: Unit) {
+		if (!canManageRentals) return;
 		editingUnitId = u.id;
 		unitForm = {
 			unitNumber: u.unitNumber,
@@ -392,24 +412,26 @@
 		>
 			<ArrowRight class="h-3.5 w-3.5" />
 		</a>
-		<button
-			type="button"
-			data-testid="unit-edit"
-			class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-			aria-label="Edit unit"
-			onclick={(e) => { e.stopPropagation(); openEditUnit(u); }}
-		>
-			<Pencil class="h-3.5 w-3.5" />
-		</button>
-		<button
-			type="button"
-			data-testid="unit-delete"
-			class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-			aria-label="Delete unit"
-			onclick={(e) => { e.stopPropagation(); deleteUnitTarget = u; }}
-		>
-			<Trash2 class="h-3.5 w-3.5" />
-		</button>
+		{#if canManageRentals}
+			<button
+				type="button"
+				data-testid="unit-edit"
+				class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+				aria-label="Edit unit"
+				onclick={(e) => { e.stopPropagation(); openEditUnit(u); }}
+			>
+				<Pencil class="h-3.5 w-3.5" />
+			</button>
+			<button
+				type="button"
+				data-testid="unit-delete"
+				class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+				aria-label="Delete unit"
+				onclick={(e) => { e.stopPropagation(); deleteUnitTarget = u; }}
+			>
+				<Trash2 class="h-3.5 w-3.5" />
+			</button>
+		{/if}
 	</div>
 {/snippet}
 
@@ -523,6 +545,7 @@
 					<StatusBadge status={property.status} />
 				</div>
 			</div>
+			{#if canManageRentals}
 			<div class="flex items-center gap-2">
 				{#if editingProperty}
 					<Button variant="outline" class="gap-2" onclick={cancelEditingProperty} disabled={savePropertyMutation.isPending} data-testid="property-detail-cancel">
@@ -549,6 +572,7 @@
 					</Button>
 				{/if}
 			</div>
+			{/if}
 		</div>
 
 		<!-- Hero: the property + its occupancy at a glance, washed by occupancy/status. -->
@@ -667,25 +691,27 @@
 			>
 				{#snippet toolbar()}
 					<div class="flex flex-1"></div>
-					<Button class="gap-2 shrink-0" onclick={openAddUnit} data-testid="unit-add-button" data-coach="add-unit">
-						<Plus class="h-4 w-4" />
-						Add Unit
-					</Button>
+					{#if canManageRentals}
+						<Button class="gap-2 shrink-0" onclick={openAddUnit} data-testid="unit-add-button" data-coach="add-unit">
+							<Plus class="h-4 w-4" />
+							Add Unit
+						</Button>
+					{/if}
 				{/snippet}
 			</DataGrid>
 		</div>
 
 		<!-- Mortgage / Loans section (+ inline amortization schedule) -->
-		<PropertyLoansSection propertyId={id} />
+		<PropertyLoansSection propertyId={id} canManage={canManageMoneyExpenses} />
 
 		<!-- Capital assets section -->
-		<PropertyCapitalAssetsSection propertyId={id} />
+		<PropertyCapitalAssetsSection propertyId={id} canManage={canManageMoneyExpenses} />
 
 		<!-- Property sale / disposition section -->
-		<PropertyDispositionsSection propertyId={id} />
+		<PropertyDispositionsSection propertyId={id} canManage={canManageRentals} />
 
 		<!-- Recurring expenses section -->
-		<PropertyRecurringExpensesSection propertyId={id} />
+		<PropertyRecurringExpensesSection propertyId={id} canManage={canManageMoneyExpenses} />
 
 		<!-- Leases section -->
 		<div data-testid="property-detail-leases">
@@ -712,7 +738,7 @@
 </div>
 
 <!-- Unit add/edit dialog -->
-<Dialog.Root open={showUnitForm} onOpenChange={(v) => { if (!v) closeUnitForm(); }}>
+<Dialog.Root open={canManageRentals && showUnitForm} onOpenChange={(v) => { if (!v) closeUnitForm(); }}>
 	<Dialog.Content class="max-w-sm">
 		<Dialog.Header>
 			<Dialog.Title>{editingUnitId == null ? 'Add Unit' : 'Edit Unit'}</Dialog.Title>
@@ -735,7 +761,7 @@
 
 <!-- Delete property confirm -->
 <ConfirmDialog
-	open={showDeletePropertyConfirm}
+	open={canManageRentals && showDeletePropertyConfirm}
 	title="Delete property"
 	message={propertyDeleteState?.message ?? ''}
 	busy={deletePropertyMutation.isPending}
@@ -750,7 +776,7 @@
 
 <!-- Delete unit confirm -->
 <ConfirmDialog
-	open={deleteUnitTarget !== null}
+	open={canManageRentals && deleteUnitTarget !== null}
 	title="Remove unit"
 	message={deleteUnitTarget ? `Remove unit "${deleteUnitTarget.unitNumber}"?` : ''}
 	busy={deleteUnitMutation.isPending}

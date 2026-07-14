@@ -7,6 +7,7 @@ export const CAPABILITY = {
 	workManage: 'work.manage',
 	reportsRead: 'reports.read',
 	moneyBalancesRead: 'money.balances.read',
+	moneyExpensesManage: 'money.expenses.manage',
 	moneyDepositsManage: 'money.deposits.manage',
 	moneyOwnerReportsRead: 'money.owner-reports.read',
 	moneyReconciliationOperate: 'money.reconciliation.operate',

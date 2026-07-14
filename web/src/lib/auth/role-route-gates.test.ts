@@ -8,6 +8,14 @@ const protectedLayout = readFileSync(
 );
 const appShell = readFileSync(new URL('../components/AppShell.svelte', import.meta.url), 'utf8');
 const experiencePolicy = readFileSync(new URL('./experience-policy.ts', import.meta.url), 'utf8');
+const propertiesList = readFileSync(
+	new URL('../../routes/(protected)/properties/+page.svelte', import.meta.url),
+	'utf8'
+);
+const propertyDetail = readFileSync(
+	new URL('../../routes/(protected)/properties/[id]/+page.svelte', import.meta.url),
+	'utf8'
+);
 
 test('direct staff routes use the same role-capability gates as navigation', () => {
 	assert.match(
@@ -27,4 +35,21 @@ test('direct staff routes use the same role-capability gates as navigation', () 
 	assert.match(experiencePolicy, /prefix: '\/onboarding'/);
 	assert.match(experiencePolicy, /prefix: '\/audit'/);
 	assert.match(experiencePolicy, /prefix: '\/ai'/);
+});
+
+test('property mutation controls use active-experience capability gates', () => {
+	for (const source of [propertiesList, propertyDetail]) {
+		assert.match(source, /activeExperience === 'Management'/);
+		assert.match(source, /activeCapabilities\.has\(CAPABILITY\.rentalsManage\)/);
+		assert.match(source, /\{#if canManageRentals\}/);
+	}
+	assert.match(propertiesList, /emptyOnAction=\{canManageRentals \? openCreate : undefined\}/);
+	assert.match(
+		propertyDetail,
+		/PropertyLoansSection propertyId=\{id\} canManage=\{canManageMoneyExpenses\}/
+	);
+	assert.match(
+		propertyDetail,
+		/PropertyDispositionsSection propertyId=\{id\} canManage=\{canManageRentals\}/
+	);
 });

@@ -7,6 +7,9 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/auth/auth_controller.dart';
+import '../../core/auth/auth_models.dart';
+import '../../core/auth/mobile_access_policy.dart';
 import '../../core/models/work_order.dart';
 import '../applications/application_detail_screen.dart';
 import '../applications/applications_models.dart';
@@ -248,10 +251,25 @@ class _UnitWorkOrderQuickActionFabState
   }
 
   MobileQuickAction? _currentAction() {
+    final auth = ref.watch(authControllerProvider);
+    if (auth is! AuthStateAuthenticated) return null;
+    final canManageWork = canUseMobileCapabilityAction(
+      experience: auth.activeExperience,
+      capabilities: auth.capabilities,
+      capability: 'work.manage',
+      experiences: const {WorkspaceExperience.management},
+    );
+    final canRecordReceipts = canUseMobileCapabilityAction(
+      experience: auth.activeExperience,
+      capabilities: auth.capabilities,
+      capability: 'money.payments.manage',
+      experiences: const {WorkspaceExperience.management},
+    );
     final index =
         _tabController?.index ?? DefaultTabController.of(context).index;
     if (index == UnitCommandCenterTab.work.index &&
-        widget.selectedWorkOrder == null) {
+        widget.selectedWorkOrder == null &&
+        canManageWork) {
       return MobileQuickAction(
         label: 'New work order',
         icon: Icons.add,
@@ -259,7 +277,7 @@ class _UnitWorkOrderQuickActionFabState
       );
     }
 
-    if (index == UnitCommandCenterTab.turnover.index) {
+    if (index == UnitCommandCenterTab.turnover.index && canManageWork) {
       return MobileQuickAction(
         label: 'New turnover task',
         icon: Icons.add,
@@ -269,7 +287,8 @@ class _UnitWorkOrderQuickActionFabState
 
     final lease = widget.dashboard.currentLease;
     if (index == UnitCommandCenterTab.ledger.index &&
-        lease?.tenantAccountId != null) {
+        lease?.tenantAccountId != null &&
+        canRecordReceipts) {
       return MobileQuickAction(
         label: 'Record receipt',
         icon: Icons.add_card_outlined,
@@ -352,6 +371,15 @@ class _UnitOverviewTab extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final header = dashboard.header;
     final unit = dashboard.unit;
+    final auth = ref.watch(authControllerProvider);
+    final canManageRentals =
+        auth is AuthStateAuthenticated &&
+        canUseMobileCapabilityAction(
+          experience: auth.activeExperience,
+          capabilities: auth.capabilities,
+          capability: 'rentals.manage',
+          experiences: const {WorkspaceExperience.management},
+        );
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
@@ -386,15 +414,17 @@ class _UnitOverviewTab extends ConsumerWidget {
           ],
         ),
         const SizedBox(height: 12),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: FilledButton.icon(
-            icon: const Icon(Icons.edit_outlined),
-            label: const Text('Edit unit'),
-            onPressed: () => _showEditUnitSheet(context, ref),
+        if (canManageRentals) ...[
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FilledButton.icon(
+              icon: const Icon(Icons.edit_outlined),
+              label: const Text('Edit unit'),
+              onPressed: () => _showEditUnitSheet(context, ref),
+            ),
           ),
-        ),
-        const SizedBox(height: 14),
+          const SizedBox(height: 14),
+        ],
         Wrap(
           spacing: 8,
           runSpacing: 8,
@@ -550,6 +580,25 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
   @override
   Widget build(BuildContext context) {
     final unitId = widget.dashboard.unit.id;
+    final auth = ref.watch(authControllerProvider);
+    final canManageListings =
+        auth is AuthStateAuthenticated &&
+        canUseMobileCapabilityAction(
+          experience: auth.activeExperience,
+          capabilities: auth.capabilities,
+          capability: 'leasing.listings.manage',
+          experiences: const {
+            WorkspaceExperience.management,
+            WorkspaceExperience.leasing,
+          },
+        );
+    if (!canManageListings) {
+      return const _EmptyTab(
+        icon: Symbols.lock_outline_rounded,
+        title: 'Listing access unavailable',
+        body: 'Your current workspace experience cannot manage this listing.',
+      );
+    }
     final listingAsync = ref.watch(unitListingWorkspaceProvider(unitId));
 
     return listingAsync.when(
@@ -1624,6 +1673,18 @@ class _UnitLeaseTab extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final summary = dashboard.currentLease;
+    final auth = ref.watch(authControllerProvider);
+    final canPrepareAgreement =
+        auth is AuthStateAuthenticated &&
+        canUseMobileCapabilityAction(
+          experience: auth.activeExperience,
+          capabilities: auth.capabilities,
+          capability: 'leasing.agreements.prepare',
+          experiences: const {
+            WorkspaceExperience.management,
+            WorkspaceExperience.leasing,
+          },
+        );
     final managementId =
         selectedLeaseManagementId ??
         (summary == null || summary.leaseManagementId <= 0
@@ -1637,14 +1698,16 @@ class _UnitLeaseTab extends ConsumerWidget {
         body:
             'Approve an application and prepare move-in, or scan an existing signed agreement.',
         action: _UnitLeaseAddAction(
-          onPressed: () => openMobileScan(
-            context,
-            initialTargetEntityType: 'LeaseAgreement',
-            lockTargetEntityType: true,
-            propertyId: dashboard.unit.propertyId,
-            unitId: dashboard.unit.id,
-            sourceLabel: 'Unit · Tenant & lease',
-          ),
+          onPressed: canPrepareAgreement
+              ? () => openMobileScan(
+                  context,
+                  initialTargetEntityType: 'LeaseAgreement',
+                  lockTargetEntityType: true,
+                  propertyId: dashboard.unit.propertyId,
+                  unitId: dashboard.unit.id,
+                  sourceLabel: 'Unit · Tenant & lease',
+                )
+              : null,
         ),
       );
     }
@@ -1663,15 +1726,12 @@ class _UnitLeaseAddAction extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        FilledButton.icon(
-          icon: const Icon(Icons.add),
-          label: const Text('Scan signed lease'),
-          onPressed: onPressed,
-        ),
-        if (onPressed == null) ...[
-          const SizedBox(height: 6),
-          const Text('A tenant relationship already exists.'),
-        ],
+        if (onPressed != null)
+          FilledButton.icon(
+            icon: const Icon(Icons.add),
+            label: const Text('Scan signed lease'),
+            onPressed: onPressed,
+          ),
       ],
     );
   }

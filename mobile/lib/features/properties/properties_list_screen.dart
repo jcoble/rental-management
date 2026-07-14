@@ -3,6 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/models.dart';
 import '../../core/api/api_exception.dart';
+import '../../core/auth/auth_controller.dart';
+import '../../core/auth/auth_models.dart';
+import '../../core/auth/mobile_access_policy.dart';
 import '../../core/widgets/mobile_m3_list.dart';
 import '../home/mobile_domain_chrome.dart';
 import '../home/mobile_quick_action_fab.dart';
@@ -64,16 +67,27 @@ class _PropertiesListScreenState extends ConsumerState<PropertiesListScreen> {
   @override
   Widget build(BuildContext context) {
     final propertiesAsync = ref.watch(propertiesProvider);
+    final auth = ref.watch(authControllerProvider);
+    final canManageRentals =
+        auth is AuthStateAuthenticated &&
+        canUseMobileCapabilityAction(
+          experience: auth.activeExperience,
+          capabilities: auth.capabilities,
+          capability: 'rentals.manage',
+          experiences: const {WorkspaceExperience.management},
+        );
 
     return Scaffold(
       appBar: mobileDomainRootAppBar(context, title: const Text('Properties')),
       floatingActionButton: MobileQuickActionFab(
         heroTag: 'properties-fab',
-        primaryAction: MobileQuickAction(
-          label: 'Add property',
-          icon: Icons.add,
-          onPressed: () => _showAddSheet(context),
-        ),
+        primaryAction: canManageRentals
+            ? MobileQuickAction(
+                label: 'Add property',
+                icon: Icons.add,
+                onPressed: () => _showAddSheet(context),
+              )
+            : null,
         onChat: () => openMobileAssistant(context),
         onRecord: () => openMobileRecord(context),
         onScan: () => openMobileScan(context),
@@ -88,7 +102,9 @@ class _PropertiesListScreenState extends ConsumerState<PropertiesListScreen> {
           ),
           data: (list) {
             if (list.isEmpty) {
-              return _EmptyBody(onAdd: () => _showAddSheet(context));
+              return _EmptyBody(
+                onAdd: canManageRentals ? () => _showAddSheet(context) : null,
+              );
             }
             final bottomInset = MediaQuery.paddingOf(context).bottom;
             return ListView.separated(
@@ -248,7 +264,7 @@ class _MetaChip extends StatelessWidget {
 class _EmptyBody extends StatelessWidget {
   const _EmptyBody({required this.onAdd});
 
-  final VoidCallback onAdd;
+  final VoidCallback? onAdd;
 
   @override
   Widget build(BuildContext context) {
@@ -283,11 +299,12 @@ class _EmptyBody extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 20),
-            FilledButton.icon(
-              onPressed: onAdd,
-              icon: const Icon(Icons.add),
-              label: const Text('Add your first property'),
-            ),
+            if (onAdd != null)
+              FilledButton.icon(
+                onPressed: onAdd,
+                icon: const Icon(Icons.add),
+                label: const Text('Add your first property'),
+              ),
           ],
         ),
       ),
