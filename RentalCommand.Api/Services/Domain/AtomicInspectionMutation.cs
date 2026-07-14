@@ -32,6 +32,12 @@ public sealed record AtomicInspectionMutationResult(
     string? ResponseJson = null,
     string? Error = null) : IAtomicResultData;
 
+public sealed record AttachInspectionReportRequest(
+    string FileName,
+    string StoragePath,
+    string ContentType,
+    long FileSize);
+
 public sealed class AtomicInspectionMutationHandler
     : IAtomicCommandHandler<AtomicInspectionMutationCommand, AtomicInspectionMutationResult>,
       IAtomicReplayAuthorizer<AtomicInspectionMutationCommand>
@@ -388,6 +394,12 @@ public sealed class AtomicInspectionMutationHandler
                 await SnapshotInspectionDetailAsync(persistence, command.PortfolioId, entity.Id, ct));
         }
 
+        if (command.Operation == AtomicInspectionMutationOperation.Complete)
+            return await CompleteInspectionAsync(command, attempt, now, ct);
+
+        if (command.Operation == AtomicInspectionMutationOperation.AttachReport)
+            return await AttachInspectionReportAsync(command, attempt, now, ct);
+
         var inspection = await persistence.Query<Inspection>().SingleOrDefaultAsync(entity =>
             entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct);
         if (inspection is null) return Missing();
@@ -451,6 +463,172 @@ public sealed class AtomicInspectionMutationHandler
         StageDataUpdate(attempt, command, nameof(Inspection), inspection.Id, now);
         return Applied(inspection.Id,
             await SnapshotInspectionAsync(persistence, command.PortfolioId, inspection.Id, ct));
+    }
+
+    private static async Task<AtomicInspectionMutationResult> CompleteInspectionAsync(
+        AtomicInspectionMutationCommand command,
+        IAtomicWriteAttempt attempt,
+        DateTime now,
+        CancellationToken ct)
+    {
+        var persistence = attempt.Persistence;
+        var state = await persistence.Query<Inspection>().AsNoTracking()
+            .Where(inspection => inspection.Id == command.EntityId
+                && inspection.PortfolioId == command.PortfolioId)
+            .Select(inspection => new CompletionState(
+                inspection.Status,
+                inspection.Items.Count(),
+                inspection.Items.Count(item => item.Result == InspectionItemResult.Pass),
+                inspection.Items.Count(item => item.Result == InspectionItemResult.Fail),
+                inspection.Items.Count(item => item.Result == InspectionItemResult.NotApplicable),
+                inspection.Items.Count(item => item.Result == InspectionItemResult.Pending)))
+            .SingleOrDefaultAsync(ct);
+        if (state is null) return Missing();
+        if (state.Status == InspectionStatus.Completed)
+            return Rejected(command.EntityId, "Inspection is already completed.");
+        if (state.TotalItems == 0)
+            return Rejected(command.EntityId,
+                "Add a checklist (pick a template) before completing this inspection — a completed inspection must record what was inspected.");
+        if (state.TotalItems == state.PendingCount)
+            return Rejected(command.EntityId,
+                "Mark at least one checklist item Pass, Fail, or N/A before completing — a completed inspection must record what was inspected.");
+
+        var inspection = await persistence.Query<Inspection>().SingleAsync(entity =>
+            entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct);
+        var failedItems = await persistence.Query<InspectionItem>()
+            .Where(item => item.InspectionId == command.EntityId
+                && item.PortfolioId == command.PortfolioId
+                && item.Result == InspectionItemResult.Fail)
+            .OrderBy(item => item.SortOrder).ThenBy(item => item.Id)
+            .ToListAsync(ct);
+        var newWorkOrders = new List<WorkOrder>();
+        foreach (var item in failedItems)
+        {
+            if (item.SpawnedWorkOrderId.HasValue) continue;
+            var workOrder = BuildInspectionWorkOrder(command, inspection, item, now);
+            item.SpawnedWorkOrder = workOrder;
+            persistence.Add(workOrder);
+            attempt.BindSemanticAudit(item, Audit(command, nameof(InspectionItem), item.Id,
+                AuditLogOperation.Updated, "Inspection failure linked to work order"));
+            attempt.BindSemanticAudit(workOrder, Audit(command, nameof(WorkOrder), 0,
+                AuditLogOperation.Created, "Work order created from failed inspection item"));
+            newWorkOrders.Add(workOrder);
+        }
+
+        inspection.Status = InspectionStatus.Completed;
+        inspection.CompletedAt ??= now;
+        inspection.UpdatedAt = now;
+        attempt.BindSemanticAudit(inspection, Audit(command, nameof(Inspection), inspection.Id,
+            AuditLogOperation.Updated, "Inspection completed"));
+        await attempt.FlushBusinessAsync(ct);
+
+        var workOrderIds = await persistence.Query<InspectionItem>().AsNoTracking()
+            .Where(item => item.InspectionId == command.EntityId
+                && item.PortfolioId == command.PortfolioId
+                && item.Result == InspectionItemResult.Fail
+                && item.SpawnedWorkOrderId != null)
+            .OrderBy(item => item.SortOrder).ThenBy(item => item.Id)
+            .Select(item => item.SpawnedWorkOrderId!.Value)
+            .ToListAsync(ct);
+        StageDataUpdate(attempt, command, nameof(Inspection), inspection.Id, now, suffix: "inspection");
+        foreach (var workOrder in newWorkOrders)
+            StageDataUpdate(attempt, command, nameof(WorkOrder), workOrder.Id, now, suffix: $"work-order-{workOrder.Id}");
+
+        var summary = new CompleteInspectionResponse
+        {
+            InspectionId = inspection.Id,
+            Status = inspection.Status,
+            TotalItems = state.TotalItems,
+            PassCount = state.PassCount,
+            FailCount = state.FailCount,
+            NotApplicableCount = state.NotApplicableCount,
+            PendingCount = state.PendingCount,
+            ReportStoredFileId = inspection.ReportStoredFileId,
+            CreatedWorkOrderIds = workOrderIds,
+        };
+        return Applied(inspection.Id, JsonSerializer.Serialize(summary));
+    }
+
+    private static async Task<AtomicInspectionMutationResult> AttachInspectionReportAsync(
+        AtomicInspectionMutationCommand command,
+        IAtomicWriteAttempt attempt,
+        DateTime now,
+        CancellationToken ct)
+    {
+        var persistence = attempt.Persistence;
+        var inspection = await persistence.Query<Inspection>().SingleOrDefaultAsync(entity =>
+            entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct);
+        if (inspection is null) return Missing();
+        if (inspection.Status != InspectionStatus.Completed)
+            return Rejected(command.EntityId, "Complete the inspection before attaching its report.");
+        if (inspection.ReportStoredFileId.HasValue)
+            return Applied(inspection.ReportStoredFileId.Value,
+                JsonSerializer.Serialize(inspection.ReportStoredFileId.Value));
+
+        var request = Read<AttachInspectionReportRequest>(command);
+        if (string.IsNullOrWhiteSpace(request.FileName) || string.IsNullOrWhiteSpace(request.StoragePath)
+            || string.IsNullOrWhiteSpace(request.ContentType) || request.FileSize <= 0)
+            throw new ArgumentException("Inspection report file metadata is incomplete.");
+        var stored = new StoredFile
+        {
+            PortfolioId = command.PortfolioId,
+            FileName = request.FileName,
+            FilePath = request.StoragePath,
+            ContentType = request.ContentType,
+            FileSize = request.FileSize,
+            EntityType = nameof(Inspection),
+            EntityId = inspection.Id,
+            UploadedAt = now,
+        };
+        persistence.Add(stored);
+        attempt.BindSemanticAudit(stored, Audit(command, nameof(StoredFile), 0,
+            AuditLogOperation.Created, "Inspection report stored"));
+        await attempt.FlushBusinessAsync(ct);
+        inspection.ReportStoredFileId = stored.Id;
+        inspection.UpdatedAt = now;
+        attempt.BindSemanticAudit(inspection, Audit(command, nameof(Inspection), inspection.Id,
+            AuditLogOperation.Updated, "Inspection report attached"));
+        await attempt.FlushBusinessAsync(ct);
+        StageDataUpdate(attempt, command, nameof(StoredFile), stored.Id, now, suffix: "report-file");
+        StageDataUpdate(attempt, command, nameof(Inspection), inspection.Id, now, suffix: "inspection");
+        return Applied(stored.Id, JsonSerializer.Serialize(stored.Id));
+    }
+
+    private static WorkOrder BuildInspectionWorkOrder(
+        AtomicInspectionMutationCommand command,
+        Inspection inspection,
+        InspectionItem item,
+        DateTime now)
+    {
+        var title = string.IsNullOrWhiteSpace(item.Label) ? "Inspection follow-up" : item.Label.Trim();
+        var area = string.IsNullOrWhiteSpace(item.Area) ? "General" : item.Area.Trim();
+        var description = string.IsNullOrWhiteSpace(item.Note)
+            ? $"Failed inspection item ({area}) from inspection #{inspection.Id}."
+            : item.Note.Trim();
+        var workOrder = new WorkOrder
+        {
+            PortfolioId = command.PortfolioId,
+            PropertyId = inspection.PropertyId,
+            UnitId = inspection.UnitId,
+            LeaseManagementId = inspection.LeaseManagementId,
+            Title = title.Length > 200 ? title[..200] : title,
+            Description = description.Length > 4000 ? description[..4000] : description,
+            Category = "Inspection",
+            Priority = WorkOrderPriority.Normal,
+            Status = WorkOrderStatus.New,
+            RequestedAt = now,
+            UpdatedAt = now,
+        };
+        workOrder.StatusEvents.Add(new WorkOrderStatusEvent
+        {
+            PortfolioId = command.PortfolioId,
+            FromStatus = null,
+            ToStatus = workOrder.Status,
+            ChangedByUserId = command.ActorUserId,
+            ChangedByLabel = "Inspection",
+            CreatedAtUtc = now,
+        });
+        return workOrder;
     }
 
     private static async Task AuthorizeAsync(
@@ -793,12 +971,21 @@ public sealed class AtomicInspectionMutationHandler
         ? value
         : value.ToUniversalTime();
     private static AtomicInspectionMutationResult Missing() => new(false, false, 0);
+    private static AtomicInspectionMutationResult Rejected(int id, string error) =>
+        new(true, false, id, Error: error);
     private static AtomicInspectionMutationResult Applied(int id, string? responseJson = null) =>
         new(true, true, id, responseJson);
 
     private sealed record InspectionReferenceValidation(
         bool PropertyValid, bool UnitValid, bool ManagementValid, bool AgreementValid, bool TemplateValid);
     private sealed record TemplateItemProjection(string Area, string Label, int SortOrder);
+    private sealed record CompletionState(
+        InspectionStatus Status,
+        int TotalItems,
+        int PassCount,
+        int FailCount,
+        int NotApplicableCount,
+        int PendingCount);
     private sealed record NormalizedTemplate(string Name, InspectionType Type, IReadOnlyList<NormalizedTemplateItem> Items);
     private sealed record NormalizedTemplateItem(string Area, string Label);
 }
