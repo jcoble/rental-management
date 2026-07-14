@@ -939,7 +939,9 @@ class _AgreementHistoryCard extends ConsumerWidget {
 
   LeaseAgreementHistory? _sourceFor(LeaseAgreementHistory agreement) {
     final sourceId =
-        agreement.replacesAgreementId ?? agreement.renewsAgreementId;
+        agreement.replacesAgreementId ??
+        agreement.renewsAgreementId ??
+        agreement.reissuesAgreementId;
     if (sourceId == null) return null;
     for (final candidate in agreements) {
       if (candidate.id == sourceId) return candidate;

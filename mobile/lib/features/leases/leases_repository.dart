@@ -293,12 +293,22 @@ class LeaseSuccessorDraftResult {
     required this.leaseAgreementId,
     required this.versionNumber,
     required this.draftRevision,
+    required this.sourceAgreementId,
+    required this.leaseAgreementSignerIds,
+    required this.addendumDecisionIds,
+    required this.replacementAddendumIds,
+    required this.replayed,
   });
 
   final int leaseManagementId;
   final int leaseAgreementId;
   final int versionNumber;
   final int draftRevision;
+  final int? sourceAgreementId;
+  final List<int> leaseAgreementSignerIds;
+  final List<int> addendumDecisionIds;
+  final List<int> replacementAddendumIds;
+  final bool replayed;
 
   factory LeaseSuccessorDraftResult.fromJson(Map<String, dynamic> json) =>
       LeaseSuccessorDraftResult(
@@ -306,6 +316,17 @@ class LeaseSuccessorDraftResult {
         leaseAgreementId: (json['leaseAgreementId'] as num?)?.toInt() ?? 0,
         versionNumber: (json['versionNumber'] as num?)?.toInt() ?? 0,
         draftRevision: (json['draftRevision'] as num?)?.toInt() ?? 0,
+        sourceAgreementId: (json['sourceAgreementId'] as num?)?.toInt(),
+        leaseAgreementSignerIds: (json['leaseAgreementSignerIds'] as List)
+            .map((value) => (value as num).toInt())
+            .toList(growable: false),
+        addendumDecisionIds: (json['addendumDecisionIds'] as List)
+            .map((value) => (value as num).toInt())
+            .toList(growable: false),
+        replacementAddendumIds: (json['replacementAddendumIds'] as List)
+            .map((value) => (value as num).toInt())
+            .toList(growable: false),
+        replayed: json['replayed'] as bool,
       );
 }
 
