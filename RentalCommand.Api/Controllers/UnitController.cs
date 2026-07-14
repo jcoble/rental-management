@@ -333,44 +333,72 @@ public class UnitController : ManagementControllerBase
     [HttpPost]
     [ProducesResponseType(typeof(UnitResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<UnitResponse>> Create([FromBody] CreateUnitRequest request, CancellationToken ct)
+    public async Task<ActionResult<UnitResponse>> Create(
+        [FromBody] CreateUnitRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var portfolioId = GetPortfolioId();
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var scope = GetWorkspaceReadScope();
         if (!await HasCapabilityAsync(
                 CapabilityKeys.RentalsManage,
-                new PropertyCapabilityAuthorizationTarget(portfolioId, request.PropertyId),
+                new PropertyCapabilityAuthorizationTarget(scope.PortfolioId, request.PropertyId),
                 ct)) return Forbid();
-        var created = await _service.CreateAsync(portfolioId, request, ct);
-        return created == null
-            ? NotFound(new { error = "Property not found in this portfolio" })
-            : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
+        try
+        {
+            var created = await _service.CreateAsync(scope, request, operationKey, ct);
+            return created == null
+                ? NotFound(new { error = "Property not found in this portfolio" })
+                : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, new { error = ex.Message }); }
     }
 
     [HttpPatch("{id:int}")]
     [ProducesResponseType(typeof(UnitResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<UnitResponse>> Update(int id, [FromBody] UpdateUnitRequest request, CancellationToken ct)
+    public async Task<ActionResult<UnitResponse>> Update(
+        int id,
+        [FromBody] UpdateUnitRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var portfolioId = GetPortfolioId();
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var scope = GetWorkspaceReadScope();
         if (!await HasCapabilityAsync(
                 CapabilityKeys.RentalsManage,
-                new UnitCapabilityAuthorizationTarget(portfolioId, id),
+                new UnitCapabilityAuthorizationTarget(scope.PortfolioId, id),
                 ct)) return Forbid();
-        var updated = await _service.UpdateAsync(portfolioId, id, request, ct);
-        return updated == null ? NotFound(new { error = "Unit not found" }) : Ok(updated);
+        try
+        {
+            var updated = await _service.UpdateAsync(scope, id, request, operationKey, ct);
+            return updated == null ? NotFound(new { error = "Unit not found" }) : Ok(updated);
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, new { error = ex.Message }); }
     }
 
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        int id,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var portfolioId = GetPortfolioId();
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var scope = GetWorkspaceReadScope();
         if (!await HasCapabilityAsync(
                 CapabilityKeys.RentalsManage,
-                new UnitCapabilityAuthorizationTarget(portfolioId, id),
+                new UnitCapabilityAuthorizationTarget(scope.PortfolioId, id),
                 ct)) return Forbid();
-        var deleted = await _service.DeleteAsync(portfolioId, id, ct);
-        return deleted ? NoContent() : NotFound(new { error = "Unit not found" });
+        try
+        {
+            var deleted = await _service.DeleteAsync(scope, id, operationKey, ct);
+            return deleted ? NoContent() : NotFound(new { error = "Unit not found" });
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, new { error = ex.Message }); }
     }
 }

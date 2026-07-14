@@ -85,11 +85,18 @@ public class ApplicationsController : ManagementControllerBase
     public async Task<ActionResult<ApplicationResponse>> Update(
         int id,
         [FromBody] UpdateApplicationRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
-        var item = await _service.UpdateAuthorizedAsync(
-            GetWorkspaceReadScope(), id, request, GetUserId(), ct);
-        return item == null ? NotFound(new { error = "Application not found" }) : Ok(item);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        try
+        {
+            var item = await _service.UpdateAuthorizedAsync(
+                GetWorkspaceReadScope(), id, request, GetUserId(), operationKey, ct);
+            return item == null ? NotFound(new { error = "Application not found" }) : Ok(item);
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, new { error = ex.Message }); }
     }
 
     /// <summary>Streams the original scanned application document.</summary>
@@ -112,36 +119,49 @@ public class ApplicationsController : ManagementControllerBase
     [ProducesResponseType(typeof(ApproveApplicationResult), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Approve(int id, CancellationToken ct)
+    public async Task<IActionResult> Approve(
+        int id,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
         try
         {
             var result = await _service.ApproveAuthorizedAsync(
-                GetWorkspaceReadScope(), id, GetUserId(), ct);
+                GetWorkspaceReadScope(), id, GetUserId(), operationKey, ct);
             return result == null ? NotFound(new { error = "Application not found" }) : Ok(result);
         }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { error = ex.Message });
         }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, new { error = ex.Message }); }
     }
 
     [HttpPost("{id:int}/decline")]
     [ProducesResponseType(typeof(ApplicationResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Decline(int id, [FromBody] DeclineApplicationRequest? body, CancellationToken ct)
+    public async Task<IActionResult> Decline(
+        int id,
+        [FromBody] DeclineApplicationRequest? body,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
         try
         {
             var result = await _service.DeclineAuthorizedAsync(
-                GetWorkspaceReadScope(), id, GetUserId(), body?.Reason, ct);
+                GetWorkspaceReadScope(), id, GetUserId(), body?.Reason, operationKey, ct);
             return result == null ? NotFound(new { error = "Application not found" }) : Ok(result);
         }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { error = ex.Message });
         }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, new { error = ex.Message }); }
     }
 
     [HttpPost("{id:int}/withdraw")]
@@ -165,11 +185,20 @@ public class ApplicationsController : ManagementControllerBase
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        int id,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var deleted = await _service.DeleteAuthorizedAsync(
-            GetWorkspaceReadScope(), id, GetUserId(), ct);
-        return deleted ? NoContent() : NotFound(new { error = "Application not found" });
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        try
+        {
+            var deleted = await _service.DeleteAuthorizedAsync(
+                GetWorkspaceReadScope(), id, GetUserId(), operationKey, ct);
+            return deleted ? NoContent() : NotFound(new { error = "Application not found" });
+        }
+        catch (UnauthorizedAccessException ex) { return StatusCode(403, new { error = ex.Message }); }
     }
 
     /// <summary>

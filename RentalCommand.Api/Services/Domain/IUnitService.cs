@@ -26,8 +26,11 @@ public interface IUnitService
 
     Task<UnitResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
 
-    /// <summary>Returns null when the target property is missing or outside the caller's portfolio.</summary>
-    Task<UnitResponse?> CreateAsync(int portfolioId, CreateUnitRequest request, CancellationToken ct = default);
-    Task<UnitResponse?> UpdateAsync(int portfolioId, int id, UpdateUnitRequest request, CancellationToken ct = default);
-    Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default);
+    /// <summary>Returns null when the target property is missing or outside the caller's scope.</summary>
+    Task<UnitResponse?> CreateAsync(
+        WorkspaceReadScope scope, CreateUnitRequest request, string operationKey, CancellationToken ct = default);
+    Task<UnitResponse?> UpdateAsync(
+        WorkspaceReadScope scope, int id, UpdateUnitRequest request, string operationKey, CancellationToken ct = default);
+    Task<bool> DeleteAsync(
+        WorkspaceReadScope scope, int id, string operationKey, CancellationToken ct = default);
 }

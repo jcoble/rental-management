@@ -1,7 +1,7 @@
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -18,16 +18,19 @@ public class UnitService : IUnitService
     private const string EntityType = "Unit";
 
     private readonly RentalCommandDbContext _db;
-    private readonly IDataUpdateService _dataUpdate;
-    private readonly IAuditTrailService _audit;
     private readonly TimeProvider _timeProvider;
+    private readonly IAtomicUnitOfWork? _atomic;
 
-    public UnitService(RentalCommandDbContext db, IDataUpdateService dataUpdate, IAuditTrailService audit, TimeProvider timeProvider)
+    public UnitService(
+        RentalCommandDbContext db,
+        IDataUpdateService dataUpdate,
+        IAuditTrailService audit,
+        TimeProvider timeProvider,
+        IAtomicUnitOfWork? atomic = null)
     {
         _db = db;
-        _dataUpdate = dataUpdate;
-        _audit = audit;
         _timeProvider = timeProvider;
+        _atomic = atomic;
     }
 
     public async Task<IReadOnlyList<UnitResponse>> ListAsync(
@@ -457,261 +460,67 @@ public class UnitService : IUnitService
             .FirstOrDefaultAsync(unit => unit.Id == id, ct);
     }
 
-    public async Task<UnitResponse?> CreateAsync(int portfolioId, CreateUnitRequest request, CancellationToken ct = default)
+    public async Task<UnitResponse?> CreateAsync(
+        WorkspaceReadScope scope,
+        CreateUnitRequest request,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        _audit.EnsureAtomicCommand();
-        // Verify the target property exists within the caller's portfolio before attaching the unit.
-        var propertyInScope = await _db.Properties
-            .AnyAsync(p => p.Id == request.PropertyId && p.PortfolioId == portfolioId, ct);
-        if (!propertyInScope)
-        {
-            return null;
-        }
-
-        // Reject a duplicate unit number up front with a clear, field-specific message instead of letting
-        // it hit the (PropertyId, UnitNumber) unique index and surface as the generic "conflicts with
-        // existing data" 409. Only LIVE units collide (the global query filter excludes soft-deleted
-        // rows); evaluated SQL-side as an EXISTS.
-        if (await _db.Units.AnyAsync(u => u.PropertyId == request.PropertyId && u.UnitNumber == request.UnitNumber, ct))
-        {
-            throw new DomainValidationException(
-                $"Unit number \"{request.UnitNumber}\" already exists on this property.",
-                StatusCodes.Status409Conflict);
-        }
-
-        var now = _timeProvider.UtcNow();
-        var entity = new Unit
-        {
-            PortfolioId = portfolioId,
-            PropertyId = request.PropertyId,
-            UnitNumber = request.UnitNumber,
-            FloorPlan = request.FloorPlan,
-            Bedrooms = request.Bedrooms,
-            Bathrooms = request.Bathrooms,
-            SquareFeet = request.SquareFeet,
-            MarketRent = request.MarketRent,
-            Notes = request.Notes,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        _db.Units.Add(entity);
-        await _db.SaveChangesAsync(ct);
-
-        await _audit.LogAsync(
-            portfolioId,
-            EntityType,
-            entity.Id,
-            AuditLogOperation.Created,
-            newValues: Snapshot(entity),
-            changeReason: $"Unit {entity.UnitNumber} created",
-            ct: ct);
-
-        var response = await GetAsync(portfolioId, entity.Id, ct)
-            ?? throw new InvalidOperationException("The newly created unit is missing from canonical occupancy.");
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
+        var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Unit,
+            AtomicRentalMutationOperation.Create, 0, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        return outcome.Value.Found
+            ? await GetAsync(scope.PortfolioId, outcome.Value.EntityId, ct)
+            : null;
     }
 
-    public async Task<UnitResponse?> UpdateAsync(int portfolioId, int id, UpdateUnitRequest request, CancellationToken ct = default)
+    public async Task<UnitResponse?> UpdateAsync(
+        WorkspaceReadScope scope,
+        int id,
+        UpdateUnitRequest request,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        _audit.EnsureAtomicCommand();
-        var entity = await _db.Units
-            .FirstOrDefaultAsync(u => u.Id == id && u.Property != null && u.Property.PortfolioId == portfolioId, ct);
-        if (entity == null)
-        {
-            return null;
-        }
-
-        // Same duplicate-number guard as create, scoped to a rename: only check when the number is
-        // actually changing, and exclude this unit's own row. Keeps the clear 409 message instead of the
-        // opaque unique-index conflict. Only LIVE units collide (the global query filter excludes
-        // soft-deleted rows).
-        if (request.UnitNumber is not null
-            && !string.Equals(request.UnitNumber, entity.UnitNumber, StringComparison.Ordinal)
-            && await _db.Units.AnyAsync(u =>
-                u.PropertyId == entity.PropertyId
-                && u.UnitNumber == request.UnitNumber
-                && u.Id != entity.Id, ct))
-        {
-            throw new DomainValidationException(
-                $"Unit number \"{request.UnitNumber}\" already exists on this property.",
-                StatusCodes.Status409Conflict);
-        }
-
-        var oldValues = new Dictionary<string, object?>();
-        var newValues = new Dictionary<string, object?>();
-
-        ApplyStringIfChanged(request.UnitNumber, entity.UnitNumber, "UnitNumber", v => entity.UnitNumber = v);
-        ApplyStringIfChanged(request.FloorPlan, entity.FloorPlan, "FloorPlan", v => entity.FloorPlan = v);
-        ApplyValueIfChanged(request.Bedrooms, entity.Bedrooms, "Bedrooms", v => entity.Bedrooms = v);
-        ApplyValueIfChanged(request.Bathrooms, entity.Bathrooms, "Bathrooms", v => entity.Bathrooms = v);
-        ApplyNullableValueIfChanged(request.SquareFeet, entity.SquareFeet, "SquareFeet", v => entity.SquareFeet = v);
-        ApplyValueIfChanged(request.MarketRent, entity.MarketRent, "MarketRent", v => entity.MarketRent = v);
-        ApplyStringIfChanged(request.Notes, entity.Notes, "Notes", v => entity.Notes = v);
-        entity.UpdatedAt = _timeProvider.UtcNow();
-
-        await _db.SaveChangesAsync(ct);
-
-        if (oldValues.Count > 0)
-        {
-            await _audit.LogAsync(
-                portfolioId,
-                EntityType,
-                entity.Id,
-                AuditLogOperation.Updated,
-                oldValues: Serialize(oldValues),
-                newValues: Serialize(newValues),
-                changeReason: $"Unit {entity.UnitNumber} updated",
-                ct: ct);
-        }
-
-        var response = await GetAsync(portfolioId, entity.Id, ct)
-            ?? throw new InvalidOperationException("The updated unit is missing from canonical occupancy.");
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
-
-        void ApplyStringIfChanged(string? requested, string? current, string field, Action<string> apply)
-        {
-            if (requested is null || string.Equals(requested, current, StringComparison.Ordinal))
-            {
-                return;
-            }
-
-            oldValues[field] = current;
-            newValues[field] = requested;
-            apply(requested);
-        }
-
-        void ApplyValueIfChanged<T>(T? requested, T current, string field, Action<T> apply)
-            where T : struct
-        {
-            if (!requested.HasValue || EqualityComparer<T>.Default.Equals(requested.Value, current))
-            {
-                return;
-            }
-
-            oldValues[field] = current;
-            newValues[field] = requested.Value;
-            apply(requested.Value);
-        }
-
-        void ApplyNullableValueIfChanged<T>(T? requested, T? current, string field, Action<T?> apply)
-            where T : struct
-        {
-            if (!requested.HasValue || EqualityComparer<T?>.Default.Equals(requested, current))
-            {
-                return;
-            }
-
-            oldValues[field] = current;
-            newValues[field] = requested.Value;
-            apply(requested.Value);
-        }
+        var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Unit,
+            AtomicRentalMutationOperation.Update, id, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        return outcome.Value.Found ? await GetAsync(scope.PortfolioId, id, ct) : null;
     }
 
-    public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
+    public async Task<bool> DeleteAsync(
+        WorkspaceReadScope scope,
+        int id,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        _audit.EnsureAtomicCommand();
-        var entity = await _db.Units
-            .FirstOrDefaultAsync(u => u.Id == id && u.Property != null && u.Property.PortfolioId == portfolioId, ct);
-        if (entity == null)
-        {
-            return false;
-        }
-
-        await EnsureUnitHasNoHistoryAsync(portfolioId, id, ct);
-
-        entity.DeletedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
-
-        await _audit.LogAsync(
-            portfolioId,
-            EntityType,
-            id,
-            AuditLogOperation.Deleted,
-            oldValues: Snapshot(entity),
-            changeReason: $"Unit {entity.UnitNumber} deleted",
-            ct: ct);
-
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
-        return true;
+        var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Unit,
+            AtomicRentalMutationOperation.Delete, id, operationKey, new object());
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        return outcome.Value.Found;
     }
 
-    private async Task EnsureUnitHasNoHistoryAsync(int portfolioId, int unitId, CancellationToken ct)
-    {
-        var guard = await BuildDeletionGuardQuery(portfolioId, unitId).SingleAsync(ct);
+    [Obsolete("Use the authenticated WorkspaceReadScope atomic mutation overload.")]
+    public Task<UnitResponse?> CreateAsync(
+        int portfolioId, CreateUnitRequest request, CancellationToken ct = default) =>
+        throw LegacyMutationRejected();
 
-        if (guard.IsOccupied)
-        {
-            throw new DomainValidationException(
-                "This unit is occupied. Return possession before deleting the unit.",
-                statusCode: 409);
-        }
+    [Obsolete("Use the authenticated WorkspaceReadScope atomic mutation overload.")]
+    public Task<UnitResponse?> UpdateAsync(
+        int portfolioId, int id, UpdateUnitRequest request, CancellationToken ct = default) =>
+        throw LegacyMutationRejected();
 
-        if (guard.HasPlannedOrCurrentRelationship)
-        {
-            throw new DomainValidationException(
-                "This unit has a planned or current rental relationship. Cancel or complete it before deleting the unit.",
-                statusCode: 409);
-        }
+    [Obsolete("Use the authenticated WorkspaceReadScope atomic mutation overload.")]
+    public Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default) =>
+        throw LegacyMutationRejected();
 
-        if (guard.HasRentalRelationshipHistory)
-        {
-            throw new DomainValidationException(
-                "This unit has rental relationship, legal, or financial history and cannot be deleted.",
-                statusCode: 409);
-        }
+    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
+        "Scoped unit mutations require the atomic persistence kernel.");
 
-        if (guard.HasWorkOrderHistory)
-        {
-            throw new DomainValidationException(
-                "This unit has work order history. Archive the work order history instead of deleting the unit.",
-                statusCode: 409);
-        }
-
-        if (guard.HasAppointmentHistory)
-        {
-            throw new DomainValidationException(
-                "This unit has appointment history. Archive the appointment history instead of deleting the unit.",
-                statusCode: 409);
-        }
-
-        if (guard.HasInspectionHistory)
-        {
-            throw new DomainValidationException(
-                "This unit has inspection history. Archive the inspection history instead of deleting the unit.",
-                statusCode: 409);
-        }
-
-        if (guard.HasExpenseHistory)
-        {
-            throw new DomainValidationException(
-                "This unit has expense history. Archive the expense history instead of deleting the unit.",
-                statusCode: 409);
-        }
-
-        if (guard.HasApplicationHistory)
-        {
-            throw new DomainValidationException(
-                "This unit has application history. Archive the applications instead of deleting the unit.",
-                statusCode: 409);
-        }
-
-        if (guard.HasRecurringExpenseHistory)
-        {
-            throw new DomainValidationException(
-                "This unit has recurring expense history. Archive the recurring expense history instead of deleting the unit.",
-                statusCode: 409);
-        }
-
-        if (guard.HasDocumentHistory)
-        {
-            throw new DomainValidationException(
-                "This unit has document history. Archive the documents instead of deleting the unit.",
-                statusCode: 409);
-        }
-    }
+    private static InvalidOperationException LegacyMutationRejected() => new(
+        "Unit mutations require an authenticated workspace scope and the atomic persistence kernel.");
 
     /// <summary>One translated SQL statement containing every Unit delete decision.</summary>
     internal IQueryable<UnitDeletionGuard> BuildDeletionGuardQuery(int portfolioId, int unitId) =>
@@ -765,17 +574,4 @@ public class UnitService : IUnitService
         public bool HasDocumentHistory { get; init; }
     }
 
-    private static string Snapshot(Unit entity) => Serialize(new Dictionary<string, object?>
-    {
-        ["PropertyId"] = entity.PropertyId,
-        ["UnitNumber"] = entity.UnitNumber,
-        ["FloorPlan"] = entity.FloorPlan,
-        ["Bedrooms"] = entity.Bedrooms,
-        ["Bathrooms"] = entity.Bathrooms,
-        ["SquareFeet"] = entity.SquareFeet,
-        ["MarketRent"] = entity.MarketRent,
-        ["Notes"] = entity.Notes,
-    });
-
-    private static string Serialize(Dictionary<string, object?> values) => JsonSerializer.Serialize(values);
 }

@@ -122,7 +122,8 @@ public sealed class CsvImportService : ICsvImportService
                         valid = await TryImportPropertyAsync(scope, Cell, dryRun, errors, id => createdId = id, ct);
                         break;
                     case "Unit":
-                        valid = await TryImportUnitAsync(portfolioId, Cell, batch, dryRun, errors, id => createdId = id, ct);
+                        valid = await TryImportUnitAsync(scope, Cell, batch, dryRun, row.RowNumber,
+                            errors, id => createdId = id, ct);
                         break;
                     case "Payment":
                         valid = await TryImportPaymentAsync(portfolioId, Cell, batch, dryRun,
@@ -260,7 +261,14 @@ public sealed class CsvImportService : ICsvImportService
     }
 
     private async Task<bool> TryImportUnitAsync(
-        int portfolioId, Func<string, string?> cell, ImportBatchContext batch, bool dryRun, List<string> errors, Action<long> setId, CancellationToken ct)
+        WorkspaceReadScope scope,
+        Func<string, string?> cell,
+        ImportBatchContext batch,
+        bool dryRun,
+        int rowNumber,
+        List<string> errors,
+        Action<long> setId,
+        CancellationToken ct)
     {
         // Resolve the property reference: an explicit propertyId wins; otherwise resolve by name
         // (case-insensitive, in-portfolio). Ambiguous or missing names are a clear per-row error.
@@ -290,7 +298,8 @@ public sealed class CsvImportService : ICsvImportService
 
         if (!dryRun)
         {
-            var created = await _units.CreateAsync(portfolioId, request, ct);
+            var operationKey = $"csv-unit:{scope.PortfolioId}:{scope.AccessContextId}:{rowNumber}:{request.PropertyId}:{request.UnitNumber}";
+            var created = await _units.CreateAsync(scope, request, operationKey, ct);
             if (created == null)
             {
                 errors.Add("The unit could not be created (the property is missing or outside this portfolio).");

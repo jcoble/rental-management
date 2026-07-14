@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -22,21 +23,23 @@ public sealed class ApplicationService : IApplicationService
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly IAuditTrailService _audit;
     private readonly TimeProvider _timeProvider;
+    private readonly IAtomicUnitOfWork? _atomic;
 
     public ApplicationService(
         RentalCommandDbContext db,
         IFileStorage files,
         IDataUpdateService dataUpdate,
         IAuditTrailService audit,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IAtomicUnitOfWork? atomic = null)
     {
         _db = db;
         _files = files;
         _dataUpdate = dataUpdate;
-        _audit = audit;
+        _ = audit;
         _timeProvider = timeProvider;
+        _atomic = atomic;
     }
 
     // -------------------------------------------------------------------------
@@ -226,82 +229,23 @@ public sealed class ApplicationService : IApplicationService
     // -------------------------------------------------------------------------
 
     public async Task<ApplicationResponse> CreateFromScanAsync(
-        int portfolioId, CreateApplicationRequest request, int userId, CancellationToken ct = default)
+        WorkspaceReadScope scope,
+        CreateApplicationRequest request,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        _audit.EnsureAtomicCommand();
-        // IDOR guard: honor a PropertyId/UnitId only when it actually lives in THIS portfolio; otherwise
-        // drop it (the landlord simply filed the applicant without a specific property) rather than letting
-        // a hallucinated/foreign id from the scan reference another portfolio's record. Same shape as the
-        // public SubmitAsync guard.
-        int? propertyId = null;
-        if (request.PropertyId is > 0 &&
-            await _db.Properties.AnyAsync(p => p.Id == request.PropertyId && p.PortfolioId == portfolioId, ct))
-        {
-            propertyId = request.PropertyId;
-        }
-
-        int? unitId = null;
-        if (request.UnitId is > 0 &&
-            await _db.Units.AnyAsync(u => u.Id == request.UnitId
-                && u.Property != null && u.Property.PortfolioId == portfolioId
-                && (propertyId == null || u.PropertyId == propertyId), ct))
-        {
-            unitId = request.UnitId;
-        }
-
-        var existingOpenApplicationId = await FindOpenApplicationIdByEmailAsync(portfolioId, request.Email, ct);
-        if (existingOpenApplicationId is not null)
-        {
-            throw new DomainValidationException(
-                $"An application for {NormalizeEmailForComparison(request.Email)} already exists as application #{existingOpenApplicationId}. Review the existing application before creating another.",
-                statusCode: 409);
-        }
-
-        var now = _timeProvider.UtcNow();
-        var entity = new RentalApplication
-        {
-            PortfolioId = portfolioId,
-            PropertyId = propertyId,
-            UnitId = unitId,
-            FirstName = request.FirstName.Trim(),
-            LastName = request.LastName.Trim(),
-            Email = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim(),
-            Phone = request.Phone,
-            DateOfBirth = request.DateOfBirth.ToUtc(),
-            // The scanned application carries a single-line current address; keep it on the legacy
-            // CurrentAddress column (the structured line1/city/... fields stay null, same as a public
-            // submit that only sends a single-line address).
-            CurrentAddress = string.IsNullOrWhiteSpace(request.CurrentAddress) ? null : request.CurrentAddress.Trim(),
-            Employer = request.Employer,
-            MonthlyIncome = request.MonthlyIncome,
-            DesiredMoveInDate = request.DesiredMoveInDate.ToUtc(),
-            Notes = request.Notes,
-            IdExtractedFields = request.IdExtractedFields,
-            // A landlord-keyed paper application carries no in-app FCRA consent event.
-            ConsentGiven = false,
-            Status = ApplicationStatus.Submitted,
-            SubmittedAtUtc = now,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        _db.RentalApplications.Add(entity);
-        await _db.SaveChangesAsync(ct);
-
-        // Audit the PII-touching create (an applicant record was created from a scanned application).
-        await _audit.LogAsync(
-            portfolioId,
-            EntityType,
-            entity.Id,
-            AuditLogOperation.Created,
-            userId: userId,
-            changeReason: "Created from scanned rental application",
-            ct: ct);
-
-        var response = ApplicationResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
+        var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Application,
+            AtomicRentalMutationOperation.Create, 0, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        return await GetAsync(scope.PortfolioId, outcome.Value.EntityId, ct)
+            ?? throw new InvalidOperationException("The created application could not be read after commit.");
     }
+
+    [Obsolete("Use the authenticated WorkspaceReadScope atomic mutation overload.")]
+    public Task<ApplicationResponse> CreateFromScanAsync(
+        int portfolioId, CreateApplicationRequest request, int userId, CancellationToken ct = default) =>
+        throw LegacyMutationRejected();
 
     public async Task<IReadOnlyList<ApplicationResponse>> ListAsync(
         int portfolioId, string? status, ListQuery query, int? unitId = null, CancellationToken ct = default)
@@ -475,480 +419,78 @@ public sealed class ApplicationService : IApplicationService
         return response;
     }
 
-    public async Task<ApplicationResponse?> UpdateAsync(
+    [Obsolete("Use the authenticated WorkspaceReadScope atomic mutation overload.")]
+    public Task<ApplicationResponse?> UpdateAsync(
         int portfolioId,
         int id,
         UpdateApplicationRequest request,
         int userId,
-        CancellationToken ct = default)
-    {
-        var applications = _db.RentalApplications
-            .Where(a => a.Id == id && a.PortfolioId == portfolioId);
-        return await UpdateFromQueryAsync(applications, null, portfolioId, request, userId, ct);
-    }
+        CancellationToken ct = default) =>
+        throw LegacyMutationRejected();
 
     public async Task<ApplicationResponse?> UpdateAuthorizedAsync(
         WorkspaceReadScope scope,
         int id,
         UpdateApplicationRequest request,
         int userId,
+        string operationKey,
         CancellationToken ct = default)
     {
-        var response = await _db.ExecuteAuthorizedMutationAsync(innerCt =>
-        {
-            var applications = _db.RentalApplications
-                .Where(a => a.Id == id)
-                .WhereAuthorized(
-                    _db,
-                    scope,
-                    [CapabilityKeys.LeasingApplicationsManage],
-                    _timeProvider.UtcNow());
-
-            if (request.ClearProperty)
-            {
-                var allPropertiesAssignment = _db.AuthorizedAllPropertyAssignments(
-                    scope,
-                    [CapabilityKeys.LeasingApplicationsManage],
-                    CapabilityAuthorizationTargetKind.Property,
-                    _timeProvider.UtcNow());
-                applications = applications.Where(_ => allPropertiesAssignment.Any());
-            }
-
-            return UpdateFromQueryAsync(
-                applications, scope, scope.PortfolioId, request, userId, innerCt, broadcast: false);
-        }, ct);
-
-        if (response is not null)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(
-                scope.PortfolioId, EntityType, response.Id, response, ct);
-        }
-
-        return response;
+        var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Application,
+            AtomicRentalMutationOperation.Update, id, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        return outcome.Value.Found ? await GetAsync(scope.PortfolioId, id, ct) : null;
     }
-
-    private async Task<ApplicationResponse?> UpdateFromQueryAsync(
-        IQueryable<RentalApplication> applications,
-        WorkspaceReadScope? authorizedScope,
-        int portfolioId,
-        UpdateApplicationRequest request,
-        int userId,
-        CancellationToken ct,
-        bool broadcast = true)
-    {
-        _audit.EnsureAtomicCommand();
-        var entity = await applications.FirstOrDefaultAsync(ct);
-        if (entity == null)
-            return null;
-
-        if (entity.Status is not (ApplicationStatus.Submitted or ApplicationStatus.UnderReview))
-        {
-            throw new DomainValidationException(
-                "Only submitted or under-review applications can be edited.",
-                statusCode: 409);
-        }
-
-        if (request.ClearProperty)
-        {
-            entity.PropertyId = null;
-            entity.UnitId = null;
-        }
-
-        if (request.PropertyId is > 0)
-        {
-            var properties = _db.Properties
-                .AsNoTracking()
-                .Where(p => p.Id == request.PropertyId && p.PortfolioId == portfolioId);
-            if (authorizedScope.HasValue)
-            {
-                properties = properties.WhereAuthorized(
-                    _db,
-                    authorizedScope.Value,
-                    [CapabilityKeys.LeasingApplicationsManage],
-                    _timeProvider.UtcNow());
-            }
-
-            var propertyExists = await properties.AnyAsync(ct);
-            if (!propertyExists)
-            {
-                throw new DomainValidationException("Selected property was not found in this portfolio.");
-            }
-
-            entity.PropertyId = request.PropertyId;
-
-            if (entity.UnitId is > 0)
-            {
-                var unitQuery = _db.Units
-                    .AsNoTracking()
-                    .Where(u => u.Id == entity.UnitId
-                        && u.PropertyId == request.PropertyId
-                        && u.Property != null
-                        && u.Property.PortfolioId == portfolioId);
-                if (authorizedScope.HasValue)
-                {
-                    var authorizedProperties = _db.Properties.AsNoTracking().WhereAuthorized(
-                        _db,
-                        authorizedScope.Value,
-                        [CapabilityKeys.LeasingApplicationsManage],
-                        _timeProvider.UtcNow());
-                    unitQuery = unitQuery.Where(unit => authorizedProperties.Any(property =>
-                        property.Id == unit.PropertyId && property.PortfolioId == unit.PortfolioId));
-                }
-
-                var unitStillMatches = await unitQuery.AnyAsync(ct);
-                if (!unitStillMatches)
-                {
-                    entity.UnitId = null;
-                }
-            }
-        }
-
-        if (request.ClearUnit)
-        {
-            entity.UnitId = null;
-        }
-
-        if (request.UnitId is > 0)
-        {
-            var unitQuery = _db.Units
-                .AsNoTracking()
-                .Where(u => u.Id == request.UnitId
-                    && u.Property != null
-                    && u.Property.PortfolioId == portfolioId);
-            if (authorizedScope.HasValue)
-            {
-                var authorizedProperties = _db.Properties.AsNoTracking().WhereAuthorized(
-                    _db,
-                    authorizedScope.Value,
-                    [CapabilityKeys.LeasingApplicationsManage],
-                    _timeProvider.UtcNow());
-                unitQuery = unitQuery.Where(unit => authorizedProperties.Any(property =>
-                    property.Id == unit.PropertyId && property.PortfolioId == unit.PortfolioId));
-            }
-
-            var unit = await unitQuery
-                .Select(u => new { u.Id, u.PropertyId })
-                .FirstOrDefaultAsync(ct);
-            if (unit == null)
-            {
-                throw new DomainValidationException("Selected unit was not found in this portfolio.");
-            }
-
-            if (entity.PropertyId is > 0 && entity.PropertyId != unit.PropertyId)
-            {
-                throw new DomainValidationException("Selected unit does not belong to the selected property.");
-            }
-
-            entity.PropertyId = unit.PropertyId;
-            entity.UnitId = unit.Id;
-        }
-
-        if (request.FirstName != null)
-        {
-            entity.FirstName = RequireNonBlank(request.FirstName, "First name");
-        }
-        if (request.LastName != null)
-        {
-            entity.LastName = RequireNonBlank(request.LastName, "Last name");
-        }
-        if (request.Email != null) entity.Email = TrimToNull(request.Email);
-        if (request.Phone != null) entity.Phone = TrimToNull(request.Phone);
-
-        if (request.ClearDateOfBirth)
-        {
-            entity.DateOfBirth = null;
-        }
-        else if (request.DateOfBirth.HasValue)
-        {
-            entity.DateOfBirth = request.DateOfBirth.ToUtc();
-        }
-
-        var structuredAddressChanged =
-            request.CurrentAddressLine1 != null ||
-            request.CurrentAddressLine2 != null ||
-            request.CurrentCity != null ||
-            request.CurrentState != null ||
-            request.CurrentPostalCode != null;
-
-        if (request.CurrentAddressLine1 != null) entity.CurrentAddressLine1 = TrimToNull(request.CurrentAddressLine1);
-        if (request.CurrentAddressLine2 != null) entity.CurrentAddressLine2 = TrimToNull(request.CurrentAddressLine2);
-        if (request.CurrentCity != null) entity.CurrentCity = TrimToNull(request.CurrentCity);
-        if (request.CurrentState != null) entity.CurrentState = TrimToNull(request.CurrentState);
-        if (request.CurrentPostalCode != null) entity.CurrentPostalCode = TrimToNull(request.CurrentPostalCode);
-
-        if (structuredAddressChanged)
-        {
-            entity.CurrentAddress = AddressComposer.Compose(
-                entity.CurrentAddressLine1,
-                entity.CurrentAddressLine2,
-                entity.CurrentCity,
-                entity.CurrentState,
-                entity.CurrentPostalCode);
-        }
-        else if (request.CurrentAddress != null)
-        {
-            entity.CurrentAddressLine1 = null;
-            entity.CurrentAddressLine2 = null;
-            entity.CurrentCity = null;
-            entity.CurrentState = null;
-            entity.CurrentPostalCode = null;
-            entity.CurrentAddress = TrimToNull(request.CurrentAddress);
-        }
-
-        if (request.Employer != null) entity.Employer = TrimToNull(request.Employer);
-
-        if (request.ClearMonthlyIncome)
-        {
-            entity.MonthlyIncome = null;
-        }
-        else if (request.MonthlyIncome.HasValue)
-        {
-            entity.MonthlyIncome = request.MonthlyIncome;
-        }
-
-        if (request.ClearDesiredMoveInDate)
-        {
-            entity.DesiredMoveInDate = null;
-        }
-        else if (request.DesiredMoveInDate.HasValue)
-        {
-            entity.DesiredMoveInDate = request.DesiredMoveInDate.ToUtc();
-        }
-
-        if (request.Notes != null) entity.Notes = TrimToNull(request.Notes);
-
-        entity.UpdatedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
-
-        await _audit.LogAsync(
-            portfolioId,
-            EntityType,
-            entity.Id,
-            AuditLogOperation.Updated,
-            userId: userId,
-            changeReason: "Application corrected by landlord",
-            ct: ct);
-
-        var response = await GetAsync(portfolioId, entity.Id, ct)
-            ?? ApplicationResponse.FromEntity(entity);
-        if (broadcast)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        }
-        return response;
-    }
-
-    public async Task<ApproveApplicationResult?> ApproveAsync(
-        int portfolioId, int id, int userId, CancellationToken ct = default)
-    {
-        var applications = _db.RentalApplications
-            .Where(a => a.Id == id && a.PortfolioId == portfolioId);
-        return await ApproveFromQueryAsync(applications, portfolioId, id, userId, ct);
-    }
+    [Obsolete("Use the authenticated WorkspaceReadScope atomic mutation overload.")]
+    public Task<ApproveApplicationResult?> ApproveAsync(
+        int portfolioId, int id, int userId, CancellationToken ct = default) =>
+        throw LegacyMutationRejected();
 
     public async Task<ApproveApplicationResult?> ApproveAuthorizedAsync(
         WorkspaceReadScope scope,
         int id,
         int userId,
+        string operationKey,
         CancellationToken ct = default)
     {
-        var result = await _db.ExecuteAuthorizedMutationAsync(innerCt =>
-        {
-            var applications = _db.RentalApplications
-                .Where(a => a.Id == id)
-                .WhereAuthorized(
-                    _db,
-                    scope,
-                    [CapabilityKeys.LeasingApplicationsManage],
-                    _timeProvider.UtcNow());
-            return ApproveFromQueryAsync(
-                applications, scope.PortfolioId, id, userId, innerCt, broadcast: false);
-        }, ct);
-
-        if (result is not null)
-        {
-            await BroadcastApprovalAsync(scope.PortfolioId, result, ct);
-        }
-
-        return result;
+        var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Application,
+            AtomicRentalMutationOperation.Approve, id, operationKey, new object());
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        return outcome.Value.Found
+            ? new ApproveApplicationResult
+            {
+                ApplicationId = outcome.Value.EntityId,
+                Status = ApplicationStatus.Approved.ToString(),
+                TenantId = outcome.Value.RelatedEntityId
+                    ?? throw new InvalidOperationException("Approved application receipt has no tenant."),
+            }
+            : null;
     }
-
-    private async Task<ApproveApplicationResult?> ApproveFromQueryAsync(
-        IQueryable<RentalApplication> applications,
+    [Obsolete("Use the authenticated WorkspaceReadScope atomic mutation overload.")]
+    public Task<ApplicationResponse?> DeclineAsync(
         int portfolioId,
         int id,
         int userId,
-        CancellationToken ct,
-        bool broadcast = true)
-    {
-        _audit.EnsureAtomicCommand();
-        var entity = await applications.FirstOrDefaultAsync(ct);
-        if (entity == null)
-            return null;
-
-        if (entity.Status is ApplicationStatus.Approved)
-            throw new InvalidOperationException("Application is already approved.");
-        if (entity.Status is ApplicationStatus.Declined or ApplicationStatus.Withdrawn)
-            throw new InvalidOperationException($"Application is {entity.Status.ToString().ToLowerInvariant()} and cannot be approved.");
-
-        await RequireCompatibleScreeningDecisionAsync(
-            portfolioId, id, ScreeningDecision.Accept, ScreeningDecision.Conditional, ct);
-
-        var now = _timeProvider.UtcNow();
-
-        // Mirror Tenant creation: the approved applicant becomes a real tenant record.
-        var tenant = new Tenant
-        {
-            PortfolioId = portfolioId,
-            FirstName = entity.FirstName,
-            LastName = entity.LastName,
-            Email = entity.Email,
-            Phone = entity.Phone,
-            DateOfBirth = entity.DateOfBirth,
-            Notes = BuildTenantNote(entity),
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _db.Tenants.Add(tenant);
-        await _db.SaveChangesAsync(ct);
-
-        entity.Status = ApplicationStatus.Approved;
-        entity.ReviewedAtUtc = now;
-        entity.ApprovedTenantId = tenant.Id;
-        entity.UpdatedAt = now;
-        await _db.SaveChangesAsync(ct);
-
-        // Audit the PII-touching mutation: an application was approved and a tenant was created.
-        await _audit.LogAsync(
-            portfolioId,
-            "Tenant",
-            tenant.Id,
-            AuditLogOperation.Created,
-            userId: userId,
-            changeReason: $"Created from approved rental application #{entity.Id}",
-            ct: ct);
-
-        if (broadcast)
-        {
-            var tenantResponse = TenantResponse.FromEntity(tenant);
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, "Tenant", tenant.Id, tenantResponse, ct);
-
-            var appResponse = ApplicationResponse.FromEntity(entity);
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, appResponse, ct);
-        }
-
-        return new ApproveApplicationResult
-        {
-            ApplicationId = entity.Id,
-            Status = entity.Status.ToString(),
-            TenantId = tenant.Id,
-        };
-    }
-
-    private async Task BroadcastApprovalAsync(
-        int portfolioId,
-        ApproveApplicationResult result,
-        CancellationToken ct)
-    {
-        var tenant = await _db.Tenants
-            .AsNoTracking()
-            .FirstOrDefaultAsync(candidate =>
-                candidate.PortfolioId == portfolioId && candidate.Id == result.TenantId, ct);
-        if (tenant is not null)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(
-                portfolioId, "Tenant", tenant.Id, TenantResponse.FromEntity(tenant), ct);
-        }
-
-        var application = await GetAsync(portfolioId, result.ApplicationId, ct);
-        if (application is not null)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(
-                portfolioId, EntityType, application.Id, application, ct);
-        }
-    }
-
-    public async Task<ApplicationResponse?> DeclineAsync(
-        int portfolioId, int id, int userId, string? reason, CancellationToken ct = default)
-    {
-        var applications = _db.RentalApplications
-            .Where(a => a.Id == id && a.PortfolioId == portfolioId);
-        return await DeclineFromQueryAsync(applications, portfolioId, id, userId, reason, ct);
-    }
+        string? reason,
+        CancellationToken ct = default) =>
+        throw LegacyMutationRejected();
 
     public async Task<ApplicationResponse?> DeclineAuthorizedAsync(
         WorkspaceReadScope scope,
         int id,
         int userId,
         string? reason,
+        string operationKey,
         CancellationToken ct = default)
     {
-        var response = await _db.ExecuteAuthorizedMutationAsync(innerCt =>
-        {
-            var applications = _db.RentalApplications
-                .Where(a => a.Id == id)
-                .WhereAuthorized(
-                    _db,
-                    scope,
-                    [CapabilityKeys.LeasingApplicationsManage],
-                    _timeProvider.UtcNow());
-            return DeclineFromQueryAsync(
-                applications, scope.PortfolioId, id, userId, reason, innerCt, broadcast: false);
-        }, ct);
-
-        if (response is not null)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(
-                scope.PortfolioId, EntityType, response.Id, response, ct);
-        }
-
-        return response;
+        var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Application,
+            AtomicRentalMutationOperation.Decline, id, operationKey, reason);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        return outcome.Value.Found ? await GetAsync(scope.PortfolioId, id, ct) : null;
     }
-
-    private async Task<ApplicationResponse?> DeclineFromQueryAsync(
-        IQueryable<RentalApplication> applications,
-        int portfolioId,
-        int id,
-        int userId,
-        string? reason,
-        CancellationToken ct,
-        bool broadcast = true)
-    {
-        _audit.EnsureAtomicCommand();
-        var entity = await applications.FirstOrDefaultAsync(ct);
-        if (entity == null)
-            return null;
-
-        if (entity.Status is ApplicationStatus.Approved)
-            throw new InvalidOperationException("An approved application cannot be declined.");
-
-        await RequireCompatibleScreeningDecisionAsync(
-            portfolioId, id, ScreeningDecision.Decline, null, ct);
-
-        var now = _timeProvider.UtcNow();
-        entity.Status = ApplicationStatus.Declined;
-        entity.DecisionReason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim();
-        entity.ReviewedAtUtc = now;
-        entity.UpdatedAt = now;
-        await _db.SaveChangesAsync(ct);
-
-        await _audit.LogAsync(
-            portfolioId,
-            EntityType,
-            entity.Id,
-            AuditLogOperation.Updated,
-            userId: userId,
-            changeReason: "Application declined" + (entity.DecisionReason is null ? "" : $": {entity.DecisionReason}"),
-            ct: ct);
-
-        var response = ApplicationResponse.FromEntity(entity);
-        if (broadcast)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        }
-        return response;
-    }
-
     public async Task<ApplicationResponse?> WithdrawAsync(
         int portfolioId, int id, int userId, CancellationToken ct = default)
     {
@@ -1013,76 +555,24 @@ public sealed class ApplicationService : IApplicationService
         return response;
     }
 
-    public async Task<bool> DeleteAsync(int portfolioId, int id, int userId, CancellationToken ct = default)
-    {
-        var applications = _db.RentalApplications
-            .Where(a => a.Id == id && a.PortfolioId == portfolioId);
-        return await DeleteFromQueryAsync(applications, portfolioId, id, userId, ct);
-    }
+    [Obsolete("Use the authenticated WorkspaceReadScope atomic mutation overload.")]
+    public Task<bool> DeleteAsync(
+        int portfolioId, int id, int userId, CancellationToken ct = default) =>
+        throw LegacyMutationRejected();
 
     public async Task<bool> DeleteAuthorizedAsync(
         WorkspaceReadScope scope,
         int id,
         int userId,
+        string operationKey,
         CancellationToken ct = default)
     {
-        var deleted = await _db.ExecuteAuthorizedMutationAsync(innerCt =>
-        {
-            var applications = _db.RentalApplications
-                .Where(a => a.Id == id)
-                .WhereAuthorized(
-                    _db,
-                    scope,
-                    [CapabilityKeys.LeasingApplicationsManage],
-                    _timeProvider.UtcNow());
-            return DeleteFromQueryAsync(
-                applications, scope.PortfolioId, id, userId, innerCt, broadcast: false);
-        }, ct);
-
-        if (deleted)
-        {
-            await _dataUpdate.BroadcastEntityDeleteAsync(scope.PortfolioId, EntityType, id, ct);
-        }
-
-        return deleted;
+        var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Application,
+            AtomicRentalMutationOperation.Delete, id, operationKey, new object());
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        return outcome.Value.Found;
     }
-
-    private async Task<bool> DeleteFromQueryAsync(
-        IQueryable<RentalApplication> applications,
-        int portfolioId,
-        int id,
-        int userId,
-        CancellationToken ct,
-        bool broadcast = true)
-    {
-        _audit.EnsureAtomicCommand();
-        var entity = await applications.FirstOrDefaultAsync(ct);
-        if (entity == null)
-        {
-            return false;
-        }
-
-        var now = _timeProvider.UtcNow();
-        entity.DeletedAt = now;
-        entity.UpdatedAt = now;
-        await _db.SaveChangesAsync(ct);
-
-        await _audit.LogAsync(
-            portfolioId,
-            EntityType,
-            id,
-            AuditLogOperation.Deleted,
-            userId: userId,
-            changeReason: $"Application #{id} deleted",
-            ct: ct);
-
-        if (broadcast)
-        {
-            await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
-        }
-        return true;
-    }
-
     public async Task<ApplicationLinkResult> GenerateLinkAsync(int portfolioId, CancellationToken ct = default)
     {
         var portfolio = await _db.Portfolios
@@ -1237,4 +727,10 @@ public sealed class ApplicationService : IApplicationService
         var note = string.Join(" ", parts);
         return note.Length > 2000 ? note[..2000] : note;
     }
+
+    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
+        "Scoped application mutations require the atomic persistence kernel.");
+
+    private static InvalidOperationException LegacyMutationRejected() => new(
+        "Application mutations require an authenticated workspace scope and the atomic persistence kernel.");
 }
