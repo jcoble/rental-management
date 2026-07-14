@@ -89,7 +89,7 @@ public sealed class ChangePasswordHandler
                 from session in persistence.Query<AuthSession>().AsNoTracking()
                 join context in persistence.Query<WorkspaceAccessContext>().AsNoTracking()
                     on new { AccessContextId = session.ActiveAccessContextId, session.UserId }
-                    equals new { AccessContextId = (int?)context.Id, context.UserId }
+                    equals new { AccessContextId = context.Id, context.UserId }
                 where session.Id == command.AuthSessionId
                     && session.UserId == command.UserId
                     && session.ActiveAccessContextId == command.AccessContextId
