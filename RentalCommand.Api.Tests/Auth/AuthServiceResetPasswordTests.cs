@@ -10,6 +10,7 @@ using RentalCommand.Api.Data;
 using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Tests;
 using RentalCommand.Api.Tests.Domain;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
@@ -23,24 +24,32 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Auth;
 
-public sealed class AuthServiceResetPasswordTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public sealed class AuthServiceResetPasswordTests : IAsyncLifetime
 {
     private const string ResetToken = "reset-token";
-    private readonly SqliteTestContext _ctx = new();
-    private readonly UserManager<ApplicationUser> _userManager;
-    private readonly ServiceProvider _services;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private UserManager<ApplicationUser> _userManager = null!;
+    private ServiceProvider _services = null!;
 
-    public AuthServiceResetPasswordTests()
+    public AuthServiceResetPasswordTests(MigratedPostgreSqlFixture fixture)
     {
-        _userManager = CreateUserManager(_ctx.Db);
-        _services = AtomicDomainTestKernel.CreateForPasswordResetSqlite(_ctx.Connection);
+        _fixture = fixture;
     }
 
-    public void Dispose()
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync();
+        _userManager = CreateUserManager(_ctx.Db);
+        _services = AtomicDomainTestKernel.CreateForPasswordResetPostgreSql(_ctx.ConnectionString);
+    }
+
+    public async Task DisposeAsync()
     {
         _userManager.Dispose();
-        _services.Dispose();
-        _ctx.Dispose();
+        await _services.DisposeAsync();
+        await _ctx.DisposeAsync();
     }
 
     [Fact]

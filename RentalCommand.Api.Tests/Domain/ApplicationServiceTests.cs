@@ -717,7 +717,8 @@ public class ApplicationServiceTests : IDisposable
         result.Token.Should().NotBeNullOrWhiteSpace();
         result.ApplyPath.Should().Be($"/apply/{result.Token}");
 
-        var portfolio = await _db.Portfolios.SingleAsync(p => p.Id == PortfolioId);
+        _db.ChangeTracker.Clear();
+        var portfolio = await _db.Portfolios.AsNoTracking().SingleAsync(p => p.Id == PortfolioId);
         portfolio.PublicApplicationToken.Should().Be(result.Token);
     }
 

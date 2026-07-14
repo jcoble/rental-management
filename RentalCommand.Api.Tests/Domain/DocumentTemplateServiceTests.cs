@@ -18,6 +18,7 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
+[Collection(MigratedPostgreSqlCollection.Name)]
 public sealed class DocumentTemplateServiceTests : IDisposable
 {
     private const int PortfolioId = 1;
@@ -29,33 +30,16 @@ public sealed class DocumentTemplateServiceTests : IDisposable
     private readonly DocumentTemplateService _sut;
     private readonly WorkspaceReadScope _scope;
     private readonly ServiceProvider _services;
+    private readonly MigratedPostgreSqlFixture _postgres;
 
-    public DocumentTemplateServiceTests()
+    public DocumentTemplateServiceTests(MigratedPostgreSqlFixture postgres)
     {
+        _postgres = postgres;
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(DocumentTemplateServiceTests));
-        var services = new ServiceCollection();
-        services.AddLogging();
-        services.AddScoped<ICurrentActor, SystemCurrentActor>();
-        services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            RentalCommand.Core.Documents.CreateDocumentTemplateCommand,
-            RentalCommand.Core.Documents.DocumentTemplateMutationResult,
-            CreateDocumentTemplateHandler>();
-        services.AddAtomicCommandHandler<
-            RentalCommand.Core.Documents.FinalizeDocumentTemplateUploadCommand,
-            RentalCommand.Core.Documents.DocumentTemplateMutationResult,
-            FinalizeDocumentTemplateUploadHandler>();
-        services.AddAtomicCommandHandler<
-            RentalCommand.Core.Documents.AddDocumentTemplateFieldCommand,
-            RentalCommand.Core.Documents.DocumentTemplateMutationResult,
-            AddDocumentTemplateFieldHandler>();
-        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+        _services = CreateAtomicServices(builder =>
             builder.UseSqlite(_ctx.ConnectionString)
-                .AddInterceptors(SqliteDatabaseClockInterceptor.Instance)
-                .UseAtomicPersistenceKernel(provider));
-        services.AddScoped<IPendingFileUploadStore, PendingFileUploadStore>();
-        _services = services.BuildServiceProvider();
+                .AddInterceptors(SqliteDatabaseClockInterceptor.Instance));
         _sut = new DocumentTemplateService(
             _ctx.Db, _catalog, _files,
             _services.GetRequiredService<IPendingFileUploadStore>(), TimeProvider.System,
@@ -223,10 +207,20 @@ public sealed class DocumentTemplateServiceTests : IDisposable
     [Fact]
     public async Task UploadPdfAsync_StoresSourceFileAndCreatesDraftOverlayLeaseTemplate()
     {
+        await using var postgres = await _postgres.CreateContextAsync();
+        var scope = postgres.Db.SeedAdministratorScope(
+            PortfolioId, nameof(UploadPdfAsync_StoresSourceFileAndCreatesDraftOverlayLeaseTemplate));
+        await using var services = CreateAtomicServices(builder =>
+            builder.UseNpgsql(postgres.ConnectionString));
+        var files = new InMemoryFileStorage();
+        var sut = new DocumentTemplateService(
+            postgres.Db, _catalog, files,
+            services.GetRequiredService<IPendingFileUploadStore>(), TimeProvider.System,
+            services.GetRequiredService<IAtomicUnitOfWork>());
         await using var content = new MemoryStream("%PDF-1.7 sample"u8.ToArray());
 
-        var result = await _sut.UploadPdfAsync(
-            _scope,
+        var result = await sut.UploadPdfAsync(
+            scope,
             content,
             "dad-lease.pdf",
             "application/pdf",
@@ -245,14 +239,43 @@ public sealed class DocumentTemplateServiceTests : IDisposable
         result.Value.OriginalStoredFileId.Should().NotBeNull();
         result.Value.DefaultForPortfolio.Should().BeTrue();
 
-        var stored = await _ctx.Db.StoredFiles.SingleAsync(f => f.Id == result.Value.OriginalStoredFileId);
+        var stored = await postgres.Db.StoredFiles.SingleAsync(
+            f => f.Id == result.Value.OriginalStoredFileId);
         stored.PortfolioId.Should().Be(PortfolioId);
         stored.EntityType.Should().Be("DocumentTemplate");
         stored.EntityId.Should().Be(result.Value.Id);
         stored.FileName.Should().Be("dad-lease.pdf");
         stored.ContentType.Should().Be("application/pdf");
         stored.FileSize.Should().Be(content.Length);
-        _files.Contains(stored.FilePath).Should().BeTrue();
+        files.Contains(stored.FilePath).Should().BeTrue();
+    }
+
+    private static ServiceProvider CreateAtomicServices(
+        Action<DbContextOptionsBuilder> configureDatabase)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddAtomicCommandHandler<
+            RentalCommand.Core.Documents.CreateDocumentTemplateCommand,
+            RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+            CreateDocumentTemplateHandler>();
+        services.AddAtomicCommandHandler<
+            RentalCommand.Core.Documents.FinalizeDocumentTemplateUploadCommand,
+            RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+            FinalizeDocumentTemplateUploadHandler>();
+        services.AddAtomicCommandHandler<
+            RentalCommand.Core.Documents.AddDocumentTemplateFieldCommand,
+            RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+            AddDocumentTemplateFieldHandler>();
+        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+        {
+            configureDatabase(builder);
+            builder.UseAtomicPersistenceKernel(provider);
+        });
+        services.AddScoped<IPendingFileUploadStore, PendingFileUploadStore>();
+        return services.BuildServiceProvider();
     }
 
     private Property SeedProperty(string name)

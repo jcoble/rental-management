@@ -125,6 +125,24 @@ public sealed class FoundationBaselinePostgreSqlTests
     }
 
     [Fact]
+    public void AccountBootstrapAudit_HasNarrowInsertOnlyAdmissionWithoutWeakeningReads()
+    {
+        CreateSql.Should().Contain(
+            "CREATE POLICY tenant_select ON \"AtomicAuditLogs\" FOR SELECT USING " +
+            "(rc_api_scope_allows(\"PortfolioId\"));");
+        CreateSql.Should().Contain(
+            "CREATE POLICY tenant_insert ON \"AtomicAuditLogs\" FOR INSERT WITH CHECK\n" +
+            "  (rc_api_scope_allows(\"PortfolioId\") OR rc_account_bootstrap_audit_allows(");
+        CreateSql.Should().Contain("target_command_type = 'auth.account.bootstrap'");
+        CreateSql.Should().Contain("target_mutation_ordinal = 1");
+        CreateSql.Should().Contain("target_entity_type = 'ApplicationUser'");
+        CreateSql.Should().Contain("target_entity_id = target_user_id");
+        CreateSql.Should().Contain("target_actor_label = 'authentication:registration'");
+        CreateSql.Should().Contain("receipt.\"AttemptId\" = target_attempt_id");
+        CreateSql.Should().Contain("access_context.\"PortfolioId\" = target_portfolio_id");
+    }
+
+    [Fact]
     public void SandboxGraduation_ClassifiesEveryPortfolioScopedTableExactlyOnce()
     {
         var mappedPortfolioTables = FoundationBaselinePostgreSql.DirectPortfolioTables
@@ -255,7 +273,7 @@ public sealed class FoundationBaselinePostgreSqlTests
     {
         FoundationBaselinePostgreSql.RlsAuthoritySelectTables.Should().BeEquivalentTo(
         [
-            "AspNetUsers", "AuthSessions", "CapabilityDefinitions", "LeaseManagementParties",
+            "AspNetUsers", "AtomicCommandReceipts", "AuthSessions", "CapabilityDefinitions", "LeaseManagementParties",
             "LeaseManagements", "MembershipRoleAssignments", "OwnerEntities", "OwnerUserAccesses",
             "Portfolios", "RoleProfileCapabilities", "RoleProfiles", "SimulationClocks",
             "SystemNoticeTemplateVersions", "TenantAccounts", "TenantUserAccesses",
@@ -274,6 +292,7 @@ public sealed class FoundationBaselinePostgreSqlTests
         FoundationBaselinePostgreSql.RlsAuthorityOwnedFunctions.Should().BeEquivalentTo(
         [
             "rc_api_scope_allows(integer)",
+            "rc_account_bootstrap_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text)",
             "rc_sandbox_graduation_allows(integer)",
             "rc_access_context_is_effective(integer, integer, timestamp with time zone)",
             "rc_list_effective_access_contexts(integer, timestamp with time zone)",

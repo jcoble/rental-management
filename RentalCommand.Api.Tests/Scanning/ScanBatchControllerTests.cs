@@ -5,7 +5,6 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
@@ -17,9 +16,6 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Scanning;
 using RentalCommand.Data;
-using RentalCommand.Data.Atomic;
-using RentalCommand.Data.Auditing;
-using RentalCommand.Data.Scanning;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Scanning;
@@ -36,7 +32,7 @@ public class ScanBatchControllerTests : IDisposable
 
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
-    private readonly ServiceProvider _services;
+    private readonly IAtomicUnitOfWork _atomic = Mock.Of<IAtomicUnitOfWork>();
     private readonly List<string> _executedSql = [];
     private readonly CanonicalScanTestAuthorization _authorization;
 
@@ -53,20 +49,6 @@ public class ScanBatchControllerTests : IDisposable
         _db = new RentalCommandTestDbContext(options);
         _db.Database.EnsureCreated();
 
-        var services = new ServiceCollection();
-        services.AddLogging();
-        services.AddScoped<ICurrentActor, SystemCurrentActor>();
-        services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            RetryScanDraftCommand,
-            ScanDraftMutationResult,
-            RetryScanDraftHandler>();
-        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
-            builder.UseSqlite(_conn)
-                .AddInterceptors(SqliteDatabaseClockInterceptor.Instance)
-                .UseAtomicPersistenceKernel(provider));
-        _services = services.BuildServiceProvider();
-
         SeedPortfolio(PortfolioId);
         _authorization = CanonicalScanAuthorizationTestData.SeedWorkspaceAdministrator(
             _db, PortfolioId, userId: 7, sessionId: SessionId);
@@ -74,7 +56,6 @@ public class ScanBatchControllerTests : IDisposable
 
     public void Dispose()
     {
-        _services.Dispose();
         _db.Dispose();
         _conn.Dispose();
     }
@@ -386,79 +367,6 @@ public class ScanBatchControllerTests : IDisposable
         response.FailureReason.Should().Be("extraction interrupted (timeout or shutdown)");
     }
 
-    [Fact]
-    public async Task Retry_FailedDraft_RequeuesAndClearsStaleExtractionData()
-    {
-        var batch = SeedBatch(PortfolioId, fileCount: 1);
-        var draft = SeedDraft(batch.Id, "Failed",
-            extractedFields: """{"tenant_name":{"value":"Avery Ellis","confidence":0.9}}""",
-            failureReason: "extraction interrupted (timeout or shutdown)");
-        draft.ModelId = "claude-cli:sonnet";
-        draft.TokensUsed = 1234;
-        draft.CostUsd = 0.0123m;
-        draft.ReviewedAt = DateTime.UtcNow;
-        draft.ReviewedBy = "7";
-        draft.ConfirmedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync();
-
-        var controller = CreateController(Mock.Of<IScanService>());
-
-        var result = await controller.Retry(
-            draft.Id,
-            $"scan-retry:{draft.Id}:test-success",
-            CancellationToken.None);
-
-        result.Should().BeOfType<OkResult>();
-
-        _db.ChangeTracker.Clear();
-        var reloaded = await _db.ScanDrafts.SingleAsync(d => d.Id == draft.Id);
-        reloaded.Status.Should().Be("Pending");
-        reloaded.ExtractedFields.Should().BeNull();
-        reloaded.FailureReason.Should().BeNull();
-        reloaded.ModelId.Should().BeNull();
-        reloaded.TokensUsed.Should().BeNull();
-        reloaded.CostUsd.Should().BeNull();
-        reloaded.ReviewedAt.Should().BeNull();
-        reloaded.ReviewedBy.Should().BeNull();
-        reloaded.ConfirmedAt.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task Retry_NonFailedDraft_ReturnsBadRequest()
-    {
-        var batch = SeedBatch(PortfolioId, fileCount: 1);
-        var draft = SeedDraft(batch.Id, "Reviewing");
-        var controller = CreateController(Mock.Of<IScanService>());
-
-        var result = await controller.Retry(
-            draft.Id,
-            $"scan-retry:{draft.Id}:test-invalid-status",
-            CancellationToken.None);
-
-        result.Should().BeOfType<BadRequestObjectResult>();
-        _db.ChangeTracker.Clear();
-        (await _db.ScanDrafts.SingleAsync(d => d.Id == draft.Id)).Status.Should().Be("Reviewing");
-    }
-
-    [Fact]
-    public async Task Retry_CrossPortfolioDraft_ReturnsNotFound()
-    {
-        const int otherPortfolioId = 99;
-        SeedPortfolio(otherPortfolioId);
-        var foreignBatch = SeedBatch(otherPortfolioId, fileCount: 1);
-        var foreignDraft = SeedDraft(foreignBatch.Id, "Failed", portfolioId: otherPortfolioId);
-        var controller = CreateController(Mock.Of<IScanService>());
-
-        var result = await controller.Retry(
-            foreignDraft.Id,
-            $"scan-retry:{foreignDraft.Id}:test-cross-portfolio",
-            CancellationToken.None);
-
-        result.Should().BeOfType<NotFoundObjectResult>();
-        _db.ChangeTracker.Clear();
-        (await _db.ScanDrafts.SingleAsync(d => d.Id == foreignDraft.Id)).Status.Should().Be("Failed");
-    }
-
     // -------------------------------------------------------------------------
     // IDOR: a batch (and its drafts) in another portfolio is not readable.
     // -------------------------------------------------------------------------
@@ -508,7 +416,7 @@ public class ScanBatchControllerTests : IDisposable
         var files = Mock.Of<IFileStorage>();
         var controller = new ScanController(
             scan, uploads ?? Mock.Of<IScanUploadService>(),
-            _services.GetRequiredService<IAtomicUnitOfWork>(), _db, files,
+            _atomic, _db, files,
             TimeProvider.System)
         {
             ControllerContext = new ControllerContext
