@@ -55,7 +55,7 @@ export const ROUTE_ACCESS_RULES: readonly RouteAccessRule[] = [
 	{ prefix: '/admin/audit', anyCapabilities: [CAPABILITY.reportsRead] },
 	{
 		prefix: '/settings/notifications/my-alerts',
-		experiences: ['Management', 'Leasing', 'Maintenance', 'Owner']
+		experiences: ['Management', 'Leasing', 'Maintenance']
 	},
 	{
 		prefix: '/settings/notifications/team-routing',
@@ -67,7 +67,7 @@ export const ROUTE_ACCESS_RULES: readonly RouteAccessRule[] = [
 	},
 	{
 		prefix: '/settings/security',
-		experiences: ['Management', 'Leasing', 'Maintenance', 'Owner']
+		experiences: ['Management', 'Leasing', 'Maintenance']
 	},
 	{ prefix: '/settings/accounting', anyCapabilities: [CAPABILITY.integrationsManage] },
 	{

@@ -87,7 +87,8 @@ bool canUseAssistant(Set<String> capabilities) =>
     capabilities.contains('reports.read');
 
 bool canManageOwnMobileAlerts(WorkspaceExperience experience) =>
-    experience != WorkspaceExperience.tenant;
+    experience != WorkspaceExperience.tenant &&
+    experience != WorkspaceExperience.owner;
 
 bool canManageMobileNotificationFoundation(Set<String> capabilities) =>
     capabilities.contains(notificationManagementCapability);
@@ -161,8 +162,8 @@ bool canOpenMobilePath({
         canManageMobileNotificationFoundation(capabilities);
   }
 
-  // Owner has a dedicated data-free landing until owner-safe projections are
-  // available. Never infer management access from overlapping capabilities.
+  // Owner has a dedicated relationship-scoped shell. Never infer management
+  // access from overlapping capabilities.
   if (experience == WorkspaceExperience.owner) return false;
 
   if (path == '/rentals') {

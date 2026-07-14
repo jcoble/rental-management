@@ -55,7 +55,8 @@ describe('experience route policy', () => {
 	it('keeps Owner in the purpose-built shell and out of Management routes', () => {
 		const noCapabilities = new Set<string>();
 		assert.equal(canAccessRoute('/owner', 'Owner', noCapabilities), true);
-		assert.equal(canAccessRoute('/settings/security', 'Owner', noCapabilities), true);
+		assert.equal(canAccessRoute('/settings/security', 'Owner', noCapabilities), false);
+		assert.equal(canAccessRoute('/settings/notifications/my-alerts', 'Owner', noCapabilities), false);
 		assert.equal(canAccessRoute('/properties', 'Owner', noCapabilities), false);
 		assert.equal(canAccessRoute('/', 'Owner', noCapabilities), false);
 	});
@@ -64,7 +65,7 @@ describe('experience route policy', () => {
 		const noCapabilities = new Set<string>();
 		const notificationAdministrator = new Set([CAPABILITY.notificationsManage]);
 
-		for (const experience of ['Management', 'Leasing', 'Maintenance', 'Owner'] as const) {
+		for (const experience of ['Management', 'Leasing', 'Maintenance'] as const) {
 			assert.equal(
 				canAccessRoute('/settings/notifications/my-alerts', experience, noCapabilities),
 				true
@@ -84,6 +85,7 @@ describe('experience route policy', () => {
 			true
 		);
 		assert.equal(canAccessRoute('/settings/notifications/my-alerts', 'Tenant', noCapabilities), false);
+		assert.equal(canAccessRoute('/settings/notifications/my-alerts', 'Owner', noCapabilities), false);
 	});
 
 	it('splits operational reconciliation from bank administration', () => {

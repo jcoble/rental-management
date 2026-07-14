@@ -228,7 +228,7 @@ void main() {
         capabilities: const {},
         path: '/settings',
       ),
-      isTrue,
+      isFalse,
     );
     expect(
       canOpenMobilePath(
@@ -236,7 +236,7 @@ void main() {
         capabilities: const {},
         path: '/settings/notifications/my-alerts',
       ),
-      isTrue,
+      isFalse,
     );
   });
 
@@ -245,7 +245,6 @@ void main() {
       WorkspaceExperience.management,
       WorkspaceExperience.leasing,
       WorkspaceExperience.maintenance,
-      WorkspaceExperience.owner,
     ]) {
       expect(
         canOpenMobilePath(
@@ -278,6 +277,14 @@ void main() {
         experience: WorkspaceExperience.tenant,
         capabilities: const {'notifications.manage'},
         path: '/settings/notifications/my-alerts',
+      ),
+      isFalse,
+    );
+    expect(
+      canOpenMobilePath(
+        experience: WorkspaceExperience.owner,
+        capabilities: const {'notifications.manage'},
+        path: '/settings/notifications/team-routing',
       ),
       isFalse,
     );
