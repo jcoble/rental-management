@@ -61,6 +61,10 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
             AtomicNotificationMutationCommand,
             AtomicNotificationMutationResult,
             AtomicNotificationMutationHandler>();
+        services.AddAtomicCommandHandler<
+            AtomicNoticeDraftMutationCommand,
+            AtomicNoticeDraftMutationResult,
+            AtomicNoticeDraftMutationHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_connectionString).UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider();
@@ -216,7 +220,7 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
             otherPropertyDraft.Should().ContainSingle();
 
             var selectedService = new NoticeDraftService(
-                replay, store, new FixedTimeProvider(new DateTimeOffset(now)));
+                replay, new FixedTimeProvider(new DateTimeOffset(now)), Atomic);
             var selectedDrafts = await selectedService.ListAsync(
                 selectedPropertyScope, null, new ListQuery { Take = 20 });
             selectedDrafts.Should().ContainSingle();
@@ -227,7 +231,8 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
                 new UpdateNoticeDraftRequest
                 {
                     Subject = "Upcoming rent reminder - reviewed",
-                });
+                },
+                "selected-notice-authorized-update");
             authorizedUpdate.Should().NotBeNull();
             authorizedUpdate!.Subject.Should().Be("Upcoming rent reminder - reviewed");
             (await selectedService.GetAsync(selectedPropertyScope, otherPropertyDraft[0].DraftId))
@@ -235,10 +240,13 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
             (await selectedService.UpdateAsync(
                     selectedPropertyScope,
                     otherPropertyDraft[0].DraftId,
-                    new UpdateNoticeDraftRequest { Subject = "Unauthorized edit" }))
+                    new UpdateNoticeDraftRequest { Subject = "Unauthorized edit" },
+                    "selected-notice-unauthorized-update"))
                 .Should().BeNull();
             (await selectedService.DismissAsync(
-                    selectedPropertyScope, otherPropertyDraft[0].DraftId))
+                    selectedPropertyScope,
+                    otherPropertyDraft[0].DraftId,
+                    "selected-notice-unauthorized-dismiss"))
                 .Should().BeNull();
 
             var deniedGeneration = await selectedService.GenerateAsync(
@@ -248,7 +256,8 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
                     LeaseManagementId = otherLeaseManagementId,
                     TenantLedgerEntryId = otherLedgerId,
                     NoticeType = "rent-reminder",
-                });
+                },
+                "selected-notice-unauthorized-generate");
             deniedGeneration.CreatedCount.Should().Be(0);
             deniedGeneration.Drafts.Should().BeEmpty();
 
@@ -257,19 +266,24 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
             selectedContext.AdvanceRevision(selectedPropertyScope.AccessRevision);
             await replay.SaveChangesAsync();
 
-            (await selectedService.DismissAsync(selectedPropertyScope, selectedDrafts[0].Id))
-                .Should().BeNull(
-                    because: "every write must revalidate the presented access revision inside its transaction");
-            var staleGeneration = await selectedService.GenerateAsync(
+            var staleDismiss = () => selectedService.DismissAsync(
+                selectedPropertyScope,
+                selectedDrafts[0].Id,
+                "selected-notice-stale-dismiss");
+            await staleDismiss.Should().ThrowAsync<UnauthorizedAccessException>(
+                because: "every write must revalidate the presented access revision inside its transaction");
+
+            var staleGeneration = () => selectedService.GenerateAsync(
                 selectedPropertyScope,
                 new GenerateNoticeDraftsRequest
                 {
                     LeaseManagementId = validLeaseManagementId,
                     TenantLedgerEntryId = validLedgerId,
                     NoticeType = "rent-reminder",
-                });
-            staleGeneration.CreatedCount.Should().Be(0);
-            staleGeneration.Drafts.Should().BeEmpty();
+                },
+                "selected-notice-stale-generate");
+            await staleGeneration.Should().ThrowAsync<UnauthorizedAccessException>(
+                because: "a stale access revision must not generate or replay a receipt");
 
             var forcedLifecycle = await store.GenerateManualAsync(
                 manualScope, validTenantId, null, null, null,
@@ -368,7 +382,7 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
             Status = AuthSessionStatus.Active,
             CreatedAtUtc = now,
             LastSeenAtUtc = now,
-            ExpiresAtUtc = now.AddHours(1),
+            ExpiresAtUtc = now.AddYears(20),
         };
         db.AddRange(assignment, session);
         await db.SaveChangesAsync();
@@ -442,7 +456,7 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
             Status = AuthSessionStatus.Active,
             CreatedAtUtc = now,
             LastSeenAtUtc = now,
-            ExpiresAtUtc = now.AddHours(1),
+            ExpiresAtUtc = now.AddYears(20),
         };
         db.AddRange(assignment, session);
         await db.SaveChangesAsync();

@@ -25,15 +25,18 @@ public interface INoticeDraftService
     /// </summary>
     Task<GenerateNoticeDraftsResponse> GenerateAsync(
         WorkspaceReadScope scope,
-        GenerateNoticeDraftsRequest? request = null,
+        GenerateNoticeDraftsRequest? request,
+        string operationKey,
         CancellationToken ct = default);
     Task<NoticeDraftResponse?> UpdateAsync(
         WorkspaceReadScope scope,
         int id,
         UpdateNoticeDraftRequest request,
+        string operationKey,
         CancellationToken ct = default);
     Task<NoticeDraftResponse?> DismissAsync(
         WorkspaceReadScope scope,
         int id,
+        string operationKey,
         CancellationToken ct = default);
 }

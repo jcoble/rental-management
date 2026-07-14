@@ -597,6 +597,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Api.Services.Domain.AtomicNotificationMutationResult,
     RentalCommand.Api.Services.Domain.AtomicNotificationMutationHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.AtomicNoticeDraftMutationCommand,
+    RentalCommand.Api.Services.Domain.AtomicNoticeDraftMutationResult,
+    RentalCommand.Api.Services.Domain.AtomicNoticeDraftMutationHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Leasing.TransferLeaseManagementCommand,
     RentalCommand.Core.Leasing.TransferLeaseManagementResult,
     RentalCommand.Data.Leasing.TransferLeaseManagementHandler>();

@@ -18,6 +18,7 @@ void main() {
     expect(adapter.path, '/notices/7');
     expect(adapter.data, containsPair('subject', 'New subj'));
     expect(adapter.data, containsPair('body', 'New body'));
+    expect(adapter.idempotencyKey, isNotEmpty);
     expect(draft.id, 7);
     expect(draft.subject, 'New subj');
   });
@@ -45,6 +46,7 @@ void main() {
       expect(adapter.data, containsPair('tenantAccountId', 12));
       expect(adapter.data, containsPair('tenantLedgerEntryId', 8));
       expect(adapter.data, containsPair('noticeType', 'rent-reminder'));
+      expect(adapter.idempotencyKey, isNotEmpty);
       expect(drafts.single.tenantLedgerEntryId, 8);
     },
   );
@@ -54,6 +56,7 @@ class _Adapter implements HttpClientAdapter {
   String? method;
   String? path;
   Map<String, dynamic>? data;
+  String? idempotencyKey;
 
   @override
   Future<ResponseBody> fetch(
@@ -64,6 +67,7 @@ class _Adapter implements HttpClientAdapter {
     method = options.method;
     path = options.path;
     data = options.data as Map<String, dynamic>?;
+    idempotencyKey = options.headers['Idempotency-Key'] as String?;
     if (options.path == '/notices/generate') {
       return ResponseBody.fromString(
         jsonEncode({

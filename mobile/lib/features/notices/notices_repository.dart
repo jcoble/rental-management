@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import 'notices_models.dart';
 
 class NoticesRepository {
@@ -27,11 +28,19 @@ class NoticesRepository {
 
   Future<void> generate() async {
     try {
-      await _dio.post<Map<String, dynamic>>('/notices/generate', data: {});
+      await IdempotentMutation.run(
+        'notice-drafts:generate:all',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/notices/generate',
+          data: {},
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
   }
+
   /// Generates notice draft(s), optionally limited to a recipient, lease relationship,
   /// tenant account, or exact ledger charge and/or [noticeType]. Returns the drafts
   /// that were created or already exist
@@ -47,15 +56,21 @@ class NoticesRepository {
     String? noticeType,
   }) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/notices/generate',
-        data: {
-          'recipientTenantId': ?recipientTenantId,
-          'leaseManagementId': ?leaseManagementId,
-          'tenantAccountId': ?tenantAccountId,
-          'tenantLedgerEntryId': ?tenantLedgerEntryId,
-          'noticeType': ?noticeType,
-        },
+      final payload = {
+        'recipientTenantId': ?recipientTenantId,
+        'leaseManagementId': ?leaseManagementId,
+        'tenantAccountId': ?tenantAccountId,
+        'tenantLedgerEntryId': ?tenantLedgerEntryId,
+        'noticeType': ?noticeType,
+      };
+      final response = await IdempotentMutation.run(
+        'notice-drafts:generate:$recipientTenantId:$leaseManagementId:'
+        '$tenantAccountId:$tenantLedgerEntryId:$noticeType',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/notices/generate',
+          data: payload,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final drafts = (response.data?['drafts'] as List<dynamic>? ?? [])
           .whereType<Map<String, dynamic>>()
@@ -70,9 +85,14 @@ class NoticesRepository {
   /// Edits a draft's subject/body before sending. PATCH /notices/{id}.
   Future<NoticeDraft> update(int id, {String? subject, String? body}) async {
     try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/notices/$id',
-        data: {'subject': ?subject, 'body': ?body},
+      final payload = {'subject': ?subject, 'body': ?body};
+      final response = await IdempotentMutation.run(
+        'notice-drafts:update:$id:$payload',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/notices/$id',
+          data: payload,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final data = response.data;
       if (data == null) {
@@ -100,7 +120,14 @@ class NoticesRepository {
 
   Future<void> dismiss(int id) async {
     try {
-      await _dio.post<Map<String, dynamic>>('/notices/$id/dismiss', data: {});
+      await IdempotentMutation.run(
+        'notice-drafts:dismiss:$id',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/notices/$id/dismiss',
+          data: {},
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

@@ -365,6 +365,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         private readonly IAtomicUnitImportPersistence _unitImports;
         private readonly IAtomicCoreCsvImportPersistence _coreCsvImports;
         private readonly IAtomicNotificationPersistence _notifications;
+        private readonly IAtomicNoticeDraftPersistence _noticeDrafts;
         private readonly IAtomicPaymentCsvImportPersistence _paymentCsvImports;
         private readonly IAtomicInspectionPersistence _inspections;
         private readonly TimeProvider _timeProvider;
@@ -395,6 +396,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             _unitImports = new AtomicUnitImportPersistence(db, auditScope);
             _coreCsvImports = new AtomicCoreCsvImportPersistence(db, auditScope);
             _notifications = new AtomicNotificationPersistence(db, auditScope);
+            _noticeDrafts = new AtomicNoticeDraftPersistence(db, auditScope);
             _paymentCsvImports = new AtomicPaymentCsvImportPersistence(db, auditScope);
             _inspections = new AtomicInspectionPersistence(db, auditScope);
             _timeProvider = timeProvider;
@@ -418,6 +420,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         public IAtomicUnitImportPersistence UnitImports => _unitImports;
         public IAtomicCoreCsvImportPersistence CoreCsvImports => _coreCsvImports;
         public IAtomicNotificationPersistence Notifications => _notifications;
+        public IAtomicNoticeDraftPersistence NoticeDrafts => _noticeDrafts;
         public IAtomicPaymentCsvImportPersistence PaymentCsvImports => _paymentCsvImports;
         public IAtomicInspectionPersistence Inspections => _inspections;
         public Guid SessionId => _db.ContextId.InstanceId;

@@ -126,6 +126,7 @@ public interface IAtomicWriteAttempt
     IAtomicUnitImportPersistence UnitImports { get; }
     IAtomicCoreCsvImportPersistence CoreCsvImports { get; }
     IAtomicNotificationPersistence Notifications { get; }
+    IAtomicNoticeDraftPersistence NoticeDrafts { get; }
     IAtomicPaymentCsvImportPersistence PaymentCsvImports { get; }
     IAtomicInspectionPersistence Inspections { get; }
 
@@ -181,6 +182,55 @@ public interface IAtomicNotificationPersistence
         bool includeStaffOnlyNotifications,
         DateTime readAtUtc,
         CancellationToken ct = default);
+}
+
+/// <summary>
+/// Kernel-owned tenant-notice generation. Candidate selection, authorization, rendering,
+/// deduplication, insertion, and response projection remain one PostgreSQL statement.
+/// </summary>
+public interface IAtomicNoticeDraftPersistence
+{
+    Task<IReadOnlyList<AtomicGeneratedTenantNoticeDraft>> GenerateManualAsync(
+        WorkspaceReadScope scope,
+        int? recipientTenantId,
+        int? leaseManagementId,
+        int? tenantAccountId,
+        long? tenantLedgerEntryId,
+        string? noticeType,
+        DateTime securityNowUtc,
+        CancellationToken ct = default);
+}
+
+/// <summary>One row returned by the database-owned notice draft INSERT/SELECT command.</summary>
+public sealed class AtomicGeneratedTenantNoticeDraft : IAtomicResultData
+{
+    public long? WorkItemId { get; init; }
+    public int DraftId { get; init; }
+    public bool WasCreated { get; init; }
+    public int CreatedCount { get; init; }
+    public int LeaseManagementId { get; init; }
+    public int TenantAccountId { get; init; }
+    public int RecipientLeaseManagementPartyId { get; init; }
+    public int? LeaseAgreementId { get; init; }
+    public int? LeaseAddendumId { get; init; }
+    public long? TenantLedgerEntryId { get; init; }
+    public int RecipientTenantId { get; init; }
+    public int? PropertyId { get; init; }
+    public string TenantName { get; init; } = string.Empty;
+    public string? PropertyName { get; init; }
+    public string? UnitNumber { get; init; }
+    public string NoticeType { get; init; } = string.Empty;
+    public string Status { get; init; } = string.Empty;
+    public string Subject { get; init; } = string.Empty;
+    public string Body { get; init; } = string.Empty;
+    public string Reason { get; init; } = string.Empty;
+    public DateTime TriggerDate { get; init; }
+    public int? ConversationId { get; init; }
+    public string? ApprovedChannels { get; init; }
+    public DateTime CreatedAt { get; init; }
+    public DateTime UpdatedAt { get; init; }
+    public DateTime? ApprovedAt { get; init; }
+    public DateTime? DismissedAt { get; init; }
 }
 
 public sealed record AtomicListingPhotoOrderResult(bool IsValid, bool HasChanges);
@@ -553,6 +603,7 @@ public enum AtomicLockResource
     Inspection = 25,
     InspectionTemplate = 26,
     InspectionItem = 27,
+    NoticeDraft = 28,
 }
 
 public enum AtomicScanDraftClaimOutcome
