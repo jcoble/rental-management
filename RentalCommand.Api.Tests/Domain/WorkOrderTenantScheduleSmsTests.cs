@@ -1,10 +1,13 @@
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -23,12 +26,13 @@ public class WorkOrderTenantScheduleSmsTests : IDisposable
 
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
-    private readonly RecordingPublisher _publisher = new();
+    private readonly ServiceProvider _services;
     private readonly WorkOrderService _workOrders;
+    private readonly WorkspaceReadScope _scope;
 
     public WorkOrderTenantScheduleSmsTests()
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
+        _conn = new SqliteConnection($"Data Source=work-order-sms-{Guid.NewGuid():N};Mode=Memory;Cache=Shared");
         _conn.Open();
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
@@ -48,29 +52,23 @@ public class WorkOrderTenantScheduleSmsTests : IDisposable
             CreatedAt = now,
             UpdatedAt = now,
         });
-        _db.Users.Add(new ApplicationUser
-        {
-            Id = 1,
-            UserName = "work-order-sms-tests@example.test",
-            NormalizedUserName = "WORK-ORDER-SMS-TESTS@EXAMPLE.TEST",
-            Email = "work-order-sms-tests@example.test",
-            NormalizedEmail = "WORK-ORDER-SMS-TESTS@EXAMPLE.TEST",
-            DisplayName = "Work Order SMS Test Actor",
-            CreatedAt = now,
-        });
         _db.SaveChanges();
+        _scope = _db.SeedAdministratorScope(PortfolioId, nameof(WorkOrderTenantScheduleSmsTests));
+        _services = AtomicDomainTestKernel.CreateForWorkOrders(_conn.ConnectionString);
 
         _workOrders = new WorkOrderService(
             _db,
             new NoopDataUpdate(),
-            _publisher,
+            Mock.Of<IMessagePublisher>(),
             Mock.Of<IFileStorage>(),
             NullLogger<WorkOrderService>.Instance,
-            TimeProvider.System);
+            TimeProvider.System,
+            _services.GetRequiredService<IAtomicUnitOfWork>());
     }
 
     public void Dispose()
     {
+        _services.Dispose();
         _db.Dispose();
         _conn.Dispose();
     }
@@ -86,7 +84,7 @@ public class WorkOrderTenantScheduleSmsTests : IDisposable
         var start = new DateTimeOffset(2026, 6, 20, 14, 0, 0, TimeSpan.FromHours(-4));
         var end = new DateTimeOffset(2026, 6, 20, 16, 0, 0, TimeSpan.FromHours(-4));
 
-        var created = await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
+        var created = await CreateAsync(new CreateWorkOrderRequest
         {
             PropertyId = property.Id,
             TenantId = tenant.Id,
@@ -105,7 +103,8 @@ public class WorkOrderTenantScheduleSmsTests : IDisposable
         entity.ScheduledWindowEnd.Should().Be(new DateTime(2026, 6, 20, 20, 0, 0, DateTimeKind.Utc));
 
         // The tenant SMS renders the landlord's LOCAL window (2:00 PM – 4:00 PM), never UTC.
-        var message = _publisher.LastSms.Should().NotBeNull().And.Subject as string;
+        var message = (await _db.OutboxMessages.AsNoTracking()
+            .SingleAsync(item => item.MessageType == "sms")).Payload;
         message.Should().Contain("2:00 PM");
         message.Should().Contain("4:00 PM");
         message.Should().NotContain("(UTC)");
@@ -120,7 +119,7 @@ public class WorkOrderTenantScheduleSmsTests : IDisposable
         var tenant = SeedTenant("Sam", "Renter", phone: "+16145559999");
         SeedActiveLease(property, tenant);
 
-        await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
+        await CreateAsync(new CreateWorkOrderRequest
         {
             PropertyId = property.Id,
             TenantId = tenant.Id,
@@ -130,8 +129,11 @@ public class WorkOrderTenantScheduleSmsTests : IDisposable
             ScheduledFor = new DateTimeOffset(2026, 6, 20, 14, 0, 0, TimeSpan.FromHours(-4)),
         });
 
-        _publisher.SmsCount.Should().Be(0);
+        (await _db.OutboxMessages.CountAsync(item => item.MessageType == "sms")).Should().Be(0);
     }
+
+    private Task<WorkOrderResponse?> CreateAsync(CreateWorkOrderRequest request) =>
+        _workOrders.CreateAuthorizedAsync(_scope, request, Guid.NewGuid().ToString("N"));
 
     private Property SeedProperty()
     {
@@ -210,24 +212,6 @@ public class WorkOrderTenantScheduleSmsTests : IDisposable
             CreatedByUserId = 1,
         });
         _db.SaveChanges();
-    }
-
-    private sealed class RecordingPublisher : IMessagePublisher
-    {
-        public int SmsCount { get; private set; }
-        public string? LastSms { get; private set; }
-
-        public Task PublishAsync<TPayload>(int portfolioId, string messageType, string idempotencyKey, TPayload payload, CancellationToken ct = default)
-        {
-            if (messageType == "sms" && payload is not null)
-            {
-                SmsCount++;
-                // Payload is an anonymous { to, message }; read message via reflection.
-                LastSms = payload.GetType().GetProperty("message")?.GetValue(payload) as string;
-            }
-
-            return Task.CompletedTask;
-        }
     }
 
     private sealed class NoopDataUpdate : IDataUpdateService
