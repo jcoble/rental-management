@@ -4,11 +4,13 @@ using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.Data;
 using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Tests.Domain;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
@@ -26,15 +28,18 @@ public sealed class AuthServiceResetPasswordTests : IDisposable
     private const string ResetToken = "reset-token";
     private readonly SqliteTestContext _ctx = new();
     private readonly UserManager<ApplicationUser> _userManager;
+    private readonly ServiceProvider _services;
 
     public AuthServiceResetPasswordTests()
     {
         _userManager = CreateUserManager(_ctx.Db);
+        _services = AtomicDomainTestKernel.CreateForPasswordResetSqlite(_ctx.Connection);
     }
 
     public void Dispose()
     {
         _userManager.Dispose();
+        _services.Dispose();
         _ctx.Dispose();
     }
 
@@ -52,8 +57,9 @@ public sealed class AuthServiceResetPasswordTests : IDisposable
         (await _userManager.CreateAsync(user, "OldPassword123!")).Succeeded.Should().BeTrue();
         (await _userManager.SetLockoutEnabledAsync(user, true)).Succeeded.Should().BeTrue();
         (await _userManager.SetLockoutEndDateAsync(user, DateTimeOffset.UtcNow.AddMinutes(5))).Succeeded.Should().BeTrue();
+        SeedWorkspaceAuthority(user, DateTime.UtcNow);
 
-        var result = await CreateService().ResetPasswordAsync(
+        var result = await CreateService(_services.GetRequiredService<IAtomicUnitOfWork>()).ResetPasswordAsync(
             user.Id.ToString(), ResetToken, "NewPassword123!", "test-password-reset");
 
         result.Success.Should().BeTrue();
@@ -62,6 +68,41 @@ public sealed class AuthServiceResetPasswordTests : IDisposable
         (await _userManager.IsLockedOutAsync(reloaded!)).Should().BeFalse(
             "the success page says the user can now sign in after resetting their password");
         (await _userManager.GetAccessFailedCountAsync(reloaded!)).Should().Be(0);
+    }
+
+    private void SeedWorkspaceAuthority(ApplicationUser user, DateTime now)
+    {
+        var accessContext = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = 1,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = accessContext,
+            PortfolioId = 1,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        membership.RoleAssignments.Add(new MembershipRoleAssignment
+        {
+            PortfolioId = 1,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        });
+        _ctx.Db.WorkspaceMemberships.Add(membership);
+        _ctx.Db.SaveChanges();
     }
 
     [Fact]
