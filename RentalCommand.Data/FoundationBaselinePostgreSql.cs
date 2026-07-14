@@ -447,7 +447,7 @@ internal static class FoundationBaselinePostgreSql
     {
         "AspNetUserClaims", "AspNetUserLogins", "AspNetUserTokens",
         "AuthSessionRefreshCredentials", "AuthSessionRefreshTokenFamilies", "AuthSessions",
-        "LoginContextSelectionChallenges", "OAuthStates", "PlaidTokenExchangeAttempts",
+        "LoginContextSelectionChallenges", "NotificationReadStates", "OAuthStates", "PlaidTokenExchangeAttempts",
         "WorkspaceInvitations",
     };
 
