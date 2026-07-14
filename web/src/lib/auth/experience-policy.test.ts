@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readdirSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import { canAccessRoute, CAPABILITY, routeAccessRule } from './experience-policy.ts';
 
@@ -84,5 +84,27 @@ describe('experience route policy', () => {
 			true
 		);
 		assert.equal(canAccessRoute('/settings/notifications/my-alerts', 'Tenant', noCapabilities), false);
+	});
+
+	it('splits operational reconciliation from bank administration', () => {
+		const propertyManager = new Set([CAPABILITY.moneyReconciliationOperate]);
+		const bankAdministrator = new Set([CAPABILITY.bankConnectionsManage]);
+
+		assert.equal(canAccessRoute('/banking', 'Management', propertyManager), true);
+		assert.equal(canAccessRoute('/plaid', 'Management', propertyManager), false);
+		assert.equal(canAccessRoute('/banking', 'Management', bankAdministrator), true);
+		assert.equal(canAccessRoute('/plaid', 'Management', bankAdministrator), true);
+	});
+
+	it('keeps private bank queries and destructive controls behind exact capabilities', () => {
+		const bankingPage = readFileSync(
+			new URL('../../routes/(protected)/banking/+page.svelte', import.meta.url),
+			'utf8'
+		);
+
+		assert.match(bankingPage, /enabled: !!portfolioId && canManageConnections/g);
+		assert.match(bankingPage, /enabled: !!portfolioId && canOperateReconciliation/);
+		assert.match(bankingPage, /\{#if canDestructivelyReconcile\}/);
+		assert.match(bankingPage, /\{#if canManageConnections\}[\s\S]*Connect Plaid/);
 	});
 });

@@ -9,6 +9,7 @@ import type {
 	ImportBankTransactionsRequest,
 	ImportBankTransactionsResponse,
 	MatchBankTransactionRequest,
+	OperationalBankTransaction,
 	PlaidLinkTokenResponse,
 	PlaidSettings,
 	SyncBankConnectionResponse
@@ -35,7 +36,7 @@ export const banking = {
 	importTransactions: (request: ImportBankTransactionsRequest) =>
 		api.post<ImportBankTransactionsResponse>('/banking/transactions/import', request),
 	match: (id: number, request: MatchBankTransactionRequest) =>
-		api.post<BankTransaction>(`/banking/transactions/${id}/match`, request),
+		api.post<OperationalBankTransaction>(`/banking/transactions/${id}/match`, request),
 	clearMatch: (id: number) =>
 		api.post<BankTransaction>(`/banking/transactions/${id}/clear-match`, {}),
 	reviewQueue: (params: { skip?: number; take?: number } = {}) => {
@@ -46,7 +47,7 @@ export const banking = {
 		return api.get<BankReviewQueueResponse>(`/banking/review-queue${suffix ? `?${suffix}` : ''}`);
 	},
 	confirmMatch: (id: number, request: ConfirmBankMatchRequest = {}) =>
-		api.post<BankTransaction>(`/banking/transactions/${id}/confirm-match`, request),
+		api.post<OperationalBankTransaction>(`/banking/transactions/${id}/confirm-match`, request),
 	dismissMatch: (id: number) =>
 		api.post<BankTransaction>(`/banking/transactions/${id}/dismiss-match`, {}),
 	// Mark a bank line as personal / not business money. It leaves the unmatched review queue and is

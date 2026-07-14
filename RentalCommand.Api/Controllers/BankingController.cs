@@ -15,7 +15,6 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/banking")]
 [Produces("application/json")]
-[Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.BankConnectionsManage)]
 public class BankingController : ManagementControllerBase
 {
     private readonly IBankingService _service;
@@ -26,6 +25,7 @@ public class BankingController : ManagementControllerBase
     }
 
     [HttpGet("summary")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.BankConnectionsManage)]
     [ProducesResponseType(typeof(BankingSummaryResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<BankingSummaryResponse>> Summary(CancellationToken ct)
     {
@@ -33,6 +33,7 @@ public class BankingController : ManagementControllerBase
     }
 
     [HttpGet("connections")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.BankConnectionsManage)]
     [ProducesResponseType(typeof(IReadOnlyList<BankConnectionResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<BankConnectionResponse>>> Connections(CancellationToken ct)
     {
@@ -40,6 +41,7 @@ public class BankingController : ManagementControllerBase
     }
 
     [HttpGet("plaid/settings")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.BankConnectionsManage)]
     [ProducesResponseType(typeof(PlaidSettingsResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<PlaidSettingsResponse>> PlaidSettings(CancellationToken ct)
     {
@@ -47,6 +49,7 @@ public class BankingController : ManagementControllerBase
     }
 
     [HttpPost("plaid/link-token")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.BankConnectionsManage)]
     [ProducesResponseType(typeof(PlaidLinkTokenResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<PlaidLinkTokenResponse>> PlaidLinkToken(
         [FromBody] PlaidLinkTokenRequest? request,
@@ -56,6 +59,7 @@ public class BankingController : ManagementControllerBase
     }
 
     [HttpPost("plaid/exchange-public-token")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.BankConnectionsManage)]
     [ProducesResponseType(typeof(BankConnectionResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<BankConnectionResponse>> ExchangePlaidPublicToken(
         [FromBody] ExchangePlaidPublicTokenRequest request,
@@ -72,6 +76,7 @@ public class BankingController : ManagementControllerBase
     }
 
     [HttpPost("connections/{id:int}/sync")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.BankConnectionsManage)]
     [ProducesResponseType(typeof(SyncBankConnectionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<SyncBankConnectionResponse>> SyncConnection(int id, CancellationToken ct)
@@ -81,6 +86,7 @@ public class BankingController : ManagementControllerBase
     }
 
     [HttpGet("transactions")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.BankConnectionsManage)]
     [ProducesResponseType(typeof(BankTransactionListResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<BankTransactionListResponse>> Transactions(
         [FromQuery] string? status,
@@ -92,6 +98,7 @@ public class BankingController : ManagementControllerBase
     }
 
     [HttpPost("transactions/import")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.BankConnectionsManage)]
     [ProducesResponseType(typeof(ImportBankTransactionsResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<ImportBankTransactionsResponse>> Import(
         [FromBody] ImportBankTransactionsRequest request,
@@ -106,18 +113,20 @@ public class BankingController : ManagementControllerBase
     }
 
     [HttpPost("transactions/{id:int}/match")]
-    [ProducesResponseType(typeof(BankTransactionResponse), StatusCodes.Status200OK)]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.MoneyReconciliationOperate)]
+    [ProducesResponseType(typeof(OperationalBankTransactionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<BankTransactionResponse>> Match(
+    public async Task<ActionResult<OperationalBankTransactionResponse>> Match(
         int id,
         [FromBody] MatchBankTransactionRequest request,
         CancellationToken ct)
     {
-        var updated = await _service.MatchAsync(GetPortfolioId(), id, request, ct);
+        var updated = await _service.MatchAsync(GetWorkspaceReadScope(), id, request, ct);
         return updated == null ? NotFound(new { error = "Bank transaction or match target not found" }) : Ok(updated);
     }
 
     [HttpPost("transactions/{id:int}/clear-match")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.MoneyReconciliationDestructive)]
     [ProducesResponseType(typeof(BankTransactionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<BankTransactionResponse>> ClearMatch(int id, CancellationToken ct)
@@ -132,13 +141,14 @@ public class BankingController : ManagementControllerBase
     /// deposit/withdrawal are not double-counted.
     /// </summary>
     [HttpGet("review-queue")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.MoneyReconciliationOperate)]
     [ProducesResponseType(typeof(BankReviewQueueResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<BankReviewQueueResponse>> ReviewQueue(
         CancellationToken ct,
         [FromQuery] int skip = 0,
         [FromQuery] int take = 50)
     {
-        return Ok(await _service.GetReviewQueueAsync(GetPortfolioId(), skip, take, ct));
+        return Ok(await _service.GetReviewQueueAsync(GetWorkspaceReadScope(), skip, take, ct));
     }
 
     /// <summary>
@@ -147,14 +157,15 @@ public class BankingController : ManagementControllerBase
     /// requires both tenantAccountId and tenantLedgerEntryId; an empty body accepts the suggestion.
     /// </summary>
     [HttpPost("transactions/{id:int}/confirm-match")]
-    [ProducesResponseType(typeof(BankTransactionResponse), StatusCodes.Status200OK)]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.MoneyReconciliationOperate)]
+    [ProducesResponseType(typeof(OperationalBankTransactionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<BankTransactionResponse>> ConfirmMatch(
+    public async Task<ActionResult<OperationalBankTransactionResponse>> ConfirmMatch(
         int id,
         [FromBody] ConfirmBankMatchRequest? request,
         CancellationToken ct)
     {
-        var updated = await _service.ConfirmMatchAsync(GetPortfolioId(), id, request ?? new ConfirmBankMatchRequest(), ct);
+        var updated = await _service.ConfirmMatchAsync(GetWorkspaceReadScope(), id, request ?? new ConfirmBankMatchRequest(), ct);
         return updated == null
             ? NotFound(new { error = "Bank transaction, suggested match, or match target not found" })
             : Ok(updated);
@@ -165,6 +176,7 @@ public class BankingController : ManagementControllerBase
     /// the review queue; the bank line stays in the books as its own real money.
     /// </summary>
     [HttpPost("transactions/{id:int}/dismiss-match")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.MoneyReconciliationDestructive)]
     [ProducesResponseType(typeof(BankTransactionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<BankTransactionResponse>> DismissMatch(int id, CancellationToken ct)
@@ -179,6 +191,7 @@ public class BankingController : ManagementControllerBase
     /// listable under the "Removed" status filter so it can be reviewed or un-ignored later.
     /// </summary>
     [HttpPost("transactions/{id:int}/ignore")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.MoneyReconciliationDestructive)]
     [ProducesResponseType(typeof(BankTransactionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<BankTransactionResponse>> Ignore(int id, CancellationToken ct)

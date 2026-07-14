@@ -9,6 +9,8 @@ export const CAPABILITY = {
 	moneyBalancesRead: 'money.balances.read',
 	moneyDepositsManage: 'money.deposits.manage',
 	moneyOwnerReportsRead: 'money.owner-reports.read',
+	moneyReconciliationOperate: 'money.reconciliation.operate',
+	moneyReconciliationDestructive: 'money.reconciliation.destructive',
 	leasingApplicationsManage: 'leasing.applications.manage',
 	leasingShowingsManage: 'leasing.showings.manage',
 	leasingAgreementsPrepare: 'leasing.agreements.prepare',
@@ -78,7 +80,10 @@ export const ROUTE_ACCESS_RULES: readonly RouteAccessRule[] = [
 	{ prefix: '/onboarding', anyCapabilities: [CAPABILITY.rentalsManage] },
 	{ prefix: '/get-started', anyCapabilities: [CAPABILITY.rentalsManage] },
 	{ prefix: '/import', anyCapabilities: [CAPABILITY.rentalsManage] },
-	{ prefix: '/banking', anyCapabilities: [CAPABILITY.bankConnectionsManage] },
+	{
+		prefix: '/banking',
+		anyCapabilities: [CAPABILITY.moneyReconciliationOperate, CAPABILITY.bankConnectionsManage]
+	},
 	{ prefix: '/plaid', anyCapabilities: [CAPABILITY.bankConnectionsManage] },
 	{ prefix: '/accounting', anyCapabilities: [CAPABILITY.moneyBalancesRead] },
 	{

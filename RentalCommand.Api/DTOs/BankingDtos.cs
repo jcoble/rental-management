@@ -97,6 +97,34 @@ public class BankMatchSuggestionResponse
     public string Reason { get; set; } = string.Empty;
 }
 
+/// <summary>
+/// Purpose-built bank-line projection for property-scoped reconciliation. It deliberately omits
+/// bank connection ids, institution/account details, provider ids, internal match target ids, and
+/// notes. Those fields belong to workspace bank administration, not operational reconciliation.
+/// </summary>
+public class OperationalBankTransactionResponse
+{
+    public int Id { get; set; }
+    public DateTime PostedAt { get; set; }
+    public string Description { get; set; } = string.Empty;
+    public string? MerchantName { get; set; }
+    public decimal Amount { get; set; }
+    public string IsoCurrencyCode { get; set; } = "USD";
+    public string? Category { get; set; }
+    public string MatchStatus { get; set; } = "Unmatched";
+}
+
+/// <summary>
+/// Human-readable match explanation for scoped operators. Target database identities are omitted;
+/// the server resolves the current authorized suggestion when the operator confirms it.
+/// </summary>
+public class OperationalBankMatchSuggestionResponse
+{
+    public decimal Confidence { get; set; }
+    public string Label { get; set; } = string.Empty;
+    public string Reason { get; set; } = string.Empty;
+}
+
 public class ImportBankTransactionsRequest
 {
     public string Provider { get; set; } = "Manual";
@@ -162,8 +190,8 @@ public class ConfirmBankMatchRequest
 /// </summary>
 public class BankReviewQueueItemResponse
 {
-    public BankTransactionResponse Transaction { get; set; } = new();
-    public BankMatchSuggestionResponse Suggestion { get; set; } = new();
+    public OperationalBankTransactionResponse Transaction { get; set; } = new();
+    public OperationalBankMatchSuggestionResponse Suggestion { get; set; } = new();
 }
 
 public class BankReviewQueueResponse

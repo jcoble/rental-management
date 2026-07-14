@@ -80,4 +80,85 @@ internal static class CanonicalScopeTestFixture
             accessContext.Id,
             accessContext.AccessRevision);
     }
+
+    internal static WorkspaceReadScope SeedPropertyManagerScope(
+        this RentalCommandDbContext db,
+        int portfolioId,
+        int propertyId,
+        string fixtureName)
+    {
+        db.Database.InstallCanonicalLeaseProjectionViewsForSqlite();
+
+        var now = DateTime.UtcNow;
+        var normalizedFixtureName = fixtureName.Replace(" ", "-", StringComparison.Ordinal).ToLowerInvariant();
+        var email = $"{normalizedFixtureName}-{Guid.NewGuid():N}@example.test";
+        var user = new ApplicationUser
+        {
+            UserName = email,
+            NormalizedUserName = email.ToUpperInvariant(),
+            Email = email,
+            NormalizedEmail = email.ToUpperInvariant(),
+            DisplayName = $"{fixtureName} Property Manager",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = now,
+        };
+        var accessContext = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = portfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = accessContext,
+            PortfolioId = portfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = portfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role => role.Key == RoleProfileKeys.PropertyManager).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.SelectedProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            SelectedProperties =
+            [
+                new MembershipRoleAssignmentProperty
+                {
+                    PortfolioId = portfolioId,
+                    PropertyId = propertyId,
+                },
+            ],
+        };
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            User = user,
+            ActiveAccessContext = accessContext,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+
+        db.AddRange(assignment, session);
+        db.SaveChanges();
+
+        return new WorkspaceReadScope(
+            portfolioId,
+            user.Id,
+            session.Id,
+            accessContext.Id,
+            accessContext.AccessRevision);
+    }
 }

@@ -964,6 +964,23 @@ export interface BankMatchSuggestion {
 	reason: string;
 }
 
+export interface OperationalBankTransaction {
+	id: number;
+	postedAt: string;
+	description: string;
+	merchantName?: string;
+	amount: number;
+	isoCurrencyCode: string;
+	category?: string;
+	matchStatus: string;
+}
+
+export interface OperationalBankMatchSuggestion {
+	confidence: number;
+	label: string;
+	reason: string;
+}
+
 export interface ImportBankTransactionsRequest {
 	provider: string;
 	institutionName: string;
@@ -1013,8 +1030,8 @@ export interface ConfirmBankMatchRequest {
 }
 
 export interface BankReviewQueueItem {
-	transaction: BankTransaction;
-	suggestion: BankMatchSuggestion;
+	transaction: OperationalBankTransaction;
+	suggestion: OperationalBankMatchSuggestion;
 }
 
 export interface BankReviewQueueResponse {

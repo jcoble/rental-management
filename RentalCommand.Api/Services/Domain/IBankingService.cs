@@ -1,4 +1,5 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -12,10 +13,10 @@ public interface IBankingService
     Task<IReadOnlyList<BankConnectionResponse>> ListConnectionsAsync(int portfolioId, CancellationToken ct = default);
     Task<BankTransactionListResponse> ListTransactionsAsync(int portfolioId, string? status, int skip = 0, int take = ListQuery.DefaultTake, CancellationToken ct = default);
     Task<ImportBankTransactionsResponse> ImportAsync(int portfolioId, ImportBankTransactionsRequest request, CancellationToken ct = default);
-    Task<BankTransactionResponse?> MatchAsync(int portfolioId, int transactionId, MatchBankTransactionRequest request, CancellationToken ct = default);
+    Task<OperationalBankTransactionResponse?> MatchAsync(WorkspaceReadScope scope, int transactionId, MatchBankTransactionRequest request, CancellationToken ct = default);
     Task<BankTransactionResponse?> ClearMatchAsync(int portfolioId, int transactionId, CancellationToken ct = default);
-    Task<BankReviewQueueResponse> GetReviewQueueAsync(int portfolioId, int skip = 0, int take = 50, CancellationToken ct = default);
-    Task<BankTransactionResponse?> ConfirmMatchAsync(int portfolioId, int transactionId, ConfirmBankMatchRequest request, CancellationToken ct = default);
+    Task<BankReviewQueueResponse> GetReviewQueueAsync(WorkspaceReadScope scope, int skip = 0, int take = 50, CancellationToken ct = default);
+    Task<OperationalBankTransactionResponse?> ConfirmMatchAsync(WorkspaceReadScope scope, int transactionId, ConfirmBankMatchRequest request, CancellationToken ct = default);
     Task<BankTransactionResponse?> DismissMatchAsync(int portfolioId, int transactionId, CancellationToken ct = default);
 
     /// <summary>

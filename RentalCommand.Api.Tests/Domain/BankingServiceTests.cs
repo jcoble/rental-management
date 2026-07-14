@@ -12,6 +12,7 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Banking;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -30,6 +31,7 @@ public class BankingServiceTests : IAsyncLifetime
     private readonly List<IDisposable> _atomicHosts = [];
     private MigratedPostgreSqlTestContext _ctx = null!;
     private BankingService _sut = null!;
+    private WorkspaceReadScope _scope;
 
     public BankingServiceTests(MigratedPostgreSqlFixture fixture)
     {
@@ -46,6 +48,7 @@ public class BankingServiceTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _ctx = await _fixture.CreateContextAsync();
+        _scope = _ctx.Db.SeedAdministratorScope(1, nameof(BankingServiceTests));
         _sut = CreateService();
     }
 
@@ -128,7 +131,7 @@ public class BankingServiceTests : IAsyncLifetime
         });
         var transactionId = imported.Transactions.Single().Id;
 
-        var matched = await _sut.MatchAsync(1, transactionId, new MatchBankTransactionRequest
+        var matched = await _sut.MatchAsync(_scope, transactionId, new MatchBankTransactionRequest
         {
             TenantAccountId = payment.TenantAccountId,
             TenantLedgerEntryId = payment.Id,
@@ -137,8 +140,9 @@ public class BankingServiceTests : IAsyncLifetime
 
         matched.Should().NotBeNull();
         matched!.MatchStatus.Should().Be("Matched");
-        matched.MatchedTenantAccountId.Should().Be(payment.TenantAccountId);
-        matched.MatchedTenantLedgerEntryId.Should().Be(payment.Id);
+        var matchedRow = _ctx.Db.BankTransactions.Single(row => row.Id == transactionId);
+        matchedRow.MatchedTenantAccountId.Should().Be(payment.TenantAccountId);
+        matchedRow.MatchedTenantLedgerEntryId.Should().Be(payment.Id);
         cleared.Should().NotBeNull();
         cleared!.MatchStatus.Should().Be("Unmatched");
         cleared.MatchedTenantLedgerEntryId.Should().BeNull();
@@ -208,7 +212,7 @@ public class BankingServiceTests : IAsyncLifetime
         _ctx.Db.AtomicAuditLogs.RemoveRange(_ctx.Db.AtomicAuditLogs);
         await _ctx.Db.SaveChangesAsync();
 
-        await _sut.MatchAsync(1, transactionId, new MatchBankTransactionRequest
+        await _sut.MatchAsync(_scope, transactionId, new MatchBankTransactionRequest
         {
             TenantAccountId = payment.TenantAccountId,
             TenantLedgerEntryId = payment.Id,
@@ -252,21 +256,20 @@ public class BankingServiceTests : IAsyncLifetime
         var transactionId = imported.Transactions.Single().Id;
 
         // A suggested match shows up in the review queue.
-        var queue = await _sut.GetReviewQueueAsync(1);
+        var queue = await _sut.GetReviewQueueAsync(_scope);
         queue.Count.Should().Be(1);
         var item = queue.Items.Single();
         item.Transaction.Id.Should().Be(transactionId);
-        item.Suggestion.EntityType.Should().Be("TenantLedgerEntry");
-        item.Suggestion.EntityId.Should().Be(payment.Id);
+        item.Suggestion.Label.Should().Contain(payment.TenantAccount!.AccountNumber);
 
         // Confirming links the payment and removes the line from the queue.
-        var confirmed = await _sut.ConfirmMatchAsync(1, transactionId, new ConfirmBankMatchRequest());
+        var confirmed = await _sut.ConfirmMatchAsync(_scope, transactionId, new ConfirmBankMatchRequest());
         confirmed.Should().NotBeNull();
         confirmed!.MatchStatus.Should().Be("Matched");
-        confirmed.MatchedTenantAccountId.Should().Be(payment.TenantAccountId);
-        confirmed.MatchedTenantLedgerEntryId.Should().Be(payment.Id);
-        confirmed.SuggestedMatch.Should().BeNull();
-        (await _sut.GetReviewQueueAsync(1)).Count.Should().Be(0);
+        var confirmedRow = _ctx.Db.BankTransactions.Single(row => row.Id == transactionId);
+        confirmedRow.MatchedTenantAccountId.Should().Be(payment.TenantAccountId);
+        confirmedRow.MatchedTenantLedgerEntryId.Should().Be(payment.Id);
+        (await _sut.GetReviewQueueAsync(_scope)).Count.Should().Be(0);
     }
 
     [Fact]
@@ -290,7 +293,7 @@ public class BankingServiceTests : IAsyncLifetime
             ],
         });
         var transactionId = imported.Transactions.Single().Id;
-        (await _sut.GetReviewQueueAsync(1)).Count.Should().Be(1);
+        (await _sut.GetReviewQueueAsync(_scope)).Count.Should().Be(1);
 
         var dismissed = await _sut.DismissMatchAsync(1, transactionId);
 
@@ -298,7 +301,7 @@ public class BankingServiceTests : IAsyncLifetime
         dismissed!.MatchStatus.Should().Be("Dismissed");
         dismissed.MatchedTenantLedgerEntryId.Should().BeNull();
         dismissed.SuggestedMatch.Should().BeNull();
-        (await _sut.GetReviewQueueAsync(1)).Count.Should().Be(0);
+        (await _sut.GetReviewQueueAsync(_scope)).Count.Should().Be(0);
     }
 
     [Fact]
@@ -323,15 +326,16 @@ public class BankingServiceTests : IAsyncLifetime
         });
         var transactionId = imported.Transactions.Single().Id;
 
-        var confirmed = await _sut.ConfirmMatchAsync(1, transactionId, new ConfirmBankMatchRequest
+        var confirmed = await _sut.ConfirmMatchAsync(_scope, transactionId, new ConfirmBankMatchRequest
         {
             ExpenseId = expense.Id,
         });
 
         confirmed.Should().NotBeNull();
         confirmed!.MatchStatus.Should().Be("Matched");
-        confirmed.MatchedExpenseId.Should().Be(expense.Id);
-        confirmed.MatchedTenantLedgerEntryId.Should().BeNull();
+        var confirmedRow = _ctx.Db.BankTransactions.Single(row => row.Id == transactionId);
+        confirmedRow.MatchedExpenseId.Should().Be(expense.Id);
+        confirmedRow.MatchedTenantLedgerEntryId.Should().BeNull();
     }
 
     [Fact]
@@ -425,7 +429,7 @@ public class BankingServiceTests : IAsyncLifetime
         // Gone from the unmatched feed and the review queue...
         var unmatched = await _sut.ListTransactionsAsync(1, "Unmatched");
         unmatched.Items.Should().NotContain(t => t.Id == transactionId);
-        (await _sut.GetReviewQueueAsync(1)).Items.Should().NotContain(i => i.Transaction.Id == transactionId);
+        (await _sut.GetReviewQueueAsync(_scope)).Items.Should().NotContain(i => i.Transaction.Id == transactionId);
 
         // ...but still listable under the Removed filter.
         var removed = await _sut.ListTransactionsAsync(1, "Removed");
@@ -595,16 +599,15 @@ public class BankingServiceTests : IAsyncLifetime
         var payment = SeedRentPaymentInto(ctx, "Emily", "Chen", 1400m, postedAt, "L-target");
         SeedRentPaymentInto(ctx, "Old", "Candidate", 1400m, postedAt.AddMonths(-6), "L-old");
         SeedRentPaymentInto(ctx, "Wrong", "Amount", 1999m, postedAt, "L-wrong");
+        var scope = ctx.Db.SeedAdministratorScope(1, "bank-review-prefilter");
 
         await sut.ImportAsync(1, BankImport("queue-prefilter", postedAt, "Emily Chen", 1400m));
         executedSql.Clear();
 
-        var queue = await sut.GetReviewQueueAsync(1);
+        var queue = await sut.GetReviewQueueAsync(scope);
 
         var item = queue.Items.Should().ContainSingle().Subject;
-        item.Transaction.SuggestedMatch.Should().NotBeNull();
-        item.Transaction.SuggestedMatch!.EntityType.Should().Be("TenantLedgerEntry");
-        item.Transaction.SuggestedMatch.EntityId.Should().Be(payment.Id);
+        item.Suggestion.Label.Should().Contain(payment.TenantAccount!.AccountNumber);
 
         var reviewQueueSql = executedSql
             .Where(sql => sql.Contains("FROM \"BankTransactions\"", StringComparison.OrdinalIgnoreCase))
@@ -643,16 +646,15 @@ public class BankingServiceTests : IAsyncLifetime
         var postedAt = new DateTime(2026, 06, 10, 0, 0, 0, DateTimeKind.Utc);
         SeedRentPaymentInto(ctx, "Emily", "Chen", 1400m, postedAt, "L-emily");
         var carlos = SeedRentPaymentInto(ctx, "Carlos", "Reyes", 1400m, postedAt, "L-carlos");
+        var scope = ctx.Db.SeedAdministratorScope(1, "bank-review-ranking");
 
         await sut.ImportAsync(1, BankImport("queue-rank", postedAt, "Carlos Reyes", 1400m));
         executedSql.Clear();
 
-        var queue = await sut.GetReviewQueueAsync(1);
+        var queue = await sut.GetReviewQueueAsync(scope);
 
         var item = queue.Items.Should().ContainSingle().Subject;
-        item.Transaction.SuggestedMatch.Should().NotBeNull();
-        item.Transaction.SuggestedMatch!.EntityType.Should().Be("TenantLedgerEntry");
-        item.Transaction.SuggestedMatch.EntityId.Should().Be(carlos.Id);
+        item.Suggestion.Label.Should().Contain(carlos.TenantAccount!.AccountNumber);
 
         var receiptCandidateSql = executedSql
             .Where(sql => sql.Contains("FROM \"TenantLedgerEntries\"", StringComparison.OrdinalIgnoreCase))
@@ -675,13 +677,14 @@ public class BankingServiceTests : IAsyncLifetime
         SeedRentPaymentInto(ctx, "Emily", "Chen", 1400m, postedAt, "L-emily");
         SeedRentPaymentInto(ctx, "Carlos", "Reyes", 1450m, postedAt.AddDays(1), "L-carlos");
         SeedRentPaymentInto(ctx, "Maya", "Patel", 1500m, postedAt.AddDays(2), "L-maya");
+        var scope = ctx.Db.SeedAdministratorScope(1, "bank-review-paging");
 
         await sut.ImportAsync(1, BankImport("queue-page-1", postedAt, "Emily Chen", 1400m));
         await sut.ImportAsync(1, BankImport("queue-page-2", postedAt.AddDays(1), "Carlos Reyes", 1450m));
         await sut.ImportAsync(1, BankImport("queue-page-3", postedAt.AddDays(2), "Maya Patel", 1500m));
         executedSql.Clear();
 
-        var queue = await sut.GetReviewQueueAsync(1, skip: 1, take: 1);
+        var queue = await sut.GetReviewQueueAsync(scope, skip: 1, take: 1);
 
         queue.Count.Should().Be(3);
         queue.Skip.Should().Be(1);
@@ -696,6 +699,52 @@ public class BankingServiceTests : IAsyncLifetime
             sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase),
             "the review queue must page suggestible rows in SQL before mapping suggestions");
+    }
+
+    [Fact]
+    public async Task PropertyManagerReviewQueue_FiltersAndPagesAuthorizedPropertyInSql()
+    {
+        var executedSql = new List<string>();
+        await using var ctx = await _fixture.CreateContextAsync(
+            [new RecordingCommandInterceptor(executedSql)]);
+        var sut = CreateServiceFor(ctx);
+        var postedAt = new DateTime(2026, 06, 10, 0, 0, 0, DateTimeKind.Utc);
+        var allowed = SeedRentPaymentInto(ctx, "Allowed", "Tenant", 1400m, postedAt, "L-allowed");
+        var denied = SeedRentPaymentInto(ctx, "Denied", "Tenant", 1550m, postedAt, "L-denied");
+        var scope = ctx.Db.SeedPropertyManagerScope(
+            1,
+            allowed.TenantAccount!.LeaseManagement!.PropertyId,
+            "bank-review-selected-property");
+
+        var allowedImport = await sut.ImportAsync(1, BankImport("scope-allowed", postedAt, "Allowed Tenant", 1400m));
+        var deniedImport = await sut.ImportAsync(1, BankImport("scope-denied", postedAt, "Denied Tenant", 1550m));
+        executedSql.Clear();
+
+        var queue = await sut.GetReviewQueueAsync(scope, skip: 0, take: 20);
+
+        queue.Count.Should().Be(1);
+        queue.Items.Should().ContainSingle(item =>
+            item.Transaction.Id == allowedImport.Transactions.Single().Id);
+        queue.Items.Should().NotContain(item =>
+            item.Transaction.Id == deniedImport.Transactions.Single().Id);
+        (await sut.MatchAsync(
+            scope,
+            allowedImport.Transactions.Single().Id,
+            new MatchBankTransactionRequest
+            {
+                TenantAccountId = denied.TenantAccountId,
+                TenantLedgerEntryId = denied.Id,
+            })).Should().BeNull();
+        (await sut.ConfirmMatchAsync(
+            scope,
+            deniedImport.Transactions.Single().Id,
+            new ConfirmBankMatchRequest())).Should().BeNull();
+
+        executedSql.Should().Contain(sql =>
+            sql.Contains("FROM \"BankTransactions\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("MembershipRoleAssignmentProperties", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase),
+            "property capability and selected-property scope must be part of the paged bank-line SQL");
     }
 
     [Fact]

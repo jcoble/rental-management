@@ -36,6 +36,7 @@
 		BookOpen,
 		HelpCircle,
 		Activity,
+		Landmark,
 		Upload
 	} from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -116,6 +117,7 @@
 			icon: Wallet,
 			items: [
 				{ href: '/accounting', label: 'Money', icon: Calculator },
+				{ href: '/banking', label: 'Banking', icon: Landmark },
 				{ href: '/deposits', label: 'Security Deposits', icon: PiggyBank },
 				{ href: '/reports', label: 'Reports', icon: BarChart3 }
 			]
@@ -190,6 +192,7 @@
 		'/onboarding': 'rocket_launch',
 		'/scan': 'document_scanner',
 		'/accounting': 'account_balance_wallet',
+		'/banking': 'account_balance',
 		'/deposits': 'savings',
 		'/reports': 'summarize',
 		'/properties': 'apartment',
