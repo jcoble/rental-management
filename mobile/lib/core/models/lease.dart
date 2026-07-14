@@ -150,6 +150,7 @@ class LeaseManagementParty {
     required this.role,
     required this.effectiveFrom,
     required this.isCurrent,
+    required this.guarantorLegalNoticeEligible,
     this.email,
     this.phone,
     this.effectiveThrough,
@@ -164,6 +165,7 @@ class LeaseManagementParty {
   final DateTime effectiveFrom;
   final DateTime? effectiveThrough;
   final bool isCurrent;
+  final bool guarantorLegalNoticeEligible;
 
   factory LeaseManagementParty.fromJson(Map<String, dynamic> json) =>
       LeaseManagementParty(
@@ -176,6 +178,8 @@ class LeaseManagementParty {
         effectiveFrom: _date(json['effectiveFrom']),
         effectiveThrough: _optionalDate(json['effectiveThrough']),
         isCurrent: json['isCurrent'] as bool? ?? false,
+        guarantorLegalNoticeEligible:
+            json['guarantorLegalNoticeEligible'] as bool? ?? false,
       );
 }
 

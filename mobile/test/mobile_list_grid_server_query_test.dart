@@ -47,13 +47,16 @@ void main() {
           take: 200,
           sort: 'name',
           availableForLease: true,
-          includeLeaseId: 12,
+          includeLeaseManagementId: 12,
         ),
       );
 
       expect(adapter.path, '/tenants/page');
       expect(adapter.queryParameters, containsPair('availableForLease', true));
-      expect(adapter.queryParameters, containsPair('includeLeaseId', 12));
+      expect(
+        adapter.queryParameters,
+        containsPair('includeLeaseManagementId', 12),
+      );
     },
   );
 

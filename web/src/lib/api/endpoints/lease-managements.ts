@@ -313,6 +313,55 @@ export interface LeaseManagementCurrentPartiesContext {
   activeTenantUserAccesses: ReturnPossessionActiveTenantUserAccess[];
 }
 
+export type TenantAccessDisposition =
+  | "RevokeImmediately"
+  | "RetainHistoricalReadOnly"
+  | "ContinueOnReplacementMembership";
+
+export interface LeaseLegalBasisRequest {
+  sameRelationshipConfirmed: boolean;
+  agreementId: number | null;
+  addendumId: number | null;
+}
+
+export interface AddEffectivePartyRequest {
+  tenantId: number;
+  role: LeaseManagementPartyRole;
+  effectiveFrom: string;
+  guarantorLegalNoticeEligible: boolean;
+  changeReason: string;
+  legalBasis: LeaseLegalBasisRequest;
+}
+
+export interface ChangeEffectivePartyRoleRequest {
+  newRole: LeaseManagementPartyRole;
+  effectiveOn: string;
+  guarantorLegalNoticeEligible: boolean;
+  accessDisposition: TenantAccessDisposition;
+  companionPrimaryPartyId: number | null;
+  companionNewRole: LeaseManagementPartyRole | null;
+  companionGuarantorLegalNoticeEligible: boolean;
+  changeReason: string;
+  legalBasis: LeaseLegalBasisRequest;
+}
+
+export interface EndEffectivePartyRequest {
+  effectiveThrough: string;
+  accessDisposition: TenantAccessDisposition;
+  primarySuccessorPartyId: number | null;
+  changeReason: string;
+  legalBasis: LeaseLegalBasisRequest;
+}
+
+export interface LeasePartyMutationResponse {
+  leaseManagementId: number;
+  partyId: number;
+  replacementPartyId: number | null;
+  companionReplacementPartyId: number | null;
+  tenantUserAccessIds: number[];
+  replayed: boolean;
+}
+
 export interface GivePossessionRequest {
   unitId: number;
 }
@@ -456,6 +505,42 @@ export const leaseManagements = {
     api.get<LeaseManagementCurrentPartiesContext>(
       `/lease-managements/${leaseManagementId}/return-possession-context`
     ),
+  addParty: (
+    leaseManagementId: number,
+    request: AddEffectivePartyRequest,
+    operationKey: string
+  ) => idempotentJson<LeasePartyMutationResponse>(
+    `/lease-managements/${leaseManagementId}/parties`, "POST", request, operationKey),
+  changePartyRole: (
+    leaseManagementId: number,
+    partyId: number,
+    request: ChangeEffectivePartyRoleRequest,
+    operationKey: string
+  ) => idempotentJson<LeasePartyMutationResponse>(
+    `/lease-managements/${leaseManagementId}/parties/${partyId}/change-role`, "POST", request, operationKey),
+  endParty: (
+    leaseManagementId: number,
+    partyId: number,
+    request: EndEffectivePartyRequest,
+    operationKey: string
+  ) => idempotentJson<LeasePartyMutationResponse>(
+    `/lease-managements/${leaseManagementId}/parties/${partyId}/end`, "POST", request, operationKey),
+  grantPartyAccess: (
+    leaseManagementId: number,
+    partyId: number,
+    reason: string,
+    operationKey: string
+  ) => idempotentJson<LeasePartyMutationResponse>(
+    `/lease-managements/${leaseManagementId}/parties/${partyId}/access`, "POST", { reason }, operationKey),
+  revokePartyAccess: (
+    leaseManagementId: number,
+    partyId: number,
+    tenantUserAccessId: number,
+    reason: string,
+    operationKey: string
+  ) => idempotentJson<LeasePartyMutationResponse>(
+    `/lease-managements/${leaseManagementId}/parties/${partyId}/access/${tenantUserAccessId}/revoke`,
+    "POST", { reason }, operationKey),
   givePossession: (
     leaseManagementId: number,
     request: GivePossessionRequest,

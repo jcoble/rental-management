@@ -105,7 +105,10 @@ describe('canonical lease lifecycle action hub', () => {
 		assert.match(possessionActionsSource, /returnContext\.parties/);
 		assert.match(possessionActionsSource, /returnContext\.activeTenantUserAccesses/);
 		assert.doesNotMatch(possessionActionsSource, /summary\.parties/);
-		assert.match(detailPageSource, /<PossessionActions \{summary\} onchanged=\{refreshLease\} \/>/);
+		assert.match(
+			detailPageSource,
+			/<PossessionActions \{summary\} canManage=\{canManageHousehold\} onchanged=\{refreshLease\} \/>/
+		);
 	});
 
 	it('records the approved ending disposition without mutating an agreement', () => {

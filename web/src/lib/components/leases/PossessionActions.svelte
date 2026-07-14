@@ -17,9 +17,11 @@
 
 	let {
 		summary,
+		canManage,
 		onchanged
 	}: {
 		summary: LeaseManagementSummary;
+		canManage: boolean;
 		onchanged: () => void | Promise<void>;
 	} = $props();
 
@@ -195,12 +197,12 @@
 			{/if}
 		</div>
 		<div class="flex flex-wrap gap-2">
-			{#if canGivePossession}
+			{#if canManage && canGivePossession}
 				<Button onclick={() => (giveOpen = true)} data-testid="lease-give-possession">
 					<KeyRound class="mr-2 h-4 w-4" /> Give possession
 				</Button>
 			{/if}
-			{#if canReturnPossession}
+			{#if canManage && canReturnPossession}
 				<Button variant="destructive" onclick={openReturn} data-testid="lease-return-possession">
 					<Undo2 class="mr-2 h-4 w-4" /> Return possession
 				</Button>

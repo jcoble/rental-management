@@ -14,7 +14,7 @@ class TenantListQuery {
     this.availableForLease,
     this.propertyId,
     this.unitId,
-    this.includeLeaseId,
+    this.includeLeaseManagementId,
   });
 
   final int skip;
@@ -24,7 +24,7 @@ class TenantListQuery {
   final bool? availableForLease;
   final int? propertyId;
   final int? unitId;
-  final int? includeLeaseId;
+  final int? includeLeaseManagementId;
 
   @override
   bool operator ==(Object other) {
@@ -36,7 +36,7 @@ class TenantListQuery {
         other.availableForLease == availableForLease &&
         other.propertyId == propertyId &&
         other.unitId == unitId &&
-        other.includeLeaseId == includeLeaseId;
+        other.includeLeaseManagementId == includeLeaseManagementId;
   }
 
   @override
@@ -48,7 +48,7 @@ class TenantListQuery {
     availableForLease,
     propertyId,
     unitId,
-    includeLeaseId,
+    includeLeaseManagementId,
   );
 }
 
@@ -86,17 +86,6 @@ class TenantPage {
   }
 }
 
-/// Result of `POST /tenants/{id}/portal-invite`.
-class PortalInviteResult {
-  const PortalInviteResult({this.email, required this.alreadyExisted});
-
-  /// The email the invite was sent to (the tenant's sign-in email).
-  final String? email;
-
-  /// True when the tenant already had a portal login (this was a resend).
-  final bool alreadyExisted;
-}
-
 /// Repository for tenants.
 ///
 /// Endpoints used:
@@ -106,8 +95,6 @@ class PortalInviteResult {
 ///   POST   /tenants                    — create tenant
 ///   PATCH  /tenants/{id}               — update tenant (partial)
 ///   DELETE /tenants/{id}               — delete tenant
-///   POST   /tenants/{id}/portal-access — turn the resident-portal login on/off
-///   POST   /tenants/{id}/portal-invite — email the tenant their portal invite
 class TenantsRepository {
   TenantsRepository(this._dio);
 
@@ -138,7 +125,7 @@ class TenantsRepository {
       'availableForLease': query.availableForLease,
       'propertyId': query.propertyId,
       'unitId': query.unitId,
-      'includeLeaseId': query.includeLeaseId,
+      'includeLeaseManagementId': query.includeLeaseManagementId,
     }..removeWhere((_, value) => value == null || value == '');
 
     try {
@@ -239,40 +226,6 @@ class TenantsRepository {
   Future<void> deleteTenant(int id) async {
     try {
       await _dio.delete<dynamic>('/tenants/$id');
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
-  }
-
-  /// Turns the tenant's resident-portal login on or off (the staff toggle).
-  /// Enabling provisions a login if needed and clears any lock; disabling locks
-  /// sign-in. Returns the resulting state: 'none' | 'active' | 'disabled'.
-  Future<String> setPortalAccess(int id, {required bool enabled}) async {
-    try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/tenants/$id/portal-access',
-        data: {'enabled': enabled},
-      );
-      return response.data?['portalAccess'] as String? ?? 'none';
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
-  }
-
-  /// Emails the tenant their resident-portal sign-in details, provisioning the
-  /// login first if needed. This is the only place an invite email goes out
-  /// (tenant creation provisions silently). Requires the tenant to have an email
-  /// (the API 400s otherwise).
-  Future<PortalInviteResult> sendPortalInvite(int id) async {
-    try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/tenants/$id/portal-invite',
-      );
-      final data = response.data ?? const <String, dynamic>{};
-      return PortalInviteResult(
-        email: data['email'] as String?,
-        alreadyExisted: data['alreadyExisted'] as bool? ?? false,
-      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

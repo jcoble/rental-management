@@ -2,12 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/auth/auth_controller.dart';
 import '../../core/files/document_opener.dart';
 import '../../core/models/lease.dart';
 import '../tenants/tenant_detail_screen.dart';
 import 'addendum_action_sheets.dart';
 import 'agreement_draft_action_sheets.dart';
 import 'ending_disposition_sheet.dart';
+import 'household_management_sheet.dart';
 import 'lease_ledger_view.dart';
 import 'leases_repository.dart';
 import 'return_possession_sheet.dart';
@@ -45,6 +47,15 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
       leaseAgreementHistoryProvider(leaseManagementId),
     );
     final agreementHistory = agreements.asData?.value;
+    final auth = ref.watch(authControllerProvider);
+    final canManageHousehold =
+        auth is AuthStateAuthenticated &&
+        (auth.hasCapability('rentals.manage') ||
+            auth.hasCapability('leasing.onboarding.manage'));
+    final canPrepareAgreements =
+        auth is AuthStateAuthenticated &&
+        (auth.hasCapability('rentals.manage') ||
+            auth.hasCapability('leasing.agreements.prepare'));
     return detail.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (error, _) => _ErrorState(
@@ -74,7 +85,11 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
             ],
             _RelationshipHeader(summary: management.summary),
             const SizedBox(height: 12),
-            _HouseholdCard(parties: management.parties),
+            _HouseholdCard(
+              management: management,
+              agreements: agreementHistory?.items ?? const [],
+              canManage: canManageHousehold,
+            ),
             const SizedBox(height: 12),
             agreements.when(
               loading: () => const Card(
@@ -95,16 +110,21 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
                 propertyName: management.summary.propertyName,
                 unitNumber: management.summary.unitNumber,
                 managementBusinessDate: management.summary.businessDate,
+                canPrepare: canPrepareAgreements,
               ),
             ),
             const SizedBox(height: 12),
-            _AddendumHistoryCard(management: management),
+            _AddendumHistoryCard(
+              management: management,
+              canPrepare: canPrepareAgreements,
+            ),
             const SizedBox(height: 12),
             _ActionsCard(
               management: management,
               onAsk: () => _ask(context, ref),
               onGivePossession:
-                  management.summary.possessionGivenAt == null &&
+                  canManageHousehold &&
+                      management.summary.possessionGivenAt == null &&
                       management.summary.canceledAt == null &&
                       management.summary.tenantAccountId != null &&
                       management.summary.currentResidentCount > 0 &&
@@ -117,13 +137,15 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
                   ? () => _givePossession(context, ref, management)
                   : null,
               onReturnPossession:
-                  management.summary.possessionGivenAt != null &&
+                  canManageHousehold &&
+                      management.summary.possessionGivenAt != null &&
                       management.summary.possessionReturnedAt == null &&
                       management.summary.canceledAt == null
                   ? () => _returnPossession(context, ref, management)
                   : null,
               onEndingDisposition:
-                  management.summary.possessionGivenAt != null &&
+                  canPrepareAgreements &&
+                      management.summary.possessionGivenAt != null &&
                       management.summary.possessionReturnedAt == null &&
                       management.summary.canceledAt == null
                   ? () => _recordEndingDisposition(context, ref, management)
@@ -434,45 +456,184 @@ class _RelationshipHeader extends StatelessWidget {
   }
 }
 
-class _HouseholdCard extends StatelessWidget {
-  const _HouseholdCard({required this.parties});
+class _HouseholdCard extends ConsumerWidget {
+  const _HouseholdCard({
+    required this.management,
+    required this.agreements,
+    required this.canManage,
+  });
 
-  final List<LeaseManagementParty> parties;
+  final LeaseManagementDetail management;
+  final List<LeaseAgreementHistory> agreements;
+  final bool canManage;
 
   @override
-  Widget build(BuildContext context) => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Household', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          if (parties.isEmpty)
-            const Text('No household members are attached.')
-          else
-            for (final party in parties)
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const CircleAvatar(child: Icon(Icons.person_outline)),
-                title: Text(party.tenantName),
-                subtitle: Text(
-                  party.effectiveThrough == null
-                      ? party.role
-                      : '${party.role} · ended ${_date(party.effectiveThrough!)}',
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => Navigator.of(context).push<void>(
-                  MaterialPageRoute<void>(
-                    builder: (_) =>
-                        TenantDetailLoaderScreen(tenantId: party.tenantId),
+  Widget build(BuildContext context, WidgetRef ref) {
+    final household = ref.watch(
+      leaseHouseholdContextProvider(management.summary.id),
+    );
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Household',
+                    style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
+                if (canManage)
+                  FilledButton.tonalIcon(
+                    onPressed: () => _open(
+                      context,
+                      ref,
+                      HouseholdAction.add,
+                      household.asData?.value,
+                    ),
+                    icon: const Icon(Icons.person_add_outlined),
+                    label: const Text('Add'),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Membership and login access can change. Signed agreement PDFs remain immutable.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            household.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (error, _) => Text(error.toString()),
+              data: (value) => Column(
+                children: [
+                  for (final party in value.parties)
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const CircleAvatar(
+                        child: Icon(Icons.person_outline),
+                      ),
+                      title: Text(party.tenantName),
+                      subtitle: Text(
+                        '${party.role} · login ${_accessFor(value, party.id) == null ? 'not granted' : 'active'}',
+                      ),
+                      trailing: canManage
+                          ? PopupMenuButton<HouseholdAction>(
+                              onSelected: (action) => _open(
+                                context,
+                                ref,
+                                action,
+                                value,
+                                party: party,
+                                access: _accessFor(value, party.id),
+                              ),
+                              itemBuilder: (_) => [
+                                const PopupMenuItem(
+                                  value: HouseholdAction.changeRole,
+                                  child: Text('Change role'),
+                                ),
+                                const PopupMenuItem(
+                                  value: HouseholdAction.end,
+                                  child: Text('End membership'),
+                                ),
+                                if (_accessFor(value, party.id) == null &&
+                                    party.email != null)
+                                  const PopupMenuItem(
+                                    value: HouseholdAction.grantAccess,
+                                    child: Text('Create resident login'),
+                                  ),
+                                if (_accessFor(value, party.id) != null)
+                                  const PopupMenuItem(
+                                    value: HouseholdAction.revokeAccess,
+                                    child: Text('Revoke resident login'),
+                                  ),
+                                const PopupMenuItem(
+                                  value: HouseholdAction.add,
+                                  child: Text('View person'),
+                                ),
+                              ],
+                            )
+                          : const Icon(Icons.chevron_right),
+                      onTap: () => Navigator.of(context).push<void>(
+                        MaterialPageRoute<void>(
+                          builder: (_) => TenantDetailLoaderScreen(
+                            tenantId: party.tenantId,
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (management.parties.any((party) => !party.isCurrent)) ...[
+                    const Divider(),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'History',
+                        style: Theme.of(context).textTheme.labelLarge,
+                      ),
+                    ),
+                    for (final party in management.parties)
+                      if (!party.isCurrent)
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.history_outlined),
+                          title: Text(party.tenantName),
+                          subtitle: Text(
+                            '${party.role} · ${_date(party.effectiveFrom)} – ${party.effectiveThrough == null ? 'current' : _date(party.effectiveThrough!)}',
+                          ),
+                        ),
+                  ],
+                ],
               ),
-        ],
+            ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
+
+  ActiveTenantUserAccess? _accessFor(
+    ReturnPossessionContext context,
+    int partyId,
+  ) {
+    for (final access in context.activeTenantUserAccesses) {
+      if (access.leaseManagementPartyId == partyId) return access;
+    }
+    return null;
+  }
+
+  Future<void> _open(
+    BuildContext context,
+    WidgetRef ref,
+    HouseholdAction action,
+    ReturnPossessionContext? household, {
+    LeaseManagementParty? party,
+    ActiveTenantUserAccess? access,
+  }) async {
+    if (action == HouseholdAction.add && party != null) {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => TenantDetailLoaderScreen(tenantId: party.tenantId),
+        ),
+      );
+      return;
+    }
+    if (household == null) return;
+    final changed = await showHouseholdManagementSheet(
+      context,
+      action: action,
+      management: management,
+      currentParties: household.parties,
+      agreements: agreements,
+      party: party,
+      access: access,
+    );
+    if (!changed) return;
+    ref.invalidate(leaseManagementDetailProvider(management.summary.id));
+    ref.invalidate(leaseHouseholdContextProvider(management.summary.id));
+  }
 }
 
 class _AgreementHistoryCard extends ConsumerWidget {
@@ -482,6 +643,7 @@ class _AgreementHistoryCard extends ConsumerWidget {
     required this.propertyName,
     required this.unitNumber,
     required this.managementBusinessDate,
+    required this.canPrepare,
   });
 
   final int leaseManagementId;
@@ -489,6 +651,7 @@ class _AgreementHistoryCard extends ConsumerWidget {
   final String propertyName;
   final String unitNumber;
   final DateTime managementBusinessDate;
+  final bool canPrepare;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -565,7 +728,7 @@ class _AgreementHistoryCard extends ConsumerWidget {
                         ),
                     ],
                   ),
-                if (agreement.isDraft)
+                if (canPrepare && agreement.isDraft)
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
@@ -590,7 +753,7 @@ class _AgreementHistoryCard extends ConsumerWidget {
                         ),
                     ],
                   ),
-                if (agreement.isGoverning)
+                if (canPrepare && agreement.isGoverning)
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
@@ -953,9 +1116,13 @@ class _CancelSuccessorDraftDialogState
 }
 
 class _AddendumHistoryCard extends ConsumerStatefulWidget {
-  const _AddendumHistoryCard({required this.management});
+  const _AddendumHistoryCard({
+    required this.management,
+    required this.canPrepare,
+  });
 
   final LeaseManagementDetail management;
+  final bool canPrepare;
 
   @override
   ConsumerState<_AddendumHistoryCard> createState() =>
@@ -989,11 +1156,12 @@ class _AddendumHistoryCardState extends ConsumerState<_AddendumHistoryCard> {
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
-                FilledButton.tonalIcon(
-                  onPressed: () => _create(context),
-                  icon: const Icon(Icons.add),
-                  label: const Text('New draft'),
-                ),
+                if (widget.canPrepare)
+                  FilledButton.tonalIcon(
+                    onPressed: () => _create(context),
+                    icon: const Icon(Icons.add),
+                    label: const Text('New draft'),
+                  ),
               ],
             ),
             const SizedBox(height: 8),
@@ -1066,19 +1234,19 @@ class _AddendumHistoryCardState extends ConsumerState<_AddendumHistoryCard> {
                   icon: const Icon(Icons.verified_outlined),
                   label: const Text('Executed PDF'),
                 ),
-              if (addendum.isDraft)
+              if (widget.canPrepare && addendum.isDraft)
                 OutlinedButton.icon(
                   onPressed: () => _edit(context, addendum),
                   icon: const Icon(Icons.edit_outlined),
                   label: const Text('Edit draft'),
                 ),
-              if (addendum.isDraft)
+              if (widget.canPrepare && addendum.isDraft)
                 FilledButton.icon(
                   onPressed: () => _issue(context, addendum),
                   icon: const Icon(Icons.send_outlined),
                   label: const Text('Issue'),
                 ),
-              if (addendum.canCorrect)
+              if (widget.canPrepare && addendum.canCorrect)
                 OutlinedButton.icon(
                   onPressed: () => _correct(context, addendum),
                   icon: const Icon(Icons.content_copy_outlined),

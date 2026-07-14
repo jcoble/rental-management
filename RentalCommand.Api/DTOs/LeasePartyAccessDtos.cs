@@ -44,7 +44,6 @@ public sealed class ChangeEffectivePartyRoleRequest
 
 public sealed class GrantTenantUserAccessRequest
 {
-    public int ApplicationUserId { get; set; }
     public string Reason { get; set; } = string.Empty;
 }
 

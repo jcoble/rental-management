@@ -40,15 +40,18 @@ public sealed class LeaseManagementController : ManagementControllerBase
     private readonly IAtomicUnitOfWork _atomic;
     private readonly ILeaseManagementQueryService _queryService;
     private readonly ILeaseQaService _qa;
+    private readonly string _webBaseUrl;
 
     public LeaseManagementController(
         IAtomicUnitOfWork atomic,
         ILeaseManagementQueryService queryService,
-        ILeaseQaService qa)
+        ILeaseQaService qa,
+        IConfiguration configuration)
     {
         _atomic = atomic;
         _queryService = queryService;
         _qa = qa;
+        _webBaseUrl = (configuration["App:WebBaseUrl"] ?? "https://localhost:5667").TrimEnd('/');
     }
 
     [HttpGet("page")]
@@ -96,7 +99,7 @@ public sealed class LeaseManagementController : ManagementControllerBase
     }
 
     /// <summary>
-    /// Returns the exact current household and active portal-access grants that require an explicit
+    /// Returns the exact current household and active relationship-access grants that require an explicit
     /// disposition before possession can be returned. Current membership, access filtering, and
     /// ordering are evaluated by PostgreSQL in two purposeful flat queries: one for parties and one
     /// for grants. The response does not rely on a client-side join or a per-party follow-up query.
@@ -463,8 +466,8 @@ public sealed class LeaseManagementController : ManagementControllerBase
             envelope.PortfolioId,
             leaseManagementId,
             partyId,
-            request.ApplicationUserId,
             request.Reason,
+            _webBaseUrl,
             envelope.UserId,
             envelope.AuthSessionId,
             envelope.AccessContextId,

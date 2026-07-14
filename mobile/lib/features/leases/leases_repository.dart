@@ -823,6 +823,79 @@ class LeaseManagementsRepository {
     }
   }
 
+  Future<Map<String, dynamic>> addParty({
+    required int leaseManagementId,
+    required Map<String, dynamic> request,
+    required String operationKey,
+  }) => _partyMutation(
+    '/lease-managements/$leaseManagementId/parties',
+    request,
+    operationKey,
+  );
+
+  Future<Map<String, dynamic>> changePartyRole({
+    required int leaseManagementId,
+    required int partyId,
+    required Map<String, dynamic> request,
+    required String operationKey,
+  }) => _partyMutation(
+    '/lease-managements/$leaseManagementId/parties/$partyId/change-role',
+    request,
+    operationKey,
+  );
+
+  Future<Map<String, dynamic>> endParty({
+    required int leaseManagementId,
+    required int partyId,
+    required Map<String, dynamic> request,
+    required String operationKey,
+  }) => _partyMutation(
+    '/lease-managements/$leaseManagementId/parties/$partyId/end',
+    request,
+    operationKey,
+  );
+
+  Future<Map<String, dynamic>> grantPartyAccess({
+    required int leaseManagementId,
+    required int partyId,
+    required String reason,
+    required String operationKey,
+  }) => _partyMutation(
+    '/lease-managements/$leaseManagementId/parties/$partyId/access',
+    {'reason': reason},
+    operationKey,
+  );
+
+  Future<Map<String, dynamic>> revokePartyAccess({
+    required int leaseManagementId,
+    required int partyId,
+    required int tenantUserAccessId,
+    required String reason,
+    required String operationKey,
+  }) => _partyMutation(
+    '/lease-managements/$leaseManagementId/parties/$partyId/access/'
+    '$tenantUserAccessId/revoke',
+    {'reason': reason},
+    operationKey,
+  );
+
+  Future<Map<String, dynamic>> _partyMutation(
+    String path,
+    Map<String, dynamic> request,
+    String operationKey,
+  ) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        path,
+        data: request,
+        options: Options(headers: {'Idempotency-Key': operationKey}),
+      );
+      return _required(response.data);
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
   Future<LeaseAgreementHistoryPage> agreementHistory(
     int leaseManagementId,
   ) async {
@@ -1511,6 +1584,13 @@ final leaseManagementsPageProvider = FutureProvider.autoDispose
 final leaseManagementDetailProvider = FutureProvider.autoDispose
     .family<LeaseManagementDetail, int>(
       (ref, id) => ref.watch(leaseManagementsRepositoryProvider).get(id),
+    );
+
+final leaseHouseholdContextProvider = FutureProvider.autoDispose
+    .family<ReturnPossessionContext, int>(
+      (ref, id) => ref
+          .watch(leaseManagementsRepositoryProvider)
+          .returnPossessionContext(id),
     );
 
 final tenantLeaseManagementsProvider = FutureProvider.autoDispose

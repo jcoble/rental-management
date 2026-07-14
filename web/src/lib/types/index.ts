@@ -451,6 +451,7 @@ export interface LeaseManagementParty {
 	effectiveFrom: string;
 	effectiveThrough?: string | null;
 	guarantorLegalNoticeEligible: boolean;
+	isCurrent: boolean;
 }
 
 export interface LeaseManagementDetail {
