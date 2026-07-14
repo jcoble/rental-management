@@ -55,7 +55,7 @@ builder.Services.AddScoped<RentalCommand.Core.Interfaces.ICurrentActor,
 // The Engine's direct restricted database identity is the sole cross-workspace authority. It never
 // receives or sets a mutable administrator/bypass flag.
 builder.Services.AddSingleton<RentalCommand.Engine.Data.EngineRlsInterceptor>();
-builder.Services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
+builder.Services.AddAtomicPersistenceKernel(allowUnconvertedWrites: false);
 builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Esign.RecordNativeSignatureCommand,
     RentalCommand.Core.Esign.NativeSignerActionResult,
