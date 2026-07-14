@@ -438,7 +438,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
 
         await using (var command = NewContext())
         {
-            var service = new TenantNoticeCandidateGenerationService(command);
+            var service = new TenantNoticeCandidateGenerationService(command, InfrastructureWrites);
             (await service.GenerateDueAsync()).Should().Be(2);
             (await service.GenerateDueAsync()).Should().Be(0);
         }
@@ -713,6 +713,8 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
     }
 
     private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();
+    private IAtomicInfrastructureWriteGate InfrastructureWrites =>
+        _services!.GetRequiredService<IAtomicInfrastructureWriteGate>();
 
     private static async Task<WorkspaceReadScope> SeedAdministratorScopeAsync(
         RentalCommandDbContext db,

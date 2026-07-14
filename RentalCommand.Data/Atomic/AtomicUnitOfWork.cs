@@ -369,6 +369,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         private readonly IAtomicPaymentCsvImportPersistence _paymentCsvImports;
         private readonly IAtomicInspectionPersistence _inspections;
         private readonly IAtomicAccountSecurityPersistence _accountSecurity;
+        private readonly IAtomicWorkspaceExperiencePersistence _workspaceExperiences;
         private readonly TimeProvider _timeProvider;
         private readonly List<OutboxMessage> _outbox = [];
         private bool _outboxMaterialized;
@@ -401,6 +402,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             _paymentCsvImports = new AtomicPaymentCsvImportPersistence(db, auditScope);
             _inspections = new AtomicInspectionPersistence(db, auditScope);
             _accountSecurity = new AtomicAccountSecurityPersistence(db);
+            _workspaceExperiences = new AtomicWorkspaceExperiencePersistence(db, auditScope);
             _timeProvider = timeProvider;
         }
 
@@ -426,6 +428,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         public IAtomicPaymentCsvImportPersistence PaymentCsvImports => _paymentCsvImports;
         public IAtomicInspectionPersistence Inspections => _inspections;
         public IAtomicAccountSecurityPersistence AccountSecurity => _accountSecurity;
+        public IAtomicWorkspaceExperiencePersistence WorkspaceExperiences => _workspaceExperiences;
         public Guid SessionId => _db.ContextId.InstanceId;
 
         public Task<DateTime> ReadDatabaseClockUtcAsync(CancellationToken ct = default) =>
@@ -522,6 +525,44 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
                     """)
                 .SingleAsync(ct);
             return new AtomicCommandTimes(row.WallClockUtc, row.BusinessDate);
+        }
+
+        public Task<bool> IsWorkspaceExperienceAvailableAsync(
+            WorkspaceReadScope scope,
+            WorkspaceExperience experience,
+            CancellationToken ct = default)
+        {
+            var experienceName = experience.ToString();
+            return _db.Database.SqlQuery<bool>($"""
+                    SELECT EXISTS (
+                        SELECT 1
+                          FROM "WorkspaceAccessContexts" AS context
+                         WHERE context."Id" = {scope.AccessContextId}
+                           AND context."UserId" = {scope.UserId}
+                           AND context."PortfolioId" = {scope.PortfolioId}
+                           AND context."AccessRevision" = {scope.AccessRevision}
+                           AND context."Status" = 'Active'
+                           AND context."SuspendedAtUtc" IS NULL
+                           AND context."RevokedAtUtc" IS NULL
+                           AND EXISTS (
+                               SELECT 1
+                                 FROM "AuthSessions" AS session
+                                WHERE session."Id" = {scope.SessionId}
+                                  AND session."UserId" = context."UserId"
+                                  AND session."ActiveAccessContextId" = context."Id"
+                                  AND session."Status" = 'Active'
+                                  AND session."RevokedAtUtc" IS NULL
+                                  AND session."ExpiresAtUtc" > clock_timestamp())
+                           AND EXISTS (
+                               SELECT 1
+                                 FROM "vw_access_envelopes" AS envelope
+                                WHERE envelope."AccessContextId" = context."Id"
+                                  AND envelope."UserId" = context."UserId"
+                                  AND envelope."PortfolioId" = context."PortfolioId"
+                                  AND jsonb_exists(
+                                      envelope."EnvelopeJson"::jsonb -> 'availableExperiences',
+                                      {experienceName}))) AS "Value"
+                    """).SingleAsync(ct);
         }
 
         public IQueryable<TEntity> Query<TEntity>() where TEntity : class => _db.Set<TEntity>();

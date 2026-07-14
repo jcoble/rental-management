@@ -1,8 +1,9 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
-using RentalCommand.Data;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -17,19 +18,23 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public sealed class WorkspaceExperienceController : AuthenticatedPortfolioControllerBase
 {
-    private readonly RentalCommandDbContext _db;
+    private static readonly AtomicJsonResultCodec<SelectWorkspaceExperienceResult> ResultCodec =
+        new("workspace-experience-select-result:v1");
+
+    private readonly IAtomicUnitOfWork _atomic;
     private readonly IAccessEnvelopeQuery _accessEnvelopes;
 
     public WorkspaceExperienceController(
-        RentalCommandDbContext db,
+        IAtomicUnitOfWork atomic,
         IAccessEnvelopeQuery accessEnvelopes)
     {
-        _db = db;
+        _atomic = atomic;
         _accessEnvelopes = accessEnvelopes;
     }
 
     [HttpPost("select")]
     public async Task<ActionResult<AccessEnvelope>> Select(
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         [FromBody] SelectWorkspaceExperienceRequest request,
         CancellationToken ct)
     {
@@ -38,45 +43,36 @@ public sealed class WorkspaceExperienceController : AuthenticatedPortfolioContro
             return BadRequest(new { error = "A valid workspace experience is required." });
         }
 
+        var normalizedKey = idempotencyKey?.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedKey) || normalizedKey.Length > 200)
+        {
+            return BadRequest(new
+            {
+                error = "A valid Idempotency-Key is required (maximum 200 characters).",
+            });
+        }
+
         var active = GetActiveAccessContext();
-        var experience = request.Experience.ToString();
-
-        // One PostgreSQL statement both revalidates the current canonical session/revision and
-        // proves the requested experience exists in the effective access-envelope projection.
-        // Authority changes advance AccessRevision, so a concurrent revocation/scope change makes
-        // this update affect zero rows instead of persisting a stale selection.
-        var updated = await _db.Database.ExecuteSqlInterpolatedAsync($"""
-            UPDATE "WorkspaceAccessContexts" AS context
-               SET "LastAuthorizedExperience" = {experience},
-                   "UpdatedAtUtc" = clock_timestamp()
-             WHERE context."Id" = {active.AccessContextId}
-               AND context."UserId" = {active.UserId}
-               AND context."PortfolioId" = {active.PortfolioId}
-               AND context."AccessRevision" = {active.AccessRevision}
-               AND context."Status" = 'Active'
-               AND context."SuspendedAtUtc" IS NULL
-               AND context."RevokedAtUtc" IS NULL
-               AND EXISTS (
-                   SELECT 1
-                     FROM "AuthSessions" AS session
-                    WHERE session."Id" = {active.SessionId}
-                      AND session."UserId" = context."UserId"
-                      AND session."ActiveAccessContextId" = context."Id"
-                      AND session."Status" = 'Active'
-                      AND session."RevokedAtUtc" IS NULL
-                      AND session."ExpiresAtUtc" > clock_timestamp())
-               AND EXISTS (
-                   SELECT 1
-                     FROM "vw_access_envelopes" AS envelope
-                    WHERE envelope."AccessContextId" = context."Id"
-                      AND envelope."UserId" = context."UserId"
-                      AND envelope."PortfolioId" = context."PortfolioId"
-                      AND jsonb_exists(
-                          envelope."EnvelopeJson"::jsonb -> 'availableExperiences',
-                          {experience}))
-            """, ct);
-
-        if (updated != 1)
+        var keyDigest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedKey)))
+            .ToLowerInvariant();
+        var command = new SelectWorkspaceExperienceCommand(
+            active.PortfolioId,
+            active.UserId,
+            active.SessionId,
+            active.AccessContextId,
+            active.AccessRevision,
+            request.Experience);
+        try
+        {
+            await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "workspace-experience.select",
+                    $"{active.PortfolioId}:{active.AccessContextId}:{keyDigest}"),
+                command,
+                ResultCodec,
+                ct);
+        }
+        catch (UnauthorizedAccessException)
         {
             return Forbid();
         }

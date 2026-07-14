@@ -237,6 +237,11 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
     {
         public IDisposable BeginPendingFileUploadAdmission() => new Lease();
         public IDisposable BeginExternalListingSignalAdmission() => new Lease();
+        public IDisposable BeginTenantNoticeCandidateGeneration() => new Lease();
+        public IDisposable BeginTenantNoticeWorkItemClaim() => new Lease();
+        public IDisposable BeginTenantNoticeWorkItemCompletion() => new Lease();
+        public IDisposable BeginTenantNoticeWorkItemRelease() => new Lease();
+        public IDisposable BeginTenantNoticeWorkItemBlock() => new Lease();
         private sealed class Lease : IDisposable { public void Dispose() { } }
     }
 }

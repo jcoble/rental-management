@@ -197,6 +197,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Auth.AuthEmailOutboxResult,
     RentalCommand.Data.Auth.AuthEmailOutboxHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Authorization.SelectWorkspaceExperienceCommand,
+    RentalCommand.Core.Authorization.SelectWorkspaceExperienceResult,
+    RentalCommand.Data.Authorization.SelectWorkspaceExperienceHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Scanning.RejectScanDraftCommand,
     RentalCommand.Core.Scanning.RejectScanDraftResult,
     RentalCommand.Data.Scanning.RejectScanDraftHandler>();

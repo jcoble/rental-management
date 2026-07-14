@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Data;
 
 namespace RentalCommand.Engine.Services;
@@ -181,9 +182,19 @@ public sealed class TenantNoticeCandidateGenerationService : ITenantNoticeCandid
         """;
 
     private readonly RentalCommandDbContext _db;
+    private readonly IAtomicInfrastructureWriteGate _writeGate;
 
-    public TenantNoticeCandidateGenerationService(RentalCommandDbContext db) => _db = db;
+    public TenantNoticeCandidateGenerationService(
+        RentalCommandDbContext db,
+        IAtomicInfrastructureWriteGate writeGate)
+    {
+        _db = db;
+        _writeGate = writeGate;
+    }
 
-    public Task<int> GenerateDueAsync(CancellationToken ct = default) =>
-        _db.Database.ExecuteSqlRawAsync(CandidateInsertSql, ct);
+    public async Task<int> GenerateDueAsync(CancellationToken ct = default)
+    {
+        using var lease = _writeGate.BeginTenantNoticeCandidateGeneration();
+        return await _db.Database.ExecuteSqlRawAsync(CandidateInsertSql, ct);
+    }
 }

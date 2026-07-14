@@ -361,11 +361,14 @@ class AuthRepository {
 
   Future<AccessEnvelope> selectExperience(
     WorkspaceExperience experience,
+  ) => IdempotentMutation.run('auth:experience:${experience.name}', (
+    operationKey,
   ) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
         '/auth/experience/select',
         data: {'experience': experience.name},
+        options: Options(headers: {'Idempotency-Key': operationKey}),
       );
       final data = response.data;
       if (data == null) {
@@ -380,7 +383,7 @@ class AuthRepository {
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
-  }
+  });
 
   /// Logs out by revoking the server-side refresh token and clearing local storage.
   Future<void> logout() async {
