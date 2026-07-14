@@ -51,7 +51,9 @@ public class VendorDispatchServiceTests : IDisposable
             VendorRatingMutationResult,
             CreateVendorRatingHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
-            builder.UseSqlite(_ctx.ConnectionString).UseAtomicPersistenceKernel(provider));
+            builder.UseSqlite(_ctx.ConnectionString)
+                .AddInterceptors(SqliteDatabaseClockInterceptor.Instance)
+                .UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider();
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(VendorDispatchServiceTests));
     }
@@ -289,7 +291,7 @@ public class VendorDispatchServiceTests : IDisposable
             ChangedByLabel = "Vendor",
             CreatedAtUtc = firstCompletionAt,
         });
-        SeedScopedManager(userId: 100, property.Id);
+        SeedScopedMember(userId: 100, property.Id, roleProfileId: 2);
         await _ctx.Db.SaveChangesAsync();
 
         var siblingCompletionAt = DateTime.UtcNow;
@@ -333,7 +335,7 @@ public class VendorDispatchServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task VendorDone_NotifiesOnlyWorkCapabilityAndPropertyScopedRecipient()
+    public async Task VendorDone_NotifiesOnlyWorkCapabilityAndPropertyScopedRecipients()
     {
         var (property, vendor) = SeedPropertyAndVendor(vendorPhone: "+16145550199");
         var decoyProperty = new Property
@@ -351,17 +353,26 @@ public class VendorDispatchServiceTests : IDisposable
         var workOrder = SeedWorkOrder(property);
         await _ctx.Db.SaveChangesAsync();
         _ctx.Db.VendorDispatches.Add(OpenDispatch(workOrder.Id, vendor.Id, DateTime.UtcNow.AddMinutes(-5)));
-        SeedScopedManager(userId: 100, property.Id);
-        SeedScopedManager(userId: 101, decoyProperty.Id);
+        SeedScopedMember(userId: 100, property.Id, roleProfileId: 2);
+        SeedScopedMember(userId: 101, decoyProperty.Id, roleProfileId: 2);
+        // Leasing is in property scope but does not supply work.read.
+        SeedScopedMember(userId: 102, property.Id, roleProfileId: 3);
         await _ctx.Db.SaveChangesAsync();
 
         var result = await CreateDoneSut().TryHandleAsync(
             "SM-scoped-recipient", "+16145550199", "DONE", DateTime.UtcNow);
 
         result.Handled.Should().BeTrue();
-        var notification = (await _ctx.Db.Notifications.ToListAsync()).Should().ContainSingle().Subject;
-        notification.UserId.Should().Be(100);
-        notification.RelatedEntityId.Should().Be(workOrder.Id);
+        var notifications = await _ctx.Db.Notifications
+            .OrderBy(notification => notification.UserId)
+            .ToListAsync();
+        notifications.Select(notification => notification.UserId)
+            .Should().Equal(_scope.UserId, 100);
+        notifications.Should().OnlyContain(notification =>
+            notification.RelatedEntityId == workOrder.Id);
+        notifications.Should().NotContain(notification =>
+            notification.UserId is 101 or 102,
+            "out-of-scope and capability-missing members are not recipients");
     }
 
     private static VendorDispatch OpenDispatch(
@@ -377,17 +388,18 @@ public class VendorDispatchServiceTests : IDisposable
         Message = "Reply DONE when complete.",
     };
 
-    private void SeedScopedManager(int userId, int propertyId)
+    private void SeedScopedMember(int userId, int propertyId, int roleProfileId)
     {
         var now = DateTime.UtcNow;
+        var role = AccessCatalog.Roles.Single(candidate => candidate.Id == roleProfileId);
         var user = new ApplicationUser
         {
             Id = userId,
-            UserName = $"manager-{userId}@example.test",
-            NormalizedUserName = $"MANAGER-{userId}@EXAMPLE.TEST",
-            Email = $"manager-{userId}@example.test",
-            NormalizedEmail = $"MANAGER-{userId}@EXAMPLE.TEST",
-            DisplayName = $"Manager {userId}",
+            UserName = $"member-{userId}@example.test",
+            NormalizedUserName = $"MEMBER-{userId}@EXAMPLE.TEST",
+            Email = $"member-{userId}@example.test",
+            NormalizedEmail = $"MEMBER-{userId}@EXAMPLE.TEST",
+            DisplayName = $"Member {userId}",
             CreatedAt = now,
         };
         var accessContext = new WorkspaceAccessContext
@@ -403,7 +415,7 @@ public class VendorDispatchServiceTests : IDisposable
             AccessContext = accessContext,
             PortfolioId = PortfolioId,
             Status = WorkspaceMembershipStatus.Active,
-            DefaultExperience = WorkspaceExperience.Management,
+            DefaultExperience = role.DefaultExperience,
             EffectiveFromUtc = now.AddDays(-1),
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
@@ -412,7 +424,7 @@ public class VendorDispatchServiceTests : IDisposable
         {
             WorkspaceMembership = membership,
             PortfolioId = PortfolioId,
-            RoleProfileId = 2,
+            RoleProfileId = roleProfileId,
             Status = MembershipRoleAssignmentStatus.Active,
             ScopeKind = MembershipRoleAssignmentScopeKind.SelectedProperties,
             EffectiveFromUtc = now.AddDays(-1),
