@@ -932,7 +932,9 @@ public sealed class AtomicInspectionMutationHandler
                 operation = deleted ? "delete" : "update",
                 data = new { },
             }),
-            IdempotencyKey = $"{command.DeliveryIdempotencyKey}:{suffix}",
+            IdempotencyKey = $"{command.DeliveryIdempotencyKey}:" +
+                $"{command.Domain.ToString().ToLowerInvariant()}:" +
+                $"{command.Operation.ToString().ToLowerInvariant()}:{suffix}",
             CreatedAtUtc = now,
             NextAttemptAtUtc = now,
         });

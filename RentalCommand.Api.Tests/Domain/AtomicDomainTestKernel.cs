@@ -1,5 +1,4 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using RentalCommand.Api.Services.Domain;
@@ -7,11 +6,13 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Operations;
 using RentalCommand.Core.Auth;
+using RentalCommand.Core.Scanning;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
 using RentalCommand.Data.Auth;
 using RentalCommand.Data.Operations;
+using RentalCommand.Data.Scanning;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -90,13 +91,23 @@ internal static class AtomicDomainTestKernel
         return services.BuildServiceProvider();
     }
 
-    internal static ServiceProvider CreateForPasswordResetSqlite(SqliteConnection connection)
+    internal static ServiceProvider CreateForPasswordResetPostgreSql(string connectionString)
     {
-        var services = CoreSqlite(connection);
+        var services = CorePostgreSql(connectionString);
         services.AddAtomicCommandHandler<
             ResetAccountPasswordCommand,
             ResetAccountPasswordResult,
             ResetAccountPasswordHandler>();
+        return services.BuildServiceProvider();
+    }
+
+    internal static ServiceProvider CreateForScanRetryPostgreSql(string connectionString)
+    {
+        var services = CorePostgreSql(connectionString);
+        services.AddAtomicCommandHandler<
+            RetryScanDraftCommand,
+            ScanDraftMutationResult,
+            RetryScanDraftHandler>();
         return services.BuildServiceProvider();
     }
 
@@ -133,19 +144,6 @@ internal static class AtomicDomainTestKernel
         services.AddAtomicPersistenceKernel();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(connection)
-                .UseAtomicPersistenceKernel(provider));
-        return services;
-    }
-
-    private static ServiceCollection CoreSqlite(SqliteConnection connection)
-    {
-        var services = new ServiceCollection();
-        services.AddLogging();
-        services.AddScoped<ICurrentActor, SystemCurrentActor>();
-        services.AddAtomicPersistenceKernel();
-        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
-            builder.UseSqlite(connection)
-                .AddInterceptors(SqliteDatabaseClockInterceptor.Instance)
                 .UseAtomicPersistenceKernel(provider));
         return services;
     }

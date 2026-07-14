@@ -7,7 +7,7 @@ namespace RentalCommand.Core.Entities;
 /// One merge/signing anchor on a document template. Coordinates are normalized percentages with a
 /// top-left origin so browser placement and PDF rendering share the same contract.
 /// </summary>
-public class DocumentTemplateField : IPortfolioScoped
+public class DocumentTemplateField : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
