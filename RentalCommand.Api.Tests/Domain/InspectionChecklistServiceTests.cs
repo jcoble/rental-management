@@ -34,6 +34,7 @@ public class InspectionChecklistServiceTests : IDisposable
     private readonly InspectionService _service;
     private readonly ServiceProvider _services;
     private readonly WorkspaceReadScope _scope;
+    private int _operationSequence;
 
     public InspectionChecklistServiceTests()
     {
@@ -94,6 +95,8 @@ public class InspectionChecklistServiceTests : IDisposable
         _conn.Dispose();
     }
 
+    private string NextOperationKey() => $"inspection-checklist-{++_operationSequence}";
+
     [Fact]
     public async Task ListTemplates_ReturnsBuiltIns_WithItems()
     {
@@ -150,13 +153,13 @@ public class InspectionChecklistServiceTests : IDisposable
         var annualTemplate = InspectionTemplateCatalog.BuiltIns
             .First(t => t.InspectionType == InspectionType.AnnualSafety);
 
-        var created = await _service.CreateAsync(PortfolioId, new CreateInspectionRequest
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
         {
             PropertyId = property.Id,
             Type = InspectionType.AnnualSafety,
             ScheduledFor = DateTime.UtcNow,
             TemplateId = annualTemplate.Id, // negative built-in id
-        });
+        }, NextOperationKey());
 
         created.Should().NotBeNull();
         created!.TemplateId.Should().Be(annualTemplate.Id);
@@ -173,38 +176,38 @@ public class InspectionChecklistServiceTests : IDisposable
     public async Task ScheduledInspection_AllowsChecklistQuestionCustomization()
     {
         var property = SeedProperty();
-        var created = await _service.CreateAsync(PortfolioId, new CreateInspectionRequest
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
         {
             PropertyId = property.Id,
             Type = InspectionType.Routine,
             ScheduledFor = DateTime.UtcNow,
-        });
+        }, NextOperationKey());
         created.Should().NotBeNull();
         created!.Items.Should().BeEmpty();
 
-        var first = await _service.CreateItemAsync(PortfolioId, created.Id, new CreateInspectionItemRequest
+        var first = await _service.CreateItemAuthorizedAsync(_scope, created.Id, new CreateInspectionItemRequest
         {
             Area = " Kitchen ",
             Label = " Sink drains ",
-        });
-        var second = await _service.CreateItemAsync(PortfolioId, created.Id, new CreateInspectionItemRequest
+        }, NextOperationKey());
+        var second = await _service.CreateItemAuthorizedAsync(_scope, created.Id, new CreateInspectionItemRequest
         {
             Area = "Safety",
             Label = "Smoke detector works",
-        });
+        }, NextOperationKey());
 
         first.Should().NotBeNull();
         second.Should().NotBeNull();
         first!.Area.Should().Be("Kitchen");
         first.Label.Should().Be("Sink drains");
 
-        var updated = await _service.UpdateItemAsync(PortfolioId, created.Id, first.Id, new UpdateInspectionItemRequest
+        var updated = await _service.UpdateItemAuthorizedAsync(_scope, created.Id, first.Id, new UpdateInspectionItemRequest
         {
             Area = "Kitchenette",
             Label = "Sink and faucet are dry",
             Result = InspectionItemResult.Pass,
             Note = "No drip.",
-        });
+        }, NextOperationKey());
 
         updated.Should().NotBeNull();
         updated!.Area.Should().Be("Kitchenette");
@@ -212,15 +215,15 @@ public class InspectionChecklistServiceTests : IDisposable
         updated.Result.Should().Be(InspectionItemResult.Pass);
         updated.Note.Should().Be("No drip.");
 
-        var reordered = await _service.ReorderItemsAsync(PortfolioId, created.Id, new ReorderInspectionItemsRequest
+        var reordered = await _service.ReorderItemsAuthorizedAsync(_scope, created.Id, new ReorderInspectionItemsRequest
         {
             ItemIds = [second!.Id, first.Id],
-        });
+        }, NextOperationKey());
         reordered.Should().NotBeNull();
         reordered!.Select(i => i.Id).Should().Equal(second.Id, first.Id);
         reordered.Select(i => i.SortOrder).Should().Equal(0, 1);
 
-        (await _service.DeleteItemAsync(PortfolioId, created.Id, second.Id)).Should().BeTrue();
+        (await _service.DeleteItemAuthorizedAsync(_scope, created.Id, second.Id, NextOperationKey())).Should().BeTrue();
 
         var detail = await _service.GetAsync(PortfolioId, created.Id);
         detail!.Items.Should().ContainSingle();
@@ -232,39 +235,39 @@ public class InspectionChecklistServiceTests : IDisposable
     public async Task ChecklistQuestionCustomization_ValidatesRequiredTextAndReorderMembership()
     {
         var property = SeedProperty();
-        var created = await _service.CreateAsync(PortfolioId, new CreateInspectionRequest
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
         {
             PropertyId = property.Id,
             Type = InspectionType.Routine,
             ScheduledFor = DateTime.UtcNow,
-        });
+        }, NextOperationKey());
         created.Should().NotBeNull();
 
-        Func<Task> createWithoutArea = () => _service.CreateItemAsync(PortfolioId, created!.Id, new CreateInspectionItemRequest
+        Func<Task> createWithoutArea = () => _service.CreateItemAuthorizedAsync(_scope, created!.Id, new CreateInspectionItemRequest
         {
             Area = " ",
             Label = "Window locks",
-        });
+        }, NextOperationKey());
         (await createWithoutArea.Should().ThrowAsync<DomainValidationException>())
             .Which.Message.Should().Contain("area");
 
-        var item = await _service.CreateItemAsync(PortfolioId, created!.Id, new CreateInspectionItemRequest
+        var item = await _service.CreateItemAuthorizedAsync(_scope, created!.Id, new CreateInspectionItemRequest
         {
             Area = "Doors",
             Label = "Front door latches",
-        });
+        }, NextOperationKey());
 
-        Func<Task> updateWithoutLabel = () => _service.UpdateItemAsync(PortfolioId, created.Id, item!.Id, new UpdateInspectionItemRequest
+        Func<Task> updateWithoutLabel = () => _service.UpdateItemAuthorizedAsync(_scope, created.Id, item!.Id, new UpdateInspectionItemRequest
         {
             Label = "",
-        });
+        }, NextOperationKey());
         (await updateWithoutLabel.Should().ThrowAsync<DomainValidationException>())
             .Which.Message.Should().Contain("checklist item");
 
-        Func<Task> reorderMissingItem = () => _service.ReorderItemsAsync(PortfolioId, created.Id, new ReorderInspectionItemsRequest
+        Func<Task> reorderMissingItem = () => _service.ReorderItemsAuthorizedAsync(_scope, created.Id, new ReorderInspectionItemsRequest
         {
             ItemIds = [999_999],
-        });
+        }, NextOperationKey());
         (await reorderMissingItem.Should().ThrowAsync<DomainValidationException>())
             .Which.Message.Should().Contain("every checklist question exactly once");
     }
@@ -274,12 +277,12 @@ public class InspectionChecklistServiceTests : IDisposable
     {
         var property = SeedProperty();
 
-        var created = await _service.CreateAsync(PortfolioId, new CreateInspectionRequest
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
         {
             PropertyId = property.Id,
             ScheduledFor = DateTime.UtcNow,
             TemplateId = 99999, // not a built-in (positive) and not an in-portfolio custom template
-        });
+        }, NextOperationKey());
 
         created.Should().BeNull("an unknown template id must be rejected");
     }
@@ -290,24 +293,24 @@ public class InspectionChecklistServiceTests : IDisposable
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
 
-        var created = await _service.CreateAsync(PortfolioId, new CreateInspectionRequest
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
         {
             PropertyId = property.Id,
             Type = InspectionType.MoveIn,
             ScheduledFor = DateTime.UtcNow,
             Inspector = "Jane Doe",
             TemplateId = moveIn.Id,
-        });
+        }, NextOperationKey());
         created.Should().NotBeNull();
 
         // Mark two items Fail, one Pass — leave the rest Pending.
         var items = created!.Items.OrderBy(i => i.SortOrder).ToList();
-        await _service.UpdateItemAsync(PortfolioId, created.Id, items[0].Id,
-            new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail, Note = "Faucet leaks badly" });
-        await _service.UpdateItemAsync(PortfolioId, created.Id, items[1].Id,
-            new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail, Note = "Burner won't ignite" });
-        await _service.UpdateItemAsync(PortfolioId, created.Id, items[2].Id,
-            new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass });
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, items[0].Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail, Note = "Faucet leaks badly" }, NextOperationKey());
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, items[1].Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail, Note = "Burner won't ignite" }, NextOperationKey());
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, items[2].Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass }, NextOperationKey());
 
         var (summary, error) = await _service.CompleteAuthorizedAsync(
             _scope, created.Id, userId: 7, operationKey: "complete-spawns-work-orders");
@@ -361,21 +364,21 @@ public class InspectionChecklistServiceTests : IDisposable
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
 
-        var created = await _service.CreateAsync(PortfolioId, new CreateInspectionRequest
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
         {
             PropertyId = property.Id,
             Type = InspectionType.MoveIn,
             ScheduledFor = DateTime.UtcNow,
             Inspector = "Jane Doe",
             TemplateId = moveIn.Id,
-        });
+        }, NextOperationKey());
         created.Should().NotBeNull();
 
         var items = created!.Items.OrderBy(i => i.SortOrder).Take(3).ToList();
         foreach (var item in items)
         {
-            await _service.UpdateItemAsync(PortfolioId, created.Id, item.Id,
-                new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail, Note = $"Fail {item.Id}" });
+            await _service.UpdateItemAuthorizedAsync(_scope, created.Id, item.Id,
+                new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail, Note = $"Fail {item.Id}" }, NextOperationKey());
         }
 
         _executedSql.Clear();
@@ -403,11 +406,11 @@ public class InspectionChecklistServiceTests : IDisposable
     public async Task Complete_AlreadyCompleted_ReturnsError()
     {
         var property = SeedProperty();
-        var created = await _service.CreateAsync(PortfolioId, new CreateInspectionRequest
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
         {
             PropertyId = property.Id,
             ScheduledFor = DateTime.UtcNow,
-        });
+        }, NextOperationKey());
 
         await _service.CompleteAuthorizedAsync(
             _scope, created!.Id, userId: 1, operationKey: "complete-already-completed-first");
@@ -424,26 +427,26 @@ public class InspectionChecklistServiceTests : IDisposable
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
 
-        var created = await _service.CreateAsync(PortfolioId, new CreateInspectionRequest
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
         {
             PropertyId = property.Id,
             Type = InspectionType.MoveIn,
             ScheduledFor = DateTime.UtcNow,
             TemplateId = moveIn.Id,
-        });
+        }, NextOperationKey());
         created.Should().NotBeNull();
 
         var item = created!.Items.OrderBy(i => i.SortOrder).First();
-        await _service.UpdateItemAsync(PortfolioId, created.Id, item.Id,
-            new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass, Note = "Walked before completion" });
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, item.Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass, Note = "Walked before completion" }, NextOperationKey());
 
         var (summary, error) = await _service.CompleteAuthorizedAsync(
             _scope, created.Id, userId: 7, operationKey: "complete-blocks-item-edits");
         error.Should().BeNull();
         summary.Should().NotBeNull();
 
-        Func<Task> edit = () => _service.UpdateItemAsync(PortfolioId, created.Id, item.Id,
-            new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail, Note = "Late edit" });
+        Func<Task> edit = () => _service.UpdateItemAuthorizedAsync(_scope, created.Id, item.Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail, Note = "Late edit" }, NextOperationKey());
 
         var ex = await edit.Should().ThrowAsync<DomainValidationException>();
         ex.Which.StatusCode.Should().Be(409);
@@ -460,38 +463,39 @@ public class InspectionChecklistServiceTests : IDisposable
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
 
-        var created = await _service.CreateAsync(PortfolioId, new CreateInspectionRequest
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
         {
             PropertyId = property.Id,
             Type = InspectionType.MoveIn,
             ScheduledFor = DateTime.UtcNow,
             TemplateId = moveIn.Id,
-        });
+        }, NextOperationKey());
         created.Should().NotBeNull();
 
         var items = created!.Items.OrderBy(i => i.SortOrder).Take(2).ToList();
-        await _service.UpdateItemAsync(PortfolioId, created.Id, items[0].Id,
-            new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass });
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, items[0].Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass }, NextOperationKey());
 
         var (summary, error) = await _service.CompleteAuthorizedAsync(
             _scope, created.Id, userId: 7, operationKey: "complete-blocks-structure-changes");
         error.Should().BeNull();
         summary.Should().NotBeNull();
 
-        Func<Task> add = () => _service.CreateItemAsync(PortfolioId, created.Id, new CreateInspectionItemRequest
+        Func<Task> add = () => _service.CreateItemAuthorizedAsync(_scope, created.Id, new CreateInspectionItemRequest
         {
             Area = "Safety",
             Label = "New late question",
-        });
-        Func<Task> editText = () => _service.UpdateItemAsync(PortfolioId, created.Id, items[0].Id, new UpdateInspectionItemRequest
+        }, NextOperationKey());
+        Func<Task> editText = () => _service.UpdateItemAuthorizedAsync(_scope, created.Id, items[0].Id, new UpdateInspectionItemRequest
         {
             Label = "Changed after completion",
-        });
-        Func<Task> delete = () => _service.DeleteItemAsync(PortfolioId, created.Id, items[0].Id);
-        Func<Task> reorder = () => _service.ReorderItemsAsync(PortfolioId, created.Id, new ReorderInspectionItemsRequest
+        }, NextOperationKey());
+        Func<Task> delete = () => _service.DeleteItemAuthorizedAsync(
+            _scope, created.Id, items[0].Id, NextOperationKey());
+        Func<Task> reorder = () => _service.ReorderItemsAuthorizedAsync(_scope, created.Id, new ReorderInspectionItemsRequest
         {
             ItemIds = created.Items.Select(i => i.Id).Reverse().ToList(),
-        });
+        }, NextOperationKey());
 
         foreach (var action in new[] { add, editText, delete, reorder })
         {
@@ -514,18 +518,18 @@ public class InspectionChecklistServiceTests : IDisposable
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
 
-        var created = await _service.CreateAsync(PortfolioId, new CreateInspectionRequest
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
         {
             PropertyId = property.Id,
             Type = InspectionType.MoveIn,
             ScheduledFor = DateTime.UtcNow,
             TemplateId = moveIn.Id,
-        });
+        }, NextOperationKey());
         created.Should().NotBeNull();
 
         var item = created!.Items.OrderBy(i => i.SortOrder).First();
-        await _service.UpdateItemAsync(PortfolioId, created.Id, item.Id,
-            new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass });
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, item.Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass }, NextOperationKey());
 
         var (summary, error) = await _service.CompleteAuthorizedAsync(
             _scope, created.Id, userId: 7, operationKey: "complete-blocks-photo-attachment");
@@ -546,7 +550,8 @@ public class InspectionChecklistServiceTests : IDisposable
         _db.StoredFiles.Add(file);
         await _db.SaveChangesAsync();
 
-        Func<Task> attachPhoto = () => _service.AttachItemPhotoAsync(PortfolioId, created.Id, item.Id, file.Id);
+        Func<Task> attachPhoto = () => _service.AttachItemPhotoAuthorizedAsync(
+            _scope, created.Id, item.Id, file.Id, NextOperationKey());
 
         var ex = await attachPhoto.Should().ThrowAsync<DomainValidationException>();
         ex.Which.StatusCode.Should().Be(409);
@@ -562,25 +567,26 @@ public class InspectionChecklistServiceTests : IDisposable
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
 
-        var created = await _service.CreateAsync(PortfolioId, new CreateInspectionRequest
+        var created = await _service.CreateAuthorizedAsync(_scope, new CreateInspectionRequest
         {
             PropertyId = property.Id,
             Type = InspectionType.MoveIn,
             ScheduledFor = DateTime.UtcNow,
             TemplateId = moveIn.Id,
-        });
+        }, NextOperationKey());
         created.Should().NotBeNull();
 
         var item = created!.Items.OrderBy(i => i.SortOrder).First();
-        await _service.UpdateItemAsync(PortfolioId, created.Id, item.Id,
-            new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass });
+        await _service.UpdateItemAuthorizedAsync(_scope, created.Id, item.Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass }, NextOperationKey());
 
         var (summary, error) = await _service.CompleteAuthorizedAsync(
             _scope, created.Id, userId: 7, operationKey: "complete-missing-photo-case");
         error.Should().BeNull();
         summary.Should().NotBeNull();
 
-        var attached = await _service.AttachItemPhotoAsync(PortfolioId, created.Id, item.Id, storedFileId: 999_999);
+        var attached = await _service.AttachItemPhotoAuthorizedAsync(
+            _scope, created.Id, item.Id, storedFileId: 999_999, operationKey: NextOperationKey());
 
         attached.Should().BeNull();
 
