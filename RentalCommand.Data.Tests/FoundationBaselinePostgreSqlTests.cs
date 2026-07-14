@@ -155,9 +155,9 @@ public sealed class FoundationBaselinePostgreSqlTests
         CreateSql.Should().Contain("target_operation = 1");
         CreateSql.Should().Contain("target_new_values ->> 'AuditRootAccessContextId' = target_entity_id::text");
         CreateSql.Should().Contain("target_new_values ->> 'UserId' = target_user_id::text");
-        CreateSql.Should().Contain(
-            "public.rc_access_context_is_effective(\n" +
-            "       target_entity_id, target_user_id, CURRENT_TIMESTAMP)");
+        CreateSql.Should().Contain("access_context.\"Status\" = 'Active'");
+        CreateSql.Should().Contain("access_context.\"SuspendedAtUtc\" IS NULL");
+        CreateSql.Should().Contain("access_context.\"RevokedAtUtc\" IS NULL");
         CreateSql.Should().Contain("target_command_type = 'auth-session:start'");
         CreateSql.Should().Contain("target_actor_label = 'authentication:session'");
         CreateSql.Should().Contain("target_change_reason = 'Authentication session started'");
