@@ -226,7 +226,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
 
         first.Disposition.Should().Be(AtomicCommandDisposition.Executed);
         replay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
-        replay.Value.Should().Be(first.Value);
+        replay.Value.Should().BeEquivalentTo(first.Value);
         first.Value.Outcome.Should().Be(LeaseAgreementDraftMutationOutcome.Applied);
         first.Value.SourceAgreementId.Should().Be(_scenario.IssuedAgreementId);
 
