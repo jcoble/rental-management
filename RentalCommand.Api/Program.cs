@@ -277,6 +277,26 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Operations.OperationMutationResult,
     RentalCommand.Data.Operations.DeleteAppointmentHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Documents.CreateDocumentTemplateCommand,
+    RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+    RentalCommand.Data.Documents.CreateDocumentTemplateHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Documents.UpdateDocumentTemplateCommand,
+    RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+    RentalCommand.Data.Documents.UpdateDocumentTemplateHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Documents.AddDocumentTemplateFieldCommand,
+    RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+    RentalCommand.Data.Documents.AddDocumentTemplateFieldHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Documents.UpdateDocumentTemplateFieldCommand,
+    RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+    RentalCommand.Data.Documents.UpdateDocumentTemplateFieldHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Documents.DeleteDocumentTemplateFieldCommand,
+    RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+    RentalCommand.Data.Documents.DeleteDocumentTemplateFieldHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Operations.CreateEvictionCaseCommand,
     RentalCommand.Core.Operations.OperationMutationResult,
     RentalCommand.Data.Operations.CreateEvictionCaseHandler>();

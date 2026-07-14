@@ -1,10 +1,15 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Scanning;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Documents;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Operations;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
@@ -14,17 +19,26 @@ namespace RentalCommand.Api.Services.Domain;
 /// <inheritdoc cref="IDocumentTemplateService"/>
 public sealed class DocumentTemplateService : IDocumentTemplateService
 {
+    private static readonly AtomicJsonResultCodec<DocumentTemplateMutationResult> MutationCodec =
+        new("document-template.mutation.v1");
     private readonly RentalCommandDbContext _db;
     private readonly IDocumentTemplateFieldCatalog _catalog;
     private readonly IFileStorage _files;
     private readonly TimeProvider _timeProvider;
+    private readonly IAtomicUnitOfWork _atomic;
 
-    public DocumentTemplateService(RentalCommandDbContext db, IDocumentTemplateFieldCatalog catalog, IFileStorage files, TimeProvider timeProvider)
+    public DocumentTemplateService(
+        RentalCommandDbContext db,
+        IDocumentTemplateFieldCatalog catalog,
+        IFileStorage files,
+        TimeProvider timeProvider,
+        IAtomicUnitOfWork atomic)
     {
         _db = db;
         _catalog = catalog;
         _files = files;
         _timeProvider = timeProvider;
+        _atomic = atomic;
     }
 
     public async Task<IReadOnlyList<DocumentTemplateResponse>> ListAsync(
@@ -110,69 +124,67 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
 
     public async Task<DocumentTemplateResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default)
     {
-        var template = await AuthorizedTemplates(scope)
+        return await AuthorizedTemplates(scope)
             .AsNoTracking()
-            .FirstOrDefaultAsync(t => t.Id == id, ct);
-        if (template is null)
-        {
-            return null;
-        }
-
-        var fields = await _db.DocumentTemplateFields
-            .AsNoTracking()
-            .Where(f => f.DocumentTemplateId == id)
-            .OrderBy(f => f.SortOrder)
-            .ThenBy(f => f.Id)
-            .ToListAsync(ct);
-
-        return DocumentTemplateResponse.FromEntity(template, fields);
+            .Where(template => template.Id == id)
+            .Select(template => new DocumentTemplateResponse
+            {
+                Id = template.Id,
+                PortfolioId = template.PortfolioId,
+                Kind = template.Kind,
+                Status = template.Status,
+                RenderMode = template.RenderMode,
+                Name = template.Name,
+                Description = template.Description,
+                OriginalStoredFileId = template.OriginalStoredFileId,
+                CompiledStoredFileId = template.CompiledStoredFileId,
+                HasDraftHtml = template.DraftHtml != null && template.DraftHtml != string.Empty,
+                DefaultForPortfolio = template.DefaultForPortfolio,
+                PropertyId = template.PropertyId,
+                Version = template.Version,
+                FieldCount = template.Fields.Count,
+                CreatedAtUtc = template.CreatedAtUtc,
+                UpdatedAtUtc = template.UpdatedAtUtc,
+                ArchivedAtUtc = template.ArchivedAtUtc,
+                Fields = template.Fields
+                    .OrderBy(field => field.SortOrder)
+                    .ThenBy(field => field.Id)
+                    .Select(field => new DocumentTemplateFieldResponse
+                    {
+                        Id = field.Id,
+                        DocumentTemplateId = field.DocumentTemplateId,
+                        FieldKey = field.FieldKey,
+                        Label = field.Label,
+                        Kind = field.Kind,
+                        SignerRole = field.SignerRole,
+                        PageNumber = field.PageNumber,
+                        XPct = field.XPct,
+                        YPct = field.YPct,
+                        WidthPct = field.WidthPct,
+                        HeightPct = field.HeightPct,
+                        Required = field.Required,
+                        Locked = field.Locked,
+                        SortOrder = field.SortOrder,
+                        DefaultText = field.DefaultText,
+                    })
+                    .ToArray(),
+            })
+            .SingleOrDefaultAsync(ct);
     }
 
-    public Task<DocumentTemplateOperationResult<DocumentTemplateResponse>> CreateAsync(
-        WorkspaceReadScope scope, CreateDocumentTemplateRequest request, CancellationToken ct = default) =>
-        _db.ExecuteAuthorizedMutationAsync(async token =>
+    public async Task<DocumentTemplateOperationResult<DocumentTemplateResponse>> CreateAsync(
+        WorkspaceReadScope scope, CreateDocumentTemplateRequest request,
+        string idempotencyKey, CancellationToken ct = default)
     {
-        var portfolioId = scope.PortfolioId;
-        if (!await CanCreateTemplateAsync(scope, request.PropertyId, token))
-        {
-            return DocumentTemplateOperationResult<DocumentTemplateResponse>.NotFound("Document template target not found");
-        }
-        var validation = await ValidateReferencesAsync(
-            scope, request.PropertyId, request.OriginalStoredFileId, request.CompiledStoredFileId, token);
-        if (validation is not null)
-        {
-            return DocumentTemplateOperationResult<DocumentTemplateResponse>.Invalid(validation);
-        }
-
-        var now = _timeProvider.UtcNow();
-        var template = new DocumentTemplate
-        {
-            PortfolioId = portfolioId,
-            Kind = request.Kind,
-            RenderMode = request.RenderMode,
-            Status = DocumentTemplateStatus.Draft,
-            Name = request.Name.Trim(),
-            Description = NormalizeNullable(request.Description),
-            OriginalStoredFileId = request.OriginalStoredFileId,
-            CompiledStoredFileId = request.CompiledStoredFileId,
-            DraftHtml = request.DraftHtml,
-            DefaultForPortfolio = request.DefaultForPortfolio,
-            PropertyId = request.PropertyId,
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now,
-        };
-
-        if (template.DefaultForPortfolio)
-        {
-            await ClearOtherDefaultsAsync(portfolioId, template.Kind, template.PropertyId, null, now, token);
-        }
-
-        _db.DocumentTemplates.Add(template);
-        await _db.SaveChangesAsync(token);
-
-        return DocumentTemplateOperationResult<DocumentTemplateResponse>.Success(
-            DocumentTemplateResponse.FromEntity(template, []));
-    }, ct);
+        var digest = Digest(idempotencyKey);
+        var command = new CreateDocumentTemplateCommand(
+            scope.PortfolioId, Actor(scope), request.Kind, request.RenderMode, request.Name,
+            request.Description, request.OriginalStoredFileId, request.CompiledStoredFileId,
+            request.PropertyId, request.DefaultForPortfolio, request.DraftHtml, digest);
+        var outcome = await _atomic.ExecuteAsync(
+            Identity("document-template.create", scope.PortfolioId, digest), command, MutationCodec, ct);
+        return MapTemplateResult(outcome.Value);
+    }
 
     public async Task<DocumentTemplateOperationResult<DocumentTemplateResponse>> UploadPdfAsync(
         WorkspaceReadScope scope,
@@ -266,186 +278,76 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         }
     }
 
-    public Task<DocumentTemplateOperationResult<DocumentTemplateResponse>> UpdateAsync(
-        WorkspaceReadScope scope, int id, UpdateDocumentTemplateRequest request, CancellationToken ct = default) =>
-        _db.ExecuteAuthorizedMutationAsync(async token =>
+    public async Task<DocumentTemplateOperationResult<DocumentTemplateResponse>> UpdateAsync(
+        WorkspaceReadScope scope, int id, UpdateDocumentTemplateRequest request,
+        string idempotencyKey, CancellationToken ct = default)
     {
-        var portfolioId = scope.PortfolioId;
-        var template = await AuthorizedTemplates(scope)
-            .FirstOrDefaultAsync(t => t.Id == id, token);
-        if (template is null)
-        {
-            return DocumentTemplateOperationResult<DocumentTemplateResponse>.NotFound("Document template not found");
-        }
+        var digest = Digest(idempotencyKey);
+        var command = new UpdateDocumentTemplateCommand(
+            scope.PortfolioId, Actor(scope), id, request.Status, request.RenderMode, request.Name,
+            request.Description, request.OriginalStoredFileId, request.CompiledStoredFileId,
+            request.PropertyId, request.DefaultForPortfolio, request.DraftHtml, digest);
+        var outcome = await _atomic.ExecuteAsync(
+            Identity("document-template.update", scope.PortfolioId, digest), command, MutationCodec, ct);
+        return MapTemplateResult(outcome.Value);
+    }
 
-        var propertyId = request.PropertyId ?? template.PropertyId;
-        if (!await CanCreateTemplateAsync(scope, propertyId, token))
-        {
-            return DocumentTemplateOperationResult<DocumentTemplateResponse>.NotFound("Document template target not found");
-        }
-        var originalFileId = request.OriginalStoredFileId ?? template.OriginalStoredFileId;
-        var compiledFileId = request.CompiledStoredFileId ?? template.CompiledStoredFileId;
-        var validation = await ValidateReferencesAsync(scope, propertyId, originalFileId, compiledFileId, token);
-        if (validation is not null)
-        {
-            return DocumentTemplateOperationResult<DocumentTemplateResponse>.Invalid(validation);
-        }
-
-        if (request.Name is not null) template.Name = request.Name.Trim();
-        if (request.Description is not null) template.Description = NormalizeNullable(request.Description);
-        if (request.Status.HasValue)
-        {
-            template.Status = request.Status.Value;
-            template.ArchivedAtUtc = request.Status.Value == DocumentTemplateStatus.Archived
-                ? _timeProvider.UtcNow()
-                : null;
-        }
-        if (request.RenderMode.HasValue) template.RenderMode = request.RenderMode.Value;
-        if (request.OriginalStoredFileId.HasValue) template.OriginalStoredFileId = request.OriginalStoredFileId;
-        if (request.CompiledStoredFileId.HasValue) template.CompiledStoredFileId = request.CompiledStoredFileId;
-        if (request.PropertyId.HasValue) template.PropertyId = request.PropertyId;
-        if (request.DraftHtml is not null) template.DraftHtml = request.DraftHtml;
-        if (request.DefaultForPortfolio.HasValue) template.DefaultForPortfolio = request.DefaultForPortfolio.Value;
-
-        var now = _timeProvider.UtcNow();
-        template.UpdatedAtUtc = now;
-        template.Version++;
-
-        if (template.DefaultForPortfolio)
-        {
-            await ClearOtherDefaultsAsync(portfolioId, template.Kind, template.PropertyId, template.Id, now, token);
-        }
-
-        await _db.SaveChangesAsync(token);
-
-        var fields = await _db.DocumentTemplateFields
-            .AsNoTracking()
-            .Where(f => f.DocumentTemplateId == template.Id)
-            .OrderBy(f => f.SortOrder)
-            .ThenBy(f => f.Id)
-            .ToListAsync(token);
-
-        return DocumentTemplateOperationResult<DocumentTemplateResponse>.Success(
-            DocumentTemplateResponse.FromEntity(template, fields));
-    }, ct);
-
-    public Task<DocumentTemplateOperationResult<DocumentTemplateFieldResponse>> AddFieldAsync(
-        WorkspaceReadScope scope, int templateId, CreateDocumentTemplateFieldRequest request, CancellationToken ct = default) =>
-        _db.ExecuteAuthorizedMutationAsync(async token =>
+    public async Task<DocumentTemplateOperationResult<DocumentTemplateFieldResponse>> AddFieldAsync(
+        WorkspaceReadScope scope, int templateId, CreateDocumentTemplateFieldRequest request,
+        string idempotencyKey, CancellationToken ct = default)
     {
-        var template = await AuthorizedTemplates(scope)
-            .FirstOrDefaultAsync(t => t.Id == templateId, token);
-        if (template is null)
-        {
+        var templateKind = await AuthorizedTemplates(scope).AsNoTracking()
+            .Where(template => template.Id == templateId)
+            .Select(template => (DocumentTemplateKind?)template.Kind)
+            .SingleOrDefaultAsync(ct);
+        if (!templateKind.HasValue)
             return DocumentTemplateOperationResult<DocumentTemplateFieldResponse>.NotFound("Document template not found");
-        }
+        var catalogItem = _catalog.Find(templateKind.Value, request.FieldKey);
+        var digest = Digest(idempotencyKey);
+        var command = new AddDocumentTemplateFieldCommand(
+            scope.PortfolioId, Actor(scope), templateId, request.FieldKey,
+            NormalizeNullable(request.Label) ?? catalogItem?.Label ?? request.FieldKey.Trim(),
+            request.Kind, request.SignerRole, request.PageNumber, request.XPct, request.YPct,
+            request.WidthPct, request.HeightPct,
+            request.Required || catalogItem?.RequiredForSignature == true,
+            request.Locked, request.SortOrder, request.DefaultText, digest);
+        var outcome = await _atomic.ExecuteAsync(
+            Identity("document-template.field.add", scope.PortfolioId, digest), command, MutationCodec, ct);
+        return MapFieldResult(outcome.Value);
+    }
 
-        var extentError = ValidateExtent(request.XPct, request.YPct, request.WidthPct, request.HeightPct);
-        if (extentError is not null)
-        {
-            return DocumentTemplateOperationResult<DocumentTemplateFieldResponse>.Invalid(extentError);
-        }
+    public async Task<DocumentTemplateOperationResult<DocumentTemplateFieldResponse>> UpdateFieldAsync(
+        WorkspaceReadScope scope, int templateId, int fieldId, UpdateDocumentTemplateFieldRequest request,
+        string idempotencyKey, CancellationToken ct = default)
+    {
+        var digest = Digest(idempotencyKey);
+        var command = new UpdateDocumentTemplateFieldCommand(
+            scope.PortfolioId, Actor(scope), templateId, fieldId, request.FieldKey, request.Label,
+            request.Kind, request.SignerRole, request.PageNumber, request.XPct, request.YPct,
+            request.WidthPct, request.HeightPct, request.Required, request.Locked,
+            request.SortOrder, request.DefaultText, digest);
+        var outcome = await _atomic.ExecuteAsync(
+            Identity("document-template.field.update", scope.PortfolioId, digest), command, MutationCodec, ct);
+        return MapFieldResult(outcome.Value);
+    }
 
-        var catalogItem = _catalog.Find(template.Kind, request.FieldKey);
-        var field = new DocumentTemplateField
+    public async Task<DocumentTemplateOperationResult<bool>> DeleteFieldAsync(
+        WorkspaceReadScope scope, int templateId, int fieldId,
+        string idempotencyKey, CancellationToken ct = default)
+    {
+        var digest = Digest(idempotencyKey);
+        var command = new DeleteDocumentTemplateFieldCommand(
+            scope.PortfolioId, Actor(scope), templateId, fieldId, digest);
+        var outcome = await _atomic.ExecuteAsync(
+            Identity("document-template.field.delete", scope.PortfolioId, digest), command, MutationCodec, ct);
+        return outcome.Value.Outcome switch
         {
-            DocumentTemplateId = template.Id,
-            FieldKey = request.FieldKey.Trim(),
-            Label = NormalizeNullable(request.Label) ?? catalogItem?.Label ?? request.FieldKey.Trim(),
-            Kind = request.Kind,
-            SignerRole = request.SignerRole,
-            PageNumber = request.PageNumber,
-            XPct = request.XPct,
-            YPct = request.YPct,
-            WidthPct = request.WidthPct,
-            HeightPct = request.HeightPct,
-            Required = request.Required || catalogItem?.RequiredForSignature == true,
-            Locked = request.Locked,
-            SortOrder = request.SortOrder,
-            DefaultText = NormalizeNullable(request.DefaultText),
+            DocumentTemplateMutationOutcome.Applied => DocumentTemplateOperationResult<bool>.Success(true),
+            DocumentTemplateMutationOutcome.NotFound => DocumentTemplateOperationResult<bool>.NotFound(
+                outcome.Value.Error ?? "Document template field not found"),
+            _ => DocumentTemplateOperationResult<bool>.Invalid(outcome.Value.Error ?? "Document template field is invalid"),
         };
-
-        _db.DocumentTemplateFields.Add(field);
-        BumpTemplateVersion(template);
-        await _db.SaveChangesAsync(token);
-
-        return DocumentTemplateOperationResult<DocumentTemplateFieldResponse>.Success(
-            DocumentTemplateFieldResponse.FromEntity(field));
-    }, ct);
-
-    public Task<DocumentTemplateOperationResult<DocumentTemplateFieldResponse>> UpdateFieldAsync(
-        WorkspaceReadScope scope, int templateId, int fieldId, UpdateDocumentTemplateFieldRequest request, CancellationToken ct = default) =>
-        _db.ExecuteAuthorizedMutationAsync(async token =>
-    {
-        var template = await AuthorizedTemplates(scope)
-            .FirstOrDefaultAsync(t => t.Id == templateId, token);
-        if (template is null)
-        {
-            return DocumentTemplateOperationResult<DocumentTemplateFieldResponse>.NotFound("Document template not found");
-        }
-
-        var field = await _db.DocumentTemplateFields
-            .FirstOrDefaultAsync(f => f.Id == fieldId && f.DocumentTemplateId == templateId, token);
-        if (field is null)
-        {
-            return DocumentTemplateOperationResult<DocumentTemplateFieldResponse>.NotFound("Document template field not found");
-        }
-
-        var nextX = request.XPct ?? field.XPct;
-        var nextY = request.YPct ?? field.YPct;
-        var nextWidth = request.WidthPct ?? field.WidthPct;
-        var nextHeight = request.HeightPct ?? field.HeightPct;
-        var extentError = ValidateExtent(nextX, nextY, nextWidth, nextHeight);
-        if (extentError is not null)
-        {
-            return DocumentTemplateOperationResult<DocumentTemplateFieldResponse>.Invalid(extentError);
-        }
-
-        if (request.FieldKey is not null) field.FieldKey = request.FieldKey.Trim();
-        if (request.Label is not null) field.Label = request.Label.Trim();
-        if (request.Kind.HasValue) field.Kind = request.Kind.Value;
-        if (request.SignerRole.HasValue) field.SignerRole = request.SignerRole.Value;
-        if (request.PageNumber.HasValue) field.PageNumber = request.PageNumber.Value;
-        field.XPct = nextX;
-        field.YPct = nextY;
-        field.WidthPct = nextWidth;
-        field.HeightPct = nextHeight;
-        if (request.Required.HasValue) field.Required = request.Required.Value;
-        if (request.Locked.HasValue) field.Locked = request.Locked.Value;
-        if (request.SortOrder.HasValue) field.SortOrder = request.SortOrder.Value;
-        if (request.DefaultText is not null) field.DefaultText = NormalizeNullable(request.DefaultText);
-
-        BumpTemplateVersion(template);
-        await _db.SaveChangesAsync(token);
-
-        return DocumentTemplateOperationResult<DocumentTemplateFieldResponse>.Success(
-            DocumentTemplateFieldResponse.FromEntity(field));
-    }, ct);
-
-    public Task<DocumentTemplateOperationResult<bool>> DeleteFieldAsync(
-        WorkspaceReadScope scope, int templateId, int fieldId, CancellationToken ct = default) =>
-        _db.ExecuteAuthorizedMutationAsync(async token =>
-    {
-        var template = await AuthorizedTemplates(scope)
-            .FirstOrDefaultAsync(t => t.Id == templateId, token);
-        if (template is null)
-        {
-            return DocumentTemplateOperationResult<bool>.NotFound("Document template not found");
-        }
-
-        var field = await _db.DocumentTemplateFields
-            .FirstOrDefaultAsync(f => f.Id == fieldId && f.DocumentTemplateId == templateId, token);
-        if (field is null)
-        {
-            return DocumentTemplateOperationResult<bool>.NotFound("Document template field not found");
-        }
-
-        _db.DocumentTemplateFields.Remove(field);
-        BumpTemplateVersion(template);
-        await _db.SaveChangesAsync(token);
-
-        return DocumentTemplateOperationResult<bool>.Success(true);
-    }, ct);
+    }
 
     public async Task<DocumentTemplateOperationResult<DocumentTemplatePreviewResult>> PreviewLeasePdfAsync(
         WorkspaceReadScope scope,
@@ -704,26 +606,80 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
             .SetProperty(t => t.UpdatedAtUtc, now), ct);
     }
 
-    private static string? ValidateExtent(double x, double y, double width, double height)
-    {
-        if (x + width > 1)
+    private static DocumentTemplateOperationResult<DocumentTemplateResponse> MapTemplateResult(
+        DocumentTemplateMutationResult result) => result.Outcome switch
         {
-            return "Field extends past the right edge of the page.";
-        }
+            DocumentTemplateMutationOutcome.Applied when result.Template is not null =>
+                DocumentTemplateOperationResult<DocumentTemplateResponse>.Success(Response(result.Template)),
+            DocumentTemplateMutationOutcome.NotFound =>
+                DocumentTemplateOperationResult<DocumentTemplateResponse>.NotFound(
+                    result.Error ?? "Document template not found"),
+            _ => DocumentTemplateOperationResult<DocumentTemplateResponse>.Invalid(
+                result.Error ?? "Document template is invalid"),
+        };
 
-        if (y + height > 1)
+    private static DocumentTemplateOperationResult<DocumentTemplateFieldResponse> MapFieldResult(
+        DocumentTemplateMutationResult result) => result.Outcome switch
         {
-            return "Field extends past the bottom edge of the page.";
-        }
+            DocumentTemplateMutationOutcome.Applied when result.Field is not null =>
+                DocumentTemplateOperationResult<DocumentTemplateFieldResponse>.Success(Response(result.Field)),
+            DocumentTemplateMutationOutcome.NotFound =>
+                DocumentTemplateOperationResult<DocumentTemplateFieldResponse>.NotFound(
+                    result.Error ?? "Document template field not found"),
+            _ => DocumentTemplateOperationResult<DocumentTemplateFieldResponse>.Invalid(
+                result.Error ?? "Document template field is invalid"),
+        };
 
-        return null;
-    }
-
-    private void BumpTemplateVersion(DocumentTemplate template)
+    private static DocumentTemplateResponse Response(DocumentTemplateSnapshot template) => new()
     {
-        template.Version++;
-        template.UpdatedAtUtc = _timeProvider.UtcNow();
-    }
+        Id = template.Id,
+        PortfolioId = template.PortfolioId,
+        Kind = template.Kind,
+        Status = template.Status,
+        RenderMode = template.RenderMode,
+        Name = template.Name,
+        Description = template.Description,
+        OriginalStoredFileId = template.OriginalStoredFileId,
+        CompiledStoredFileId = template.CompiledStoredFileId,
+        HasDraftHtml = template.HasDraftHtml,
+        DefaultForPortfolio = template.DefaultForPortfolio,
+        PropertyId = template.PropertyId,
+        Version = template.Version,
+        FieldCount = template.FieldCount,
+        CreatedAtUtc = template.CreatedAtUtc,
+        UpdatedAtUtc = template.UpdatedAtUtc,
+        ArchivedAtUtc = template.ArchivedAtUtc,
+        Fields = template.Fields.Select(Response).ToArray(),
+    };
+
+    private static DocumentTemplateFieldResponse Response(DocumentTemplateFieldSnapshot field) => new()
+    {
+        Id = field.Id,
+        DocumentTemplateId = field.DocumentTemplateId,
+        FieldKey = field.FieldKey,
+        Label = field.Label,
+        Kind = field.Kind,
+        SignerRole = field.SignerRole,
+        PageNumber = field.PageNumber,
+        XPct = field.XPct,
+        YPct = field.YPct,
+        WidthPct = field.WidthPct,
+        HeightPct = field.HeightPct,
+        Required = field.Required,
+        Locked = field.Locked,
+        SortOrder = field.SortOrder,
+        DefaultText = field.DefaultText,
+    };
+
+    private static StaffOperationActor Actor(WorkspaceReadScope scope) => new(
+        scope.UserId, scope.SessionId, scope.AccessContextId, scope.AccessRevision);
+
+    private static string Digest(string idempotencyKey) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(idempotencyKey)))
+            .ToLowerInvariant();
+
+    private static AtomicCommandIdentity Identity(string operation, int portfolioId, string digest) =>
+        new(operation, $"{portfolioId}:{digest}");
 
     private static string? NormalizeNullable(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

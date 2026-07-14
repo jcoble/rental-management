@@ -17,6 +17,7 @@
 		type DocumentTemplateSignerRole,
 	} from '$lib/api/endpoints/document-templates';
 	import { documentFileHref } from '$lib/api/endpoints/documents';
+	import { idempotentMutation } from '$lib/api/idempotency';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -95,10 +96,16 @@
 	const activateTemplateMutation = createMutation(() => ({
 		mutationFn: (template: DocumentTemplate) => {
 			activatingTemplateId = template.id;
-			return documentTemplates.update(template.id, {
-				status: 'Active',
-				defaultForPortfolio: true,
-			});
+			return idempotentMutation(`document-template:${template.id}:activate`, (operationKey) =>
+				documentTemplates.update(
+					template.id,
+					{
+						status: 'Active',
+						defaultForPortfolio: true
+					},
+					operationKey
+				)
+			);
 		},
 		onSuccess: (template) => {
 			showSuccess(`${template.name} is now the default lease PDF.`);

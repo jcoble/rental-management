@@ -136,16 +136,29 @@ export const documentTemplates = {
 	listPage: (params?: DocumentTemplateListParams) =>
 		api.get<DocumentTemplateListResponse>(`/document-templates/page${buildTemplateQuery(params)}`),
 	get: (id: number) => api.get<DocumentTemplate>(`/document-templates/${id}`),
-	update: (id: number, request: UpdateDocumentTemplateRequest) =>
-		api.patch<DocumentTemplate>(`/document-templates/${id}`, request),
+	update: (id: number, request: UpdateDocumentTemplateRequest, operationKey: string) =>
+		api.patch<DocumentTemplate>(`/document-templates/${id}`, request, {
+			headers: { 'Idempotency-Key': operationKey }
+		}),
 	fieldCatalog: (kind: DocumentTemplateKind = 'Lease') =>
 		api.get<DocumentTemplateFieldCatalogItem[]>(`/document-templates/field-catalog?kind=${encodeURIComponent(kind)}`),
-	addField: (templateId: number, request: CreateDocumentTemplateFieldRequest) =>
-		api.post<DocumentTemplateField>(`/document-templates/${templateId}/fields`, request),
-	updateField: (templateId: number, fieldId: number, request: UpdateDocumentTemplateFieldRequest) =>
-		api.put<DocumentTemplateField>(`/document-templates/${templateId}/fields/${fieldId}`, request),
-	deleteField: (templateId: number, fieldId: number) =>
-		api.delete<void>(`/document-templates/${templateId}/fields/${fieldId}`),
+	addField: (templateId: number, request: CreateDocumentTemplateFieldRequest, operationKey: string) =>
+		api.post<DocumentTemplateField>(`/document-templates/${templateId}/fields`, request, {
+			headers: { 'Idempotency-Key': operationKey }
+		}),
+	updateField: (
+		templateId: number,
+		fieldId: number,
+		request: UpdateDocumentTemplateFieldRequest,
+		operationKey: string
+	) =>
+		api.put<DocumentTemplateField>(`/document-templates/${templateId}/fields/${fieldId}`, request, {
+			headers: { 'Idempotency-Key': operationKey }
+		}),
+	deleteField: (templateId: number, fieldId: number, operationKey: string) =>
+		api.delete<void>(`/document-templates/${templateId}/fields/${fieldId}`, {
+			headers: { 'Idempotency-Key': operationKey }
+		}),
 	previewLeaseAgreementPdf: (templateId: number, leaseAgreementId: number) =>
 		downloadFile(`/document-templates/${templateId}/preview/lease-agreements/${leaseAgreementId}`),
 	uploadLeasePdf: (
