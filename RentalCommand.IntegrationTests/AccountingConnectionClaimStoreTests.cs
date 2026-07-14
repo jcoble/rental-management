@@ -8,6 +8,7 @@ using Microsoft.Extensions.Options;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -422,6 +423,7 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
         var now = DateTime.UtcNow;
         var portfolioId = await SeedPortfolioAsync(now, "Disable in flight");
+        var scope = await SeedAdministratorScopeAsync(portfolioId, now, "disable-in-flight");
         await using (var seed = NewContext())
         {
             seed.AccountingConnections.Add(Connection(portfolioId, now, pullEnabled: true));
@@ -443,7 +445,12 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
             {
                 await using var controlDb = NewContext();
                 await CreateConnectionService(controlDb, provider.Object)
-                    .SetPullEnabledAsync(portfolioId, AccountingProvider.QuickBooks, false, CancellationToken.None);
+                    .SetPullEnabledAsync(
+                        scope,
+                        AccountingProvider.QuickBooks,
+                        false,
+                        "disable-in-flight",
+                        CancellationToken.None);
                 return new AccountingPullResult<ExtCustomerDto>(
                     [new ExtCustomerDto("customer-disable", "Disabled", true, now, null, null, "{}")],
                     now, false);
@@ -468,6 +475,7 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
         var now = DateTime.UtcNow;
         var portfolioId = await SeedPortfolioAsync(now, "Disconnect rotation");
+        var scope = await SeedAdministratorScopeAsync(portfolioId, now, "disconnect-rotation");
         await using (var seed = NewContext())
         {
             seed.AccountingConnections.Add(Connection(portfolioId, now, pullEnabled: true));
@@ -490,7 +498,11 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
             {
                 await using var controlDb = NewContext();
                 await CreateConnectionService(controlDb, provider.Object)
-                    .DisconnectAsync(portfolioId, AccountingProvider.QuickBooks, CancellationToken.None);
+                    .DisconnectAsync(
+                        scope,
+                        AccountingProvider.QuickBooks,
+                        "disconnect-rotation",
+                        CancellationToken.None);
                 return new AccountingTokenResult(
                     "rotated-access", "rotated-refresh", now.AddHours(1), null, null);
             });
@@ -639,6 +651,75 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         return portfolio.Id;
     }
 
+    private async Task<WorkspaceReadScope> SeedAdministratorScopeAsync(
+        int portfolioId,
+        DateTime now,
+        string suffix)
+    {
+        await using var db = NewContext();
+        var email = $"accounting-{suffix}@example.test";
+        var user = new ApplicationUser
+        {
+            UserName = email,
+            NormalizedUserName = email.ToUpperInvariant(),
+            Email = email,
+            NormalizedEmail = email.ToUpperInvariant(),
+            DisplayName = $"Accounting {suffix}",
+            CreatedAt = now,
+        };
+        db.Users.Add(user);
+        await db.SaveChangesAsync();
+
+        var context = new WorkspaceAccessContext
+        {
+            UserId = user.Id,
+            PortfolioId = portfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = context,
+            PortfolioId = portfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = portfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(
+                role => role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = user.Id,
+            ActiveAccessContext = context,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        db.AddRange(assignment, session);
+        await db.SaveChangesAsync();
+        return new WorkspaceReadScope(
+            portfolioId,
+            user.Id,
+            session.Id,
+            context.Id,
+            context.AccessRevision);
+    }
+
     private async Task SeedConnectionsAsync(DateTime now, int count)
     {
         for (var index = 0; index < count; index++)
@@ -771,6 +852,18 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
             RentalCommand.Core.Accounting.ApplyAccountingPullResultCommand,
             RentalCommand.Core.Accounting.ApplyAccountingPullResult,
             ApplyAccountingPullResultHandler>();
+        services.AddAtomicCommandHandler<
+            PrepareAccountingDisconnectCommand,
+            PrepareAccountingDisconnectResult,
+            PrepareAccountingDisconnectHandler>();
+        services.AddAtomicCommandHandler<
+            FinalizeAccountingDisconnectCommand,
+            FinalizeAccountingDisconnectResult,
+            FinalizeAccountingDisconnectHandler>();
+        services.AddAtomicCommandHandler<
+            SetAccountingDirectionCommand,
+            SetAccountingDirectionResult,
+            SetAccountingDirectionHandler>();
         services.AddDbContext<RentalCommandDbContext>((sp, options) =>
         {
             options.UseNpgsql(_connectionString).UseAtomicPersistenceKernel(sp);
