@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import 'notification_help_action.dart';
 import 'notification_foundation_repository.dart';
 
 class TenantNoticesScreen extends ConsumerStatefulWidget {
@@ -15,7 +16,6 @@ class TenantNoticesScreen extends ConsumerStatefulWidget {
 class _TenantNoticesScreenState extends ConsumerState<TenantNoticesScreen> {
   late Future<List<TenantNoticePolicy>> _policies;
   late Future<List<NoticeDeliveryStatus>> _deliveries;
-  bool _seeding = false;
 
   NotificationFoundationRepository get _repository =>
       ref.read(notificationFoundationRepositoryProvider);
@@ -37,20 +37,6 @@ class _TenantNoticesScreenState extends ConsumerState<TenantNoticesScreen> {
 
   void _reloadDeliveries() {
     _deliveries = _repository.listTenantNoticeDeliveries(take: 50);
-  }
-
-  Future<void> _seed() async {
-    setState(() => _seeding = true);
-    try {
-      await _repository.seedTenantNoticeTemplates();
-      if (!mounted) return;
-      setState(_reloadAll);
-      _showMessage('Supplied templates and safe Draft policies are ready.');
-    } catch (error) {
-      if (mounted) _showError(error);
-    } finally {
-      if (mounted) setState(() => _seeding = false);
-    }
   }
 
   Future<void> _editPolicy(TenantNoticePolicy policy) async {
@@ -80,6 +66,7 @@ class _TenantNoticesScreenState extends ConsumerState<TenantNoticesScreen> {
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Tenant notices'),
+          actions: const [NotificationHelpAction()],
           bottom: const TabBar(
             tabs: [
               Tab(text: 'Automations'),
@@ -91,9 +78,7 @@ class _TenantNoticesScreenState extends ConsumerState<TenantNoticesScreen> {
           children: [
             _PoliciesTab(
               future: _policies,
-              seeding: _seeding,
               onRetry: () => setState(_reloadPolicies),
-              onSeed: _seed,
               onEditPolicy: _editPolicy,
               onEditTemplate: _editTemplate,
             ),
@@ -106,34 +91,18 @@ class _TenantNoticesScreenState extends ConsumerState<TenantNoticesScreen> {
       ),
     );
   }
-
-  void _showError(Object error) => _showMessage(
-    error is ApiException
-        ? error.message
-        : 'We couldn\'t update tenant notice settings.',
-  );
-
-  void _showMessage(String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
-  }
 }
 
 class _PoliciesTab extends StatelessWidget {
   const _PoliciesTab({
     required this.future,
-    required this.seeding,
     required this.onRetry,
-    required this.onSeed,
     required this.onEditPolicy,
     required this.onEditTemplate,
   });
 
   final Future<List<TenantNoticePolicy>> future;
-  final bool seeding;
   final VoidCallback onRetry;
-  final VoidCallback onSeed;
   final ValueChanged<TenantNoticePolicy> onEditPolicy;
   final ValueChanged<TenantNoticePolicy> onEditTemplate;
 
@@ -148,8 +117,8 @@ class _PoliciesTab extends StatelessWidget {
         return _NoticeError(error: snapshot.error!, onRetry: onRetry);
       }
       final policies = snapshot.data ?? const <TenantNoticePolicy>[];
-      if (policies.isEmpty) {
-        return _SeedNotices(seeding: seeding, onSeed: onSeed);
+      if (policies.length != 5) {
+        return _MissingNotices(onRetry: onRetry);
       }
       return ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
@@ -233,14 +202,7 @@ class _PolicyCard extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 3),
-            Text(
-              policy.templateIsCustomized
-                  ? 'Customized from supplied baseline '
-                        '#${policy.templateBasedOnSystemTemplateVersionId}'
-                  : 'Supplied template baseline '
-                        '#${policy.templateBasedOnSystemTemplateVersionId}',
-              style: theme.textTheme.bodySmall,
-            ),
+            Text(policy.templateProvenance, style: theme.textTheme.bodySmall),
             if (policy.templateUpdateAvailable)
               const Padding(
                 padding: EdgeInsets.only(top: 4),
@@ -644,10 +606,10 @@ class _TenantTemplateEditorSheetState
           const SizedBox(height: 8),
           Text(
             policy.templateIsCustomized
-                ? 'Customized from system baseline '
-                      '#${policy.templateBasedOnSystemTemplateVersionId}.'
-                : 'Supplied from system baseline '
-                      '#${policy.templateBasedOnSystemTemplateVersionId}.',
+                ? '${policy.templateProvenance}. Your edits are stored as a '
+                      'new workspace version.'
+                : '${policy.templateProvenance}. This complete supplied copy '
+                      'can be edited without changing the Rental Command default.',
             style: Theme.of(context).textTheme.bodySmall,
           ),
           if (policy.templateUpdateAvailable)
@@ -748,8 +710,7 @@ class _DeliveriesTab extends StatelessWidget {
               children: [
                 Text(
                   'The 50 most recent records are returned in server order, '
-                  'including queued, accepted, retrying, delivered, and '
-                  'failed evidence.',
+                  'so the status below reflects the durable delivery queue.',
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
@@ -798,6 +759,13 @@ class _DeliveryCard extends StatelessWidget {
                 ),
                 _StatusChip(label: delivery.status),
               ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _deliveryStatusExplanation(delivery.status),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: 8),
             Text(
@@ -889,11 +857,10 @@ class _ModeExplanation extends StatelessWidget {
   );
 }
 
-class _SeedNotices extends StatelessWidget {
-  const _SeedNotices({required this.seeding, required this.onSeed});
+class _MissingNotices extends StatelessWidget {
+  const _MissingNotices({required this.onRetry});
 
-  final bool seeding;
-  final VoidCallback onSeed;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) => Center(
@@ -905,14 +872,15 @@ class _SeedNotices extends StatelessWidget {
           const Icon(Icons.campaign_outlined, size: 40),
           const SizedBox(height: 12),
           const Text(
-            'Create the five supplied templates and safe Draft-for-review '
-            'policies. Existing custom versions are not overwritten.',
+            'Every new workspace receives five complete editable templates '
+            'and safe Draft-for-review policies. Reload; if they are still '
+            'missing, workspace setup needs attention.',
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 16),
-          FilledButton(
-            onPressed: seeding ? null : onSeed,
-            child: Text(seeding ? 'Setting up…' : 'Set up supplied notices'),
+          OutlinedButton(
+            onPressed: onRetry,
+            child: const Text('Reload notices'),
           ),
         ],
       ),
@@ -1013,6 +981,17 @@ String _channelLabel(String channel) => switch (channel) {
   'MobilePush' => 'Mobile push',
   'Sms' => 'SMS',
   _ => channel,
+};
+
+String _deliveryStatusExplanation(String status) => switch (status) {
+  'Queued' => 'Waiting for the delivery worker to make the first attempt.',
+  'Accepted' =>
+    'The provider accepted the message; final delivery is not confirmed yet.',
+  'Retrying' =>
+    'A provider attempt failed temporarily and another attempt is scheduled.',
+  'Delivered' => 'The provider confirmed delivery.',
+  'Failed' => 'Delivery retries ended. Review the error and recipient details.',
+  _ => 'Current status reported by the delivery provider.',
 };
 
 String _shortDate(DateTime value) {

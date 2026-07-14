@@ -61,6 +61,8 @@ Each policy separately chooses timing, tenant channels, eligible relationship ro
 
 Rental Command supplies complete starting copy for every tenant-notice automation. You edit that copy instead of beginning with an empty message.
 
+Every new workspace receives these copies during setup. If an automation or supplied template is missing, the settings screen reports a workspace-setup problem instead of asking the user to create blank content.
+
 Saving an edit creates a new immutable workspace template version. Older versions remain available as history, and an already prepared notice stays tied to the exact template version used to render it. **Restore current supplied default** also creates a new version; it does not erase prior customization.
 
 Legal templates require a reviewed jurisdiction before automatic delivery is available. This is a workflow safeguard, not legal advice; the workspace administrator remains responsible for confirming the notice and timing for the applicable jurisdiction.
@@ -73,3 +75,15 @@ Legal templates require a reviewed jurisdiction before automatic delivery is ava
 - Channel selection never bypasses record access, property scope, or role capabilities.
 
 If a channel has no valid destination—for example, SMS is selected but the recipient has no phone number—the system does not invent one. Tenant notice failure behavior determines whether delivery stops for review, retries and keeps a draft, or retries and records failure.
+
+## Delivery status
+
+The delivery list distinguishes submission to a provider from confirmed delivery:
+
+- **Queued** — the durable delivery worker has not made the first attempt yet.
+- **Accepted** — the provider accepted the message, but final delivery has not been confirmed.
+- **Retrying** — a temporary provider failure occurred and another attempt is scheduled.
+- **Delivered** — the provider confirmed delivery.
+- **Failed** — retries ended. Review the recorded error and the recipient's destination before trying again.
+
+The list also shows the recipient relationship role, channel, destination, attempt count, next retry when applicable, and the provider's last error. It is delivery evidence, not a second set of notification preferences.

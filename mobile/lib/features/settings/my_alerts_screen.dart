@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import 'notification_help_action.dart';
 import 'notification_foundation_repository.dart';
 
 class MyAlertsScreen extends ConsumerStatefulWidget {
@@ -43,7 +44,10 @@ class _MyAlertsScreenState extends ConsumerState<MyAlertsScreen> {
   Widget build(BuildContext context) {
     final alerts = ref.watch(myAlertsProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('My alerts')),
+      appBar: AppBar(
+        title: const Text('My alerts'),
+        actions: const [NotificationHelpAction()],
+      ),
       body: alerts.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, _) => _ErrorBody(

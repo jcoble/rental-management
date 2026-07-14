@@ -209,6 +209,7 @@ class TenantNoticePolicy {
     required this.failureBehavior,
     required this.workspaceNoticeTemplateVersionId,
     required this.templateSystemKey,
+    required this.templateProvenance,
     required this.templateVersion,
     required this.templateSubject,
     required this.templateBody,
@@ -241,6 +242,7 @@ class TenantNoticePolicy {
   final String failureBehavior;
   final int workspaceNoticeTemplateVersionId;
   final String templateSystemKey;
+  final String templateProvenance;
   final int templateVersion;
   final String templateSubject;
   final String templateBody;
@@ -281,6 +283,8 @@ class TenantNoticePolicy {
     workspaceNoticeTemplateVersionId:
         (json['workspaceNoticeTemplateVersionId'] as num).toInt(),
     templateSystemKey: json['templateSystemKey'] as String? ?? '',
+    templateProvenance:
+        json['templateProvenance'] as String? ?? 'Rental Command supplied copy',
     templateVersion: (json['templateVersion'] as num?)?.toInt() ?? 0,
     templateSubject: json['templateSubject'] as String? ?? '',
     templateBody: json['templateBody'] as String? ?? '',
@@ -408,17 +412,17 @@ class NotificationFoundationRepository {
   final Dio _dio;
 
   Future<MyAlerts> getMyAlerts() => _request(
-    () => _dio.get<Map<String, dynamic>>('/notification-settings/my-alerts'),
+    () => _dio.get<Map<String, dynamic>>('/my-alerts'),
     (data) => MyAlerts.fromJson(_map(data)),
   );
 
   Future<MyAlerts> updateMyAlerts(MyAlerts alerts) {
     final request = alerts.toUpdateJson();
     return IdempotentMutation.run(
-      'notification-settings:my-alerts:$request',
+      'my-alerts:$request',
       (operationKey) => _request(
         () => _dio.put<Map<String, dynamic>>(
-          '/notification-settings/my-alerts',
+          '/my-alerts',
           data: request,
           options: Options(headers: {'Idempotency-Key': operationKey}),
         ),
@@ -428,9 +432,7 @@ class NotificationFoundationRepository {
   }
 
   Future<MorningBriefingSettings> getMorningBriefingSettings() => _request(
-    () => _dio.get<Map<String, dynamic>>(
-      '/notification-settings/morning-briefing',
-    ),
+    () => _dio.get<Map<String, dynamic>>('/team-routing/morning-briefing'),
     (data) => MorningBriefingSettings.fromJson(_map(data)),
   );
 
@@ -439,10 +441,10 @@ class NotificationFoundationRepository {
   ) {
     final request = settings.toUpdateJson();
     return IdempotentMutation.run(
-      'notification-settings:morning-briefing:$request',
+      'team-routing:morning-briefing:$request',
       (operationKey) => _request(
         () => _dio.put<Map<String, dynamic>>(
-          '/notification-settings/morning-briefing',
+          '/team-routing/morning-briefing',
           data: request,
           options: Options(headers: {'Idempotency-Key': operationKey}),
         ),
@@ -452,23 +454,19 @@ class NotificationFoundationRepository {
   }
 
   Future<List<TeamRoutingRule>> listTeamRouting() => _request(
-    () => _dio.get<List<dynamic>>('/notification-settings/team-routing'),
+    () => _dio.get<List<dynamic>>('/team-routing'),
     (data) => _list(data, TeamRoutingRule.fromJson),
   );
 
   Future<List<TeamRoutingRecipient>> listTeamRoutingRecipients(int ruleId) =>
       _request(
-        () => _dio.get<List<dynamic>>(
-          '/notification-settings/team-routing/$ruleId/recipients',
-        ),
+        () => _dio.get<List<dynamic>>('/team-routing/$ruleId/recipients'),
         (data) => _list(data, TeamRoutingRecipient.fromJson),
       );
 
   Future<List<TeamRoutingRecipientPreview>> previewTeamRouting(int ruleId) =>
       _request(
-        () => _dio.get<List<dynamic>>(
-          '/notification-settings/team-routing/$ruleId/preview',
-        ),
+        () => _dio.get<List<dynamic>>('/team-routing/$ruleId/preview'),
         (data) => _list(data, TeamRoutingRecipientPreview.fromJson),
       );
 
@@ -485,10 +483,10 @@ class NotificationFoundationRepository {
       'recipients': recipients.map((item) => item.toJson()).toList(),
     };
     return IdempotentMutation.run(
-      'notification-settings:team-routing:$request',
+      'team-routing:$request',
       (operationKey) => _request(
         () => _dio.put<Map<String, dynamic>>(
-          '/notification-settings/team-routing',
+          '/team-routing',
           data: request,
           options: Options(headers: {'Idempotency-Key': operationKey}),
         ),
@@ -498,7 +496,7 @@ class NotificationFoundationRepository {
   }
 
   Future<List<TenantNoticePolicy>> listTenantNoticePolicies() => _request(
-    () => _dio.get<List<dynamic>>('/notification-settings/tenant-notices'),
+    () => _dio.get<List<dynamic>>('/tenant-notices'),
     (data) => _list(data, TenantNoticePolicy.fromJson),
   );
 
@@ -506,25 +504,14 @@ class NotificationFoundationRepository {
     TenantNoticePolicy policy,
     Map<String, dynamic> request,
   ) => IdempotentMutation.run(
-    'notification-settings:tenant-notice:${policy.automationKey}:$request',
+    'tenant-notices:${policy.automationKey}:$request',
     (operationKey) => _request(
       () => _dio.put<Map<String, dynamic>>(
-        '/notification-settings/tenant-notices/${Uri.encodeComponent(policy.automationKey)}',
+        '/tenant-notices/${Uri.encodeComponent(policy.automationKey)}',
         data: request,
         options: Options(headers: {'Idempotency-Key': operationKey}),
       ),
       (data) => TenantNoticePolicy.fromJson(_map(data)),
-    ),
-  );
-
-  Future<void> seedTenantNoticeTemplates() => IdempotentMutation.run(
-    'notification-settings:tenant-notices:seed',
-    (operationKey) => _request(
-      () => _dio.post<void>(
-        '/notification-settings/tenant-notices/templates/seed',
-        options: Options(headers: {'Idempotency-Key': operationKey}),
-      ),
-      (_) {},
     ),
   );
 
@@ -542,10 +529,10 @@ class NotificationFoundationRepository {
       'confirmJurisdictionReviewed': confirmJurisdictionReviewed,
     };
     return IdempotentMutation.run(
-      'notification-settings:tenant-notice-template:$systemKey:$request',
+      'tenant-notices:template:$systemKey:$request',
       (operationKey) => _request(
         () => _dio.post<Map<String, dynamic>>(
-          '/notification-settings/tenant-notices/templates/${Uri.encodeComponent(systemKey)}/versions',
+          '/tenant-notices/templates/${Uri.encodeComponent(systemKey)}/versions',
           data: request,
           options: Options(headers: {'Idempotency-Key': operationKey}),
         ),
@@ -557,10 +544,10 @@ class NotificationFoundationRepository {
   Future<TenantNoticePolicy> restoreTenantNoticeTemplate(
     String systemKey,
   ) => IdempotentMutation.run(
-    'notification-settings:tenant-notice-template:$systemKey:restore',
+    'tenant-notices:template:$systemKey:restore',
     (operationKey) => _request(
       () => _dio.post<Map<String, dynamic>>(
-        '/notification-settings/tenant-notices/templates/${Uri.encodeComponent(systemKey)}/restore-default',
+        '/tenant-notices/templates/${Uri.encodeComponent(systemKey)}/restore-default',
         options: Options(headers: {'Idempotency-Key': operationKey}),
       ),
       (data) => TenantNoticePolicy.fromJson(_map(data)),
@@ -571,7 +558,7 @@ class NotificationFoundationRepository {
     int take = 50,
   }) => _request(
     () => _dio.get<List<dynamic>>(
-      '/notification-settings/tenant-notices/deliveries',
+      '/tenant-notices/deliveries',
       queryParameters: {'take': take},
     ),
     (data) => _list(data, NoticeDeliveryStatus.fromJson),

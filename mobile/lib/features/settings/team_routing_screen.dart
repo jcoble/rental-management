@@ -3,16 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../team/team_repository.dart';
+import 'notification_help_action.dart';
 import 'notification_foundation_repository.dart';
-
-const _teamRoutingTopics = <String>[
-  'RentAndMoney',
-  'ApplicationsAndLeasing',
-  'WorkOrders',
-  'OwnerStatementsAndDecisions',
-  'AccountAndSecurity',
-  'MorningBriefing',
-];
 
 class TeamRoutingScreen extends ConsumerStatefulWidget {
   const TeamRoutingScreen({super.key});
@@ -56,12 +48,12 @@ class _TeamRoutingScreenState extends ConsumerState<TeamRoutingScreen> {
     if (saved == true && mounted) await _refresh();
   }
 
-  Future<void> _edit({TeamRoutingRule? rule, String? newTopic}) async {
+  Future<void> _edit(TeamRoutingRule rule) async {
     final saved = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
-      builder: (_) => _TeamRoutingEditorSheet(rule: rule, newTopic: newTopic),
+      builder: (_) => _TeamRoutingEditorSheet(rule: rule),
     );
     if (saved == true && mounted) await _refresh();
   }
@@ -71,17 +63,7 @@ class _TeamRoutingScreenState extends ConsumerState<TeamRoutingScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Team routing'),
-        actions: [
-          PopupMenuButton<String>(
-            tooltip: 'Add routing rule',
-            icon: const Icon(Icons.add),
-            onSelected: (topic) => _edit(newTopic: topic),
-            itemBuilder: (_) => [
-              for (final topic in _teamRoutingTopics)
-                PopupMenuItem(value: topic, child: Text(_topicLabel(topic))),
-            ],
-          ),
-        ],
+        actions: const [NotificationHelpAction()],
       ),
       body: FutureBuilder<List<TeamRoutingRule>>(
         future: _rules,
@@ -146,19 +128,10 @@ class _TeamRoutingScreenState extends ConsumerState<TeamRoutingScreen> {
                 ),
                 const SizedBox(height: 12),
                 if (rules.isEmpty)
-                  _EmptyRouting(onAdd: () => _edit(newTopic: 'RentAndMoney'))
+                  _MissingRouting(onRetry: () => setState(_reload))
                 else
                   for (final rule in rules)
-                    _RoutingRuleCard(
-                      rule: rule,
-                      onEdit: () => _edit(rule: rule),
-                    ),
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  onPressed: () => _showTopicPicker(context),
-                  icon: const Icon(Icons.add),
-                  label: const Text('Configure another topic'),
-                ),
+                    _RoutingRuleCard(rule: rule, onEdit: () => _edit(rule)),
               ],
             ),
           );
@@ -166,38 +139,10 @@ class _TeamRoutingScreenState extends ConsumerState<TeamRoutingScreen> {
       ),
     );
   }
-
-  Future<void> _showTopicPicker(BuildContext context) async {
-    final topic = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      builder: (sheetContext) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            const ListTile(
-              title: Text('Choose a responsibility'),
-              subtitle: Text('Creates or replaces an all-properties rule.'),
-            ),
-            for (final item in _teamRoutingTopics)
-              ListTile(
-                title: Text(_topicLabel(item)),
-                subtitle: Text(_topicDetail(item)),
-                onTap: () => Navigator.of(sheetContext).pop(item),
-              ),
-          ],
-        ),
-      ),
-    );
-    if (topic != null && mounted) await _edit(newTopic: topic);
-  }
 }
 
 class _MorningBriefingCard extends StatelessWidget {
-  const _MorningBriefingCard({
-    required this.settings,
-    required this.onEdit,
-  });
+  const _MorningBriefingCard({required this.settings, required this.onEdit});
 
   final MorningBriefingSettings settings;
   final VoidCallback onEdit;
@@ -428,10 +373,9 @@ class _RoutingRuleCard extends StatelessWidget {
 }
 
 class _TeamRoutingEditorSheet extends ConsumerStatefulWidget {
-  const _TeamRoutingEditorSheet({this.rule, this.newTopic});
+  const _TeamRoutingEditorSheet({required this.rule});
 
-  final TeamRoutingRule? rule;
-  final String? newTopic;
+  final TeamRoutingRule rule;
 
   @override
   ConsumerState<_TeamRoutingEditorSheet> createState() =>
@@ -453,14 +397,13 @@ class _TeamRoutingEditorSheetState
   @override
   void initState() {
     super.initState();
-    _topic = widget.rule?.topic ?? widget.newTopic ?? _teamRoutingTopics.first;
-    _useFallback = widget.rule?.useWorkspaceAdministratorFallback ?? true;
+    _topic = widget.rule.topic;
+    _useFallback = widget.rule.useWorkspaceAdministratorFallback;
     _data = _loadData();
   }
 
   Future<_RoutingEditorData> _loadData() async {
     final rule = widget.rule;
-    if (rule == null) return const _RoutingEditorData([], []);
     final repository = ref.read(notificationFoundationRepositoryProvider);
     final values = await Future.wait<Object>([
       repository.listTeamRoutingRecipients(rule.id),
@@ -528,7 +471,7 @@ class _TeamRoutingEditorSheetState
           .read(notificationFoundationRepositoryProvider)
           .replaceTeamRouting(
             topic: _topic,
-            propertyId: widget.rule?.propertyId,
+            propertyId: widget.rule.propertyId,
             useWorkspaceAdministratorFallback: _useFallback,
             recipients: [
               for (final recipient in _recipients.values)
@@ -585,7 +528,7 @@ class _TeamRoutingEditorSheetState
             ),
             children: [
               Text(
-                widget.rule?.scope ?? 'All properties',
+                widget.rule.scope,
                 style: Theme.of(context).textTheme.titleSmall,
               ),
               Text(
@@ -768,10 +711,10 @@ class _EditableRecipientCard extends StatelessWidget {
   );
 }
 
-class _EmptyRouting extends StatelessWidget {
-  const _EmptyRouting({required this.onAdd});
+class _MissingRouting extends StatelessWidget {
+  const _MissingRouting({required this.onRetry});
 
-  final VoidCallback onAdd;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) => Card(
@@ -781,11 +724,17 @@ class _EmptyRouting extends StatelessWidget {
         children: [
           const Icon(Icons.alt_route_outlined, size: 36),
           const SizedBox(height: 8),
-          const Text('No team routing has been configured.'),
+          const Text('Routing defaults are unavailable.'),
+          const SizedBox(height: 6),
+          const Text(
+            'Every new workspace receives one rule for each responsibility. '
+            'Reload; if the rules are still missing, workspace setup needs attention.',
+            textAlign: TextAlign.center,
+          ),
           const SizedBox(height: 12),
-          FilledButton(
-            onPressed: onAdd,
-            child: const Text('Configure routing'),
+          OutlinedButton(
+            onPressed: onRetry,
+            child: const Text('Reload routing'),
           ),
         ],
       ),
@@ -849,15 +798,4 @@ String _topicLabel(String topic) => switch (topic) {
   'AccountAndSecurity' => 'Account and security',
   'MorningBriefing' => 'Morning Briefing',
   _ => topic,
-};
-
-String _topicDetail(String topic) => switch (topic) {
-  'RentAndMoney' => 'Rent, balances, payments, and account work.',
-  'ApplicationsAndLeasing' => 'Applications, screening, and lease setup.',
-  'WorkOrders' => 'Requests, assignments, and escalations.',
-  'OwnerStatementsAndDecisions' => 'Owner reports and approvals.',
-  'AccountAndSecurity' => 'Access, security, and workspace administration.',
-  'MorningBriefing' =>
-    'Daily rent, lease, appointment, inspection, and urgent work summary.',
-  _ => '',
 };

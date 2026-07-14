@@ -87,12 +87,10 @@ void main() {
     expect(repositorySource, isNot(contains("'/notifications/settings'")));
     expect(repositorySource, isNot(contains('notifyTenants')));
     expect(repositorySource, isNot(contains('leaseEndAutoAction')));
-    expect(repositorySource, contains("'/notification-settings/my-alerts'"));
-    expect(repositorySource, contains("'/notification-settings/team-routing'"));
-    expect(
-      repositorySource,
-      contains("'/notification-settings/tenant-notices/deliveries'"),
-    );
+    expect(repositorySource, contains("'/my-alerts'"));
+    expect(repositorySource, contains("'/team-routing'"));
+    expect(repositorySource, contains("'/tenant-notices/deliveries'"));
+    expect(repositorySource, isNot(contains("'/notification-settings/")));
     expect(settingsSource, contains("title: 'My alerts'"));
     expect(settingsSource, contains("title: 'Team routing'"));
     expect(settingsSource, contains("title: 'Tenant notices'"));

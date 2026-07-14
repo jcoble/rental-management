@@ -50,6 +50,15 @@
 		return 'border-border text-muted-foreground';
 	}
 
+	function deliveryStatusExplanation(status: string): string {
+		if (status === 'Queued') return 'Waiting for the delivery worker to make the first attempt.';
+		if (status === 'Accepted') return 'The provider accepted the message; final delivery is not confirmed yet.';
+		if (status === 'Retrying') return 'A provider attempt failed temporarily and another attempt is scheduled.';
+		if (status === 'Delivered') return 'The provider confirmed delivery.';
+		if (status === 'Failed') return 'Delivery retries ended. Review the error and recipient details.';
+		return 'Current status reported by the delivery provider.';
+	}
+
 	let policyDrafts = $state<Record<string, UpsertTenantNoticePolicyRequest>>({});
 	let templateDrafts = $state<Record<string, { subject: string; body: string; jurisdictionCode: string; confirmJurisdictionReviewed: boolean }>>({});
 	let appliedDataKey = $state('');
@@ -100,15 +109,6 @@
 	function autoAllowed(policy: TenantNoticePolicyResponse): boolean {
 		return policy.canAutoSend;
 	}
-
-	const seedMutation = createMutation(() => ({
-		mutationFn: () => notifications.tenantNotices.seedTemplates(),
-		onSuccess: async () => {
-			await queryClient.invalidateQueries({ queryKey: ['notification-settings', 'tenant-notices', 'policies'] });
-			showSuccess('Supplied tenant notice templates and Draft policies are ready.');
-		},
-		onError: (error) => showError(apiErrorMessage(error))
-	}));
 
 	const savePolicyMutation = createMutation(() => ({
 		mutationFn: (key: string) => notifications.tenantNotices.updatePolicy(key, policyDrafts[key]),
@@ -171,7 +171,7 @@
 	{:else if policiesQuery.isError}
 		<Card.Root><Card.Content class="space-y-4 p-6"><p class="text-sm text-destructive">We couldn't load tenant notice settings.</p><Button variant="outline" onclick={() => policiesQuery.refetch()}>Retry</Button></Card.Content></Card.Root>
 	{:else if (policiesQuery.data?.length ?? 0) < suppliedAutomationCount}
-		<Card.Root><Card.Content class="space-y-4 p-6"><div><h2 class="font-semibold">Finish tenant notice setup</h2><p class="mt-2 text-sm text-muted-foreground">Create the five supplied editable templates and safe Draft-for-review policies. This is idempotent and will not overwrite customized versions or existing policies.</p></div><Button onclick={() => seedMutation.mutate()} disabled={seedMutation.isPending}>{seedMutation.isPending ? 'Setting up…' : 'Set up supplied notices'}</Button></Card.Content></Card.Root>
+		<Card.Root><Card.Content class="space-y-4 p-6"><div><h2 class="font-semibold">Supplied notices are unavailable</h2><p class="mt-2 text-sm text-muted-foreground">Every new workspace receives five complete editable templates and safe Draft-for-review policies. Reload this page; if they are still missing, workspace setup needs attention.</p></div><Button variant="outline" onclick={() => policiesQuery.refetch()}>Reload notices</Button></Card.Content></Card.Root>
 	{:else}
 		<div class="space-y-4">
 			{#each policiesQuery.data ?? [] as policy (policy.id)}
@@ -181,7 +181,7 @@
 				{#if draft && templateDraft}
 					<Card.Root class="gap-0 py-0" data-testid={`tenant-notice-${policy.automationKey}`}>
 						<Card.Content class="space-y-5 p-6">
-							<div class="flex flex-wrap items-start justify-between gap-4"><div><div class="flex flex-wrap items-center gap-2"><h2 class="text-lg font-semibold">{automation.label}</h2><span class="rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground">{policy.classification}</span></div><p class="mt-1 text-sm text-muted-foreground">{automation.detail}</p></div><p class="text-xs text-muted-foreground">Template v{policy.templateVersion}{policy.templateIsCustomized ? ' · customized' : ' · supplied'}</p></div>
+							<div class="flex flex-wrap items-start justify-between gap-4"><div><div class="flex flex-wrap items-center gap-2"><h2 class="text-lg font-semibold">{automation.label}</h2><span class="rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground">{policy.classification}</span></div><p class="mt-1 text-sm text-muted-foreground">{automation.detail}</p></div><div class="max-w-sm text-right text-xs text-muted-foreground"><p>Workspace template v{policy.templateVersion}{policy.templateIsCustomized ? ' · customized' : ' · supplied'}</p><p class="mt-1">{policy.templateProvenance}</p></div></div>
 
 							<div><p class="mb-2 text-sm font-medium">Automation mode</p><div class="inline-flex flex-wrap overflow-hidden rounded-lg border border-border">{#each [{ value: 'Off', label: 'Off' }, { value: 'Draft', label: 'Draft for review' }, { value: 'Auto', label: 'Send automatically' }] as mode (mode.value)}<button type="button" class={`min-h-11 px-4 text-sm font-medium ${draft.mode === mode.value ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground'}`} disabled={mode.value === 'Auto' && !autoAllowed(policy)} onclick={() => selectMode(policy, mode.value as TenantNoticeMode)}>{mode.label}</button>{/each}</div>{#if policy.classification === 'Legal' && !autoAllowed(policy)}<p class="mt-2 text-xs text-amber-700 dark:text-amber-400">Automatic delivery stays unavailable until an administrator saves a jurisdiction-reviewed template version.</p>{/if}</div>
 
@@ -196,7 +196,7 @@
 							<div class="flex flex-wrap items-center gap-3"><Button onclick={() => savePolicyMutation.mutate(policy.automationKey)} disabled={savePolicyMutation.isPending}>{savePolicyMutation.isPending ? 'Saving…' : 'Save automation'}</Button><Button variant="outline" onclick={() => (expandedAutomation = expandedAutomation === policy.automationKey ? null : policy.automationKey)}>{expandedAutomation === policy.automationKey ? 'Close template' : 'Review and edit template'}</Button><p class="text-xs text-muted-foreground">Currently bound to workspace template v{policy.templateVersion}.</p></div>
 
 							{#if expandedAutomation === policy.automationKey}
-								<div class="space-y-4 border-t border-border pt-5"><div><h3 class="font-semibold">Editable workspace template</h3><p class="mt-1 text-sm text-muted-foreground">This starts with complete Rental Command copy. Saving appends and binds a new immutable workspace version; it never overwrites the prior version.</p>{#if policy.templateUpdateAvailable}<p class="mt-2 text-sm text-amber-700 dark:text-amber-400">A newer Rental Command supplied version is available. Restore it below to create and bind a new workspace version.</p>{/if}</div><div><label for={`template-subject-${policy.automationKey}`} class="mb-1 block text-sm font-medium">Subject</label><Input id={`template-subject-${policy.automationKey}`} bind:value={templateDraft.subject} /></div><div><label for={`template-body-${policy.automationKey}`} class="mb-1 block text-sm font-medium">Message</label><textarea id={`template-body-${policy.automationKey}`} class="min-h-32 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" bind:value={templateDraft.body}></textarea><p class="mt-1 text-xs text-muted-foreground">Merge fields such as <code>{'{{tenant_name}}'}</code> and <code>{'{{property_address}}'}</code> fill from the notice's Lease Management context.</p></div>{#if policy.classification === 'Legal'}<div class="grid gap-3 sm:grid-cols-2"><div><label for={`template-jurisdiction-${policy.automationKey}`} class="mb-1 block text-sm font-medium">Reviewed jurisdiction</label><Input id={`template-jurisdiction-${policy.automationKey}`} bind:value={templateDraft.jurisdictionCode} placeholder="State or local code" /></div><label class="flex min-h-14 items-center gap-3 self-end rounded-lg border border-border p-3"><Checkbox checked={templateDraft.confirmJurisdictionReviewed} onCheckedChange={(value) => (templateDraft.confirmJurisdictionReviewed = value === true)} /><span class="text-sm">I reviewed this template for that jurisdiction</span></label></div>{/if}<div class="flex flex-wrap gap-3"><Button onclick={() => saveTemplateMutation.mutate(policy.automationKey)} disabled={saveTemplateMutation.isPending || !templateDraft.subject.trim() || !templateDraft.body.trim() || (policy.classification === 'Legal' && (!templateDraft.jurisdictionCode.trim() || !templateDraft.confirmJurisdictionReviewed))}>{saveTemplateMutation.isPending ? 'Saving…' : 'Save and use new template version'}</Button><Button variant="outline" onclick={() => restoreTemplateMutation.mutate(policy.automationKey)} disabled={restoreTemplateMutation.isPending}>Restore and use current supplied default</Button></div></div>
+								<div class="space-y-4 border-t border-border pt-5"><div><h3 class="font-semibold">Editable workspace template</h3><p class="mt-1 text-sm text-muted-foreground">{policy.templateProvenance}. Saving appends and binds a new immutable workspace version; it never overwrites the prior version. Restoring the supplied default also creates a new workspace version, so history is preserved.</p>{#if policy.templateUpdateAvailable}<p class="mt-2 text-sm text-amber-700 dark:text-amber-400">A newer Rental Command supplied version is available. Restore it below to create and bind a new workspace version.</p>{/if}</div><div><label for={`template-subject-${policy.automationKey}`} class="mb-1 block text-sm font-medium">Subject</label><Input id={`template-subject-${policy.automationKey}`} bind:value={templateDraft.subject} /></div><div><label for={`template-body-${policy.automationKey}`} class="mb-1 block text-sm font-medium">Message</label><textarea id={`template-body-${policy.automationKey}`} class="min-h-32 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" bind:value={templateDraft.body}></textarea><p class="mt-1 text-xs text-muted-foreground">Merge fields such as <code>{'{{tenant_name}}'}</code> and <code>{'{{property_address}}'}</code> fill from the notice's Lease Management context.</p></div>{#if policy.classification === 'Legal'}<div class="grid gap-3 sm:grid-cols-2"><div><label for={`template-jurisdiction-${policy.automationKey}`} class="mb-1 block text-sm font-medium">Reviewed jurisdiction</label><Input id={`template-jurisdiction-${policy.automationKey}`} bind:value={templateDraft.jurisdictionCode} placeholder="State or local code" /></div><label class="flex min-h-14 items-center gap-3 self-end rounded-lg border border-border p-3"><Checkbox checked={templateDraft.confirmJurisdictionReviewed} onCheckedChange={(value) => (templateDraft.confirmJurisdictionReviewed = value === true)} /><span class="text-sm">I reviewed this template for that jurisdiction</span></label></div>{/if}<div class="flex flex-wrap gap-3"><Button onclick={() => saveTemplateMutation.mutate(policy.automationKey)} disabled={saveTemplateMutation.isPending || !templateDraft.subject.trim() || !templateDraft.body.trim() || (policy.classification === 'Legal' && (!templateDraft.jurisdictionCode.trim() || !templateDraft.confirmJurisdictionReviewed))}>{saveTemplateMutation.isPending ? 'Saving…' : 'Save and use new template version'}</Button><Button variant="outline" onclick={() => restoreTemplateMutation.mutate(policy.automationKey)} disabled={restoreTemplateMutation.isPending}>Restore and use current supplied default</Button></div></div>
 							{/if}
 						</Card.Content>
 					</Card.Root>
@@ -222,6 +222,7 @@
 							<div class="grid gap-3 rounded-lg border border-border p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
 								<div>
 									<div class="flex flex-wrap items-center gap-2"><p class="font-medium">{delivery.subject}</p><span class={`rounded-full border px-2 py-0.5 text-xs font-medium ${deliveryStatusClass(delivery.status)}`}>{delivery.status}</span></div>
+									<p class="mt-1 text-xs text-muted-foreground">{deliveryStatusExplanation(delivery.status)}</p>
 									<p class="mt-1 text-sm text-muted-foreground">{delivery.recipientRole} · {delivery.channel} · {delivery.destination}</p>
 									{#if delivery.lastError}<p class="mt-2 text-sm text-destructive">{delivery.lastError}</p>{/if}
 								</div>

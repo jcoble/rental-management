@@ -112,14 +112,6 @@
 		return topics.find((item) => item.topic === topic)!;
 	}
 
-	function rulesFor(topic: TeamRoutingTopic) {
-		return (rulesQuery.data ?? []).filter((rule) => rule.topic === topic);
-	}
-
-	function workspaceRule(topic: TeamRoutingTopic) {
-		return rulesFor(topic).find((rule) => rule.propertyId === null);
-	}
-
 	function beginEdit(topic: TeamRoutingTopic, rule?: TeamRoutingRuleResponse) {
 		editingTopic = topic;
 		editingRuleId = rule?.id ?? null;
@@ -202,30 +194,24 @@
 			</Card.Content>
 		</Card.Root>
 
+		{#if (rulesQuery.data?.length ?? 0) === 0}
+			<Card.Root><Card.Content class="space-y-3 p-6"><h2 class="font-semibold">Routing defaults are unavailable</h2><p class="text-sm text-muted-foreground">Every new workspace receives one saved rule for each responsibility. Reload this page; if the rules are still missing, the workspace setup needs attention.</p><Button variant="outline" onclick={() => rulesQuery.refetch()}>Reload routing</Button></Card.Content></Card.Root>
+		{:else}
 		<div class="grid gap-4 md:grid-cols-2">
-			{#each topics as item (item.topic)}
+			{#each rulesQuery.data ?? [] as rule (rule.id)}
+				{@const item = topicMeta(rule.topic)}
 				<Card.Root class="gap-0 py-0">
 					<Card.Content class="space-y-4 p-5">
 						<div><h2 class="font-semibold">{item.label}</h2><p class="mt-1 text-sm text-muted-foreground">{item.detail}</p></div>
-						{#if rulesFor(item.topic).length === 0}
-							<p class="rounded-md bg-muted/40 p-3 text-sm text-muted-foreground">No saved rule. This topic has no configured recipient until an administrator saves one.</p>
-						{:else}
-							<div class="space-y-2">
-								{#each rulesFor(item.topic) as rule (rule.id)}
-									<div class="rounded-md border border-border p-3">
-										<div class="flex items-start justify-between gap-3"><div><p class="text-sm font-medium">{rule.scope}</p><p class="text-xs text-muted-foreground">{rule.namedRecipientSummary}</p></div><Button size="sm" variant="outline" onclick={() => beginEdit(item.topic, rule)}>Edit</Button></div>
-										<p class="mt-2 text-xs text-muted-foreground">{rule.routingExplanation}</p>
-									</div>
-								{/each}
-							</div>
-						{/if}
-						<Button variant="outline" onclick={() => beginEdit(item.topic, workspaceRule(item.topic))}>
-							{workspaceRule(item.topic) ? 'Edit all-properties routing' : 'Configure all properties'}
-						</Button>
+						<div class="rounded-md border border-border p-3">
+							<div class="flex items-start justify-between gap-3"><div><p class="text-sm font-medium">{rule.scope}</p><p class="text-xs text-muted-foreground">{rule.namedRecipientSummary}</p></div><Button size="sm" variant="outline" onclick={() => beginEdit(item.topic, rule)}>Edit</Button></div>
+							<p class="mt-2 text-xs text-muted-foreground">{rule.routingExplanation}</p>
+						</div>
 					</Card.Content>
 				</Card.Root>
 			{/each}
 		</div>
+		{/if}
 
 		{#if editingTopic}
 			<Card.Root id="team-routing-editor" class="gap-0 py-0">
