@@ -1,6 +1,7 @@
 import type { Vendor, VendorRating, VendorScorecard } from '$lib/types';
 import { api } from '../client';
 import { buildListQuery, type ListParams } from '../list-params';
+import { idempotentMutation } from '../idempotency';
 
 export interface VendorListResponse {
 	items: Vendor[];
@@ -15,9 +16,18 @@ export const vendors = {
 	listPage: (portfolioId: number, params?: ListParams) =>
 		api.get<VendorListResponse>(`/vendors/page${buildListQuery(params, { portfolioId })}`),
 	get: (id: number) => api.get<Vendor>(`/vendors/${id}`),
-	create: (data: Record<string, unknown>) => api.post<Vendor>('/vendors', data),
-	update: (id: number, data: Record<string, unknown>) => api.patch<Vendor>(`/vendors/${id}`, data),
-	delete: (id: number) => api.delete(`/vendors/${id}`),
+	create: (data: Record<string, unknown>) =>
+		idempotentMutation(`vendors:create:${JSON.stringify(data)}`, (key) =>
+			api.post<Vendor>('/vendors', data, { headers: { 'Idempotency-Key': key } })
+		),
+	update: (id: number, data: Record<string, unknown>) =>
+		idempotentMutation(`vendors:update:${id}:${JSON.stringify(data)}`, (key) =>
+			api.patch<Vendor>(`/vendors/${id}`, data, { headers: { 'Idempotency-Key': key } })
+		),
+	delete: (id: number) =>
+		idempotentMutation(`vendors:delete:${id}`, (key) =>
+			api.delete(`/vendors/${id}`, { headers: { 'Idempotency-Key': key } })
+		),
 	// Record a 1–5 star rating; optionally tied to the work order it followed.
 	rate: (id: number, data: { stars: number; comment?: string; workOrderId?: number }) =>
 		api.post<VendorRating>(`/vendors/${id}/ratings`, data),

@@ -70,15 +70,6 @@ public class OwnerEntityListQuery : ListQuery
     public OwnerEntityType? OwnerEntityType { get; set; }
 }
 
-public class DeleteOwnerEntityOptions
-{
-    /// <summary>
-    /// When true, clears this owner from assigned properties before soft-deleting the owner. This is
-    /// intended for Guided Setup cleanup where a property may be temporarily ownerless.
-    /// </summary>
-    public bool ClearPropertyAssignments { get; set; }
-}
-
 public class CreateOwnerEntityRequest
 {
     public OwnerEntityType OwnerEntityType { get; set; } = OwnerEntityType.Person;

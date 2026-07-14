@@ -1,7 +1,9 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -20,14 +22,69 @@ public class PropertyService : IPropertyService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
+    private readonly IAtomicUnitOfWork? _atomic;
     private readonly TimeProvider _timeProvider;
 
-    public PropertyService(RentalCommandDbContext db, IDataUpdateService dataUpdate, TimeProvider timeProvider)
+    public PropertyService(
+        RentalCommandDbContext db,
+        IDataUpdateService dataUpdate,
+        TimeProvider timeProvider,
+        IAtomicUnitOfWork? atomic = null)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _timeProvider = timeProvider;
+        _atomic = atomic;
     }
+
+    public async Task<PropertyResponse?> CreateAsync(
+        WorkspaceReadScope scope,
+        CreatePropertyRequest request,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Property,
+            AtomicCoreCrudMutationOperation.Create, 0, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
+        return DeserializeSnapshot<PropertyResponse>(outcome.Value);
+    }
+
+    public async Task<PropertyResponse?> UpdateAsync(
+        WorkspaceReadScope scope,
+        int id,
+        UpdatePropertyRequest request,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Property,
+            AtomicCoreCrudMutationOperation.Update, id, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
+        return DeserializeSnapshot<PropertyResponse>(outcome.Value);
+    }
+
+    public async Task<bool> DeleteAsync(
+        WorkspaceReadScope scope,
+        int id,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Property,
+            AtomicCoreCrudMutationOperation.Delete, id, operationKey, new object());
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
+        return outcome.Value.Found;
+    }
+
+    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
+        "Scoped property mutations require the atomic persistence kernel.");
+
+    private static TResponse? DeserializeSnapshot<TResponse>(AtomicCoreCrudMutationResult result)
+        where TResponse : class =>
+        result.Found && result.ResponseJson is not null
+            ? JsonSerializer.Deserialize<TResponse>(result.ResponseJson)
+            : null;
 
     public async Task<IReadOnlyList<PropertyResponse>> ListAsync(
         WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default)
@@ -164,283 +221,6 @@ public class PropertyService : IPropertyService
         response.OwnerName = row.OwnerName;
         return response;
     }
-
-    public Task<PropertyResponse?> CreateAsync(
-        WorkspaceReadScope scope, CreatePropertyRequest request, CancellationToken ct = default) =>
-        _db.ExecuteAuthorizedMutationAsync(async token =>
-    {
-        var portfolioId = scope.PortfolioId;
-        if (!await _db.AuthorizedWorkspaceAssignments(
-                scope,
-                [CapabilityKeys.RentalsManage],
-                CapabilityAuthorizationTargetKind.Property,
-                _timeProvider.UtcNow()).AnyAsync(token))
-        {
-            return null;
-        }
-
-        // Verify any supplied owner/owner-entity references belong to the caller's portfolio (no cross-tenant linking).
-        if (request.OwnerId.HasValue &&
-            !await _db.EnsureOwnerInPortfolioAsync(portfolioId, request.OwnerId.Value, token))
-        {
-            return null;
-        }
-
-        if (request.OwnerEntityId.HasValue &&
-            !await _db.EnsureOwnerEntityInPortfolioAsync(portfolioId, request.OwnerEntityId.Value, token))
-        {
-            return null;
-        }
-
-        // When no owner is supplied, link the property to the portfolio's primary (self) owner so it shows up
-        // in the owners report. If the portfolio has no primary owner yet, leave it null rather than failing.
-        var ownerEntityId = request.ClearOwnerEntity ? null : request.OwnerEntityId;
-        if (!ownerEntityId.HasValue && !request.ClearOwnerEntity)
-        {
-            ownerEntityId = await _db.OwnerEntities
-                .Where(oe => oe.PortfolioId == portfolioId && oe.IsPrimary)
-                .Select(oe => (int?)oe.Id)
-                .FirstOrDefaultAsync(token);
-        }
-
-        var now = _timeProvider.UtcNow();
-        var entity = new Property
-        {
-            PortfolioId = portfolioId,
-            OwnerId = request.OwnerId,
-            OwnerEntityId = ownerEntityId,
-            Name = request.Name,
-            PropertyType = request.PropertyType,
-            Status = request.Status,
-            AddressLine1 = request.AddressLine1,
-            AddressLine2 = request.AddressLine2,
-            City = request.City,
-            State = request.State,
-            PostalCode = request.PostalCode,
-            YearBuilt = request.YearBuilt,
-            ManagementFeePercent = request.ManagementFeePercent,
-            Notes = request.Notes,
-            PurchasePrice = request.PurchasePrice,
-            LandValue = request.LandValue,
-            InServiceDate = request.InServiceDate.ToUtc(),
-            ManualAnnualDepreciation = request.ManualAnnualDepreciation,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        Unit? canonicalUnit = null;
-        if (IsPropertyUnitType(entity.PropertyType))
-        {
-            canonicalUnit = NewCanonicalUnit(entity, now);
-            _db.Units.Add(canonicalUnit);
-        }
-
-        _db.Properties.Add(entity);
-        await _db.SaveChangesAsync(token);
-
-        var response = PropertyResponse.FromEntity(entity, canonicalUnit == null ? 0 : 1, 0);
-        response.OwnerName = entity.OwnerEntity?.Name ?? entity.Owner?.Name;
-        if (canonicalUnit != null)
-        {
-            var canonicalUnitResponse = await BuildCanonicalUnitResponseQuery(portfolioId, canonicalUnit.Id)
-                .SingleAsync(token);
-            await _dataUpdate.BroadcastEntityUpdateAsync(
-                portfolioId,
-                UnitEntityType,
-                canonicalUnit.Id,
-                canonicalUnitResponse,
-                token);
-        }
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, token);
-        return response;
-    }, ct);
-
-    public Task<PropertyResponse?> UpdateAsync(
-        WorkspaceReadScope scope, int id, UpdatePropertyRequest request, CancellationToken ct = default) =>
-        _db.ExecuteAuthorizedMutationAsync(async token =>
-    {
-        var portfolioId = scope.PortfolioId;
-        var entity = await _db.Properties
-            .WhereAuthorized(_db, scope, CapabilityKeys.RentalsManage, _timeProvider.UtcNow())
-            .Include(p => p.Owner)
-            .Include(p => p.OwnerEntity)
-            .FirstOrDefaultAsync(p => p.Id == id, token);
-        if (entity == null)
-        {
-            return null;
-        }
-
-        // Verify any supplied owner/owner-entity references belong to the caller's portfolio (no cross-tenant linking).
-        if (request.OwnerId.HasValue &&
-            !await _db.EnsureOwnerInPortfolioAsync(portfolioId, request.OwnerId.Value, token))
-        {
-            return null;
-        }
-
-        if (request.OwnerEntityId.HasValue &&
-            !await _db.EnsureOwnerEntityInPortfolioAsync(portfolioId, request.OwnerEntityId.Value, token))
-        {
-            return null;
-        }
-
-        var previousCanonicalUnitNumber = CanonicalUnitNumber(entity.Name);
-        var now = _timeProvider.UtcNow();
-
-        if (request.Status == PropertyStatus.Inactive && entity.Status != PropertyStatus.Inactive)
-        {
-            var guard = await BuildPropertyDeletionGuardQuery(portfolioId, id).SingleAsync(token);
-            if (guard.HasOccupiedUnit)
-            {
-                throw new DomainValidationException(
-                    "This property has an occupied unit. Return possession before marking the property inactive.",
-                    statusCode: 409);
-            }
-
-            if (guard.HasPlannedOrCurrentRelationship)
-            {
-                throw new DomainValidationException(
-                    "This property has a planned or current rental relationship. Cancel or complete it before marking the property inactive.",
-                    statusCode: 409);
-            }
-        }
-
-        if (request.OwnerId.HasValue) entity.OwnerId = request.OwnerId;
-        if (request.ClearOwnerEntity)
-        {
-            entity.OwnerEntityId = null;
-        }
-        else if (request.OwnerEntityId.HasValue)
-        {
-            entity.OwnerEntityId = request.OwnerEntityId;
-        }
-        if (request.Name != null) entity.Name = request.Name;
-        if (request.PropertyType.HasValue) entity.PropertyType = request.PropertyType.Value;
-        if (request.Status.HasValue) entity.Status = request.Status.Value;
-        if (request.AddressLine1 != null) entity.AddressLine1 = request.AddressLine1;
-        if (request.AddressLine2 != null) entity.AddressLine2 = request.AddressLine2;
-        if (request.City != null) entity.City = request.City;
-        if (request.State != null) entity.State = request.State;
-        if (request.PostalCode != null) entity.PostalCode = request.PostalCode;
-        if (request.YearBuilt.HasValue) entity.YearBuilt = request.YearBuilt;
-        if (request.ManagementFeePercent.HasValue) entity.ManagementFeePercent = request.ManagementFeePercent;
-        if (request.Notes != null) entity.Notes = request.Notes;
-        if (request.PurchasePrice.HasValue) entity.PurchasePrice = request.PurchasePrice;
-        if (request.LandValue.HasValue) entity.LandValue = request.LandValue;
-        if (request.InServiceDate.HasValue) entity.InServiceDate = request.InServiceDate.ToUtc();
-        if (request.ManualAnnualDepreciation.HasValue) entity.ManualAnnualDepreciation = request.ManualAnnualDepreciation;
-        entity.UpdatedAt = now;
-
-        var touchedCanonicalUnit = await EnsureCanonicalUnitAsync(
-            entity,
-            previousCanonicalUnitNumber,
-            now,
-            token);
-        await _db.SaveChangesAsync(token);
-
-        // Re-read the unit aggregates in SQL (single scalar query) so the broadcast row carries the
-        // same counts the list/detail show — the edit doesn't change unit membership, but keeping the
-        // shape consistent avoids the grid flashing 0s on a live update.
-        var counts = await _db.Properties
-            .AsNoTracking()
-            .Where(p => p.Id == id && p.PortfolioId == portfolioId)
-            .Select(p => new
-            {
-                UnitCount = p.Units.Count,
-                Occupied = _db.UnitOccupancyProjections.Count(occupancy =>
-                    occupancy.PortfolioId == portfolioId && occupancy.PropertyId == p.Id && occupancy.IsOccupied),
-            })
-            .FirstOrDefaultAsync(token);
-
-        var response = PropertyResponse.FromEntity(entity, counts?.UnitCount ?? 0, counts?.Occupied ?? 0);
-        response.OwnerName = entity.OwnerEntity?.Name ?? entity.Owner?.Name;
-        if (touchedCanonicalUnit != null)
-        {
-            var canonicalUnitResponse = await BuildCanonicalUnitResponseQuery(portfolioId, touchedCanonicalUnit.Id)
-                .SingleAsync(token);
-            await _dataUpdate.BroadcastEntityUpdateAsync(
-                portfolioId,
-                UnitEntityType,
-                touchedCanonicalUnit.Id,
-                canonicalUnitResponse,
-                token);
-        }
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, token);
-        return response;
-    }, ct);
-
-    public Task<bool> DeleteAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default) =>
-        _db.ExecuteAuthorizedMutationAsync(async token =>
-    {
-        var portfolioId = scope.PortfolioId;
-        if (!await _db.AuthorizedWorkspaceAssignments(
-                scope,
-                [CapabilityKeys.RentalsManage],
-                CapabilityAuthorizationTargetKind.Property,
-                _timeProvider.UtcNow()).AnyAsync(token))
-        {
-            return false;
-        }
-
-        var entity = await _db.Properties
-            .WhereAuthorized(_db, scope, CapabilityKeys.RentalsManage, _timeProvider.UtcNow())
-            .FirstOrDefaultAsync(p => p.Id == id, token);
-        if (entity == null)
-        {
-            return false;
-        }
-
-        // Block the soft-delete while the property still has live units or canonical rental history.
-        // DeleteAsync only sets the property's own DeletedAt; a child unit keeps DeletedAt == null but
-        // every unit read INNER-JOINs through the property, so it would persist live yet vanish from
-        // every UI surface (and still hold its slot in the (PropertyId, UnitNumber) unique index).
-        // Mirror the tenant relationship / vendor open-work-order delete guards: require the landlord to
-        // clear the children first. The live-unit count and the consolidated history guard run SQL-side.
-        // Unit has no independently trusted portfolio scope — the parent
-        // property was already confirmed in-portfolio above, so PropertyId == id is correctly scoped.
-        var liveUnitCount = await _db.Units
-            .CountAsync(u => u.PropertyId == id, token);
-        Unit? canonicalUnitToDelete = null;
-        if (liveUnitCount > 0)
-        {
-            if (liveUnitCount == 1 && IsPropertyUnitType(entity.PropertyType))
-            {
-                var unit = await _db.Units
-                    .FirstAsync(u => u.PropertyId == id, token);
-                if (string.Equals(unit.UnitNumber, CanonicalUnitNumber(entity.Name), StringComparison.Ordinal))
-                {
-                    await EnsureUnitHasNoHistoryAsync(portfolioId, unit.Id, token);
-                    canonicalUnitToDelete = unit;
-                }
-            }
-
-            if (canonicalUnitToDelete == null)
-            {
-                var unitNoun = liveUnitCount == 1 ? "unit" : "units";
-                throw new DomainValidationException(
-                    $"This property still has {liveUnitCount} {unitNoun}. Remove the {unitNoun} before deleting this property.",
-                    statusCode: 409);
-            }
-        }
-
-        await EnsurePropertyHasNoHistoryAsync(portfolioId, id, token);
-
-        var now = _timeProvider.UtcNow();
-        if (canonicalUnitToDelete != null)
-        {
-            canonicalUnitToDelete.DeletedAt = now;
-            canonicalUnitToDelete.UpdatedAt = now;
-        }
-        entity.DeletedAt = now;
-        entity.UpdatedAt = now;
-        await _db.SaveChangesAsync(token);
-
-        if (canonicalUnitToDelete != null)
-        {
-            await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, UnitEntityType, canonicalUnitToDelete.Id, token);
-        }
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, token);
-        return true;
-    }, ct);
 
     private async Task<Unit?> EnsureCanonicalUnitAsync(
         Property property,

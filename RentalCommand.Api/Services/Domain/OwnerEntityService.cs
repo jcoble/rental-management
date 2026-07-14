@@ -1,7 +1,9 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -18,14 +20,69 @@ public class OwnerEntityService : IOwnerEntityService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
+    private readonly IAtomicUnitOfWork? _atomic;
     private readonly TimeProvider _timeProvider;
 
-    public OwnerEntityService(RentalCommandDbContext db, IDataUpdateService dataUpdate, TimeProvider timeProvider)
+    public OwnerEntityService(
+        RentalCommandDbContext db,
+        IDataUpdateService dataUpdate,
+        TimeProvider timeProvider,
+        IAtomicUnitOfWork? atomic = null)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _timeProvider = timeProvider;
+        _atomic = atomic;
     }
+
+    public async Task<OwnerEntityResponse?> CreateAsync(
+        WorkspaceReadScope scope,
+        CreateOwnerEntityRequest request,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.OwnerEntity,
+            AtomicCoreCrudMutationOperation.Create, 0, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
+        return DeserializeSnapshot<OwnerEntityResponse>(outcome.Value);
+    }
+
+    public async Task<OwnerEntityResponse?> UpdateAsync(
+        WorkspaceReadScope scope,
+        int id,
+        UpdateOwnerEntityRequest request,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.OwnerEntity,
+            AtomicCoreCrudMutationOperation.Update, id, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
+        return DeserializeSnapshot<OwnerEntityResponse>(outcome.Value);
+    }
+
+    public async Task<bool> DeleteAsync(
+        WorkspaceReadScope scope,
+        int id,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.OwnerEntity,
+            AtomicCoreCrudMutationOperation.Delete, id, operationKey, new { });
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
+        return outcome.Value.Found;
+    }
+
+    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
+        "Scoped owner mutations require the atomic persistence kernel.");
+
+    private static TResponse? DeserializeSnapshot<TResponse>(AtomicCoreCrudMutationResult result)
+        where TResponse : class =>
+        result.Found && result.ResponseJson is not null
+            ? JsonSerializer.Deserialize<TResponse>(result.ResponseJson)
+            : null;
 
     public async Task<IReadOnlyList<OwnerEntityResponse>> ListAsync(WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default)
     {
@@ -121,148 +178,6 @@ public class OwnerEntityService : IOwnerEntityService
     {
         return GetProjectedAsync(scope, id, CapabilityKeys.MoneyOwnerReportsRead, ct);
     }
-
-    public Task<OwnerEntityResponse?> CreateAsync(
-        WorkspaceReadScope scope,
-        CreateOwnerEntityRequest request,
-        CancellationToken ct = default) =>
-        _db.ExecuteAuthorizedMutationAsync(async token =>
-    {
-        var portfolioId = scope.PortfolioId;
-        if (!await _db.AuthorizedWorkspaceAssignments(
-                scope,
-                [CapabilityKeys.RentalsManage],
-                CapabilityAuthorizationTargetKind.Property,
-                _timeProvider.UtcNow()).AnyAsync(token))
-        {
-            return null;
-        }
-
-        var now = _timeProvider.UtcNow();
-        var entity = new OwnerEntity
-        {
-            PortfolioId = portfolioId,
-            OwnerEntityType = request.OwnerEntityType,
-            Name = request.Name,
-            TaxId = request.TaxId,
-            AddressLine1 = request.AddressLine1,
-            AddressLine2 = request.AddressLine2,
-            City = request.City,
-            State = request.State,
-            PostalCode = request.PostalCode,
-            // Keep the legacy single-line Address in sync (composed from the structured fields,
-            // falling back to any single-line Address the caller still sends).
-            Address = AddressComposer.Compose(request.AddressLine1, request.AddressLine2, request.City, request.State, request.PostalCode)
-                      ?? request.Address,
-            Phone = request.Phone,
-            Email = request.Email,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        _db.OwnerEntities.Add(entity);
-        await _db.SaveChangesAsync(token);
-
-        var response = await GetProjectedAsync(scope, entity.Id, CapabilityKeys.RentalsManage, token)
-            ?? OwnerEntityResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, token);
-        return response;
-    }, ct);
-
-    public Task<OwnerEntityResponse?> UpdateAsync(
-        WorkspaceReadScope scope,
-        int id,
-        UpdateOwnerEntityRequest request,
-        CancellationToken ct = default) =>
-        _db.ExecuteAuthorizedMutationAsync(async token =>
-    {
-        var portfolioId = scope.PortfolioId;
-        var entity = await AuthorizedOwnersForMutation(scope, CapabilityKeys.RentalsManage)
-            .FirstOrDefaultAsync(o => o.Id == id, token);
-        if (entity == null)
-        {
-            return null;
-        }
-
-        if (request.OwnerEntityType.HasValue) entity.OwnerEntityType = request.OwnerEntityType.Value;
-        if (request.Name != null) entity.Name = request.Name;
-        if (request.TaxId != null) entity.TaxId = request.TaxId;
-        if (request.AddressLine1 != null) entity.AddressLine1 = request.AddressLine1;
-        if (request.AddressLine2 != null) entity.AddressLine2 = request.AddressLine2;
-        if (request.City != null) entity.City = request.City;
-        if (request.State != null) entity.State = request.State;
-        if (request.PostalCode != null) entity.PostalCode = request.PostalCode;
-        // Re-compose the legacy single-line Address from the (possibly updated) structured fields;
-        // fall back to an explicitly-sent Address only when no structured parts exist.
-        entity.Address = AddressComposer.Compose(entity.AddressLine1, entity.AddressLine2, entity.City, entity.State, entity.PostalCode)
-                         ?? (request.Address ?? entity.Address);
-        if (request.Phone != null) entity.Phone = request.Phone;
-        if (request.Email != null) entity.Email = request.Email;
-        entity.UpdatedAt = _timeProvider.UtcNow();
-
-        await _db.SaveChangesAsync(token);
-
-        var response = await GetProjectedAsync(scope, entity.Id, CapabilityKeys.RentalsManage, token)
-            ?? OwnerEntityResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, token);
-        return response;
-    }, ct);
-
-    public Task<bool> DeleteAsync(
-        WorkspaceReadScope scope,
-        int id,
-        DeleteOwnerEntityOptions? options = null,
-        CancellationToken ct = default) =>
-        _db.ExecuteAuthorizedMutationAsync(async token =>
-    {
-        var portfolioId = scope.PortfolioId;
-        var entity = await AuthorizedOwnersForMutation(scope, CapabilityKeys.RentalsManage)
-            .FirstOrDefaultAsync(o => o.Id == id, token);
-        if (entity == null)
-        {
-            return false;
-        }
-
-        var propertyCount = await _db.Properties
-            .AsNoTracking()
-            .CountAsync(p => p.PortfolioId == portfolioId && p.OwnerEntityId == id, token);
-        if (propertyCount > 0)
-        {
-            if (options?.ClearPropertyAssignments != true)
-            {
-                var propertyNoun = propertyCount == 1 ? "property" : "properties";
-                var targetNoun = propertyCount == 1 ? "that property" : "those properties";
-                throw new DomainValidationException(
-                    $"This owner is assigned to {propertyCount} {propertyNoun}. Please reassign {targetNoun} or clear the owner before deleting this owner.",
-                    statusCode: 409);
-            }
-
-            var now = _timeProvider.UtcNow();
-            await _db.Properties
-                .Where(p => p.PortfolioId == portfolioId && p.OwnerEntityId == id)
-                .ExecuteUpdateAsync(setters => setters
-                    .SetProperty(p => p.OwnerEntityId, (int?)null)
-                    .SetProperty(p => p.UpdatedAt, now), token);
-        }
-
-        var distributionCount = await _db.OwnerDistributions
-            .AsNoTracking()
-            .CountAsync(d => d.PortfolioId == portfolioId && d.OwnerEntityId == id, token);
-        if (distributionCount > 0)
-        {
-            var distributionNoun = distributionCount == 1 ? "distribution" : "distributions";
-            throw new DomainValidationException(
-                $"This owner has {distributionCount} recorded {distributionNoun}. Delete or reassign those owner distributions before deleting this owner.",
-                statusCode: 409);
-        }
-
-        entity.DeletedAt = _timeProvider.UtcNow();
-        entity.UpdatedAt = entity.DeletedAt.Value;
-        await _db.SaveChangesAsync(token);
-
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, token);
-        return true;
-    }, ct);
 
     private IQueryable<Property> AuthorizedProperties(WorkspaceReadScope scope, string capabilityKey) =>
         _db.Properties

@@ -181,6 +181,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Api.Services.Domain.AtomicRentalMutationResult,
     RentalCommand.Api.Services.Domain.AtomicRentalMutationHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.AtomicCoreCrudMutationCommand,
+    RentalCommand.Api.Services.Domain.AtomicCoreCrudMutationResult,
+    RentalCommand.Api.Services.Domain.AtomicCoreCrudMutationHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Leasing.CreatePropertyDispositionCommand,
     RentalCommand.Core.Leasing.CreatePropertyDispositionResult,
     RentalCommand.Data.Leasing.CreatePropertyDispositionHandler>();

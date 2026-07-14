@@ -12,11 +12,11 @@ public interface IOwnerEntityService
     Task<IReadOnlyList<OwnerEntityResponse>> ListAsync(WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default);
     Task<OwnerEntityListResponse> ListPageAsync(WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default);
     Task<OwnerEntityResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default);
-    Task<OwnerEntityResponse?> CreateAsync(WorkspaceReadScope scope, CreateOwnerEntityRequest request, CancellationToken ct = default);
-    Task<OwnerEntityResponse?> UpdateAsync(WorkspaceReadScope scope, int id, UpdateOwnerEntityRequest request, CancellationToken ct = default);
+    Task<OwnerEntityResponse?> CreateAsync(WorkspaceReadScope scope, CreateOwnerEntityRequest request, string operationKey, CancellationToken ct = default);
+    Task<OwnerEntityResponse?> UpdateAsync(WorkspaceReadScope scope, int id, UpdateOwnerEntityRequest request, string operationKey, CancellationToken ct = default);
     Task<bool> DeleteAsync(
         WorkspaceReadScope scope,
         int id,
-        DeleteOwnerEntityOptions? options = null,
+        string operationKey,
         CancellationToken ct = default);
 }

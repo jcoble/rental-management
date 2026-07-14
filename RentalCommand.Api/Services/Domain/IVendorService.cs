@@ -12,9 +12,9 @@ public interface IVendorService
     Task<IReadOnlyList<VendorResponse>> ListAsync(WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default);
     Task<VendorListResponse> ListPageAsync(WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default);
     Task<VendorResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default);
-    Task<VendorResponse?> CreateAsync(WorkspaceReadScope scope, CreateVendorRequest request, CancellationToken ct = default);
-    Task<VendorResponse?> UpdateAsync(WorkspaceReadScope scope, int id, UpdateVendorRequest request, CancellationToken ct = default);
-    Task<bool> DeleteAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default);
+    Task<VendorResponse?> CreateAsync(WorkspaceReadScope scope, CreateVendorRequest request, string operationKey, CancellationToken ct = default);
+    Task<VendorResponse?> UpdateAsync(WorkspaceReadScope scope, int id, UpdateVendorRequest request, string operationKey, CancellationToken ct = default);
+    Task<bool> DeleteAsync(WorkspaceReadScope scope, int id, string operationKey, CancellationToken ct = default);
 
     /// <summary>
     /// Enqueue a friendly SMS asking the vendor to send their W-9 for 1099 tax reporting, and audit it.

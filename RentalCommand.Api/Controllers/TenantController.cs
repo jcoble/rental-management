@@ -48,9 +48,14 @@ public class TenantController : ManagementControllerBase
 
     [HttpPost]
     [ProducesResponseType(typeof(TenantResponse), StatusCodes.Status201Created)]
-    public async Task<ActionResult<TenantResponse>> Create([FromBody] CreateTenantRequest request, CancellationToken ct)
+    public async Task<ActionResult<TenantResponse>> Create(
+        [FromBody] CreateTenantRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var created = await _service.CreateAuthorizedAsync(GetWorkspaceReadScope(), request, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+        var created = await _service.CreateAuthorizedAsync(GetWorkspaceReadScope(), request, operationKey, ct);
         if (created is null)
         {
             return Forbid();
@@ -62,18 +67,29 @@ public class TenantController : ManagementControllerBase
     [HttpPatch("{id:int}")]
     [ProducesResponseType(typeof(TenantResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<TenantResponse>> Update(int id, [FromBody] UpdateTenantRequest request, CancellationToken ct)
+    public async Task<ActionResult<TenantResponse>> Update(
+        int id,
+        [FromBody] UpdateTenantRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var updated = await _service.UpdateAuthorizedAsync(GetWorkspaceReadScope(), id, request, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+        var updated = await _service.UpdateAuthorizedAsync(GetWorkspaceReadScope(), id, request, operationKey, ct);
         return updated == null ? NotFound(new { error = "Tenant not found" }) : Ok(updated);
     }
 
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        int id,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+        var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, operationKey, ct);
         return deleted ? NoContent() : NotFound(new { error = "Tenant not found" });
     }
 

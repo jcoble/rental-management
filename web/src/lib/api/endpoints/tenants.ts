@@ -1,6 +1,7 @@
 import type { Tenant } from '$lib/types';
 import { api } from '../client';
 import { buildListQuery, type ListParams } from '../list-params';
+import { idempotentMutation } from '../idempotency';
 
 export interface TenantListResponse {
 	items: Tenant[];
@@ -26,7 +27,16 @@ export const tenants = {
 			})}`
 		),
 	get: (id: number) => api.get<Tenant>(`/tenants/${id}`),
-	create: (data: Record<string, unknown>) => api.post<Tenant>('/tenants', data),
-	update: (id: number, data: Record<string, unknown>) => api.patch<Tenant>(`/tenants/${id}`, data),
-	delete: (id: number) => api.delete(`/tenants/${id}`),
+	create: (data: Record<string, unknown>) =>
+		idempotentMutation(`tenants:create:${JSON.stringify(data)}`, (key) =>
+			api.post<Tenant>('/tenants', data, { headers: { 'Idempotency-Key': key } })
+		),
+	update: (id: number, data: Record<string, unknown>) =>
+		idempotentMutation(`tenants:update:${id}:${JSON.stringify(data)}`, (key) =>
+			api.patch<Tenant>(`/tenants/${id}`, data, { headers: { 'Idempotency-Key': key } })
+		),
+	delete: (id: number) =>
+		idempotentMutation(`tenants:delete:${id}`, (key) =>
+			api.delete(`/tenants/${id}`, { headers: { 'Idempotency-Key': key } })
+		),
 };

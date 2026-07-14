@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import '../../core/models/models.dart';
 
 class TenantListQuery {
@@ -186,9 +187,13 @@ class TenantsRepository {
   /// Create body: { firstName, lastName, email?, phone?, emergencyContact? }
   Future<Tenant> createTenant(Map<String, dynamic> data) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/tenants',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'tenants:create:$data',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/tenants',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -206,9 +211,13 @@ class TenantsRepository {
   /// Update body: same optional fields as create (partial PATCH)
   Future<Tenant> updateTenant(int id, Map<String, dynamic> data) async {
     try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/tenants/$id',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'tenants:update:$id:$data',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/tenants/$id',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -225,7 +234,13 @@ class TenantsRepository {
 
   Future<void> deleteTenant(int id) async {
     try {
-      await _dio.delete<dynamic>('/tenants/$id');
+      await IdempotentMutation.run(
+        'tenants:delete:$id',
+        (key) => _dio.delete<dynamic>(
+          '/tenants/$id',
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

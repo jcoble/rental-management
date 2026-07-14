@@ -82,16 +82,31 @@ class _OwnerDetailScreenState extends ConsumerState<OwnerDetailScreen> {
   Future<void> _confirmDelete() async {
     final messenger = ScaffoldMessenger.of(context);
     final hasAssignments = _owner.assignedPropertyCount > 0;
+    if (hasAssignments) {
+      await showDialog<void>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Owner cannot be deleted'),
+          content: Text(
+            '${_owner.name} is assigned to ${_owner.assignedPropertyCount} '
+            'properties. Reassign or clear those properties first.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Delete owner?'),
         content: Text(
-          hasAssignments
-              ? '${_owner.name} is assigned to ${_owner.assignedPropertyCount} '
-                    'properties. Delete this owner and clear those property '
-                    'assignments?'
-              : 'Delete ${_owner.name}? This cannot be undone.',
+          'Delete ${_owner.name}? This cannot be undone.',
         ),
         actions: [
           TextButton(
@@ -100,7 +115,7 @@ class _OwnerDetailScreenState extends ConsumerState<OwnerDetailScreen> {
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: Text(hasAssignments ? 'Clear and delete' : 'Delete'),
+            child: const Text('Delete'),
           ),
         ],
       ),
@@ -111,7 +126,7 @@ class _OwnerDetailScreenState extends ConsumerState<OwnerDetailScreen> {
     try {
       await ref
           .read(ownersRepositoryProvider)
-          .deleteOwner(_owner.id, clearPropertyAssignments: hasAssignments);
+          .deleteOwner(_owner.id);
       widget.onChanged?.call();
       if (!mounted) return;
       messenger

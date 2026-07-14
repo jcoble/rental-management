@@ -355,6 +355,9 @@ public enum AtomicLockResource
     Portfolio = 19,
     TenantIdentityEmail = 20,
     ApplicationUser = 21,
+    OwnerEntity = 22,
+    Tenant = 23,
+    Vendor = 24,
 }
 
 public enum AtomicScanDraftClaimOutcome
