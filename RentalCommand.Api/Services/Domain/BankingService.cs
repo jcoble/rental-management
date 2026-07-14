@@ -1121,14 +1121,17 @@ public class BankingService : IBankingService
                 MatchConfidence = transaction.MatchConfidence,
                 Notes = transaction.Notes,
                 UpdatedAt = transaction.UpdatedAt,
-                SuggestionEntityType = suggestion == null ? null : suggestion.EntityType,
-                SuggestionEntityId = suggestion == null ? null : suggestion.EntityId,
-                SuggestionTenantAccountId = suggestion == null ? null : suggestion.TenantAccountId,
-                SuggestionConfidence = suggestion == null
-                    ? null
-                    : suggestion.Confidence > 0.99m ? 0.99m : suggestion.Confidence,
-                SuggestionLabel = suggestion == null ? null : suggestion.Label,
-                SuggestionReason = suggestion == null ? null : suggestion.Reason,
+                // Flatten the optional SQL row into nullable scalars. Testing the projected CLR
+                // object itself for null makes EF construct BankSuggestionRankRow first, which
+                // forces left-join NULLs through its non-nullable value properties.
+                SuggestionEntityType = suggestion.EntityType,
+                SuggestionEntityId = (long?)suggestion.EntityId,
+                SuggestionTenantAccountId = suggestion.TenantAccountId,
+                SuggestionConfidence = suggestion.Confidence > 0.99m
+                    ? 0.99m
+                    : (decimal?)suggestion.Confidence,
+                SuggestionLabel = suggestion.Label,
+                SuggestionReason = suggestion.Reason,
             };
     }
 
