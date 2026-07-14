@@ -473,13 +473,7 @@ internal sealed class AtomicAuditScope : IAtomicExecutionState, IAtomicInfrastru
         var id = entry.Metadata.FindPrimaryKey()?.Properties.Count == 1
             ? Convert.ToInt32(entry.Property(entry.Metadata.FindPrimaryKey()!.Properties[0].Name).CurrentValue)
             : 0;
-        var operation = entry.State switch
-        {
-            Microsoft.EntityFrameworkCore.EntityState.Added => AuditLogOperation.Created,
-            Microsoft.EntityFrameworkCore.EntityState.Modified => AuditLogOperation.Updated,
-            Microsoft.EntityFrameworkCore.EntityState.Deleted => AuditLogOperation.Deleted,
-            _ => throw new ArgumentException("The exact tracked object has no pending auditable mutation."),
-        };
+        var operation = TrackedOperation(entry);
 
         var unresolvedGeneratedId = operation == AuditLogOperation.Created
             && audit.EntityId == 0
@@ -491,6 +485,25 @@ internal sealed class AtomicAuditScope : IAtomicExecutionState, IAtomicInfrastru
         {
             throw new ArgumentException("Semantic audit does not match the exact pending tracked mutation.");
         }
+    }
+
+    private static AuditLogOperation TrackedOperation(EntityEntry entry)
+    {
+        if (entry.State == Microsoft.EntityFrameworkCore.EntityState.Modified
+            && entry.Metadata.FindProperty("DeletedAt") is not null)
+        {
+            var deletedAt = entry.Property("DeletedAt");
+            if (deletedAt.IsModified && deletedAt.OriginalValue is null && deletedAt.CurrentValue is not null)
+                return AuditLogOperation.Deleted;
+        }
+
+        return entry.State switch
+        {
+            Microsoft.EntityFrameworkCore.EntityState.Added => AuditLogOperation.Created,
+            Microsoft.EntityFrameworkCore.EntityState.Modified => AuditLogOperation.Updated,
+            Microsoft.EntityFrameworkCore.EntityState.Deleted => AuditLogOperation.Deleted,
+            _ => throw new ArgumentException("The exact tracked object has no pending auditable mutation."),
+        };
     }
 
     private static void ValidateSemantic(AtomicAuditMutation mutation, AtomicSemanticAudit audit)

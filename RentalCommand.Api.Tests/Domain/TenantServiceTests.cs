@@ -257,8 +257,25 @@ public class TenantServiceTests : IDisposable
         var memberTenant = SeedTenant("Blair", "Member", activeRelationshipCount: 0);
         var otherUnitTenant = SeedTenant("Casey", "Other", activeRelationshipCount: 0);
         var expiredTenant = SeedTenant("Devon", "Expired", activeRelationshipCount: 0);
-        SeedRelationshipOnUnit(activeTenant, property, targetUnit, occupying: true);
-        SeedRelationshipOnUnit(memberTenant, property, targetUnit, occupying: true, withSeparatePrimaryTenant: true, noticeGiven: true);
+        var currentRelationship = SeedRelationshipOnUnit(
+            memberTenant,
+            property,
+            targetUnit,
+            occupying: true,
+            withSeparatePrimaryTenant: true,
+            noticeGiven: true);
+        _ctx.Db.LeaseManagementParties.Add(new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagement = currentRelationship,
+            TenantId = activeTenant.Id,
+            Role = LeaseManagementPartyRole.Occupant,
+            EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddMonths(-1)),
+            ChangeReason = "Unit-filter occupant fixture",
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = ActorUserId,
+        });
+        _ctx.Db.SaveChanges();
         SeedRelationshipOnUnit(otherUnitTenant, property, otherUnit, occupying: true);
         SeedRelationshipOnUnit(expiredTenant, property, targetUnit, occupying: false);
 
@@ -567,7 +584,7 @@ public class TenantServiceTests : IDisposable
         return (property, targetUnit, otherUnit);
     }
 
-    private void SeedRelationshipOnUnit(
+    private LeaseManagement SeedRelationshipOnUnit(
         Tenant tenant,
         Property property,
         Unit unit,
@@ -624,6 +641,7 @@ public class TenantServiceTests : IDisposable
         }
 
         _ctx.Db.SaveChanges();
+        return relationship;
     }
 
     private static LeaseManagement NewRelationship(
