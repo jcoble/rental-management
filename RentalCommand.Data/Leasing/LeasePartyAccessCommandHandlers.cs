@@ -2,7 +2,6 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -578,13 +577,6 @@ public sealed class GrantTenantUserAccessHandler
     : IAtomicCommandHandler<GrantTenantUserAccessCommand, LeasePartyMutationResult>,
       IAtomicReplayAuthorizer<GrantTenantUserAccessCommand>
 {
-    private readonly ILookupNormalizer _lookupNormalizer;
-
-    public GrantTenantUserAccessHandler(ILookupNormalizer lookupNormalizer)
-    {
-        _lookupNormalizer = lookupNormalizer;
-    }
-
     public async Task<LeasePartyMutationResult> HandleAsync(
         GrantTenantUserAccessCommand command,
         IAtomicWriteAttempt attempt,
@@ -620,7 +612,9 @@ public sealed class GrantTenantUserAccessHandler
                 "The active household member must have a valid email before login access can be granted.", command.PartyId);
         }
 
-        var normalizedEmail = _lookupNormalizer.NormalizeEmail(email);
+        // Match ASP.NET Identity's UpperInvariantLookupNormalizer without injecting a
+        // framework service into the transaction-owned command handler.
+        var normalizedEmail = email.Normalize().ToUpperInvariant();
         if (string.IsNullOrWhiteSpace(normalizedEmail))
         {
             return LeasePartyAccessCommandSupport.Error(

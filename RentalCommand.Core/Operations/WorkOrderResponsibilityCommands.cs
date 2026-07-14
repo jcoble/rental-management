@@ -81,4 +81,4 @@ public sealed record UpdateAssignedWorkOrderResult(
     DateTime? ScheduledForUtc,
     DateTime? ScheduledWindowEndUtc,
     DateTime? CompletedAtUtc,
-    DateTime UpdatedAtUtc);
+    DateTime UpdatedAtUtc) : IAtomicResultData;

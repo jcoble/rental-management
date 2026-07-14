@@ -296,7 +296,18 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         (await db.BankConnections.CountAsync()).Should().Be(1);
         (await db.BankTransactions.CountAsync()).Should().Be(40);
         (await db.AtomicCommandReceipts.CountAsync(row => row.CommandType == identity.CommandType)).Should().Be(1);
-        (await db.AtomicAuditLogs.CountAsync(row => row.CommandType == identity.CommandType)).Should().Be(41);
+        var auditCounts = await db.AtomicAuditLogs
+            .Where(row => row.CommandType == identity.CommandType
+                && row.CommandIdempotencyKey == identity.IdempotencyKey)
+            .GroupBy(row => row.EntityType)
+            .Select(group => new { EntityType = group.Key, Count = group.Count() })
+            .ToDictionaryAsync(row => row.EntityType, row => row.Count);
+        auditCounts.Should().BeEquivalentTo(new Dictionary<string, int>
+        {
+            [nameof(BankConnection)] = 1,
+            [nameof(BankTransaction)] = 40,
+            [nameof(Notification)] = 1,
+        });
         (await db.Notifications.CountAsync(row => row.Type == "BankImportCompleted")).Should().Be(1);
 
         var mergeCommands = Recorder.Commands

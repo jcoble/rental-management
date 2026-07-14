@@ -820,21 +820,29 @@ public sealed class AtomicNotificationMutationHandler
         IAtomicPersistenceSession persistence,
         int portfolioId,
         int userId) =>
-        from user in persistence.Query<ApplicationUser>().AsNoTracking()
-        join context in persistence.Query<WorkspaceAccessContext>().AsNoTracking()
-            on new { UserId = user.Id, PortfolioId = portfolioId }
-            equals new { context.UserId, context.PortfolioId }
-        where user.Id == userId && context.Status == WorkspaceAccessContextStatus.Active
+        from context in persistence.Query<WorkspaceAccessContext>().AsNoTracking()
+        join user in persistence.Query<ApplicationUser>().AsNoTracking() on context.UserId equals user.Id
+        where context.PortfolioId == portfolioId && context.UserId == userId
+            && context.Status == WorkspaceAccessContextStatus.Active
             && context.SuspendedAtUtc == null && context.RevokedAtUtc == null
         join saved in persistence.Query<UserAlertPreference>().AsNoTracking()
-            on new { PortfolioId = portfolioId, UserId = userId }
+                .Select(preference => new
+                {
+                    preference.PortfolioId,
+                    preference.UserId,
+                    EnableInApp = (bool?)preference.EnableInApp,
+                    EnableMobilePush = (bool?)preference.EnableMobilePush,
+                    EnableEmail = (bool?)preference.EnableEmail,
+                    EnableSms = (bool?)preference.EnableSms,
+                })
+            on new { context.PortfolioId, context.UserId }
             equals new { saved.PortfolioId, saved.UserId } into preferences
         from preference in preferences.DefaultIfEmpty()
         select new MyAlertsResponse(user.Id, user.DisplayName, user.Email, user.PhoneNumber,
-            preference == null || preference.EnableInApp,
-            preference == null || preference.EnableMobilePush,
-            preference == null || preference.EnableEmail,
-            preference != null && preference.EnableSms);
+            preference.EnableInApp ?? true,
+            preference.EnableMobilePush ?? true,
+            preference.EnableEmail ?? true,
+            preference.EnableSms ?? false);
 
     private static IQueryable<TeamRoutingRuleResponse> TeamRoutingResponseQuery(
         IAtomicPersistenceSession persistence,

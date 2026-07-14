@@ -308,18 +308,29 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
     }
 
     private IQueryable<MyAlertsResponse> MyAlertsQuery(int portfolioId, int userId) =>
-        from user in _db.Users.AsNoTracking()
-        join context in _db.WorkspaceAccessContexts.AsNoTracking()
-            on new { UserId = user.Id, PortfolioId = portfolioId }
-            equals new { context.UserId, context.PortfolioId }
-        where user.Id == userId && context.Status == WorkspaceAccessContextStatus.Active
+        from context in _db.WorkspaceAccessContexts.AsNoTracking()
+        join user in _db.Users.AsNoTracking() on context.UserId equals user.Id
+        where context.PortfolioId == portfolioId && context.UserId == userId
+            && context.Status == WorkspaceAccessContextStatus.Active
             && context.SuspendedAtUtc == null && context.RevokedAtUtc == null
         join saved in _db.UserAlertPreferences.AsNoTracking()
-            on new { PortfolioId = portfolioId, UserId = userId } equals new { saved.PortfolioId, saved.UserId } into preferences
+                .Select(preference => new
+                {
+                    preference.PortfolioId,
+                    preference.UserId,
+                    EnableInApp = (bool?)preference.EnableInApp,
+                    EnableMobilePush = (bool?)preference.EnableMobilePush,
+                    EnableEmail = (bool?)preference.EnableEmail,
+                    EnableSms = (bool?)preference.EnableSms,
+                })
+            on new { context.PortfolioId, context.UserId }
+            equals new { saved.PortfolioId, saved.UserId } into preferences
         from preference in preferences.DefaultIfEmpty()
         select new MyAlertsResponse(user.Id, user.DisplayName, user.Email, user.PhoneNumber,
-            preference == null || preference.EnableInApp, preference == null || preference.EnableMobilePush,
-            preference == null || preference.EnableEmail, preference != null && preference.EnableSms);
+            preference.EnableInApp ?? true,
+            preference.EnableMobilePush ?? true,
+            preference.EnableEmail ?? true,
+            preference.EnableSms ?? false);
 
     private IQueryable<MorningBriefingSettingsResponse> MorningBriefingSettingsQuery(int portfolioId) =>
         from settings in _db.AutomationSettings.AsNoTracking()
