@@ -20,7 +20,8 @@ public sealed class LeaseEndingDispositionRouteContractTests
         method.GetCustomAttribute<HttpPostAttribute>()!.Template
             .Should().Be("{leaseManagementId:int}/ending-disposition");
         method.GetParameters().Should().Contain(parameter =>
-            parameter.GetCustomAttribute<FromHeaderAttribute>() is { Name: "Idempotency-Key" });
+            parameter.GetCustomAttributes<FromHeaderAttribute>()
+                .Any(attribute => attribute.Name == "Idempotency-Key"));
         typeof(RecordLeaseEndingDispositionHandler).Should()
             .Implement<IAtomicReplayAuthorizer<RecordLeaseEndingDispositionCommand>>();
     }
