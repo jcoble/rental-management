@@ -466,15 +466,12 @@ class _UnitWorkOrderQuickActionFab extends ConsumerStatefulWidget {
 
 class _UnitWorkOrderQuickActionFabState
     extends ConsumerState<_UnitWorkOrderQuickActionFab> {
-  final Object _quickActionOwner = Object();
   TabController? _tabController;
-  MobileQuickActionController? _scopeController;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     final nextController = DefaultTabController.maybeOf(context);
-    final nextScope = MobileQuickActionScope.maybeOf(context);
 
     if (!identical(_tabController, nextController)) {
       _tabController?.removeListener(_handleTabChanged);
@@ -482,10 +479,6 @@ class _UnitWorkOrderQuickActionFabState
       _tabController?.addListener(_handleTabChanged);
     }
 
-    if (!identical(_scopeController, nextScope)) {
-      _scopeController?.clearPrimaryAction(_quickActionOwner);
-      _scopeController = nextScope;
-    }
     widget.activeView.removeListener(_handleTabChanged);
     widget.activeView.addListener(_handleTabChanged);
   }
@@ -494,7 +487,6 @@ class _UnitWorkOrderQuickActionFabState
   void dispose() {
     _tabController?.removeListener(_handleTabChanged);
     widget.activeView.removeListener(_handleTabChanged);
-    _scopeController?.clearPrimaryAction(_quickActionOwner);
     super.dispose();
   }
 
@@ -605,13 +597,6 @@ class _UnitWorkOrderQuickActionFabState
   @override
   Widget build(BuildContext context) {
     final action = _currentAction();
-    final scope = _scopeController;
-    if (scope != null) {
-      scope.setPrimaryAction(_quickActionOwner, action);
-      return const SizedBox.shrink();
-    }
-
-    if (action == null) return const SizedBox.shrink();
     return MobileQuickActionFab(
       heroTag: 'unit-work-order-quick-action-fab',
       primaryAction: action,

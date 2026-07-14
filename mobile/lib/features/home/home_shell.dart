@@ -705,7 +705,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
                     useNearestScope: false,
                     onChat: _openAssistant,
                     onRecord: _openRecord,
-                    onScan: _openCapture,
+                    onScan:
+                        quickActionController.scanAction ?? _openCapture,
                   );
                 },
               ),
