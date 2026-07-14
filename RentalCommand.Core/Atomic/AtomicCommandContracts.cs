@@ -622,6 +622,7 @@ public enum AtomicLockResource
     InspectionTemplate = 26,
     InspectionItem = 27,
     NoticeDraft = 28,
+    OwnerDistribution = 29,
 }
 
 public enum AtomicScanDraftClaimOutcome

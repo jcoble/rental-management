@@ -31,5 +31,9 @@ export const owners = {
 			})
 		),
 	emailStatement: (ownerId: number, year: number) =>
-		api.post<void>(`/accounting/owner-statements/${ownerId}/email?year=${year}`, {}),
+		idempotentMutation(`owner-statement:email:${ownerId}:${year}`, (key) =>
+			api.post<void>(`/accounting/owner-statements/${ownerId}/email?year=${year}`, {}, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
 };
