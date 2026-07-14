@@ -74,9 +74,15 @@ public class PortfolioController : ManagementControllerBase
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.AccountDestructiveActions)]
     [ProducesResponseType(typeof(PortfolioResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<PortfolioResponse>> Update(int id, [FromBody] UpdatePortfolioRequest request, CancellationToken ct)
+    public async Task<ActionResult<PortfolioResponse>> Update(
+        int id,
+        [FromBody] UpdatePortfolioRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+        var updated = await _service.UpdateAsync(GetWorkspaceReadScope(), id, request, operationKey, ct);
         return updated == null ? NotFound(new { error = "Portfolio not found" }) : Ok(updated);
     }
 
@@ -84,9 +90,14 @@ public class PortfolioController : ManagementControllerBase
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.AccountDestructiveActions)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        int id,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+        var deleted = await _service.DeleteAsync(GetWorkspaceReadScope(), id, operationKey, ct);
         return deleted ? NoContent() : NotFound(new { error = "Portfolio not found" });
     }
 }

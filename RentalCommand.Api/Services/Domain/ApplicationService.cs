@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
@@ -427,23 +426,24 @@ public sealed class ApplicationService : IApplicationService
             AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
         return outcome.Value.Found;
     }
-    public async Task<ApplicationLinkResult> GenerateLinkAsync(int portfolioId, CancellationToken ct = default)
+    public async Task<ApplicationLinkResult> GenerateLinkAsync(
+        WorkspaceReadScope scope,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        var portfolio = await _db.Portfolios
-            .FirstOrDefaultAsync(p => p.Id == portfolioId, ct)
-            ?? throw new InvalidOperationException("Portfolio not found.");
-
-        // URL-safe opaque token. Rotating invalidates the previous link, which is the intended
-        // "regenerate to revoke the old link" behavior.
-        var token = GenerateToken();
-        portfolio.PublicApplicationToken = token;
-        portfolio.UpdatedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
+        var command = AtomicWorkspaceCoreMutation.Command(
+            scope, AtomicWorkspaceCoreMutationOperation.RotateApplicationLink,
+            operationKey, new { });
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicWorkspaceCoreMutation.Identity(command), command,
+            AtomicWorkspaceCoreMutation.Codec, ct);
+        if (!outcome.Value.Found || outcome.Value.PublicApplicationToken is null)
+            throw new InvalidOperationException("Portfolio not found.");
 
         return new ApplicationLinkResult
         {
-            Token = token,
-            ApplyPath = $"/apply/{token}",
+            Token = outcome.Value.PublicApplicationToken,
+            ApplyPath = $"/apply/{outcome.Value.PublicApplicationToken}",
         };
     }
 
@@ -494,16 +494,6 @@ public sealed class ApplicationService : IApplicationService
         return await _db.Portfolios
             .AsNoTracking()
             .FirstOrDefaultAsync(p => p.PublicApplicationToken == token, ct);
-    }
-
-    private static string GenerateToken()
-    {
-        // 32 random bytes → ~43-char URL-safe string, well within the 64-char column.
-        var bytes = RandomNumberGenerator.GetBytes(32);
-        return Convert.ToBase64String(bytes)
-            .Replace('+', '-')
-            .Replace('/', '_')
-            .TrimEnd('=');
     }
 
     private static string? NormalizeEmailForComparison(string? email)

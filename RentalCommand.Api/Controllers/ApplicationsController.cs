@@ -504,7 +504,9 @@ public class ApplicationsController : ManagementControllerBase
     /// </summary>
     [HttpPost("link")]
     [ProducesResponseType(typeof(ApplicationLinkResult), StatusCodes.Status200OK)]
-    public async Task<ActionResult<ApplicationLinkResult>> GenerateLink(CancellationToken ct)
+    public async Task<ActionResult<ApplicationLinkResult>> GenerateLink(
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
         var portfolioId = GetPortfolioId();
         if (!await HasCapabilityAsync(
@@ -515,7 +517,10 @@ public class ApplicationsController : ManagementControllerBase
             return Forbid();
         }
 
-        var result = await _service.GenerateLinkAsync(portfolioId, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+
+        var result = await _service.GenerateLinkAsync(GetWorkspaceReadScope(), operationKey, ct);
         return Ok(result);
     }
 

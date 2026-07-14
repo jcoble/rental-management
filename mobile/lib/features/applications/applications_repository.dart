@@ -308,24 +308,28 @@ class ApplicationsRepository {
   }
 
   /// Mint a shareable apply link.
-  Future<ApplicationLink> createLink() async {
-    try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/applications/link',
-        data: {},
-      );
-      final data = response.data;
-      if (data == null) {
-        throw const ApiException(
-          statusCode: 0,
-          message: 'Empty response from server.',
+  Future<ApplicationLink> createLink() => IdempotentMutation.run(
+    'applications:create-link',
+    (operationKey) async {
+      try {
+        final response = await _dio.post<Map<String, dynamic>>(
+          '/applications/link',
+          data: {},
+          options: Options(headers: {'Idempotency-Key': operationKey}),
         );
+        final data = response.data;
+        if (data == null) {
+          throw const ApiException(
+            statusCode: 0,
+            message: 'Empty response from server.',
+          );
+        }
+        return ApplicationLink.fromJson(data);
+      } on DioException catch (e) {
+        throw ApiException.fromDioException(e);
       }
-      return ApplicationLink.fromJson(data);
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
-  }
+    },
+  );
 
   Future<ApplicantScreening> startIntegratedScreening(
     int id, {

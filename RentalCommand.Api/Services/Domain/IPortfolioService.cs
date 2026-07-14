@@ -1,4 +1,5 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -20,6 +21,9 @@ public interface IPortfolioService
     /// </summary>
     Task<GettingStartedSignalsResponse?> GetGettingStartedSignalsAsync(int portfolioId, CancellationToken ct = default);
 
-    Task<PortfolioResponse?> UpdateAsync(int portfolioId, int id, UpdatePortfolioRequest request, CancellationToken ct = default);
-    Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default);
+    Task<PortfolioResponse?> UpdateAsync(
+        WorkspaceReadScope scope, int id, UpdatePortfolioRequest request, string operationKey,
+        CancellationToken ct = default);
+    Task<bool> DeleteAsync(
+        WorkspaceReadScope scope, int id, string operationKey, CancellationToken ct = default);
 }

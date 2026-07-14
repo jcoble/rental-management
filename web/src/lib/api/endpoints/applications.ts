@@ -230,7 +230,11 @@ export const applications = {
 			headers: { 'Idempotency-Key': operationKey }
 		})
 	),
-	createLink: () => api.post<ApplicationLinkResult>('/applications/link'),
+	createLink: () => idempotentMutation('applications:create-link', (operationKey) =>
+		api.post<ApplicationLinkResult>('/applications/link', undefined, {
+			headers: { 'Idempotency-Key': operationKey }
+		})
+	),
 	startIntegratedScreening: (id: number, operationKey: string) =>
 		api.post<ApplicantScreeningResponse>(`/applications/${id}/screening/integrated`, { operationKey }),
 	trackExternalScreening: (id: number, body: TrackExternalScreeningRequest) =>

@@ -711,12 +711,12 @@ public class ApplicationServiceTests : IDisposable
     [Fact]
     public async Task GenerateLinkAsync_RotatesTokenAndReturnsApplyPath()
     {
-        var result = await _sut.GenerateLinkAsync(OtherPortfolioId);
+        var result = await _sut.GenerateLinkAsync(_scope, Guid.NewGuid().ToString("N"));
 
         result.Token.Should().NotBeNullOrWhiteSpace();
         result.ApplyPath.Should().Be($"/apply/{result.Token}");
 
-        var portfolio = await _db.Portfolios.SingleAsync(p => p.Id == OtherPortfolioId);
+        var portfolio = await _db.Portfolios.SingleAsync(p => p.Id == PortfolioId);
         portfolio.PublicApplicationToken.Should().Be(result.Token);
     }
 
