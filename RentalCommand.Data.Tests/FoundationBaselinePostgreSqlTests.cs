@@ -125,11 +125,11 @@ public sealed class FoundationBaselinePostgreSqlTests
     }
 
     [Fact]
-    public void AccountBootstrapAudit_HasNarrowInsertOnlyAdmissionWithoutWeakeningReads()
+    public void AccountBootstrapAudit_HasExactTransactionBoundAdmissionForInsertReturning()
     {
         CreateSql.Should().Contain(
-            "CREATE POLICY tenant_select ON \"AtomicAuditLogs\" FOR SELECT USING " +
-            "(rc_api_scope_allows(\"PortfolioId\"));");
+            "CREATE POLICY tenant_select ON \"AtomicAuditLogs\" FOR SELECT USING\n" +
+            "  (rc_api_scope_allows(\"PortfolioId\") OR rc_account_bootstrap_audit_allows(");
         CreateSql.Should().Contain(
             "CREATE POLICY tenant_insert ON \"AtomicAuditLogs\" FOR INSERT WITH CHECK\n" +
             "  (rc_api_scope_allows(\"PortfolioId\") OR rc_account_bootstrap_audit_allows(");
@@ -139,6 +139,7 @@ public sealed class FoundationBaselinePostgreSqlTests
         CreateSql.Should().Contain("target_entity_id = target_user_id");
         CreateSql.Should().Contain("target_actor_label = 'authentication:registration'");
         CreateSql.Should().Contain("receipt.\"AttemptId\" = target_attempt_id");
+        CreateSql.Should().Contain("receipt.xmin = pg_current_xact_id()::xid");
         CreateSql.Should().Contain("access_context.\"PortfolioId\" = target_portfolio_id");
     }
 

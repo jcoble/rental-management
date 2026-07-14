@@ -832,6 +832,10 @@ internal static class FoundationBaselinePostgreSql
                WHERE receipt."AttemptId" = target_attempt_id
                  AND receipt."CommandType" = target_command_type
                  AND receipt."IdempotencyKey" = target_command_idempotency_key
+                 -- INSERT ... RETURNING also evaluates the SELECT policy. Limit that visibility
+                 -- to the transaction that inserted this exact receipt; after commit, xmin can no
+                 -- longer equal the caller's current transaction id.
+                 AND receipt.xmin = pg_current_xact_id()::xid
              );
         $function$;
 
@@ -1249,7 +1253,10 @@ internal static class FoundationBaselinePostgreSql
         DROP POLICY IF EXISTS tenant_insert ON "AtomicAuditLogs";
         DROP POLICY IF EXISTS tenant_update ON "AtomicAuditLogs";
         DROP POLICY IF EXISTS tenant_delete ON "AtomicAuditLogs";
-        CREATE POLICY tenant_select ON "AtomicAuditLogs" FOR SELECT USING ({PortfolioPredicate});
+        CREATE POLICY tenant_select ON "AtomicAuditLogs" FOR SELECT USING
+          ({PortfolioPredicate} OR rc_account_bootstrap_audit_allows(
+            "PortfolioId", "AttemptId", "CommandType", "CommandIdempotencyKey", "MutationOrdinal",
+            "UserId", "EntityType", "EntityId", "Operation", "ActorLabel", "ChangeReason"));
         CREATE POLICY tenant_insert ON "AtomicAuditLogs" FOR INSERT WITH CHECK
           ({PortfolioPredicate} OR rc_account_bootstrap_audit_allows(
             "PortfolioId", "AttemptId", "CommandType", "CommandIdempotencyKey", "MutationOrdinal",
