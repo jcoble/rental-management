@@ -45,31 +45,55 @@ public class NoticeDraftsController : ManagementControllerBase
     /// </summary>
     [HttpPost("generate")]
     [ProducesResponseType(typeof(GenerateNoticeDraftsResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<GenerateNoticeDraftsResponse>> Generate(
         [FromBody] GenerateNoticeDraftsRequest? request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
-        return Ok(await _service.GenerateAsync(GetWorkspaceReadScope(), request, ct));
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+        {
+            return BadRequest(new { error = "Idempotency-Key header is required (max 128 characters)." });
+        }
+
+        return Ok(await _service.GenerateAsync(GetWorkspaceReadScope(), request, operationKey, ct));
     }
 
     [HttpPatch("{id:int}")]
     [ProducesResponseType(typeof(NoticeDraftResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<NoticeDraftResponse>> Update(
         int id,
         [FromBody] UpdateNoticeDraftRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
-        var updated = await _service.UpdateAsync(GetWorkspaceReadScope(), id, request, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+        {
+            return BadRequest(new { error = "Idempotency-Key header is required (max 128 characters)." });
+        }
+
+        var updated = await _service.UpdateAsync(
+            GetWorkspaceReadScope(), id, request, operationKey, ct);
         return updated == null ? NotFound(new { error = "Draft notice not found or no longer editable" }) : Ok(updated);
     }
 
     [HttpPost("{id:int}/dismiss")]
     [ProducesResponseType(typeof(NoticeDraftResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<NoticeDraftResponse>> Dismiss(int id, CancellationToken ct)
+    public async Task<ActionResult<NoticeDraftResponse>> Dismiss(
+        int id,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var updated = await _service.DismissAsync(GetWorkspaceReadScope(), id, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+        {
+            return BadRequest(new { error = "Idempotency-Key header is required (max 128 characters)." });
+        }
+
+        var updated = await _service.DismissAsync(GetWorkspaceReadScope(), id, operationKey, ct);
         return updated == null ? NotFound(new { error = "Draft notice not found or cannot be dismissed" }) : Ok(updated);
     }
 }

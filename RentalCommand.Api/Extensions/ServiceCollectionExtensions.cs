@@ -109,8 +109,6 @@ public static class ServiceCollectionExtensions
         services.AddScoped<INotificationService, NotificationService>();
         services.AddScoped<IMessagingProviderSettingsResolver, MessagingProviderSettingsResolver>();
         services.AddScoped<INotificationFoundationService, NotificationFoundationService>();
-        services.AddScoped<RentalCommand.Data.Notifications.ITenantNoticeDraftSetStore,
-            RentalCommand.Data.Notifications.TenantNoticeDraftSetStore>();
         // Pluggable SMS providers + resolver (BYO per-portfolio, platform-env fallback). Shared with
         // the Engine outbox path; the API uses it for the synchronous "send test SMS" verify endpoint.
         services.AddSmsProviders();

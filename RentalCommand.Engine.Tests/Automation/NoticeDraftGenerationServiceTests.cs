@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data.Notifications;
 using RentalCommand.Engine.Services;
@@ -20,7 +21,7 @@ public sealed class NoticeDraftGenerationServiceTests
         var drafts = new Mock<ITenantNoticeDraftSetStore>(MockBehavior.Strict);
         drafts.Setup(store => store.GenerateClaimedBatchAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([
-                new GeneratedTenantNoticeDraft
+                new AtomicGeneratedTenantNoticeDraft
                 {
                     WorkItemId = work.Id,
                     DraftId = 56,
@@ -72,7 +73,7 @@ public sealed class NoticeDraftGenerationServiceTests
         var drafts = new Mock<ITenantNoticeDraftSetStore>(MockBehavior.Strict);
         drafts.Setup(store => store.GenerateClaimedBatchAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([
-                new GeneratedTenantNoticeDraft
+                new AtomicGeneratedTenantNoticeDraft
                 {
                     WorkItemId = work.Id,
                     DraftId = 56,

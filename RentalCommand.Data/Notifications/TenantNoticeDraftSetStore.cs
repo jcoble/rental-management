@@ -1,17 +1,18 @@
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NpgsqlTypes;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Data.Notifications;
 
 public interface ITenantNoticeDraftSetStore
 {
-    Task<IReadOnlyList<GeneratedTenantNoticeDraft>> GenerateClaimedBatchAsync(
+    Task<IReadOnlyList<AtomicGeneratedTenantNoticeDraft>> GenerateClaimedBatchAsync(
         Guid claimToken,
         CancellationToken ct = default);
 
-    Task<IReadOnlyList<GeneratedTenantNoticeDraft>> GenerateManualAsync(
+    Task<IReadOnlyList<AtomicGeneratedTenantNoticeDraft>> GenerateManualAsync(
         WorkspaceReadScope scope,
         int? recipientTenantId,
         int? leaseManagementId,
@@ -20,42 +21,6 @@ public interface ITenantNoticeDraftSetStore
         string? noticeType,
         DateTime securityNowUtc,
         CancellationToken ct = default);
-}
-
-/// <summary>
-/// Exact result of the set-based draft command. A work-item id is present for Engine batches and
-/// absent for a manual request. Every display field is projected by the same PostgreSQL statement
-/// that performs the insert, so callers never materialize ids and issue follow-up queries.
-/// </summary>
-public sealed class GeneratedTenantNoticeDraft
-{
-    public long? WorkItemId { get; init; }
-    public int DraftId { get; init; }
-    public bool WasCreated { get; init; }
-    public int CreatedCount { get; init; }
-    public int LeaseManagementId { get; init; }
-    public int TenantAccountId { get; init; }
-    public int RecipientLeaseManagementPartyId { get; init; }
-    public int? LeaseAgreementId { get; init; }
-    public int? LeaseAddendumId { get; init; }
-    public long? TenantLedgerEntryId { get; init; }
-    public int RecipientTenantId { get; init; }
-    public int? PropertyId { get; init; }
-    public string TenantName { get; init; } = string.Empty;
-    public string? PropertyName { get; init; }
-    public string? UnitNumber { get; init; }
-    public string NoticeType { get; init; } = string.Empty;
-    public string Status { get; init; } = string.Empty;
-    public string Subject { get; init; } = string.Empty;
-    public string Body { get; init; } = string.Empty;
-    public string Reason { get; init; } = string.Empty;
-    public DateTime TriggerDate { get; init; }
-    public int? ConversationId { get; init; }
-    public string? ApprovedChannels { get; init; }
-    public DateTime CreatedAt { get; init; }
-    public DateTime UpdatedAt { get; init; }
-    public DateTime? ApprovedAt { get; init; }
-    public DateTime? DismissedAt { get; init; }
 }
 
 /// <summary>
@@ -69,7 +34,7 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
 
     public TenantNoticeDraftSetStore(RentalCommandDbContext db) => _db = db;
 
-    public Task<IReadOnlyList<GeneratedTenantNoticeDraft>> GenerateClaimedBatchAsync(
+    public Task<IReadOnlyList<AtomicGeneratedTenantNoticeDraft>> GenerateClaimedBatchAsync(
         Guid claimToken,
         CancellationToken ct = default) =>
         ExecuteAsync(
@@ -81,7 +46,7 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
             ],
             ct);
 
-    public Task<IReadOnlyList<GeneratedTenantNoticeDraft>> GenerateManualAsync(
+    public Task<IReadOnlyList<AtomicGeneratedTenantNoticeDraft>> GenerateManualAsync(
         WorkspaceReadScope scope,
         int? recipientTenantId,
         int? leaseManagementId,
@@ -111,14 +76,14 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
             ],
             ct);
 
-    private async Task<IReadOnlyList<GeneratedTenantNoticeDraft>> ExecuteAsync(
+    private async Task<IReadOnlyList<AtomicGeneratedTenantNoticeDraft>> ExecuteAsync(
         string sourceSql,
         string authorizedPropertiesSql,
         NpgsqlParameter[] parameters,
         CancellationToken ct)
     {
         var rows = await _db.Database
-            .SqlQueryRaw<GeneratedTenantNoticeDraft>(
+            .SqlQueryRaw<AtomicGeneratedTenantNoticeDraft>(
                 BuildSql(sourceSql, authorizedPropertiesSql), parameters)
             .ToListAsync(ct);
         return rows;
