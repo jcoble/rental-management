@@ -1,9 +1,13 @@
+using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Operations;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
@@ -12,19 +16,19 @@ namespace RentalCommand.Api.Services.Domain;
 
 public class EvictionCaseService : IEvictionCaseService
 {
-    private const string EntityType = "EvictionCase";
-    private const string EventEntityType = "EvictionCaseEvent";
+    private static readonly AtomicJsonResultCodec<OperationMutationResult> MutationCodec =
+        new("eviction-case.mutation.v1");
     private static readonly string[] ReadCapabilities = [CapabilityKeys.RentalsRead];
-    private static readonly string[] WriteCapabilities = [CapabilityKeys.RentalsManage];
     private readonly RentalCommandDbContext _db;
-    private readonly IDataUpdateService _dataUpdate;
     private readonly TimeProvider _timeProvider;
+    private readonly IAtomicUnitOfWork? _atomic;
 
-    public EvictionCaseService(RentalCommandDbContext db, IDataUpdateService dataUpdate, TimeProvider timeProvider)
+    public EvictionCaseService(RentalCommandDbContext db, IDataUpdateService dataUpdate,
+        TimeProvider timeProvider, IAtomicUnitOfWork? atomic = null)
     {
         _db = db;
-        _dataUpdate = dataUpdate;
         _timeProvider = timeProvider;
+        _atomic = atomic;
     }
 
     public async Task<IReadOnlyList<EvictionCaseResponse>> ListAsync(int portfolioId, EvictionCaseListQuery query, CancellationToken ct = default)
@@ -84,278 +88,70 @@ public class EvictionCaseService : IEvictionCaseService
             .FirstOrDefaultAsync(ct);
     }
 
-    public async Task<EvictionCaseResponse?> CreateAsync(int portfolioId, CreateEvictionCaseRequest request, CancellationToken ct = default)
-        => await CreateCoreAsync(
-            portfolioId,
-            request,
-            _db.LeaseManagements.AsNoTracking().Where(m => m.PortfolioId == portfolioId),
-            broadcast: true,
-            ct);
-
     public async Task<EvictionCaseResponse?> CreateAuthorizedAsync(
-        WorkspaceReadScope scope,
-        CreateEvictionCaseRequest request,
+        WorkspaceReadScope scope, CreateEvictionCaseRequest request, string idempotencyKey,
         CancellationToken ct = default)
     {
-        var response = await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
-        {
-            var authorizedProperties = _db.Properties
-                .AsNoTracking()
-                .WhereAuthorized(_db, scope, WriteCapabilities, _timeProvider.UtcNow());
-            var managements = _db.LeaseManagements.AsNoTracking().Where(management =>
-                management.PortfolioId == scope.PortfolioId &&
-                authorizedProperties.Any(property =>
-                    property.Id == management.PropertyId &&
-                    property.PortfolioId == management.PortfolioId));
-            return await CreateCoreAsync(
-                scope.PortfolioId, request, managements, broadcast: false, innerCt);
-        }, ct);
-
-        if (response != null)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(
-                scope.PortfolioId, EntityType, response.Id, response, ct);
-        }
-
-        return response;
+        var command = new CreateEvictionCaseCommand(
+            scope.PortfolioId, Actor(scope), request.LeaseManagementId, request.LeaseAgreementId,
+            request.RespondentLeaseManagementPartyIds.ToArray(), request.Status,
+            request.FiledOnDate?.ToUtc(), request.HearingDate?.ToUtc(), request.CourtName,
+            request.CaseNumber, request.Notes, idempotencyKey);
+        var outcome = await Atomic.ExecuteAsync(
+            Identity("eviction-case.create", idempotencyKey), command, MutationCodec, ct);
+        return Response(outcome.Value);
     }
-
-    private async Task<EvictionCaseResponse?> CreateCoreAsync(
-        int portfolioId,
-        CreateEvictionCaseRequest request,
-        IQueryable<LeaseManagement> managements,
-        bool broadcast,
-        CancellationToken ct)
-    {
-        var respondentIds = request.RespondentLeaseManagementPartyIds.Distinct().ToArray();
-        var context = await managements
-            .Where(m => m.Id == request.LeaseManagementId)
-            .Select(m => new
-            {
-                Management = m,
-                AgreementValid = request.LeaseAgreementId == null || _db.LeaseAgreements.Any(a =>
-                    a.Id == request.LeaseAgreementId && a.PortfolioId == portfolioId && a.LeaseManagementId == m.Id),
-                RespondentCount = _db.LeaseManagementParties.Count(p =>
-                    respondentIds.Contains(p.Id) &&
-                    p.PortfolioId == portfolioId && p.LeaseManagementId == m.Id),
-            })
-            .FirstOrDefaultAsync(ct);
-        if (context is null || !context.AgreementValid || context.RespondentCount != respondentIds.Length)
-            return null;
-
-        var now = _timeProvider.UtcNow();
-        var eventDate = request.FiledOnDate?.ToUtc().Date ?? now.Date;
-        var entity = new EvictionCase
-        {
-            PortfolioId = portfolioId,
-            LeaseManagementId = context.Management.Id,
-            LeaseAgreementId = request.LeaseAgreementId,
-            PropertyId = context.Management.PropertyId,
-            UnitId = context.Management.UnitId,
-            Status = request.Status,
-            FiledOnDate = request.FiledOnDate?.ToUtc().Date ?? (request.Status >= EvictionCaseStatus.Filed ? eventDate : null),
-            HearingDate = request.HearingDate?.ToUtc().Date,
-            CourtName = Normalize(request.CourtName), CaseNumber = Normalize(request.CaseNumber), Notes = Normalize(request.Notes),
-            CreatedAt = now, UpdatedAt = now,
-        };
-        foreach (var partyId in respondentIds)
-            entity.Respondents.Add(new EvictionCaseRespondent { PortfolioId = portfolioId, LeaseManagementPartyId = partyId });
-        var initialType = InitialEventForStatus(entity.Status);
-        if (initialType.HasValue)
-            entity.Events.Add(new EvictionCaseEvent { PortfolioId = portfolioId, EventType = initialType.Value, EventDate = eventDate, Notes = entity.Notes ?? "Case opened.", CreatedAt = now, UpdatedAt = now });
-        _db.EvictionCases.Add(entity);
-        await _db.SaveChangesAsync(ct);
-        var response = await ProjectResponses(
-                BaseQuery(portfolioId).Where(e => e.Id == entity.Id),
-                includeEvents: true)
-            .FirstOrDefaultAsync(ct);
-        if (response is null) return null;
-        if (broadcast)
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
-    }
-
-    public async Task<EvictionCaseResponse?> UpdateAsync(int portfolioId, int id, UpdateEvictionCaseRequest request, CancellationToken ct = default)
-        => await UpdateCoreAsync(
-            portfolioId,
-            _db.EvictionCases.Where(e => e.PortfolioId == portfolioId),
-            id,
-            request,
-            broadcast: true,
-            ct);
 
     public async Task<EvictionCaseResponse?> UpdateAuthorizedAsync(
-        WorkspaceReadScope scope,
-        int id,
-        UpdateEvictionCaseRequest request,
-        CancellationToken ct = default)
+        WorkspaceReadScope scope, int id, UpdateEvictionCaseRequest request,
+        string idempotencyKey, CancellationToken ct = default)
     {
-        var response = await _db.ExecuteAuthorizedMutationAsync(
-            innerCt => UpdateCoreAsync(
-                scope.PortfolioId,
-                AuthorizedBaseQuery(scope, WriteCapabilities, tracking: true),
-                id,
-                request,
-                broadcast: false,
-                innerCt),
-            ct);
-
-        if (response != null)
-            await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, id, response, ct);
-        return response;
+        var command = new UpdateEvictionCaseCommand(
+            scope.PortfolioId, Actor(scope), id, request.Status, request.FiledOnDate?.ToUtc(),
+            request.HearingDate?.ToUtc(), request.ResolvedOnDate?.ToUtc(), request.CourtName,
+            request.CaseNumber, request.Resolution, request.Notes, idempotencyKey);
+        var outcome = await Atomic.ExecuteAsync(
+            Identity("eviction-case.update", idempotencyKey), command, MutationCodec, ct);
+        return Response(outcome.Value);
     }
-
-    private async Task<EvictionCaseResponse?> UpdateCoreAsync(
-        int portfolioId,
-        IQueryable<EvictionCase> cases,
-        int id,
-        UpdateEvictionCaseRequest request,
-        bool broadcast,
-        CancellationToken ct)
-    {
-        var entity = await cases.FirstOrDefaultAsync(e => e.Id == id, ct);
-        if (entity is null) return null;
-        if (request.Status.HasValue) entity.Status = request.Status.Value;
-        if (request.FiledOnDate.HasValue) entity.FiledOnDate = request.FiledOnDate.Value.ToUtc().Date;
-        if (request.HearingDate.HasValue) entity.HearingDate = request.HearingDate.Value.ToUtc().Date;
-        if (request.ResolvedOnDate.HasValue) entity.ResolvedOnDate = request.ResolvedOnDate.Value.ToUtc().Date;
-        if (request.CourtName != null) entity.CourtName = Normalize(request.CourtName);
-        if (request.CaseNumber != null) entity.CaseNumber = Normalize(request.CaseNumber);
-        if (request.Resolution != null) entity.Resolution = Normalize(request.Resolution);
-        if (request.Notes != null) entity.Notes = Normalize(request.Notes);
-        entity.UpdatedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
-        var response = await ProjectResponses(BaseQuery(portfolioId).Where(e => e.Id == id), includeEvents: true)
-            .FirstOrDefaultAsync(ct);
-        if (broadcast && response != null)
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, id, response, ct);
-        return response;
-    }
-
-    public async Task<EvictionCaseResponse?> AddEventAsync(int portfolioId, int id, CreateEvictionCaseEventRequest request, CancellationToken ct = default)
-        => await AddEventCoreAsync(
-            portfolioId,
-            _db.EvictionCases.Where(e => e.PortfolioId == portfolioId),
-            id,
-            request,
-            broadcast: true,
-            ct);
 
     public async Task<EvictionCaseResponse?> AddEventAuthorizedAsync(
-        WorkspaceReadScope scope,
-        int id,
-        CreateEvictionCaseEventRequest request,
-        CancellationToken ct = default)
+        WorkspaceReadScope scope, int id, CreateEvictionCaseEventRequest request,
+        string idempotencyKey, CancellationToken ct = default)
     {
-        EvictionCaseEventResponse? eventResponse = null;
-        var response = await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
-        {
-            var result = await AddEventCoreAsync(
-                scope.PortfolioId,
-                AuthorizedBaseQuery(scope, WriteCapabilities, tracking: true),
-                id,
-                request,
-                broadcast: false,
-                innerCt);
-            if (result != null)
-            {
-                eventResponse = await _db.EvictionCaseEvents.AsNoTracking()
-                    .Where(evt => evt.EvictionCaseId == id && evt.PortfolioId == scope.PortfolioId)
-                    .OrderByDescending(evt => evt.Id)
-                    .Select(evt => new EvictionCaseEventResponse
-                    {
-                        Id = evt.Id,
-                        PortfolioId = evt.PortfolioId,
-                        EvictionCaseId = evt.EvictionCaseId,
-                        EventType = evt.EventType,
-                        EventDate = evt.EventDate,
-                        Notes = evt.Notes,
-                        CreatedAt = evt.CreatedAt,
-                        UpdatedAt = evt.UpdatedAt,
-                    })
-                    .FirstAsync(innerCt);
-            }
-            return result;
-        }, ct);
-
-        if (response != null && eventResponse != null)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(
-                scope.PortfolioId, EventEntityType, eventResponse.Id, eventResponse, ct);
-            await _dataUpdate.BroadcastEntityUpdateAsync(
-                scope.PortfolioId, EntityType, id, response, ct);
-        }
-        return response;
+        var command = new AddEvictionCaseEventCommand(
+            scope.PortfolioId, Actor(scope), id, request.EventType, request.EventDate.ToUtc(),
+            request.Notes, idempotencyKey);
+        var outcome = await Atomic.ExecuteAsync(
+            Identity("eviction-case.event.create", idempotencyKey), command, MutationCodec, ct);
+        return Response(outcome.Value);
     }
-
-    private async Task<EvictionCaseResponse?> AddEventCoreAsync(
-        int portfolioId,
-        IQueryable<EvictionCase> cases,
-        int id,
-        CreateEvictionCaseEventRequest request,
-        bool broadcast,
-        CancellationToken ct)
-    {
-        var entity = await cases.FirstOrDefaultAsync(e => e.Id == id, ct);
-        if (entity is null) return null;
-        var now = _timeProvider.UtcNow();
-        var evt = new EvictionCaseEvent { PortfolioId = portfolioId, EvictionCaseId = id, EventType = request.EventType, EventDate = request.EventDate.ToUtc().Date, Notes = Normalize(request.Notes), CreatedAt = now, UpdatedAt = now };
-        _db.EvictionCaseEvents.Add(evt);
-        ApplyEventToCase(entity, evt, now);
-        await _db.SaveChangesAsync(ct);
-        var response = await ProjectResponses(BaseQuery(portfolioId).Where(e => e.Id == id), includeEvents: true)
-            .FirstOrDefaultAsync(ct);
-        if (broadcast && response != null)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EventEntityType, evt.Id, EvictionCaseEventResponse.FromEntity(evt), ct);
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, id, response, ct);
-        }
-        return response;
-    }
-
-    public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
-        => await DeleteCoreAsync(
-            portfolioId,
-            _db.EvictionCases.Where(e => e.PortfolioId == portfolioId),
-            id,
-            broadcast: true,
-            ct);
 
     public async Task<bool> DeleteAuthorizedAsync(
-        WorkspaceReadScope scope,
-        int id,
-        CancellationToken ct = default)
+        WorkspaceReadScope scope, int id, string idempotencyKey, CancellationToken ct = default)
     {
-        var deleted = await _db.ExecuteAuthorizedMutationAsync(
-            innerCt => DeleteCoreAsync(
-                scope.PortfolioId,
-                AuthorizedBaseQuery(scope, WriteCapabilities, tracking: true),
-                id,
-                broadcast: false,
-                innerCt),
-            ct);
-        if (deleted)
-            await _dataUpdate.BroadcastEntityDeleteAsync(scope.PortfolioId, EntityType, id, ct);
-        return deleted;
+        var command = new DeleteEvictionCaseCommand(scope.PortfolioId, Actor(scope), id, idempotencyKey);
+        var outcome = await Atomic.ExecuteAsync(
+            Identity("eviction-case.delete", idempotencyKey), command, MutationCodec, ct);
+        return outcome.Value.Outcome == OperationMutationOutcome.Applied;
     }
 
-    private async Task<bool> DeleteCoreAsync(
-        int portfolioId,
-        IQueryable<EvictionCase> cases,
-        int id,
-        bool broadcast,
-        CancellationToken ct)
+    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
+        "Atomic eviction mutations are not configured.");
+
+    private static StaffOperationActor Actor(WorkspaceReadScope scope) => new(
+        scope.UserId, scope.SessionId, scope.AccessContextId, scope.AccessRevision);
+
+    private static AtomicCommandIdentity Identity(string operation, string key)
     {
-        var entity = await cases.Include(e => e.Events).FirstOrDefaultAsync(e => e.Id == id, ct);
-        if (entity is null) return false;
-        var now = _timeProvider.UtcNow();
-        entity.DeletedAt = now; entity.UpdatedAt = now;
-        foreach (var evt in entity.Events) { evt.DeletedAt = now; evt.UpdatedAt = now; }
-        await _db.SaveChangesAsync(ct);
-        if (broadcast)
-            await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
-        return true;
+        var digest = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(key)));
+        return new AtomicCommandIdentity(operation, digest);
     }
+
+    private static EvictionCaseResponse? Response(OperationMutationResult result) =>
+        result.Outcome == OperationMutationOutcome.NotFound || result.ResponseJson is null
+            ? null
+            : JsonSerializer.Deserialize<EvictionCaseResponse>(result.ResponseJson);
 
     private IQueryable<EvictionCase> BaseQuery(int portfolioId) => _db.EvictionCases.AsNoTracking()
         .Where(e => e.PortfolioId == portfolioId);
@@ -438,33 +234,4 @@ public class EvictionCaseService : IEvictionCaseService
         return q;
     }
 
-    private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
-    private static EvictionEventType? InitialEventForStatus(EvictionCaseStatus status) => status switch
-    {
-        EvictionCaseStatus.NoticeServed => EvictionEventType.NoticeServed,
-        EvictionCaseStatus.Filed => EvictionEventType.Filed,
-        EvictionCaseStatus.HearingScheduled => EvictionEventType.HearingScheduled,
-        EvictionCaseStatus.Judgment => EvictionEventType.Judgment,
-        EvictionCaseStatus.MoveOut => EvictionEventType.MoveOut,
-        EvictionCaseStatus.Settled => EvictionEventType.Settlement,
-        EvictionCaseStatus.Dismissed => EvictionEventType.Dismissal,
-        _ => null,
-    };
-    private static void ApplyEventToCase(EvictionCase entity, EvictionCaseEvent evt, DateTime now)
-    {
-        switch (evt.EventType)
-        {
-            case EvictionEventType.NoticeServed: entity.Status = EvictionCaseStatus.NoticeServed; break;
-            case EvictionEventType.Filed: entity.Status = EvictionCaseStatus.Filed; entity.FiledOnDate ??= evt.EventDate; break;
-            case EvictionEventType.HearingScheduled: entity.Status = EvictionCaseStatus.HearingScheduled; entity.HearingDate = evt.EventDate; break;
-            case EvictionEventType.Judgment: entity.Status = EvictionCaseStatus.Judgment; entity.ResolvedOnDate ??= evt.EventDate; entity.Resolution = Normalize(evt.Notes) ?? "Judgment"; break;
-            case EvictionEventType.MoveOut: entity.Status = EvictionCaseStatus.MoveOut; entity.ResolvedOnDate ??= evt.EventDate; entity.Resolution = Normalize(evt.Notes) ?? "Move-out completed"; break;
-            case EvictionEventType.Settlement: entity.Status = EvictionCaseStatus.Settled; entity.ResolvedOnDate ??= evt.EventDate; entity.Resolution = Normalize(evt.Notes) ?? "Settlement"; break;
-            case EvictionEventType.Dismissal: entity.Status = EvictionCaseStatus.Dismissed; entity.ResolvedOnDate ??= evt.EventDate; entity.Resolution = Normalize(evt.Notes) ?? "Dismissed"; break;
-            case EvictionEventType.PaymentPlan:
-            case EvictionEventType.Note:
-                break;
-        }
-        entity.UpdatedAt = now;
-    }
 }

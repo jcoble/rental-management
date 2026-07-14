@@ -269,6 +269,22 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Operations.OperationMutationResult,
     RentalCommand.Data.Operations.DeleteAppointmentHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.CreateEvictionCaseCommand,
+    RentalCommand.Core.Operations.OperationMutationResult,
+    RentalCommand.Data.Operations.CreateEvictionCaseHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.UpdateEvictionCaseCommand,
+    RentalCommand.Core.Operations.OperationMutationResult,
+    RentalCommand.Data.Operations.UpdateEvictionCaseHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.AddEvictionCaseEventCommand,
+    RentalCommand.Core.Operations.OperationMutationResult,
+    RentalCommand.Data.Operations.AddEvictionCaseEventHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.DeleteEvictionCaseCommand,
+    RentalCommand.Core.Operations.OperationMutationResult,
+    RentalCommand.Data.Operations.DeleteEvictionCaseHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Esign.IssueLeaseAgreementCommand,
     RentalCommand.Core.Esign.IssueLeaseAgreementResult,
     RentalCommand.Data.Esign.IssueLeaseAgreementHandler>();

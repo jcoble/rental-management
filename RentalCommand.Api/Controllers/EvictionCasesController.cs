@@ -47,9 +47,13 @@ public class EvictionCasesController : ManagementControllerBase
     [ProducesResponseType(typeof(EvictionCaseResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<EvictionCaseResponse>> Create(
-        [FromBody] CreateEvictionCaseRequest request, CancellationToken ct)
+        [FromBody] CreateEvictionCaseRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
-        var created = await _service.CreateAuthorizedAsync(GetWorkspaceReadScope(), request, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var created = await _service.CreateAuthorizedAsync(
+            GetWorkspaceReadScope(), request, operationKey, ct);
         return created is null
             ? NotFound(new { error = "Lease relationship, agreement, or respondent party not found in this portfolio" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
@@ -59,9 +63,13 @@ public class EvictionCasesController : ManagementControllerBase
     [ProducesResponseType(typeof(EvictionCaseResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<EvictionCaseResponse>> Update(
-        int id, [FromBody] UpdateEvictionCaseRequest request, CancellationToken ct)
+        int id, [FromBody] UpdateEvictionCaseRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
-        var updated = await _service.UpdateAuthorizedAsync(GetWorkspaceReadScope(), id, request, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var updated = await _service.UpdateAuthorizedAsync(
+            GetWorkspaceReadScope(), id, request, operationKey, ct);
         return updated is null ? NotFound(new { error = "Eviction case not found" }) : Ok(updated);
     }
 
@@ -69,9 +77,13 @@ public class EvictionCasesController : ManagementControllerBase
     [ProducesResponseType(typeof(EvictionCaseResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<EvictionCaseResponse>> AddEvent(
-        int id, [FromBody] CreateEvictionCaseEventRequest request, CancellationToken ct)
+        int id, [FromBody] CreateEvictionCaseEventRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
-        var updated = await _service.AddEventAuthorizedAsync(GetWorkspaceReadScope(), id, request, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var updated = await _service.AddEventAuthorizedAsync(
+            GetWorkspaceReadScope(), id, request, operationKey, ct);
         return updated is null
             ? NotFound(new { error = "Eviction case not found" })
             : CreatedAtAction(nameof(Get), new { id = updated.Id }, updated);
@@ -80,9 +92,12 @@ public class EvictionCasesController : ManagementControllerBase
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        int id, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
-        var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, operationKey, ct);
         return deleted ? NoContent() : NotFound(new { error = "Eviction case not found" });
     }
 }
