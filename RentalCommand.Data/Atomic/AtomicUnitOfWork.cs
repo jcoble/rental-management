@@ -81,9 +81,15 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         var attempt = new AtomicWriteAttempt(attemptId, db, auditScope, _timeProvider);
         using var auditLease = auditScope.BeginAttempt(identity, attemptId);
         IDbContextTransaction? transaction = null;
+        var originalAutoSavepointsEnabled = db.Database.AutoSavepointsEnabled;
 
         try
         {
+            // This executor owns the complete transaction and always rolls it back on failure.
+            // EF savepoints would split one atomic attempt across PostgreSQL subtransaction IDs,
+            // preventing RLS from proving that staged business rows and their audit receipt were
+            // written by this exact outer transaction.
+            db.Database.AutoSavepointsEnabled = false;
             using (auditScope.BeginExecutorTransactionLifecycle())
             {
                 transaction = await db.Database.BeginTransactionAsync(ct);
@@ -233,6 +239,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         }
         finally
         {
+            db.Database.AutoSavepointsEnabled = originalAutoSavepointsEnabled;
             if (transaction is not null)
             {
                 await transaction.DisposeAsync();
