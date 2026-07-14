@@ -18,10 +18,6 @@ public class BankingControllerAuthorizationTests
     [InlineData(nameof(BankingController.SyncConnection), CapabilityKeys.BankConnectionsManage)]
     [InlineData(nameof(BankingController.Transactions), CapabilityKeys.BankConnectionsManage)]
     [InlineData(nameof(BankingController.Import), CapabilityKeys.BankConnectionsManage)]
-    [InlineData(nameof(BankingController.Match), CapabilityKeys.MoneyReconciliationOperate)]
-    [InlineData(nameof(BankingController.ReviewQueue), CapabilityKeys.MoneyReconciliationOperate)]
-    [InlineData(nameof(BankingController.ConfirmMatch), CapabilityKeys.MoneyReconciliationOperate)]
-    [InlineData(nameof(BankingController.Route), CapabilityKeys.MoneyReconciliationOperate)]
     [InlineData(nameof(BankingController.ClearMatch), CapabilityKeys.MoneyReconciliationDestructive)]
     [InlineData(nameof(BankingController.DismissMatch), CapabilityKeys.MoneyReconciliationDestructive)]
     [InlineData(nameof(BankingController.Ignore), CapabilityKeys.MoneyReconciliationDestructive)]
@@ -35,6 +31,31 @@ public class BankingControllerAuthorizationTests
 
         declared.Roles.Should().BeNullOrWhiteSpace();
         declared.Policy.Should().Be(CapabilityPolicy.Prefix + capabilityKey);
+    }
+
+    [Theory]
+    [InlineData(nameof(BankingController.Match))]
+    [InlineData(nameof(BankingController.ReviewQueue))]
+    [InlineData(nameof(BankingController.ConfirmMatch))]
+    [InlineData(nameof(BankingController.Route))]
+    public void OperationalReconciliation_DelegatesPropertyAuthorizationToScopedSqlAndCommands(
+        string actionName)
+    {
+        var method = typeof(BankingController).GetMethods().Single(candidate => candidate.Name == actionName);
+
+        method.GetCustomAttributes(typeof(AuthorizeAttribute), inherit: false)
+            .Should().BeEmpty(
+                "an HTTP capability policy only has a workspace target; property authorization must use the bank line's DB-side property predicate");
+    }
+
+    [Fact]
+    public void Route_ReturnsThePurposeBuiltOperationalProjection()
+    {
+        var method = typeof(BankingController).GetMethods()
+            .Single(candidate => candidate.Name == nameof(BankingController.Route));
+
+        method.ReturnType.Should().Be(
+            typeof(Task<Microsoft.AspNetCore.Mvc.ActionResult<OperationalBankTransactionResponse>>));
     }
 
     [Fact]

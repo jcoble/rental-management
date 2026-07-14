@@ -646,17 +646,14 @@ public sealed class RouteBankTransactionHandler
         await attempt.Locking.AcquireAsync(AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
         await attempt.Locking.AcquireAsync(AtomicLockResource.BankTransaction, command.TransactionId, ct);
         var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        await AuthorizeAsync(command, attempt.Persistence, now, ct);
 
         var transaction = await attempt.Persistence.Query<BankTransaction>()
             .SingleOrDefaultAsync(row => row.Id == command.TransactionId
                 && row.PortfolioId == command.PortfolioId, ct);
         if (transaction is null) return Result(RouteBankTransactionOutcome.TransactionNotFound, command.TransactionId);
+        await AuthorizeAsync(command, transaction.PropertyId, attempt.Persistence, now, ct);
         if (transaction.UpdatedAt != command.ExpectedUpdatedAtUtc)
             return Result(RouteBankTransactionOutcome.StaleVersion, transaction.Id);
-        if (command.PropertyId is { } propertyId && !await attempt.Persistence.Query<Property>()
-                .AnyAsync(row => row.Id == propertyId && row.PortfolioId == command.PortfolioId, ct))
-            return Result(RouteBankTransactionOutcome.PropertyNotFound, transaction.Id);
         if (transaction.PropertyId == command.PropertyId)
             return Result(RouteBankTransactionOutcome.AlreadyApplied, transaction.Id);
 
@@ -677,25 +674,39 @@ public sealed class RouteBankTransactionHandler
     {
         BankingAuthorizationSupport.Validate(command);
         var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        await AuthorizeAsync(command, persistence, now, ct);
+        var current = await persistence.Query<BankTransaction>()
+            .Where(row => row.Id == command.TransactionId && row.PortfolioId == command.PortfolioId)
+            .Select(row => new { row.PropertyId })
+            .SingleOrDefaultAsync(ct);
+        if (current is null) throw new UnauthorizedAccessException();
+        await AuthorizeAsync(command, current.PropertyId, persistence, now, ct);
     }
 
     private static async Task AuthorizeAsync(
         RouteBankTransactionCommand command,
+        int? currentPropertyId,
         IAtomicPersistenceSession persistence,
         DateTime now,
         CancellationToken ct)
     {
-        var authorized = command.PropertyId is { } propertyId
-            ? await BankingAuthorizationSupport.HasPropertyAuthorityAsync(
-                command.PortfolioId, propertyId, command.ActorUserId, command.AuthSessionId,
-                command.AccessContextId, command.ExpectedAccessRevision,
-                CapabilityKeys.MoneyReconciliationOperate, persistence, now, ct)
-            : await BankingAuthorizationSupport.HasWorkspaceAuthorityAsync(
+        if (command.PropertyId is not { } targetPropertyId)
+        {
+            var canRemoveRoute = await BankingAuthorizationSupport.HasWorkspaceAuthorityAsync(
                 command.PortfolioId, command.ActorUserId, command.AuthSessionId,
                 command.AccessContextId, command.ExpectedAccessRevision,
                 CapabilityKeys.MoneyReconciliationDestructive, persistence, now, ct);
-        if (!authorized) throw new UnauthorizedAccessException();
+            if (!canRemoveRoute) throw new UnauthorizedAccessException();
+            return;
+        }
+
+        var requiredPropertyIds = currentPropertyId is { } sourcePropertyId && sourcePropertyId != targetPropertyId
+            ? new[] { sourcePropertyId, targetPropertyId }
+            : new[] { targetPropertyId };
+        var canRoute = await BankingAuthorizationSupport.HasPropertyAuthoritiesAsync(
+            command.PortfolioId, requiredPropertyIds, command.ActorUserId, command.AuthSessionId,
+            command.AccessContextId, command.ExpectedAccessRevision,
+            CapabilityKeys.MoneyReconciliationOperate, persistence, now, ct);
+        if (!canRoute) throw new UnauthorizedAccessException();
     }
 
     private static RouteBankTransactionResult Result(RouteBankTransactionOutcome outcome, int id) => new(outcome, id);
@@ -732,14 +743,33 @@ internal static class BankingAuthorizationSupport
     internal static Task<bool> HasPropertyAuthorityAsync(
         int portfolioId, int propertyId, int actorUserId, Guid authSessionId, int accessContextId,
         long expectedAccessRevision, string capability, IAtomicPersistenceSession persistence,
-        DateTime now, CancellationToken ct) =>
-        LiveAssignments(portfolioId, actorUserId, authSessionId, accessContextId,
-                expectedAccessRevision, capability, persistence, now)
-            .AnyAsync(assignment =>
-                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
-                || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
-                    && assignment.SelectedProperties.Any(scope =>
-                        scope.PortfolioId == portfolioId && scope.PropertyId == propertyId)), ct);
+        DateTime now, CancellationToken ct) => HasPropertyAuthoritiesAsync(
+            portfolioId, [propertyId], actorUserId, authSessionId, accessContextId,
+            expectedAccessRevision, capability, persistence, now, ct);
+
+    internal static async Task<bool> HasPropertyAuthoritiesAsync(
+        int portfolioId, IReadOnlyCollection<int> propertyIds, int actorUserId, Guid authSessionId,
+        int accessContextId, long expectedAccessRevision, string capability,
+        IAtomicPersistenceSession persistence, DateTime now, CancellationToken ct)
+    {
+        var requiredPropertyIds = propertyIds.Distinct().Order().ToArray();
+        if (requiredPropertyIds.Length == 0) return false;
+
+        var liveAssignments = LiveAssignments(
+            portfolioId, actorUserId, authSessionId, accessContextId,
+            expectedAccessRevision, capability, persistence, now);
+        var authorizedPropertyCount = await persistence.Query<Property>()
+            .Where(property =>
+                property.PortfolioId == portfolioId &&
+                requiredPropertyIds.Contains(property.Id) &&
+                liveAssignments.Any(assignment =>
+                    assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                    (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
+                     assignment.SelectedProperties.Any(scope =>
+                         scope.PortfolioId == portfolioId && scope.PropertyId == property.Id))))
+            .CountAsync(ct);
+        return authorizedPropertyCount == requiredPropertyIds.Length;
+    }
 
     internal static Task<bool> HasWorkspaceAuthorityAsync(
         int portfolioId, int actorUserId, Guid authSessionId, int accessContextId,

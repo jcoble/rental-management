@@ -113,7 +113,6 @@ public class BankingController : ManagementControllerBase
     }
 
     [HttpPost("transactions/{id:int}/match")]
-    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.MoneyReconciliationOperate)]
     [ProducesResponseType(typeof(OperationalBankTransactionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<OperationalBankTransactionResponse>> Match(
@@ -134,17 +133,18 @@ public class BankingController : ManagementControllerBase
     }
 
     [HttpPut("transactions/{id:int}/route")]
-    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.MoneyReconciliationOperate)]
-    [ProducesResponseType(typeof(BankTransactionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(OperationalBankTransactionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
-    public async Task<ActionResult<BankTransactionResponse>> Route(
+    public async Task<ActionResult<OperationalBankTransactionResponse>> Route(
         int id, [FromBody] RouteBankTransactionRequest request, CancellationToken ct)
     {
         try
         {
             var updated = await _service.RouteTransactionAsync(GetWorkspaceReadScope(), id, request, ct);
-            return updated == null ? NotFound(new { error = "Bank transaction or property not found" }) : Ok(updated);
+            return updated == null
+                ? NotFound(new { error = "Bank transaction or property not found" })
+                : Ok(ToOperationalResponse(updated));
         }
         catch (BankingConflictException exception)
         {
@@ -178,7 +178,6 @@ public class BankingController : ManagementControllerBase
     /// deposit/withdrawal are not double-counted.
     /// </summary>
     [HttpGet("review-queue")]
-    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.MoneyReconciliationOperate)]
     [ProducesResponseType(typeof(BankReviewQueueResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<BankReviewQueueResponse>> ReviewQueue(
         CancellationToken ct,
@@ -194,7 +193,6 @@ public class BankingController : ManagementControllerBase
     /// requires both tenantAccountId and tenantLedgerEntryId; omitting target ids accepts the suggestion.
     /// </summary>
     [HttpPost("transactions/{id:int}/confirm-match")]
-    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.MoneyReconciliationOperate)]
     [ProducesResponseType(typeof(OperationalBankTransactionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<OperationalBankTransactionResponse>> ConfirmMatch(
@@ -262,4 +260,17 @@ public class BankingController : ManagementControllerBase
         }
         catch (UnauthorizedAccessException) { return Forbid(); }
     }
+
+    private static OperationalBankTransactionResponse ToOperationalResponse(BankTransactionResponse transaction) => new()
+    {
+        Id = transaction.Id,
+        PostedAt = transaction.PostedAt,
+        Description = transaction.Description,
+        MerchantName = transaction.MerchantName,
+        Amount = transaction.Amount,
+        IsoCurrencyCode = transaction.IsoCurrencyCode,
+        Category = transaction.Category,
+        MatchStatus = transaction.MatchStatus,
+        UpdatedAt = transaction.UpdatedAt,
+    };
 }
