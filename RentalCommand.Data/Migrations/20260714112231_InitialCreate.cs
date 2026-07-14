@@ -398,6 +398,37 @@ namespace RentalCommand.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
+                name: "AutomationSettings",
+                columns: table => new
+                {
+                    Id = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
+                    EnableRentCharges = table.Column<bool>(type: "boolean", nullable: false),
+                    RentChargeLeadDays = table.Column<int>(type: "integer", nullable: false, defaultValue: 5),
+                    EnableLateFees = table.Column<bool>(type: "boolean", nullable: false),
+                    LateFeeGraceDays = table.Column<int>(type: "integer", nullable: false, defaultValue: 5),
+                    EnableLeaseExpiryReminders = table.Column<bool>(type: "boolean", nullable: false, defaultValue: true),
+                    LeaseExpiryReminderDays = table.Column<int>(type: "integer", nullable: false, defaultValue: 60),
+                    EnableRecurringMaintenance = table.Column<bool>(type: "boolean", nullable: false, defaultValue: true),
+                    EnableMorningBriefing = table.Column<bool>(type: "boolean", nullable: false, defaultValue: true),
+                    MorningBriefingSendHourLocal = table.Column<int>(type: "integer", nullable: false, defaultValue: 8),
+                    MorningBriefingIncludeEmpty = table.Column<bool>(type: "boolean", nullable: false),
+                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    UpdatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_AutomationSettings", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_AutomationSettings_Portfolios_PortfolioId",
+                        column: x => x.PortfolioId,
+                        principalTable: "Portfolios",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
                 name: "BankConnections",
                 columns: table => new
                 {
@@ -472,37 +503,6 @@ namespace RentalCommand.Data.Migrations
                     table.PrimaryKey("PK_InspectionTemplates", x => x.Id);
                     table.ForeignKey(
                         name: "FK_InspectionTemplates_Portfolios_PortfolioId",
-                        column: x => x.PortfolioId,
-                        principalTable: "Portfolios",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "AutomationSettings",
-                columns: table => new
-                {
-                    Id = table.Column<int>(type: "integer", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
-                    EnableRentCharges = table.Column<bool>(type: "boolean", nullable: false),
-                    RentChargeLeadDays = table.Column<int>(type: "integer", nullable: false, defaultValue: 5),
-                    EnableLateFees = table.Column<bool>(type: "boolean", nullable: false),
-                    LateFeeGraceDays = table.Column<int>(type: "integer", nullable: false, defaultValue: 5),
-                    EnableLeaseExpiryReminders = table.Column<bool>(type: "boolean", nullable: false, defaultValue: true),
-                    LeaseExpiryReminderDays = table.Column<int>(type: "integer", nullable: false, defaultValue: 60),
-                    EnableRecurringMaintenance = table.Column<bool>(type: "boolean", nullable: false, defaultValue: true),
-                    EnableMorningBriefing = table.Column<bool>(type: "boolean", nullable: false, defaultValue: true),
-                    MorningBriefingSendHourLocal = table.Column<int>(type: "integer", nullable: false, defaultValue: 8),
-                    MorningBriefingIncludeEmpty = table.Column<bool>(type: "boolean", nullable: false),
-                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    UpdatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_AutomationSettings", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_AutomationSettings_Portfolios_PortfolioId",
                         column: x => x.PortfolioId,
                         principalTable: "Portfolios",
                         principalColumn: "Id",
@@ -1193,39 +1193,6 @@ namespace RentalCommand.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
-                name: "NoticeDeliveryEvidence",
-                columns: table => new
-                {
-                    Id = table.Column<long>(type: "bigint", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
-                    RenderedNoticeId = table.Column<long>(type: "bigint", nullable: false),
-                    RecipientLeaseManagementPartyId = table.Column<int>(type: "integer", nullable: false),
-                    RecipientRole = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false),
-                    Channel = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false),
-                    Destination = table.Column<string>(type: "character varying(500)", maxLength: 500, nullable: false),
-                    OutboxMessageId = table.Column<long>(type: "bigint", nullable: false),
-                    IdempotencyKey = table.Column<string>(type: "character varying(300)", maxLength: 300, nullable: false),
-                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_NoticeDeliveryEvidence", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_NoticeDeliveryEvidence_OutboxMessages_OutboxMessageId",
-                        column: x => x.OutboxMessageId,
-                        principalTable: "OutboxMessages",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Restrict);
-                    table.ForeignKey(
-                        name: "FK_NoticeDeliveryEvidence_RenderedNotices_RenderedNoticeId_Por~",
-                        columns: x => new { x.RenderedNoticeId, x.PortfolioId },
-                        principalTable: "RenderedNotices",
-                        principalColumns: new[] { "Id", "PortfolioId" },
-                        onDelete: ReferentialAction.Restrict);
-                });
-
-            migrationBuilder.CreateTable(
                 name: "LegalDocumentArtifacts",
                 columns: table => new
                 {
@@ -1251,8 +1218,8 @@ namespace RentalCommand.Data.Migrations
                     table.UniqueConstraint("AK_LegalDocumentArtifacts_Id_StoredFileId_PortfolioId", x => new { x.Id, x.StoredFileId, x.PortfolioId });
                     table.CheckConstraint("CK_LegalDocumentArtifact_ByteLength", "\"ByteLength\" > 0");
                     table.CheckConstraint("CK_LegalDocumentArtifact_ContentSha256", "\"ContentSha256\" ~ '^[0-9a-f]{64}$'");
-                    table.CheckConstraint("CK_LegalDocumentArtifact_IssuanceBinding", "(\"ArtifactKind\" IN ('IssuedAgreement', 'IssuedAddendum') AND \"LegalIssuanceFingerprint\" ~ '^[0-9a-f]{64}$') OR (\"ArtifactKind\" NOT IN ('IssuedAgreement', 'IssuedAddendum') AND \"LegalIssuanceFingerprint\" IS NULL)");
                     table.CheckConstraint("CK_LegalDocumentArtifact_ContentType", "\"ContentType\" IN ('application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/gif')");
+                    table.CheckConstraint("CK_LegalDocumentArtifact_IssuanceBinding", "(\"ArtifactKind\" IN ('IssuedAgreement', 'IssuedAddendum') AND \"LegalIssuanceFingerprint\" ~ '^[0-9a-f]{64}$') OR (\"ArtifactKind\" NOT IN ('IssuedAgreement', 'IssuedAddendum') AND \"LegalIssuanceFingerprint\" IS NULL)");
                     table.CheckConstraint("CK_LegalDocumentArtifact_Kind", "\"ArtifactKind\" IN ('IssuedAgreement', 'ExecutedAgreement', 'IssuedAddendum', 'ExecutedAddendum', 'CompletionCertificate')");
                     table.ForeignKey(
                         name: "FK_LegalDocumentArtifacts_AspNetUsers_CreatedByUserId",
@@ -1305,72 +1272,6 @@ namespace RentalCommand.Data.Migrations
                         principalTable: "StoredFiles",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.SetNull);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "ScanDrafts",
-                columns: table => new
-                {
-                    Id = table.Column<int>(type: "integer", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
-                    BatchId = table.Column<int>(type: "integer", nullable: true),
-                    FilePath = table.Column<string>(type: "character varying(1024)", maxLength: 1024, nullable: false),
-                    SourceStoredFileId = table.Column<int>(type: "integer", nullable: true),
-                    SourceContentSha256 = table.Column<string>(type: "char(64)", nullable: true),
-                    SourceLabel = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: true),
-                    CaptureExperience = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: true),
-                    CaptureAccessContextId = table.Column<int>(type: "integer", nullable: true),
-                    CaptureAccessRevision = table.Column<long>(type: "bigint", nullable: true),
-                    CapturePropertyId = table.Column<int>(type: "integer", nullable: true),
-                    CaptureUnitId = table.Column<int>(type: "integer", nullable: true),
-                    CaptureLeaseManagementId = table.Column<int>(type: "integer", nullable: true),
-                    CaptureLeaseAgreementId = table.Column<int>(type: "integer", nullable: true),
-                    CaptureTenantAccountId = table.Column<int>(type: "integer", nullable: true),
-                    CaptureTenantLedgerEntryId = table.Column<long>(type: "bigint", nullable: true),
-                    CaptureWorkOrderId = table.Column<int>(type: "integer", nullable: true),
-                    CaptureApplicationId = table.Column<int>(type: "integer", nullable: true),
-                    CaptureRentalListingId = table.Column<int>(type: "integer", nullable: true),
-                    ThumbnailPath = table.Column<string>(type: "character varying(1024)", maxLength: 1024, nullable: true),
-                    TargetEntityType = table.Column<string>(type: "character varying(120)", maxLength: 120, nullable: false),
-                    Status = table.Column<string>(type: "character varying(50)", maxLength: 50, nullable: false),
-                    ProcessingClaimOwner = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: true),
-                    ProcessingClaimToken = table.Column<Guid>(type: "uuid", nullable: true),
-                    ProcessingClaimExpiresAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
-                    ProcessingAttemptCount = table.Column<int>(type: "integer", nullable: false),
-                    ProcessingLastAttemptAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
-                    ExtractedFields = table.Column<string>(type: "jsonb", nullable: true),
-                    ModelId = table.Column<string>(type: "character varying(120)", maxLength: 120, nullable: true),
-                    TokensUsed = table.Column<int>(type: "integer", nullable: true),
-                    CostUsd = table.Column<decimal>(type: "numeric(18,4)", precision: 18, scale: 4, nullable: true),
-                    FailureReason = table.Column<string>(type: "character varying(500)", maxLength: 500, nullable: true),
-                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    ReviewedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
-                    ReviewedBy = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: true),
-                    ConfirmedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
-                    ConfirmedEntityId = table.Column<int>(type: "integer", nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_ScanDrafts", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_ScanDrafts_Portfolios_PortfolioId",
-                        column: x => x.PortfolioId,
-                        principalTable: "Portfolios",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                    table.ForeignKey(
-                        name: "FK_ScanDrafts_ScanBatches_BatchId",
-                        column: x => x.BatchId,
-                        principalTable: "ScanBatches",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.SetNull);
-                    table.ForeignKey(
-                        name: "FK_ScanDrafts_StoredFiles_SourceStoredFileId",
-                        column: x => x.SourceStoredFileId,
-                        principalTable: "StoredFiles",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Restrict);
                 });
 
             migrationBuilder.CreateTable(
@@ -1583,46 +1484,6 @@ namespace RentalCommand.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
-                name: "Conversations",
-                columns: table => new
-                {
-                    Id = table.Column<int>(type: "integer", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
-                    TenantId = table.Column<int>(type: "integer", nullable: false),
-                    Subject = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
-                    PropertyId = table.Column<int>(type: "integer", nullable: true),
-                    StartedByLandlord = table.Column<bool>(type: "boolean", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    LastMessageAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    LastMessagePreview = table.Column<string>(type: "character varying(280)", maxLength: 280, nullable: true),
-                    LandlordUnreadCount = table.Column<int>(type: "integer", nullable: false),
-                    TenantUnreadCount = table.Column<int>(type: "integer", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_Conversations", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_Conversations_Portfolios_PortfolioId",
-                        column: x => x.PortfolioId,
-                        principalTable: "Portfolios",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                    table.ForeignKey(
-                        name: "FK_Conversations_Properties_PropertyId",
-                        column: x => x.PropertyId,
-                        principalTable: "Properties",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.SetNull);
-                    table.ForeignKey(
-                        name: "FK_Conversations_Tenants_TenantId",
-                        column: x => x.TenantId,
-                        principalTable: "Tenants",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Restrict);
-                });
-
-            migrationBuilder.CreateTable(
                 name: "DocumentTemplates",
                 columns: table => new
                 {
@@ -1813,9 +1674,7 @@ namespace RentalCommand.Data.Migrations
                 {
                     table.PrimaryKey("PK_TeamRoutingRules", x => x.Id);
                     table.UniqueConstraint("AK_TeamRoutingRules_Id_PortfolioId", x => new { x.Id, x.PortfolioId });
-                    table.CheckConstraint(
-                        "CK_TeamRoutingRules_WorkspaceOnlyTopics",
-                        "\"PropertyId\" IS NULL OR \"Topic\" NOT IN ('AccountAndSecurity', 'MorningBriefing')");
+                    table.CheckConstraint("CK_TeamRoutingRules_WorkspaceOnlyTopics", "\"PropertyId\" IS NULL OR \"Topic\" NOT IN ('AccountAndSecurity', 'MorningBriefing')");
                     table.ForeignKey(
                         name: "FK_TeamRoutingRules_Portfolios_PortfolioId",
                         column: x => x.PortfolioId,
@@ -1910,6 +1769,7 @@ namespace RentalCommand.Data.Migrations
                 {
                     table.PrimaryKey("PK_MembershipRoleAssignments", x => x.Id);
                     table.UniqueConstraint("AK_MembershipRoleAssignments_Id_PortfolioId", x => new { x.Id, x.PortfolioId });
+                    table.UniqueConstraint("AK_MembershipRoleAssignments_Id_WorkspaceMembershipId_Portfoli~", x => new { x.Id, x.WorkspaceMembershipId, x.PortfolioId });
                     table.CheckConstraint("CK_MembershipRoleAssignments_EffectivePeriod", "\"EffectiveToUtc\" IS NULL OR \"EffectiveToUtc\" > \"EffectiveFromUtc\"");
                     table.CheckConstraint("CK_MembershipRoleAssignments_ScopeKind", "\"ScopeKind\" IN ('AllProperties', 'SelectedProperties', 'AssignedWorkOrders')");
                     table.CheckConstraint("CK_MembershipRoleAssignments_StatusFacts", "(\"Status\" = 'Active' AND \"SuspendedAtUtc\" IS NULL AND \"RevokedAtUtc\" IS NULL) OR (\"Status\" = 'Suspended' AND \"SuspendedAtUtc\" IS NOT NULL AND \"RevokedAtUtc\" IS NULL) OR (\"Status\" = 'Revoked' AND \"RevokedAtUtc\" IS NOT NULL)");
@@ -2001,29 +1861,6 @@ namespace RentalCommand.Data.Migrations
                         columns: x => new { x.TenantNoticePolicyId, x.PortfolioId },
                         principalTable: "TenantNoticePolicies",
                         principalColumns: new[] { "Id", "PortfolioId" },
-                        onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "ConversationMessages",
-                columns: table => new
-                {
-                    Id = table.Column<int>(type: "integer", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    ConversationId = table.Column<int>(type: "integer", nullable: false),
-                    SenderRole = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: false),
-                    Body = table.Column<string>(type: "character varying(4000)", maxLength: 4000, nullable: false),
-                    Channels = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: true),
-                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_ConversationMessages", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_ConversationMessages_Conversations_ConversationId",
-                        column: x => x.ConversationId,
-                        principalTable: "Conversations",
-                        principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
                 });
 
@@ -2944,11 +2781,13 @@ namespace RentalCommand.Data.Migrations
                     CreatedBy = table.Column<string>(type: "character varying(120)", maxLength: 120, nullable: true),
                     UpdatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
                     DeletedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
-                    ExtractedData = table.Column<string>(type: "jsonb", nullable: true)
+                    ExtractedData = table.Column<string>(type: "jsonb", nullable: true),
+                    TechnicianAccessInstructions = table.Column<string>(type: "character varying(2000)", maxLength: 2000, nullable: true)
                 },
                 constraints: table =>
                 {
                     table.PrimaryKey("PK_WorkOrders", x => x.Id);
+                    table.UniqueConstraint("AK_WorkOrders_Id_PropertyId_PortfolioId", x => new { x.Id, x.PropertyId, x.PortfolioId });
                     table.ForeignKey(
                         name: "FK_WorkOrders_LeaseManagements_LeaseManagementId",
                         column: x => x.LeaseManagementId,
@@ -3338,6 +3177,45 @@ namespace RentalCommand.Data.Migrations
                         name: "FK_LeaseAgreementSigners_Tenants_TenantId_PortfolioId",
                         columns: x => new { x.TenantId, x.PortfolioId },
                         principalTable: "Tenants",
+                        principalColumns: new[] { "Id", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "NoticeDeliveryEvidence",
+                columns: table => new
+                {
+                    Id = table.Column<long>(type: "bigint", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
+                    RenderedNoticeId = table.Column<long>(type: "bigint", nullable: false),
+                    RecipientLeaseManagementPartyId = table.Column<int>(type: "integer", nullable: false),
+                    RecipientRole = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false),
+                    Channel = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false),
+                    Destination = table.Column<string>(type: "character varying(500)", maxLength: 500, nullable: false),
+                    OutboxMessageId = table.Column<long>(type: "bigint", nullable: false),
+                    IdempotencyKey = table.Column<string>(type: "character varying(300)", maxLength: 300, nullable: false),
+                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_NoticeDeliveryEvidence", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_NoticeDeliveryEvidence_LeaseManagementParties_RecipientLeas~",
+                        columns: x => new { x.RecipientLeaseManagementPartyId, x.PortfolioId },
+                        principalTable: "LeaseManagementParties",
+                        principalColumns: new[] { "Id", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_NoticeDeliveryEvidence_OutboxMessages_OutboxMessageId",
+                        column: x => x.OutboxMessageId,
+                        principalTable: "OutboxMessages",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_NoticeDeliveryEvidence_RenderedNotices_RenderedNoticeId_Por~",
+                        columns: x => new { x.RenderedNoticeId, x.PortfolioId },
+                        principalTable: "RenderedNotices",
                         principalColumns: new[] { "Id", "PortfolioId" },
                         onDelete: ReferentialAction.Restrict);
                 });
@@ -3815,10 +3693,58 @@ namespace RentalCommand.Data.Migrations
                         principalColumns: new[] { "Id", "PortfolioId" },
                         onDelete: ReferentialAction.Restrict);
                     table.ForeignKey(
-                        name: "FK_TenantPaymentAttempts_TenantPaymentAttempts_RefundsPayment~",
+                        name: "FK_TenantPaymentAttempts_TenantPaymentAttempts_RefundsPaymentA~",
                         columns: x => new { x.RefundsPaymentAttemptId, x.TenantAccountId, x.PortfolioId },
                         principalTable: "TenantPaymentAttempts",
                         principalColumns: new[] { "Id", "TenantAccountId", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "Conversations",
+                columns: table => new
+                {
+                    Id = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
+                    TenantId = table.Column<int>(type: "integer", nullable: false),
+                    Subject = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
+                    PropertyId = table.Column<int>(type: "integer", nullable: true),
+                    WorkOrderId = table.Column<int>(type: "integer", nullable: true),
+                    StartedByLandlord = table.Column<bool>(type: "boolean", nullable: false),
+                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    LastMessageAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    LastMessagePreview = table.Column<string>(type: "character varying(280)", maxLength: 280, nullable: true),
+                    LandlordUnreadCount = table.Column<int>(type: "integer", nullable: false),
+                    TenantUnreadCount = table.Column<int>(type: "integer", nullable: false),
+                    TechnicianUnreadCount = table.Column<int>(type: "integer", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_Conversations", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_Conversations_Portfolios_PortfolioId",
+                        column: x => x.PortfolioId,
+                        principalTable: "Portfolios",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                    table.ForeignKey(
+                        name: "FK_Conversations_Properties_PropertyId",
+                        column: x => x.PropertyId,
+                        principalTable: "Properties",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.SetNull);
+                    table.ForeignKey(
+                        name: "FK_Conversations_Tenants_TenantId",
+                        column: x => x.TenantId,
+                        principalTable: "Tenants",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_Conversations_WorkOrders_WorkOrderId",
+                        column: x => x.WorkOrderId,
+                        principalTable: "WorkOrders",
+                        principalColumn: "Id",
                         onDelete: ReferentialAction.Restrict);
                 });
 
@@ -3894,6 +3820,79 @@ namespace RentalCommand.Data.Migrations
                         principalTable: "WorkOrders",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.SetNull);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "WorkOrderResponsibilities",
+                columns: table => new
+                {
+                    Id = table.Column<Guid>(type: "uuid", nullable: false),
+                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
+                    PropertyId = table.Column<int>(type: "integer", nullable: false),
+                    WorkOrderId = table.Column<int>(type: "integer", nullable: false),
+                    WorkspaceMembershipId = table.Column<int>(type: "integer", nullable: false),
+                    MembershipRoleAssignmentId = table.Column<int>(type: "integer", nullable: false),
+                    Kind = table.Column<string>(type: "character varying(24)", maxLength: 24, nullable: false),
+                    EffectiveFromUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    EffectiveToUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
+                    AssignedByUserId = table.Column<int>(type: "integer", nullable: false),
+                    AssignedByAccessContextId = table.Column<int>(type: "integer", nullable: false),
+                    AssignedReason = table.Column<string>(type: "character varying(1000)", maxLength: 1000, nullable: false),
+                    AssignedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    EndedByUserId = table.Column<int>(type: "integer", nullable: true),
+                    EndedByAccessContextId = table.Column<int>(type: "integer", nullable: true),
+                    EndedReason = table.Column<string>(type: "character varying(1000)", maxLength: 1000, nullable: true),
+                    EndedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_WorkOrderResponsibilities", x => x.Id);
+                    table.CheckConstraint("CK_WorkOrderResponsibilities_AssignedFacts", "\"AssignedAtUtc\" = \"EffectiveFromUtc\" AND length(btrim(\"AssignedReason\")) > 0");
+                    table.CheckConstraint("CK_WorkOrderResponsibilities_EffectivePeriod", "\"EffectiveToUtc\" IS NULL OR \"EffectiveToUtc\" > \"EffectiveFromUtc\"");
+                    table.CheckConstraint("CK_WorkOrderResponsibilities_EndFacts", "(\"EffectiveToUtc\" IS NULL AND \"EndedAtUtc\" IS NULL AND \"EndedByUserId\" IS NULL AND \"EndedByAccessContextId\" IS NULL AND \"EndedReason\" IS NULL) OR (\"EffectiveToUtc\" IS NOT NULL AND \"EndedAtUtc\" = \"EffectiveToUtc\" AND \"EndedByUserId\" IS NOT NULL AND \"EndedByAccessContextId\" IS NOT NULL AND \"EndedReason\" IS NOT NULL AND length(btrim(\"EndedReason\")) > 0)");
+                    table.CheckConstraint("CK_WorkOrderResponsibilities_Kind", "\"Kind\" IN ('Primary', 'Supporting')");
+                    table.ForeignKey(
+                        name: "FK_WorkOrderResponsibilities_AspNetUsers_AssignedByUserId",
+                        column: x => x.AssignedByUserId,
+                        principalTable: "AspNetUsers",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_WorkOrderResponsibilities_AspNetUsers_EndedByUserId",
+                        column: x => x.EndedByUserId,
+                        principalTable: "AspNetUsers",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_WorkOrderResponsibilities_MembershipRoleAssignments_Members~",
+                        columns: x => new { x.MembershipRoleAssignmentId, x.WorkspaceMembershipId, x.PortfolioId },
+                        principalTable: "MembershipRoleAssignments",
+                        principalColumns: new[] { "Id", "WorkspaceMembershipId", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_WorkOrderResponsibilities_WorkOrders_WorkOrderId_PropertyId~",
+                        columns: x => new { x.WorkOrderId, x.PropertyId, x.PortfolioId },
+                        principalTable: "WorkOrders",
+                        principalColumns: new[] { "Id", "PropertyId", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_WorkOrderResponsibilities_WorkspaceAccessContexts_AssignedB~",
+                        columns: x => new { x.AssignedByAccessContextId, x.AssignedByUserId, x.PortfolioId },
+                        principalTable: "WorkspaceAccessContexts",
+                        principalColumns: new[] { "Id", "UserId", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_WorkOrderResponsibilities_WorkspaceAccessContexts_EndedByAc~",
+                        columns: x => new { x.EndedByAccessContextId, x.EndedByUserId, x.PortfolioId },
+                        principalTable: "WorkspaceAccessContexts",
+                        principalColumns: new[] { "Id", "UserId", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_WorkOrderResponsibilities_WorkspaceMemberships_WorkspaceMem~",
+                        columns: x => new { x.WorkspaceMembershipId, x.PortfolioId },
+                        principalTable: "WorkspaceMemberships",
+                        principalColumns: new[] { "Id", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
                 });
 
             migrationBuilder.CreateTable(
@@ -4458,6 +4457,91 @@ namespace RentalCommand.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
+                name: "ConversationMessages",
+                columns: table => new
+                {
+                    Id = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    ConversationId = table.Column<int>(type: "integer", nullable: false),
+                    SenderRole = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: false),
+                    Body = table.Column<string>(type: "character varying(4000)", maxLength: 4000, nullable: false),
+                    Channels = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: true),
+                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_ConversationMessages", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_ConversationMessages_Conversations_ConversationId",
+                        column: x => x.ConversationId,
+                        principalTable: "Conversations",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "TechnicianWorkEntries",
+                columns: table => new
+                {
+                    Id = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
+                    WorkOrderId = table.Column<int>(type: "integer", nullable: false),
+                    WorkOrderResponsibilityId = table.Column<Guid>(type: "uuid", nullable: false),
+                    WorkspaceMembershipId = table.Column<int>(type: "integer", nullable: false),
+                    MembershipRoleAssignmentId = table.Column<int>(type: "integer", nullable: false),
+                    CreatedByUserId = table.Column<int>(type: "integer", nullable: false),
+                    Kind = table.Column<string>(type: "character varying(24)", maxLength: 24, nullable: false),
+                    Note = table.Column<string>(type: "character varying(2000)", maxLength: 2000, nullable: true),
+                    Quantity = table.Column<decimal>(type: "numeric(12,3)", precision: 12, scale: 3, nullable: true),
+                    Unit = table.Column<string>(type: "character varying(40)", maxLength: 40, nullable: true),
+                    StoredFileId = table.Column<int>(type: "integer", nullable: true),
+                    OccurredAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_TechnicianWorkEntries", x => x.Id);
+                    table.CheckConstraint("CK_TechnicianWorkEntries_KindFacts", "(\"Kind\" = 'Note' AND \"Note\" IS NOT NULL AND \"Quantity\" IS NULL AND \"StoredFileId\" IS NULL) OR (\"Kind\" IN ('Time', 'Material') AND \"Quantity\" > 0 AND \"Unit\" IS NOT NULL AND \"StoredFileId\" IS NULL) OR (\"Kind\" = 'Photo' AND \"StoredFileId\" IS NOT NULL AND \"Quantity\" IS NULL)");
+                    table.ForeignKey(
+                        name: "FK_TechnicianWorkEntries_AspNetUsers_CreatedByUserId",
+                        column: x => x.CreatedByUserId,
+                        principalTable: "AspNetUsers",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_TechnicianWorkEntries_MembershipRoleAssignments_MembershipR~",
+                        columns: x => new { x.MembershipRoleAssignmentId, x.WorkspaceMembershipId, x.PortfolioId },
+                        principalTable: "MembershipRoleAssignments",
+                        principalColumns: new[] { "Id", "WorkspaceMembershipId", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_TechnicianWorkEntries_StoredFiles_StoredFileId",
+                        column: x => x.StoredFileId,
+                        principalTable: "StoredFiles",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_TechnicianWorkEntries_WorkOrderResponsibilities_WorkOrderRe~",
+                        column: x => x.WorkOrderResponsibilityId,
+                        principalTable: "WorkOrderResponsibilities",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_TechnicianWorkEntries_WorkOrders_WorkOrderId",
+                        column: x => x.WorkOrderId,
+                        principalTable: "WorkOrders",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_TechnicianWorkEntries_WorkspaceMemberships_WorkspaceMembers~",
+                        columns: x => new { x.WorkspaceMembershipId, x.PortfolioId },
+                        principalTable: "WorkspaceMemberships",
+                        principalColumns: new[] { "Id", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                });
+
+            migrationBuilder.CreateTable(
                 name: "SignatureSigners",
                 columns: table => new
                 {
@@ -4569,6 +4653,12 @@ namespace RentalCommand.Data.Migrations
                         principalColumns: new[] { "Id", "LeaseManagementId", "PortfolioId" },
                         onDelete: ReferentialAction.Restrict);
                     table.ForeignKey(
+                        name: "FK_NoticeDrafts_LeaseManagementParties_RecipientLeaseManagemen~",
+                        columns: x => new { x.RecipientLeaseManagementPartyId, x.LeaseManagementId, x.PortfolioId },
+                        principalTable: "LeaseManagementParties",
+                        principalColumns: new[] { "Id", "LeaseManagementId", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
                         name: "FK_NoticeDrafts_LeaseManagements_LeaseManagementId_PortfolioId",
                         columns: x => new { x.LeaseManagementId, x.PortfolioId },
                         principalTable: "LeaseManagements",
@@ -4587,12 +4677,6 @@ namespace RentalCommand.Data.Migrations
                         principalColumn: "Id",
                         onDelete: ReferentialAction.SetNull);
                     table.ForeignKey(
-                        name: "FK_NoticeDrafts_LeaseManagementParties_RecipientLeaseManagemen~",
-                        columns: x => new { x.RecipientLeaseManagementPartyId, x.LeaseManagementId, x.PortfolioId },
-                        principalTable: "LeaseManagementParties",
-                        principalColumns: new[] { "Id", "LeaseManagementId", "PortfolioId" },
-                        onDelete: ReferentialAction.Restrict);
-                    table.ForeignKey(
                         name: "FK_NoticeDrafts_TenantAccounts_TenantAccountId_LeaseManagement~",
                         columns: x => new { x.TenantAccountId, x.LeaseManagementId, x.PortfolioId },
                         principalTable: "TenantAccounts",
@@ -4606,13 +4690,125 @@ namespace RentalCommand.Data.Migrations
                         onDelete: ReferentialAction.Restrict);
                 });
 
-            migrationBuilder.AddForeignKey(
-                name: "FK_NoticeDeliveryEvidence_LeaseManagementParties_RecipientLease~",
-                table: "NoticeDeliveryEvidence",
-                columns: new[] { "RecipientLeaseManagementPartyId", "PortfolioId" },
-                principalTable: "LeaseManagementParties",
-                principalColumns: new[] { "Id", "PortfolioId" },
-                onDelete: ReferentialAction.Restrict);
+            migrationBuilder.CreateTable(
+                name: "ScanDrafts",
+                columns: table => new
+                {
+                    Id = table.Column<int>(type: "integer", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
+                    BatchId = table.Column<int>(type: "integer", nullable: true),
+                    FilePath = table.Column<string>(type: "character varying(1024)", maxLength: 1024, nullable: false),
+                    SourceStoredFileId = table.Column<int>(type: "integer", nullable: true),
+                    SourceContentSha256 = table.Column<string>(type: "char(64)", nullable: true),
+                    SourceLabel = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: true),
+                    CaptureExperience = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: true),
+                    CaptureAccessContextId = table.Column<int>(type: "integer", nullable: true),
+                    CaptureAccessRevision = table.Column<long>(type: "bigint", nullable: true),
+                    CapturePropertyId = table.Column<int>(type: "integer", nullable: true),
+                    CaptureUnitId = table.Column<int>(type: "integer", nullable: true),
+                    CaptureLeaseManagementId = table.Column<int>(type: "integer", nullable: true),
+                    CaptureLeaseAgreementId = table.Column<int>(type: "integer", nullable: true),
+                    CaptureTenantAccountId = table.Column<int>(type: "integer", nullable: true),
+                    CaptureTenantLedgerEntryId = table.Column<long>(type: "bigint", nullable: true),
+                    CaptureWorkOrderId = table.Column<int>(type: "integer", nullable: true),
+                    CaptureApplicationId = table.Column<int>(type: "integer", nullable: true),
+                    CaptureRentalListingId = table.Column<int>(type: "integer", nullable: true),
+                    ThumbnailPath = table.Column<string>(type: "character varying(1024)", maxLength: 1024, nullable: true),
+                    TargetEntityType = table.Column<string>(type: "character varying(120)", maxLength: 120, nullable: false),
+                    Status = table.Column<string>(type: "character varying(50)", maxLength: 50, nullable: false),
+                    ProcessingClaimOwner = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: true),
+                    ProcessingClaimToken = table.Column<Guid>(type: "uuid", nullable: true),
+                    ProcessingClaimExpiresAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
+                    ProcessingAttemptCount = table.Column<int>(type: "integer", nullable: false),
+                    ProcessingLastAttemptAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
+                    ExtractedFields = table.Column<string>(type: "jsonb", nullable: true),
+                    ModelId = table.Column<string>(type: "character varying(120)", maxLength: 120, nullable: true),
+                    TokensUsed = table.Column<int>(type: "integer", nullable: true),
+                    CostUsd = table.Column<decimal>(type: "numeric(18,4)", precision: 18, scale: 4, nullable: true),
+                    FailureReason = table.Column<string>(type: "character varying(500)", maxLength: 500, nullable: true),
+                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
+                    ReviewedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
+                    ReviewedBy = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: true),
+                    ConfirmedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
+                    ConfirmedEntityId = table.Column<int>(type: "integer", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_ScanDrafts", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_ScanDrafts_LeaseAgreements_CaptureLeaseAgreementId",
+                        column: x => x.CaptureLeaseAgreementId,
+                        principalTable: "LeaseAgreements",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_ScanDrafts_LeaseManagements_CaptureLeaseManagementId",
+                        column: x => x.CaptureLeaseManagementId,
+                        principalTable: "LeaseManagements",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_ScanDrafts_Portfolios_PortfolioId",
+                        column: x => x.PortfolioId,
+                        principalTable: "Portfolios",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                    table.ForeignKey(
+                        name: "FK_ScanDrafts_Properties_CapturePropertyId",
+                        column: x => x.CapturePropertyId,
+                        principalTable: "Properties",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_ScanDrafts_RentalApplications_CaptureApplicationId",
+                        column: x => x.CaptureApplicationId,
+                        principalTable: "RentalApplications",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_ScanDrafts_RentalListings_CaptureRentalListingId",
+                        column: x => x.CaptureRentalListingId,
+                        principalTable: "RentalListings",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_ScanDrafts_ScanBatches_BatchId",
+                        column: x => x.BatchId,
+                        principalTable: "ScanBatches",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.SetNull);
+                    table.ForeignKey(
+                        name: "FK_ScanDrafts_StoredFiles_SourceStoredFileId",
+                        column: x => x.SourceStoredFileId,
+                        principalTable: "StoredFiles",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_ScanDrafts_TenantAccounts_CaptureTenantAccountId",
+                        column: x => x.CaptureTenantAccountId,
+                        principalTable: "TenantAccounts",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_ScanDrafts_TenantLedgerEntries_CaptureTenantLedgerEntryId",
+                        column: x => x.CaptureTenantLedgerEntryId,
+                        principalTable: "TenantLedgerEntries",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_ScanDrafts_Units_CaptureUnitId",
+                        column: x => x.CaptureUnitId,
+                        principalTable: "Units",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_ScanDrafts_WorkOrders_CaptureWorkOrderId",
+                        column: x => x.CaptureWorkOrderId,
+                        principalTable: "WorkOrders",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                });
 
             migrationBuilder.CreateTable(
                 name: "SecurityDepositEntries",
@@ -5510,6 +5706,12 @@ namespace RentalCommand.Data.Migrations
                 columns: new[] { "UserId", "Status", "ExpiresAtUtc" });
 
             migrationBuilder.CreateIndex(
+                name: "IX_AutomationSettings_PortfolioId",
+                table: "AutomationSettings",
+                column: "PortfolioId",
+                unique: true);
+
+            migrationBuilder.CreateIndex(
                 name: "IX_BankConnections_PortfolioId",
                 table: "BankConnections",
                 column: "PortfolioId");
@@ -5561,25 +5763,25 @@ namespace RentalCommand.Data.Migrations
                 column: "PortfolioId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_BankTransactions_PortfolioId_PropertyId_MatchStatus_PostedAt",
-                table: "BankTransactions",
-                columns: new[] { "PortfolioId", "PropertyId", "MatchStatus", "PostedAt" });
-
-            migrationBuilder.CreateIndex(
-                name: "IX_BankTransactions_PropertyId_PortfolioId",
-                table: "BankTransactions",
-                columns: new[] { "PropertyId", "PortfolioId" });
-
-            migrationBuilder.CreateIndex(
                 name: "IX_BankTransactions_PortfolioId_MatchedTenantAccountId_Matched~",
                 table: "BankTransactions",
                 columns: new[] { "PortfolioId", "MatchedTenantAccountId", "MatchedTenantLedgerEntryId" },
                 filter: "\"MatchedTenantLedgerEntryId\" IS NOT NULL");
 
             migrationBuilder.CreateIndex(
+                name: "IX_BankTransactions_PortfolioId_PropertyId_MatchStatus_PostedAt",
+                table: "BankTransactions",
+                columns: new[] { "PortfolioId", "PropertyId", "MatchStatus", "PostedAt" });
+
+            migrationBuilder.CreateIndex(
                 name: "IX_BankTransactions_PostedAt",
                 table: "BankTransactions",
                 column: "PostedAt");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_BankTransactions_PropertyId_PortfolioId",
+                table: "BankTransactions",
+                columns: new[] { "PropertyId", "PortfolioId" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_CapabilityDefinitions_Key",
@@ -5628,6 +5830,13 @@ namespace RentalCommand.Data.Migrations
                 columns: new[] { "PortfolioId", "TenantId" });
 
             migrationBuilder.CreateIndex(
+                name: "IX_Conversations_PortfolioId_WorkOrderId",
+                table: "Conversations",
+                columns: new[] { "PortfolioId", "WorkOrderId" },
+                unique: true,
+                filter: "\"WorkOrderId\" IS NOT NULL");
+
+            migrationBuilder.CreateIndex(
                 name: "IX_Conversations_PropertyId",
                 table: "Conversations",
                 column: "PropertyId");
@@ -5636,6 +5845,11 @@ namespace RentalCommand.Data.Migrations
                 name: "IX_Conversations_TenantId",
                 table: "Conversations",
                 column: "TenantId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Conversations_WorkOrderId",
+                table: "Conversations",
+                column: "WorkOrderId");
 
             migrationBuilder.CreateIndex(
                 name: "IX_DeviceTokens_PortfolioId_UserId",
@@ -6455,10 +6669,21 @@ namespace RentalCommand.Data.Migrations
                 columns: new[] { "WorkspaceMembershipId", "Status", "EffectiveFromUtc" });
 
             migrationBuilder.CreateIndex(
+                name: "IX_MessagingProviderSettings_PortfolioId",
+                table: "MessagingProviderSettings",
+                column: "PortfolioId",
+                unique: true);
+
+            migrationBuilder.CreateIndex(
                 name: "IX_NoticeDeliveryEvidence_OutboxMessageId",
                 table: "NoticeDeliveryEvidence",
                 column: "OutboxMessageId",
                 unique: true);
+
+            migrationBuilder.CreateIndex(
+                name: "IX_NoticeDeliveryEvidence_RecipientLeaseManagementPartyId_Port~",
+                table: "NoticeDeliveryEvidence",
+                columns: new[] { "RecipientLeaseManagementPartyId", "PortfolioId" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_NoticeDeliveryEvidence_RenderedNoticeId_PortfolioId",
@@ -6466,15 +6691,10 @@ namespace RentalCommand.Data.Migrations
                 columns: new[] { "RenderedNoticeId", "PortfolioId" });
 
             migrationBuilder.CreateIndex(
-                name: "IX_NoticeDeliveryEvidence_RenderedNoticeId_RecipientLeaseManage~",
+                name: "IX_NoticeDeliveryEvidence_RenderedNoticeId_RecipientLeaseManag~",
                 table: "NoticeDeliveryEvidence",
                 columns: new[] { "RenderedNoticeId", "RecipientLeaseManagementPartyId", "Channel" },
                 unique: true);
-
-            migrationBuilder.CreateIndex(
-                name: "IX_NoticeDeliveryEvidence_RecipientLeaseManagementPartyId_Portf~",
-                table: "NoticeDeliveryEvidence",
-                columns: new[] { "RecipientLeaseManagementPartyId", "PortfolioId" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_NoticeDrafts_ConversationId",
@@ -6517,20 +6737,6 @@ namespace RentalCommand.Data.Migrations
                 column: "PortfolioId");
 
             migrationBuilder.CreateIndex(
-                name: "UX_NoticeDrafts_OpenAgreementNotice",
-                table: "NoticeDrafts",
-                columns: new[] { "PortfolioId", "LeaseManagementId", "LeaseAgreementId", "NoticeType" },
-                unique: true,
-                filter: "\"TenantLedgerEntryId\" IS NULL AND \"LeaseAgreementId\" IS NOT NULL AND \"Status\" IN ('Draft','Approved')");
-
-            migrationBuilder.CreateIndex(
-                name: "UX_NoticeDrafts_OpenLedgerNotice",
-                table: "NoticeDrafts",
-                columns: new[] { "PortfolioId", "TenantLedgerEntryId", "NoticeType" },
-                unique: true,
-                filter: "\"TenantLedgerEntryId\" IS NOT NULL AND \"Status\" IN ('Draft','Approved')");
-
-            migrationBuilder.CreateIndex(
                 name: "IX_NoticeDrafts_PropertyId",
                 table: "NoticeDrafts",
                 column: "PropertyId");
@@ -6541,7 +6747,7 @@ namespace RentalCommand.Data.Migrations
                 column: "RecipientLeaseManagementPartyId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_NoticeDrafts_RecipientLeaseManagementPartyId_LeaseManagementI~",
+                name: "IX_NoticeDrafts_RecipientLeaseManagementPartyId_LeaseManagemen~",
                 table: "NoticeDrafts",
                 columns: new[] { "RecipientLeaseManagementPartyId", "LeaseManagementId", "PortfolioId" });
 
@@ -6587,10 +6793,18 @@ namespace RentalCommand.Data.Migrations
                 column: "WorkspaceNoticeTemplateVersionId");
 
             migrationBuilder.CreateIndex(
-                name: "IX_AutomationSettings_PortfolioId",
-                table: "AutomationSettings",
-                column: "PortfolioId",
-                unique: true);
+                name: "UX_NoticeDrafts_OpenAgreementNotice",
+                table: "NoticeDrafts",
+                columns: new[] { "PortfolioId", "LeaseManagementId", "LeaseAgreementId", "NoticeType" },
+                unique: true,
+                filter: "\"TenantLedgerEntryId\" IS NULL AND \"LeaseAgreementId\" IS NOT NULL AND \"Status\" IN ('Draft','Approved')");
+
+            migrationBuilder.CreateIndex(
+                name: "UX_NoticeDrafts_OpenLedgerNotice",
+                table: "NoticeDrafts",
+                columns: new[] { "PortfolioId", "TenantLedgerEntryId", "NoticeType" },
+                unique: true,
+                filter: "\"TenantLedgerEntryId\" IS NOT NULL AND \"Status\" IN ('Draft','Approved')");
 
             migrationBuilder.CreateIndex(
                 name: "IX_Notifications_CreatedAt",
@@ -6611,12 +6825,6 @@ namespace RentalCommand.Data.Migrations
                 name: "IX_Notifications_UserId",
                 table: "Notifications",
                 column: "UserId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_MessagingProviderSettings_PortfolioId",
-                table: "MessagingProviderSettings",
-                column: "PortfolioId",
-                unique: true);
 
             migrationBuilder.CreateIndex(
                 name: "IX_OAuthStates_ExpiresAt",
@@ -7402,6 +7610,46 @@ namespace RentalCommand.Data.Migrations
                 column: "PropertyId");
 
             migrationBuilder.CreateIndex(
+                name: "IX_TechnicianWorkEntries_CreatedByUserId",
+                table: "TechnicianWorkEntries",
+                column: "CreatedByUserId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_TechnicianWorkEntries_MembershipRoleAssignmentId_WorkspaceM~",
+                table: "TechnicianWorkEntries",
+                columns: new[] { "MembershipRoleAssignmentId", "WorkspaceMembershipId", "PortfolioId" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_TechnicianWorkEntries_PortfolioId_WorkOrderId_CreatedAtUtc_~",
+                table: "TechnicianWorkEntries",
+                columns: new[] { "PortfolioId", "WorkOrderId", "CreatedAtUtc", "Id" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_TechnicianWorkEntries_PortfolioId_WorkspaceMembershipId_Cre~",
+                table: "TechnicianWorkEntries",
+                columns: new[] { "PortfolioId", "WorkspaceMembershipId", "CreatedAtUtc" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_TechnicianWorkEntries_StoredFileId",
+                table: "TechnicianWorkEntries",
+                column: "StoredFileId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_TechnicianWorkEntries_WorkOrderId",
+                table: "TechnicianWorkEntries",
+                column: "WorkOrderId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_TechnicianWorkEntries_WorkOrderResponsibilityId",
+                table: "TechnicianWorkEntries",
+                column: "WorkOrderResponsibilityId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_TechnicianWorkEntries_WorkspaceMembershipId_PortfolioId",
+                table: "TechnicianWorkEntries",
+                columns: new[] { "WorkspaceMembershipId", "PortfolioId" });
+
+            migrationBuilder.CreateIndex(
                 name: "IX_TenantAccountConditionPeriods_CreatedByUserId",
                 table: "TenantAccountConditionPeriods",
                 column: "CreatedByUserId");
@@ -7700,14 +7948,14 @@ namespace RentalCommand.Data.Migrations
                 filter: "\"RefundsPaymentAttemptId\" IS NOT NULL");
 
             migrationBuilder.CreateIndex(
-                name: "IX_TenantPaymentAttempts_TenantAccountId_PortfolioId",
-                table: "TenantPaymentAttempts",
-                columns: new[] { "TenantAccountId", "PortfolioId" });
-
-            migrationBuilder.CreateIndex(
                 name: "IX_TenantPaymentAttempts_RefundsPaymentAttemptId_TenantAccount~",
                 table: "TenantPaymentAttempts",
                 columns: new[] { "RefundsPaymentAttemptId", "TenantAccountId", "PortfolioId" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_TenantPaymentAttempts_TenantAccountId_PortfolioId",
+                table: "TenantPaymentAttempts",
+                columns: new[] { "TenantAccountId", "PortfolioId" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_Tenants_PortfolioId",
@@ -7862,6 +8110,60 @@ namespace RentalCommand.Data.Migrations
                 column: "PortfolioId");
 
             migrationBuilder.CreateIndex(
+                name: "IX_WorkOrderResponsibilities_AssignedByAccessContextId_Assigne~",
+                table: "WorkOrderResponsibilities",
+                columns: new[] { "AssignedByAccessContextId", "AssignedByUserId", "PortfolioId" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_WorkOrderResponsibilities_AssignedByUserId",
+                table: "WorkOrderResponsibilities",
+                column: "AssignedByUserId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_WorkOrderResponsibilities_EndedByAccessContextId_EndedByUse~",
+                table: "WorkOrderResponsibilities",
+                columns: new[] { "EndedByAccessContextId", "EndedByUserId", "PortfolioId" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_WorkOrderResponsibilities_EndedByUserId",
+                table: "WorkOrderResponsibilities",
+                column: "EndedByUserId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_WorkOrderResponsibilities_MembershipRoleAssignmentId_Worksp~",
+                table: "WorkOrderResponsibilities",
+                columns: new[] { "MembershipRoleAssignmentId", "WorkspaceMembershipId", "PortfolioId" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_WorkOrderResponsibilities_PortfolioId_WorkspaceMembershipId~",
+                table: "WorkOrderResponsibilities",
+                columns: new[] { "PortfolioId", "WorkspaceMembershipId", "EffectiveFromUtc", "EffectiveToUtc" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_WorkOrderResponsibilities_WorkOrderId_PropertyId_PortfolioId",
+                table: "WorkOrderResponsibilities",
+                columns: new[] { "WorkOrderId", "PropertyId", "PortfolioId" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_WorkOrderResponsibilities_WorkspaceMembershipId_PortfolioId",
+                table: "WorkOrderResponsibilities",
+                columns: new[] { "WorkspaceMembershipId", "PortfolioId" });
+
+            migrationBuilder.CreateIndex(
+                name: "UX_WorkOrderResponsibilities_CurrentMember",
+                table: "WorkOrderResponsibilities",
+                columns: new[] { "PortfolioId", "WorkOrderId", "WorkspaceMembershipId" },
+                unique: true,
+                filter: "\"EffectiveToUtc\" IS NULL");
+
+            migrationBuilder.CreateIndex(
+                name: "UX_WorkOrderResponsibilities_CurrentPrimary",
+                table: "WorkOrderResponsibilities",
+                columns: new[] { "PortfolioId", "WorkOrderId", "Kind" },
+                unique: true,
+                filter: "\"EffectiveToUtc\" IS NULL AND \"Kind\" = 'Primary'");
+
+            migrationBuilder.CreateIndex(
                 name: "IX_WorkOrders_LeaseManagementId",
                 table: "WorkOrders",
                 column: "LeaseManagementId");
@@ -8001,78 +8303,6 @@ namespace RentalCommand.Data.Migrations
                 principalTable: "Expenses",
                 principalColumn: "Id",
                 onDelete: ReferentialAction.SetNull);
-
-            migrationBuilder.AddForeignKey(
-                name: "FK_ScanDrafts_LeaseAgreements_CaptureLeaseAgreementId",
-                table: "ScanDrafts",
-                column: "CaptureLeaseAgreementId",
-                principalTable: "LeaseAgreements",
-                principalColumn: "Id",
-                onDelete: ReferentialAction.Restrict);
-
-            migrationBuilder.AddForeignKey(
-                name: "FK_ScanDrafts_LeaseManagements_CaptureLeaseManagementId",
-                table: "ScanDrafts",
-                column: "CaptureLeaseManagementId",
-                principalTable: "LeaseManagements",
-                principalColumn: "Id",
-                onDelete: ReferentialAction.Restrict);
-
-            migrationBuilder.AddForeignKey(
-                name: "FK_ScanDrafts_Properties_CapturePropertyId",
-                table: "ScanDrafts",
-                column: "CapturePropertyId",
-                principalTable: "Properties",
-                principalColumn: "Id",
-                onDelete: ReferentialAction.Restrict);
-
-            migrationBuilder.AddForeignKey(
-                name: "FK_ScanDrafts_RentalApplications_CaptureApplicationId",
-                table: "ScanDrafts",
-                column: "CaptureApplicationId",
-                principalTable: "RentalApplications",
-                principalColumn: "Id",
-                onDelete: ReferentialAction.Restrict);
-
-            migrationBuilder.AddForeignKey(
-                name: "FK_ScanDrafts_RentalListings_CaptureRentalListingId",
-                table: "ScanDrafts",
-                column: "CaptureRentalListingId",
-                principalTable: "RentalListings",
-                principalColumn: "Id",
-                onDelete: ReferentialAction.Restrict);
-
-            migrationBuilder.AddForeignKey(
-                name: "FK_ScanDrafts_TenantAccounts_CaptureTenantAccountId",
-                table: "ScanDrafts",
-                column: "CaptureTenantAccountId",
-                principalTable: "TenantAccounts",
-                principalColumn: "Id",
-                onDelete: ReferentialAction.Restrict);
-
-            migrationBuilder.AddForeignKey(
-                name: "FK_ScanDrafts_TenantLedgerEntries_CaptureTenantLedgerEntryId",
-                table: "ScanDrafts",
-                column: "CaptureTenantLedgerEntryId",
-                principalTable: "TenantLedgerEntries",
-                principalColumn: "Id",
-                onDelete: ReferentialAction.Restrict);
-
-            migrationBuilder.AddForeignKey(
-                name: "FK_ScanDrafts_Units_CaptureUnitId",
-                table: "ScanDrafts",
-                column: "CaptureUnitId",
-                principalTable: "Units",
-                principalColumn: "Id",
-                onDelete: ReferentialAction.Restrict);
-
-            migrationBuilder.AddForeignKey(
-                name: "FK_ScanDrafts_WorkOrders_CaptureWorkOrderId",
-                table: "ScanDrafts",
-                column: "CaptureWorkOrderId",
-                principalTable: "WorkOrders",
-                principalColumn: "Id",
-                onDelete: ReferentialAction.Restrict);
 
             // The effective clock is global and has one fixed row. Keep the seed idempotent so the
             // same clean baseline can be exercised repeatedly against disposable databases.
@@ -8262,6 +8492,9 @@ namespace RentalCommand.Data.Migrations
                 name: "AuthSessionRefreshCredentials");
 
             migrationBuilder.DropTable(
+                name: "AutomationSettings");
+
+            migrationBuilder.DropTable(
                 name: "BankTransactions");
 
             migrationBuilder.DropTable(
@@ -8313,19 +8546,16 @@ namespace RentalCommand.Data.Migrations
                 name: "MembershipRoleAssignmentProperties");
 
             migrationBuilder.DropTable(
+                name: "MessagingProviderSettings");
+
+            migrationBuilder.DropTable(
                 name: "NoticeDeliveryEvidence");
 
             migrationBuilder.DropTable(
                 name: "NoticeDrafts");
 
             migrationBuilder.DropTable(
-                name: "AutomationSettings");
-
-            migrationBuilder.DropTable(
                 name: "Notifications");
-
-            migrationBuilder.DropTable(
-                name: "MessagingProviderSettings");
 
             migrationBuilder.DropTable(
                 name: "OAuthStates");
@@ -8374,6 +8604,9 @@ namespace RentalCommand.Data.Migrations
 
             migrationBuilder.DropTable(
                 name: "TeamRoutingRuleRecipients");
+
+            migrationBuilder.DropTable(
+                name: "TechnicianWorkEntries");
 
             migrationBuilder.DropTable(
                 name: "TenantAccountConditionPeriods");
@@ -8436,9 +8669,6 @@ namespace RentalCommand.Data.Migrations
                 name: "Loans");
 
             migrationBuilder.DropTable(
-                name: "MembershipRoleAssignments");
-
-            migrationBuilder.DropTable(
                 name: "OutboxMessages");
 
             migrationBuilder.DropTable(
@@ -8466,6 +8696,9 @@ namespace RentalCommand.Data.Migrations
                 name: "TeamRoutingRules");
 
             migrationBuilder.DropTable(
+                name: "WorkOrderResponsibilities");
+
+            migrationBuilder.DropTable(
                 name: "TenantLedgerEntries");
 
             migrationBuilder.DropTable(
@@ -8484,12 +8717,6 @@ namespace RentalCommand.Data.Migrations
                 name: "RentalListings");
 
             migrationBuilder.DropTable(
-                name: "RoleProfiles");
-
-            migrationBuilder.DropTable(
-                name: "WorkspaceMemberships");
-
-            migrationBuilder.DropTable(
                 name: "LeaseAddendumSigners");
 
             migrationBuilder.DropTable(
@@ -8499,19 +8726,25 @@ namespace RentalCommand.Data.Migrations
                 name: "SignatureRequests");
 
             migrationBuilder.DropTable(
+                name: "MembershipRoleAssignments");
+
+            migrationBuilder.DropTable(
                 name: "TenantPaymentAttempts");
 
             migrationBuilder.DropTable(
                 name: "WorkspaceNoticeTemplateVersions");
 
             migrationBuilder.DropTable(
-                name: "WorkspaceAccessContexts");
-
-            migrationBuilder.DropTable(
                 name: "LeaseManagementParties");
 
             migrationBuilder.DropTable(
                 name: "LeaseAddenda");
+
+            migrationBuilder.DropTable(
+                name: "RoleProfiles");
+
+            migrationBuilder.DropTable(
+                name: "WorkspaceMemberships");
 
             migrationBuilder.DropTable(
                 name: "TenantAccounts");
@@ -8521,6 +8754,9 @@ namespace RentalCommand.Data.Migrations
 
             migrationBuilder.DropTable(
                 name: "LeaseAgreements");
+
+            migrationBuilder.DropTable(
+                name: "WorkspaceAccessContexts");
 
             migrationBuilder.DropTable(
                 name: "LegalDocumentSourceVersions");
