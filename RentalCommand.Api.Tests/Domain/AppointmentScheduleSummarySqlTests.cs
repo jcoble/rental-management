@@ -36,7 +36,7 @@ public sealed class AppointmentScheduleSummarySqlTests
             .BuildScheduleSummaryQuery(Scope, windowStartUtc, windowEndUtc)
             .ToQueryString();
 
-        sql.Should().Contain("COUNT(*)");
+        sql.Should().ContainEquivalentOf("count(*)");
         sql.Should().Contain("Appointments");
         sql.Should().Contain("ScheduledStart");
         sql.Should().Contain(">=");
