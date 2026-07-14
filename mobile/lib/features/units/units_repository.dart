@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import '../../core/models/unit.dart';
 
 class UnitHealth {
@@ -871,8 +872,12 @@ class UnitsRepository {
 
   Future<ListingWorkspace> generateListingWorkspace(int unitId) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/units/$unitId/listing-workspace/generate',
+      final response = await IdempotentMutation.run(
+        'listing:$unitId:generate',
+        (operationKey) => _dio.post<Map<String, dynamic>>(
+          '/units/$unitId/listing-workspace/generate',
+          options: _listingMutationOptions(operationKey),
+        ),
       );
       final data = response.data;
       if (data == null) {
@@ -892,9 +897,13 @@ class UnitsRepository {
     SaveListingWorkspaceRequest request,
   ) async {
     try {
-      final response = await _dio.put<Map<String, dynamic>>(
-        '/units/$unitId/listing-workspace',
-        data: request.toJson(),
+      final response = await IdempotentMutation.run(
+        'listing:$unitId:save:${request.toJson()}',
+        (operationKey) => _dio.put<Map<String, dynamic>>(
+          '/units/$unitId/listing-workspace',
+          data: request.toJson(),
+          options: _listingMutationOptions(operationKey),
+        ),
       );
       final data = response.data;
       if (data == null) {
@@ -926,8 +935,8 @@ class UnitsRepository {
             filename: fileName,
             contentType: DioMediaType.parse(contentType),
           ),
-          'clientOperationId': clientOperationId,
         }),
+        options: _listingMutationOptions(clientOperationId),
       );
       return ListingWorkspace.fromJson(response.data!);
     } on DioException catch (e) {
@@ -937,8 +946,12 @@ class UnitsRepository {
 
   Future<ListingWorkspace> removeListingPhoto(int unitId, int photoId) async {
     try {
-      final response = await _dio.delete<Map<String, dynamic>>(
-        '/units/$unitId/listing-workspace/photos/$photoId/content',
+      final response = await IdempotentMutation.run(
+        'listing:$unitId:photo:$photoId:remove',
+        (operationKey) => _dio.delete<Map<String, dynamic>>(
+          '/units/$unitId/listing-workspace/photos/$photoId/content',
+          options: _listingMutationOptions(operationKey),
+        ),
       );
       return ListingWorkspace.fromJson(response.data!);
     } on DioException catch (e) {
@@ -951,9 +964,13 @@ class UnitsRepository {
     List<int> photoIds,
   ) async {
     try {
-      final response = await _dio.put<Map<String, dynamic>>(
-        '/units/$unitId/listing-workspace/photos/order',
-        data: {'photoIds': photoIds},
+      final response = await IdempotentMutation.run(
+        "listing:$unitId:photos:reorder:${photoIds.join(',')}",
+        (operationKey) => _dio.put<Map<String, dynamic>>(
+          '/units/$unitId/listing-workspace/photos/order',
+          data: {'photoIds': photoIds},
+          options: _listingMutationOptions(operationKey),
+        ),
       );
       return ListingWorkspace.fromJson(response.data!);
     } on DioException catch (e) {
@@ -967,9 +984,13 @@ class UnitsRepository {
     required bool accept,
   }) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/units/$unitId/listing-workspace/signals/$signalId/confirm',
-        queryParameters: {'accept': accept},
+      final response = await IdempotentMutation.run(
+        'listing:$unitId:signal:$signalId:confirm:$accept',
+        (operationKey) => _dio.post<Map<String, dynamic>>(
+          '/units/$unitId/listing-workspace/signals/$signalId/confirm',
+          queryParameters: {'accept': accept},
+          options: _listingMutationOptions(operationKey),
+        ),
       );
       final data = response.data;
       if (data == null) {
@@ -989,8 +1010,12 @@ class UnitsRepository {
     int publicationId,
   ) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/units/$unitId/listing-workspace/publications/$publicationId/connected/prepare',
+      final response = await IdempotentMutation.run(
+        'listing:$unitId:publication:$publicationId:prepare',
+        (operationKey) => _dio.post<Map<String, dynamic>>(
+          '/units/$unitId/listing-workspace/publications/$publicationId/connected/prepare',
+          options: _listingMutationOptions(operationKey),
+        ),
       );
       return ListingWorkspace.fromJson(response.data!);
     } on DioException catch (e) {
@@ -1007,13 +1032,16 @@ class UnitsRepository {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
         '/units/$unitId/listing-workspace/publications/$publicationId/connected/$action',
-        data: {'clientOperationId': clientOperationId},
+        options: _listingMutationOptions(clientOperationId),
       );
       return ListingWorkspace.fromJson(response.data!);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
   }
+
+  static Options _listingMutationOptions(String operationKey) =>
+      Options(headers: {'Idempotency-Key': operationKey});
 }
 
 final unitsRepositoryProvider = Provider<UnitsRepository>((ref) {

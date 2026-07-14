@@ -25,6 +25,7 @@ public enum ListingPublicationStatus
     Paused = 4,
     Failed = 5,
     Removed = 6,
+    ReconciliationRequired = 7,
 }
 
 public enum ExternalListingSignalDisposition

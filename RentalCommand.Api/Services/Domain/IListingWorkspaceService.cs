@@ -29,7 +29,7 @@ public interface IListingWorkspaceService
         string clientOperationId, CancellationToken ct = default);
     Task<ListingPhotoFileResult?> OpenPhotoAsync(int portfolioId, int unitId, int photoId, CancellationToken ct = default);
     Task<ExternalListingSignalResponse?> IngestSignalAsync(int portfolioId, int unitId, int publicationId,
-        IngestExternalListingSignalRequest request, CancellationToken ct = default);
+        string providerMessageKey, IngestExternalListingSignalRequest request, CancellationToken ct = default);
     Task<ListingWorkspaceResponse?> ConfirmSignalAsync(WorkspaceReadScope scope, int unitId, int signalId, bool accept,
         string clientOperationId,
         CancellationToken ct = default);

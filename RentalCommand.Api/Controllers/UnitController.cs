@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
@@ -128,11 +126,12 @@ public class UnitController : ManagementControllerBase
     [HttpPost("{id:int}/listing-workspace/generate")]
     [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<ListingWorkspaceResponse>> GenerateListingWorkspace(int id, CancellationToken ct)
+    public async Task<ActionResult<ListingWorkspaceResponse>> GenerateListingWorkspace(
+        int id, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
         if (!await CanManageListingAsync(id, ct)) return Forbid();
         var listing = await _listings.GenerateAsync(
-            GetWorkspaceReadScope(), id, GetListingOperationId("generate"), ct);
+            GetWorkspaceReadScope(), id, RequireListingOperationId(idempotencyKey), ct);
         return listing == null ? NotFound(new { error = "Unit not found" }) : Ok(listing);
     }
 
@@ -140,11 +139,12 @@ public class UnitController : ManagementControllerBase
     [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<ListingWorkspaceResponse>> SaveListingWorkspace(
-        int id, [FromBody] SaveListingWorkspaceRequest request, CancellationToken ct)
+        int id, [FromBody] SaveListingWorkspaceRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
         if (!await CanManageListingAsync(id, ct)) return Forbid();
         var listing = await _listings.SaveAsync(
-            GetWorkspaceReadScope(), id, request, GetListingOperationId("save"), ct);
+            GetWorkspaceReadScope(), id, request, RequireListingOperationId(idempotencyKey), ct);
         return listing == null ? NotFound(new { error = "Unit not found" }) : Ok(listing);
     }
 
@@ -152,12 +152,12 @@ public class UnitController : ManagementControllerBase
     [Consumes("multipart/form-data")]
     [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<ListingWorkspaceResponse>> AttachListingPhoto(
-        int id, int photoId, IFormFile file, [FromForm] string clientOperationId, CancellationToken ct)
+        int id, int photoId, IFormFile file,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
         if (!await CanManageListingAsync(id, ct)) return Forbid();
         if (file is null || file.Length == 0) return BadRequest(new { error = "A non-empty photo is required." });
-        if (string.IsNullOrWhiteSpace(clientOperationId) || clientOperationId.Trim().Length > 160)
-            return BadRequest(new { error = "clientOperationId is required and cannot exceed 160 characters." });
+        var operationId = RequireListingOperationId(idempotencyKey);
 
         var fileName = DiskFileStorage.SanitizeFileName(file.FileName);
         var contentType = file.ContentType?.Trim().ToLowerInvariant() ?? string.Empty;
@@ -175,40 +175,43 @@ public class UnitController : ManagementControllerBase
             return BadRequest(new { error = valid ? "Listing photos must be image files." : error });
 
         var workspace = await _listings.AttachPhotoAsync(GetWorkspaceReadScope(), id, photoId,
-            clientOperationId, fileName, contentType, bytes, ct);
+            operationId, fileName, contentType, bytes, ct);
         return workspace is null ? NotFound(new { error = "Listing photo was not found" }) : Ok(workspace);
     }
 
     [HttpPatch("{id:int}/listing-workspace/photos/{photoId:int}")]
     [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<ListingWorkspaceResponse>> UpdateListingPhoto(
-        int id, int photoId, [FromBody] UpdateListingPhotoRequest request, CancellationToken ct)
+        int id, int photoId, [FromBody] UpdateListingPhotoRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
         if (!await CanManageListingAsync(id, ct)) return Forbid();
         var workspace = await _listings.UpdatePhotoAsync(
-            GetWorkspaceReadScope(), id, photoId, request, GetListingOperationId("photo-update"), ct);
+            GetWorkspaceReadScope(), id, photoId, request, RequireListingOperationId(idempotencyKey), ct);
         return workspace is null ? NotFound(new { error = "Listing photo was not found" }) : Ok(workspace);
     }
 
     [HttpDelete("{id:int}/listing-workspace/photos/{photoId:int}/content")]
     [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<ListingWorkspaceResponse>> RemoveListingPhoto(
-        int id, int photoId, CancellationToken ct)
+        int id, int photoId, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
         if (!await CanManageListingAsync(id, ct)) return Forbid();
         var workspace = await _listings.RemovePhotoAsync(
-            GetWorkspaceReadScope(), id, photoId, GetListingOperationId("photo-remove"), ct);
+            GetWorkspaceReadScope(), id, photoId, RequireListingOperationId(idempotencyKey), ct);
         return workspace is null ? NotFound(new { error = "Listing photo was not found" }) : Ok(workspace);
     }
 
     [HttpPut("{id:int}/listing-workspace/photos/order")]
     [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<ListingWorkspaceResponse>> ReorderListingPhotos(
-        int id, [FromBody] ReorderListingPhotosRequest request, CancellationToken ct)
+        int id, [FromBody] ReorderListingPhotosRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
         if (!await CanManageListingAsync(id, ct)) return Forbid();
         var workspace = await _listings.ReorderPhotosAsync(
-            GetWorkspaceReadScope(), id, request, GetListingOperationId("photo-reorder"), ct);
+            GetWorkspaceReadScope(), id, request, RequireListingOperationId(idempotencyKey), ct);
         return workspace is null ? NotFound(new { error = "Listing workspace was not found" }) : Ok(workspace);
     }
 
@@ -226,66 +229,73 @@ public class UnitController : ManagementControllerBase
     [HttpPost("{id:int}/listing-workspace/publications/{publicationId:int}/connected/prepare")]
     [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<ListingWorkspaceResponse>> PrepareConnectedListing(
-        int id, int publicationId, CancellationToken ct)
+        int id, int publicationId, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
         if (!await CanManageListingAsync(id, ct)) return Forbid();
         var workspace = await _listings.PrepareConnectedAsync(
-            GetWorkspaceReadScope(), id, publicationId, GetListingOperationId("connected-prepare"), ct);
+            GetWorkspaceReadScope(), id, publicationId, RequireListingOperationId(idempotencyKey), ct);
         return workspace is null ? NotFound(new { error = "Connected listing publication not found" }) : Ok(workspace);
     }
 
     [HttpPost("{id:int}/listing-workspace/publications/{publicationId:int}/connected/publish")]
     [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
     public Task<ActionResult<ListingWorkspaceResponse>> PublishConnectedListing(
-        int id, int publicationId, [FromBody] ConnectedListingCommandRequest request, CancellationToken ct)
-        => RunConnectedCommandAsync(id, publicationId, request,
+        int id, int publicationId, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+        => RunConnectedCommandAsync(id, publicationId, idempotencyKey,
             _listings.PublishConnectedAsync, ct);
 
     [HttpPost("{id:int}/listing-workspace/publications/{publicationId:int}/connected/update")]
     [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
     public Task<ActionResult<ListingWorkspaceResponse>> UpdateConnectedListing(
-        int id, int publicationId, [FromBody] ConnectedListingCommandRequest request, CancellationToken ct)
-        => RunConnectedCommandAsync(id, publicationId, request,
+        int id, int publicationId, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+        => RunConnectedCommandAsync(id, publicationId, idempotencyKey,
             _listings.UpdateConnectedAsync, ct);
 
     [HttpPost("{id:int}/listing-workspace/publications/{publicationId:int}/connected/unpublish")]
     [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
     public Task<ActionResult<ListingWorkspaceResponse>> UnpublishConnectedListing(
-        int id, int publicationId, [FromBody] ConnectedListingCommandRequest request, CancellationToken ct)
-        => RunConnectedCommandAsync(id, publicationId, request,
+        int id, int publicationId, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+        => RunConnectedCommandAsync(id, publicationId, idempotencyKey,
             _listings.UnpublishConnectedAsync, ct);
 
     private async Task<ActionResult<ListingWorkspaceResponse>> RunConnectedCommandAsync(
         int unitId,
         int publicationId,
-        ConnectedListingCommandRequest request,
+        string? idempotencyKey,
         Func<WorkspaceReadScope, int, int, string, CancellationToken, Task<ListingWorkspaceResponse?>> command,
         CancellationToken ct)
     {
         if (!await CanManageListingAsync(unitId, ct)) return Forbid();
         var workspace = await command(GetWorkspaceReadScope(), unitId, publicationId,
-            request.ClientOperationId, ct);
+            RequireListingOperationId(idempotencyKey), ct);
         return workspace is null ? NotFound(new { error = "Connected listing publication not found" }) : Ok(workspace);
     }
 
     [HttpPost("{id:int}/listing-workspace/publications/{publicationId:int}/signals")]
     [ProducesResponseType(typeof(ExternalListingSignalResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<ExternalListingSignalResponse>> IngestListingSignal(
-        int id, int publicationId, [FromBody] IngestExternalListingSignalRequest request, CancellationToken ct)
+        int id, int publicationId, [FromBody] IngestExternalListingSignalRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
         if (!await CanManageListingAsync(id, ct)) return Forbid();
-        var signal = await _listings.IngestSignalAsync(GetPortfolioId(), id, publicationId, request, ct);
+        var signal = await _listings.IngestSignalAsync(GetPortfolioId(), id, publicationId,
+            RequireListingOperationId(idempotencyKey), request, ct);
         return signal is null ? NotFound(new { error = "Listing publication not found" }) : Ok(signal);
     }
 
     [HttpPost("{id:int}/listing-workspace/signals/{signalId:int}/confirm")]
     [ProducesResponseType(typeof(ListingWorkspaceResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<ListingWorkspaceResponse>> ConfirmListingSignal(
-        int id, int signalId, [FromQuery] bool accept = true, CancellationToken ct = default)
+        int id, int signalId, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromQuery] bool accept = true, CancellationToken ct = default)
     {
         if (!await CanManageListingAsync(id, ct)) return Forbid();
         var workspace = await _listings.ConfirmSignalAsync(
-            GetWorkspaceReadScope(), id, signalId, accept, GetListingOperationId("signal-confirm"), ct);
+            GetWorkspaceReadScope(), id, signalId, accept, RequireListingOperationId(idempotencyKey), ct);
         return workspace is null ? NotFound(new { error = "Listing signal not found" }) : Ok(workspace);
     }
 
@@ -300,16 +310,14 @@ public class UnitController : ManagementControllerBase
             ct);
     }
 
-    private string GetListingOperationId(string operation)
+    private static string RequireListingOperationId(string? supplied)
     {
-        var supplied = Request.Headers["Idempotency-Key"].FirstOrDefault()?.Trim();
-        if (!string.IsNullOrEmpty(supplied))
-            return supplied.Length <= 160
-                ? supplied
-                : throw new DomainValidationException("Idempotency-Key cannot exceed 160 characters.");
-        var traceHash = Convert.ToHexString(SHA256.HashData(
-            Encoding.UTF8.GetBytes(HttpContext.TraceIdentifier))).ToLowerInvariant();
-        return $"{operation}:{traceHash}";
+        var operationId = supplied?.Trim();
+        if (string.IsNullOrEmpty(operationId))
+            throw new DomainValidationException("Idempotency-Key is required.");
+        if (operationId.Length > 160)
+            throw new DomainValidationException("Idempotency-Key cannot exceed 160 characters.");
+        return operationId;
     }
 
     /// <summary>

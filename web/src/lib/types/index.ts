@@ -127,7 +127,7 @@ export interface Unit {
 }
 
 export type RentalListingStatus = 'Draft' | 'ReadyToPublish' | 'Published' | 'Paused' | 'Filled' | 'Archived';
-export type ListingPublicationStatus = 'Draft' | 'Ready' | 'Publishing' | 'Published' | 'Paused' | 'Failed' | 'Removed';
+export type ListingPublicationStatus = 'Draft' | 'Ready' | 'Publishing' | 'Published' | 'Paused' | 'Failed' | 'Removed' | 'ReconciliationRequired';
 
 export interface ListingPhoto {
 	id: number;

@@ -63,7 +63,9 @@ public sealed record ListingChannelPackage(
 
 public sealed record ListingChannelPhoto(
     int Position, string Category, string? Caption, int? StoredFileId, string? FileName, string? Sha256);
-public sealed record PrepareListingPublicationCommand(ListingChannelPackage Package);
+public sealed record PrepareListingPublicationCommand(
+    ListingChannelPackage Package,
+    string IdempotencyKey);
 public sealed record PublishListingCommand(ListingChannelPackage Package, string PreparedPackageKey, string IdempotencyKey);
 public sealed record UpdateListingCommand(ListingChannelPackage Package, string? ExternalListingId, string IdempotencyKey);
 public sealed record UnpublishListingCommand(int PublicationId, string? ExternalListingId, string IdempotencyKey);
