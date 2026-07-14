@@ -34,13 +34,6 @@ public class TenantResponse
     /// <summary>User-facing reason delete is disabled, when <see cref="CanDelete"/> is false.</summary>
     public string? DeleteBlockedReason { get; set; }
 
-    /// <summary>
-    /// Portal-login state for this tenant: <c>"none"</c> (no Identity login), <c>"active"</c> (login,
-    /// can sign in), or <c>"disabled"</c> (login locked off). Only populated on the single-tenant GET
-    /// (it requires an Identity join); null on list/create/update responses.
-    /// </summary>
-    public string? PortalAccess { get; set; }
-
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
@@ -107,33 +100,6 @@ public class CreateTenantRequest
 
     [MaxLength(2000)]
     public string? Notes { get; set; }
-}
-
-/// <summary>Request body for the staff portal-access toggle: turn the tenant's login on or off.</summary>
-public class SetPortalAccessRequest
-{
-    /// <summary>True to enable the tenant's portal login (provisioning one if needed), false to turn it off.</summary>
-    public bool Enabled { get; set; }
-}
-
-/// <summary>Result of the staff portal-access toggle for a tenant.</summary>
-public class PortalAccessResponse
-{
-    /// <summary>The resulting portal-login state: <c>"none"</c>, <c>"active"</c>, or <c>"disabled"</c>.</summary>
-    public string PortalAccess { get; set; } = "none";
-
-    /// <summary>The email the tenant signs in with, when known.</summary>
-    public string? Email { get; set; }
-}
-
-/// <summary>Result of the staff "send / resend portal invite" action for a tenant.</summary>
-public class PortalInviteResponse
-{
-    /// <summary>The email the invite was sent to (the tenant's sign-in email).</summary>
-    public string? Email { get; set; }
-
-    /// <summary>True when the tenant already had a portal login (this was a resend).</summary>
-    public bool AlreadyExisted { get; set; }
 }
 
 public class UpdateTenantRequest

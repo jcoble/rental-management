@@ -2,7 +2,6 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -31,8 +30,6 @@ public sealed class ApplicationService : IApplicationService
         IFileStorage files,
         IDataUpdateService dataUpdate,
         IAuditTrailService audit,
-        ITenantPortalProvisioningService portalProvisioning,
-        ILogger<ApplicationService> logger,
         TimeProvider timeProvider)
     {
         _db = db;

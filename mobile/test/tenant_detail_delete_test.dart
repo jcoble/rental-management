@@ -58,7 +58,6 @@ Tenant _tenant() {
     lastName: 'Tenant',
     email: 'verify@example.test',
     activeLeaseCount: 1,
-    portalAccess: 'active',
     createdAt: DateTime(2026, 6, 29),
     updatedAt: DateTime(2026, 6, 29),
   );

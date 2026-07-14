@@ -1,7 +1,6 @@
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -25,21 +24,15 @@ public class TenantService : ITenantService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly ITenantPortalProvisioningService _portalProvisioning;
-    private readonly ILogger<TenantService> _logger;
     private readonly TimeProvider _timeProvider;
 
     public TenantService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
-        ITenantPortalProvisioningService portalProvisioning,
-        ILogger<TenantService> logger,
         TimeProvider timeProvider)
     {
         _db = db;
         _dataUpdate = dataUpdate;
-        _portalProvisioning = portalProvisioning;
-        _logger = logger;
         _timeProvider = timeProvider;
     }
 
@@ -402,13 +395,6 @@ public class TenantService : ITenantService
                     .Select(party => party.LeaseManagementId)
                     .Distinct()
                     .Count(),
-                // Portal-login state: existence + lockout of the Identity user linked to this tenant,
-                // fetched DB-side as correlated subqueries in the SAME query (no follow-up round trip).
-                HasPortalUser = _db.TenantUserAccesses.Any(access =>
-                    access.PortfolioId == portfolioId && access.RevokedAtUtc == null &&
-                    access.LeaseManagementParty!.TenantId == t.Id),
-                HasHistoricalPortalGrant = _db.TenantUserAccesses.Any(access =>
-                    access.PortfolioId == portfolioId && access.LeaseManagementParty!.TenantId == t.Id),
             })
             .FirstOrDefaultAsync(ct);
 
@@ -419,8 +405,6 @@ public class TenantService : ITenantService
 
         var response = TenantResponse.FromEntity(row.Entity);
         ApplyDeleteState(response, row.ActiveLeaseCount, row.LeaseHistoryCount);
-        response.PortalAccess = row.HasPortalUser ? "active"
-            : row.HasHistoricalPortalGrant ? "disabled" : "none";
         return response;
     }
 
@@ -443,12 +427,6 @@ public class TenantService : ITenantService
 
         _db.Tenants.Add(entity);
         await _db.SaveChangesAsync(ct);
-
-        // A tenant is a first-class portal user: provision their Identity login the moment they're
-        // created. Silent — no email goes out here (staff send the invite on demand). Best-effort: a
-        // tenant with no email yet is a normal no-op (NoEmail), and a provisioning hiccup must never
-        // fail tenant creation.
-        await TryProvisionPortalAccessAsync(entity.Id, portfolioId, ct);
 
         var response = await GetAsync(portfolioId, entity.Id, ct) ?? TenantResponse.FromEntity(entity);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);

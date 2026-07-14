@@ -1,12 +1,7 @@
-using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Authorization;
-using RentalCommand.Core.Configuration;
-using RentalCommand.Core.Entities;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -20,23 +15,10 @@ namespace RentalCommand.Api.Controllers;
 public class TenantController : ManagementControllerBase
 {
     private readonly ITenantService _service;
-    private readonly ITenantPortalProvisioningService _portalProvisioning;
-    private readonly IAuthEmailSender _authEmailSender;
-    private readonly UserManager<ApplicationUser> _userManager;
-    private readonly SeedSettings _seedSettings;
 
-    public TenantController(
-        ITenantService service,
-        ITenantPortalProvisioningService portalProvisioning,
-        IAuthEmailSender authEmailSender,
-        UserManager<ApplicationUser> userManager,
-        IOptions<SeedSettings> seedSettings)
+    public TenantController(ITenantService service)
     {
         _service = service;
-        _portalProvisioning = portalProvisioning;
-        _authEmailSender = authEmailSender;
-        _userManager = userManager;
-        _seedSettings = seedSettings.Value;
     }
 
     [HttpGet]

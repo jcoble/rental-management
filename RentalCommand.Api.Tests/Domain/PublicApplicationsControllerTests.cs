@@ -60,8 +60,6 @@ public class PublicApplicationsControllerTests : IDisposable
             Mock.Of<IFileStorage>(),
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(),
-            new NoopTenantPortalProvisioningService(),
-            NullLogger<ApplicationService>.Instance,
             TimeProvider.System);
         var uploadSettings = Options.Create(new UploadSettings
         {

@@ -1,17 +1,11 @@
 using System.Data.Common;
 using FluentAssertions;
-using Microsoft.AspNetCore.Identity;
-using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using Moq;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
-using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -27,25 +21,14 @@ public class TenantServiceTests : IDisposable
 
     private readonly List<string> _commands = [];
     private readonly SqliteTestContext _ctx;
-    private readonly UserManager<ApplicationUser> _userManager;
-    private readonly TenantPortalProvisioningService _provisioning;
     private readonly TenantService _sut;
 
     public TenantServiceTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
         SeedCanonicalLeaseReadModel();
-        _userManager = CreateUserManager(_ctx.Db);
-        // Real provisioning over the same in-memory DB so CreateAsync's auto-provision actually mints
-        // an Identity login we can assert on (Tenant role + TenantId link).
-        _provisioning = new TenantPortalProvisioningService(
-            _userManager,
-            _ctx.Db,
-            Options.Create(new SeedSettings()),
-            TimeProvider.System,
-            NullLogger<TenantPortalProvisioningService>.Instance);
         _sut = new TenantService(
-            _ctx.Db, Mock.Of<IDataUpdateService>(), _provisioning, NullLogger<TenantService>.Instance, TimeProvider.System);
+            _ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
     }
 
     private void SeedCanonicalLeaseReadModel()
@@ -125,92 +108,7 @@ public class TenantServiceTests : IDisposable
 
     public void Dispose()
     {
-        _userManager.Dispose();
         _ctx.Dispose();
-    }
-
-    [Fact]
-    public async Task CreateAsync_WithEmail_ProvisionsRoleFreeIdentityUser()
-    {
-        var response = await _sut.CreateAsync(PortfolioId, new CreateTenantRequest
-        {
-            FirstName = "Portal",
-            LastName = "Tenant",
-            Email = "portal.tenant@example.local",
-        });
-
-        var identityUser = await _userManager.FindByEmailAsync("portal.tenant@example.local");
-        identityUser.Should().NotBeNull("creating a tenant with an email provisions their portal login");
-        identityUser!.EmailConfirmed.Should().BeTrue();
-        _ctx.Db.TenantUserAccesses.Should().BeEmpty(
-            "a tenant record alone is not an effective lease-party relationship");
-    }
-
-    [Fact]
-    public async Task CreateAsync_WithoutEmail_DoesNotProvisionAndDoesNotThrow()
-    {
-        var response = await _sut.CreateAsync(PortfolioId, new CreateTenantRequest
-        {
-            FirstName = "NoEmail",
-            LastName = "Tenant",
-            Email = null,
-        });
-
-        response.Id.Should().BeGreaterThan(0, "tenant creation still succeeds without an email");
-        _ctx.Db.Users.Should().ContainSingle(
-                "a tenant with no email must not add an Identity login beyond the pre-seeded test actor")
-            .Which.Id.Should().Be(ActorUserId);
-    }
-
-    [Fact]
-    public async Task GetAsync_ReportsRelationshipScopedPortalAccessState()
-    {
-        // Creating a tenant provisions an Identity login, but no portal authority exists until
-        // an effective rental-relationship party grants that identity access.
-        var relationshipTenant = await _sut.CreateAsync(PortfolioId, new CreateTenantRequest
-        {
-            FirstName = "Active",
-            LastName = "Portal",
-            Email = "active.portal@example.local",
-        });
-        (await _sut.GetAsync(PortfolioId, relationshipTenant.Id))!.PortalAccess.Should().Be("none");
-
-        var tenantEntity = _ctx.Db.Tenants.Single(tenant => tenant.Id == relationshipTenant.Id);
-        SeedRelationshipMembership(tenantEntity, occupying: true);
-        await _provisioning.SetPortalAccessAsync(relationshipTenant.Id, PortfolioId, enabled: true);
-        (await _sut.GetAsync(PortfolioId, relationshipTenant.Id))!.PortalAccess.Should().Be("active");
-
-        // A tenant with no email has no login → none.
-        var none = await _sut.CreateAsync(PortfolioId, new CreateTenantRequest
-        {
-            FirstName = "NoLogin",
-            LastName = "Portal",
-            Email = null,
-        });
-        (await _sut.GetAsync(PortfolioId, none.Id))!.PortalAccess.Should().Be("none");
-
-        // Revoking the effective relationship grant preserves its history, so the tenant becomes
-        // disabled; enabling provisions a new current relationship grant and restores access.
-        await _provisioning.SetPortalAccessAsync(relationshipTenant.Id, PortfolioId, enabled: false);
-        (await _sut.GetAsync(PortfolioId, relationshipTenant.Id))!.PortalAccess.Should().Be("disabled");
-
-        await _provisioning.SetPortalAccessAsync(relationshipTenant.Id, PortfolioId, enabled: true);
-        (await _sut.GetAsync(PortfolioId, relationshipTenant.Id))!.PortalAccess.Should().Be("active");
-    }
-
-    private static UserManager<ApplicationUser> CreateUserManager(RentalCommandDbContext db)
-    {
-        var store = new UserOnlyStore<ApplicationUser, RentalCommandDbContext, int>(db);
-        return new UserManager<ApplicationUser>(
-            store,
-            Options.Create(new IdentityOptions()),
-            new PasswordHasher<ApplicationUser>(),
-            [],
-            [],
-            new UpperInvariantLookupNormalizer(),
-            new IdentityErrorDescriber(),
-            null!,
-            NullLogger<UserManager<ApplicationUser>>.Instance);
     }
 
     [Fact]

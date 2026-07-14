@@ -1,10 +1,8 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auditing;
-using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -127,8 +125,6 @@ public sealed class CanonicalLeaseReaderSqlTests
         var service = new TenantService(
             db,
             Mock.Of<IDataUpdateService>(),
-            Mock.Of<ITenantPortalProvisioningService>(),
-            NullLogger<TenantService>.Instance,
             TimeProvider.System);
 
         var sql = service.BuildRelationshipCountQuery(
