@@ -274,6 +274,7 @@ internal static class WorkspaceAccessModelConfiguration
         {
             entity.HasKey(e => e.Id);
             entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
+            entity.HasAlternateKey(e => new { e.Id, e.WorkspaceMembershipId, e.PortfolioId });
             entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(24);
             entity.Property(e => e.ScopeKind).HasConversion<string>().HasMaxLength(32);
             entity.HasQueryFilter(e => e.WorkspaceMembership!.AccessContext!.Portfolio!.DeletedAt == null);

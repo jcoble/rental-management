@@ -164,6 +164,14 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
                         accessMutation.ExpectedRevision,
                         ct);
             }
+            if (command is RentalCommand.Core.Operations.IWorkspaceAccessRevisionSetMutationCommand revisionSetMutation)
+            {
+                await services.GetRequiredService<WorkOrderResponsibilityAccessRevisionGuard>()
+                    .ValidatePendingMutationAsync(
+                        db,
+                        revisionSetMutation.AccessRevisionExpectations,
+                        ct);
+            }
 
             await attempt.FlushBusinessAsync(ct);
             if (accessGuardResult is not null)

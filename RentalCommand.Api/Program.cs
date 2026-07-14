@@ -203,6 +203,10 @@ builder.Services.AddAtomicCommandHandler<
     WorkspaceTeamMutationResult,
     ChangeWorkspaceMembershipStatusHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.AssignWorkOrderResponsibilityCommand,
+    RentalCommand.Core.Operations.AssignWorkOrderResponsibilityResult,
+    RentalCommand.Data.Operations.AssignWorkOrderResponsibilityHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Esign.IssueLeaseAgreementCommand,
     RentalCommand.Core.Esign.IssueLeaseAgreementResult,
     RentalCommand.Data.Esign.IssueLeaseAgreementHandler>();

@@ -4348,6 +4348,10 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasAlternateKey("Id", "PortfolioId");
+
+                    b.HasAlternateKey("Id", "WorkspaceMembershipId", "PortfolioId");
+
                     b.HasIndex("RoleProfileId", "Status");
 
                     b.HasIndex("WorkspaceMembershipId", "PortfolioId");
@@ -9040,6 +9044,8 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasAlternateKey("Id", "PropertyId", "PortfolioId");
+
                     b.HasIndex("LeaseManagementId");
 
                     b.HasIndex("PortfolioId");
@@ -9060,6 +9066,50 @@ namespace RentalCommand.Data.Migrations
 
                     b.ToTable("WorkOrders");
                 });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.WorkOrderResponsibility", b =>
+                {
+                    b.Property<Guid>("Id").HasColumnType("uuid");
+                    b.Property<DateTime>("AssignedAtUtc").HasColumnType("timestamp with time zone");
+                    b.Property<int>("AssignedByAccessContextId").HasColumnType("integer");
+                    b.Property<int>("AssignedByUserId").HasColumnType("integer");
+                    b.Property<string>("AssignedReason").IsRequired().HasMaxLength(1000).HasColumnType("character varying(1000)");
+                    b.Property<DateTime>("EffectiveFromUtc").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("EffectiveToUtc").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("EndedAtUtc").HasColumnType("timestamp with time zone");
+                    b.Property<int?>("EndedByAccessContextId").HasColumnType("integer");
+                    b.Property<int?>("EndedByUserId").HasColumnType("integer");
+                    b.Property<string>("EndedReason").HasMaxLength(1000).HasColumnType("character varying(1000)");
+                    b.Property<string>("Kind").IsRequired().HasMaxLength(24).HasColumnType("character varying(24)");
+                    b.Property<int>("MembershipRoleAssignmentId").HasColumnType("integer");
+                    b.Property<int>("PortfolioId").HasColumnType("integer");
+                    b.Property<int>("PropertyId").HasColumnType("integer");
+                    b.Property<int>("WorkOrderId").HasColumnType("integer");
+                    b.Property<int>("WorkspaceMembershipId").HasColumnType("integer");
+                    b.HasKey("Id");
+                    b.HasIndex("AssignedByUserId");
+                    b.HasIndex("EndedByUserId");
+                    b.HasIndex("AssignedByAccessContextId", "AssignedByUserId", "PortfolioId");
+                    b.HasIndex("EndedByAccessContextId", "EndedByUserId", "PortfolioId");
+                    b.HasIndex("MembershipRoleAssignmentId", "WorkspaceMembershipId", "PortfolioId");
+                    b.HasIndex("PortfolioId", "WorkOrderId", "Kind")
+                        .IsUnique()
+                        .HasDatabaseName("UX_WorkOrderResponsibilities_CurrentPrimary")
+                        .HasFilter("\"EffectiveToUtc\" IS NULL AND \"Kind\" = 'Primary'");
+                    b.HasIndex("PortfolioId", "WorkOrderId", "WorkspaceMembershipId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_WorkOrderResponsibilities_CurrentMember")
+                        .HasFilter("\"EffectiveToUtc\" IS NULL");
+                    b.HasIndex("PortfolioId", "WorkspaceMembershipId", "EffectiveFromUtc", "EffectiveToUtc");
+                    b.HasIndex("WorkOrderId", "PropertyId", "PortfolioId");
+                    b.HasIndex("WorkspaceMembershipId", "PortfolioId");
+                    b.ToTable("WorkOrderResponsibilities", t =>
+                        {
+                            t.HasCheckConstraint("CK_WorkOrderResponsibilities_EffectivePeriod", "\"EffectiveToUtc\" IS NULL OR \"EffectiveToUtc\" > \"EffectiveFromUtc\"");
+                            t.HasCheckConstraint("CK_WorkOrderResponsibilities_EndFacts", "(\"EffectiveToUtc\" IS NULL AND \"EndedAtUtc\" IS NULL AND \"EndedByUserId\" IS NULL AND \"EndedByAccessContextId\" IS NULL AND \"EndedReason\" IS NULL) OR (\"EffectiveToUtc\" IS NOT NULL AND \"EndedAtUtc\" = \"EffectiveToUtc\" AND \"EndedByUserId\" IS NOT NULL AND \"EndedByAccessContextId\" IS NOT NULL AND \"EndedReason\" IS NOT NULL)");
+                        });
+                });
+
 
             modelBuilder.Entity("RentalCommand.Core.Entities.WorkOrderStatusEvent", b =>
                 {
@@ -12751,6 +12801,63 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Vendor");
                 });
 
+            modelBuilder.Entity("RentalCommand.Core.Entities.WorkOrderResponsibility", b =>
+                {
+                    b.HasOne("RentalCommand.Core.Entities.ApplicationUser", "AssignedByUser")
+                        .WithMany()
+                        .HasForeignKey("AssignedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.WorkspaceAccessContext", "AssignedByAccessContext")
+                        .WithMany()
+                        .HasForeignKey("AssignedByAccessContextId", "AssignedByUserId", "PortfolioId")
+                        .HasPrincipalKey("Id", "UserId", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.ApplicationUser", "EndedByUser")
+                        .WithMany()
+                        .HasForeignKey("EndedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("RentalCommand.Core.Entities.WorkspaceAccessContext", "EndedByAccessContext")
+                        .WithMany()
+                        .HasForeignKey("EndedByAccessContextId", "EndedByUserId", "PortfolioId")
+                        .HasPrincipalKey("Id", "UserId", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("RentalCommand.Core.Entities.MembershipRoleAssignment", "MembershipRoleAssignment")
+                        .WithMany("WorkOrderResponsibilities")
+                        .HasForeignKey("MembershipRoleAssignmentId", "WorkspaceMembershipId", "PortfolioId")
+                        .HasPrincipalKey("Id", "WorkspaceMembershipId", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.WorkOrder", "WorkOrder")
+                        .WithMany("Responsibilities")
+                        .HasForeignKey("WorkOrderId", "PropertyId", "PortfolioId")
+                        .HasPrincipalKey("Id", "PropertyId", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.WorkspaceMembership", "WorkspaceMembership")
+                        .WithMany("WorkOrderResponsibilities")
+                        .HasForeignKey("WorkspaceMembershipId", "PortfolioId")
+                        .HasPrincipalKey("Id", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("AssignedByAccessContext");
+                    b.Navigation("AssignedByUser");
+                    b.Navigation("EndedByAccessContext");
+                    b.Navigation("EndedByUser");
+                    b.Navigation("MembershipRoleAssignment");
+                    b.Navigation("WorkOrder");
+                    b.Navigation("WorkspaceMembership");
+                });
+
+
             modelBuilder.Entity("RentalCommand.Core.Entities.WorkOrderStatusEvent", b =>
                 {
                     b.HasOne("RentalCommand.Core.Entities.WorkOrder", "WorkOrder")
@@ -13022,6 +13129,8 @@ namespace RentalCommand.Data.Migrations
             modelBuilder.Entity("RentalCommand.Core.Entities.MembershipRoleAssignment", b =>
                 {
                     b.Navigation("SelectedProperties");
+
+                    b.Navigation("WorkOrderResponsibilities");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.Owner", b =>
@@ -13237,6 +13346,8 @@ namespace RentalCommand.Data.Migrations
                 {
                     b.Navigation("Expenses");
 
+                    b.Navigation("Responsibilities");
+
                     b.Navigation("StatusEvents");
                 });
 
@@ -13256,6 +13367,8 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Invitations");
 
                     b.Navigation("RoleAssignments");
+
+                    b.Navigation("WorkOrderResponsibilities");
                 });
 #pragma warning restore 612, 618
         }

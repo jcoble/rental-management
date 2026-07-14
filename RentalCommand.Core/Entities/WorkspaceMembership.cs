@@ -25,4 +25,6 @@ public sealed class WorkspaceMembership
         new List<MembershipRoleAssignment>();
     public ICollection<WorkspaceInvitation> Invitations { get; set; } =
         new List<WorkspaceInvitation>();
+    public ICollection<WorkOrderResponsibility> WorkOrderResponsibilities { get; set; } =
+        new List<WorkOrderResponsibility>();
 }

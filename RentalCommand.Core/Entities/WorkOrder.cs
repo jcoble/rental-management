@@ -51,4 +51,5 @@ public class WorkOrder : IAuditable, IPortfolioScoped
 
     /// <summary>Append-only status timeline (Received → Assigned → In Progress → Done), oldest first.</summary>
     public List<WorkOrderStatusEvent> StatusEvents { get; set; } = [];
+    public List<WorkOrderResponsibility> Responsibilities { get; set; } = [];
 }

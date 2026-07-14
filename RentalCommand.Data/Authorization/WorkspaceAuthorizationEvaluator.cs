@@ -239,26 +239,37 @@ public sealed class WorkspaceAuthorizationEvaluator : IWorkspaceAuthorizationEva
         DateTime utcNow,
         CancellationToken cancellationToken)
     {
-        // Management work.read/work.manage are property-target capabilities. Assigned-work
-        // capabilities have target kind WorkOrder and therefore cannot enter this assignment query;
-        // they remain fail-closed until WorkOrderResponsibility exists.
-        var assignments = EffectiveAssignments(
+        var propertyAssignments = EffectiveAssignments(
             accessContext,
             capabilityKeys,
             CapabilityAuthorizationTargetKind.Property,
+            utcNow);
+        var assignedWorkAssignments = EffectiveAssignments(
+            accessContext,
+            capabilityKeys,
+            CapabilityAuthorizationTargetKind.WorkOrder,
             utcNow);
 
         return _db.WorkOrders.AsNoTracking().AnyAsync(workOrder =>
                 workOrder.Id == target.WorkOrderId &&
                 workOrder.PortfolioId == target.PortfolioId &&
                 workOrder.PortfolioId == accessContext.PortfolioId &&
-                assignments.Any(assignment =>
+                (propertyAssignments.Any(assignment =>
                     assignment.PortfolioId == workOrder.PortfolioId &&
                     (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
                      (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
                       assignment.SelectedProperties.Any(scope =>
                           scope.PortfolioId == workOrder.PortfolioId &&
-                          scope.PropertyId == workOrder.PropertyId)))),
+                          scope.PropertyId == workOrder.PropertyId)))) ||
+                 assignedWorkAssignments.Any(assignment =>
+                     assignment.PortfolioId == workOrder.PortfolioId &&
+                     assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AssignedWorkOrders &&
+                     workOrder.Responsibilities.Any(responsibility =>
+                         responsibility.PortfolioId == workOrder.PortfolioId &&
+                         responsibility.WorkspaceMembershipId == assignment.WorkspaceMembershipId &&
+                         responsibility.MembershipRoleAssignmentId == assignment.Id &&
+                         responsibility.EffectiveFromUtc <= utcNow &&
+                         (responsibility.EffectiveToUtc == null || responsibility.EffectiveToUtc > utcNow))))),
             cancellationToken);
     }
 

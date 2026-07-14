@@ -100,21 +100,25 @@ public class WorkOrderService : IWorkOrderService
         WorkOrderListQuery query,
         CancellationToken ct = default)
     {
+        var now = _timeProvider.UtcNow();
         var q = _db.WorkOrders
             .AsNoTracking()
             .WhereAuthorized(
                 _db,
                 scope,
-                new[] { CapabilityKeys.WorkRead },
-                _timeProvider.UtcNow());
+                new[] { CapabilityKeys.WorkRead, CapabilityKeys.AssignedWorkRead },
+                now);
+        var managementProperties = _db.Properties.AsNoTracking()
+            .WhereAuthorized(_db, scope, [CapabilityKeys.WorkRead], now);
 
-        return ListPageFromQueryAsync(q, query, ct);
+        return ListPageFromQueryAsync(q, query, ct, managementProperties);
     }
 
     private static async Task<WorkOrderListResponse> ListPageFromQueryAsync(
         IQueryable<WorkOrder> q,
         WorkOrderListQuery query,
-        CancellationToken ct)
+        CancellationToken ct,
+        IQueryable<Property>? managementProperties = null)
     {
 
         if (query.PropertyId.HasValue)
@@ -226,13 +230,23 @@ public class WorkOrderService : IWorkOrderService
         // JOINs — EF translates the optional-navigation member access to a join, so there is no
         // per-row follow-up query. The full related entities are never materialized; only the name
         // columns ride along.
-        var rows = await q
-            .Select(w => new WorkOrderListRow(
+        var rowQuery = managementProperties is null
+            ? q.Select(w => new WorkOrderListRow(
                 w,
                 w.Property != null ? w.Property.Name : null,
                 w.Unit != null ? w.Unit.UnitNumber : null,
                 w.Vendor != null ? w.Vendor.Name : null,
-                w.Tenant != null ? ((w.Tenant.FirstName + " " + w.Tenant.LastName)).Trim() : null))
+                w.Tenant != null ? ((w.Tenant.FirstName + " " + w.Tenant.LastName)).Trim() : null,
+                true))
+            : q.Select(w => new WorkOrderListRow(
+                w,
+                w.Property != null ? w.Property.Name : null,
+                w.Unit != null ? w.Unit.UnitNumber : null,
+                w.Vendor != null ? w.Vendor.Name : null,
+                w.Tenant != null ? ((w.Tenant.FirstName + " " + w.Tenant.LastName)).Trim() : null,
+                managementProperties.Any(property =>
+                    property.Id == w.PropertyId && property.PortfolioId == w.PortfolioId)));
+        var rows = await rowQuery
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
@@ -277,7 +291,8 @@ public class WorkOrderService : IWorkOrderService
     }
 
     private sealed record WorkOrderListRow(
-        WorkOrder WorkOrder, string? PropertyName, string? UnitNumber, string? VendorName, string? TenantName);
+        WorkOrder WorkOrder, string? PropertyName, string? UnitNumber, string? VendorName,
+        string? TenantName, bool CanReadFinancialDetails);
 
     private static WorkOrderResponse ToListResponse(WorkOrderListRow row)
     {
@@ -286,6 +301,12 @@ public class WorkOrderService : IWorkOrderService
         response.UnitNumber = row.UnitNumber;
         response.VendorName = row.VendorName;
         response.TenantName = row.TenantName;
+        if (!row.CanReadFinancialDetails)
+        {
+            response.EstimatedCost = null;
+            response.ActualCost = null;
+            response.LeaseManagementId = null;
+        }
         return response;
     }
 
@@ -313,21 +334,24 @@ public class WorkOrderService : IWorkOrderService
             .WhereAuthorized(
                 _db,
                 scope,
-                new[] { CapabilityKeys.WorkRead },
+                new[] { CapabilityKeys.WorkRead, CapabilityKeys.AssignedWorkRead },
                 _timeProvider.UtcNow())
             .Include(w => w.Property)
             .Include(w => w.Unit)
             .Include(w => w.Vendor)
             .Include(w => w.Tenant);
 
-        return GetFromQueryAsync(q, scope.PortfolioId, id, ct);
+        var managementProperties = _db.Properties.AsNoTracking()
+            .WhereAuthorized(_db, scope, [CapabilityKeys.WorkRead], _timeProvider.UtcNow());
+        return GetFromQueryAsync(q, scope.PortfolioId, id, ct, managementProperties);
     }
 
     private async Task<WorkOrderDetailResponse?> GetFromQueryAsync(
         IQueryable<WorkOrder> q,
         int portfolioId,
         int id,
-        CancellationToken ct)
+        CancellationToken ct,
+        IQueryable<Property>? managementProperties = null)
     {
         var entity = await q.FirstOrDefaultAsync(ct);
         if (entity == null)
@@ -343,6 +367,13 @@ public class WorkOrderService : IWorkOrderService
             .ToListAsync(ct);
 
         var response = WorkOrderDetailResponse.FromEntity(entity, events);
+        if (managementProperties is not null && !await managementProperties.AnyAsync(property =>
+                property.Id == entity.PropertyId && property.PortfolioId == entity.PortfolioId, ct))
+        {
+            response.EstimatedCost = null;
+            response.ActualCost = null;
+            response.LeaseManagementId = null;
+        }
 
         // Whether an OPEN vendor dispatch (texted, still awaiting the vendor's DONE) exists for this work
         // order — a single EXISTS computed DB-side, never loaded-then-counted. Drives the detail page's

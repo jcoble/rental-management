@@ -25,4 +25,6 @@ public sealed class MembershipRoleAssignment
     public RoleProfile? RoleProfile { get; set; }
     public ICollection<MembershipRoleAssignmentProperty> SelectedProperties { get; set; } =
         new List<MembershipRoleAssignmentProperty>();
+    public ICollection<WorkOrderResponsibility> WorkOrderResponsibilities { get; set; } =
+        new List<WorkOrderResponsibility>();
 }
