@@ -1,8 +1,12 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Identity;
-using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Auth;
+using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
-using RentalCommand.Core.Time;
-using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Auth;
 
@@ -26,28 +30,32 @@ public interface ICanonicalAccountBootstrapService
         string displayName,
         string? password,
         bool emailConfirmed,
+        string operationKey,
         CanonicalWorkspaceBootstrapOptions? workspace = null,
         CancellationToken ct = default);
 }
 
 /// <summary>
-/// The only fresh-account bootstrap. Password and Google registration both create the same complete
-/// workspace authority graph in one explicit transaction; no Identity role or UserAccount is written.
+/// Prepares Identity validation and password hashing outside the database transaction, then executes
+/// the only fresh-account bootstrap through the receipt-backed atomic kernel.
 /// </summary>
 public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstrapService
 {
+    private static readonly AtomicJsonResultCodec<BootstrapAccountResult> ResultCodec =
+        new("auth-account-bootstrap-result:v1");
+
     private readonly UserManager<ApplicationUser> _users;
-    private readonly RentalCommandDbContext _db;
-    private readonly TimeProvider _timeProvider;
+    private readonly IAtomicUnitOfWork _atomic;
+    private readonly byte[] _intentKey;
 
     public CanonicalAccountBootstrapService(
         UserManager<ApplicationUser> users,
-        RentalCommandDbContext db,
-        TimeProvider timeProvider)
+        IAtomicUnitOfWork atomic,
+        IOptions<AtomicAuthSessionCredentialOptions> credentialOptions)
     {
         _users = users;
-        _db = db;
-        _timeProvider = timeProvider;
+        _atomic = atomic;
+        _intentKey = Convert.FromBase64String(credentialOptions.Value.SigningKey);
     }
 
     public async Task<CanonicalAccountBootstrapResult> CreateAsync(
@@ -55,69 +63,117 @@ public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstra
         string displayName,
         string? password,
         bool emailConfirmed,
+        string operationKey,
         CanonicalWorkspaceBootstrapOptions? workspace = null,
         CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationKey);
         var normalizedEmail = _users.NormalizeEmail(email);
-        if (await _db.Users.AsNoTracking()
-                .AnyAsync(user => user.NormalizedEmail == normalizedEmail, ct))
+        if (string.IsNullOrWhiteSpace(normalizedEmail))
         {
-            return new CanonicalAccountBootstrapResult(null, null, null, ["Email is already registered"]);
+            return Failure("Invalid email address");
         }
 
-        var now = _timeProvider.UtcNow();
-        var user = new ApplicationUser
+        var candidate = new ApplicationUser
         {
             UserName = email,
             Email = email,
-            EmailConfirmed = emailConfirmed,
             DisplayName = displayName.Trim(),
-            CreatedAt = now,
+            EmailConfirmed = emailConfirmed,
         };
-
-        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
-        var createResult = password is null
-            ? await _users.CreateAsync(user)
-            : await _users.CreateAsync(user, password);
-        if (!createResult.Succeeded)
+        var validationErrors = new List<string>();
+        // Identity's user validator also performs a state-dependent uniqueness query. Duplicate
+        // admission belongs inside the locked receipt transaction so an ambiguous retry can replay
+        // the completed bootstrap instead of failing before it reaches the receipt.
+        if (!new EmailAddressAttribute().IsValid(candidate.Email))
         {
-            await transaction.RollbackAsync(ct);
-            return new CanonicalAccountBootstrapResult(
-                null,
-                null,
-                null,
-                createResult.Errors.Select(error => error.Description).ToArray());
+            validationErrors.Add("Invalid email address");
+        }
+        if (password is not null)
+        {
+            foreach (var validator in _users.PasswordValidators)
+            {
+                var validation = await validator.ValidateAsync(_users, candidate, password);
+                if (!validation.Succeeded)
+                {
+                    validationErrors.AddRange(validation.Errors.Select(error => error.Description));
+                }
+            }
+        }
+        if (validationErrors.Count > 0)
+        {
+            return new CanonicalAccountBootstrapResult(null, null, null, validationErrors.Distinct().ToArray());
         }
 
-        var defaultPortfolioName = string.IsNullOrWhiteSpace(user.DisplayName)
+        var defaultPortfolioName = string.IsNullOrWhiteSpace(candidate.DisplayName)
             ? "My Portfolio"
-            : $"{user.DisplayName}'s Portfolio";
-        var defaultManagementCompanyName = string.IsNullOrWhiteSpace(user.DisplayName)
+            : $"{candidate.DisplayName}'s Portfolio";
+        var defaultManagementCompanyName = string.IsNullOrWhiteSpace(candidate.DisplayName)
             ? "My Company"
-            : user.DisplayName;
+            : candidate.DisplayName;
         var portfolioName = string.IsNullOrWhiteSpace(workspace?.PortfolioName)
             ? defaultPortfolioName
             : workspace.PortfolioName.Trim();
         var managementCompanyName = string.IsNullOrWhiteSpace(workspace?.ManagementCompanyName)
             ? defaultManagementCompanyName
             : workspace.ManagementCompanyName.Trim();
-        var ownerName = string.IsNullOrWhiteSpace(user.DisplayName)
-            ? (user.Email?.Split('@')[0] ?? "Me (primary owner)")
-            : user.DisplayName;
-        var bootstrap = await _db.Database.SqlQuery<InitialWorkspaceBootstrapRow>($"""
-                SELECT * FROM rc_bootstrap_initial_workspace(
-                    {user.Id}, {portfolioName}, {managementCompanyName}, {ownerName},
-                    {user.Email ?? string.Empty}, {now})
-                """)
-            .SingleAsync(ct);
-        await transaction.CommitAsync(ct);
-        return new CanonicalAccountBootstrapResult(
-            user, bootstrap.PortfolioId, bootstrap.AccessContextId, []);
+        var ownerName = string.IsNullOrWhiteSpace(candidate.DisplayName)
+            ? email.Split('@')[0]
+            : candidate.DisplayName;
+        var passwordHash = password is null ? null : _users.PasswordHasher.HashPassword(candidate, password);
+        var intentHash = CreateIntentHash(normalizedEmail, password ?? "external-account", emailConfirmed.ToString());
+        var command = new BootstrapAccountCommand(
+            email.Trim(),
+            normalizedEmail,
+            candidate.DisplayName,
+            passwordHash,
+            intentHash,
+            emailConfirmed,
+            portfolioName,
+            managementCompanyName,
+            ownerName,
+            CreateLockId(normalizedEmail));
+        var keyDigest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(operationKey)))
+            .ToLowerInvariant();
+        var outcome = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity("auth.account.bootstrap", $"email:{keyDigest}"),
+            command,
+            ResultCodec,
+            ct);
+        if (outcome.Value.Outcome == BootstrapAccountOutcome.DuplicateEmail)
+        {
+            return Failure("Email is already registered");
+        }
+
+        var user = await _users.FindByIdAsync(outcome.Value.UserId.ToString());
+        return user is null
+            ? Failure("Account bootstrap did not return a persisted user")
+            : new CanonicalAccountBootstrapResult(
+                user,
+                outcome.Value.PortfolioId,
+                outcome.Value.AccessContextId,
+                []);
     }
 
-    private sealed class InitialWorkspaceBootstrapRow
+    internal string CreateIntentHash(params string[] values)
     {
-        public int PortfolioId { get; set; }
-        public int AccessContextId { get; set; }
+        var payload = Encoding.UTF8.GetBytes(string.Join("\0", values));
+        try
+        {
+            return Convert.ToHexString(HMACSHA256.HashData(_intentKey, payload)).ToLowerInvariant();
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(payload);
+        }
     }
+
+    private static Guid CreateLockId(string normalizedEmail)
+    {
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes(normalizedEmail));
+        return new Guid(digest.AsSpan(0, 16));
+    }
+
+    private static CanonicalAccountBootstrapResult Failure(string error) =>
+        new(null, null, null, [error]);
 }

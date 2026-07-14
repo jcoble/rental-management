@@ -368,6 +368,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         private readonly IAtomicNoticeDraftPersistence _noticeDrafts;
         private readonly IAtomicPaymentCsvImportPersistence _paymentCsvImports;
         private readonly IAtomicInspectionPersistence _inspections;
+        private readonly IAtomicAccountSecurityPersistence _accountSecurity;
         private readonly TimeProvider _timeProvider;
         private readonly List<OutboxMessage> _outbox = [];
         private bool _outboxMaterialized;
@@ -399,6 +400,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             _noticeDrafts = new AtomicNoticeDraftPersistence(db, auditScope);
             _paymentCsvImports = new AtomicPaymentCsvImportPersistence(db, auditScope);
             _inspections = new AtomicInspectionPersistence(db, auditScope);
+            _accountSecurity = new AtomicAccountSecurityPersistence(db);
             _timeProvider = timeProvider;
         }
 
@@ -423,6 +425,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         public IAtomicNoticeDraftPersistence NoticeDrafts => _noticeDrafts;
         public IAtomicPaymentCsvImportPersistence PaymentCsvImports => _paymentCsvImports;
         public IAtomicInspectionPersistence Inspections => _inspections;
+        public IAtomicAccountSecurityPersistence AccountSecurity => _accountSecurity;
         public Guid SessionId => _db.ContextId.InstanceId;
 
         public Task<DateTime> ReadDatabaseClockUtcAsync(CancellationToken ct = default) =>

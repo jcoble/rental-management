@@ -7,6 +7,7 @@
  */
 
 import { fail } from '@sveltejs/kit';
+import { createHash } from 'node:crypto';
 import type { Actions, PageServerLoad } from './$types';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
 
@@ -24,11 +25,16 @@ export const actions: Actions = {
 		}
 
 		try {
+			// One-minute intent buckets preserve the same key across an ambiguous retry without
+			// preventing the user from deliberately requesting another email later.
+			const operationKey = createHash('sha256')
+				.update(`${email}:${Math.floor(Date.now() / 60_000)}`)
+				.digest('hex');
 			// We fire this request and ignore any non-network error — the API always
 			// returns 200 regardless of whether the account exists.
 			await fetch(`${SERVER_API_BASE_URL}/auth/forgot-password`, {
 				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
+				headers: { 'Content-Type': 'application/json', 'Idempotency-Key': operationKey },
 				body: JSON.stringify({ email })
 			});
 		} catch (err) {

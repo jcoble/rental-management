@@ -1,20 +1,14 @@
-using System.Text.Json;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Identity;
-using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
-using RentalCommand.Core.Enums;
-using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Atomic;
 using Microsoft.Extensions.Options;
-using RentalCommand.Data;
-using RentalCommand.Api.Data;
 
 namespace RentalCommand.Api.Services.Auth;
 
@@ -84,9 +78,9 @@ public interface IAuthService
 {
     Task<AuthResult> LoginAsync(string email, string password, int? accessContextId = null, string? ipAddress = null, string? userAgent = null);
     Task<AuthResult> LoginExternalAsync(int userId, int? accessContextId = null, CancellationToken ct = default);
-    Task<AuthResult> RegisterAsync(RegisterRequest request);
+    Task<AuthResult> RegisterAsync(RegisterRequest request, string operationKey, CancellationToken ct = default);
     Task<AuthResult> RefreshAsync(string refreshToken, string? ipAddress = null, string? userAgent = null);
-    Task<AuthUserResult> ConfirmEmailAsync(string userId, string token);
+    Task<AuthUserResult> ConfirmEmailAsync(string userId, string token, string operationKey, CancellationToken ct = default);
     Task<AuthUserResult> GetCurrentUserAsync(string userId);
 
     /// <summary>
@@ -94,8 +88,9 @@ public interface IAuthService
     /// (no transport in Phase 0). Always succeeds to avoid email enumeration; returns the token
     /// for development convenience.
     /// </summary>
-    Task<string?> GeneratePasswordResetTokenAsync(string email);
-    Task<AuthUserResult> ResetPasswordAsync(string userId, string token, string newPassword);
+    Task<string?> GeneratePasswordResetTokenAsync(string email, string operationKey, CancellationToken ct = default);
+    Task<AuthUserResult> ResetPasswordAsync(
+        string userId, string token, string newPassword, string operationKey, CancellationToken ct = default);
 
     /// <summary>
     /// Re-sends the email-confirmation message for an unverified account. Always reports success
@@ -103,7 +98,7 @@ public interface IAuthService
     /// a silent no-op. Only an existing, still-unconfirmed account actually generates a fresh token
     /// and enqueues the email.
     /// </summary>
-    Task<AuthUserResult> ResendVerificationEmailAsync(string email);
+    Task<AuthUserResult> ResendVerificationEmailAsync(string email, string operationKey, CancellationToken ct = default);
 
     /// <summary>
     /// Changes the signed-in user's password. Rejects accounts with no local password (external
@@ -123,6 +118,10 @@ public class AuthService : IAuthService
 {
     private static readonly AtomicJsonResultCodec<ChangePasswordResult> ChangePasswordCodec =
         new("auth-password-change-result:v1");
+    private static readonly AtomicJsonResultCodec<ConfirmAccountEmailResult> ConfirmEmailCodec =
+        new("auth-email-confirm-result:v1");
+    private static readonly AtomicJsonResultCodec<ResetAccountPasswordResult> ResetPasswordCodec =
+        new("auth-password-reset-result:v1");
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly SignInManager<ApplicationUser> _signInManager;
     private readonly IAtomicAuthSessionCredentialService _atomicCredentials;
@@ -131,8 +130,6 @@ public class AuthService : IAuthService
     private readonly IAccessEnvelopeQuery _accessEnvelopes;
     private readonly AtomicAuthSessionCredentialOptions _credentialOptions;
     private readonly IAuthEmailSender _emailSender;
-    private readonly RentalCommandDbContext _db;
-    private readonly IAuditTrailService _audit;
     private readonly ICanonicalAccountBootstrapService _accountBootstrap;
     private readonly IAtomicUnitOfWork _atomic;
     private readonly ILogger<AuthService> _logger;
@@ -147,8 +144,6 @@ public class AuthService : IAuthService
         IAccessEnvelopeQuery accessEnvelopes,
         IOptions<AtomicAuthSessionCredentialOptions> credentialOptions,
         IAuthEmailSender emailSender,
-        RentalCommandDbContext db,
-        IAuditTrailService audit,
         ICanonicalAccountBootstrapService accountBootstrap,
         IAtomicUnitOfWork atomic,
         ILogger<AuthService> logger,
@@ -162,8 +157,6 @@ public class AuthService : IAuthService
         _accessEnvelopes = accessEnvelopes;
         _credentialOptions = credentialOptions.Value;
         _emailSender = emailSender;
-        _db = db;
-        _audit = audit;
         _accountBootstrap = accountBootstrap;
         _atomic = atomic;
         _logger = logger;
@@ -269,13 +262,18 @@ public class AuthService : IAuthService
             session.RefreshBearer);
     }
 
-    public async Task<AuthResult> RegisterAsync(RegisterRequest request)
+    public async Task<AuthResult> RegisterAsync(
+        RegisterRequest request,
+        string operationKey,
+        CancellationToken ct = default)
     {
         var bootstrap = await _accountBootstrap.CreateAsync(
             request.Email,
             request.DisplayName,
             request.Password,
-            emailConfirmed: false);
+            emailConfirmed: false,
+            operationKey: operationKey,
+            ct: ct);
         if (!bootstrap.Succeeded)
         {
             var duplicate = bootstrap.Errors.Contains("Email is already registered");
@@ -286,7 +284,8 @@ public class AuthService : IAuthService
 
         var user = bootstrap.User!;
         var emailToken = await _userManager.GenerateEmailConfirmationTokenAsync(user);
-        await _emailSender.SendEmailConfirmationAsync(user, emailToken);
+        await _emailSender.SendEmailConfirmationAsync(
+            user, bootstrap.PortfolioId, emailToken, $"{operationKey}:verification", ct);
         _logger.LogInformation(
             "Registered user {Email} (id {UserId}) with one canonical Administrator context; awaiting email verification.",
             request.Email, user.Id);
@@ -370,21 +369,45 @@ public class AuthService : IAuthService
         }, tokens);
     }
 
-    public async Task<AuthUserResult> ConfirmEmailAsync(string userId, string token)
+    public async Task<AuthUserResult> ConfirmEmailAsync(
+        string userId,
+        string token,
+        string operationKey,
+        CancellationToken ct = default)
     {
+        if (!int.TryParse(userId, out var parsedUserId) || parsedUserId <= 0)
+        {
+            return AuthUserResult.Fail("User not found");
+        }
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null)
         {
             return AuthUserResult.Fail("User not found");
         }
 
-        var result = await _userManager.ConfirmEmailAsync(user, token);
-        if (!result.Succeeded)
+        var tokenValid = await _userManager.VerifyUserTokenAsync(
+            user,
+            _userManager.Options.Tokens.EmailConfirmationTokenProvider,
+            UserManager<ApplicationUser>.ConfirmEmailTokenPurpose,
+            token);
+        var command = new ConfirmAccountEmailCommand(
+            parsedUserId,
+            user.SecurityStamp ?? string.Empty,
+            tokenValid,
+            CreateAuthIntentHash(parsedUserId.ToString(), token, "confirm-email"));
+        var result = (await _atomic.ExecuteAsync(
+            AuthIdentity("auth.email.confirm", parsedUserId, operationKey),
+            command,
+            ConfirmEmailCodec,
+            ct)).Value;
+        if (result.Outcome is ConfirmAccountEmailOutcome.InvalidToken)
         {
-            var errors = string.Join("; ", result.Errors.Select(e => e.Description));
-            return AuthUserResult.Fail($"Email confirmation failed: {errors}", AuthErrorType.BadRequest);
+            return AuthUserResult.Fail("Email confirmation failed: invalid or expired token", AuthErrorType.BadRequest);
         }
+        if (result.Outcome is ConfirmAccountEmailOutcome.UserNotFound)
+            return AuthUserResult.Fail("User not found");
 
+        user.EmailConfirmed = true;
         return AuthUserResult.Ok(await MapToUserDtoAsync(user));
     }
 
@@ -399,7 +422,10 @@ public class AuthService : IAuthService
         return AuthUserResult.Ok(await MapToUserDtoAsync(user));
     }
 
-    public async Task<string?> GeneratePasswordResetTokenAsync(string email)
+    public async Task<string?> GeneratePasswordResetTokenAsync(
+        string email,
+        string operationKey,
+        CancellationToken ct = default)
     {
         var user = await _userManager.FindByEmailAsync(email);
         if (user == null)
@@ -409,40 +435,70 @@ public class AuthService : IAuthService
         }
 
         var token = await _userManager.GeneratePasswordResetTokenAsync(user);
-        await _emailSender.SendPasswordResetAsync(user, token);
+        await _emailSender.SendPasswordResetAsync(user, null, token, operationKey, ct);
         _logger.LogInformation("Password reset token generated for {Email} (id {UserId}). Reset email enqueued.", email, user.Id);
         return token;
     }
 
-    public async Task<AuthUserResult> ResetPasswordAsync(string userId, string token, string newPassword)
+    public async Task<AuthUserResult> ResetPasswordAsync(
+        string userId,
+        string token,
+        string newPassword,
+        string operationKey,
+        CancellationToken ct = default)
     {
+        if (!int.TryParse(userId, out var parsedUserId) || parsedUserId <= 0)
+        {
+            return AuthUserResult.Fail("Invalid or expired reset link.", AuthErrorType.BadRequest);
+        }
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null)
         {
             return AuthUserResult.Fail("Invalid or expired reset link.", AuthErrorType.BadRequest);
         }
 
-        var result = await _userManager.ResetPasswordAsync(user, token, newPassword);
-        if (!result.Succeeded)
+        var validationErrors = new List<IdentityError>();
+        foreach (var validator in _userManager.PasswordValidators)
         {
-            var errors = string.Join("; ", result.Errors.Select(e => e.Description));
-            return AuthUserResult.Fail(errors, AuthErrorType.BadRequest);
+            var validation = await validator.ValidateAsync(_userManager, user, newPassword);
+            if (!validation.Succeeded) validationErrors.AddRange(validation.Errors);
+        }
+        if (validationErrors.Count > 0)
+        {
+            return AuthUserResult.Fail(
+                string.Join("; ", validationErrors.Select(error => error.Description)),
+                AuthErrorType.BadRequest);
         }
 
-        await _userManager.SetLockoutEndDateAsync(user, null);
-        await _userManager.ResetAccessFailedCountAsync(user);
+        var tokenValid = await _userManager.VerifyUserTokenAsync(
+            user,
+            _userManager.Options.Tokens.PasswordResetTokenProvider,
+            UserManager<ApplicationUser>.ResetPasswordTokenPurpose,
+            token);
+        var command = new ResetAccountPasswordCommand(
+            parsedUserId,
+            user.SecurityStamp ?? string.Empty,
+            tokenValid,
+            _userManager.PasswordHasher.HashPassword(user, newPassword),
+            CreateAuthIntentHash(parsedUserId.ToString(), token, newPassword, "reset-password"));
+        var result = (await _atomic.ExecuteAsync(
+            AuthIdentity("auth.password.reset", parsedUserId, operationKey),
+            command,
+            ResetPasswordCodec,
+            ct)).Value;
+        if (result.Outcome != ResetAccountPasswordOutcome.Reset)
+            return AuthUserResult.Fail("Invalid or expired reset link.", AuthErrorType.BadRequest);
 
-        // Confirm the email too in case they reset before verifying.
-        if (!user.EmailConfirmed)
-        {
-            user.EmailConfirmed = true;
-            await _userManager.UpdateAsync(user);
-        }
-
+        user.EmailConfirmed = true;
+        user.AccessFailedCount = 0;
+        user.LockoutEnd = null;
         return AuthUserResult.Ok(await MapToUserDtoAsync(user));
     }
 
-    public async Task<AuthUserResult> ResendVerificationEmailAsync(string email)
+    public async Task<AuthUserResult> ResendVerificationEmailAsync(
+        string email,
+        string operationKey,
+        CancellationToken ct = default)
     {
         var user = await _userManager.FindByEmailAsync(email);
 
@@ -463,7 +519,7 @@ public class AuthService : IAuthService
         }
 
         var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
-        await _emailSender.SendEmailConfirmationAsync(user, token);
+        await _emailSender.SendEmailConfirmationAsync(user, null, token, operationKey, ct);
         _logger.LogInformation("Verification email resent for {Email} (id {UserId}).", email, user.Id);
         return AuthUserResult.Ok(null!);
     }
@@ -556,7 +612,28 @@ public class AuthService : IAuthService
         }
     }
 
-    private static string SerializeAudit(object values) => JsonSerializer.Serialize(values);
+    private string CreateAuthIntentHash(params string[] values)
+    {
+        var key = Convert.FromBase64String(_credentialOptions.SigningKey);
+        var payload = Encoding.UTF8.GetBytes(string.Join("\0", values));
+        try
+        {
+            return Convert.ToHexString(HMACSHA256.HashData(key, payload)).ToLowerInvariant();
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(key);
+            CryptographicOperations.ZeroMemory(payload);
+        }
+    }
+
+    private static AtomicCommandIdentity AuthIdentity(string commandType, int userId, string operationKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationKey);
+        var keyDigest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(operationKey)))
+            .ToLowerInvariant();
+        return new AtomicCommandIdentity(commandType, $"{userId}:{keyDigest}");
+    }
 
     public Task<UserDto> MapToUserDtoAsync(ApplicationUser user)
     {

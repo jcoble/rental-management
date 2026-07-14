@@ -53,7 +53,8 @@ public sealed class AuthServiceResetPasswordTests : IDisposable
         (await _userManager.SetLockoutEnabledAsync(user, true)).Succeeded.Should().BeTrue();
         (await _userManager.SetLockoutEndDateAsync(user, DateTimeOffset.UtcNow.AddMinutes(5))).Succeeded.Should().BeTrue();
 
-        var result = await CreateService().ResetPasswordAsync(user.Id.ToString(), ResetToken, "NewPassword123!");
+        var result = await CreateService().ResetPasswordAsync(
+            user.Id.ToString(), ResetToken, "NewPassword123!", "test-password-reset");
 
         result.Success.Should().BeTrue();
         var reloaded = await _userManager.FindByIdAsync(user.Id.ToString());
@@ -123,8 +124,6 @@ public sealed class AuthServiceResetPasswordTests : IDisposable
             SessionLifetimeDays = 30,
         }),
         Mock.Of<IAuthEmailSender>(),
-        _ctx.Db,
-        Mock.Of<IAuditTrailService>(),
         Mock.Of<ICanonicalAccountBootstrapService>(),
         atomic ?? Mock.Of<IAtomicUnitOfWork>(),
         NullLogger<AuthService>.Instance,

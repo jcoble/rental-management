@@ -4,10 +4,21 @@ namespace RentalCommand.Api.Services.Auth;
 
 /// <summary>
 /// Sends transactional auth emails (email confirmation, password reset) via the DB outbox.
-/// Sending is best-effort — failures are logged and swallowed so they never block registration.
+/// Enqueueing is receipt-backed and fails with the owning auth operation instead of silently
+/// losing a confirmation or reset message.
 /// </summary>
 public interface IAuthEmailSender : RentalCommand.Core.Atomic.IAtomicRemoteDependency
 {
-    Task SendEmailConfirmationAsync(ApplicationUser user, string token, CancellationToken ct = default);
-    Task SendPasswordResetAsync(ApplicationUser user, string token, CancellationToken ct = default);
+    Task SendEmailConfirmationAsync(
+        ApplicationUser user,
+        int? expectedPortfolioId,
+        string token,
+        string operationKey,
+        CancellationToken ct = default);
+    Task SendPasswordResetAsync(
+        ApplicationUser user,
+        int? expectedPortfolioId,
+        string token,
+        string operationKey,
+        CancellationToken ct = default);
 }
