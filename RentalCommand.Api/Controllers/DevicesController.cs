@@ -65,12 +65,6 @@ public class DevicesController : AuthenticatedPortfolioControllerBase
             active.AccessContextId, active.AccessRevision);
     }
 
-    private static bool TryValidateIdempotencyKey(string? raw, out string key)
-    {
-        key = raw?.Trim() ?? string.Empty;
-        return key.Length is > 0 and <= 128;
-    }
-
     private BadRequestObjectResult InvalidKey() =>
         BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
 }
