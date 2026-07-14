@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Banking;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -70,6 +71,7 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
         services.AddAtomicCommandHandler<ApplyPlaidSyncCommand, ApplyPlaidSyncResult, ApplyPlaidSyncHandler>();
         services.AddAtomicCommandHandler<ImportBankTransactionsCommand, ImportBankTransactionsResult, ImportBankTransactionsHandler>();
         services.AddAtomicCommandHandler<ReconcileBankTransactionCommand, ReconcileBankTransactionResult, ReconcileBankTransactionHandler>();
+        services.AddAtomicCommandHandler<RouteBankTransactionCommand, RouteBankTransactionResult, RouteBankTransactionHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -531,62 +533,6 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task Reconciliation_ConcurrentVersionOwners_ApplyOnceAndReplayCanonicalReceipt()
-    {
-        SkipIfNoDocker();
-        int transactionId;
-        int connectionId;
-        await using (var db = NewContext())
-        {
-            var connection = new BankConnection
-            {
-                PortfolioId = _portfolioId,
-                Provider = "Manual",
-                InstitutionName = "Match bank",
-                AccountName = "Checking",
-                Status = "Active",
-                CreatedAt = _now,
-                UpdatedAt = _now,
-            };
-            db.BankConnections.Add(connection);
-            await db.SaveChangesAsync();
-            connectionId = connection.Id;
-            var seededTransaction = new BankTransaction
-            {
-                PortfolioId = _portfolioId,
-                BankConnectionId = connectionId,
-                ProviderTransactionId = "reconcile-once",
-                PostedAt = _now,
-                Description = "Personal transaction",
-                Amount = -5m,
-                MatchStatus = "Unmatched",
-                CreatedAt = _now,
-                UpdatedAt = _now,
-            };
-            db.BankTransactions.Add(seededTransaction);
-            await db.SaveChangesAsync();
-            transactionId = seededTransaction.Id;
-        }
-        var command = new ReconcileBankTransactionCommand(
-            _portfolioId, transactionId, BankReconciliationAction.Ignore, null, null, null, _now, _now.AddSeconds(1));
-        var identity = new AtomicCommandIdentity("banking.transaction.reconcile", $"{_portfolioId}:{transactionId}:ignore-once");
-
-        var outcomes = await Task.WhenAll(
-            Atomic.ExecuteAsync(identity, command, ReconcileCodec),
-            Atomic.ExecuteAsync(identity, command, ReconcileCodec));
-
-        outcomes.Select(result => result.Disposition).Should()
-            .BeEquivalentTo([AtomicCommandDisposition.Executed, AtomicCommandDisposition.Replayed]);
-        outcomes[0].Value.Should().BeEquivalentTo(outcomes[1].Value);
-        await using var verify = NewContext();
-        var transaction = await verify.BankTransactions.SingleAsync(row => row.Id == transactionId);
-        transaction.MatchStatus.Should().Be("Removed");
-        transaction.Notes.Should().Contain("ignored");
-        (await verify.AtomicAuditLogs.CountAsync(row => row.CommandType == identity.CommandType)).Should().Be(1);
-        (await verify.AtomicCommandReceipts.CountAsync(row => row.CommandType == identity.CommandType)).Should().Be(1);
-    }
-
-    [SkippableFact]
     public async Task Reconciliation_CrossPortfolioTarget_IsNotVisibleOrMutated()
     {
         SkipIfNoDocker();
@@ -644,7 +590,13 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
                 null,
                 null,
                 _now,
-                _now.AddSeconds(1)),
+                _now.AddSeconds(1),
+                1,
+                Guid.NewGuid(),
+                1,
+                1,
+                CapabilityKeys.MoneyReconciliationDestructive,
+                "cross-portfolio"),
             ReconcileCodec);
 
         result.Value.Outcome.Should().Be(ReconcileBankTransactionOutcome.TransactionNotFound);

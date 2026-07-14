@@ -943,6 +943,8 @@ export interface ExchangePlaidPublicTokenRequest {
 
 export interface BankTransaction {
 	id: number;
+	propertyId?: number;
+	propertyName?: string;
 	bankConnectionId: number;
 	institutionName: string;
 	accountName: string;
@@ -960,6 +962,7 @@ export interface BankTransaction {
 	matchStatus: string;
 	matchConfidence?: number;
 	notes?: string;
+	updatedAt: string;
 	suggestedMatch?: BankMatchSuggestion;
 }
 
@@ -988,6 +991,7 @@ export interface OperationalBankTransaction {
 	isoCurrencyCode: string;
 	category?: string;
 	matchStatus: string;
+	updatedAt: string;
 }
 
 export interface OperationalBankMatchSuggestion {
@@ -1033,12 +1037,22 @@ export interface SyncBankConnectionResponse {
 }
 
 export interface MatchBankTransactionRequest {
+	operationKey: string;
+	expectedUpdatedAtUtc: string;
 	tenantAccountId?: number;
 	tenantLedgerEntryId?: number;
 	expenseId?: number;
 }
 
+export interface RouteBankTransactionRequest {
+	operationKey: string;
+	propertyId?: number;
+	expectedUpdatedAtUtc: string;
+}
+
 export interface ConfirmBankMatchRequest {
+	operationKey: string;
+	expectedUpdatedAtUtc: string;
 	tenantAccountId?: number;
 	tenantLedgerEntryId?: number;
 	expenseId?: number;

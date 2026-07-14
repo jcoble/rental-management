@@ -1517,6 +1517,9 @@ namespace RentalCommand.Data.Migrations
                     b.Property<int>("PortfolioId")
                         .HasColumnType("integer");
 
+                    b.Property<int?>("PropertyId")
+                        .HasColumnType("integer");
+
                     b.Property<DateTime>("PostedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -1541,6 +1544,8 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("PortfolioId");
 
+                    b.HasIndex("PropertyId", "PortfolioId");
+
                     b.HasIndex("PostedAt");
 
                     b.HasIndex("BankConnectionId", "ProviderTransactionId")
@@ -1552,6 +1557,8 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("PortfolioId", "MatchedTenantAccountId", "MatchedTenantLedgerEntryId")
                         .HasFilter("\"MatchedTenantLedgerEntryId\" IS NOT NULL");
+
+                    b.HasIndex("PortfolioId", "PropertyId", "MatchStatus", "PostedAt");
 
                     b.ToTable("BankTransactions");
                 });
@@ -10371,6 +10378,12 @@ namespace RentalCommand.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.HasOne("RentalCommand.Core.Entities.Property", "Property")
+                        .WithMany()
+                        .HasForeignKey("PropertyId", "PortfolioId")
+                        .HasPrincipalKey("Id", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("RentalCommand.Core.Entities.TenantAccount", "MatchedTenantAccount")
                         .WithMany()
                         .HasForeignKey("MatchedTenantAccountId", "PortfolioId")
@@ -10392,6 +10405,8 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("MatchedTenantLedgerEntry");
 
                     b.Navigation("Portfolio");
+
+                    b.Navigation("Property");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.CapitalAsset", b =>

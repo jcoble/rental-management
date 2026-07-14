@@ -121,18 +121,55 @@ public class BankingController : ManagementControllerBase
         [FromBody] MatchBankTransactionRequest request,
         CancellationToken ct)
     {
-        var updated = await _service.MatchAsync(GetWorkspaceReadScope(), id, request, ct);
-        return updated == null ? NotFound(new { error = "Bank transaction or match target not found" }) : Ok(updated);
+        try
+        {
+            var updated = await _service.MatchAsync(GetWorkspaceReadScope(), id, request, ct);
+            return updated == null ? NotFound(new { error = "Bank transaction or match target not found" }) : Ok(updated);
+        }
+        catch (BankingConflictException exception)
+        {
+            return Conflict(new { error = exception.Message });
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+    }
+
+    [HttpPut("transactions/{id:int}/route")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.BankConnectionsManage)]
+    [ProducesResponseType(typeof(BankTransactionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<BankTransactionResponse>> Route(
+        int id, [FromBody] RouteBankTransactionRequest request, CancellationToken ct)
+    {
+        try
+        {
+            var updated = await _service.RouteTransactionAsync(GetWorkspaceReadScope(), id, request, ct);
+            return updated == null ? NotFound(new { error = "Bank transaction or property not found" }) : Ok(updated);
+        }
+        catch (BankingConflictException exception)
+        {
+            return Conflict(new { error = exception.Message });
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
     }
 
     [HttpPost("transactions/{id:int}/clear-match")]
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.MoneyReconciliationDestructive)]
     [ProducesResponseType(typeof(BankTransactionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<BankTransactionResponse>> ClearMatch(int id, CancellationToken ct)
+    public async Task<ActionResult<BankTransactionResponse>> ClearMatch(
+        int id, [FromBody] BankTransactionMutationRequest request, CancellationToken ct)
     {
-        var updated = await _service.ClearMatchAsync(GetPortfolioId(), id, ct);
-        return updated == null ? NotFound(new { error = "Bank transaction not found" }) : Ok(updated);
+        try
+        {
+            var updated = await _service.ClearMatchAsync(GetWorkspaceReadScope(), id, request, ct);
+            return updated == null ? NotFound(new { error = "Bank transaction not found" }) : Ok(updated);
+        }
+        catch (BankingConflictException exception)
+        {
+            return Conflict(new { error = exception.Message });
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
     }
 
     /// <summary>
@@ -154,7 +191,7 @@ public class BankingController : ManagementControllerBase
     /// <summary>
     /// Confirm a suggested match. Links the bank line to a canonical tenant-account receipt or an
     /// expense and marks it Matched so accounting treats them as the same money. A receipt target
-    /// requires both tenantAccountId and tenantLedgerEntryId; an empty body accepts the suggestion.
+    /// requires both tenantAccountId and tenantLedgerEntryId; omitting target ids accepts the suggestion.
     /// </summary>
     [HttpPost("transactions/{id:int}/confirm-match")]
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.MoneyReconciliationOperate)]
@@ -162,13 +199,21 @@ public class BankingController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<OperationalBankTransactionResponse>> ConfirmMatch(
         int id,
-        [FromBody] ConfirmBankMatchRequest? request,
+        [FromBody] ConfirmBankMatchRequest request,
         CancellationToken ct)
     {
-        var updated = await _service.ConfirmMatchAsync(GetWorkspaceReadScope(), id, request ?? new ConfirmBankMatchRequest(), ct);
-        return updated == null
-            ? NotFound(new { error = "Bank transaction, suggested match, or match target not found" })
-            : Ok(updated);
+        try
+        {
+            var updated = await _service.ConfirmMatchAsync(GetWorkspaceReadScope(), id, request, ct);
+            return updated == null
+                ? NotFound(new { error = "Bank transaction, suggested match, or match target not found" })
+                : Ok(updated);
+        }
+        catch (BankingConflictException exception)
+        {
+            return Conflict(new { error = exception.Message });
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
     }
 
     /// <summary>
@@ -179,10 +224,19 @@ public class BankingController : ManagementControllerBase
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.MoneyReconciliationDestructive)]
     [ProducesResponseType(typeof(BankTransactionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<BankTransactionResponse>> DismissMatch(int id, CancellationToken ct)
+    public async Task<ActionResult<BankTransactionResponse>> DismissMatch(
+        int id, [FromBody] BankTransactionMutationRequest request, CancellationToken ct)
     {
-        var updated = await _service.DismissMatchAsync(GetPortfolioId(), id, ct);
-        return updated == null ? NotFound(new { error = "Bank transaction not found" }) : Ok(updated);
+        try
+        {
+            var updated = await _service.DismissMatchAsync(GetWorkspaceReadScope(), id, request, ct);
+            return updated == null ? NotFound(new { error = "Bank transaction not found" }) : Ok(updated);
+        }
+        catch (BankingConflictException exception)
+        {
+            return Conflict(new { error = exception.Message });
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
     }
 
     /// <summary>
@@ -194,9 +248,18 @@ public class BankingController : ManagementControllerBase
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.MoneyReconciliationDestructive)]
     [ProducesResponseType(typeof(BankTransactionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<BankTransactionResponse>> Ignore(int id, CancellationToken ct)
+    public async Task<ActionResult<BankTransactionResponse>> Ignore(
+        int id, [FromBody] BankTransactionMutationRequest request, CancellationToken ct)
     {
-        var updated = await _service.IgnoreTransactionAsync(GetPortfolioId(), id, ct);
-        return updated == null ? NotFound(new { error = "Bank transaction not found" }) : Ok(updated);
+        try
+        {
+            var updated = await _service.IgnoreTransactionAsync(GetWorkspaceReadScope(), id, request, ct);
+            return updated == null ? NotFound(new { error = "Bank transaction not found" }) : Ok(updated);
+        }
+        catch (BankingConflictException exception)
+        {
+            return Conflict(new { error = exception.Message });
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
     }
 }

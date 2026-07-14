@@ -818,6 +818,7 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.Property(e => e.RawData).HasColumnType("jsonb");
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.BankConnectionId);
+            entity.HasIndex(e => new { e.PortfolioId, e.PropertyId, e.MatchStatus, e.PostedAt });
             entity.HasIndex(e => e.PostedAt);
             entity.HasIndex(e => e.MatchStatus);
             entity.HasIndex(e => new { e.BankConnectionId, e.ProviderTransactionId }).IsUnique();
@@ -829,6 +830,11 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
                 .WithMany(c => c.Transactions)
                 .HasForeignKey(e => e.BankConnectionId)
                 .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Property)
+                .WithMany()
+                .HasForeignKey(e => new { e.PropertyId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(e => new { e.PortfolioId, e.MatchedTenantAccountId, e.MatchedTenantLedgerEntryId })
                 .HasFilter("\"MatchedTenantLedgerEntryId\" IS NOT NULL");
             entity.HasOne(e => e.MatchedTenantAccount)

@@ -191,7 +191,13 @@ public sealed record ReconcileBankTransactionCommand(
     long? TenantLedgerEntryId,
     int? ExpenseId,
     DateTime ExpectedUpdatedAtUtc,
-    DateTime AppliedAtUtc) : IAtomicCommandData;
+    DateTime AppliedAtUtc,
+    int ActorUserId,
+    Guid AuthSessionId,
+    int AccessContextId,
+    long ExpectedAccessRevision,
+    string RequiredCapability,
+    string OperationKey) : IAtomicCommandData;
 
 public enum ReconcileBankTransactionOutcome
 {
@@ -199,9 +205,37 @@ public enum ReconcileBankTransactionOutcome
     AlreadyApplied,
     TransactionNotFound,
     TargetNotFound,
+    RouteRequired,
+    AccessDenied,
     StaleVersion,
 }
 
 public sealed record ReconcileBankTransactionResult(
     ReconcileBankTransactionOutcome Outcome,
+    int TransactionId) : IAtomicResultData;
+
+public sealed record RouteBankTransactionCommand(
+    int PortfolioId,
+    int TransactionId,
+    int? PropertyId,
+    DateTime ExpectedUpdatedAtUtc,
+    DateTime AppliedAtUtc,
+    int ActorUserId,
+    Guid AuthSessionId,
+    int AccessContextId,
+    long ExpectedAccessRevision,
+    string OperationKey) : IAtomicCommandData;
+
+public enum RouteBankTransactionOutcome
+{
+    Applied,
+    AlreadyApplied,
+    TransactionNotFound,
+    PropertyNotFound,
+    AccessDenied,
+    StaleVersion,
+}
+
+public sealed record RouteBankTransactionResult(
+    RouteBankTransactionOutcome Outcome,
     int TransactionId) : IAtomicResultData;
