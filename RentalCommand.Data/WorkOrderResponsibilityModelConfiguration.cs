@@ -115,5 +115,66 @@ internal static class WorkOrderResponsibilityModelConfiguration
                 .HasForeignKey(responsibility => responsibility.EndedByUserId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
+
+        modelBuilder.Entity<TechnicianWorkEntry>(entity =>
+        {
+            entity.HasKey(entry => entry.Id);
+            entity.Property(entry => entry.Kind).HasConversion<string>().HasMaxLength(24);
+            entity.Property(entry => entry.Note).HasMaxLength(2000);
+            entity.Property(entry => entry.Quantity).HasPrecision(12, 3);
+            entity.Property(entry => entry.Unit).HasMaxLength(40);
+            entity.HasIndex(entry => new
+            {
+                entry.PortfolioId,
+                entry.WorkOrderId,
+                entry.CreatedAtUtc,
+                entry.Id,
+            });
+            entity.HasIndex(entry => new
+            {
+                entry.PortfolioId,
+                entry.WorkspaceMembershipId,
+                entry.CreatedAtUtc,
+            });
+            entity.ToTable(table =>
+            {
+                table.HasCheckConstraint(
+                    "CK_TechnicianWorkEntries_KindFacts",
+                    "(\"Kind\" = 'Note' AND \"Note\" IS NOT NULL AND \"Quantity\" IS NULL AND \"StoredFileId\" IS NULL) OR " +
+                    "(\"Kind\" IN ('Time', 'Material') AND \"Quantity\" > 0 AND \"Unit\" IS NOT NULL AND \"StoredFileId\" IS NULL) OR " +
+                    "(\"Kind\" = 'Photo' AND \"StoredFileId\" IS NOT NULL AND \"Quantity\" IS NULL)");
+            });
+            entity.HasQueryFilter(entry =>
+                entry.WorkOrder!.DeletedAt == null &&
+                entry.WorkOrder.Portfolio!.DeletedAt == null);
+            entity.HasOne(entry => entry.WorkOrder)
+                .WithMany(workOrder => workOrder.TechnicianEntries)
+                .HasForeignKey(entry => entry.WorkOrderId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(entry => entry.WorkOrderResponsibility)
+                .WithMany(responsibility => responsibility.TechnicianEntries)
+                .HasForeignKey(entry => entry.WorkOrderResponsibilityId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(entry => entry.WorkspaceMembership)
+                .WithMany(membership => membership.TechnicianWorkEntries)
+                .HasForeignKey(entry => new { entry.WorkspaceMembershipId, entry.PortfolioId })
+                .HasPrincipalKey(membership => new { membership.Id, membership.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(entry => entry.MembershipRoleAssignment)
+                .WithMany(assignment => assignment.TechnicianWorkEntries)
+                .HasForeignKey(entry => new
+                    { entry.MembershipRoleAssignmentId, entry.WorkspaceMembershipId, entry.PortfolioId })
+                .HasPrincipalKey(assignment => new
+                    { assignment.Id, assignment.WorkspaceMembershipId, assignment.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(entry => entry.CreatedByUser)
+                .WithMany()
+                .HasForeignKey(entry => entry.CreatedByUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(entry => entry.StoredFile)
+                .WithMany()
+                .HasForeignKey(entry => entry.StoredFileId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
     }
 }

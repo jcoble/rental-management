@@ -34,6 +34,7 @@ import '../leases/lease_detail_screen.dart';
 import '../leases/leases_list_screen.dart';
 import '../maintenance/work_order_unit_aware_loader.dart';
 import '../messages/message_detail_screen.dart';
+import '../technician/technician_landing_screen.dart';
 import '../messages/message_models.dart';
 import '../messages/messages_list_screen.dart';
 import '../money/expense_detail_screen.dart';
@@ -624,6 +625,13 @@ class _HomeShellState extends ConsumerState<HomeShell>
       return MobileShellNavigation(
         controller: _shellNavigator,
         child: const LeasingLandingScreen(),
+      );
+    }
+
+    if (authState.activeExperience == WorkspaceExperience.maintenance) {
+      return MobileShellNavigation(
+        controller: _shellNavigator,
+        child: const TechnicianLandingScreen(),
       );
     }
 

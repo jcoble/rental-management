@@ -26,6 +26,7 @@ import '../../features/settings/my_alerts_screen.dart';
 import '../../features/settings/settings_screen.dart';
 import '../../features/settings/team_routing_screen.dart';
 import '../../features/settings/tenant_notices_screen.dart';
+import '../../features/technician/technician_assignment_detail_screen.dart';
 import '../../features/units/unit_command_center_screen.dart';
 import 'mobile_access_denied_screen.dart';
 
@@ -215,6 +216,11 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/work-orders/:id',
         builder: (context, state) =>
             WorkOrderShellTargetLoaderScreen(workOrderId: _idParam(state)),
+      ),
+      GoRoute(
+        path: '/technician/assignments/:id',
+        builder: (context, state) =>
+            TechnicianAssignmentDetailScreen(workOrderId: _idParam(state)),
       ),
       GoRoute(
         path: '/units/:id',

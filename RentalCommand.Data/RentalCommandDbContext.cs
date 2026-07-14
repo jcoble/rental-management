@@ -102,6 +102,7 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
     public DbSet<VendorRating> VendorRatings => Set<VendorRating>();
     public DbSet<WorkOrder> WorkOrders => Set<WorkOrder>();
     public DbSet<WorkOrderResponsibility> WorkOrderResponsibilities => Set<WorkOrderResponsibility>();
+    public DbSet<TechnicianWorkEntry> TechnicianWorkEntries => Set<TechnicianWorkEntry>();
     public DbSet<WorkOrderStatusEvent> WorkOrderStatusEvents => Set<WorkOrderStatusEvent>();
     public DbSet<RecurringMaintenanceTask> RecurringMaintenanceTasks => Set<RecurringMaintenanceTask>();
     public DbSet<Appointment> Appointments => Set<Appointment>();
@@ -1893,6 +1894,7 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.Property(e => e.EstimatedCost).HasPrecision(18, 2);
             entity.Property(e => e.ActualCost).HasPrecision(18, 2);
             entity.Property(e => e.CreatedBy).HasMaxLength(120);
+            entity.Property(e => e.TechnicianAccessInstructions).HasMaxLength(2000);
             entity.Property(e => e.Priority).HasConversion<int>();
             entity.Property(e => e.Status).HasConversion<int>();
             // Full scan-extraction superset for work orders created from a scan draft (Postgres jsonb).
@@ -2171,6 +2173,9 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.Property(e => e.Subject).IsRequired().HasMaxLength(200);
             entity.Property(e => e.LastMessagePreview).HasMaxLength(280);
             entity.HasIndex(e => new { e.PortfolioId, e.TenantId });
+            entity.HasIndex(e => new { e.PortfolioId, e.WorkOrderId })
+                .IsUnique()
+                .HasFilter("\"WorkOrderId\" IS NOT NULL");
             entity.HasIndex(e => e.LastMessageAt);
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
@@ -2186,6 +2191,10 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
                 .WithMany()
                 .HasForeignKey(e => e.PropertyId)
                 .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.WorkOrder)
+                .WithMany()
+                .HasForeignKey(e => e.WorkOrderId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<ConversationMessage>(entity =>

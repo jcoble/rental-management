@@ -283,6 +283,7 @@ export const workOrderSchema = z.object({
 	propertyId: numericString('Property'),
 	title: required('Title'),
 	description: required('Description'),
+	technicianAccessInstructions: optionalText,
 	priority: z.string(),
 	category: required('Category'),
 	// Optional maintenance context (all blank → null). unitId is filtered to the chosen property

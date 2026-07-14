@@ -8,6 +8,7 @@ class WorkOrder {
   final int? vendorId;
   final String title;
   final String description;
+  final String? technicianAccessInstructions;
   final String category;
   final String priority;
   final String status;
@@ -38,6 +39,7 @@ class WorkOrder {
     this.vendorId,
     required this.title,
     required this.description,
+    this.technicianAccessInstructions,
     required this.category,
     required this.priority,
     required this.status,
@@ -66,17 +68,24 @@ class WorkOrder {
       vendorId: (json['vendorId'] as num?)?.toInt(),
       title: json['title'] as String? ?? '',
       description: json['description'] as String? ?? '',
+      technicianAccessInstructions:
+          json['technicianAccessInstructions'] as String?,
       category: json['category'] as String? ?? '',
       priority: json['priority'] as String? ?? '',
       status: json['status'] as String? ?? '',
-      requestedAt: DateTime.tryParse(json['requestedAt'] as String? ?? '') ?? DateTime(0),
+      requestedAt:
+          DateTime.tryParse(json['requestedAt'] as String? ?? '') ??
+          DateTime(0),
       scheduledFor: DateTime.tryParse(json['scheduledFor'] as String? ?? ''),
-      scheduledWindowEnd: DateTime.tryParse(json['scheduledWindowEnd'] as String? ?? ''),
+      scheduledWindowEnd: DateTime.tryParse(
+        json['scheduledWindowEnd'] as String? ?? '',
+      ),
       completedAt: DateTime.tryParse(json['completedAt'] as String? ?? ''),
       estimatedCost: (json['estimatedCost'] as num?)?.toDouble(),
       actualCost: (json['actualCost'] as num?)?.toDouble(),
       createdBy: json['createdBy'] as String?,
-      updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime(0),
+      updatedAt:
+          DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime(0),
       propertyName: json['propertyName'] as String?,
       unitNumber: json['unitNumber'] as String?,
       tenantName: json['tenantName'] as String?,
@@ -94,6 +103,8 @@ class WorkOrder {
       if (vendorId != null) 'vendorId': vendorId,
       'title': title,
       'description': description,
+      if (technicianAccessInstructions != null)
+        'technicianAccessInstructions': technicianAccessInstructions,
       'category': category,
       'priority': priority,
       'status': status,

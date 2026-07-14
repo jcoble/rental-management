@@ -256,11 +256,46 @@ void main() {
     );
   });
 
+  test('maintenance uses only the assigned-work experience', () {
+    const capabilities = {
+      'maintenance.assigned-work.read',
+      'maintenance.assigned-work.update',
+      'maintenance.assigned-work.converse',
+    };
+
+    expect(
+      canOpenMobilePath(
+        experience: WorkspaceExperience.maintenance,
+        capabilities: capabilities,
+        path: '/technician/assignments/42',
+      ),
+      isTrue,
+    );
+    for (final path in [
+      '/work',
+      '/work-orders/42',
+      '/inbox',
+      '/messages/2',
+      '/rentals',
+      '/money',
+      '/scan/capture',
+    ]) {
+      expect(
+        canOpenMobilePath(
+          experience: WorkspaceExperience.maintenance,
+          capabilities: capabilities,
+          path: path,
+        ),
+        isFalse,
+        reason: 'Technicians must not open the management route $path.',
+      );
+    }
+  });
+
   test('notification settings separate personal and administrator access', () {
     for (final experience in [
       WorkspaceExperience.management,
       WorkspaceExperience.leasing,
-      WorkspaceExperience.maintenance,
     ]) {
       expect(
         canOpenMobilePath(
@@ -287,6 +322,15 @@ void main() {
         isTrue,
       );
     }
+
+    expect(
+      canOpenMobilePath(
+        experience: WorkspaceExperience.maintenance,
+        capabilities: const {'notifications.manage'},
+        path: '/settings/notifications/tenant-notices',
+      ),
+      isFalse,
+    );
 
     expect(
       canOpenMobilePath(

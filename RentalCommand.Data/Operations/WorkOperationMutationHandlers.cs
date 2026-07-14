@@ -41,6 +41,7 @@ public sealed class CreateWorkOrderHandler
             VendorId = command.VendorId,
             Title = command.Title.Trim(),
             Description = command.Description.Trim(),
+            TechnicianAccessInstructions = command.TechnicianAccessInstructions?.Trim(),
             Category = command.Category.Trim(),
             Priority = command.Priority,
             Status = command.Status,
@@ -190,6 +191,8 @@ public sealed class UpdateWorkOrderHandler
             (command.VendorId.HasValue && command.VendorId != entity.VendorId) ||
             (command.Title is not null && command.Title.Trim() != entity.Title) ||
             (command.Description is not null && command.Description.Trim() != entity.Description) ||
+            (command.TechnicianAccessInstructions is not null &&
+             command.TechnicianAccessInstructions.Trim() != entity.TechnicianAccessInstructions) ||
             (command.Category is not null && command.Category.Trim() != entity.Category) ||
             (command.Priority.HasValue && command.Priority.Value != entity.Priority) ||
             (command.EstimatedCost.HasValue && command.EstimatedCost != entity.EstimatedCost) ||
@@ -200,6 +203,8 @@ public sealed class UpdateWorkOrderHandler
         if (command.VendorId.HasValue) entity.VendorId = command.VendorId;
         if (command.Title is not null) entity.Title = command.Title.Trim();
         if (command.Description is not null) entity.Description = command.Description.Trim();
+        if (command.TechnicianAccessInstructions is not null)
+            entity.TechnicianAccessInstructions = command.TechnicianAccessInstructions.Trim();
         if (command.Category is not null) entity.Category = command.Category.Trim();
         if (command.Priority.HasValue) entity.Priority = command.Priority.Value;
         if (command.Status.HasValue) entity.Status = command.Status.Value;

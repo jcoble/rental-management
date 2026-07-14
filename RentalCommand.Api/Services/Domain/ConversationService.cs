@@ -263,7 +263,8 @@ public class ConversationService : IConversationService
                 .Select(m => new ConversationMessageDto
                 {
                     Id = m.Id,
-                    SenderRole = m.SenderRole == ConversationSenderRole.Landlord ? "Landlord" : "Tenant",
+                    SenderRole = m.SenderRole == ConversationSenderRole.Landlord ? "Landlord" :
+                        m.SenderRole == ConversationSenderRole.Technician ? "Technician" : "Tenant",
                     Body = m.Body,
                     Channels = m.Channels,
                     CreatedAt = m.CreatedAt,

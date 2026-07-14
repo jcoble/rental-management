@@ -101,6 +101,7 @@ public static class ServiceCollectionExtensions
         services.AddAccountingProviders();
         // --- controllers-ops-misc sub-unit ---
         services.AddScoped<IWorkOrderService, WorkOrderService>();
+        services.AddScoped<ITechnicianExperienceService, TechnicianExperienceService>();
         services.AddScoped<IRecurringMaintenanceTaskService, RecurringMaintenanceTaskService>();
         services.AddScoped<IAppointmentService, AppointmentService>();
         services.AddScoped<IInspectionService, InspectionService>();

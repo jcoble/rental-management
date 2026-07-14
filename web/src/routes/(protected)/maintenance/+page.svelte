@@ -109,6 +109,7 @@
 		propertyId: '',
 		title: '',
 		description: '',
+		technicianAccessInstructions: '',
 		priority: 'Normal',
 		category: 'General',
 		unitId: '',
@@ -130,7 +131,7 @@
 		{ id: 'issue', label: 'Issue', description: 'Title and details' },
 		{ id: 'triage', label: 'Triage', description: 'Priority and type' },
 		{ id: 'location', label: 'Location', description: 'Property and unit' },
-		{ id: 'schedule', label: 'Schedule', description: 'Visit window' },
+		{ id: 'schedule', label: 'Schedule', description: 'Visit window and access' },
 		{ id: 'people', label: 'People', description: 'Tenant and vendor' },
 		{ id: 'budget', label: 'Budget', description: 'Estimated cost' },
 	];
@@ -138,7 +139,7 @@
 		['title', 'description'],
 		['priority', 'category'],
 		['propertyId', 'unitId'],
-		['scheduledFor', 'scheduledWindowEnd'],
+		['scheduledFor', 'scheduledWindowEnd', 'technicianAccessInstructions'],
 		['tenantId', 'vendorId'],
 		['estimatedCost'],
 	] as const;
@@ -223,6 +224,7 @@
 			propertyId: String(wo.propertyId),
 			title: wo.title,
 			description: wo.description,
+			technicianAccessInstructions: wo.technicianAccessInstructions ?? '',
 			priority: wo.priority,
 			category: wo.category,
 			unitId: wo.unitId != null ? String(wo.unitId) : '',
@@ -878,6 +880,11 @@
 							<Input data-testid="work-order-category-input" bind:value={woForm.category} placeholder="Category" />
 								{#if woErrors.category}<p class="mt-1 text-xs text-destructive" data-testid="work-order-category-error">{woErrors.category}</p>{/if}
 							</div>
+						</div>
+						<div class="mt-3">
+							<label for="work-order-technician-access" class="mb-1 block text-xs font-medium text-muted-foreground">Safe access instructions (optional)</label>
+							<textarea id="work-order-technician-access" data-testid="work-order-technician-access-input" bind:value={woForm.technicianAccessInstructions} rows={3} maxlength={2000} class="w-full rounded border border-border bg-background px-3 py-2 text-sm" placeholder="Entry instructions, lockbox location, pets, or contact guidance safe for the assigned technician"></textarea>
+							<p class="mt-1 text-xs text-muted-foreground">Shown only in the assigned technician workspace. Do not include financial or unrelated resident information.</p>
 						</div>
 					{:else if woStep === 2}
 						<div>

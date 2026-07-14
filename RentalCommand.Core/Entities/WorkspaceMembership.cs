@@ -27,4 +27,6 @@ public sealed class WorkspaceMembership
         new List<WorkspaceInvitation>();
     public ICollection<WorkOrderResponsibility> WorkOrderResponsibilities { get; set; } =
         new List<WorkOrderResponsibility>();
+    public ICollection<TechnicianWorkEntry> TechnicianWorkEntries { get; set; } =
+        new List<TechnicianWorkEntry>();
 }
