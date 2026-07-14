@@ -13,7 +13,7 @@ namespace RentalCommand.Api.Tests.Domain;
 /// Go-live (graduate-once → wipe demo) coverage for <see cref="SandboxService"/>: a sandbox portfolio's
 /// data is wiped and the flag flipped to Live; the operation is idempotent; and it only ever affects the
 /// caller's own portfolio (IDOR-safe) — a second, sandboxed portfolio is left fully intact. Also pins
-/// C-4: after the wipe the new Live portfolio is re-seeded with the landlord's own primary self-owner.
+/// C-4: the canonical primary owner and its relationship survive the demo-data wipe.
 /// </summary>
 public class SandboxServiceTests : IDisposable
 {
@@ -23,14 +23,13 @@ public class SandboxServiceTests : IDisposable
 
     private SandboxService BuildService()
     {
-        var provisioner = new SelfOwnerProvisioner(_ctx.Db, NullLogger<SelfOwnerProvisioner>.Instance, TimeProvider.System);
         var seeder = new RentalCommand.Api.Services.Auth.DemoDataSeeder(
             _ctx.Db,
             NullLogger<RentalCommand.Api.Services.Auth.DemoDataSeeder>.Instance,
             TimeProvider.System,
             new LegalDocumentSourceVersionTestResolver(_ctx.Db));
         return new SandboxService(
-            _ctx.Db, provisioner, seeder, NullLogger<SandboxService>.Instance, TimeProvider.System);
+            _ctx.Db, seeder, NullLogger<SandboxService>.Instance, TimeProvider.System);
     }
 
     // -----------------------------------------------------------------------
@@ -270,12 +269,37 @@ public class SandboxServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task GoLive_CreatesPrimarySelfOwner_FromTheAdminUser_AfterWipingDemoOwners()
+    public async Task GoLive_PreservesCanonicalPrimaryOwner_WhileWipingDemoOwners()
     {
-        // C-4: the wipe removes the demo owners, so the fresh Live portfolio must be re-seeded with the
-        // landlord's own primary owner — otherwise the getting-started "owner" step blocks "add property".
+        // Registration creates this canonical owner and relationship atomically. Sandbox graduation
+        // preserves them rather than deleting and recreating the same authority graph through a second path.
         MarkSandbox(portfolioId: 1, DateTime.UtcNow);
         SeedRichGraph(portfolioId: 1, actorDisplayName: "Pat Owner", actorEmail: "owner@example.com");
+        var user = await _ctx.Db.Users.SingleAsync(candidate => candidate.Email == "owner@example.com");
+        var context = await _ctx.Db.WorkspaceAccessContexts.SingleAsync(candidate =>
+            candidate.UserId == user.Id && candidate.PortfolioId == 1);
+        var primary = new OwnerEntity
+        {
+            PortfolioId = 1,
+            OwnerEntityType = OwnerEntityType.Person,
+            Name = "Pat Owner",
+            Email = "owner@example.com",
+            IsPrimary = true,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _ctx.Db.OwnerUserAccesses.Add(new OwnerUserAccess
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = 1,
+            ApplicationUser = user,
+            AccessContext = context,
+            OwnerEntity = primary,
+            EffectiveFromUtc = DateTime.UtcNow,
+            GrantedAtUtc = DateTime.UtcNow,
+            GrantedByUser = user,
+            Reason = "Initial workspace owner relationship",
+        });
         // Demo owner that the wipe should remove.
         _ctx.Db.OwnerEntities.Add(new OwnerEntity
         {
@@ -289,7 +313,7 @@ public class SandboxServiceTests : IDisposable
         await _ctx.Db.SaveChangesAsync();
         await BuildService().GoLiveAsync(1, CancellationToken.None);
 
-        // Exactly one owner remains: the primary self-owner derived from the account.
+        // Exactly one owner remains: the original canonical primary owner and its access relationship.
         _ctx.Db.ChangeTracker.Clear();
         var owners = await _ctx.Db.OwnerEntities.IgnoreQueryFilters()
             .Where(o => o.PortfolioId == 1).ToListAsync();
@@ -297,6 +321,8 @@ public class SandboxServiceTests : IDisposable
         owners[0].IsPrimary.Should().BeTrue();
         owners[0].Name.Should().Be("Pat Owner");
         owners[0].Email.Should().Be("owner@example.com");
+        (await _ctx.Db.OwnerUserAccesses.CountAsync(access =>
+            access.PortfolioId == 1 && access.OwnerEntityId == owners[0].Id)).Should().Be(1);
     }
 
     [Fact]

@@ -1,11 +1,22 @@
 import type { Portfolio, Dashboard, SandboxState, GettingStartedSignalsResponse } from '$lib/types';
 import { api } from '../client';
+import { idempotentMutation } from '../idempotency';
 
 export const portfolios = {
 	list: () => api.get<Portfolio[]>('/portfolios'),
 	get: (id: number) => api.get<Portfolio>(`/portfolios/${id}`),
-	update: (id: number, data: Partial<Portfolio>) => api.patch<Portfolio>(`/portfolios/${id}`, data),
-	delete: (id: number) => api.delete(`/portfolios/${id}`),
+	update: (id: number, data: Partial<Portfolio>) =>
+		idempotentMutation(`portfolios:update:${id}:${JSON.stringify(data)}`, (operationKey) =>
+			api.patch<Portfolio>(`/portfolios/${id}`, data, {
+				headers: { 'Idempotency-Key': operationKey }
+			})
+		),
+	delete: (id: number) =>
+		idempotentMutation(`portfolios:delete:${id}`, (operationKey) =>
+			api.delete(`/portfolios/${id}`, {
+				headers: { 'Idempotency-Key': operationKey }
+			})
+		),
 	dashboard: (id: number) => api.get<Dashboard>(`/portfolios/${id}/dashboard`),
 	gettingStarted: () => api.get<GettingStartedSignalsResponse>('/portfolios/getting-started'),
 

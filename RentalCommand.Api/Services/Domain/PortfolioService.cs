@@ -1,10 +1,8 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Core.Entities;
-using RentalCommand.Core.Enums;
-using RentalCommand.Core.Interfaces;
-using RentalCommand.Core.Time;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -12,20 +10,15 @@ namespace RentalCommand.Api.Services.Domain;
 /// <inheritdoc cref="IPortfolioService"/>
 public class PortfolioService : IPortfolioService
 {
-    private const string EntityType = "Portfolio";
-
     private readonly RentalCommandDbContext _db;
-    private readonly IDataUpdateService _dataUpdate;
-    private readonly TimeProvider _timeProvider;
+    private readonly IAtomicUnitOfWork _atomic;
 
     public PortfolioService(
         RentalCommandDbContext db,
-        IDataUpdateService dataUpdate,
-        TimeProvider timeProvider)
+        IAtomicUnitOfWork atomic)
     {
         _db = db;
-        _dataUpdate = dataUpdate;
-        _timeProvider = timeProvider;
+        _atomic = atomic;
     }
 
     public async Task<IReadOnlyList<PortfolioResponse>> ListForUserAsync(int portfolioId, CancellationToken ct = default)
@@ -114,55 +107,41 @@ public class PortfolioService : IPortfolioService
         };
     }
 
-    public async Task<PortfolioResponse?> UpdateAsync(int portfolioId, int id, UpdatePortfolioRequest request, CancellationToken ct = default)
+    public async Task<PortfolioResponse?> UpdateAsync(
+        WorkspaceReadScope scope,
+        int id,
+        UpdatePortfolioRequest request,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        if (id != portfolioId)
+        if (id != scope.PortfolioId)
         {
             return null;
         }
-
-        var entity = await _db.Portfolios
-            .FirstOrDefaultAsync(p => p.Id == portfolioId, ct);
-        if (entity == null)
-        {
-            return null;
-        }
-
-        if (request.Name != null) entity.Name = request.Name;
-        if (request.Description != null) entity.Description = request.Description;
-        if (request.ManagementCompanyName != null) entity.ManagementCompanyName = request.ManagementCompanyName;
-        if (!string.IsNullOrWhiteSpace(request.TimeZone)) entity.TimeZone = request.TimeZone;
-        if (request.Status.HasValue) entity.Status = request.Status.Value;
-        if (!string.IsNullOrWhiteSpace(request.Currency)) entity.Currency = request.Currency;
-        if (request.Settings != null) entity.Settings = request.Settings;
-        entity.UpdatedAt = _timeProvider.UtcNow();
-
-        await _db.SaveChangesAsync(ct);
-
-        var response = PortfolioResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
+        var command = AtomicWorkspaceCoreMutation.Command(
+            scope, AtomicWorkspaceCoreMutationOperation.UpdatePortfolio, operationKey, request);
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicWorkspaceCoreMutation.Identity(command), command, AtomicWorkspaceCoreMutation.Codec, ct);
+        return outcome.Value.Found && outcome.Value.ResponseJson is not null
+            ? JsonSerializer.Deserialize<PortfolioResponse>(outcome.Value.ResponseJson)
+            : null;
     }
 
-    public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
+    public async Task<bool> DeleteAsync(
+        WorkspaceReadScope scope,
+        int id,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        if (id != portfolioId)
+        if (id != scope.PortfolioId)
         {
             return false;
         }
-
-        var entity = await _db.Portfolios
-            .FirstOrDefaultAsync(p => p.Id == portfolioId, ct);
-        if (entity == null)
-        {
-            return false;
-        }
-
-        entity.DeletedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
-
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
-        return true;
+        var command = AtomicWorkspaceCoreMutation.Command(
+            scope, AtomicWorkspaceCoreMutationOperation.DeletePortfolio, operationKey, new { });
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicWorkspaceCoreMutation.Identity(command), command, AtomicWorkspaceCoreMutation.Codec, ct);
+        return outcome.Value.Found;
     }
 
     private static string? ReadNotificationEmail(string? settingsJson)

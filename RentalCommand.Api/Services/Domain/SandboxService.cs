@@ -9,20 +9,17 @@ namespace RentalCommand.Api.Services.Domain;
 public sealed class SandboxService : ISandboxService
 {
     private readonly RentalCommandDbContext _db;
-    private readonly ISelfOwnerProvisioner _selfOwnerProvisioner;
     private readonly Auth.DemoDataSeeder _demoSeeder;
     private readonly ILogger<SandboxService> _logger;
     private readonly TimeProvider _timeProvider;
 
     public SandboxService(
         RentalCommandDbContext db,
-        ISelfOwnerProvisioner selfOwnerProvisioner,
         Auth.DemoDataSeeder demoSeeder,
         ILogger<SandboxService> logger,
         TimeProvider timeProvider)
     {
         _db = db;
-        _selfOwnerProvisioner = selfOwnerProvisioner;
         _demoSeeder = demoSeeder;
         _logger = logger;
         _timeProvider = timeProvider;
@@ -64,12 +61,6 @@ public sealed class SandboxService : ISandboxService
         portfolio.SandboxSeededAtUtc = null;
         portfolio.UpdatedAt = _timeProvider.UtcNow();
         await _db.SaveChangesAsync(ct);
-
-        // The wipe removed the demo owners, so the fresh Live portfolio has none. Re-create the primary
-        // self-owner from the landlord's own account so the getting-started "owner" step is satisfied
-        // before they add a property (the wipe's SetNull FK already cleared the stale OwnerEntityId).
-        // Best-effort: if no admin user resolves, skip rather than fail the graduation.
-        await EnsureSelfOwnerAfterWipeAsync(portfolioId, ct);
 
         await tx.CommitAsync(ct);
 
@@ -126,30 +117,6 @@ public sealed class SandboxService : ISandboxService
             "Portfolio {PortfolioId} recorded first-login onboarding choice: {Choice}.", portfolioId, choice);
 
         return ToState(portfolio);
-    }
-
-    /// <summary>
-    /// After a Go-Live wipe, recreates the portfolio's primary self-owner from its administering user.
-    /// Resolves the owner-user as the earliest Admin-role-eligible account scoped to the portfolio; if no
-    /// such user exists (e.g. a test fixture with no Identity users) it is a safe no-op.
-    /// </summary>
-    private async Task EnsureSelfOwnerAfterWipeAsync(int portfolioId, CancellationToken ct)
-    {
-        var user = await _db.Users
-            .Where(u => u.WorkspaceAccessContexts.Any(context =>
-                context.PortfolioId == portfolioId && context.Membership != null))
-            .OrderBy(u => u.Id)
-            .FirstOrDefaultAsync(ct);
-
-        if (user is null)
-        {
-            _logger.LogWarning(
-                "Go-Live for portfolio {PortfolioId}: no administering user found; skipped self-owner creation.",
-                portfolioId);
-            return;
-        }
-
-        await _selfOwnerProvisioner.EnsureSelfOwnerAsync(user, portfolioId, ct);
     }
 
     // Kept beside the executable deletes so IntegrationTests can prove that this service and the
@@ -259,7 +226,11 @@ public sealed class SandboxService : ISandboxService
         await _db.OwnerDistributions.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.OwnerUserAccesses.IgnoreQueryFilters()
-            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+            .Where(e => e.PortfolioId == portfolioId
+                && !_db.OwnerEntities.IgnoreQueryFilters().Any(owner =>
+                    owner.Id == e.OwnerEntityId && owner.PortfolioId == portfolioId
+                    && owner.IsPrimary && owner.DeletedAt == null))
+            .ExecuteDeleteAsync(ct);
         await _db.VendorRatings.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.VendorDispatches.IgnoreQueryFilters()
@@ -403,7 +374,7 @@ public sealed class SandboxService : ISandboxService
         await _db.Vendors.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.OwnerEntities.IgnoreQueryFilters()
-            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+            .Where(e => e.PortfolioId == portfolioId && !e.IsPrimary).ExecuteDeleteAsync(ct);
         await _db.Owners.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.OAuthStates.IgnoreQueryFilters()

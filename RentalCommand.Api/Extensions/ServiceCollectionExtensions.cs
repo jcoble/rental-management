@@ -177,12 +177,6 @@ public static class ServiceCollectionExtensions
         services.AddScoped<RentalCommand.Core.Interfaces.ISandboxGuard, RentalCommand.Data.SandboxGuard>();
         services.AddScoped<ISandboxService, SandboxService>();
 
-        // --- owner provisioning (the landlord IS the first owner) ---
-        // InitialWorkspaceAuthorityProvisioner creates every fresh workspace's full owner + Team graph.
-        // SelfOwnerProvisioner remains the explicit, current go-live operation; no startup backfill exists.
-        services.AddScoped<ISelfOwnerProvisioner, SelfOwnerProvisioner>();
-        services.AddScoped<IInitialWorkspaceAuthorityProvisioner, InitialWorkspaceAuthorityProvisioner>();
-
         return services;
     }
 }

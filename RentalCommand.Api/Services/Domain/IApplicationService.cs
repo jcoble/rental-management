@@ -88,5 +88,6 @@ public interface IApplicationService
         WorkspaceReadScope scope, int id, int userId, string operationKey, CancellationToken ct = default);
 
     /// <summary>Generates or rotates the portfolio's public application token and returns the apply link.</summary>
-    Task<ApplicationLinkResult> GenerateLinkAsync(int portfolioId, CancellationToken ct = default);
+    Task<ApplicationLinkResult> GenerateLinkAsync(
+        WorkspaceReadScope scope, string operationKey, CancellationToken ct = default);
 }
