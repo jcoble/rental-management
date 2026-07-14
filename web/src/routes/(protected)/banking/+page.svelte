@@ -3,6 +3,7 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { CAPABILITY } from '$lib/auth/experience-policy';
 	import { banking } from '$lib/api/endpoints/banking';
+	import { properties } from '$lib/api/endpoints/properties';
 	import type {
 		BankReviewQueueResponse,
 		BankMatchSuggestion,
@@ -11,7 +12,8 @@
 		ExchangePlaidPublicTokenRequest,
 		ImportBankTransactionsRequest,
 		MatchBankTransactionRequest,
-		PlaidSettings
+		PlaidSettings,
+		Property
 	} from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { formatDateOnly } from '$lib/utils/date';
@@ -99,6 +101,12 @@
 		enabled: !!portfolioId && canManageConnections
 	}));
 
+	const propertiesQuery = createQuery(() => ({
+		queryKey: ['banking-route-properties', portfolioId],
+		queryFn: () => properties.list(portfolioId!, { take: 250 }),
+		enabled: !!portfolioId && canManageConnections
+	}));
+
 	const plaidSettingsQuery = createQuery(() => ({
 		queryKey: ['banking-plaid-settings', portfolioId],
 		queryFn: () => banking.plaidSettings(),
@@ -114,6 +122,7 @@
 	const summary = $derived(summaryQuery.data as BankingSummary | undefined);
 	const transactionPage = $derived(transactionsQuery.data as BankTransactionListResponse | undefined);
 	const transactions = $derived(transactionPage?.items ?? []);
+	const routingProperties = $derived((propertiesQuery.data as Property[] | undefined) ?? []);
 	const transactionTotalCount = $derived(transactionPage?.totalCount ?? transactions.length);
 	const transactionPageEnd = $derived((transactionPage?.skip ?? transactionSkip) + transactions.length);
 	const plaidSettings = $derived(plaidSettingsQuery.data as PlaidSettings | undefined);
@@ -192,10 +201,22 @@
 		onError: (err) => showError(apiErrorMessage(err))
 	}));
 
-	function matchRequest(suggestion: BankMatchSuggestion): MatchBankTransactionRequest {
+	const routeMutation = createMutation(() => ({
+		mutationFn: ({ id, propertyId, updatedAt, operationKey }: { id: number; propertyId?: number; updatedAt: string; operationKey: string }) =>
+			banking.routeTransaction(id, { propertyId, expectedUpdatedAtUtc: updatedAt, operationKey }),
+		onSuccess: () => {
+			showSuccess('Bank transaction route updated.');
+			refreshBanking();
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
+
+	function matchRequest(suggestion: BankMatchSuggestion, updatedAt: string): MatchBankTransactionRequest {
+		const operation = { operationKey: crypto.randomUUID(), expectedUpdatedAtUtc: updatedAt };
 		return suggestion.entityType === 'Expense'
-			? { expenseId: suggestion.entityId }
+			? { ...operation, expenseId: suggestion.entityId }
 			: {
+					...operation,
 					tenantAccountId: suggestion.tenantAccountId,
 					tenantLedgerEntryId: suggestion.entityId
 				};
@@ -211,8 +232,15 @@
 		onError: (err) => showError(apiErrorMessage(err))
 	}));
 
+	type BankMutation = { id: number; operationKey: string; expectedUpdatedAtUtc: string };
+	const mutationFor = (id: number, expectedUpdatedAtUtc: string): BankMutation => ({
+		id,
+		expectedUpdatedAtUtc,
+		operationKey: crypto.randomUUID()
+	});
+
 	const clearMutation = createMutation(() => ({
-		mutationFn: (id: number) => banking.clearMatch(id),
+		mutationFn: (mutation: BankMutation) => banking.clearMatch(mutation.id, mutation),
 		onSuccess: () => {
 			showSuccess('Match cleared.');
 			refreshBanking();
@@ -225,9 +253,9 @@
 	// be brought back via Clear (un-ignore). Tracks a pending id for per-row button disabling.
 	let pendingIgnoreId = $state<number | null>(null);
 	const ignoreMutation = createMutation(() => ({
-		mutationFn: (id: number) => banking.ignore(id),
-		onMutate: (id: number) => {
-			pendingIgnoreId = id;
+		mutationFn: (mutation: BankMutation) => banking.ignore(mutation.id, mutation),
+		onMutate: (mutation: BankMutation) => {
+			pendingIgnoreId = mutation.id;
 		},
 		onSuccess: () => {
 			showSuccess('Marked personal — kept out of your books.');
@@ -242,9 +270,9 @@
 	let pendingReviewId = $state<number | null>(null);
 
 	const confirmMatchMutation = createMutation(() => ({
-		mutationFn: (id: number) => banking.confirmMatch(id),
-		onMutate: (id: number) => {
-			pendingReviewId = id;
+		mutationFn: (mutation: BankMutation) => banking.confirmMatch(mutation.id, mutation),
+		onMutate: (mutation: BankMutation) => {
+			pendingReviewId = mutation.id;
 		},
 		onSuccess: () => {
 			showSuccess('Confirmed. We won’t count this one twice.');
@@ -258,9 +286,9 @@
 	}));
 
 	const dismissMatchMutation = createMutation(() => ({
-		mutationFn: (id: number) => banking.dismissMatch(id),
-		onMutate: (id: number) => {
-			pendingReviewId = id;
+		mutationFn: (mutation: BankMutation) => banking.dismissMatch(mutation.id, mutation),
+		onMutate: (mutation: BankMutation) => {
+			pendingReviewId = mutation.id;
 		},
 		onSuccess: () => {
 			showSuccess('Got it — not a match.');
@@ -475,7 +503,7 @@
 								<Button
 									size="sm"
 									class="flex-1 lg:flex-none"
-									onclick={() => confirmMatchMutation.mutate(item.transaction.id)}
+									onclick={() => confirmMatchMutation.mutate(mutationFor(item.transaction.id, item.transaction.updatedAt))}
 									disabled={pendingReviewId === item.transaction.id}
 									data-testid="bank-review-confirm-{item.transaction.id}"
 								>
@@ -487,7 +515,7 @@
 										size="sm"
 										variant="outline"
 										class="flex-1 lg:flex-none"
-										onclick={() => dismissMatchMutation.mutate(item.transaction.id)}
+										onclick={() => dismissMatchMutation.mutate(mutationFor(item.transaction.id, item.transaction.updatedAt))}
 										disabled={pendingReviewId === item.transaction.id}
 										data-testid="bank-review-dismiss-{item.transaction.id}"
 									>
@@ -567,6 +595,7 @@
 									<th class="px-4 py-3 text-left font-medium text-muted-foreground">Date</th>
 									<th class="px-4 py-3 text-left font-medium text-muted-foreground">Description</th>
 									<th class="px-4 py-3 text-right font-medium text-muted-foreground">Amount</th>
+									<th class="px-4 py-3 text-left font-medium text-muted-foreground">Property route</th>
 									<th class="px-4 py-3 text-left font-medium text-muted-foreground">Match</th>
 								</tr>
 							</thead>
@@ -581,6 +610,30 @@
 										<td class="whitespace-nowrap px-4 py-3 text-right font-mono {transaction.amount >= 0 ? 'text-[var(--success)]' : 'text-destructive'}">
 											{money(transaction.amount)}
 										</td>
+										<td class="min-w-56 px-4 py-3">
+											<Select.Root
+												type="single"
+												value={transaction.propertyId ? String(transaction.propertyId) : 'unassigned'}
+												onValueChange={(value) => routeMutation.mutate({
+													id: transaction.id,
+													propertyId: value === 'unassigned' ? undefined : Number(value),
+													updatedAt: transaction.updatedAt,
+													operationKey: crypto.randomUUID()
+												})}
+												disabled={routeMutation.isPending}
+											>
+												<Select.Trigger class="h-9 w-full" data-testid="bank-transaction-route-{transaction.id}">
+													{transaction.propertyName ?? 'Unassigned · admin only'}
+												</Select.Trigger>
+												<Select.Content>
+													<Select.Item value="unassigned" label="Unassigned · admin only">Unassigned · admin only</Select.Item>
+													{#each routingProperties as property (property.id)}
+														<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
+													{/each}
+												</Select.Content>
+											</Select.Root>
+											<p class="mt-1 text-xs text-muted-foreground">Controls which assigned managers may review this line.</p>
+										</td>
 										<td class="min-w-64 px-4 py-3">
 										{#if transaction.matchStatus === 'Matched'}
 											<div class="flex flex-wrap items-center gap-2">
@@ -589,7 +642,7 @@
 													<Button
 														size="sm"
 														variant="outline"
-														onclick={() => clearMutation.mutate(transaction.id)}
+												onclick={() => clearMutation.mutate(mutationFor(transaction.id, transaction.updatedAt))}
 														disabled={clearMutation.isPending}
 													>
 														Clear
@@ -603,7 +656,7 @@
 													<Button
 														size="sm"
 														variant="outline"
-														onclick={() => clearMutation.mutate(transaction.id)}
+												onclick={() => clearMutation.mutate(mutationFor(transaction.id, transaction.updatedAt))}
 														disabled={clearMutation.isPending}
 														data-testid="bank-transaction-unignore-{transaction.id}"
 													>
@@ -621,7 +674,7 @@
 																size="sm"
 																onclick={() => matchMutation.mutate({
 																	id: transaction.id,
-																	request: matchRequest(transaction.suggestedMatch!)
+															request: matchRequest(transaction.suggestedMatch!, transaction.updatedAt)
 																})}
 																disabled={matchMutation.isPending}
 															>
@@ -633,7 +686,7 @@
 																size="sm"
 																variant="ghost"
 																class="text-muted-foreground"
-																onclick={() => ignoreMutation.mutate(transaction.id)}
+													onclick={() => ignoreMutation.mutate(mutationFor(transaction.id, transaction.updatedAt))}
 																disabled={pendingIgnoreId === transaction.id}
 																data-testid="bank-transaction-ignore-{transaction.id}"
 															>
@@ -651,7 +704,7 @@
 														size="sm"
 														variant="ghost"
 														class="text-muted-foreground"
-														onclick={() => ignoreMutation.mutate(transaction.id)}
+												onclick={() => ignoreMutation.mutate(mutationFor(transaction.id, transaction.updatedAt))}
 														disabled={pendingIgnoreId === transaction.id}
 														data-testid="bank-transaction-ignore-{transaction.id}"
 													>

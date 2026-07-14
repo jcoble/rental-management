@@ -38,6 +38,8 @@ public class BankingService : IBankingService
         new("banking.import.result.v1");
     private static readonly AtomicJsonResultCodec<ReconcileBankTransactionResult> ReconciliationCodec =
         new("banking.reconciliation.result.v1");
+    private static readonly AtomicJsonResultCodec<RouteBankTransactionResult> RoutingCodec =
+        new("banking.routing.result.v1");
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataProtector _protector;
@@ -451,29 +453,54 @@ public class BankingService : IBankingService
             .FirstOrDefaultAsync(t => t.Id == transactionId, ct);
         if (transaction == null) return null;
         ValidateMatchTarget(request.TenantAccountId, request.TenantLedgerEntryId, request.ExpenseId);
-        if (!await IsOperationalTargetAuthorizedAsync(scope, request.TenantAccountId,
-                request.TenantLedgerEntryId, request.ExpenseId, ct))
-        {
-            return null;
-        }
-
         var updated = await ReconcileAsync(
-            scope.PortfolioId,
+            scope,
             transaction,
             request.ExpenseId.HasValue ? BankReconciliationAction.MatchExpense : BankReconciliationAction.MatchReceipt,
             request.TenantAccountId,
             request.TenantLedgerEntryId,
             request.ExpenseId,
+            request.OperationKey,
+            request.ExpectedUpdatedAtUtc,
             ct);
         return updated is null ? null : MapOperationalTransactionResponse(updated);
     }
 
-    public async Task<BankTransactionResponse?> ClearMatchAsync(int portfolioId, int transactionId, CancellationToken ct = default)
+    public async Task<BankTransactionResponse?> RouteTransactionAsync(
+        WorkspaceReadScope scope,
+        int transactionId,
+        RouteBankTransactionRequest request,
+        CancellationToken ct = default)
     {
-        var transaction = await BaseTransactions(portfolioId).AsNoTracking()
+        ValidateOperation(request.OperationKey, request.ExpectedUpdatedAtUtc);
+        var outcome = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity("banking.transaction.route",
+                $"{scope.PortfolioId}:{scope.AccessContextId}:{transactionId}:{request.OperationKey}"),
+            new RouteBankTransactionCommand(
+                scope.PortfolioId, transactionId, request.PropertyId, request.ExpectedUpdatedAtUtc,
+                _timeProvider.UtcNow(), scope.UserId, scope.SessionId, scope.AccessContextId,
+                scope.AccessRevision, request.OperationKey),
+            RoutingCodec,
+            ct);
+        return outcome.Value.Outcome switch
+        {
+            RouteBankTransactionOutcome.TransactionNotFound or RouteBankTransactionOutcome.PropertyNotFound => null,
+            RouteBankTransactionOutcome.StaleVersion => throw new BankingConflictException(
+                "This bank transaction changed after it was loaded. Refresh and choose the property again."),
+            RouteBankTransactionOutcome.AccessDenied => throw new UnauthorizedAccessException(),
+            _ => await LoadFullTransactionAsync(scope.PortfolioId, transactionId, ct),
+        };
+    }
+
+    public async Task<BankTransactionResponse?> ClearMatchAsync(
+        WorkspaceReadScope scope, int transactionId, BankTransactionMutationRequest request, CancellationToken ct = default)
+    {
+        var transaction = await BaseTransactions(scope.PortfolioId).AsNoTracking()
             .FirstOrDefaultAsync(t => t.Id == transactionId, ct);
         if (transaction == null) return null;
-        return await ReconcileAsync(portfolioId, transaction, BankReconciliationAction.Clear, null, null, null, ct);
+        return await ReconcileAsync(scope, transaction, BankReconciliationAction.Clear, null, null, null,
+            request.OperationKey, request.ExpectedUpdatedAtUtc, ct,
+            CapabilityKeys.MoneyReconciliationDestructive);
     }
 
     public async Task<BankReviewQueueResponse> GetReviewQueueAsync(
@@ -489,28 +516,32 @@ public class BankingService : IBankingService
         // Unmatched (not yet confirmed, dismissed, or removed) AND the matcher currently has a
         // payment/expense candidate for it. These are the lines at risk of double-counting a
         // scanned receipt against the bank deposit/withdrawal.
-        var candidateQuery = SuggestibleUnmatchedTransactionsQuery(scope);
-        var count = await candidateQuery.CountAsync(ct);
-        var transactions = await candidateQuery
-            .OrderByDescending(t => t.PostedAt)
-            .ThenByDescending(t => t.Id)
+        var ranked = RankedSuggestionsQuery(scope.PortfolioId, null, scope);
+        var count = await ranked.CountAsync(ct);
+        var rows = await (
+                from transaction in _db.BankTransactions.AsNoTracking()
+                join suggestion in ranked on transaction.Id equals suggestion.TransactionId
+                orderby transaction.PostedAt descending, transaction.Id descending
+                select new BankReviewQueueSqlRow
+                {
+                    Id = transaction.Id,
+                    PostedAt = transaction.PostedAt,
+                    Description = transaction.Description,
+                    MerchantName = transaction.MerchantName,
+                    Amount = transaction.Amount,
+                    IsoCurrencyCode = transaction.IsoCurrencyCode,
+                    Category = transaction.Category,
+                    MatchStatus = transaction.MatchStatus,
+                    UpdatedAt = transaction.UpdatedAt,
+                    Confidence = suggestion.Confidence > 0.99m ? 0.99m : suggestion.Confidence,
+                    Label = suggestion.Label,
+                    Reason = suggestion.Reason,
+                })
             .Skip(skip)
             .Take(take)
             .ToListAsync(ct);
 
-        var suggestions = await LoadSqlRankedSuggestionsAsync(
-            scope.PortfolioId,
-            transactions.Select(transaction => transaction.Id).ToArray(),
-            scope,
-            ct);
-
-        var items = transactions
-            .Select(transaction => new BankReviewQueueItemResponse
-            {
-                Transaction = MapOperationalTransactionEntity(transaction),
-                Suggestion = MapOperationalSuggestion(suggestions[transaction.Id]),
-            })
-            .ToList();
+        var items = rows.Select(MapOperationalQueueItem).ToList();
 
         return new BankReviewQueueResponse
         {
@@ -552,34 +583,34 @@ public class BankingService : IBankingService
                 expenseId = checked((int)suggestion.EntityId);
         }
 
-        if (!await IsOperationalTargetAuthorizedAsync(
-                scope, tenantAccountId, tenantLedgerEntryId, expenseId, ct))
-        {
-            return null;
-        }
-
         var updated = await ReconcileAsync(
-            scope.PortfolioId,
+            scope,
             transaction,
             tenantLedgerEntryId.HasValue ? BankReconciliationAction.MatchReceipt : BankReconciliationAction.MatchExpense,
             tenantAccountId,
             tenantLedgerEntryId,
             expenseId,
+            request.OperationKey,
+            request.ExpectedUpdatedAtUtc,
             ct);
         return updated is null ? null : MapOperationalTransactionResponse(updated);
     }
 
-    public async Task<BankTransactionResponse?> DismissMatchAsync(int portfolioId, int transactionId, CancellationToken ct = default)
+    public async Task<BankTransactionResponse?> DismissMatchAsync(
+        WorkspaceReadScope scope, int transactionId, BankTransactionMutationRequest request, CancellationToken ct = default)
     {
-        var transaction = await BaseTransactions(portfolioId).AsNoTracking()
+        var transaction = await BaseTransactions(scope.PortfolioId).AsNoTracking()
             .FirstOrDefaultAsync(t => t.Id == transactionId, ct);
         if (transaction == null) return null;
-        return await ReconcileAsync(portfolioId, transaction, BankReconciliationAction.Dismiss, null, null, null, ct);
+        return await ReconcileAsync(scope, transaction, BankReconciliationAction.Dismiss, null, null, null,
+            request.OperationKey, request.ExpectedUpdatedAtUtc, ct,
+            CapabilityKeys.MoneyReconciliationDestructive);
     }
 
-    public async Task<BankTransactionResponse?> IgnoreTransactionAsync(int portfolioId, int transactionId, CancellationToken ct = default)
+    public async Task<BankTransactionResponse?> IgnoreTransactionAsync(
+        WorkspaceReadScope scope, int transactionId, BankTransactionMutationRequest request, CancellationToken ct = default)
     {
-        var transaction = await BaseTransactions(portfolioId).AsNoTracking()
+        var transaction = await BaseTransactions(scope.PortfolioId).AsNoTracking()
             .FirstOrDefaultAsync(t => t.Id == transactionId, ct);
         if (transaction == null) return null;
         // Personal / not-business money (Starbucks, Uber, an owner draw, etc.). We reuse the existing
@@ -590,13 +621,16 @@ public class BankingService : IBankingService
         // TODO(no-migration): persist a per-merchant "auto-ignore" memory so future lines from the
         // same merchant are pre-suggested as ignore. That needs a new table (e.g. IgnoredMerchant),
         // which is out of scope for this migration-free wave.
-        return await ReconcileAsync(portfolioId, transaction, BankReconciliationAction.Ignore, null, null, null, ct);
+        return await ReconcileAsync(scope, transaction, BankReconciliationAction.Ignore, null, null, null,
+            request.OperationKey, request.ExpectedUpdatedAtUtc, ct,
+            CapabilityKeys.MoneyReconciliationDestructive);
     }
 
     private IQueryable<BankTransaction> BaseTransactions(int portfolioId)
     {
         return _db.BankTransactions
             .Include(t => t.BankConnection)
+            .Include(t => t.Property)
             .Where(t => t.PortfolioId == portfolioId);
     }
 
@@ -652,7 +686,9 @@ public class BankingService : IBankingService
         return _db.BankTransactions.AsNoTracking()
             .Where(transaction =>
                 transaction.PortfolioId == scope.PortfolioId &&
-                transaction.MatchStatus == "Unmatched")
+                transaction.MatchStatus == "Unmatched" &&
+                transaction.PropertyId != null &&
+                authorizedProperties.Any(property => property.Id == transaction.PropertyId))
             .Where(transaction =>
                 (transaction.Amount > 0 && _db.TenantLedgerEntries.AsNoTracking().Any(entry =>
                     entry.PortfolioId == scope.PortfolioId &&
@@ -662,38 +698,16 @@ public class BankingService : IBankingService
                     entry.Amount <= transaction.Amount + 0.01m &&
                     entry.EffectiveOn >= DateOnly.FromDateTime(transaction.PostedAt.AddDays(-7)) &&
                     entry.EffectiveOn <= DateOnly.FromDateTime(transaction.PostedAt.AddDays(7)) &&
-                    authorizedProperties.Any(property =>
-                        property.Id == entry.TenantAccount!.LeaseManagement!.PropertyId))) ||
+                    entry.TenantAccount!.LeaseManagement!.PropertyId == transaction.PropertyId)) ||
                 (transaction.Amount < 0 && authorizedExpenses.Any(expense =>
                     expense.Amount >= -transaction.Amount - 0.01m &&
                     expense.Amount <= -transaction.Amount + 0.01m &&
                     (expense.PaidAt ?? expense.IncurredAt) >= transaction.PostedAt.AddDays(-7) &&
-                    (expense.PaidAt ?? expense.IncurredAt) <= transaction.PostedAt.AddDays(7))));
-    }
-
-    private async Task<bool> IsOperationalTargetAuthorizedAsync(
-        WorkspaceReadScope scope,
-        int? tenantAccountId,
-        long? tenantLedgerEntryId,
-        int? expenseId,
-        CancellationToken ct)
-    {
-        var now = _timeProvider.UtcNow();
-        if (tenantAccountId.HasValue && tenantLedgerEntryId.HasValue)
-        {
-            var authorizedProperties = _db.Properties.AsNoTracking()
-                .WhereAuthorized(_db, scope, CapabilityKeys.MoneyReconciliationOperate, now);
-            return await _db.TenantLedgerEntries.AsNoTracking().AnyAsync(entry =>
-                entry.PortfolioId == scope.PortfolioId &&
-                entry.Id == tenantLedgerEntryId.Value &&
-                entry.TenantAccountId == tenantAccountId.Value &&
-                authorizedProperties.Any(property =>
-                    property.Id == entry.TenantAccount!.LeaseManagement!.PropertyId), ct);
-        }
-
-        return expenseId.HasValue && await _db.Expenses.AsNoTracking()
-            .WhereMoneyAuthorized(_db, scope, CapabilityKeys.MoneyReconciliationOperate, now)
-            .AnyAsync(expense => expense.Id == expenseId.Value, ct);
+                    (expense.PaidAt ?? expense.IncurredAt) <= transaction.PostedAt.AddDays(7) &&
+                    (expense.PropertyId == transaction.PropertyId
+                        || (expense.PropertyId == null && expense.Unit!.PropertyId == transaction.PropertyId)
+                        || (expense.PropertyId == null && expense.UnitId == null
+                            && expense.WorkOrder!.PropertyId == transaction.PropertyId)))));
     }
 
     private Task<PlaidRuntimeSettings> GetRuntimeSettingsAsync(int portfolioId, CancellationToken ct)
@@ -807,43 +821,70 @@ public class BankingService : IBankingService
     }
 
     private async Task<BankTransactionResponse?> ReconcileAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         BankTransaction current,
         BankReconciliationAction action,
         int? tenantAccountId,
         long? tenantLedgerEntryId,
         int? expenseId,
-        CancellationToken ct)
+        string operationKey,
+        DateTime expectedUpdatedAtUtc,
+        CancellationToken ct,
+        string requiredCapability = CapabilityKeys.MoneyReconciliationOperate)
     {
-        var identity = Digest(
-            portfolioId,
-            current.Id,
-            current.UpdatedAt.ToUniversalTime().Ticks,
-            action,
-            tenantAccountId,
-            tenantLedgerEntryId,
-            expenseId);
+        ValidateOperation(operationKey, expectedUpdatedAtUtc);
         var outcome = await _atomic.ExecuteAsync(
-            new AtomicCommandIdentity("banking.transaction.reconcile", $"{portfolioId}:{current.Id}:{identity}"),
+            new AtomicCommandIdentity("banking.transaction.reconcile",
+                $"{scope.PortfolioId}:{scope.AccessContextId}:{current.Id}:{operationKey}"),
             new ReconcileBankTransactionCommand(
-                portfolioId,
+                scope.PortfolioId,
                 current.Id,
                 action,
                 tenantAccountId,
                 tenantLedgerEntryId,
                 expenseId,
-                current.UpdatedAt,
-                _timeProvider.UtcNow()),
+                expectedUpdatedAtUtc,
+                _timeProvider.UtcNow(),
+                scope.UserId,
+                scope.SessionId,
+                scope.AccessContextId,
+                scope.AccessRevision,
+                requiredCapability,
+                operationKey),
             ReconciliationCodec,
             ct);
         if (outcome.Value.Outcome is ReconcileBankTransactionOutcome.TransactionNotFound
-            or ReconcileBankTransactionOutcome.TargetNotFound)
+            or ReconcileBankTransactionOutcome.TargetNotFound
+            or ReconcileBankTransactionOutcome.RouteRequired)
         {
             return null;
         }
+        if (outcome.Value.Outcome == ReconcileBankTransactionOutcome.StaleVersion)
+            throw new BankingConflictException(
+                "This bank transaction changed after it was loaded. Refresh before reconciling it.");
+        if (outcome.Value.Outcome == ReconcileBankTransactionOutcome.AccessDenied)
+            throw new UnauthorizedAccessException();
 
-        var canonical = await BaseTransactions(portfolioId).AsNoTracking()
+        var canonical = await BaseTransactions(scope.PortfolioId).AsNoTracking()
             .SingleOrDefaultAsync(row => row.Id == current.Id, ct);
+        return canonical is null
+            ? null
+            : (await MapTransactionsWithSuggestionsAsync(scope.PortfolioId, [canonical], ct)).Single();
+    }
+
+    private static void ValidateOperation(string operationKey, DateTime expectedUpdatedAtUtc)
+    {
+        if (string.IsNullOrWhiteSpace(operationKey) || operationKey.Trim().Length > 128)
+            throw new InvalidOperationException("A stable operationKey of at most 128 characters is required.");
+        if (expectedUpdatedAtUtc == default)
+            throw new InvalidOperationException("expectedUpdatedAtUtc is required.");
+    }
+
+    private async Task<BankTransactionResponse?> LoadFullTransactionAsync(
+        int portfolioId, int transactionId, CancellationToken ct)
+    {
+        var canonical = await BaseTransactions(portfolioId).AsNoTracking()
+            .SingleOrDefaultAsync(row => row.Id == transactionId, ct);
         return canonical is null
             ? null
             : (await MapTransactionsWithSuggestionsAsync(portfolioId, [canonical], ct)).Single();
@@ -917,6 +958,26 @@ public class BankingService : IBankingService
         WorkspaceReadScope? scope,
         CancellationToken ct)
     {
+        var rows = await RankedSuggestionsQuery(portfolioId, transactionIds, scope).ToListAsync(ct);
+
+        return rows.ToDictionary(
+            r => r.TransactionId,
+            r => new BankMatchSuggestionResponse
+            {
+                EntityType = r.EntityType,
+                EntityId = r.EntityId,
+                TenantAccountId = r.TenantAccountId,
+                Confidence = r.Confidence > 0.99m ? 0.99m : r.Confidence,
+                Label = string.IsNullOrWhiteSpace(r.Label) ? r.EntityType.ToLowerInvariant() : r.Label,
+                Reason = r.Reason,
+            });
+    }
+
+    private IQueryable<BankSuggestionRankRow> RankedSuggestionsQuery(
+        int portfolioId,
+        int[]? transactionIds,
+        WorkspaceReadScope? scope)
+    {
         var receiptEntries = _db.TenantLedgerEntries.AsNoTracking()
             .Where(entry => entry.PortfolioId == portfolioId);
         var expenses = _db.Expenses.AsNoTracking()
@@ -953,8 +1014,9 @@ public class BankingService : IBankingService
                 entry.EffectiveOn >= DateOnly.FromDateTime(t.PostedAt.AddDays(-14)) && entry.EffectiveOn <= DateOnly.FromDateTime(t.PostedAt.AddDays(14)) && hasNameMatch ? 0.42m :
                 0m
             where
-                transactionIds.Contains(t.Id) &&
+                (transactionIds == null || transactionIds.Contains(t.Id)) &&
                 t.PortfolioId == portfolioId &&
+                t.PropertyId != null &&
                 t.MatchStatus == "Unmatched" &&
                 t.Amount > 0m &&
                 entry.PortfolioId == portfolioId &&
@@ -962,6 +1024,7 @@ public class BankingService : IBankingService
                 entry.Direction == TenantLedgerDirection.Credit &&
                 entry.Amount >= t.Amount - 0.01m &&
                 entry.Amount <= t.Amount + 0.01m &&
+                account.LeaseManagement!.PropertyId == t.PropertyId &&
                 dateScore > 0m
             select new BankSuggestionRankRow
             {
@@ -992,13 +1055,17 @@ public class BankingService : IBankingService
                 anchor >= t.PostedAt.AddDays(-14) && anchor <= t.PostedAt.AddDays(14) && hasNameMatch ? 0.42m :
                 0m
             where
-                transactionIds.Contains(t.Id) &&
+                (transactionIds == null || transactionIds.Contains(t.Id)) &&
                 t.PortfolioId == portfolioId &&
+                t.PropertyId != null &&
                 t.MatchStatus == "Unmatched" &&
                 t.Amount < 0m &&
                 e.PortfolioId == portfolioId &&
                 e.Amount >= -t.Amount - 0.01m &&
                 e.Amount <= -t.Amount + 0.01m &&
+                (e.PropertyId == t.PropertyId
+                    || (e.PropertyId == null && e.Unit!.PropertyId == t.PropertyId)
+                    || (e.PropertyId == null && e.UnitId == null && e.WorkOrder!.PropertyId == t.PropertyId)) &&
                 dateScore > 0m
             select new BankSuggestionRankRow
             {
@@ -1011,27 +1078,14 @@ public class BankingService : IBankingService
                 Reason = "Withdrawal amount and date line up with an expense.",
             };
 
-        var rows = await receiptCandidates
+        return receiptCandidates
             .Concat(expenseCandidates)
             .GroupBy(c => c.TransactionId)
             .Select(g => g
                 .OrderByDescending(c => c.Confidence)
                 .ThenBy(c => c.EntityType)
                 .ThenBy(c => c.EntityId)
-                .First())
-            .ToListAsync(ct);
-
-        return rows.ToDictionary(
-            r => r.TransactionId,
-            r => new BankMatchSuggestionResponse
-            {
-                EntityType = r.EntityType,
-                EntityId = r.EntityId,
-                TenantAccountId = r.TenantAccountId,
-                Confidence = r.Confidence > 0.99m ? 0.99m : r.Confidence,
-                Label = string.IsNullOrWhiteSpace(r.Label) ? r.EntityType.ToLowerInvariant() : r.Label,
-                Reason = r.Reason,
-            });
+                .First());
     }
 
     private sealed class BankSuggestionRankRow
@@ -1040,6 +1094,22 @@ public class BankingService : IBankingService
         public string EntityType { get; set; } = string.Empty;
         public long EntityId { get; set; }
         public int? TenantAccountId { get; set; }
+        public decimal Confidence { get; set; }
+        public string Label { get; set; } = string.Empty;
+        public string Reason { get; set; } = string.Empty;
+    }
+
+    private sealed class BankReviewQueueSqlRow
+    {
+        public int Id { get; set; }
+        public DateTime PostedAt { get; set; }
+        public string Description { get; set; } = string.Empty;
+        public string? MerchantName { get; set; }
+        public decimal Amount { get; set; }
+        public string IsoCurrencyCode { get; set; } = "USD";
+        public string? Category { get; set; }
+        public string MatchStatus { get; set; } = string.Empty;
+        public DateTime UpdatedAt { get; set; }
         public decimal Confidence { get; set; }
         public string Label { get; set; } = string.Empty;
         public string Reason { get; set; } = string.Empty;
@@ -1063,6 +1133,8 @@ public class BankingService : IBankingService
         BankMatchSuggestionResponse? suggestion) => new()
     {
         Id = t.Id,
+        PropertyId = t.PropertyId,
+        PropertyName = t.Property?.Name,
         BankConnectionId = t.BankConnectionId,
         InstitutionName = t.BankConnection?.InstitutionName ?? "",
         AccountName = t.BankConnection?.AccountName ?? "",
@@ -1080,19 +1152,30 @@ public class BankingService : IBankingService
         MatchStatus = t.MatchStatus,
         MatchConfidence = t.MatchConfidence,
         Notes = t.Notes,
+        UpdatedAt = t.UpdatedAt,
         SuggestedMatch = suggestion
     };
 
-    private static OperationalBankTransactionResponse MapOperationalTransactionEntity(BankTransaction transaction) => new()
+    private static BankReviewQueueItemResponse MapOperationalQueueItem(BankReviewQueueSqlRow row) => new()
     {
-        Id = transaction.Id,
-        PostedAt = transaction.PostedAt,
-        Description = transaction.Description,
-        MerchantName = transaction.MerchantName,
-        Amount = transaction.Amount,
-        IsoCurrencyCode = transaction.IsoCurrencyCode,
-        Category = transaction.Category,
-        MatchStatus = transaction.MatchStatus,
+        Transaction = new OperationalBankTransactionResponse
+        {
+            Id = row.Id,
+            PostedAt = row.PostedAt,
+            Description = row.Description,
+            MerchantName = row.MerchantName,
+            Amount = row.Amount,
+            IsoCurrencyCode = row.IsoCurrencyCode,
+            Category = row.Category,
+            MatchStatus = row.MatchStatus,
+            UpdatedAt = row.UpdatedAt,
+        },
+        Suggestion = new OperationalBankMatchSuggestionResponse
+        {
+            Confidence = row.Confidence,
+            Label = row.Label,
+            Reason = row.Reason,
+        },
     };
 
     private static OperationalBankTransactionResponse MapOperationalTransactionResponse(BankTransactionResponse transaction) => new()
@@ -1105,13 +1188,9 @@ public class BankingService : IBankingService
         IsoCurrencyCode = transaction.IsoCurrencyCode,
         Category = transaction.Category,
         MatchStatus = transaction.MatchStatus,
+        UpdatedAt = transaction.UpdatedAt,
     };
 
-    private static OperationalBankMatchSuggestionResponse MapOperationalSuggestion(
-        BankMatchSuggestionResponse suggestion) => new()
-    {
-        Confidence = suggestion.Confidence,
-        Label = suggestion.Label,
-        Reason = suggestion.Reason,
-    };
 }
+
+public sealed class BankingConflictException(string message) : InvalidOperationException(message);

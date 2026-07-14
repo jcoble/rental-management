@@ -79,6 +79,9 @@ class BankTransaction {
     this.suggestedMatch,
     required this.institutionName,
     required this.accountName,
+    this.propertyId,
+    this.propertyName,
+    required this.updatedAt,
   });
 
   final int id;
@@ -90,12 +93,16 @@ class BankTransaction {
   final BankMatchSuggestion? suggestedMatch;
   final String institutionName;
   final String accountName;
+  final int? propertyId;
+  final String? propertyName;
+  final DateTime updatedAt;
 
   factory BankTransaction.fromJson(Map<String, dynamic> json) {
     final rawSuggestion = json['suggestedMatch'];
     return BankTransaction(
       id: (json['id'] as num).toInt(),
-      postedAt: DateTime.tryParse(json['postedAt'] as String? ?? '') ?? DateTime(0),
+      postedAt:
+          DateTime.tryParse(json['postedAt'] as String? ?? '') ?? DateTime(0),
       description: json['description'] as String? ?? '',
       merchantName: json['merchantName'] as String?,
       amount: (json['amount'] as num?)?.toDouble() ?? 0,
@@ -105,6 +112,10 @@ class BankTransaction {
           : null,
       institutionName: json['institutionName'] as String? ?? '',
       accountName: json['accountName'] as String? ?? '',
+      propertyId: (json['propertyId'] as num?)?.toInt(),
+      propertyName: json['propertyName'] as String?,
+      updatedAt:
+          DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime(0),
     );
   }
 }
@@ -138,10 +149,7 @@ class BankMatchSuggestion {
 /// A single bank line that may be a duplicate of a payment/expense already on
 /// record. The backend pairs the raw [transaction] with a [suggestion].
 class BankReviewItem {
-  const BankReviewItem({
-    required this.transaction,
-    required this.suggestion,
-  });
+  const BankReviewItem({required this.transaction, required this.suggestion});
 
   final BankReviewTransaction transaction;
   final BankReviewSuggestion suggestion;
@@ -188,6 +196,7 @@ class BankReviewTransaction {
     required this.description,
     this.merchantName,
     required this.matchStatus,
+    required this.updatedAt,
   });
 
   final int id;
@@ -196,25 +205,39 @@ class BankReviewTransaction {
   final String description;
   final String? merchantName;
   final String matchStatus;
+  final DateTime updatedAt;
 
   factory BankReviewTransaction.fromJson(Map<String, dynamic> json) {
     return BankReviewTransaction(
       id: (json['id'] as num?)?.toInt() ?? 0,
-      postedAt: DateTime.tryParse(json['postedAt'] as String? ?? '') ?? DateTime(0),
+      postedAt:
+          DateTime.tryParse(json['postedAt'] as String? ?? '') ?? DateTime(0),
       amount: (json['amount'] as num?)?.toDouble() ?? 0,
       description: json['description'] as String? ?? '',
       merchantName: json['merchantName'] as String?,
       matchStatus: json['matchStatus'] as String? ?? 'Unmatched',
+      updatedAt:
+          DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime(0),
     );
   }
 }
 
+class BankRoutingProperty {
+  const BankRoutingProperty({required this.id, required this.name});
+
+  final int id;
+  final String name;
+
+  factory BankRoutingProperty.fromJson(Map<String, dynamic> json) =>
+      BankRoutingProperty(
+        id: (json['id'] as num).toInt(),
+        name: json['name'] as String? ?? '',
+      );
+}
+
 /// The full duplicate-review queue: a [count] and the list of [items].
 class BankReviewQueue {
-  const BankReviewQueue({
-    required this.count,
-    required this.items,
-  });
+  const BankReviewQueue({required this.count, required this.items});
 
   final int count;
   final List<BankReviewItem> items;

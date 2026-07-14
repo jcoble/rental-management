@@ -4830,6 +4830,7 @@ namespace RentalCommand.Data.Migrations
                         .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
                     PortfolioId = table.Column<int>(type: "integer", nullable: false),
                     BankConnectionId = table.Column<int>(type: "integer", nullable: false),
+                    PropertyId = table.Column<int>(type: "integer", nullable: true),
                     ProviderTransactionId = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
                     PostedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
                     AuthorizedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
@@ -4863,6 +4864,12 @@ namespace RentalCommand.Data.Migrations
                         principalTable: "Portfolios",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
+                    table.ForeignKey(
+                        name: "FK_BankTransactions_Properties_PropertyId_PortfolioId",
+                        columns: x => new { x.PropertyId, x.PortfolioId },
+                        principalTable: "Properties",
+                        principalColumns: new[] { "Id", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
                     table.ForeignKey(
                         name: "FK_BankTransactions_TenantAccounts_MatchedTenantAccountId_Port~",
                         columns: x => new { x.MatchedTenantAccountId, x.PortfolioId },
@@ -5606,6 +5613,16 @@ namespace RentalCommand.Data.Migrations
                 name: "IX_BankTransactions_PortfolioId",
                 table: "BankTransactions",
                 column: "PortfolioId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_BankTransactions_PortfolioId_PropertyId_MatchStatus_PostedAt",
+                table: "BankTransactions",
+                columns: new[] { "PortfolioId", "PropertyId", "MatchStatus", "PostedAt" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_BankTransactions_PropertyId_PortfolioId",
+                table: "BankTransactions",
+                columns: new[] { "PropertyId", "PortfolioId" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_BankTransactions_PortfolioId_MatchedTenantAccountId_Matched~",

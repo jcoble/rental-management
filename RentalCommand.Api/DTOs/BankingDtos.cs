@@ -59,6 +59,8 @@ public class BankConnectionResponse
 public class BankTransactionResponse
 {
     public int Id { get; set; }
+    public int? PropertyId { get; set; }
+    public string? PropertyName { get; set; }
     public int BankConnectionId { get; set; }
     public string InstitutionName { get; set; } = string.Empty;
     public string AccountName { get; set; } = string.Empty;
@@ -76,6 +78,7 @@ public class BankTransactionResponse
     public string MatchStatus { get; set; } = "Unmatched";
     public decimal? MatchConfidence { get; set; }
     public string? Notes { get; set; }
+    public DateTime UpdatedAt { get; set; }
     public BankMatchSuggestionResponse? SuggestedMatch { get; set; }
 }
 
@@ -112,6 +115,7 @@ public class OperationalBankTransactionResponse
     public string IsoCurrencyCode { get; set; } = "USD";
     public string? Category { get; set; }
     public string MatchStatus { get; set; } = "Unmatched";
+    public DateTime UpdatedAt { get; set; }
 }
 
 /// <summary>
@@ -167,9 +171,18 @@ public class SyncBankConnectionResponse
 
 public class MatchBankTransactionRequest
 {
+    public string OperationKey { get; set; } = string.Empty;
+    public DateTime ExpectedUpdatedAtUtc { get; set; }
     public int? TenantAccountId { get; set; }
     public long? TenantLedgerEntryId { get; set; }
     public int? ExpenseId { get; set; }
+}
+
+public class RouteBankTransactionRequest
+{
+    public string OperationKey { get; set; } = string.Empty;
+    public int? PropertyId { get; set; }
+    public DateTime ExpectedUpdatedAtUtc { get; set; }
 }
 
 /// <summary>
@@ -179,9 +192,17 @@ public class MatchBankTransactionRequest
 /// </summary>
 public class ConfirmBankMatchRequest
 {
+    public string OperationKey { get; set; } = string.Empty;
+    public DateTime ExpectedUpdatedAtUtc { get; set; }
     public int? TenantAccountId { get; set; }
     public long? TenantLedgerEntryId { get; set; }
     public int? ExpenseId { get; set; }
+}
+
+public class BankTransactionMutationRequest
+{
+    public string OperationKey { get; set; } = string.Empty;
+    public DateTime ExpectedUpdatedAtUtc { get; set; }
 }
 
 /// <summary>

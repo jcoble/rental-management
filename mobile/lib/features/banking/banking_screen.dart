@@ -32,11 +32,16 @@ class BankingScreen extends ConsumerWidget {
     final transactionsAsync = canManageConnections
         ? ref.watch(bankingTransactionsProvider)
         : null;
+    final routingPropertiesAsync = canManageConnections
+        ? ref.watch(bankingRoutingPropertiesProvider)
+        : null;
 
     Future<void> refresh() async {
       if (canManageConnections) ref.invalidate(bankingSummaryProvider);
       if (canOperate) ref.invalidate(bankingReviewQueueProvider);
       if (canManageConnections) ref.invalidate(bankingTransactionsProvider);
+      if (canManageConnections)
+        ref.invalidate(bankingRoutingPropertiesProvider);
     }
 
     return Scaffold(
@@ -56,63 +61,64 @@ class BankingScreen extends ConsumerWidget {
               ),
               const SizedBox(height: 18),
             ],
-            if (canOperate) reviewAsync!.when(
-              loading: () => const _LoadingCard(
-                label: 'Checking for possible duplicates...',
-              ),
-              error: (e, _) => Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _SectionHeader(title: 'Review suggested matches'),
-                  const SizedBox(height: 8),
-                  _ErrorCard(message: _message(e)),
-                ],
-              ),
-              data: (queue) {
-                if (queue.items.isEmpty) {
+            if (canOperate)
+              reviewAsync!.when(
+                loading: () => const _LoadingCard(
+                  label: 'Checking for possible duplicates...',
+                ),
+                error: (e, _) => Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _SectionHeader(title: 'Review suggested matches'),
+                    const SizedBox(height: 8),
+                    _ErrorCard(message: _message(e)),
+                  ],
+                ),
+                data: (queue) {
+                  if (queue.items.isEmpty) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _SectionHeader(title: 'Review suggested matches'),
+                        const SizedBox(height: 8),
+                        const _ReviewEmptyCard(),
+                      ],
+                    );
+                  }
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _SectionHeader(title: 'Review suggested matches'),
+                      _SectionHeader(
+                        title: 'Review suggested matches',
+                        count: queue.count,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'These bank lines look like money already on record. '
+                        'Confirm so we don\'t count it twice.',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
                       const SizedBox(height: 8),
-                      const _ReviewEmptyCard(),
+                      for (final item in queue.items) ...[
+                        _ReviewCard(
+                          item: item,
+                          canDismiss: canDestructivelyReconcile,
+                        ),
+                        const SizedBox(height: 8),
+                      ],
                     ],
                   );
-                }
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _SectionHeader(
-                      title: 'Review suggested matches',
-                      count: queue.count,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'These bank lines look like money already on record. '
-                      'Confirm so we don\'t count it twice.',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    for (final item in queue.items) ...[
-                      _ReviewCard(
-                        item: item,
-                        canDismiss: canDestructivelyReconcile,
-                      ),
-                      const SizedBox(height: 8),
-                    ],
-                  ],
-                );
-              },
-            ),
+                },
+              ),
             if (canManageConnections) ...[
               const SizedBox(height: 18),
               Text(
                 'Recent bank lines',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
               ),
               const SizedBox(height: 8),
               transactionsAsync!.when(
@@ -128,6 +134,8 @@ class BankingScreen extends ConsumerWidget {
                       for (final transaction in transactions) ...[
                         _TransactionCard(
                           transaction: transaction,
+                          routingProperties:
+                              routingPropertiesAsync?.value ?? const [],
                           canOperate: canOperate,
                           canClear: canDestructivelyReconcile,
                         ),
@@ -214,11 +222,13 @@ class _TransactionCard extends ConsumerWidget {
     required this.transaction,
     required this.canOperate,
     required this.canClear,
+    required this.routingProperties,
   });
 
   final BankTransaction transaction;
   final bool canOperate;
   final bool canClear;
+  final List<BankRoutingProperty> routingProperties;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -260,6 +270,43 @@ class _TransactionCard extends ConsumerWidget {
               style: theme.textTheme.bodySmall?.copyWith(
                 color: cs.onSurfaceVariant,
               ),
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<int?>(
+              initialValue: transaction.propertyId,
+              decoration: const InputDecoration(
+                labelText: 'Property route',
+                helperText: 'Only assigned managers can review routed lines.',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+              items: [
+                const DropdownMenuItem<int?>(
+                  value: null,
+                  child: Text('Unassigned · admin only'),
+                ),
+                for (final property in routingProperties)
+                  DropdownMenuItem<int?>(
+                    value: property.id,
+                    child: Text(property.name),
+                  ),
+              ],
+              onChanged: (propertyId) async {
+                try {
+                  await ref
+                      .read(bankingRepositoryProvider)
+                      .routeTransaction(transaction, propertyId);
+                  ref.invalidate(bankingSummaryProvider);
+                  ref.invalidate(bankingTransactionsProvider);
+                  ref.invalidate(bankingReviewQueueProvider);
+                } catch (e) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(BankingScreen._message(e))),
+                    );
+                  }
+                }
+              },
             ),
             const SizedBox(height: 10),
             if (transaction.matchStatus == 'Matched')
@@ -489,7 +536,10 @@ class _ReviewCard extends ConsumerWidget {
                     onPressed: () => run(
                       () => ref
                           .read(bankingRepositoryProvider)
-                          .confirmMatch(transaction.id),
+                          .confirmMatch(
+                            transaction.id,
+                            expectedUpdatedAt: transaction.updatedAt,
+                          ),
                       'Confirmed. We won\'t count it twice.',
                     ),
                     child: const Text('Confirm'),
@@ -502,7 +552,10 @@ class _ReviewCard extends ConsumerWidget {
                       onPressed: () => run(
                         () => ref
                             .read(bankingRepositoryProvider)
-                            .dismissMatch(transaction.id),
+                            .dismissMatch(
+                              transaction.id,
+                              transaction.updatedAt,
+                            ),
                         'Kept as a separate bank line.',
                       ),
                       child: const Text('Not a match'),

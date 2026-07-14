@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Banking;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -303,6 +304,7 @@ public sealed class ApplyPlaidSyncHandler
         amount = row.Amount,
         isoCurrencyCode = row.IsoCurrencyCode,
         category = row.Category,
+        propertyId = row.PropertyId,
         matchedTenantAccountId = row.MatchedTenantAccountId,
         matchedTenantLedgerEntryId = row.MatchedTenantLedgerEntryId,
         matchedExpenseId = row.MatchedExpenseId,
@@ -456,24 +458,38 @@ public sealed class ImportBankTransactionsHandler
 }
 
 public sealed class ReconcileBankTransactionHandler
-    : IAtomicCommandHandler<ReconcileBankTransactionCommand, ReconcileBankTransactionResult>
+    : IAtomicCommandHandler<ReconcileBankTransactionCommand, ReconcileBankTransactionResult>,
+      IAtomicReplayAuthorizer<ReconcileBankTransactionCommand>
 {
     public async Task<ReconcileBankTransactionResult> HandleAsync(
         ReconcileBankTransactionCommand command,
         IAtomicWriteAttempt attempt,
         CancellationToken ct)
     {
+        BankingAuthorizationSupport.Validate(command);
+        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
+        await attempt.Locking.AcquireAsync(AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
         await attempt.Locking.AcquireAsync(AtomicLockResource.BankTransaction, command.TransactionId, ct);
+        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
         var transaction = await attempt.Persistence.Query<BankTransaction>()
             .SingleOrDefaultAsync(row => row.Id == command.TransactionId
                 && row.PortfolioId == command.PortfolioId, ct);
         if (transaction is null) return Result(ReconcileBankTransactionOutcome.TransactionNotFound, command.TransactionId);
+        if (transaction.PropertyId is null)
+            return Result(ReconcileBankTransactionOutcome.RouteRequired, transaction.Id);
+        if (!await BankingAuthorizationSupport.HasPropertyAuthorityAsync(
+                command.PortfolioId, transaction.PropertyId.Value, command.ActorUserId,
+                command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
+                command.RequiredCapability, attempt.Persistence, now, ct))
+        {
+            return Result(ReconcileBankTransactionOutcome.AccessDenied, transaction.Id);
+        }
         if (transaction.UpdatedAt != command.ExpectedUpdatedAtUtc)
         {
             return Result(ReconcileBankTransactionOutcome.StaleVersion, transaction.Id);
         }
 
-        if (!await TargetExistsAsync(command, attempt, ct))
+        if (!await TargetExistsAsync(command, transaction.PropertyId.Value, attempt, ct))
         {
             return Result(ReconcileBankTransactionOutcome.TargetNotFound, transaction.Id);
         }
@@ -493,8 +509,27 @@ public sealed class ReconcileBankTransactionHandler
         return Result(ReconcileBankTransactionOutcome.Applied, transaction.Id);
     }
 
+    public async Task AuthorizeReplayAsync(
+        ReconcileBankTransactionCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        BankingAuthorizationSupport.Validate(command);
+        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var propertyId = await persistence.Query<BankTransaction>()
+            .Where(row => row.Id == command.TransactionId && row.PortfolioId == command.PortfolioId)
+            .Select(row => row.PropertyId)
+            .SingleOrDefaultAsync(ct);
+        if (propertyId is null || !await BankingAuthorizationSupport.HasPropertyAuthorityAsync(
+                command.PortfolioId, propertyId.Value, command.ActorUserId,
+                command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
+                command.RequiredCapability, persistence, now, ct))
+            throw new UnauthorizedAccessException();
+    }
+
     private static async Task<bool> TargetExistsAsync(
         ReconcileBankTransactionCommand command,
+        int propertyId,
         IAtomicWriteAttempt attempt,
         CancellationToken ct) => command.Action switch
         {
@@ -507,13 +542,19 @@ public sealed class ReconcileBankTransactionHandler
                     && row.TenantAccountId == accountId
                     && row.PortfolioId == command.PortfolioId
                     && row.EntryType == TenantLedgerEntryType.PaymentReceipt
-                    && row.Direction == TenantLedgerDirection.Credit, ct),
+                    && row.Direction == TenantLedgerDirection.Credit
+                    && row.TenantAccount!.LeaseManagement!.PropertyId == propertyId, ct),
             BankReconciliationAction.MatchExpense
                 when command.ExpenseId is { } expenseId
                     && command.TenantAccountId is null
                     && command.TenantLedgerEntryId is null =>
                 await attempt.Persistence.Query<Expense>().AnyAsync(row => row.Id == expenseId
-                    && row.PortfolioId == command.PortfolioId, ct),
+                    && row.PortfolioId == command.PortfolioId
+                    && row.DeletedAt == null
+                    && (row.PropertyId == propertyId
+                        || (row.PropertyId == null && row.Unit!.PropertyId == propertyId)
+                        || (row.PropertyId == null && row.UnitId == null
+                            && row.WorkOrder!.PropertyId == propertyId)), ct),
             BankReconciliationAction.MatchReceipt or BankReconciliationAction.MatchExpense => false,
             _ => command.TenantAccountId is null
                 && command.TenantLedgerEntryId is null
@@ -591,4 +632,140 @@ public sealed class ReconcileBankTransactionHandler
 
     private static ReconcileBankTransactionResult Result(ReconcileBankTransactionOutcome outcome, int id) =>
         new(outcome, id);
+}
+
+public sealed class RouteBankTransactionHandler
+    : IAtomicCommandHandler<RouteBankTransactionCommand, RouteBankTransactionResult>,
+      IAtomicReplayAuthorizer<RouteBankTransactionCommand>
+{
+    public async Task<RouteBankTransactionResult> HandleAsync(
+        RouteBankTransactionCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+    {
+        BankingAuthorizationSupport.Validate(command);
+        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
+        await attempt.Locking.AcquireAsync(AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
+        await attempt.Locking.AcquireAsync(AtomicLockResource.BankTransaction, command.TransactionId, ct);
+        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        if (!await BankingAuthorizationSupport.HasWorkspaceAuthorityAsync(
+                command.PortfolioId, command.ActorUserId, command.AuthSessionId,
+                command.AccessContextId, command.ExpectedAccessRevision,
+                CapabilityKeys.BankConnectionsManage, attempt.Persistence, now, ct))
+            return Result(RouteBankTransactionOutcome.AccessDenied, command.TransactionId);
+
+        var transaction = await attempt.Persistence.Query<BankTransaction>()
+            .SingleOrDefaultAsync(row => row.Id == command.TransactionId
+                && row.PortfolioId == command.PortfolioId, ct);
+        if (transaction is null) return Result(RouteBankTransactionOutcome.TransactionNotFound, command.TransactionId);
+        if (transaction.UpdatedAt != command.ExpectedUpdatedAtUtc)
+            return Result(RouteBankTransactionOutcome.StaleVersion, transaction.Id);
+        if (command.PropertyId is { } propertyId && !await attempt.Persistence.Query<Property>()
+                .AnyAsync(row => row.Id == propertyId && row.PortfolioId == command.PortfolioId, ct))
+            return Result(RouteBankTransactionOutcome.PropertyNotFound, transaction.Id);
+        if (transaction.PropertyId == command.PropertyId)
+            return Result(RouteBankTransactionOutcome.AlreadyApplied, transaction.Id);
+
+        var before = ApplyPlaidSyncHandler.Snapshot(transaction);
+        transaction.PropertyId = command.PropertyId;
+        transaction.UpdatedAt = command.AppliedAtUtc;
+        await attempt.FlushBusinessAsync(ct);
+        attempt.StageSemanticEvent(ApplyPlaidSyncHandler.TransactionAudit(
+            command.PortfolioId, transaction, AuditLogOperation.Updated, before,
+            command.PropertyId is null
+                ? "Bank transaction operational route removed."
+                : $"Bank transaction routed to Property #{command.PropertyId}."));
+        return Result(RouteBankTransactionOutcome.Applied, transaction.Id);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        RouteBankTransactionCommand command, IAtomicPersistenceSession persistence, CancellationToken ct)
+    {
+        BankingAuthorizationSupport.Validate(command);
+        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        if (!await BankingAuthorizationSupport.HasWorkspaceAuthorityAsync(
+                command.PortfolioId, command.ActorUserId, command.AuthSessionId,
+                command.AccessContextId, command.ExpectedAccessRevision,
+                CapabilityKeys.BankConnectionsManage, persistence, now, ct))
+            throw new UnauthorizedAccessException();
+    }
+
+    private static RouteBankTransactionResult Result(RouteBankTransactionOutcome outcome, int id) => new(outcome, id);
+}
+
+internal static class BankingAuthorizationSupport
+{
+    internal static void Validate(ReconcileBankTransactionCommand command)
+    {
+        Validate(command.PortfolioId, command.TransactionId, command.ActorUserId, command.AuthSessionId,
+            command.AccessContextId, command.ExpectedAccessRevision, command.RequiredCapability,
+            command.OperationKey);
+    }
+
+    internal static void Validate(RouteBankTransactionCommand command)
+    {
+        Validate(command.PortfolioId, command.TransactionId, command.ActorUserId, command.AuthSessionId,
+            command.AccessContextId, command.ExpectedAccessRevision, CapabilityKeys.BankConnectionsManage,
+            command.OperationKey);
+    }
+
+    private static void Validate(int portfolioId, int transactionId, int actorUserId, Guid authSessionId,
+        int accessContextId, long expectedAccessRevision, string capability, string operationKey)
+    {
+        if (portfolioId <= 0 || transactionId <= 0 || actorUserId <= 0 || authSessionId == Guid.Empty
+            || accessContextId <= 0 || expectedAccessRevision <= 0 || string.IsNullOrWhiteSpace(capability)
+            || string.IsNullOrWhiteSpace(operationKey) || operationKey.Trim().Length > 128)
+            throw new ArgumentException("Portfolio, transaction, actor, access revision, and capability are required.");
+    }
+
+    internal static Task<bool> HasPropertyAuthorityAsync(
+        int portfolioId, int propertyId, int actorUserId, Guid authSessionId, int accessContextId,
+        long expectedAccessRevision, string capability, IAtomicPersistenceSession persistence,
+        DateTime now, CancellationToken ct) =>
+        LiveAssignments(portfolioId, actorUserId, authSessionId, accessContextId,
+                expectedAccessRevision, capability, persistence, now)
+            .AnyAsync(assignment =>
+                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
+                || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
+                    && assignment.SelectedProperties.Any(scope =>
+                        scope.PortfolioId == portfolioId && scope.PropertyId == propertyId)), ct);
+
+    internal static Task<bool> HasWorkspaceAuthorityAsync(
+        int portfolioId, int actorUserId, Guid authSessionId, int accessContextId,
+        long expectedAccessRevision, string capability, IAtomicPersistenceSession persistence,
+        DateTime now, CancellationToken ct) =>
+        LiveAssignments(portfolioId, actorUserId, authSessionId, accessContextId,
+                expectedAccessRevision, capability, persistence, now)
+            .AnyAsync(assignment => assignment.RoleProfile!.Capabilities.Any(profileCapability =>
+                profileCapability.CapabilityDefinition!.Key == capability
+                && profileCapability.CapabilityDefinition.AuthorizationTargetKind
+                    == CapabilityAuthorizationTargetKind.Workspace), ct);
+
+    private static IQueryable<MembershipRoleAssignment> LiveAssignments(
+        int portfolioId, int actorUserId, Guid authSessionId, int accessContextId,
+        long expectedAccessRevision, string capability, IAtomicPersistenceSession persistence, DateTime now) =>
+        persistence.Query<MembershipRoleAssignment>().Where(assignment =>
+            assignment.PortfolioId == portfolioId
+            && assignment.Status == MembershipRoleAssignmentStatus.Active
+            && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
+            && assignment.EffectiveFromUtc <= now
+            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now)
+            && assignment.WorkspaceMembership!.AccessContextId == accessContextId
+            && assignment.WorkspaceMembership.PortfolioId == portfolioId
+            && assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active
+            && assignment.WorkspaceMembership.SuspendedAtUtc == null
+            && assignment.WorkspaceMembership.RevokedAtUtc == null
+            && assignment.WorkspaceMembership.EffectiveFromUtc <= now
+            && (assignment.WorkspaceMembership.EffectiveToUtc == null
+                || assignment.WorkspaceMembership.EffectiveToUtc > now)
+            && assignment.WorkspaceMembership.AccessContext!.UserId == actorUserId
+            && assignment.WorkspaceMembership.AccessContext.PortfolioId == portfolioId
+            && assignment.WorkspaceMembership.AccessContext.AccessRevision == expectedAccessRevision
+            && assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active
+            && assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null
+            && assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null
+            && persistence.Query<AuthSession>().Any(session => session.Id == authSessionId
+                && session.UserId == actorUserId && session.ActiveAccessContextId == accessContextId
+                && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
+                && session.ExpiresAtUtc > now)
+            && assignment.RoleProfile!.Capabilities.Any(profileCapability =>
+                profileCapability.CapabilityDefinition!.Key == capability));
 }

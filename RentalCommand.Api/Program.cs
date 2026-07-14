@@ -398,6 +398,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Banking.ReconcileBankTransactionCommand,
     RentalCommand.Core.Banking.ReconcileBankTransactionResult,
     RentalCommand.Data.Banking.ReconcileBankTransactionHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Banking.RouteBankTransactionCommand,
+    RentalCommand.Core.Banking.RouteBankTransactionResult,
+    RentalCommand.Data.Banking.RouteBankTransactionHandler>();
 // The live scan-confirm endpoint admits only the five completed non-lease targets through this
 // persistence-only writer. Lease confirmation returns 503 until its aggregate writer is complete.
 builder.Services.AddScoped<RentalCommand.Data.Scanning.ProductionScanConfirmationTargetWriter>();
