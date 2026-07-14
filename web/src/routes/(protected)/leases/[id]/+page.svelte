@@ -19,13 +19,14 @@
 	import AgreementDraftDialog from '$lib/components/leases/AgreementDraftDialog.svelte';
 	import AgreementSignatureProgress from '$lib/components/leases/AgreementSignatureProgress.svelte';
 	import AgreementSuccessorDialog from '$lib/components/leases/AgreementSuccessorDialog.svelte';
+	import EndingDispositionDialog from '$lib/components/leases/EndingDispositionDialog.svelte';
 	import PossessionActions from '$lib/components/leases/PossessionActions.svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import Pagination from '$lib/components/shared/Pagination.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
-	import { FileDown, FilePenLine, FilePlus2, Home, ScanLine, Users } from '@lucide/svelte';
+	import { CalendarClock, FileDown, FilePenLine, FilePlus2, Home, ScanLine, Users } from '@lucide/svelte';
 	import { apiErrorMessage, showError } from '$lib/utils/toast';
 
 	type SuccessorType = 'Correction' | 'Restatement' | 'Renewal' | 'MonthToMonth';
@@ -45,6 +46,16 @@
 	let editAddendumId = $state<number | null>(null);
 	let createAddendumBase = $state<LeaseAgreementSummary | null>(null);
 	let correctionAddendum = $state<LeaseAddendumHistoryItem | null>(null);
+	let endingDispositionOpen = $state(false);
+
+	function endingDispositionLabel(value: string) {
+		switch (value) {
+			case 'OfferRenewal': return 'Renew / continue';
+			case 'OfferMonthToMonth': return 'Continue month-to-month';
+			case 'NonRenewalMoveOut': return 'Move out / end';
+			default: return 'Not decided';
+		}
+	}
 
 	const relationshipQuery = createQuery(() => ({
 		queryKey: ['lease-managements', leaseManagementId],
@@ -205,7 +216,7 @@
 			</div>
 		{/if}
 
-		<div class="grid gap-4 md:grid-cols-3">
+		<div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
 			<Card>
 				<CardHeader><CardTitle class="text-base">Relationship</CardTitle></CardHeader>
 				<CardContent class="space-y-2">
@@ -226,7 +237,13 @@
 					<p class="text-sm text-muted-foreground">
 						{summary.agreementStatus ?? 'Not issued'}{summary.termEndOn ? ` · ends ${summary.termEndOn}` : ''}
 					</p>
-					{#if summary.upcomingLeaseAgreementId}<p class="mt-1 text-xs text-primary">A signed upcoming agreement is scheduled.</p>{/if}
+					{#if summary.upcomingLeaseAgreementId}
+						<p class="mt-1 text-xs text-primary">
+							Upcoming: {summary.upcomingAgreementNumber ?? `agreement #${summary.upcomingLeaseAgreementId}`}
+							{summary.upcomingTermStartOn ? ` from ${summary.upcomingTermStartOn}` : ''}
+							{summary.upcomingAgreementStatus ? ` · ${summary.upcomingAgreementStatus}` : ''}
+						</p>
+					{/if}
 				</CardContent>
 			</Card>
 			<Card>
@@ -236,9 +253,34 @@
 					<p class="text-sm text-muted-foreground">Continues across renewals and corrections</p>
 				</CardContent>
 			</Card>
+			<Card>
+				<CardHeader><CardTitle class="text-base">Ending plan</CardTitle></CardHeader>
+				<CardContent class="space-y-2">
+					<p class="font-medium">{endingDispositionLabel(summary.endingDisposition)}</p>
+					{#if summary.endingDispositionDecidedAtUtc}
+						<p class="text-xs text-muted-foreground">Decided {new Date(summary.endingDispositionDecidedAtUtc).toLocaleDateString()}</p>
+					{/if}
+					{#if summary.plannedMoveOutAtUtc}
+						<p class="text-sm text-muted-foreground">Move-out planned {new Date(summary.plannedMoveOutAtUtc).toLocaleDateString()}</p>
+					{/if}
+					{#if summary.possessionGivenAtUtc && !summary.possessionReturnedAtUtc && !summary.canceledAtUtc}
+						<Button variant="outline" size="sm" class="gap-2" onclick={() => (endingDispositionOpen = true)}>
+							<CalendarClock class="h-4 w-4" /> Record decision
+						</Button>
+					{/if}
+				</CardContent>
+			</Card>
 		</div>
 
 		<PossessionActions {summary} onchanged={refreshLease} />
+
+		{#if endingDispositionOpen}
+			<EndingDispositionDialog
+				{summary}
+				onclose={() => (endingDispositionOpen = false)}
+				onrecorded={refreshLease}
+			/>
+		{/if}
 
 		<Card>
 			<CardHeader><CardTitle class="flex items-center gap-2"><Users class="h-5 w-5" /> Household and responsibility</CardTitle></CardHeader>

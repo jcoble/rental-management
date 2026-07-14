@@ -156,6 +156,36 @@ void main() {
       expect(adapter.headers?['Idempotency-Key'], 'stable-cancel-44-82');
     },
   );
+
+  test(
+    'ending disposition posts canonical dates, reason, and stable key',
+    () async {
+      final adapter = _RecordingAdapter();
+      final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+        ..httpClientAdapter = adapter;
+      final repo = LeaseManagementsRepository(dio);
+
+      await repo.recordEndingDisposition(
+        leaseManagementId: 44,
+        unitId: 17,
+        disposition: 'NonRenewalMoveOut',
+        noticeGivenAt: DateTime(2026, 7, 13),
+        plannedMoveOutAt: DateTime(2026, 8, 1),
+        decisionReason: 'Tenant gave early termination notice.',
+        operationKey: 'stable-ending-44',
+      );
+
+      expect(adapter.path, '/lease-managements/44/ending-disposition');
+      expect(adapter.headers?['Idempotency-Key'], 'stable-ending-44');
+      expect(adapter.data, {
+        'unitId': 17,
+        'disposition': 'NonRenewalMoveOut',
+        'noticeGivenAtUtc': '2026-07-13T12:00:00.000Z',
+        'plannedMoveOutAtUtc': '2026-08-01T12:00:00.000Z',
+        'decisionReason': 'Tenant gave early termination notice.',
+      });
+    },
+  );
 }
 
 class _RecordingAdapter implements HttpClientAdapter {

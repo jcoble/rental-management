@@ -33,6 +33,10 @@ class LeaseManagementSummary {
     this.termEndOn,
     this.baseRentAmount,
     this.upcomingAgreementId,
+    this.upcomingAgreementNumber,
+    this.upcomingAgreementStatus,
+    this.upcomingTermStartOn,
+    this.upcomingTermEndOn,
     this.tenantAccountId,
     this.primaryTenantId,
     this.primaryTenantName,
@@ -43,6 +47,9 @@ class LeaseManagementSummary {
     this.accountClosedAt,
     this.canceledAt,
     this.endingDisposition = 'Undecided',
+    this.endingDispositionDecidedAt,
+    this.endingDispositionDecidedByUserId,
+    this.noticeGivenAt,
   });
 
   final int id;
@@ -61,6 +68,10 @@ class LeaseManagementSummary {
   final DateTime? termEndOn;
   final double? baseRentAmount;
   final int? upcomingAgreementId;
+  final String? upcomingAgreementNumber;
+  final String? upcomingAgreementStatus;
+  final DateTime? upcomingTermStartOn;
+  final DateTime? upcomingTermEndOn;
   final int? tenantAccountId;
   final int? primaryTenantId;
   final String? primaryTenantName;
@@ -74,6 +85,9 @@ class LeaseManagementSummary {
   final DateTime? accountClosedAt;
   final DateTime? canceledAt;
   final String endingDisposition;
+  final DateTime? endingDispositionDecidedAt;
+  final int? endingDispositionDecidedByUserId;
+  final DateTime? noticeGivenAt;
   final DateTime updatedAt;
 
   bool get isOpen =>
@@ -98,6 +112,10 @@ class LeaseManagementSummary {
       termEndOn: _optionalDate(json['termEndOn']),
       baseRentAmount: (json['baseRentAmount'] as num?)?.toDouble(),
       upcomingAgreementId: (json['upcomingLeaseAgreementId'] as num?)?.toInt(),
+      upcomingAgreementNumber: json['upcomingAgreementNumber'] as String?,
+      upcomingAgreementStatus: json['upcomingAgreementStatus'] as String?,
+      upcomingTermStartOn: _optionalDate(json['upcomingTermStartOn']),
+      upcomingTermEndOn: _optionalDate(json['upcomingTermEndOn']),
       tenantAccountId: (json['tenantAccountId'] as num?)?.toInt(),
       primaryTenantId: (json['primaryTenantId'] as num?)?.toInt(),
       primaryTenantName: json['primaryTenantName'] as String?,
@@ -113,6 +131,12 @@ class LeaseManagementSummary {
       accountClosedAt: _optionalDate(json['accountClosedAtUtc']),
       canceledAt: _optionalDate(json['canceledAtUtc']),
       endingDisposition: json['endingDisposition'] as String? ?? 'Undecided',
+      endingDispositionDecidedAt: _optionalDate(
+        json['endingDispositionDecidedAtUtc'],
+      ),
+      endingDispositionDecidedByUserId:
+          (json['endingDispositionDecidedByUserId'] as num?)?.toInt(),
+      noticeGivenAt: _optionalDate(json['noticeGivenAtUtc']),
       updatedAt: _date(json['updatedAtUtc']),
     );
   }

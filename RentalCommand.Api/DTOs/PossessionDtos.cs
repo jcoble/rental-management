@@ -1,4 +1,5 @@
 using RentalCommand.Core.Leasing;
+using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.DTOs;
 
@@ -46,6 +47,24 @@ public sealed record ReturnPossessionResponse(
     int UnitId,
     int TurnoverPeriodId,
     DateTime PossessionReturnedAtUtc,
+    bool Replayed);
+
+public sealed class RecordLeaseEndingDispositionRequest
+{
+    public int UnitId { get; set; }
+    public LeaseManagementEndingDisposition? Disposition { get; set; }
+    public DateTime? NoticeGivenAtUtc { get; set; }
+    public DateTime? PlannedMoveOutAtUtc { get; set; }
+    public string DecisionReason { get; set; } = string.Empty;
+}
+
+public sealed record RecordLeaseEndingDispositionResponse(
+    int LeaseManagementId,
+    LeaseManagementEndingDisposition EndingDisposition,
+    DateTime? EndingDispositionDecidedAtUtc,
+    int? EndingDispositionDecidedByUserId,
+    DateTime? NoticeGivenAtUtc,
+    DateTime? PlannedMoveOutAtUtc,
     bool Replayed);
 
 public sealed class CancelPlannedRelationshipAccessRequest
