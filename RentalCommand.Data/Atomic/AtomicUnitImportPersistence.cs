@@ -8,7 +8,7 @@ using RentalCommand.Core.Authorization;
 namespace RentalCommand.Data.Atomic;
 
 /// <summary>Kernel-owned, set-based Unit CSV validation and persistence.</summary>
-public sealed class AtomicUnitImportPersistence
+internal sealed class AtomicUnitImportPersistence
     : IAtomicUnitImportPersistence, IUnitCsvImportPreviewQuery
 {
     // Both preview and import use this exact resolution, authorization, validation, and
