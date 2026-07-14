@@ -185,6 +185,7 @@ public sealed class NativeEsignExecutionClaimStoreTests : IAsyncLifetime
             VersionNumber = version,
             AgreementNumber = $"AGR-BRANCH-{version}",
             ChangeType = changeType,
+            CorrectionReason = isCorrection ? "Corrected integration-test agreement facts." : null,
             ReplacesAgreementId = isCorrection ? source.Id : null,
             RenewsAgreementId = isCorrection ? null : source.Id,
             TermType = LeaseAgreementTermType.FixedTerm,

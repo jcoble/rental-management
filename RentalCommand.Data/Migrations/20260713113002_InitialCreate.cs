@@ -2595,6 +2595,7 @@ namespace RentalCommand.Data.Migrations
                     VersionNumber = table.Column<int>(type: "integer", nullable: false, defaultValue: 1),
                     AgreementNumber = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: false),
                     ChangeType = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false),
+                    CorrectionReason = table.Column<string>(type: "character varying(1000)", maxLength: 1000, nullable: true),
                     TransferredFromAgreementId = table.Column<int>(type: "integer", nullable: true),
                     ReplacesAgreementId = table.Column<int>(type: "integer", nullable: true),
                     RenewsAgreementId = table.Column<int>(type: "integer", nullable: true),
@@ -2623,6 +2624,7 @@ namespace RentalCommand.Data.Migrations
                     VoidNote = table.Column<string>(type: "character varying(2000)", maxLength: 2000, nullable: true),
                     DraftCanceledAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
                     DraftCancellationReason = table.Column<string>(type: "character varying(1000)", maxLength: 1000, nullable: true),
+                    DraftCanceledByUserId = table.Column<int>(type: "integer", nullable: true),
                     CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false, defaultValueSql: "clock_timestamp()"),
                     CreatedByUserId = table.Column<int>(type: "integer", nullable: false),
                     UpdatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false, defaultValueSql: "clock_timestamp()"),
@@ -2634,8 +2636,9 @@ namespace RentalCommand.Data.Migrations
                     table.UniqueConstraint("AK_LeaseAgreements_Id_LeaseManagementId_PortfolioId", x => new { x.Id, x.LeaseManagementId, x.PortfolioId });
                     table.UniqueConstraint("AK_LeaseAgreements_Id_PortfolioId", x => new { x.Id, x.PortfolioId });
                     table.CheckConstraint("CK_LeaseAgreement_ChangeType", "\"ChangeType\" IN ('Initial', 'Transfer', 'Correction', 'Renewal', 'MonthToMonth', 'Restatement')");
+                    table.CheckConstraint("CK_LeaseAgreement_CorrectionReason", "(\"ChangeType\" = 'Correction' AND \"CorrectionReason\" IS NOT NULL AND length(btrim(\"CorrectionReason\")) > 0) OR (\"ChangeType\" <> 'Correction' AND \"CorrectionReason\" IS NULL)");
                     table.CheckConstraint("CK_LeaseAgreement_Currency", "\"Currency\" ~ '^[A-Z]{3}$'");
-                    table.CheckConstraint("CK_LeaseAgreement_DraftCancellation", "(\"DraftCanceledAtUtc\" IS NULL) = (\"DraftCancellationReason\" IS NULL)");
+                    table.CheckConstraint("CK_LeaseAgreement_DraftCancellation", "(\"DraftCanceledAtUtc\" IS NULL AND \"DraftCancellationReason\" IS NULL AND \"DraftCanceledByUserId\" IS NULL) OR (\"DraftCanceledAtUtc\" IS NOT NULL AND \"DraftCancellationReason\" IS NOT NULL AND \"DraftCanceledByUserId\" IS NOT NULL)");
                     table.CheckConstraint("CK_LeaseAgreement_DraftRevision", "\"DraftRevision\" >= 1");
                     table.CheckConstraint("CK_LeaseAgreement_Execution", "((\"FullyExecutedAtUtc\" IS NULL) = (\"ExecutedArtifactId\" IS NULL)) AND (\"FullyExecutedAtUtc\" IS NULL OR \"IssuedAtUtc\" IS NOT NULL)");
                     table.CheckConstraint("CK_LeaseAgreement_GoverningDate", "\"GoverningFromOn\" >= \"TermStartOn\" AND (\"TermEndOn\" IS NULL OR \"GoverningFromOn\" <= \"TermEndOn\")");
@@ -2652,6 +2655,12 @@ namespace RentalCommand.Data.Migrations
                     table.ForeignKey(
                         name: "FK_LeaseAgreements_AspNetUsers_CreatedByUserId",
                         column: x => x.CreatedByUserId,
+                        principalTable: "AspNetUsers",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_LeaseAgreements_AspNetUsers_DraftCanceledByUserId",
+                        column: x => x.DraftCanceledByUserId,
                         principalTable: "AspNetUsers",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Restrict);
@@ -6047,6 +6056,11 @@ namespace RentalCommand.Data.Migrations
                 name: "IX_LeaseAgreements_DocumentSourceVersionId_PortfolioId",
                 table: "LeaseAgreements",
                 columns: new[] { "DocumentSourceVersionId", "PortfolioId" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_LeaseAgreements_DraftCanceledByUserId",
+                table: "LeaseAgreements",
+                column: "DraftCanceledByUserId");
 
             migrationBuilder.CreateIndex(
                 name: "IX_LeaseAgreements_ExecutedArtifactId_PortfolioId",

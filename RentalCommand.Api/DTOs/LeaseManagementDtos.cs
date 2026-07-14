@@ -102,6 +102,7 @@ public sealed class LeaseAgreementHistoryResponse
     public int VersionNumber { get; init; }
     public string AgreementNumber { get; init; } = string.Empty;
     public LeaseAgreementChangeType ChangeType { get; init; }
+    public string? CorrectionReason { get; init; }
     public int? ReplacesAgreementId { get; init; }
     public int? RenewsAgreementId { get; init; }
     public LeaseAgreementTermType TermType { get; init; }
@@ -119,6 +120,9 @@ public sealed class LeaseAgreementHistoryResponse
     public DateTime? IssuedAtUtc { get; init; }
     public DateTime? FullyExecutedAtUtc { get; init; }
     public DateTime? VoidedAtUtc { get; init; }
+    public DateTime? DraftCanceledAtUtc { get; init; }
+    public int? DraftCanceledByUserId { get; init; }
+    public string? DraftCancellationReason { get; init; }
     public DateTime CreatedAtUtc { get; init; }
     public DateTime UpdatedAtUtc { get; init; }
 }

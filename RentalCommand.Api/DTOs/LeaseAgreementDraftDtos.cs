@@ -40,6 +40,7 @@ public sealed class LeaseAgreementDraftDetailResponse
     public int DraftRevision { get; init; }
     public string AgreementNumber { get; init; } = string.Empty;
     public LeaseAgreementChangeType ChangeType { get; init; }
+    public string? CorrectionReason { get; init; }
     public LeaseAgreementTermType TermType { get; init; }
     public DateOnly TermStartOn { get; init; }
     public DateOnly? TermEndOn { get; init; }
@@ -88,11 +89,25 @@ public sealed class LeaseRenewalAddendumDecisionRequest
 public sealed class CreateLeaseAgreementSuccessorDraftRequest
 {
     public LeaseAgreementChangeType? ChangeType { get; set; }
+    public string? CorrectionReason { get; set; }
     public DateOnly TermStartOn { get; set; }
     public DateOnly? TermEndOn { get; set; }
     public DateOnly GoverningFromOn { get; set; }
     public List<LeaseRenewalAddendumDecisionRequest> AddendumDecisions { get; set; } = [];
 }
+
+public sealed class CancelLeaseAgreementSuccessorDraftRequest
+{
+    public string CancellationReason { get; set; } = string.Empty;
+}
+
+public sealed record CancelLeaseAgreementSuccessorDraftResponse(
+    int LeaseManagementId,
+    int LeaseAgreementId,
+    DateTime DraftCanceledAtUtc,
+    int DraftCanceledByUserId,
+    string DraftCancellationReason,
+    bool Replayed);
 
 public sealed class LeaseAgreementRenewalFinancialEffectSummaryResponse
 {

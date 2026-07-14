@@ -263,6 +263,9 @@ public sealed class CreateLeaseAgreementSuccessorDraftHandler
             VersionNumber = nextVersion,
             AgreementNumber = $"AGR-{command.LeaseManagementId:D8}-V{nextVersion}",
             ChangeType = command.ChangeType,
+            CorrectionReason = command.ChangeType == LeaseAgreementChangeType.Correction
+                ? command.CorrectionReason!.Trim()
+                : null,
             ReplacesAgreementId = isReplacement ? source.Id : null,
             RenewsAgreementId = isReplacement ? null : source.Id,
             TermType = command.ChangeType switch
@@ -612,9 +615,15 @@ internal static class LeaseAgreementDraftCommandSupport
             || (command.ChangeType == LeaseAgreementChangeType.MonthToMonth && command.TermEndOn != null)
             || (command.ChangeType != LeaseAgreementChangeType.MonthToMonth
                 && (command.TermEndOn == null || command.TermEndOn < command.TermStartOn
-                    || command.GoverningFromOn > command.TermEndOn)))
+                    || command.GoverningFromOn > command.TermEndOn))
+            || (command.ChangeType == LeaseAgreementChangeType.Correction
+                && (string.IsNullOrWhiteSpace(command.CorrectionReason)
+                    || command.CorrectionReason.Trim().Length > 1000))
+            || (command.ChangeType != LeaseAgreementChangeType.Correction
+                && !string.IsNullOrWhiteSpace(command.CorrectionReason)))
         {
-            throw new ArgumentException("Successor type and governing/term dates are invalid.");
+            throw new ArgumentException(
+                "Successor type, governing/term dates, or correction reason are invalid.");
         }
     }
 

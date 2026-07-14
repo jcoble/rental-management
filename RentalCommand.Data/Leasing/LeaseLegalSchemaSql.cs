@@ -384,25 +384,25 @@ internal static class LeaseLegalSchemaSql
 
           IF OLD."IssuedAtUtc" IS NOT NULL AND ROW(
               NEW."PublicId", NEW."PortfolioId", NEW."LeaseManagementId", NEW."VersionNumber",
-              NEW."AgreementNumber", NEW."ChangeType", NEW."TransferredFromAgreementId",
+              NEW."AgreementNumber", NEW."ChangeType", NEW."CorrectionReason", NEW."TransferredFromAgreementId",
               NEW."ReplacesAgreementId", NEW."RenewsAgreementId", NEW."TermType",
               NEW."TermStartOn", NEW."TermEndOn", NEW."GoverningFromOn",
               NEW."BaseRentAmount", NEW."RentDueDay", NEW."SecurityDepositObligation",
               NEW."LateFeeAmount", NEW."GracePeriodDays", NEW."Currency",
               NEW."TermsSchemaVersion", NEW."TermsPayload", NEW."DocumentSourceVersionId",
               NEW."IssuedArtifactId", NEW."IssuedAtUtc",
-              NEW."DraftCanceledAtUtc", NEW."DraftCancellationReason",
+              NEW."DraftCanceledAtUtc", NEW."DraftCancellationReason", NEW."DraftCanceledByUserId",
               NEW."CreatedAtUtc", NEW."CreatedByUserId", NEW."DraftRevision")
             IS DISTINCT FROM ROW(
               OLD."PublicId", OLD."PortfolioId", OLD."LeaseManagementId", OLD."VersionNumber",
-              OLD."AgreementNumber", OLD."ChangeType", OLD."TransferredFromAgreementId",
+              OLD."AgreementNumber", OLD."ChangeType", OLD."CorrectionReason", OLD."TransferredFromAgreementId",
               OLD."ReplacesAgreementId", OLD."RenewsAgreementId", OLD."TermType",
               OLD."TermStartOn", OLD."TermEndOn", OLD."GoverningFromOn",
               OLD."BaseRentAmount", OLD."RentDueDay", OLD."SecurityDepositObligation",
               OLD."LateFeeAmount", OLD."GracePeriodDays", OLD."Currency",
               OLD."TermsSchemaVersion", OLD."TermsPayload", OLD."DocumentSourceVersionId",
               OLD."IssuedArtifactId", OLD."IssuedAtUtc",
-              OLD."DraftCanceledAtUtc", OLD."DraftCancellationReason",
+              OLD."DraftCanceledAtUtc", OLD."DraftCancellationReason", OLD."DraftCanceledByUserId",
               OLD."CreatedAtUtc", OLD."CreatedByUserId", OLD."DraftRevision") THEN
             RAISE EXCEPTION 'Issued LeaseAgreement contractual fields are immutable';
           END IF;
@@ -427,8 +427,8 @@ internal static class LeaseLegalSchemaSql
           END IF;
 
           IF OLD."DraftCanceledAtUtc" IS NOT NULL AND
-             ROW(NEW."DraftCanceledAtUtc", NEW."DraftCancellationReason") IS DISTINCT FROM
-             ROW(OLD."DraftCanceledAtUtc", OLD."DraftCancellationReason") THEN
+             ROW(NEW."DraftCanceledAtUtc", NEW."DraftCancellationReason", NEW."DraftCanceledByUserId") IS DISTINCT FROM
+             ROW(OLD."DraftCanceledAtUtc", OLD."DraftCancellationReason", OLD."DraftCanceledByUserId") THEN
             RAISE EXCEPTION 'LeaseAgreement draft-cancellation evidence is immutable once recorded';
           END IF;
 

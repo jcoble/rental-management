@@ -242,6 +242,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             DraftRevision = row.DraftRevision,
             AgreementNumber = row.AgreementNumber,
             ChangeType = row.ChangeType,
+            CorrectionReason = row.CorrectionReason,
             TermType = row.TermType,
             TermStartOn = row.TermStartOn,
             TermEndOn = row.TermEndOn,
@@ -660,6 +661,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             DraftRevision = agreement.DraftRevision,
             AgreementNumber = agreement.AgreementNumber,
             ChangeType = agreement.ChangeType,
+            CorrectionReason = agreement.CorrectionReason,
             TermType = agreement.TermType,
             TermStartOn = agreement.TermStartOn,
             TermEndOn = agreement.TermEndOn,
@@ -1061,6 +1063,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
                 VersionNumber = agreement.VersionNumber,
                 AgreementNumber = agreement.AgreementNumber,
                 ChangeType = agreement.ChangeType,
+                CorrectionReason = agreement.CorrectionReason,
                 ReplacesAgreementId = agreement.ReplacesAgreementId,
                 RenewsAgreementId = agreement.RenewsAgreementId,
                 TermType = agreement.TermType,
@@ -1104,6 +1107,9 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
                 IssuedAtUtc = agreement.IssuedAtUtc,
                 FullyExecutedAtUtc = agreement.FullyExecutedAtUtc,
                 VoidedAtUtc = agreement.VoidedAtUtc,
+                DraftCanceledAtUtc = agreement.DraftCanceledAtUtc,
+                DraftCanceledByUserId = agreement.DraftCanceledByUserId,
+                DraftCancellationReason = agreement.DraftCancellationReason,
                 CreatedAtUtc = agreement.CreatedAtUtc,
                 UpdatedAtUtc = agreement.UpdatedAtUtc,
             };
@@ -1499,6 +1505,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         public int DraftRevision { get; init; }
         public string AgreementNumber { get; init; } = string.Empty;
         public LeaseAgreementChangeType ChangeType { get; init; }
+        public string? CorrectionReason { get; init; }
         public LeaseAgreementTermType TermType { get; init; }
         public DateOnly TermStartOn { get; init; }
         public DateOnly? TermEndOn { get; init; }
