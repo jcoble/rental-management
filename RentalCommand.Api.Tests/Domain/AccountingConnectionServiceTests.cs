@@ -19,11 +19,8 @@ using Xunit;
 namespace RentalCommand.Api.Tests.Domain;
 
 /// <summary>
-/// Phase 1 backbone guard: the encrypted-token round trip (AC-4). Connecting through
-/// a fake provider must persist the OAuth tokens ONLY as cipher text — recoverable to
-/// the original value, never stored as plaintext — and disconnect must blank them.
-/// Deliberately the single focused unit test for Phase 1; the system is in flux and
-/// the sandbox flow is the real signal.
+/// Accounting integration contracts while provider callback admission is being moved into
+/// one database-validated command. The callback must remain fail-closed until that command lands.
 /// </summary>
 public class AccountingConnectionServiceTests : IDisposable
 {
@@ -39,12 +36,11 @@ public class AccountingConnectionServiceTests : IDisposable
     public void Dispose() => _ctx.Dispose();
 
     [Fact]
-    public async Task CompleteCallback_PersistsTokensAsCipherText_AndRoundTrips()
+    public async Task CompleteCallback_RemainsFailClosedUntilDatabaseValidatedAdmissionLands()
     {
-        const string access = "qbo-access-token-PLAINTEXT-secret";
-        const string refresh = "qbo-refresh-token-PLAINTEXT-secret";
         var provider = new FakeAccountingProvider(AccountingProvider.QuickBooks,
-            new AccountingTokenResult(access, refresh, DateTime.UtcNow.AddHours(1), "realm-123", "Acme Books"));
+            new AccountingTokenResult("unused-access", "unused-refresh", DateTime.UtcNow.AddHours(1),
+                "realm-123", "Acme Books"));
 
         var sut = CreateService(provider);
 
@@ -60,45 +56,16 @@ public class AccountingConnectionServiceTests : IDisposable
         });
         await _ctx.Db.SaveChangesAsync();
 
-        var (portfolioId, resolvedProvider) = await sut.CompleteCallbackFromStateAsync(
+        var act = () => sut.CompleteCallbackFromStateAsync(
             new AccountingCallback("auth-code", "state-token-abc", "realm-123", null),
             CancellationToken.None);
 
-        portfolioId.Should().Be(1);
-        resolvedProvider.Should().Be(AccountingProvider.QuickBooks);
-
-        var conn = await _ctx.Db.AccountingConnections.AsNoTracking()
-            .SingleAsync(c => c.PortfolioId == 1 && c.Provider == AccountingProvider.QuickBooks);
-
-        conn.Status.Should().Be(AccountingConnectionStatus.Connected);
-        conn.ExternalAccountId.Should().Be("realm-123");
-        conn.CompanyName.Should().Be("Acme Books");
-
-        // AC-4: at rest it is cipher text, NOT the plaintext token.
-        conn.AccessTokenCipherText.Should().NotBeNullOrEmpty();
-        conn.AccessTokenCipherText.Should().NotContain(access);
-        conn.RefreshTokenCipherText.Should().NotBeNullOrEmpty();
-        conn.RefreshTokenCipherText.Should().NotContain(refresh);
-
-        // …and it decrypts back to the original (the ProtectNullable/UnprotectNullable round trip).
-        var protector = _dp.CreateProtector("RentalCommand.Accounting.v1");
-        protector.Unprotect(conn.AccessTokenCipherText!).Should().Be(access);
-        protector.Unprotect(conn.RefreshTokenCipherText!).Should().Be(refresh);
-
-        // The single-use state row was consumed.
-        (await _ctx.Db.OAuthStates.CountAsync()).Should().Be(0);
-
-        // Disconnect blanks the tokens.
-        await sut.DisconnectAsync(
-            new WorkspaceReadScope(1, 1, Guid.NewGuid(), 1, 1),
-            AccountingProvider.QuickBooks,
-            "accounting-disconnect-test",
-            CancellationToken.None);
-        var afterDisconnect = await _ctx.Db.AccountingConnections.AsNoTracking()
-            .SingleAsync(c => c.PortfolioId == 1 && c.Provider == AccountingProvider.QuickBooks);
-        afterDisconnect.Status.Should().Be(AccountingConnectionStatus.Disconnected);
-        afterDisconnect.AccessTokenCipherText.Should().BeNull();
-        afterDisconnect.RefreshTokenCipherText.Should().BeNull();
+        var error = await act.Should().ThrowAsync<AccountingNotConfiguredException>();
+        error.Which.Message.Should().Contain("temporarily unavailable");
+        (await _ctx.Db.OAuthStates.CountAsync()).Should().Be(1,
+            "a disabled callback must not consume the single-use state");
+        (await _ctx.Db.AccountingConnections.CountAsync()).Should().Be(0,
+            "the disabled path must not partially persist provider state or credentials");
     }
 
     [Fact]
