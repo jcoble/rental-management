@@ -27,7 +27,8 @@ public sealed class LeaseHouseholdAccessContractTests
         })
         {
             controller.GetMethod(methodName)!.GetParameters().Should().Contain(parameter =>
-                parameter.GetCustomAttribute<FromHeaderAttribute>() is { Name: "Idempotency-Key" });
+                parameter.GetCustomAttributes<FromHeaderAttribute>()
+                    .Any(attribute => attribute.Name == "Idempotency-Key"));
         }
 
         typeof(GrantTenantUserAccessHandler)
@@ -39,8 +40,9 @@ public sealed class LeaseHouseholdAccessContractTests
     public void Tenant_controller_has_no_tenant_wide_access_mutation()
     {
         typeof(TenantController).GetMethods().Should().NotContain(method =>
-            method.GetCustomAttribute<HttpPostAttribute>()?.Template is
-                "{id:int}/portal-access" or "{id:int}/portal-invite");
+            method.GetCustomAttributes<HttpPostAttribute>().Any(attribute =>
+                attribute.Template == "{id:int}/portal-access" ||
+                attribute.Template == "{id:int}/portal-invite"));
     }
 
     [Fact]

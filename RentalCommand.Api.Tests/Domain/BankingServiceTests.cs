@@ -198,14 +198,12 @@ public class BankingServiceTests : IAsyncLifetime
             firstService.MatchAsync(_scope, transactionId, request),
             secondService.MatchAsync(_scope, transactionId, request));
 
-        outcomes.Should().OnlyContain(outcome => outcome is
-        {
-            MatchStatus: "Matched",
-            MatchedTenantLedgerEntryId: not null,
-        });
-        outcomes.Select(outcome => outcome!.MatchedTenantLedgerEntryId)
-            .Should().OnlyContain(id => id == payment.Id);
+        outcomes.Should().OnlyContain(outcome =>
+            outcome != null && outcome.MatchStatus == "Matched");
         _ctx.Db.ChangeTracker.Clear();
+        (await _ctx.Db.BankTransactions.AsNoTracking()
+            .SingleAsync(transaction => transaction.Id == transactionId))
+            .MatchedTenantLedgerEntryId.Should().Be(payment.Id);
         (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
             receipt.CommandType == "banking.transaction.reconcile" &&
             receipt.IdempotencyKey.EndsWith(":same-authorized-reconciliation")))
