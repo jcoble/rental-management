@@ -735,14 +735,20 @@ if (migrateOnly)
         engineConnectionStringForMigration!,
         allowDevelopmentDefaults: builder.Environment.IsDevelopment());
 
-    await using var seedScope = app.Services.CreateAsyncScope();
+    return;
+}
+
+// Application seed/bootstrap work must run through the long-running API connection. The
+// migration process deliberately exits above after schema and runtime-role provisioning so the
+// migrator identity can never invoke API-only authority functions such as
+// rc_bootstrap_initial_workspace.
+await using (var seedScope = app.Services.CreateAsyncScope())
+{
     await seedScope.ServiceProvider.GetRequiredService<IdentitySeeder>().SeedAsync();
     if (app.Configuration.GetValue<bool>("Seed:DemoData", false))
     {
         await seedScope.ServiceProvider.GetRequiredService<DemoDataSeeder>().SeedAsync();
     }
-
-    return;
 }
 
 // Behind Traefik (TLS terminator) the API receives plain HTTP on :8080, so honor X-Forwarded-Proto
