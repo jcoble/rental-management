@@ -233,6 +233,18 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Api.Services.Domain.PrepareAccountingConnectResult,
     RentalCommand.Api.Services.Domain.PrepareAccountingConnectHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.PrepareAccountingDisconnectCommand,
+    RentalCommand.Api.Services.Domain.PrepareAccountingDisconnectResult,
+    RentalCommand.Api.Services.Domain.PrepareAccountingDisconnectHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.FinalizeAccountingDisconnectCommand,
+    RentalCommand.Api.Services.Domain.FinalizeAccountingDisconnectResult,
+    RentalCommand.Api.Services.Domain.FinalizeAccountingDisconnectHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.SetAccountingDirectionCommand,
+    RentalCommand.Api.Services.Domain.SetAccountingDirectionResult,
+    RentalCommand.Api.Services.Domain.SetAccountingDirectionHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Api.Services.Domain.CancelTenantAutopayCommand,
     RentalCommand.Api.Services.Domain.CancelTenantAutopayResult,
     RentalCommand.Api.Services.Domain.CancelTenantAutopayHandler>();

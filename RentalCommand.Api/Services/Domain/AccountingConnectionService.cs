@@ -34,7 +34,7 @@ public sealed class AccountingNotConfiguredException : Exception
 /// <list type="bullet">
 ///   <item><see cref="StartConnectAsync"/>: persist a single-use <c>OAuthState</c> and return the provider authorize URL.</item>
 ///   <item><see cref="CompleteCallbackAsync"/>: validate-and-consume the state, exchange the code via the resolved provider, encrypt+persist tokens, flip Connected.</item>
-///   <item><see cref="DisconnectAsync"/>: best-effort revoke, flip Disconnected, blank tokens.</item>
+///   <item><see cref="DisconnectAsync"/>: atomically disable local access, best-effort revoke, then finalize the retained revoke credential.</item>
 ///   <item><see cref="GetStatusAsync"/>: one card per available provider for the settings shell.</item>
 ///   <item><see cref="LookupStateAsync"/>: learn the provider+redirectUri for a callback without consuming the row.</item>
 ///   <item><see cref="SetPullEnabledAsync"/>/<see cref="SetPushEnabledAsync"/>: per-direction toggles.</item>
@@ -175,18 +175,30 @@ public class AccountingConnectionService
         return Task.CompletedTask;
     }
 
-    /// <summary>Best-effort revoke at the provider, then flip Disconnected and blank the tokens.</summary>
-    public async Task DisconnectAsync(int portfolioId, AccountingProvider provider, CancellationToken ct)
+    /// <summary>
+    /// Disable the local connection atomically, best-effort revoke outside the database transaction,
+    /// then atomically clear the retained encrypted revoke credential.
+    /// </summary>
+    public async Task DisconnectAsync(
+        WorkspaceReadScope scope,
+        AccountingProvider provider,
+        string operationKey,
+        CancellationToken ct)
     {
-        var conn = await _db.AccountingConnections.AsNoTracking()
-            .FirstOrDefaultAsync(c => c.PortfolioId == portfolioId && c.Provider == provider, ct);
-        if (conn == null)
+        var prepareCommand = AtomicAccountingLifecycle.PrepareDisconnectCommand(
+            scope, provider, operationKey);
+        var prepared = await _atomic.ExecuteAsync(
+            AtomicAccountingLifecycle.PrepareDisconnectIdentity(prepareCommand),
+            prepareCommand,
+            AtomicAccountingLifecycle.DisconnectPrepareCodec,
+            ct);
+        if (prepared.Value.Outcome is PrepareAccountingDisconnectOutcome.NotFound
+            or PrepareAccountingDisconnectOutcome.AlreadyDisconnected)
         {
             return;
         }
 
-        // Revoke only when we can both resolve the provider and decrypt a refresh token.
-        var refreshToken = UnprotectNullable(conn.RefreshTokenCipherText);
+        var refreshToken = UnprotectNullable(prepared.Value.RefreshTokenCipherText);
         if (!string.IsNullOrWhiteSpace(refreshToken) && _providerResolver.IsRegistered(provider))
         {
             try
@@ -199,33 +211,23 @@ public class AccountingConnectionService
             {
                 _logger.LogWarning(ex,
                     "Provider revoke failed for AccountingConnection {ConnectionId} ({Provider}) — proceeding with local disconnect",
-                    conn.Id, provider);
+                    prepared.Value.ConnectionId, provider);
             }
         }
 
-        var disconnectedAt = _timeProvider.UtcNow();
-        await _db.AccountingConnections
-            .Where(c => c.Id == conn.Id
-                && c.PortfolioId == portfolioId
-                && c.Provider == provider)
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(c => c.Status, AccountingConnectionStatus.Disconnected)
-                .SetProperty(c => c.AccessTokenCipherText, (string?)null)
-                .SetProperty(c => c.RefreshTokenCipherText, (string?)null)
-                .SetProperty(c => c.TokenExpiresAt, (DateTime?)null)
-                .SetProperty(c => c.PullClaimOwner, (string?)null)
-                .SetProperty(c => c.PullClaimToken, (Guid?)null)
-                .SetProperty(c => c.PullClaimExpiresAtUtc, (DateTime?)null)
-                .SetProperty(c => c.TokenRotationState, AccountingTokenRotationState.Idle)
-                .SetProperty(c => c.TokenRotationClaimOwner, (string?)null)
-                .SetProperty(c => c.TokenRotationClaimToken, (Guid?)null)
-                .SetProperty(c => c.TokenRotationClaimExpiresAtUtc, (DateTime?)null)
-                .SetProperty(c => c.DisconnectedAt, disconnectedAt)
-                .SetProperty(c => c.UpdatedAt, disconnectedAt), ct);
+        var finalizeCommand = AtomicAccountingLifecycle.FinalizeDisconnectCommand(
+            prepareCommand, prepared.Value);
+        var finalized = await _atomic.ExecuteAsync(
+            AtomicAccountingLifecycle.FinalizeDisconnectIdentity(finalizeCommand),
+            finalizeCommand,
+            AtomicAccountingLifecycle.DisconnectFinalizeCodec,
+            // Once prepare commits, request cancellation must not strand the retained revoke
+            // credential or undo the already-durable local disconnect.
+            CancellationToken.None);
 
         _logger.LogInformation(
-            "AccountingConnection {ConnectionId} disconnected for portfolio {PortfolioId} ({Provider})",
-            conn.Id, portfolioId, provider);
+            "AccountingConnection {ConnectionId} disconnected for portfolio {PortfolioId} ({Provider}); finalize outcome {Outcome}",
+            prepared.Value.ConnectionId, scope.PortfolioId, provider, finalized.Value.Outcome);
     }
 
     /// <summary>
@@ -316,31 +318,40 @@ public class AccountingConnectionService
     }
 
     /// <summary>Toggle the pull (accounting → Rental Command) direction for a connected provider.</summary>
-    public Task SetPullEnabledAsync(int portfolioId, AccountingProvider provider, bool enabled, CancellationToken ct)
-        => SetDirectionAsync(portfolioId, provider, pull: enabled, push: null, ct);
+    public Task SetPullEnabledAsync(
+        WorkspaceReadScope scope,
+        AccountingProvider provider,
+        bool enabled,
+        string operationKey,
+        CancellationToken ct) =>
+        SetDirectionAsync(scope, provider, pull: enabled, push: null, operationKey, ct);
 
     /// <summary>Toggle the push (Rental Command → accounting) direction for a connected provider.</summary>
-    public Task SetPushEnabledAsync(int portfolioId, AccountingProvider provider, bool enabled, CancellationToken ct)
-        => SetDirectionAsync(portfolioId, provider, pull: null, push: enabled, ct);
+    public Task SetPushEnabledAsync(
+        WorkspaceReadScope scope,
+        AccountingProvider provider,
+        bool enabled,
+        string operationKey,
+        CancellationToken ct) =>
+        SetDirectionAsync(scope, provider, pull: null, push: enabled, operationKey, ct);
 
     /// <summary>Set one or both direction toggles on the connection in a single update.</summary>
     public async Task SetDirectionAsync(
-        int portfolioId, AccountingProvider provider, bool? pull, bool? push, CancellationToken ct)
+        WorkspaceReadScope scope,
+        AccountingProvider provider,
+        bool? pull,
+        bool? push,
+        string operationKey,
+        CancellationToken ct)
     {
-        var updatedAt = _timeProvider.UtcNow();
-        var updated = await _db.AccountingConnections
-            .Where(c => c.PortfolioId == portfolioId && c.Provider == provider)
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(c => c.PullEnabled, c => pull.HasValue ? pull.Value : c.PullEnabled)
-                .SetProperty(c => c.PushEnabled, c => push.HasValue ? push.Value : c.PushEnabled)
-                .SetProperty(c => c.PullClaimOwner,
-                    c => pull == false ? null : c.PullClaimOwner)
-                .SetProperty(c => c.PullClaimToken,
-                    c => pull == false ? null : c.PullClaimToken)
-                .SetProperty(c => c.PullClaimExpiresAtUtc,
-                    c => pull == false ? null : c.PullClaimExpiresAtUtc)
-                .SetProperty(c => c.UpdatedAt, updatedAt), ct);
-        if (updated == 0)
+        var command = AtomicAccountingLifecycle.DirectionCommand(
+            scope, provider, pull, push, operationKey);
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicAccountingLifecycle.DirectionIdentity(command),
+            command,
+            AtomicAccountingLifecycle.DirectionCodec,
+            ct);
+        if (!outcome.Value.Found)
             throw new InvalidOperationException(
                 $"No {provider} connection to configure. Connect the provider first.");
     }
