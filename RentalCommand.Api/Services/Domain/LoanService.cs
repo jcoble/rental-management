@@ -3,8 +3,6 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
-using RentalCommand.Core.Enums;
-using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
@@ -14,18 +12,13 @@ namespace RentalCommand.Api.Services.Domain;
 /// <inheritdoc cref="ILoanService"/>
 public class LoanService : ILoanService
 {
-    private const string EntityType = "Loan";
-
     private readonly RentalCommandDbContext _db;
-    private readonly IDataUpdateService _dataUpdate;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork? _atomic;
+    private readonly IAtomicUnitOfWork _atomic;
 
-    public LoanService(RentalCommandDbContext db, IDataUpdateService dataUpdate,
-        TimeProvider timeProvider, IAtomicUnitOfWork? atomic = null)
+    public LoanService(RentalCommandDbContext db, TimeProvider timeProvider, IAtomicUnitOfWork atomic)
     {
         _db = db;
-        _dataUpdate = dataUpdate;
         _timeProvider = timeProvider;
         _atomic = atomic;
     }
@@ -64,20 +57,14 @@ public class LoanService : ILoanService
     {
         var totalCount = await filtered.CountAsync(ct);
 
-        var items = await ApplySort(filtered, query)
+        var items = await MoneyResponseProjection.Loans(ApplySort(filtered, query))
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
-            .Select(l => new { Loan = l, PropertyName = l.Property!.Name })
             .ToListAsync(ct);
 
         return new LoanListResponse
         {
-            Items = items.Select(x =>
-            {
-                var r = LoanResponse.FromEntity(x.Loan);
-                r.PropertyName = x.PropertyName;
-                return r;
-            }).ToList(),
+            Items = items,
             TotalCount = totalCount,
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,
@@ -139,165 +126,49 @@ public class LoanService : ILoanService
                 _db, scope, CapabilityKeys.MoneyBalancesRead, _timeProvider.UtcNow()),
             scope.PortfolioId, id, ct);
 
-    private static async Task<LoanResponse?> GetAsync(
+    private static Task<LoanResponse?> GetAsync(
         IQueryable<Loan> loans, int portfolioId, int id, CancellationToken ct)
-    {
-        var entity = await loans
-            .Include(l => l.Property)
-            .FirstOrDefaultAsync(l => l.Id == id && l.PortfolioId == portfolioId, ct);
-
-        return entity == null ? null : LoanResponse.FromEntity(entity);
-    }
-
-    public async Task<LoanResponse?> CreateAsync(int portfolioId, CreateLoanRequest request, CancellationToken ct = default)
-    {
-        // IDOR guard: the property must belong to this portfolio (no cross-tenant linking).
-        if (!await _db.EnsurePropertyInPortfolioAsync(portfolioId, request.PropertyId, ct))
-            return null;
-
-        var now = _timeProvider.UtcNow();
-        var entity = new Loan
-        {
-            PortfolioId = portfolioId,
-            PropertyId = request.PropertyId,
-            Lender = request.Lender,
-            OriginalAmount = request.OriginalAmount,
-            CurrentBalance = request.CurrentBalance ?? request.OriginalAmount,
-            AnnualInterestRatePct = request.AnnualInterestRatePct,
-            TermMonths = request.TermMonths,
-            StartDate = request.StartDate.ToUtc(),
-            DayOfMonthDue = request.DayOfMonthDue,
-            MonthlyPrincipalInterest = request.MonthlyPrincipalInterest,
-            MonthlyEscrow = request.MonthlyEscrow,
-            EscrowCoversTaxes = request.EscrowCoversTaxes,
-            EscrowCoversInsurance = request.EscrowCoversInsurance,
-            Status = request.Status,
-            Notes = request.Notes,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        _db.Loans.Add(entity);
-        await _db.SaveChangesAsync(ct);
-
-        // Re-read the property name for the response without a tracked nav.
-        var propertyName = await _db.Properties
-            .AsNoTracking()
-            .Where(p => p.Id == entity.PropertyId)
-            .Select(p => p.Name)
+        => MoneyResponseProjection.Loans(
+                loans.Where(loan => loan.Id == id && loan.PortfolioId == portfolioId))
             .FirstOrDefaultAsync(ct);
-
-        var response = LoanResponse.FromEntity(entity);
-        response.PropertyName = propertyName;
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
-    }
 
     public async Task<LoanResponse?> CreateAsync(
         WorkspaceReadScope scope, CreateLoanRequest request, string idempotencyKey, CancellationToken ct = default)
     {
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
             AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, idempotencyKey, request);
-        var outcome = await Atomic.ExecuteAsync(
+        var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         if (!outcome.Value.Found) return null;
-        var response = await GetAsync(scope.PortfolioId, outcome.Value.EntityId, ct);
-        if (response is not null)
-            await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, response.Id, response, ct);
-        return response;
-    }
-
-    public async Task<LoanResponse?> UpdateAsync(int portfolioId, int id, UpdateLoanRequest request, CancellationToken ct = default)
-    {
-        var entity = await _db.Loans
-            .FirstOrDefaultAsync(l => l.Id == id && l.PortfolioId == portfolioId, ct);
-        if (entity == null)
-            return null;
-
-        if (request.Lender != null) entity.Lender = request.Lender;
-        if (request.OriginalAmount.HasValue) entity.OriginalAmount = request.OriginalAmount.Value;
-        if (request.CurrentBalance.HasValue) entity.CurrentBalance = request.CurrentBalance.Value;
-        if (request.AnnualInterestRatePct.HasValue) entity.AnnualInterestRatePct = request.AnnualInterestRatePct.Value;
-        if (request.TermMonths.HasValue) entity.TermMonths = request.TermMonths.Value;
-        if (request.StartDate.HasValue) entity.StartDate = request.StartDate.Value.ToUtc();
-        if (request.DayOfMonthDue.HasValue) entity.DayOfMonthDue = request.DayOfMonthDue.Value;
-        if (request.MonthlyPrincipalInterest.HasValue) entity.MonthlyPrincipalInterest = request.MonthlyPrincipalInterest.Value;
-        if (request.MonthlyEscrow.HasValue) entity.MonthlyEscrow = request.MonthlyEscrow.Value;
-        if (request.EscrowCoversTaxes.HasValue) entity.EscrowCoversTaxes = request.EscrowCoversTaxes.Value;
-        if (request.EscrowCoversInsurance.HasValue) entity.EscrowCoversInsurance = request.EscrowCoversInsurance.Value;
-        if (request.Status.HasValue) entity.Status = request.Status.Value;
-        if (request.Notes != null) entity.Notes = request.Notes;
-        entity.UpdatedAt = _timeProvider.UtcNow();
-
-        await _db.SaveChangesAsync(ct);
-
-        var propertyName = await _db.Properties
-            .AsNoTracking()
-            .Where(p => p.Id == entity.PropertyId)
-            .Select(p => p.Name)
-            .FirstOrDefaultAsync(ct);
-
-        var response = LoanResponse.FromEntity(entity);
-        response.PropertyName = propertyName;
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
+        return ReadSnapshot<LoanResponse>(outcome.Value);
     }
 
     public async Task<LoanResponse?> UpdateAsync(
         WorkspaceReadScope scope, int id, UpdateLoanRequest request, string idempotencyKey, CancellationToken ct = default)
     {
-        if (await GetAsync(scope, id, ct) is null)
-            return null;
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
             AtomicMoneyDomain.Loan, AtomicMoneyOperation.Update, id, idempotencyKey, request);
-        var outcome = await Atomic.ExecuteAsync(
+        var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
         if (!outcome.Value.Found) return null;
-        var response = await GetAsync(scope.PortfolioId, id, ct);
-        if (response is not null)
-            await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, id, response, ct);
-        return response;
-    }
-
-    public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
-    {
-        var entity = await _db.Loans
-            .FirstOrDefaultAsync(l => l.Id == id && l.PortfolioId == portfolioId, ct);
-        if (entity == null)
-            return false;
-
-        entity.DeletedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
-
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
-        return true;
+        return ReadSnapshot<LoanResponse>(outcome.Value);
     }
 
     public async Task<bool> DeleteAsync(
         WorkspaceReadScope scope, int id, string idempotencyKey, CancellationToken ct = default)
     {
-        var visible = await GetAsync(scope, id, ct) is not null;
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
             AtomicMoneyDomain.Loan, AtomicMoneyOperation.Delete, id, idempotencyKey, new object());
-        AtomicCommandOutcome<AtomicMoneyMutationResult> outcome;
-        try
-        {
-            outcome = await Atomic.ExecuteAsync(
-                AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
-        }
-        catch (UnauthorizedAccessException) when (!visible)
-        {
-            return false;
-        }
-        if (outcome.Value.Applied)
-            await _dataUpdate.BroadcastEntityDeleteAsync(scope.PortfolioId, EntityType, id, ct);
-        return visible || outcome.Disposition == AtomicCommandDisposition.Replayed
-            ? outcome.Value.Found
-            : false;
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        return outcome.Value.Found;
     }
 
-    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
-        "Scoped loan mutations require the atomic persistence kernel.");
+    private static TResponse ReadSnapshot<TResponse>(AtomicMoneyMutationResult result) where TResponse : class =>
+        result.ResponseJson is { Length: > 0 } json
+            ? System.Text.Json.JsonSerializer.Deserialize<TResponse>(json)
+                ?? throw new AtomicReceiptInvariantException("The money receipt snapshot is invalid.")
+            : throw new AtomicReceiptInvariantException("The money receipt snapshot is missing.");
 
     public async Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(int portfolioId, int loanId, CancellationToken ct = default)
     {
@@ -312,7 +183,21 @@ public class LoanService : ILoanService
             .AsNoTracking()
             .Where(p => p.LoanId == loanId && p.PortfolioId == portfolioId)
             .OrderBy(p => p.PeriodKey)
-            .Select(p => LoanPaymentResponse.FromEntity(p))
+            .Select(payment => new LoanPaymentResponse
+            {
+                Id = payment.Id,
+                LoanId = payment.LoanId,
+                PeriodKey = payment.PeriodKey,
+                DueDate = payment.DueDate,
+                PaidDate = payment.PaidDate,
+                InterestAmount = payment.InterestAmount,
+                PrincipalAmount = payment.PrincipalAmount,
+                EscrowAmount = payment.EscrowAmount,
+                TotalAmount = payment.TotalAmount,
+                BalanceAfter = payment.BalanceAfter,
+                Status = payment.Status,
+                PaymentDoesNotCoverInterest = payment.PaymentDoesNotCoverInterest,
+            })
             .ToListAsync(ct);
     }
 
@@ -328,7 +213,21 @@ public class LoanService : ILoanService
         return await _db.LoanPayments.AsNoTracking()
             .Where(payment => payment.LoanId == loanId && payment.PortfolioId == scope.PortfolioId)
             .OrderBy(payment => payment.PeriodKey)
-            .Select(payment => LoanPaymentResponse.FromEntity(payment))
+            .Select(payment => new LoanPaymentResponse
+            {
+                Id = payment.Id,
+                LoanId = payment.LoanId,
+                PeriodKey = payment.PeriodKey,
+                DueDate = payment.DueDate,
+                PaidDate = payment.PaidDate,
+                InterestAmount = payment.InterestAmount,
+                PrincipalAmount = payment.PrincipalAmount,
+                EscrowAmount = payment.EscrowAmount,
+                TotalAmount = payment.TotalAmount,
+                BalanceAfter = payment.BalanceAfter,
+                Status = payment.Status,
+                PaymentDoesNotCoverInterest = payment.PaymentDoesNotCoverInterest,
+            })
             .ToListAsync(ct);
     }
 }

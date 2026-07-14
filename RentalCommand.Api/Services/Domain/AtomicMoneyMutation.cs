@@ -45,6 +45,8 @@ public sealed class AtomicMoneyMutationHandler
             AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
         await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
         var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        if (!await LiveAssignments(command, attempt.Persistence, now).AnyAsync(ct))
+            throw Denied("Your workspace access changed. Refresh and try again.");
 
         return command.Domain switch
         {
@@ -83,7 +85,7 @@ public sealed class AtomicMoneyMutationHandler
                     request.PropertyId, request.UnitId, request.WorkOrderId, ct);
             }
 
-            var target = await persistence.Query<Expense>()
+            var target = await persistence.Query<Expense>().IgnoreQueryFilters()
                 .Where(row => row.Id == command.EntityId && row.PortfolioId == command.PortfolioId)
                 .Select(row => new { row.PropertyId, row.UnitId, row.WorkOrderId })
                 .SingleOrDefaultAsync(ct);
@@ -100,7 +102,7 @@ public sealed class AtomicMoneyMutationHandler
                     request.PropertyId, request.UnitId, null, ct);
             }
 
-            var target = await persistence.Query<RecurringExpense>()
+            var target = await persistence.Query<RecurringExpense>().IgnoreQueryFilters()
                 .Where(row => row.Id == command.EntityId && row.PortfolioId == command.PortfolioId)
                 .Select(row => new { row.PropertyId, row.UnitId })
                 .SingleOrDefaultAsync(ct);
@@ -115,7 +117,7 @@ public sealed class AtomicMoneyMutationHandler
                 request.PropertyId, null, null, ct);
         }
 
-        var loanTarget = await persistence.Query<Loan>()
+        var loanTarget = await persistence.Query<Loan>().IgnoreQueryFilters()
             .Where(row => row.Id == command.EntityId && row.PortfolioId == command.PortfolioId)
             .Select(row => new { row.PropertyId })
             .SingleOrDefaultAsync(ct);
@@ -304,13 +306,15 @@ public sealed class AtomicMoneyMutationHandler
         if (command.Operation != AtomicMoneyOperation.Create && entity is null) return Missing();
         if (entity is not null && !await HasPropertyAuthorityAsync(
                 command, persistence, now, entity.PropertyId, null, null, ct))
-            throw Denied(command.Operation == AtomicMoneyOperation.Delete
-                ? "You can view this loan but cannot delete it."
-                : "You can view this loan but cannot change it.");
+            return Missing();
         if (command.Operation == AtomicMoneyOperation.Delete)
         {
             entity!.DeletedAt = now; entity.UpdatedAt = now;
-            await attempt.FlushBusinessAsync(ct); return Applied(entity.Id);
+            attempt.BindSemanticAudit(entity, Audit(command, nameof(Loan), AuditLogOperation.Deleted,
+                $"Loan {entity.Id} deleted"));
+            await attempt.FlushBusinessAsync(ct);
+            StageDataUpdate(attempt, command, nameof(Loan), entity.Id, now, deleted: true);
+            return Applied(entity.Id);
         }
         if (command.Operation == AtomicMoneyOperation.Create)
         {
@@ -318,7 +322,7 @@ public sealed class AtomicMoneyMutationHandler
             if (!await persistence.Query<Property>().AnyAsync(
                     row => row.Id == request.PropertyId && row.PortfolioId == command.PortfolioId, ct)) return Missing();
             if (!await HasPropertyAuthorityAsync(command, persistence, now, request.PropertyId, null, null, ct))
-                throw Denied("You cannot create loans outside your assigned properties.");
+                return Missing();
             entity = new Loan
             {
                 PortfolioId = command.PortfolioId, PropertyId = request.PropertyId, Lender = request.Lender,
@@ -330,6 +334,8 @@ public sealed class AtomicMoneyMutationHandler
                 Status = request.Status, Notes = request.Notes, CreatedAt = now, UpdatedAt = now,
             };
             persistence.Add(entity);
+            attempt.BindSemanticAudit(entity, Audit(command, nameof(Loan), AuditLogOperation.Created,
+                $"Loan for {entity.Lender} created", entityId: 0));
         }
         else
         {
@@ -348,8 +354,13 @@ public sealed class AtomicMoneyMutationHandler
             if (request.Status.HasValue) entity!.Status = request.Status.Value;
             if (request.Notes is not null) entity!.Notes = request.Notes;
             entity!.UpdatedAt = now;
+            attempt.BindSemanticAudit(entity, Audit(command, nameof(Loan), AuditLogOperation.Updated,
+                $"Loan {entity.Id} updated"));
         }
-        await attempt.FlushBusinessAsync(ct); return Applied(entity!.Id);
+        await attempt.FlushBusinessAsync(ct);
+        var responseJson = await SnapshotLoanAsync(entity!.Id, command.PortfolioId, persistence, ct);
+        StageDataUpdate(attempt, command, nameof(Loan), entity.Id, now, responseJson: responseJson);
+        return Applied(entity.Id, responseJson);
     }
 
     private static async Task<AtomicMoneyMutationResult> MutateDistributionAsync(
@@ -408,6 +419,19 @@ public sealed class AtomicMoneyMutationHandler
                 persistence.Query<Expense>().AsNoTracking().Where(expense =>
                     expense.Id == entityId && expense.PortfolioId == portfolioId),
                 persistence.Query<StoredFile>().AsNoTracking())
+            .SingleAsync(ct);
+        return JsonSerializer.Serialize(response);
+    }
+
+    private static async Task<string> SnapshotLoanAsync(
+        int entityId,
+        int portfolioId,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        var response = await MoneyResponseProjection.Loans(
+                persistence.Query<Loan>().AsNoTracking().Where(loan =>
+                    loan.Id == entityId && loan.PortfolioId == portfolioId))
             .SingleAsync(ct);
         return JsonSerializer.Serialize(response);
     }
