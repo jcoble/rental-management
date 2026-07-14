@@ -637,9 +637,6 @@ builder.Services.AddScoped<IAuthEmailSender, OutboxAuthEmailSender>();
 builder.Services.AddScoped<ICanonicalAccountBootstrapService, CanonicalAccountBootstrapService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IGoogleAuthService, GoogleAuthService>();
-// On-demand tenant portal provisioning for the staff "grant portal access" endpoint. Fresh seed
-// workspaces contain no tenants, and startup never scans existing tenants or creates accounts in a loop.
-builder.Services.AddScoped<ITenantPortalProvisioningService, TenantPortalProvisioningService>();
 builder.Services.AddScoped<IdentitySeeder>();
 builder.Services.AddScoped<DemoDataSeeder>();
 

@@ -3,7 +3,6 @@ using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
@@ -73,7 +72,7 @@ public class ApplicationServiceTests : IDisposable
 
         _sut = new ApplicationService(
             _db, _files.Object, Mock.Of<IDataUpdateService>(), _audit,
-            new NoopTenantPortalProvisioningService(), NullLogger<ApplicationService>.Instance, TimeProvider.System);
+            TimeProvider.System);
     }
 
     public void Dispose()
@@ -838,8 +837,6 @@ public sealed class ApplicationServicePostgreSqlTests : IAsyncLifetime
             Mock.Of<IFileStorage>(),
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(),
-            new NoopTenantPortalProvisioningService(),
-            NullLogger<ApplicationService>.Instance,
             TimeProvider.System);
     }
 
