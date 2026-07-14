@@ -777,10 +777,12 @@ public class BankingServiceTests : IAsyncLifetime
             sql.Contains("FROM \"BankTransactions\"", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("COALESCE", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("CASE", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("ROW_NUMBER", StringComparison.OrdinalIgnoreCase) &&
+            (sql.Contains("LATERAL", StringComparison.OrdinalIgnoreCase) ||
+             sql.Contains("ROW_NUMBER", StringComparison.OrdinalIgnoreCase)) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains(">=", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("<", StringComparison.OrdinalIgnoreCase),
-            "bank suggestion candidates must be narrowed, scored, and ranked with the bank line in SQL before materialization");
+            "bank suggestion candidates must be narrowed, scored, and ranked by a correlated top-one SQL query before materialization");
     }
 
     [Fact]
