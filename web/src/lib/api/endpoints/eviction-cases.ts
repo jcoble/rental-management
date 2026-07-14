@@ -1,4 +1,5 @@
 import { api } from '../client';
+import { idempotentMutation } from '../idempotency';
 import { buildListQuery, type ListParams } from '../list-params';
 
 export type EvictionCaseStatus =
@@ -37,14 +38,19 @@ export interface EvictionCaseEvent {
 export interface EvictionCase {
 	id: number;
 	portfolioId: number;
-	leaseId: number;
-	leaseNumber?: string | null;
+	leaseManagementId: number;
+	relationshipNumber?: string | null;
+	leaseAgreementId?: number | null;
+	agreementNumber?: string | null;
 	propertyId: number;
 	propertyName?: string | null;
 	unitId: number;
 	unitNumber?: string | null;
-	tenantId: number;
-	tenantName?: string | null;
+	respondents: Array<{
+		leaseManagementPartyId: number;
+		tenantId: number;
+		tenantName: string;
+	}>;
 	status: EvictionCaseStatus;
 	filedOnDate?: string | null;
 	hearingDate?: string | null;
@@ -62,9 +68,9 @@ export interface EvictionCase {
 }
 
 export interface EvictionCaseListParams extends ListParams {
-	leaseId?: number;
+	leaseManagementId?: number;
 	propertyId?: number;
-	tenantId?: number;
+	leaseManagementPartyId?: number;
 	status?: EvictionCaseStatus;
 }
 
@@ -76,7 +82,9 @@ export interface EvictionCaseListResponse {
 }
 
 export interface CreateEvictionCaseRequest {
-	leaseId: number;
+	leaseManagementId: number;
+	leaseAgreementId?: number | null;
+	respondentLeaseManagementPartyIds: number[];
 	status: EvictionCaseStatus;
 	filedOnDate?: string | null;
 	hearingDate?: string | null;
@@ -92,9 +100,9 @@ export interface CreateEvictionCaseEventRequest {
 }
 
 const queryParams = (params?: EvictionCaseListParams) => ({
-	leaseId: params?.leaseId,
+	leaseManagementId: params?.leaseManagementId,
 	propertyId: params?.propertyId,
-	tenantId: params?.tenantId,
+	leaseManagementPartyId: params?.leaseManagementPartyId,
 	status: params?.status
 });
 
@@ -104,9 +112,24 @@ export const evictionCases = {
 	listPage: (params?: EvictionCaseListParams) =>
 		api.get<EvictionCaseListResponse>(`/eviction-cases/page${buildListQuery(params, queryParams(params))}`),
 	get: (id: number) => api.get<EvictionCase>(`/eviction-cases/${id}`),
-	create: (data: CreateEvictionCaseRequest) => api.post<EvictionCase>('/eviction-cases', data),
-	update: (id: number, data: Record<string, unknown>) => api.patch<EvictionCase>(`/eviction-cases/${id}`, data),
+	create: (data: CreateEvictionCaseRequest) =>
+		idempotentMutation(`eviction-case:create:${JSON.stringify(data)}`, (key) =>
+			api.post<EvictionCase>('/eviction-cases', data, { headers: { 'Idempotency-Key': key } })
+		),
+	update: (id: number, data: Record<string, unknown>) =>
+		idempotentMutation(`eviction-case:update:${id}:${JSON.stringify(data)}`, (key) =>
+			api.patch<EvictionCase>(`/eviction-cases/${id}`, data, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
 	addEvent: (id: number, data: CreateEvictionCaseEventRequest) =>
-		api.post<EvictionCase>(`/eviction-cases/${id}/events`, data),
-	remove: (id: number) => api.delete(`/eviction-cases/${id}`)
+		idempotentMutation(`eviction-case:event:${id}:${JSON.stringify(data)}`, (key) =>
+			api.post<EvictionCase>(`/eviction-cases/${id}/events`, data, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
+	remove: (id: number) =>
+		idempotentMutation(`eviction-case:delete:${id}`, (key) =>
+			api.delete(`/eviction-cases/${id}`, { headers: { 'Idempotency-Key': key } })
+		)
 };

@@ -15,7 +15,11 @@ public sealed class WorkOperationAtomicContractTests
     [InlineData(typeof(CreateAppointmentHandler), typeof(IAtomicReplayAuthorizer<CreateAppointmentCommand>))]
     [InlineData(typeof(UpdateAppointmentHandler), typeof(IAtomicReplayAuthorizer<UpdateAppointmentCommand>))]
     [InlineData(typeof(DeleteAppointmentHandler), typeof(IAtomicReplayAuthorizer<DeleteAppointmentCommand>))]
-    public void Every_live_work_order_handler_reauthorizes_receipt_replay(
+    [InlineData(typeof(CreateEvictionCaseHandler), typeof(IAtomicReplayAuthorizer<CreateEvictionCaseCommand>))]
+    [InlineData(typeof(UpdateEvictionCaseHandler), typeof(IAtomicReplayAuthorizer<UpdateEvictionCaseCommand>))]
+    [InlineData(typeof(AddEvictionCaseEventHandler), typeof(IAtomicReplayAuthorizer<AddEvictionCaseEventCommand>))]
+    [InlineData(typeof(DeleteEvictionCaseHandler), typeof(IAtomicReplayAuthorizer<DeleteEvictionCaseCommand>))]
+    public void Every_live_operation_handler_reauthorizes_receipt_replay(
         Type handlerType, Type replayContract)
     {
         replayContract.IsAssignableFrom(handlerType).Should().BeTrue();
