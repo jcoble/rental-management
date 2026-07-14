@@ -117,7 +117,7 @@ public sealed class CreateVendorRatingHandler
         var assignments = StaffOperationAuthorization.ActiveAssignments(
             command.PortfolioId, command.Actor, CapabilityKeys.WorkManage, persistence, now);
         var workOrders = StaffOperationAuthorization.AuthorizedWorkOrders(
-            command.PortfolioId, command.Actor, CapabilityKeys.WorkManage, persistence, now, tracking: false);
+            command.PortfolioId, command.Actor, CapabilityKeys.WorkManage, persistence, now, tracking);
         var query = persistence.Query<Vendor>().Where(vendor =>
             vendor.Id == command.VendorId &&
             vendor.PortfolioId == command.PortfolioId &&
