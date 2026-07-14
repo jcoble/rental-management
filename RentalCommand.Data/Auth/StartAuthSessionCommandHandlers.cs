@@ -201,6 +201,7 @@ public sealed class StartAuthSessionHandler
             NewValues: JsonSerializer.Serialize(new
             {
                 command.AuthSessionId,
+                command.UserId,
                 AuditRootAccessContextId = target.AccessContextId,
                 target.AccessRevision,
                 command.RefreshTokenFamilyId,
