@@ -124,6 +124,7 @@ public interface IAtomicWriteAttempt
     IAtomicLeaseMutationPersistence Leasing { get; }
     IAtomicListingPersistence Listings { get; }
     IAtomicUnitImportPersistence UnitImports { get; }
+    IAtomicCoreCsvImportPersistence CoreCsvImports { get; }
 
     /// <summary>Flushes tracked business rows while the owner transaction remains open.</summary>
     Task<AtomicBusinessFlush> FlushBusinessAsync(CancellationToken ct = default);
@@ -222,6 +223,56 @@ public interface IUnitCsvImportPreviewQuery
     Task<AtomicUnitImportBatchResult> PreviewAsync(
         WorkspaceReadScope scope,
         IReadOnlyList<AtomicUnitImportRow> rows,
+        CancellationToken ct = default);
+}
+
+public enum AtomicCoreCsvImportDomain
+{
+    Property,
+    Tenant,
+}
+
+public sealed record AtomicCoreCsvImportRowResult(
+    int RowNumber,
+    bool Valid,
+    bool IsDuplicate,
+    int? CreatedId,
+    int? RelatedId,
+    string[] Errors) : IAtomicResultData;
+
+public sealed record AtomicCoreCsvImportBatchResult(
+    bool Authorized,
+    IReadOnlyList<AtomicCoreCsvImportRowResult> Rows,
+    IReadOnlyList<AtomicCoreCsvImportRowResult> CreatedRows,
+    int TotalRows,
+    int ValidRows,
+    int CreatedCount,
+    int DuplicateRows) : IAtomicResultData;
+
+/// <summary>
+/// Executes one typed Property or Tenant CSV batch as one PostgreSQL statement inside the owning
+/// command transaction. Resolution, authorization, classification, insertion, and result counts
+/// remain database-owned.
+/// </summary>
+public interface IAtomicCoreCsvImportPersistence
+{
+    Task<AtomicCoreCsvImportBatchResult> ImportAsync(
+        WorkspaceReadScope scope,
+        AtomicCoreCsvImportDomain domain,
+        string rowsJson,
+        DateTime createdAtUtc,
+        CancellationToken ct = default);
+}
+
+/// <summary>
+/// Read-only Property/Tenant CSV preview. It opens no receipt and admits no write permit or DML.
+/// </summary>
+public interface ICoreCsvImportPreviewQuery
+{
+    Task<AtomicCoreCsvImportBatchResult> PreviewAsync(
+        WorkspaceReadScope scope,
+        AtomicCoreCsvImportDomain domain,
+        string rowsJson,
         CancellationToken ct = default);
 }
 
