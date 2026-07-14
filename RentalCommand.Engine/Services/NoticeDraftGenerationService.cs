@@ -57,11 +57,11 @@ public sealed class NoticeDraftGenerationService : INoticeDraftGenerationService
                 if (item.IsAuto && draft.Status == "Draft")
                 {
                     await _foundation.ApproveAndQueueAsync(
-                        item.PortfolioId,
-                        null,
+                        NoticeApprovalExecutionContext.ForAutomation(item.PortfolioId),
                         draft.DraftId,
                         new ApproveAndQueueNoticeRequest(EnabledChannels(item)),
                         new TenantNoticeWorkFence(item.Id, token),
+                        $"tenant-notice-work:{item.Id}:approve",
                         ct);
                     continue;
                 }

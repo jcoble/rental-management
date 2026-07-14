@@ -126,16 +126,6 @@ public sealed class NotificationFoundationController : AuthenticatedPortfolioCon
     }
 
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.NotificationsManage)]
-    [HttpPost("tenant-notices/drafts/{draftId:int}/approve-and-queue")]
-    public async Task<ActionResult<object>> ApproveAndQueue(
-        int draftId, ApproveAndQueueNoticeRequest request, CancellationToken ct)
-    {
-        var renderedNoticeId = await _service.ApproveAndQueueAsync(
-            GetPortfolioId(), GetUserId(), draftId, request, null, ct);
-        return Ok(new { renderedNoticeId });
-    }
-
-    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.NotificationsManage)]
     [HttpGet("tenant-notices/deliveries")]
     public Task<IReadOnlyList<NoticeDeliveryStatusResponse>> ListDeliveryStatuses(
         [FromQuery] int take = 50,

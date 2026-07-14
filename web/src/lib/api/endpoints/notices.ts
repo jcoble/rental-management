@@ -29,7 +29,11 @@ export const notices = {
 			})
 		),
 	approve: (id: number, request: ApproveNoticeDraftRequest) =>
-		api.post<NoticeDraft>(`/notices/${id}/approve`, request),
+		idempotentMutation(`notice-drafts:approve:${id}:${JSON.stringify(request)}`, (key) =>
+			api.post<NoticeDraft>(`/notices/${id}/approve`, request, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
 	dismiss: (id: number) =>
 		idempotentMutation(`notice-drafts:dismiss:${id}`, (key) =>
 			api.post<NoticeDraft>(`/notices/${id}/dismiss`, {}, {

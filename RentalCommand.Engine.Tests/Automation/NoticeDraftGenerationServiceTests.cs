@@ -35,8 +35,8 @@ public sealed class NoticeDraftGenerationServiceTests
             ]);
         var foundation = new Mock<INotificationFoundationService>(MockBehavior.Strict);
         foundation.Setup(service => service.ApproveAndQueueAsync(
-                work.PortfolioId,
-                null,
+                It.Is<NoticeApprovalExecutionContext>(context =>
+                    context.PortfolioId == work.PortfolioId && context.ActorUserId == null),
                 56,
                 It.Is<ApproveAndQueueNoticeRequest>(request =>
                     request.Channels.SequenceEqual(new[]
@@ -46,6 +46,7 @@ public sealed class NoticeDraftGenerationServiceTests
                     })),
                 It.Is<TenantNoticeWorkFence>(fence =>
                     fence.WorkItemId == work.Id && fence.ClaimToken == token),
+                $"tenant-notice-work:{work.Id}:approve",
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(78);
 
