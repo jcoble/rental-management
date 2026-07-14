@@ -192,7 +192,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
                 agreement => agreement.Id == issued.ReplacesAgreementId);
             var predecessorArtifactId = await AddArtifactAsync(
                 arrange, _scenario.PortfolioId, predecessor.Id, 30_003, DateTime.UtcNow);
-            predecessor.GoverningFromOn = new DateOnly(2025, 1, 1);
+            issued.GoverningFromOn = new DateOnly(2026, 6, 1);
             predecessor.IssuedArtifactId = predecessorArtifactId;
             predecessor.ExecutedArtifactId = predecessorArtifactId;
             predecessor.IssuedAtUtc = DateTime.UtcNow;

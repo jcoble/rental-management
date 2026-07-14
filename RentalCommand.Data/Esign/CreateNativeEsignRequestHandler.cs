@@ -151,6 +151,10 @@ public sealed class IssueLeaseAgreementHandler
         agreement.IssuedArtifactId = artifact.Id;
         agreement.IssuedAtUtc = times.WallClockUtc;
         agreement.UpdatedAtUtc = times.WallClockUtc;
+        attempt.BindSemanticAudit(agreement, new AtomicSemanticAudit(command.PortfolioId,
+            nameof(LeaseAgreement), agreement.Id, AuditLogOperation.Updated, UserId: command.ActorUserId,
+            NewValues: JsonSerializer.Serialize(new { agreement.IssuedArtifactId, agreement.IssuedAtUtc }),
+            ChangeReason: "Issued immutable Agreement artifact and froze the legal signer snapshot."));
         var packet = new SignatureRequest
         {
             PortfolioId = command.PortfolioId,
@@ -199,10 +203,6 @@ public sealed class IssueLeaseAgreementHandler
         pending.StoredFileId = storedFile.Id;
         pending.UpdatedAtUtc = times.WallClockUtc;
 
-        attempt.BindSemanticAudit(agreement, new AtomicSemanticAudit(command.PortfolioId,
-            nameof(LeaseAgreement), agreement.Id, AuditLogOperation.Updated, UserId: command.ActorUserId,
-            NewValues: JsonSerializer.Serialize(new { agreement.IssuedArtifactId, agreement.IssuedAtUtc }),
-            ChangeReason: "Issued immutable Agreement artifact and froze the legal signer snapshot."));
         attempt.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId,
             nameof(SignatureRequest), packet.Id, AuditLogOperation.Created, UserId: command.ActorUserId,
             NewValues: JsonSerializer.Serialize(new { packet.PublicId, packet.LeaseAgreementId, Status = packet.Status.ToString() }),
