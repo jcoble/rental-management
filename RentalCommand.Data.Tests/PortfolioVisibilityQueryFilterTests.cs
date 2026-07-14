@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Data.Tests;
 
@@ -76,6 +77,28 @@ public sealed class PortfolioVisibilityQueryFilterTests
             .And.NotContain(nameof(LeaseAgreement.FullyExecutedAtUtc));
         QueryFilterFor<TenantLedgerEntry>(db).ToString().Should()
             .NotContain(nameof(TenantAccount.ClosedAtUtc));
+    }
+
+    [Fact]
+    public void Document_template_fields_are_directly_scoped_and_cannot_cross_portfolios()
+    {
+        using var db = CreateDb();
+
+        typeof(IPortfolioScoped).IsAssignableFrom(typeof(DocumentTemplateField)).Should().BeTrue();
+        var entity = db.Model.FindEntityType(typeof(DocumentTemplateField))!;
+        entity.FindProperty(nameof(DocumentTemplateField.PortfolioId))!.IsNullable.Should().BeFalse();
+        entity.GetForeignKeys().Should().Contain(foreignKey =>
+            foreignKey.Properties.Select(property => property.Name).SequenceEqual(
+                [nameof(DocumentTemplateField.DocumentTemplateId), nameof(DocumentTemplateField.PortfolioId)]) &&
+            foreignKey.PrincipalKey.Properties.Select(property => property.Name).SequenceEqual(
+                [nameof(DocumentTemplate.Id), nameof(DocumentTemplate.PortfolioId)]));
+        entity.GetIndexes().Should().Contain(index =>
+            index.Properties.Select(property => property.Name).SequenceEqual(
+                [nameof(DocumentTemplateField.PortfolioId), nameof(DocumentTemplateField.DocumentTemplateId),
+                    nameof(DocumentTemplateField.FieldKey)]));
+        FoundationBaselinePostgreSql.DirectPortfolioTables.Should().Contain("DocumentTemplateFields");
+        FoundationBaselinePostgreSql.ChildPortfolioTables
+            .Select(policy => policy.Table).Should().NotContain("DocumentTemplateFields");
     }
 
     private static System.Linq.Expressions.LambdaExpression QueryFilterFor<TEntity>(

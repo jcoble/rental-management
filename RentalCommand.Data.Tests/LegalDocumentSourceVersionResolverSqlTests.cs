@@ -48,7 +48,17 @@ public sealed class LegalDocumentSourceVersionResolverSqlTests
         sql.Should().Contain("ON CONFLICT (\"PortfolioId\", \"BusinessKey\") DO NOTHING");
         sql.Should().Contain("source.\"SnapshotPayload\"");
         sql.Should().Contain("source.\"SnapshotPayload\" ->> 'originalStoredFileId'");
+        sql.Should().Contain("field.\"PortfolioId\" = template.\"PortfolioId\"");
         sql.Should().NotContain("UPDATE");
+    }
+
+    [Fact]
+    public void Atomic_authored_snapshot_scopes_template_fields_in_the_same_statement()
+    {
+        var sql = StaticAtomicSql("ResolveAuthoredSql");
+
+        sql.Should().Contain("field.\"DocumentTemplateId\" = template.\"Id\"");
+        sql.Should().Contain("field.\"PortfolioId\" = template.\"PortfolioId\"");
     }
 
     [Fact]

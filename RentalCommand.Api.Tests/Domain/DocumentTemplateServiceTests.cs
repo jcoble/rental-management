@@ -125,6 +125,7 @@ public sealed class DocumentTemplateServiceTests : IDisposable
         SeedTemplate("Other lease", DocumentTemplateKind.Lease, otherProperty.Id);
         _ctx.Db.DocumentTemplateFields.Add(new DocumentTemplateField
         {
+            PortfolioId = PortfolioId,
             DocumentTemplateId = selected.Id,
             FieldKey = "lease.monthlyRent",
             Label = "Monthly rent",
@@ -182,6 +183,14 @@ public sealed class DocumentTemplateServiceTests : IDisposable
 
         var storedTemplate = await _ctx.Db.DocumentTemplates.FirstAsync(t => t.Id == template.Id);
         storedTemplate.Version.Should().Be(2);
+        var storedField = await _ctx.Db.DocumentTemplateFields.SingleAsync(
+            field => field.DocumentTemplateId == template.Id);
+        storedField.PortfolioId.Should().Be(PortfolioId);
+        var fieldAudit = await _ctx.Db.AtomicAuditLogs.SingleAsync(audit =>
+            audit.EntityType == nameof(DocumentTemplateField) && audit.EntityId == storedField.Id);
+        fieldAudit.PortfolioId.Should().Be(PortfolioId);
+        fieldAudit.NewValues.Should().Contain($"\"PortfolioId\":{PortfolioId}")
+            .And.Contain($"\"DocumentTemplateId\":{template.Id}");
     }
 
     [Fact]

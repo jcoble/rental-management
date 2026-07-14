@@ -2148,6 +2148,8 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasAlternateKey("Id", "PortfolioId");
+
                     b.HasIndex("CompiledStoredFileId");
 
                     b.HasIndex("OriginalStoredFileId");
@@ -2179,6 +2181,9 @@ namespace RentalCommand.Data.Migrations
                         .HasColumnType("character varying(500)");
 
                     b.Property<int>("DocumentTemplateId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("PortfolioId")
                         .HasColumnType("integer");
 
                     b.Property<string>("FieldKey")
@@ -2227,9 +2232,9 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("DocumentTemplateId");
+                    b.HasIndex("DocumentTemplateId", "PortfolioId");
 
-                    b.HasIndex("DocumentTemplateId", "FieldKey");
+                    b.HasIndex("PortfolioId", "DocumentTemplateId", "FieldKey");
 
                     b.ToTable("DocumentTemplateFields", t =>
                         {
@@ -10588,9 +10593,11 @@ namespace RentalCommand.Data.Migrations
                 {
                     b.HasOne("RentalCommand.Core.Entities.DocumentTemplate", "DocumentTemplate")
                         .WithMany("Fields")
-                        .HasForeignKey("DocumentTemplateId")
+                        .HasForeignKey("DocumentTemplateId", "PortfolioId")
+                        .HasPrincipalKey("Id", "PortfolioId")
                         .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
+                        .IsRequired()
+                        .HasConstraintName("FK_DocumentTemplateFields_DocumentTemplates_Scope");
 
                     b.Navigation("DocumentTemplate");
                 });

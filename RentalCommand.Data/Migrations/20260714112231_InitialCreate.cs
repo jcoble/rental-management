@@ -1870,6 +1870,7 @@ namespace RentalCommand.Data.Migrations
                 {
                     Id = table.Column<int>(type: "integer", nullable: false)
                         .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
                     DocumentTemplateId = table.Column<int>(type: "integer", nullable: false),
                     FieldKey = table.Column<string>(type: "character varying(120)", maxLength: 120, nullable: false),
                     Label = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
@@ -1896,10 +1897,10 @@ namespace RentalCommand.Data.Migrations
                     table.CheckConstraint("CK_DocumentTemplateField_YExtent", "\"YPct\" + \"HeightPct\" <= 1");
                     table.CheckConstraint("CK_DocumentTemplateField_YPct", "\"YPct\" >= 0 AND \"YPct\" <= 1");
                     table.ForeignKey(
-                        name: "FK_DocumentTemplateFields_DocumentTemplates_DocumentTemplateId",
-                        column: x => x.DocumentTemplateId,
+                        name: "FK_DocumentTemplateFields_DocumentTemplates_Scope",
+                        columns: x => new { x.DocumentTemplateId, x.PortfolioId },
                         principalTable: "DocumentTemplates",
-                        principalColumn: "Id",
+                        principalColumns: new[] { "Id", "PortfolioId" },
                         onDelete: ReferentialAction.Cascade);
                 });
 
@@ -5863,14 +5864,14 @@ namespace RentalCommand.Data.Migrations
                 unique: true);
 
             migrationBuilder.CreateIndex(
-                name: "IX_DocumentTemplateFields_DocumentTemplateId",
+                name: "IX_DocumentTemplateFields_DocumentTemplateId_PortfolioId",
                 table: "DocumentTemplateFields",
-                column: "DocumentTemplateId");
+                columns: new[] { "DocumentTemplateId", "PortfolioId" });
 
             migrationBuilder.CreateIndex(
-                name: "IX_DocumentTemplateFields_DocumentTemplateId_FieldKey",
+                name: "IX_DocumentTemplateFields_PortfolioId_DocumentTemplateId_FieldKey",
                 table: "DocumentTemplateFields",
-                columns: new[] { "DocumentTemplateId", "FieldKey" });
+                columns: new[] { "PortfolioId", "DocumentTemplateId", "FieldKey" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_DocumentTemplates_CompiledStoredFileId",

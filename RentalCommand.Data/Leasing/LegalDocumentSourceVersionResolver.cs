@@ -249,6 +249,7 @@ internal sealed class LegalDocumentSourceVersionResolver : ILegalDocumentSourceV
                     ORDER BY field."SortOrder", field."Id")
                 FROM "DocumentTemplateFields" AS field
                 WHERE field."DocumentTemplateId" = template."Id"
+                  AND field."PortfolioId" = template."PortfolioId"
             ), '[]'::jsonb)
         )
         """;

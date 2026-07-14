@@ -413,8 +413,8 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.Property(e => e.Kind).HasConversion<string>().HasMaxLength(40);
             entity.Property(e => e.SignerRole).HasConversion<string>().HasMaxLength(40);
             entity.Property(e => e.DefaultText).HasMaxLength(500);
-            entity.HasIndex(e => e.DocumentTemplateId);
-            entity.HasIndex(e => new { e.DocumentTemplateId, e.FieldKey });
+            entity.HasIndex(e => new { e.DocumentTemplateId, e.PortfolioId });
+            entity.HasIndex(e => new { e.PortfolioId, e.DocumentTemplateId, e.FieldKey });
             entity.HasQueryFilter(e => e.DocumentTemplate!.Portfolio!.DeletedAt == null);
             entity.ToTable(t =>
             {
@@ -428,8 +428,10 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             });
             entity.HasOne(e => e.DocumentTemplate)
                 .WithMany(t => t.Fields)
-                .HasForeignKey(e => e.DocumentTemplateId)
-                .OnDelete(DeleteBehavior.Cascade);
+                .HasForeignKey(e => new { e.DocumentTemplateId, e.PortfolioId })
+                .HasPrincipalKey(t => new { t.Id, t.PortfolioId })
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("FK_DocumentTemplateFields_DocumentTemplates_Scope");
         });
 
         modelBuilder.Entity<ScanDraft>(entity =>

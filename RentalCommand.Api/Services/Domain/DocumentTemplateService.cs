@@ -387,7 +387,8 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
             .Select(pair => pair.Key)
             .ToArray();
         var fields = await _db.DocumentTemplateFields.AsNoTracking()
-            .Where(field => field.DocumentTemplateId == template.Id
+            .Where(field => field.PortfolioId == scope.PortfolioId
+                && field.DocumentTemplateId == template.Id
                 && (field.Kind == DocumentTemplateFieldKind.Whiteout
                     || (field.SignerRole == DocumentTemplateSignerRole.None
                         && field.Kind != DocumentTemplateFieldKind.Signature

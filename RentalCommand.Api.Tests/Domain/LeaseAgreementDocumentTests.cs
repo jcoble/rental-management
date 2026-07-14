@@ -297,6 +297,7 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
             new()
             {
                 Id = 1,
+                PortfolioId = PortfolioId,
                 FieldKey = "pdf.whiteout",
                 Label = "Erase PDF text",
                 Kind = DocumentTemplateFieldKind.Whiteout,
@@ -310,6 +311,7 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
             new()
             {
                 Id = 2,
+                PortfolioId = PortfolioId,
                 FieldKey = "tenant.fullName",
                 Label = "Tenant full name",
                 Kind = DocumentTemplateFieldKind.Text,
@@ -636,6 +638,7 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
         };
         template.Fields.Add(new DocumentTemplateField
         {
+            PortfolioId = template.PortfolioId,
             FieldKey = "tenant.fullName",
             Label = "Tenant full name",
             Kind = DocumentTemplateFieldKind.Text,
@@ -648,6 +651,7 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
         });
         template.Fields.Add(new DocumentTemplateField
         {
+            PortfolioId = template.PortfolioId,
             FieldKey = "lease.monthlyRent",
             Label = "Monthly rent",
             Kind = DocumentTemplateFieldKind.Currency,
