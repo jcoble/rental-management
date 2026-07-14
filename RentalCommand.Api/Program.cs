@@ -281,6 +281,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Documents.DocumentTemplateMutationResult,
     RentalCommand.Data.Documents.CreateDocumentTemplateHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Documents.FinalizeDocumentTemplateUploadCommand,
+    RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+    RentalCommand.Data.Documents.FinalizeDocumentTemplateUploadHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Documents.UpdateDocumentTemplateCommand,
     RentalCommand.Core.Documents.DocumentTemplateMutationResult,
     RentalCommand.Data.Documents.UpdateDocumentTemplateHandler>();

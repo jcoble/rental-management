@@ -179,7 +179,8 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
     public void PreviewLeasePdfAsync_UsesCanonicalAgreementQuery()
     {
         var templates = new DocumentTemplateService(
-            _db, new DocumentTemplateFieldCatalog(), _storage, TimeProvider.System,
+            _db, new DocumentTemplateFieldCatalog(), _storage,
+            Mock.Of<RentalCommand.Data.Documents.IPendingFileUploadStore>(), TimeProvider.System,
             Mock.Of<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
 
         var sql = templates.BuildAgreementPreviewQuery(_scope, 123).ToQueryString();

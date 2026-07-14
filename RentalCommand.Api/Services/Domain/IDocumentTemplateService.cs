@@ -28,6 +28,7 @@ public interface IDocumentTemplateService
         string? description,
         bool defaultForPortfolio,
         int? propertyId,
+        string idempotencyKey,
         CancellationToken ct = default);
 
     Task<DocumentTemplateOperationResult<DocumentTemplateResponse>> UpdateAsync(
