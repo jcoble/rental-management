@@ -103,11 +103,17 @@ public class BankingServiceTests : IAsyncLifetime
         });
 
         first.ImportedCount.Should().Be(1);
-        first.Transactions.Single().SuggestedMatch.Should().NotBeNull();
-        first.Transactions.Single().SuggestedMatch!.EntityType.Should().Be("TenantLedgerEntry");
-        first.Transactions.Single().SuggestedMatch!.EntityId.Should().Be(payment.Id);
         duplicate.ImportedCount.Should().Be(0);
         duplicate.SkippedCount.Should().Be(1);
+
+        var transactionId = first.Transactions.Single().Id;
+        AssignRoute(_ctx, transactionId, payment.TenantAccount!.LeaseManagement!.PropertyId);
+        var suggestion = (await _sut.ListTransactionsAsync(1, "Unmatched"))
+            .Items.Should().ContainSingle().Subject
+            .SuggestedMatch;
+        suggestion.Should().NotBeNull();
+        suggestion!.EntityType.Should().Be("TenantLedgerEntry");
+        suggestion.EntityId.Should().Be(payment.Id);
     }
 
     [Fact]
@@ -140,16 +146,37 @@ public class BankingServiceTests : IAsyncLifetime
             TenantAccountId = payment.TenantAccountId,
             TenantLedgerEntryId = payment.Id,
         });
-        var cleared = await _sut.ClearMatchAsync(_scope, transactionId, Mutation(transactionId, "clear-match"));
-
         matched.Should().NotBeNull();
         matched!.MatchStatus.Should().Be("Matched");
-        var matchedRow = _ctx.Db.BankTransactions.Single(row => row.Id == transactionId);
-        matchedRow.MatchedTenantAccountId.Should().Be(payment.TenantAccountId);
-        matchedRow.MatchedTenantLedgerEntryId.Should().Be(payment.Id);
+        var matchedState = await _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(row => row.Id == transactionId)
+            .Select(row => new
+            {
+                row.MatchStatus,
+                row.MatchedTenantAccountId,
+                row.MatchedTenantLedgerEntryId,
+            })
+            .SingleAsync();
+        matchedState.MatchStatus.Should().Be("Matched");
+        matchedState.MatchedTenantAccountId.Should().Be(payment.TenantAccountId);
+        matchedState.MatchedTenantLedgerEntryId.Should().Be(payment.Id);
+
+        var cleared = await _sut.ClearMatchAsync(_scope, transactionId, Mutation(transactionId, "clear-match"));
         cleared.Should().NotBeNull();
         cleared!.MatchStatus.Should().Be("Unmatched");
         cleared.MatchedTenantLedgerEntryId.Should().BeNull();
+        var clearedState = await _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(row => row.Id == transactionId)
+            .Select(row => new
+            {
+                row.MatchStatus,
+                row.MatchedTenantAccountId,
+                row.MatchedTenantLedgerEntryId,
+            })
+            .SingleAsync();
+        clearedState.MatchStatus.Should().Be("Unmatched");
+        clearedState.MatchedTenantAccountId.Should().BeNull();
+        clearedState.MatchedTenantLedgerEntryId.Should().BeNull();
     }
 
     [Fact]
@@ -186,7 +213,9 @@ public class BankingServiceTests : IAsyncLifetime
 
         _ctx.Db.ChangeTracker.Clear();
         var transaction = await _ctx.Db.BankTransactions.AsNoTracking()
-            .SingleAsync(row => row.Id == transactionId);
+            .Where(row => row.Id == transactionId)
+            .Select(row => new { row.MatchStatus, row.MatchedTenantLedgerEntryId })
+            .SingleAsync();
         transaction.MatchStatus.Should().Be("Matched");
         transaction.MatchedTenantLedgerEntryId.Should().Be(payment.Id);
         (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
@@ -245,8 +274,9 @@ public class BankingServiceTests : IAsyncLifetime
             outcome != null && outcome.MatchStatus == "Matched");
         _ctx.Db.ChangeTracker.Clear();
         (await _ctx.Db.BankTransactions.AsNoTracking()
-            .SingleAsync(transaction => transaction.Id == transactionId))
-            .MatchedTenantLedgerEntryId.Should().Be(payment.Id);
+            .Where(transaction => transaction.Id == transactionId)
+            .Select(transaction => transaction.MatchedTenantLedgerEntryId)
+            .SingleAsync()).Should().Be(payment.Id);
         (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
             receipt.CommandType == "banking.transaction.reconcile" &&
             receipt.IdempotencyKey.EndsWith(":same-authorized-reconciliation")))
@@ -508,7 +538,10 @@ public class BankingServiceTests : IAsyncLifetime
         });
         confirmed.Should().NotBeNull();
         confirmed!.MatchStatus.Should().Be("Matched");
-        var confirmedRow = _ctx.Db.BankTransactions.Single(row => row.Id == transactionId);
+        var confirmedRow = await _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(row => row.Id == transactionId)
+            .Select(row => new { row.MatchedTenantAccountId, row.MatchedTenantLedgerEntryId })
+            .SingleAsync();
         confirmedRow.MatchedTenantAccountId.Should().Be(payment.TenantAccountId);
         confirmedRow.MatchedTenantLedgerEntryId.Should().Be(payment.Id);
         (await _sut.GetReviewQueueAsync(_scope)).Count.Should().Be(0);
@@ -579,7 +612,10 @@ public class BankingServiceTests : IAsyncLifetime
 
         confirmed.Should().NotBeNull();
         confirmed!.MatchStatus.Should().Be("Matched");
-        var confirmedRow = _ctx.Db.BankTransactions.Single(row => row.Id == transactionId);
+        var confirmedRow = await _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(row => row.Id == transactionId)
+            .Select(row => new { row.MatchedExpenseId, row.MatchedTenantLedgerEntryId })
+            .SingleAsync();
         confirmedRow.MatchedExpenseId.Should().Be(expense.Id);
         confirmedRow.MatchedTenantLedgerEntryId.Should().BeNull();
     }
@@ -591,8 +627,9 @@ public class BankingServiceTests : IAsyncLifetime
         // appears on the bank line's merchant text; the other (Emily Chen) does not. The named
         // candidate must win, even though both clear the amount + date gate.
         var date = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
-        var emily = SeedRentPaymentFor("Emily", "Chen", 1500m, date, "L-EMILY");
-        var carlos = SeedRentPaymentFor("Carlos", "Reyes", 1500m, date, "L-CARLOS");
+        var property = SeedRouteProperty(_ctx, "Name ranking");
+        var emily = SeedRentPaymentInto(_ctx, "Emily", "Chen", 1500m, date, "L-EMILY", property);
+        var carlos = SeedRentPaymentInto(_ctx, "Carlos", "Reyes", 1500m, date, "L-CARLOS", property);
 
         var imported = await _sut.ImportAsync(1, new ImportBankTransactionsRequest
         {
@@ -612,7 +649,11 @@ public class BankingServiceTests : IAsyncLifetime
             ],
         });
 
-        var suggestion = imported.Transactions.Single().SuggestedMatch;
+        var transactionId = imported.Transactions.Single().Id;
+        AssignRoute(_ctx, transactionId, property.Id);
+        var suggestion = (await _sut.ListTransactionsAsync(1, "Unmatched"))
+            .Items.Should().ContainSingle().Subject
+            .SuggestedMatch;
         suggestion.Should().NotBeNull();
         suggestion!.EntityType.Should().Be("TenantLedgerEntry");
         suggestion.EntityId.Should().Be(carlos.Id);
@@ -626,17 +667,25 @@ public class BankingServiceTests : IAsyncLifetime
 
         // Named match: merchant text contains the tenant name.
         await using var namedCtx = await _fixture.CreateContextAsync();
-        SeedRentPaymentInto(namedCtx, "Carlos", "Reyes", 1500m, date, "L-1");
+        var namedPayment = SeedRentPaymentInto(namedCtx, "Carlos", "Reyes", 1500m, date, "L-1");
         var namedSvc = CreateServiceFor(namedCtx);
         var namedResult = await namedSvc.ImportAsync(1, BankImport("named-1", date, "Carlos Reyes", 1500m));
-        var namedScore = namedResult.Transactions.Single().SuggestedMatch!.Confidence;
+        var namedTransactionId = namedResult.Transactions.Single().Id;
+        AssignRoute(namedCtx, namedTransactionId, namedPayment.TenantAccount!.LeaseManagement!.PropertyId);
+        var namedScore = (await namedSvc.ListTransactionsAsync(1, "Unmatched"))
+            .Items.Should().ContainSingle().Subject
+            .SuggestedMatch!.Confidence;
 
         // Date-only match: no merchant name overlap, same amount + date.
         await using var anonCtx = await _fixture.CreateContextAsync();
-        SeedRentPaymentInto(anonCtx, "Carlos", "Reyes", 1500m, date, "L-1");
+        var anonPayment = SeedRentPaymentInto(anonCtx, "Carlos", "Reyes", 1500m, date, "L-1");
         var anonSvc = CreateServiceFor(anonCtx);
         var anonResult = await anonSvc.ImportAsync(1, BankImport("anon-1", date, null, 1500m));
-        var anonScore = anonResult.Transactions.Single().SuggestedMatch!.Confidence;
+        var anonTransactionId = anonResult.Transactions.Single().Id;
+        AssignRoute(anonCtx, anonTransactionId, anonPayment.TenantAccount!.LeaseManagement!.PropertyId);
+        var anonScore = (await anonSvc.ListTransactionsAsync(1, "Unmatched"))
+            .Items.Should().ContainSingle().Subject
+            .SuggestedMatch!.Confidence;
 
         namedScore.Should().BeGreaterThan(anonScore);
     }
@@ -896,8 +945,9 @@ public class BankingServiceTests : IAsyncLifetime
             [new RecordingCommandInterceptor(executedSql)]);
         var sut = CreateServiceFor(ctx);
         var postedAt = new DateTime(2026, 06, 10, 0, 0, 0, DateTimeKind.Utc);
-        SeedRentPaymentInto(ctx, "Emily", "Chen", 1400m, postedAt, "L-emily");
-        var carlos = SeedRentPaymentInto(ctx, "Carlos", "Reyes", 1400m, postedAt, "L-carlos");
+        var property = SeedRouteProperty(ctx, "Review queue ranking");
+        SeedRentPaymentInto(ctx, "Emily", "Chen", 1400m, postedAt, "L-emily", property);
+        var carlos = SeedRentPaymentInto(ctx, "Carlos", "Reyes", 1400m, postedAt, "L-carlos", property);
         var scope = ctx.Db.SeedAdministratorScope(1, "bank-review-ranking");
 
         var rankedImport = await sut.ImportAsync(1, BankImport("queue-rank", postedAt, "Carlos Reyes", 1400m));
@@ -1485,9 +1535,10 @@ public class BankingServiceTests : IAsyncLifetime
         string lastName,
         decimal amount,
         DateTime paidAt,
-        string leaseNumber)
+        string leaseNumber,
+        Property? property = null)
     {
-        var property = new Property
+        property ??= new Property
         {
             PortfolioId = 1,
             Name = "Short North Condo",
