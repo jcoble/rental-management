@@ -151,9 +151,10 @@ public sealed class OwnerPortalRelationshipBoundaryPostgreSqlTests : IAsyncLifet
         distributions.Items.Should().NotContain(item => item.PropertyId == scenario.OtherOwnerPropertyId);
         _commands.Should().HaveCount(2);
         _commands.Should().ContainSingle(sql =>
-            sql.Contains("count", StringComparison.OrdinalIgnoreCase) &&
+            IsTopLevelCountCommand(sql) &&
             sql.Contains("vw_effective_owner_access", StringComparison.OrdinalIgnoreCase));
         _commands.Should().ContainSingle(sql =>
+            !IsTopLevelCountCommand(sql) &&
             sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase));
 
@@ -204,9 +205,10 @@ public sealed class OwnerPortalRelationshipBoundaryPostgreSqlTests : IAsyncLifet
         page.Items.Should().ContainSingle(item => item.Name == "Bravo House");
         _commands.Should().HaveCount(2, "count and bounded page data are the only database round trips");
         _commands.Should().ContainSingle(sql =>
-            sql.Contains("SELECT count(*)::int", StringComparison.OrdinalIgnoreCase) &&
+            IsTopLevelCountCommand(sql) &&
             sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase));
         _commands.Should().ContainSingle(sql =>
+            !IsTopLevelCountCommand(sql) &&
             sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
@@ -445,6 +447,9 @@ public sealed class OwnerPortalRelationshipBoundaryPostgreSqlTests : IAsyncLifet
         int OtherOwnerPropertyId,
         int OtherPortfolioPropertyId,
         int Year);
+
+    private static bool IsTopLevelCountCommand(string sql) =>
+        sql.TrimStart().StartsWith("SELECT count(*)", StringComparison.OrdinalIgnoreCase);
 
     private sealed class QueryRecorder(List<string> commands) : DbCommandInterceptor
     {

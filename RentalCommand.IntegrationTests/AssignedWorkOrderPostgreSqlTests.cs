@@ -338,8 +338,13 @@ public sealed class AssignedWorkOrderPostgreSqlTests : IAsyncLifetime
         });
         db.Conversations.Add(conversation);
         await db.SaveChangesAsync();
+        var persistedVersions = await db.WorkOrders.AsNoTracking()
+            .Where(workOrder => workOrder.Id == assigned.Id || workOrder.Id == unassigned.Id)
+            .Select(workOrder => new { workOrder.Id, workOrder.UpdatedAt })
+            .ToDictionaryAsync(workOrder => workOrder.Id, workOrder => workOrder.UpdatedAt);
         return new Scenario(1, user.Id, session.Id, context.Id, context.AccessRevision,
-            assigned.Id, assigned.UpdatedAt, unassigned.Id, unassigned.UpdatedAt, conversation.Id);
+            assigned.Id, persistedVersions[assigned.Id],
+            unassigned.Id, persistedVersions[unassigned.Id], conversation.Id);
     }
 
     private static WorkOrder WorkOrder(int propertyId, int tenantId, string title, DateTime now) => new()

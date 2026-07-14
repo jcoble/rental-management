@@ -47,9 +47,10 @@ public sealed class RoleExperienceAuthorizationPostgreSqlTests : IAsyncLifetime
         allowed.Items.Should().NotContain(item => item.UnitId == scenario.OtherPortfolioUnitId);
         _commands.Should().HaveCount(2, "count and bounded page data must be the only database round trips");
         _commands.Should().ContainSingle(sql =>
-            sql.Contains("SELECT count(*)::int", StringComparison.OrdinalIgnoreCase) &&
+            IsTopLevelCountCommand(sql) &&
             sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase));
         _commands.Should().ContainSingle(sql =>
+            !IsTopLevelCountCommand(sql) &&
             sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
@@ -97,9 +98,10 @@ public sealed class RoleExperienceAuthorizationPostgreSqlTests : IAsyncLifetime
         page.Items.Should().NotContain(item => item.Id == scenario.OtherPortfolioWorkOrderId);
         _commands.Should().HaveCount(2, "authorization, search, sort, and paging remain in count/page SQL");
         _commands.Should().ContainSingle(sql =>
-            sql.Contains("count", StringComparison.OrdinalIgnoreCase) &&
+            IsTopLevelCountCommand(sql) &&
             sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase));
         _commands.Should().ContainSingle(sql =>
+            !IsTopLevelCountCommand(sql) &&
             sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
@@ -513,6 +515,9 @@ public sealed class RoleExperienceAuthorizationPostgreSqlTests : IAsyncLifetime
         int PortfolioTwoRuleId,
         int PortfolioOnePolicyId,
         int PortfolioTwoPolicyId);
+
+    private static bool IsTopLevelCountCommand(string sql) =>
+        sql.TrimStart().StartsWith("SELECT count(*)", StringComparison.OrdinalIgnoreCase);
 
     private sealed class QueryRecorder(List<string> commands) : DbCommandInterceptor
     {
