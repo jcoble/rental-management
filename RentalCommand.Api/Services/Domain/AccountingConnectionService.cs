@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Accounting;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Models.Accounting;
