@@ -1,11 +1,18 @@
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
-using Moq;
 using RentalCommand.Api.Simulation;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Automation;
+using RentalCommand.Data;
+using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Auditing;
+using RentalCommand.Data.Automation;
 using RentalCommand.Engine.Services;
 using RentalCommand.TestCommon;
 
@@ -22,8 +29,28 @@ public class RecurringMaintenanceServiceTests : IDisposable
     private const int PortfolioId = 1;
 
     private readonly SqliteTestContext _ctx = new();
+    private readonly ServiceProvider _services;
 
-    public void Dispose() => _ctx.Dispose();
+    public RecurringMaintenanceServiceTests()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddAtomicCommandHandler<
+            ApplyClaimedRecurringMaintenanceBatchCommand,
+            ApplyScheduledFinanceBatchResult,
+            ApplyClaimedRecurringMaintenanceBatchHandler>();
+        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+            builder.UseSqlite(_ctx.ConnectionString).UseAtomicPersistenceKernel(provider));
+        _services = services.BuildServiceProvider();
+    }
+
+    public void Dispose()
+    {
+        _services.Dispose();
+        _ctx.Dispose();
+    }
 
     // -----------------------------------------------------------------------
 
@@ -50,6 +77,7 @@ public class RecurringMaintenanceServiceTests : IDisposable
         // First run creates exactly one work order.
         var firstResult = await sut.GenerateAsync();
         firstResult.Should().Be(1);
+        _ctx.Db.ChangeTracker.Clear();
 
         var workOrders = _ctx.Db.WorkOrders.ToList();
         workOrders.Should().HaveCount(1);
@@ -151,6 +179,7 @@ public class RecurringMaintenanceServiceTests : IDisposable
         var result = await sut.GenerateAsync();
 
         result.Should().Be(1);
+        _ctx.Db.ChangeTracker.Clear();
         _ctx.Db.WorkOrders.Count().Should().Be(1);
 
         var reloaded = _ctx.Db.RecurringMaintenanceTasks.Single(t => t.Id == task.Id);
@@ -182,8 +211,7 @@ public class RecurringMaintenanceServiceTests : IDisposable
         _ctx.Db.SaveChanges();
 
         return new RecurringMaintenanceService(
-            _ctx.Db,
-            Mock.Of<IDataUpdateService>(),
+            _services.GetRequiredService<IAtomicUnitOfWork>(),
             TimeProvider.System,
             new AppTimeZoneProvider(new ConfigurationBuilder().Build()),
             new TestScheduledAutomationClaimStore(_ctx.Db),

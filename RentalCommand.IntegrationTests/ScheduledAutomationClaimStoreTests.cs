@@ -128,7 +128,7 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task Maintenance_master_switch_is_enforced_by_claim_and_lock_queries()
+    public async Task Maintenance_master_switch_is_enforced_by_claim_query()
     {
         Skip.IfNot(_dockerAvailable, "Docker is unavailable.");
         var now = DateTime.UtcNow;
@@ -168,9 +168,8 @@ public sealed class ScheduledAutomationClaimStoreTests : IAsyncLifetime
                 .SetProperty(row => row.EnableRecurringMaintenance, false)
                 .SetProperty(row => row.UpdatedAtUtc, now));
 
-        await using var tx = await db.Database.BeginTransactionAsync();
-        (await store.LockOwnedRecurringMaintenanceAsync(claims, now)).Should().BeEmpty();
-        await tx.RollbackAsync();
+        (await store.ClaimRecurringMaintenanceAsync(
+            "maintenance-disabled-again", now, TimeSpan.FromMinutes(2), 25)).Should().BeEmpty();
     }
 
     [SkippableFact]

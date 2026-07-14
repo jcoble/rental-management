@@ -79,6 +79,46 @@ internal sealed class AtomicScheduledFinancePersistence : IAtomicScheduledFinanc
             """).IgnoreQueryFilters().ToListAsync(ct);
     }
 
+    public async Task<IReadOnlyList<RecurringMaintenanceTask>> LockRecurringMaintenanceClaimsAsync(
+        int[] recurringMaintenanceTaskIds,
+        Guid claimToken,
+        DateTime businessDateUtc,
+        CancellationToken ct = default)
+    {
+        if (recurringMaintenanceTaskIds.Length == 0) return [];
+        if (!_db.Database.IsNpgsql())
+        {
+            var now = DateTime.UtcNow;
+            return await _db.RecurringMaintenanceTasks.IgnoreQueryFilters()
+                .Where(task => recurringMaintenanceTaskIds.Contains(task.Id) &&
+                    task.DeletedAt == null && task.WorkerClaimToken == claimToken &&
+                    task.WorkerClaimExpiresAtUtc > now && task.IsActive &&
+                    task.NextDueDate <= businessDateUtc &&
+                    (!_db.AutomationSettings.Any(settings => settings.PortfolioId == task.PortfolioId) ||
+                     _db.AutomationSettings.Any(settings => settings.PortfolioId == task.PortfolioId &&
+                         settings.EnableRecurringMaintenance)))
+                .OrderBy(task => task.Id)
+                .ToListAsync(ct);
+        }
+
+        using var lease = _scope.BeginInternalRawDml(
+            "RecurringMaintenanceTasks", AtomicRawDmlOperation.Update);
+        return await _db.RecurringMaintenanceTasks.FromSqlInterpolated($"""
+            SELECT task.*
+            FROM "RecurringMaintenanceTasks" AS task
+            LEFT JOIN "AutomationSettings" AS settings ON settings."PortfolioId" = task."PortfolioId"
+            WHERE task."Id" = ANY({recurringMaintenanceTaskIds})
+              AND task."DeletedAt" IS NULL
+              AND task."WorkerClaimToken" = {claimToken}
+              AND task."WorkerClaimExpiresAtUtc" > clock_timestamp()
+              AND task."IsActive"
+              AND task."NextDueDate" <= {AsUtc(businessDateUtc)}
+              AND COALESCE(settings."EnableRecurringMaintenance", TRUE)
+            ORDER BY task."Id"
+            FOR UPDATE OF task
+            """).IgnoreQueryFilters().ToListAsync(ct);
+    }
+
     private static DateTime AsUtc(DateTime value) => value.Kind switch
     {
         DateTimeKind.Utc => value,

@@ -350,6 +350,12 @@ public interface IAtomicScheduledFinancePersistence
         Guid claimToken,
         DateTime businessDateUtc,
         CancellationToken ct = default);
+
+    Task<IReadOnlyList<RecurringMaintenanceTask>> LockRecurringMaintenanceClaimsAsync(
+        int[] recurringMaintenanceTaskIds,
+        Guid claimToken,
+        DateTime businessDateUtc,
+        CancellationToken ct = default);
 }
 
 public sealed record AtomicLoanPaymentTail(int LoanId, string PeriodKey, decimal BalanceAfter);

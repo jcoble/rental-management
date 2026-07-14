@@ -23,17 +23,6 @@ public sealed class TestScheduledAutomationClaimStore(RentalCommandDbContext db)
         }))), ct);
     }
 
-    public async Task<IReadOnlyList<RecurringMaintenanceTask>> LockOwnedRecurringMaintenanceAsync(
-        IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default)
-    {
-        var (ids, token) = BatchIdentity(claims);
-        return await db.RecurringMaintenanceTasks.Where(row => ids.Contains(row.Id) &&
-            row.WorkerClaimToken == token && row.IsActive && row.NextDueDate <= todayUtc &&
-            (!db.AutomationSettings.Any(settings => settings.PortfolioId == row.PortfolioId) ||
-             db.AutomationSettings.Any(settings =>
-                 settings.PortfolioId == row.PortfolioId && settings.EnableRecurringMaintenance)))
-            .ToListAsync(ct);
-    }
 
     public async Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimRecurringExpensesAsync(
         string owner, DateTime todayUtc, TimeSpan leaseDuration, int batchSize,
@@ -79,9 +68,4 @@ public sealed class TestScheduledAutomationClaimStore(RentalCommandDbContext db)
         return claims;
     }
 
-    private static (int[] Ids, Guid Token) BatchIdentity(IReadOnlyList<ScheduledAutomationClaim> claims)
-    {
-        if (claims.Count == 0) return ([], Guid.Empty);
-        return (claims.Select(claim => claim.Id).ToArray(), claims[0].ClaimToken);
-    }
 }

@@ -97,6 +97,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Automation.ApplyScheduledFinanceBatchResult,
     RentalCommand.Data.Automation.ApplyClaimedRecurringExpenseBatchHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Automation.ApplyClaimedRecurringMaintenanceBatchCommand,
+    RentalCommand.Core.Automation.ApplyScheduledFinanceBatchResult,
+    RentalCommand.Data.Automation.ApplyClaimedRecurringMaintenanceBatchHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Automation.ApplyScheduledTenantChargeBatchCommand,
     RentalCommand.Core.Automation.ApplyScheduledTenantChargeBatchResult,
     RentalCommand.Data.Payments.ApplyScheduledTenantChargeBatchHandler>();

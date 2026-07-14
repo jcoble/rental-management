@@ -270,6 +270,157 @@ public sealed class ApplyClaimedRecurringExpenseBatchHandler
     }
 }
 
+public sealed class ApplyClaimedRecurringMaintenanceBatchHandler
+    : IAtomicCommandHandler<ApplyClaimedRecurringMaintenanceBatchCommand, ApplyScheduledFinanceBatchResult>
+{
+    public async Task<ApplyScheduledFinanceBatchResult> HandleAsync(
+        ApplyClaimedRecurringMaintenanceBatchCommand command,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        var ids = command.RecurringMaintenanceTaskIds.Distinct().ToArray();
+        if (ids.Length == 0 || ids.Length != command.RecurringMaintenanceTaskIds.Length ||
+            command.ClaimToken == Guid.Empty || command.BusinessDateUtc == default ||
+            command.AppliedAtUtc == default || string.IsNullOrWhiteSpace(command.BusinessTimeZoneId))
+            throw new ArgumentException("A complete recurring-maintenance claim batch is required.", nameof(command));
+
+        var businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(command.BusinessTimeZoneId);
+        var tasks = await attempt.ScheduledFinance.LockRecurringMaintenanceClaimsAsync(
+            ids, command.ClaimToken, command.BusinessDateUtc, ct);
+        if (tasks.Count != ids.Length)
+        {
+            throw new ScheduledFinanceClaimLostException(
+                "The recurring-maintenance claim batch is stale, expired, incomplete, or owned by another worker.");
+        }
+
+        var generated = new List<WorkOrder>(tasks.Count);
+        foreach (var task in tasks)
+        {
+            var priorNextDueDate = task.NextDueDate;
+            var nextDueDate = priorNextDueDate;
+            do
+            {
+                nextDueDate = Advance(nextDueDate, task.RecurrenceInterval);
+            }
+            while (nextDueDate <= command.BusinessDateUtc);
+
+            var workOrder = new WorkOrder
+            {
+                PortfolioId = task.PortfolioId,
+                PropertyId = task.PropertyId,
+                UnitId = task.UnitId,
+                VendorId = task.VendorId,
+                RecurringMaintenanceTaskId = task.Id,
+                Title = task.Title,
+                Description = string.IsNullOrWhiteSpace(task.Description) ? task.Title : task.Description,
+                Category = string.IsNullOrWhiteSpace(task.Category) ? "General" : task.Category,
+                Priority = task.Priority,
+                Status = WorkOrderStatus.New,
+                RequestedAt = command.AppliedAtUtc,
+                ScheduledFor = ToScheduledUtc(priorNextDueDate, task.ScheduledTime, businessTimeZone),
+                EstimatedCost = task.EstimatedCost,
+                CreatedBy = "Recurring maintenance",
+                UpdatedAt = command.AppliedAtUtc,
+            };
+            workOrder.StatusEvents.Add(new WorkOrderStatusEvent
+            {
+                PortfolioId = task.PortfolioId,
+                FromStatus = null,
+                ToStatus = WorkOrderStatus.New,
+                Note = "Auto-created from recurring maintenance schedule",
+                ChangedByUserId = null,
+                ChangedByLabel = "System",
+                CreatedAtUtc = command.AppliedAtUtc,
+            });
+            generated.Add(workOrder);
+            attempt.Persistence.Add(workOrder);
+            attempt.BindSemanticAudit(workOrder, new AtomicSemanticAudit(
+                task.PortfolioId,
+                nameof(WorkOrder),
+                0,
+                AuditLogOperation.Created,
+                ActorLabel: "system:recurring-maintenance",
+                NewValues: JsonSerializer.Serialize(new
+                {
+                    RecurringMaintenanceTaskId = task.Id,
+                    task.PropertyId,
+                    task.UnitId,
+                    task.VendorId,
+                    task.Title,
+                    DueDate = priorNextDueDate,
+                }),
+                ChangeReason: "Generated a recurring-maintenance work order."));
+
+            task.LastGeneratedAtUtc = command.AppliedAtUtc;
+            task.NextDueDate = nextDueDate;
+            task.UpdatedAt = command.AppliedAtUtc;
+            ClearClaim(task);
+            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+                task.PortfolioId,
+                nameof(RecurringMaintenanceTask),
+                task.Id,
+                AuditLogOperation.Updated,
+                ActorLabel: "system:recurring-maintenance",
+                OldValues: JsonSerializer.Serialize(new { NextDueDate = priorNextDueDate }),
+                NewValues: JsonSerializer.Serialize(new
+                {
+                    task.NextDueDate,
+                    task.LastGeneratedAtUtc,
+                    ClaimReleased = true,
+                }),
+                ChangeReason: "Advanced a claimed recurring-maintenance schedule."));
+        }
+
+        await attempt.FlushBusinessAsync(ct);
+        foreach (var workOrder in generated)
+        {
+            attempt.StageOutbox(RentalCommand.Data.Operations.CreateWorkOrderHandler.DataUpdate(
+                workOrder.PortfolioId,
+                nameof(WorkOrder),
+                workOrder.Id,
+                $"recurring-maintenance-work-order:{command.ClaimToken:N}:{workOrder.RecurringMaintenanceTaskId}",
+                command.AppliedAtUtc));
+            attempt.StageOutbox(RentalCommand.Data.Operations.CreateWorkOrderHandler.DataUpdate(
+                workOrder.PortfolioId,
+                nameof(RecurringMaintenanceTask),
+                workOrder.RecurringMaintenanceTaskId!.Value,
+                $"recurring-maintenance-task-update:{command.ClaimToken:N}:{workOrder.RecurringMaintenanceTaskId}",
+                command.AppliedAtUtc));
+        }
+
+        return new ApplyScheduledFinanceBatchResult(
+            ScheduledFinanceApplyOutcome.Applied,
+            tasks.Count,
+            generated.Count);
+    }
+
+    private static DateTime Advance(DateTime date, RecurrenceInterval interval) => interval switch
+    {
+        RecurrenceInterval.Weekly => date.AddDays(7),
+        RecurrenceInterval.Monthly => date.AddMonths(1),
+        RecurrenceInterval.Quarterly => date.AddMonths(3),
+        RecurrenceInterval.SemiAnnually => date.AddMonths(6),
+        RecurrenceInterval.Annually => date.AddYears(1),
+        _ => throw new InvalidOperationException($"Unsupported recurring-maintenance interval {interval}."),
+    };
+
+    private static DateTime? ToScheduledUtc(
+        DateTime dueDate, TimeOnly? scheduledTime, TimeZoneInfo businessTimeZone)
+    {
+        if (!scheduledTime.HasValue) return null;
+        var local = DateTime.SpecifyKind(
+            dueDate.Date.Add(scheduledTime.Value.ToTimeSpan()), DateTimeKind.Unspecified);
+        return TimeZoneInfo.ConvertTimeToUtc(local, businessTimeZone);
+    }
+
+    private static void ClearClaim(RecurringMaintenanceTask task)
+    {
+        task.WorkerClaimOwner = null;
+        task.WorkerClaimToken = null;
+        task.WorkerClaimExpiresAtUtc = null;
+    }
+}
+
 public sealed class ScheduledFinanceClaimLostException : InvalidOperationException
 {
     public ScheduledFinanceClaimLostException(string message) : base(message) { }

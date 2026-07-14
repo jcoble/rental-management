@@ -3,7 +3,6 @@ using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NpgsqlTypes;
 using RentalCommand.Core.Enums;
-using RentalCommand.Core.Entities;
 
 namespace RentalCommand.Data.Automation;
 
@@ -20,8 +19,6 @@ public interface IScheduledAutomationClaimStore
     Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimRecurringMaintenanceAsync(
         string owner, DateTime todayUtc, TimeSpan leaseDuration, int batchSize,
         CancellationToken ct = default);
-    Task<IReadOnlyList<RecurringMaintenanceTask>> LockOwnedRecurringMaintenanceAsync(
-        IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -135,25 +132,6 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
         CancellationToken ct = default) =>
         ClaimAsync(MaintenanceSql, owner, todayUtc, leaseDuration, batchSize, false, ct);
 
-    public async Task<IReadOnlyList<RecurringMaintenanceTask>> LockOwnedRecurringMaintenanceAsync(
-        IReadOnlyList<ScheduledAutomationClaim> claims, DateTime todayUtc, CancellationToken ct = default)
-    {
-        var (ids, token) = BatchIdentity(claims);
-        if (ids.Length == 0) return [];
-        return await _db.RecurringMaintenanceTasks.FromSqlInterpolated($"""
-            SELECT task.*
-            FROM "RecurringMaintenanceTasks" AS task
-            LEFT JOIN "AutomationSettings" AS settings ON settings."PortfolioId" = task."PortfolioId"
-            WHERE task."Id" = ANY({ids})
-              AND task."DeletedAt" IS NULL
-              AND task."WorkerClaimToken" = {token}
-              AND task."IsActive"
-              AND task."NextDueDate" <= {AsUtc(todayUtc)}
-              AND COALESCE(settings."EnableRecurringMaintenance", TRUE)
-            ORDER BY task."Id"
-            FOR UPDATE OF task
-            """).IgnoreQueryFilters().ToListAsync(ct);
-    }
 
     private async Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimAsync(
         string sql, string owner, DateTime todayUtc, TimeSpan leaseDuration,
@@ -204,12 +182,4 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
         _ => DateTime.SpecifyKind(value, DateTimeKind.Utc),
     };
 
-    private static (int[] Ids, Guid Token) BatchIdentity(IReadOnlyList<ScheduledAutomationClaim> claims)
-    {
-        if (claims.Count == 0) return ([], Guid.Empty);
-        var token = claims[0].ClaimToken;
-        if (claims.Any(claim => claim.ClaimToken != token))
-            throw new InvalidOperationException("A scheduled automation batch must share one claim token.");
-        return (claims.Select(claim => claim.Id).ToArray(), token);
-    }
 }
