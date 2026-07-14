@@ -7795,8 +7795,8 @@ namespace RentalCommand.Data.Migrations
                 columns: new[] { "PropertyId", "PortfolioId" });
 
             migrationBuilder.Sql("""
-            CREATE UNIQUE INDEX "IX_Units_PropertyId_UnitNumber_CI"
-            ON "Units" ("PropertyId", lower(trim("UnitNumber")))
+                CREATE UNIQUE INDEX "IX_Units_PropertyId_UnitNumber_CI"
+                ON "Units" ("PropertyId", lower(trim("UnitNumber")))
                 WHERE "DeletedAt" IS NULL;
                 """);
 
