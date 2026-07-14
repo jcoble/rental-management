@@ -19,8 +19,8 @@ public sealed class CsvImportService : ICsvImportService
     private readonly RentalCommandDbContext _db;
     private readonly ITenantService _tenants;
     private readonly IPropertyService _properties;
-    private readonly IUnitService _units;
     private readonly IAtomicUnitOfWork _atomic;
+    private readonly IUnitCsvImportPreviewQuery _unitPreview;
     private readonly IExpenseService _expenses;
     private readonly ILoanService _loans;
 
@@ -38,16 +38,16 @@ public sealed class CsvImportService : ICsvImportService
         RentalCommandDbContext db,
         ITenantService tenants,
         IPropertyService properties,
-        IUnitService units,
         IAtomicUnitOfWork atomic,
+        IUnitCsvImportPreviewQuery unitPreview,
         IExpenseService expenses,
         ILoanService loans)
     {
         _db = db;
         _tenants = tenants;
         _properties = properties;
-        _units = units;
         _atomic = atomic;
+        _unitPreview = unitPreview;
         _expenses = expenses;
         _loans = loans;
     }
@@ -84,8 +84,15 @@ public sealed class CsvImportService : ICsvImportService
         var rows = table.Rows
             .Select((cells, index) => new ImportRow(index + 2, cells))
             .ToList();
-        if (canonicalType == "Payment" && !dryRun && commandContext is null)
-            throw new ArgumentException("Authenticated operation context is required for payment imports.");
+        if ((canonicalType == "Payment" || canonicalType == "Unit") && !dryRun && commandContext is null)
+            throw new ArgumentException("Authenticated operation context is required for atomic imports.");
+        if (canonicalType == "Unit")
+        {
+            var unitContext = commandContext ?? new CsvImportCommandContext(
+                scope.UserId, scope.SessionId, scope.AccessContextId, scope.AccessRevision, "dry-run");
+            return await ImportUnitsAtomicAsync(
+                scope, rows, columnIndex, unitContext, dryRun, ct);
+        }
 
         var batch = await BuildBatchContextAsync(portfolioId, canonicalType, rows, columnIndex, ct);
 
@@ -120,10 +127,6 @@ public sealed class CsvImportService : ICsvImportService
                         break;
                     case "Property":
                         valid = await TryImportPropertyAsync(scope, Cell, dryRun, errors, id => createdId = id, ct);
-                        break;
-                    case "Unit":
-                        valid = await TryImportUnitAsync(scope, Cell, batch, dryRun, row.RowNumber,
-                            errors, id => createdId = id, ct);
                         break;
                     case "Payment":
                         valid = await TryImportPaymentAsync(portfolioId, Cell, batch, dryRun,
@@ -260,55 +263,109 @@ public sealed class CsvImportService : ICsvImportService
         return true;
     }
 
-    private async Task<bool> TryImportUnitAsync(
+    private async Task<CsvImportResult> ImportUnitsAtomicAsync(
         WorkspaceReadScope scope,
-        Func<string, string?> cell,
-        ImportBatchContext batch,
+        IReadOnlyList<ImportRow> rows,
+        IReadOnlyDictionary<string, int> columnIndex,
+        CsvImportCommandContext context,
         bool dryRun,
-        int rowNumber,
-        List<string> errors,
-        Action<long> setId,
         CancellationToken ct)
     {
-        // Resolve the property reference: an explicit propertyId wins; otherwise resolve by name
-        // (case-insensitive, in-portfolio). Ambiguous or missing names are a clear per-row error.
-        var propertyIdRaw = NullIfEmpty(cell("propertyId"));
-        var propertyName = NullIfEmpty(cell("propertyName"));
-        var propertyId = ResolvePropertyReference(propertyIdRaw, propertyName, batch, errors);
-
-        var request = new CreateUnitRequest
+        var commands = new List<AtomicUnitImportRow>();
+        foreach (var row in rows)
         {
-            // Use a placeholder when resolution failed so the [Range] annotation doesn't add a
-            // confusing second "PropertyId" error on top of our clear property-resolution message;
-            // creation below is gated on propertyId.HasValue regardless.
-            PropertyId = propertyId ?? 1,
-            UnitNumber = cell("unitNumber") ?? string.Empty,
-            Bedrooms = ParseDecimal("bedrooms", cell("bedrooms"), errors) ?? 0m,
-            Bathrooms = ParseDecimal("bathrooms", cell("bathrooms"), errors) ?? 0m,
-            MarketRent = ParseDecimal("marketRent", cell("marketRent"), errors) ?? 0m,
-        };
-
-        // Validate the remaining DataAnnotations (UnitNumber required, ranges on bedrooms/bath/rent).
-        TryValidate(request, errors);
-
-        if (errors.Count > 0 || !propertyId.HasValue)
-        {
-            return false;
-        }
-
-        if (!dryRun)
-        {
-            var operationKey = $"csv-unit:{scope.PortfolioId}:{scope.AccessContextId}:{rowNumber}:{request.PropertyId}:{request.UnitNumber}";
-            var created = await _units.CreateAsync(scope, request, operationKey, ct);
-            if (created == null)
+            string? Cell(string column) =>
+                columnIndex.TryGetValue(column, out var index) && index < row.Cells.Length
+                    ? row.Cells[index].Trim()
+                    : null;
+            var errors = new List<string>();
+            int? propertyId = null;
+            var propertyIdRaw = NullIfEmpty(Cell("propertyId"));
+            if (propertyIdRaw is not null)
             {
-                errors.Add("The unit could not be created (the property is missing or outside this portfolio).");
-                return false;
+                if (int.TryParse(propertyIdRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+                    && parsed > 0) propertyId = parsed;
+                else errors.Add("propertyId must be a positive whole number.");
             }
-            setId(created.Id);
+            var request = new CreateUnitRequest
+            {
+                PropertyId = propertyId ?? 1,
+                UnitNumber = Cell("unitNumber") ?? string.Empty,
+                Bedrooms = ParseDecimal("bedrooms", Cell("bedrooms"), errors) ?? 0m,
+                Bathrooms = ParseDecimal("bathrooms", Cell("bathrooms"), errors) ?? 0m,
+                MarketRent = ParseDecimal("marketRent", Cell("marketRent"), errors) ?? 0m,
+            };
+            TryValidate(request, errors);
+            if (propertyId is null && string.IsNullOrWhiteSpace(Cell("propertyName")))
+                errors.Add("propertyName or propertyId is required.");
+            commands.Add(new AtomicUnitImportRow(
+                row.RowNumber, propertyId, NullIfEmpty(Cell("propertyName")),
+                request.UnitNumber.Trim(), request.Bedrooms, request.Bathrooms, request.MarketRent,
+                errors.ToArray()));
         }
 
-        return true;
+        if (commands.Count == 0)
+        {
+            return new CsvImportResult
+            {
+                EntityType = "Unit",
+                DryRun = dryRun,
+                Rows = [],
+            };
+        }
+
+        AtomicUnitImportRowResult[] databaseRows;
+        int totalRows;
+        int validRows;
+        int createdRows;
+        int duplicateRows;
+        if (dryRun)
+        {
+            var preview = await _unitPreview.PreviewAsync(scope, commands, ct);
+            if (!preview.Authorized)
+                throw new UnauthorizedAccessException(
+                    "At least one Unit row is outside your assigned property scope.");
+            databaseRows = preview.Rows.ToArray();
+            totalRows = preview.TotalRows;
+            validRows = preview.ValidRows;
+            createdRows = preview.CreatedCount;
+            duplicateRows = preview.DuplicateRows;
+        }
+        else
+        {
+            var command = new AtomicUnitCsvImportCommand(
+                scope.PortfolioId, context.ActorUserId, context.AuthSessionId,
+                context.AccessContextId, context.AccessRevision,
+                context.OperationKeyDigest, commands.ToArray());
+            var outcome = await _atomic.ExecuteAsync(
+                AtomicUnitCsvImport.Identity(command), command, AtomicUnitCsvImport.Codec, ct);
+            databaseRows = outcome.Value.Rows;
+            totalRows = outcome.Value.TotalRows;
+            validRows = outcome.Value.ValidRows;
+            createdRows = outcome.Value.CreatedRows;
+            duplicateRows = outcome.Value.DuplicateRows;
+        }
+        var responseRows = Array.ConvertAll(databaseRows, row => new CsvImportRowResult
+        {
+            RowNumber = row.RowNumber,
+            Valid = row.Valid,
+            Errors = row.Errors,
+            CreatedId = row.CreatedId,
+            IsDuplicate = row.IsDuplicate,
+            SkipReason = row.IsDuplicate
+                ? "A live unit with this number already exists on the property."
+                : null,
+        });
+        return new CsvImportResult
+        {
+            EntityType = "Unit",
+            DryRun = dryRun,
+            TotalRows = totalRows,
+            ValidRows = validRows,
+            CreatedRows = createdRows,
+            DuplicateRows = duplicateRows,
+            Rows = responseRows,
+        };
     }
 
     private async Task<bool> TryImportPaymentAsync(

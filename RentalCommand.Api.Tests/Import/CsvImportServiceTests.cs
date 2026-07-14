@@ -45,7 +45,7 @@ public class CsvImportServiceTests : IDisposable
             _ctx.Db,
             new TenantService(_ctx.Db, noop, TimeProvider.System),
             new PropertyService(_ctx.Db, noop, TimeProvider.System),
-            new UnitService(_ctx.Db, noop, Mock.Of<IAuditTrailService>(), TimeProvider.System),
+            _atomic,
             _atomic,
             new ExpenseService(_ctx.Db, noop, Mock.Of<IFileStorage>(), TimeProvider.System),
             new LoanService(_ctx.Db, noop, TimeProvider.System));
@@ -384,9 +384,14 @@ public class CsvImportServiceTests : IDisposable
         _ctx.Db.SaveChanges();
     }
 
-    private sealed class CapturingAtomicUnitOfWork : IAtomicUnitOfWork
+    private sealed class CapturingAtomicUnitOfWork : IAtomicUnitOfWork, IUnitCsvImportPreviewQuery
     {
         public List<RecordTenantReceiptCommand> Commands { get; } = [];
+
+        public Task<AtomicUnitImportBatchResult> PreviewAsync(
+            WorkspaceReadScope scope,
+            IReadOnlyList<AtomicUnitImportRow> rows,
+            CancellationToken ct = default) => Task.FromResult(UnitResult(rows, created: false));
 
         public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
             AtomicCommandIdentity identity,
@@ -396,9 +401,20 @@ public class CsvImportServiceTests : IDisposable
             where TCommand : notnull, IAtomicCommandData
             where TResult : notnull
         {
+            if (command is AtomicUnitCsvImportCommand unit
+                && typeof(TResult) == typeof(AtomicUnitCsvImportResult))
+            {
+                var batch = UnitResult(unit.Rows, created: true);
+                var result = new AtomicUnitCsvImportResult(
+                    batch.Rows.ToArray(), batch.TotalRows, batch.ValidRows,
+                    batch.CreatedCount, batch.DuplicateRows);
+                return Task.FromResult((AtomicCommandOutcome<TResult>)(object)
+                    new AtomicCommandOutcome<AtomicUnitCsvImportResult>(
+                        result, AtomicCommandDisposition.Executed, Guid.NewGuid()));
+            }
             if (command is not RecordTenantReceiptCommand receipt
                 || typeof(TResult) != typeof(RecordTenantReceiptResult))
-                throw new InvalidOperationException("Unexpected atomic command in CSV payment test.");
+                throw new InvalidOperationException("Unexpected atomic command in CSV import test.");
             Commands.Add(receipt);
             var result = new RecordTenantReceiptResult(
                 true, receipt.TenantAccountId, 9_000_000_001L, 9_000_000_002L,
@@ -406,6 +422,28 @@ public class CsvImportServiceTests : IDisposable
             return Task.FromResult((AtomicCommandOutcome<TResult>)(object)
                 new AtomicCommandOutcome<RecordTenantReceiptResult>(
                     result, AtomicCommandDisposition.Executed, Guid.NewGuid()));
+        }
+
+        private static AtomicUnitImportBatchResult UnitResult(
+            IReadOnlyList<AtomicUnitImportRow> rows,
+            bool created)
+        {
+            var results = rows.Select((row, index) => new AtomicUnitImportRowResult(
+                row.RowNumber,
+                row.Errors.Length == 0,
+                false,
+                created && row.Errors.Length == 0 ? 50_000 + index : null,
+                row.PropertyId,
+                row.UnitNumber,
+                row.Bedrooms,
+                row.Bathrooms,
+                row.MarketRent,
+                row.Errors)).ToArray();
+            var createdRows = results.Where(row => row.CreatedId.HasValue).ToArray();
+            return new AtomicUnitImportBatchResult(
+                true, results, createdRows, results.Length,
+                results.Count(row => row.Valid), createdRows.Length,
+                results.Count(row => row.IsDuplicate));
         }
     }
 

@@ -8,6 +8,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
 using RentalCommand.Core;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -33,6 +34,7 @@ public class ApplicationServiceTests : IDisposable
     private readonly Mock<IFileStorage> _files = new();
     private readonly RecordingAuditService _audit = new();
     private readonly ApplicationService _sut;
+    private readonly WorkspaceReadScope _scope;
 
     public ApplicationServiceTests()
     {
@@ -69,10 +71,12 @@ public class ApplicationServiceTests : IDisposable
             UpdatedAt = DateTime.UtcNow,
         });
         _db.SaveChanges();
+        _scope = _db.SeedAdministratorScope(PortfolioId, nameof(ApplicationServiceTests));
 
         _sut = new ApplicationService(
             _db, _files.Object, Mock.Of<IDataUpdateService>(), _audit,
-            TimeProvider.System);
+            TimeProvider.System,
+            Mock.Of<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
     }
 
     public void Dispose()
@@ -175,7 +179,7 @@ public class ApplicationServiceTests : IDisposable
             ConsentGiven = true,
         };
 
-        var result = await _sut.SubmitAsync(Token, request, "203.0.113.7");
+        var result = await _sut.SubmitAsync(Token, request, "203.0.113.7", Guid.NewGuid().ToString("N"));
 
         result.Should().NotBeNull();
         result!.Status.Should().Be("Submitted");
@@ -214,7 +218,7 @@ public class ApplicationServiceTests : IDisposable
             ConsentGiven = true,
         };
 
-        var act = () => _sut.SubmitAsync(Token, request, "203.0.113.7");
+        var act = () => _sut.SubmitAsync(Token, request, "203.0.113.7", Guid.NewGuid().ToString("N"));
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.StatusCode.Should().Be(409);
@@ -232,7 +236,7 @@ public class ApplicationServiceTests : IDisposable
             ConsentGiven = true,
         };
 
-        var result = await _sut.SubmitAsync("not-a-real-token", request, "203.0.113.9");
+        var result = await _sut.SubmitAsync("not-a-real-token", request, "203.0.113.9", Guid.NewGuid().ToString("N"));
 
         result.Should().BeNull();
         (await _db.RentalApplications.CountAsync()).Should().Be(0);
@@ -271,7 +275,7 @@ public class ApplicationServiceTests : IDisposable
             ConsentGiven = true,
         };
 
-        var result = await _sut.SubmitAsync(Token, request, null);
+        var result = await _sut.SubmitAsync(Token, request, null, Guid.NewGuid().ToString("N"));
 
         result.Should().NotBeNull();
         var saved = await _db.RentalApplications.SingleAsync();
@@ -305,7 +309,7 @@ public class ApplicationServiceTests : IDisposable
         _db.RentalApplications.Add(app);
         await _db.SaveChangesAsync();
 
-        var result = await _sut.ApproveAsync(PortfolioId, app.Id, userId: 7);
+        var result = await _sut.ApproveAuthorizedAsync(_scope, app.Id, 7, Guid.NewGuid().ToString("N"));
 
         result.Should().NotBeNull();
         result!.Status.Should().Be("Approved");
@@ -345,7 +349,7 @@ public class ApplicationServiceTests : IDisposable
             ConsentGiven = true,
         };
 
-        var result = await _sut.SubmitAsync(Token, request, "203.0.113.7");
+        var result = await _sut.SubmitAsync(Token, request, "203.0.113.7", Guid.NewGuid().ToString("N"));
 
         result.Should().NotBeNull();
         var saved = await _db.RentalApplications.SingleAsync();
@@ -620,7 +624,7 @@ public class ApplicationServiceTests : IDisposable
         _db.RentalApplications.Add(app);
         await _db.SaveChangesAsync();
 
-        var act = async () => await _sut.ApproveAsync(PortfolioId, app.Id, userId: 7);
+        var act = async () => await _sut.ApproveAuthorizedAsync(_scope, app.Id, 7, Guid.NewGuid().ToString("N"));
         await act.Should().ThrowAsync<InvalidOperationException>();
     }
 
@@ -649,7 +653,7 @@ public class ApplicationServiceTests : IDisposable
             CurrentAddress = "110 Cedar St, Columbus, OH 43215",
         };
 
-        var act = async () => await _sut.CreateFromScanAsync(PortfolioId, request, userId: 7);
+        var act = async () => await _sut.CreateFromScanAsync(_scope, request, Guid.NewGuid().ToString("N"));
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.Message.Should().Contain("qa.applicant.001@example.local");
@@ -684,7 +688,7 @@ public class ApplicationServiceTests : IDisposable
             Email = "qa.applicant.001@example.local",
         };
 
-        var result = await _sut.CreateFromScanAsync(PortfolioId, request, userId: 7);
+        var result = await _sut.CreateFromScanAsync(_scope, request, Guid.NewGuid().ToString("N"));
 
         result.Id.Should().NotBe(existing.Id);
         result.Status.Should().Be(ApplicationStatus.Submitted.ToString());
@@ -720,7 +724,7 @@ public class ApplicationServiceTests : IDisposable
         _db.RentalApplications.Add(app);
         await _db.SaveChangesAsync();
 
-        var deleted = await _sut.DeleteAsync(PortfolioId, app.Id, userId: 42);
+        var deleted = await _sut.DeleteAuthorizedAsync(_scope, app.Id, 42, Guid.NewGuid().ToString("N"));
 
         deleted.Should().BeTrue();
         (await _sut.GetAsync(PortfolioId, app.Id)).Should().BeNull();
@@ -839,7 +843,8 @@ public sealed class ApplicationServicePostgreSqlTests : IAsyncLifetime
             Mock.Of<IFileStorage>(),
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(),
-            TimeProvider.System);
+            TimeProvider.System,
+            Mock.Of<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
     }
 
     public async Task DisposeAsync()

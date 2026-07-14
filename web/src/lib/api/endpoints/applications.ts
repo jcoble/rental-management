@@ -1,5 +1,6 @@
 import { api, fetchApi } from '../client';
 import { buildListQuery, type ListParams } from '../list-params';
+import { idempotentMutation } from '../idempotency';
 
 /** Application lifecycle status (string enum, matches the API). */
 export type ApplicationStatus =
@@ -208,11 +209,27 @@ export const applications = {
 		api.get<ApplicationListResponse>(`/applications/page${buildQuery(params)}`),
 	get: (id: number) => api.get<ApplicationResponse>(`/applications/${id}`),
 	update: (id: number, data: UpdateApplicationRequest) =>
-		api.patch<ApplicationResponse>(`/applications/${id}`, data),
-	approve: (id: number) => api.post<ApproveApplicationResult>(`/applications/${id}/approve`),
+		idempotentMutation(`applications:update:${id}:${JSON.stringify(data)}`, (operationKey) =>
+			api.patch<ApplicationResponse>(`/applications/${id}`, data, {
+				headers: { 'Idempotency-Key': operationKey }
+			})
+		),
+	approve: (id: number) => idempotentMutation(`applications:approve:${id}`, (operationKey) =>
+		api.post<ApproveApplicationResult>(`/applications/${id}/approve`, undefined, {
+			headers: { 'Idempotency-Key': operationKey }
+		})
+	),
 	decline: (id: number, reason?: string) =>
-		api.post<ApplicationResponse>(`/applications/${id}/decline`, { reason: reason ?? null }),
-	withdraw: (id: number) => api.post<ApplicationResponse>(`/applications/${id}/withdraw`),
+		idempotentMutation(`applications:decline:${id}:${reason ?? ''}`, (operationKey) =>
+			api.post<ApplicationResponse>(`/applications/${id}/decline`, { reason: reason ?? null }, {
+				headers: { 'Idempotency-Key': operationKey }
+			})
+		),
+	withdraw: (id: number) => idempotentMutation(`applications:withdraw:${id}`, (operationKey) =>
+		api.post<ApplicationResponse>(`/applications/${id}/withdraw`, undefined, {
+			headers: { 'Idempotency-Key': operationKey }
+		})
+	),
 	createLink: () => api.post<ApplicationLinkResult>('/applications/link'),
 	startIntegratedScreening: (id: number, operationKey: string) =>
 		api.post<ApplicantScreeningResponse>(`/applications/${id}/screening/integrated`, { operationKey }),

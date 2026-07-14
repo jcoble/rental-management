@@ -185,6 +185,14 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Api.Services.Domain.AtomicCoreCrudMutationResult,
     RentalCommand.Api.Services.Domain.AtomicCoreCrudMutationHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.AtomicPublicApplicationSubmissionCommand,
+    RentalCommand.Api.Services.Domain.AtomicPublicApplicationSubmissionResult,
+    RentalCommand.Api.Services.Domain.AtomicPublicApplicationSubmissionHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Import.AtomicUnitCsvImportCommand,
+    RentalCommand.Api.Services.Import.AtomicUnitCsvImportResult,
+    RentalCommand.Api.Services.Import.AtomicUnitCsvImportHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Leasing.CreatePropertyDispositionCommand,
     RentalCommand.Core.Leasing.CreatePropertyDispositionResult,
     RentalCommand.Data.Leasing.CreatePropertyDispositionHandler>();

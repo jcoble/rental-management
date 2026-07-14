@@ -8602,10 +8602,6 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("PropertyId", "PortfolioId");
 
-                    b.HasIndex("PropertyId", "UnitNumber")
-                        .IsUnique()
-                        .HasFilter("\"DeletedAt\" IS NULL");
-
                     b.ToTable("Units");
                 });
 

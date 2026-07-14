@@ -9,6 +9,7 @@ using Moq;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
@@ -60,7 +61,8 @@ public class PublicApplicationsControllerTests : IDisposable
             Mock.Of<IFileStorage>(),
             Mock.Of<IDataUpdateService>(),
             Mock.Of<IAuditTrailService>(),
-            TimeProvider.System);
+            TimeProvider.System,
+            new PublicSubmissionAtomicUnitOfWork(_db));
         var uploadSettings = Options.Create(new UploadSettings
         {
             MaxFileSizeBytes = 10_000_000,
@@ -95,7 +97,7 @@ public class PublicApplicationsControllerTests : IDisposable
             ConsentGiven = true,
         };
 
-        var result = await _controller.Submit(Token, request, CancellationToken.None);
+        var result = await _controller.Submit(Token, request, Guid.NewGuid().ToString("N"), CancellationToken.None);
 
         var obj = result.Result.Should().BeOfType<ObjectResult>().Subject;
         obj.StatusCode.Should().Be(StatusCodes.Status201Created);
@@ -117,7 +119,7 @@ public class PublicApplicationsControllerTests : IDisposable
             ConsentGiven = true,
         };
 
-        var result = await _controller.Submit("wrong-token", request, CancellationToken.None);
+        var result = await _controller.Submit("wrong-token", request, Guid.NewGuid().ToString("N"), CancellationToken.None);
 
         result.Result.Should().BeOfType<NotFoundObjectResult>();
         (await _db.RentalApplications.CountAsync()).Should().Be(0);
@@ -133,7 +135,7 @@ public class PublicApplicationsControllerTests : IDisposable
             ConsentGiven = false,
         };
 
-        var result = await _controller.Submit(Token, request, CancellationToken.None);
+        var result = await _controller.Submit(Token, request, Guid.NewGuid().ToString("N"), CancellationToken.None);
 
         result.Result.Should().BeOfType<BadRequestObjectResult>();
         (await _db.RentalApplications.CountAsync()).Should().Be(0);
@@ -166,5 +168,58 @@ public class PublicApplicationsControllerTests : IDisposable
             string systemPrompt, IReadOnlyList<LlmChatMessage> messages,
             IReadOnlyList<LlmToolSpec> tools, CancellationToken ct = default)
             => Task.FromResult(new LlmToolResult("noop", null, [], 0, 0, "noop"));
+    }
+
+    private sealed class PublicSubmissionAtomicUnitOfWork(RentalCommandDbContext db) : IAtomicUnitOfWork
+    {
+        public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            AtomicCommandIdentity identity,
+            TCommand command,
+            IAtomicResultCodec<TResult> resultCodec,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull
+        {
+            if (command is not AtomicPublicApplicationSubmissionCommand submit
+                || typeof(TResult) != typeof(AtomicPublicApplicationSubmissionResult))
+                throw new InvalidOperationException("Unexpected atomic command in public application controller test.");
+
+            var portfolioId = await db.Portfolios
+                .Where(portfolio => portfolio.PublicApplicationToken == submit.Token)
+                .Select(portfolio => (int?)portfolio.Id)
+                .SingleOrDefaultAsync(ct);
+            if (portfolioId is null)
+            {
+                return (AtomicCommandOutcome<TResult>)(object)
+                    new AtomicCommandOutcome<AtomicPublicApplicationSubmissionResult>(
+                        new(false, 0, string.Empty, string.Empty),
+                        AtomicCommandDisposition.Executed,
+                        Guid.NewGuid());
+            }
+
+            var request = System.Text.Json.JsonSerializer
+                .Deserialize<SubmitApplicationRequest>(submit.RequestJson)!;
+            var now = DateTime.UtcNow;
+            var application = new RentalApplication
+            {
+                PortfolioId = portfolioId.Value,
+                FirstName = request.FirstName,
+                LastName = request.LastName,
+                ConsentGiven = request.ConsentGiven,
+                ConsentAtUtc = now,
+                ConsentIpAddress = submit.IpAddress,
+                Status = RentalCommand.Core.Enums.ApplicationStatus.Submitted,
+                SubmittedAtUtc = now,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            db.RentalApplications.Add(application);
+            await db.SaveChangesAsync(ct);
+            return (AtomicCommandOutcome<TResult>)(object)
+                new AtomicCommandOutcome<AtomicPublicApplicationSubmissionResult>(
+                    new(true, application.Id, "Submitted", "Received"),
+                    AtomicCommandDisposition.Executed,
+                    Guid.NewGuid());
+        }
     }
 }

@@ -4,6 +4,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
 using RentalCommand.Core;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
@@ -23,6 +24,7 @@ public class UnitServiceCreateTests : IAsyncLifetime
     private readonly MigratedPostgreSqlFixture _fixture;
     private MigratedPostgreSqlTestContext _ctx = null!;
     private UnitService _sut = null!;
+    private WorkspaceReadScope _scope;
 
     public UnitServiceCreateTests(MigratedPostgreSqlFixture fixture)
     {
@@ -32,7 +34,9 @@ public class UnitServiceCreateTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _ctx = await _fixture.CreateContextAsync();
-        _sut = new UnitService(_ctx.Db, Mock.Of<IDataUpdateService>(), Mock.Of<IAuditTrailService>(), TimeProvider.System);
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(UnitServiceCreateTests));
+        _sut = new UnitService(_ctx.Db, Mock.Of<IDataUpdateService>(), Mock.Of<IAuditTrailService>(),
+            TimeProvider.System, Mock.Of<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
     }
 
     public async Task DisposeAsync() => await _ctx.DisposeAsync();
@@ -41,9 +45,9 @@ public class UnitServiceCreateTests : IAsyncLifetime
     public async Task CreateAsync_ThrowsClear409WhenUnitNumberDuplicatedOnProperty()
     {
         var property = SeedProperty();
-        await _sut.CreateAsync(PortfolioId, NewUnit(property.Id, "101"));
+        await _sut.CreateAsync(_scope, NewUnit(property.Id, "101"), Guid.NewGuid().ToString("N"));
 
-        var act = async () => await _sut.CreateAsync(PortfolioId, NewUnit(property.Id, "101"));
+        var act = async () => await _sut.CreateAsync(_scope, NewUnit(property.Id, "101"), Guid.NewGuid().ToString("N"));
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.StatusCode.Should().Be(409);
@@ -56,9 +60,9 @@ public class UnitServiceCreateTests : IAsyncLifetime
     {
         var propertyA = SeedProperty("Property A");
         var propertyB = SeedProperty("Property B");
-        await _sut.CreateAsync(PortfolioId, NewUnit(propertyA.Id, "101"));
+        await _sut.CreateAsync(_scope, NewUnit(propertyA.Id, "101"), Guid.NewGuid().ToString("N"));
 
-        var created = await _sut.CreateAsync(PortfolioId, NewUnit(propertyB.Id, "101"));
+        var created = await _sut.CreateAsync(_scope, NewUnit(propertyB.Id, "101"), Guid.NewGuid().ToString("N"));
 
         created.Should().NotBeNull();
         created!.UnitNumber.Should().Be("101");
@@ -68,11 +72,11 @@ public class UnitServiceCreateTests : IAsyncLifetime
     public async Task UpdateAsync_ThrowsClear409WhenRenamingToAnExistingUnitNumber()
     {
         var property = SeedProperty();
-        await _sut.CreateAsync(PortfolioId, NewUnit(property.Id, "101"));
-        var second = await _sut.CreateAsync(PortfolioId, NewUnit(property.Id, "102"));
+        await _sut.CreateAsync(_scope, NewUnit(property.Id, "101"), Guid.NewGuid().ToString("N"));
+        var second = await _sut.CreateAsync(_scope, NewUnit(property.Id, "102"), Guid.NewGuid().ToString("N"));
 
         var act = async () =>
-            await _sut.UpdateAsync(PortfolioId, second!.Id, new UpdateUnitRequest { UnitNumber = "101" });
+            await _sut.UpdateAsync(_scope, second!.Id, new UpdateUnitRequest { UnitNumber = "101" }, Guid.NewGuid().ToString("N"));
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.StatusCode.Should().Be(409);
@@ -83,10 +87,10 @@ public class UnitServiceCreateTests : IAsyncLifetime
     public async Task UpdateAsync_AllowsKeepingTheSameUnitNumber()
     {
         var property = SeedProperty();
-        var unit = await _sut.CreateAsync(PortfolioId, NewUnit(property.Id, "101"));
+        var unit = await _sut.CreateAsync(_scope, NewUnit(property.Id, "101"), Guid.NewGuid().ToString("N"));
 
         var updated = await _sut.UpdateAsync(
-            PortfolioId, unit!.Id, new UpdateUnitRequest { UnitNumber = "101", MarketRent = 1500m });
+            _scope, unit!.Id, new UpdateUnitRequest { UnitNumber = "101", MarketRent = 1500m }, Guid.NewGuid().ToString("N"));
 
         updated.Should().NotBeNull();
         updated!.UnitNumber.Should().Be("101");
@@ -97,10 +101,10 @@ public class UnitServiceCreateTests : IAsyncLifetime
     public async Task UpdateAsync_AllowsMarketRentWithoutAcceptingMutableOccupancyStatus()
     {
         var property = SeedProperty();
-        var unit = await _sut.CreateAsync(PortfolioId, NewUnit(property.Id, "101"));
+        var unit = await _sut.CreateAsync(_scope, NewUnit(property.Id, "101"), Guid.NewGuid().ToString("N"));
 
         var rentUpdate = await _sut.UpdateAsync(
-            PortfolioId, unit!.Id, new UpdateUnitRequest { MarketRent = 1500m });
+            _scope, unit!.Id, new UpdateUnitRequest { MarketRent = 1500m }, Guid.NewGuid().ToString("N"));
 
         rentUpdate.Should().NotBeNull();
         rentUpdate!.MarketRent.Should().Be(1500m);

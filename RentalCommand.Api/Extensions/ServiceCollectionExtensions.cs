@@ -169,6 +169,8 @@ public static class ServiceCollectionExtensions
         // --- CSV / bulk import (migration on-ramp) ---
         services.AddScoped<RentalCommand.Api.Services.Import.ICsvImportService,
             RentalCommand.Api.Services.Import.CsvImportService>();
+        services.AddScoped<RentalCommand.Core.Atomic.IUnitCsvImportPreviewQuery,
+            RentalCommand.Data.Atomic.AtomicUnitImportPersistence>();
 
         // --- mobile push registration ---
         services.AddScoped<IDeviceService, DeviceService>();

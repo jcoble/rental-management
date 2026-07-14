@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import 'applications_models.dart';
 
 class ApplicationListQuery {
@@ -157,90 +158,118 @@ class ApplicationsRepository {
 
   /// Correct landlord-editable details while the application is still open.
   Future<RentalApplication> update(int id, UpdateApplicationInput input) async {
-    try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/applications/$id',
-        data: input.toJson(),
-      );
-      final data = response.data;
-      if (data == null) {
-        throw const ApiException(
-          statusCode: 0,
-          message: 'Empty response from server.',
+    final payload = input.toJson();
+    return IdempotentMutation.run('applications:update:$id:$payload', (
+      operationKey,
+    ) async {
+      try {
+        final response = await _dio.patch<Map<String, dynamic>>(
+          '/applications/$id',
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+          data: payload,
         );
+        final data = response.data;
+        if (data == null) {
+          throw const ApiException(
+            statusCode: 0,
+            message: 'Empty response from server.',
+          );
+        }
+        return RentalApplication.fromJson(data);
+      } on DioException catch (e) {
+        throw ApiException.fromDioException(e);
       }
-      return RentalApplication.fromJson(data);
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    });
   }
 
   Future<void> delete(int id) async {
-    try {
-      await _dio.delete<void>('/applications/$id');
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    await IdempotentMutation.run('applications:delete:$id', (
+      operationKey,
+    ) async {
+      try {
+        await _dio.delete<void>(
+          '/applications/$id',
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        );
+      } on DioException catch (e) {
+        throw ApiException.fromDioException(e);
+      }
+    });
   }
 
   /// Approve — returns { applicationId, status, tenantId }. Also creates a Tenant.
   Future<ApplicationApproval> approve(int id) async {
-    try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/applications/$id/approve',
-        data: {},
-      );
-      final data = response.data;
-      if (data == null) {
-        throw const ApiException(
-          statusCode: 0,
-          message: 'Empty response from server.',
+    return IdempotentMutation.run('applications:approve:$id', (
+      operationKey,
+    ) async {
+      try {
+        final response = await _dio.post<Map<String, dynamic>>(
+          '/applications/$id/approve',
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+          data: {},
         );
+        final data = response.data;
+        if (data == null) {
+          throw const ApiException(
+            statusCode: 0,
+            message: 'Empty response from server.',
+          );
+        }
+        return ApplicationApproval.fromJson(data);
+      } on DioException catch (e) {
+        throw ApiException.fromDioException(e);
       }
-      return ApplicationApproval.fromJson(data);
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    });
   }
 
   /// Decline with an optional reason — returns the updated application.
   Future<RentalApplication> decline(int id, {String? reason}) async {
-    try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/applications/$id/decline',
-        data: {if (reason != null && reason.isNotEmpty) 'reason': reason},
-      );
-      final data = response.data;
-      if (data == null) {
-        throw const ApiException(
-          statusCode: 0,
-          message: 'Empty response from server.',
+    return IdempotentMutation.run('applications:decline:$id:${reason ?? ''}', (
+      operationKey,
+    ) async {
+      try {
+        final response = await _dio.post<Map<String, dynamic>>(
+          '/applications/$id/decline',
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+          data: {if (reason != null && reason.isNotEmpty) 'reason': reason},
         );
+        final data = response.data;
+        if (data == null) {
+          throw const ApiException(
+            statusCode: 0,
+            message: 'Empty response from server.',
+          );
+        }
+        return RentalApplication.fromJson(data);
+      } on DioException catch (e) {
+        throw ApiException.fromDioException(e);
       }
-      return RentalApplication.fromJson(data);
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    });
   }
 
   /// Withdraw — returns the updated application.
   Future<RentalApplication> withdraw(int id) async {
-    try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/applications/$id/withdraw',
-        data: {},
-      );
-      final data = response.data;
-      if (data == null) {
-        throw const ApiException(
-          statusCode: 0,
-          message: 'Empty response from server.',
+    return IdempotentMutation.run('applications:withdraw:$id', (
+      operationKey,
+    ) async {
+      try {
+        final response = await _dio.post<Map<String, dynamic>>(
+          '/applications/$id/withdraw',
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+          data: {},
         );
+        final data = response.data;
+        if (data == null) {
+          throw const ApiException(
+            statusCode: 0,
+            message: 'Empty response from server.',
+          );
+        }
+        return RentalApplication.fromJson(data);
+      } on DioException catch (e) {
+        throw ApiException.fromDioException(e);
       }
-      return RentalApplication.fromJson(data);
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    });
   }
 
   /// Records an immutable fee collection in the application's pre-tenancy

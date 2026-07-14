@@ -66,11 +66,11 @@ public class ImportController : ManagementControllerBase
         {
             if (!TryReadWorkspaceScope(out var scope)) return Forbid();
             CsvImportCommandContext? commandContext = null;
-            if (!dryRun && IsPaymentType(entityType))
+            if (!dryRun && IsAtomicImportType(entityType))
             {
                 var normalizedKey = idempotencyKey?.Trim();
                 if (string.IsNullOrWhiteSpace(normalizedKey) || normalizedKey.Length > 200)
-                    return BadRequest(new { error = "A valid Idempotency-Key is required for payment imports (maximum 200 characters)." });
+                    return BadRequest(new { error = "A valid Idempotency-Key is required for Unit and payment imports (maximum 200 characters)." });
                 if (!TryGetActiveAccessContext(out var active))
                     return Forbid();
 
@@ -94,9 +94,11 @@ public class ImportController : ManagementControllerBase
         }
     }
 
-    private static bool IsPaymentType(string entityType) =>
+    private static bool IsAtomicImportType(string entityType) =>
         entityType.Trim().Equals("payment", StringComparison.OrdinalIgnoreCase)
-        || entityType.Trim().Equals("payments", StringComparison.OrdinalIgnoreCase);
+        || entityType.Trim().Equals("payments", StringComparison.OrdinalIgnoreCase)
+        || entityType.Trim().Equals("unit", StringComparison.OrdinalIgnoreCase)
+        || entityType.Trim().Equals("units", StringComparison.OrdinalIgnoreCase);
 
     // -------------------------------------------------------------------------
     // GET /api/v1/import/{entityType}/template

@@ -168,12 +168,17 @@ public class ApplicationsController : ManagementControllerBase
     [ProducesResponseType(typeof(ApplicationResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Withdraw(int id, CancellationToken ct)
+    public async Task<IActionResult> Withdraw(
+        int id,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
         try
         {
             var result = await _service.WithdrawAuthorizedAsync(
-                GetWorkspaceReadScope(), id, GetUserId(), ct);
+                GetWorkspaceReadScope(), id, GetUserId(), operationKey, ct);
             return result == null ? NotFound(new { error = "Application not found" }) : Ok(result);
         }
         catch (InvalidOperationException ex)

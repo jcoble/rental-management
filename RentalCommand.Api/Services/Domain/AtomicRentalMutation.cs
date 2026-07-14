@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
@@ -10,7 +11,7 @@ using RentalCommand.Core.Enums;
 namespace RentalCommand.Api.Services.Domain;
 
 public enum AtomicRentalMutationDomain { Unit, Application }
-public enum AtomicRentalMutationOperation { Create, Update, Approve, Decline, Delete }
+public enum AtomicRentalMutationOperation { Create, Update, Approve, Decline, Withdraw, Delete }
 
 public sealed record AtomicRentalMutationCommand(
     int PortfolioId,
@@ -28,7 +29,8 @@ public sealed record AtomicRentalMutationResult(
     bool Found,
     bool Applied,
     int EntityId,
-    int? RelatedEntityId = null) : IAtomicResultData;
+    int? RelatedEntityId = null,
+    string? ResponseJson = null) : IAtomicResultData;
 
 /// <summary>
 /// Receipt-backed Unit and rental-application writes. Every authorization predicate is repeated
@@ -105,23 +107,24 @@ public sealed class AtomicRentalMutationHandler
         if (command.Operation == AtomicRentalMutationOperation.Create)
         {
             var request = Read<CreateUnitRequest>(command);
+            var normalizedUnitNumber = RequireNonBlank(request.UnitNumber, "Unit number");
             if (!await AuthorizeUnitCreateAsync(command, persistence, now, ct))
                 throw Denied();
             if (await persistence.Query<Unit>().AnyAsync(unit =>
                     unit.PortfolioId == command.PortfolioId
                     && unit.PropertyId == request.PropertyId
-                    && unit.UnitNumber == request.UnitNumber
+                    && unit.UnitNumber.Trim().ToLower() == normalizedUnitNumber.ToLower()
                     && unit.DeletedAt == null, ct))
             {
                 throw new DomainValidationException(
-                    $"Unit number \"{request.UnitNumber}\" already exists on this property.", 409);
+                    $"Unit number \"{normalizedUnitNumber}\" already exists on this property.", 409);
             }
 
             var entity = new Unit
             {
                 PortfolioId = command.PortfolioId,
                 PropertyId = request.PropertyId,
-                UnitNumber = request.UnitNumber,
+                UnitNumber = normalizedUnitNumber,
                 FloorPlan = request.FloorPlan,
                 Bedrooms = request.Bedrooms,
                 Bathrooms = request.Bathrooms,
@@ -134,9 +137,23 @@ public sealed class AtomicRentalMutationHandler
             persistence.Add(entity);
             attempt.BindSemanticAudit(entity, Audit(command, UnitEntityType,
                 AuditLogOperation.Created, $"Unit {entity.UnitNumber} created"));
-            await attempt.FlushBusinessAsync(ct);
+            await FlushUnitAsync(attempt, ct);
             StageDataUpdate(attempt, command, UnitEntityType, entity.Id, now);
-            return Applied(entity.Id);
+            return Applied(entity.Id, responseJson: JsonSerializer.Serialize(new UnitResponse
+            {
+                Id = entity.Id,
+                PropertyId = entity.PropertyId,
+                UnitNumber = entity.UnitNumber,
+                FloorPlan = entity.FloorPlan,
+                Bedrooms = entity.Bedrooms,
+                Bathrooms = entity.Bathrooms,
+                SquareFeet = entity.SquareFeet,
+                MarketRent = entity.MarketRent,
+                Status = DerivedUnitStatus.Vacant,
+                Notes = entity.Notes,
+                CreatedAt = entity.CreatedAt,
+                UpdatedAt = entity.UpdatedAt,
+            }));
         }
 
         var unit = await persistence.Query<Unit>().SingleOrDefaultAsync(entity =>
@@ -164,20 +181,23 @@ public sealed class AtomicRentalMutationHandler
         if (command.Operation != AtomicRentalMutationOperation.Update)
             throw new ArgumentException("Unsupported Unit mutation operation.");
         var update = Read<UpdateUnitRequest>(command);
-        if (update.UnitNumber is not null
-            && !string.Equals(update.UnitNumber, unit.UnitNumber, StringComparison.Ordinal)
+        var normalizedUpdateNumber = update.UnitNumber is null
+            ? null
+            : RequireNonBlank(update.UnitNumber, "Unit number");
+        if (normalizedUpdateNumber is not null
+            && !string.Equals(normalizedUpdateNumber, unit.UnitNumber, StringComparison.Ordinal)
             && await persistence.Query<Unit>().AnyAsync(candidate =>
                 candidate.PortfolioId == command.PortfolioId
                 && candidate.PropertyId == unit.PropertyId
-                && candidate.UnitNumber == update.UnitNumber
+                && candidate.UnitNumber.Trim().ToLower() == normalizedUpdateNumber.ToLower()
                 && candidate.Id != unit.Id
                 && candidate.DeletedAt == null, ct))
         {
             throw new DomainValidationException(
-                $"Unit number \"{update.UnitNumber}\" already exists on this property.", 409);
+                $"Unit number \"{normalizedUpdateNumber}\" already exists on this property.", 409);
         }
 
-        if (update.UnitNumber is not null) unit.UnitNumber = update.UnitNumber;
+        if (normalizedUpdateNumber is not null) unit.UnitNumber = normalizedUpdateNumber;
         if (update.FloorPlan is not null) unit.FloorPlan = update.FloorPlan;
         if (update.Bedrooms.HasValue) unit.Bedrooms = update.Bedrooms.Value;
         if (update.Bathrooms.HasValue) unit.Bathrooms = update.Bathrooms.Value;
@@ -187,7 +207,7 @@ public sealed class AtomicRentalMutationHandler
         unit.UpdatedAt = now;
         attempt.BindSemanticAudit(unit, Audit(command, UnitEntityType,
             AuditLogOperation.Updated, $"Unit {unit.UnitNumber} updated"));
-        await attempt.FlushBusinessAsync(ct);
+        await FlushUnitAsync(attempt, ct);
         StageDataUpdate(attempt, command, UnitEntityType, unit.Id, now);
         return Applied(unit.Id);
     }
@@ -202,10 +222,12 @@ public sealed class AtomicRentalMutationHandler
         if (command.Operation == AtomicRentalMutationOperation.Create)
         {
             var request = Read<CreateApplicationRequest>(command);
-            if (!await AuthorizeApplicationCreateAsync(command, persistence, now, ct))
-                throw Denied();
             var references = await ResolveApplicationReferencesAsync(
                 command.PortfolioId, request.PropertyId, request.UnitId, persistence, ct);
+            if (!await AuthorizePropertyAsync(command, persistence, now, references.PropertyId,
+                    CapabilityKeys.LeasingApplicationsManage,
+                    requireAllProperties: references.PropertyId is null, ct))
+                throw Denied();
             var email = NormalizeEmail(request.Email);
             if (email is not null && await OpenApplicationExistsAsync(
                     command.PortfolioId, email, persistence, ct))
@@ -237,9 +259,10 @@ public sealed class AtomicRentalMutationHandler
             persistence.Add(entity);
             attempt.BindSemanticAudit(entity, Audit(command, ApplicationEntityType,
                 AuditLogOperation.Created, "Created from scanned rental application"));
-            await attempt.FlushBusinessAsync(ct);
+            await FlushOpenApplicationAsync(attempt, ct);
             StageDataUpdate(attempt, command, ApplicationEntityType, entity.Id, now);
-            return Applied(entity.Id);
+            return Applied(entity.Id,
+                responseJson: JsonSerializer.Serialize(ApplicationResponse.FromEntity(entity)));
         }
 
         var application = await persistence.Query<RentalApplication>().SingleOrDefaultAsync(entity =>
@@ -258,6 +281,8 @@ public sealed class AtomicRentalMutationHandler
                 await ApproveApplicationAsync(command, application, attempt, now, ct),
             AtomicRentalMutationOperation.Decline =>
                 await DeclineApplicationAsync(command, application, attempt, now, ct),
+            AtomicRentalMutationOperation.Withdraw =>
+                await WithdrawApplicationAsync(command, application, attempt, now, ct),
             AtomicRentalMutationOperation.Delete =>
                 await DeleteApplicationAsync(command, application, attempt, now, ct),
             _ => throw new ArgumentException("Unsupported Application mutation operation."),
@@ -287,6 +312,11 @@ public sealed class AtomicRentalMutationHandler
         }
         if (request.PropertyId is > 0)
         {
+            if (!await persistence.Query<Property>().AnyAsync(property =>
+                    property.Id == request.PropertyId
+                    && property.PortfolioId == command.PortfolioId
+                    && property.DeletedAt == null, ct))
+                throw new DomainValidationException("Selected property was not found in this portfolio.");
             if (!await AuthorizePropertyAsync(command, persistence, now, request.PropertyId,
                     CapabilityKeys.LeasingApplicationsManage, requireAllProperties: false, ct))
                 throw Denied();
@@ -351,7 +381,7 @@ public sealed class AtomicRentalMutationHandler
 
         attempt.BindSemanticAudit(entity, Audit(command, ApplicationEntityType,
             AuditLogOperation.Updated, "Application corrected by landlord"));
-        await attempt.FlushBusinessAsync(ct);
+        await FlushOpenApplicationAsync(attempt, ct);
         StageDataUpdate(attempt, command, ApplicationEntityType, entity.Id, now);
         return Applied(entity.Id);
     }
@@ -424,6 +454,25 @@ public sealed class AtomicRentalMutationHandler
         return Applied(entity.Id);
     }
 
+    private static async Task<AtomicRentalMutationResult> WithdrawApplicationAsync(
+        AtomicRentalMutationCommand command,
+        RentalApplication entity,
+        IAtomicWriteAttempt attempt,
+        DateTime now,
+        CancellationToken ct)
+    {
+        if (entity.Status == ApplicationStatus.Approved)
+            throw new InvalidOperationException("An approved application cannot be withdrawn.");
+        entity.Status = ApplicationStatus.Withdrawn;
+        entity.ReviewedAtUtc = now;
+        entity.UpdatedAt = now;
+        attempt.BindSemanticAudit(entity, Audit(command, ApplicationEntityType,
+            AuditLogOperation.Updated, "Application withdrawn"));
+        await attempt.FlushBusinessAsync(ct);
+        StageDataUpdate(attempt, command, ApplicationEntityType, entity.Id, now);
+        return Applied(entity.Id);
+    }
+
     private static async Task<AtomicRentalMutationResult> DeleteApplicationAsync(
         AtomicRentalMutationCommand command,
         RentalApplication entity,
@@ -482,15 +531,11 @@ public sealed class AtomicRentalMutationHandler
         CancellationToken ct)
     {
         var request = Read<CreateApplicationRequest>(command);
-        int? propertyId = request.PropertyId;
-        if (request.UnitId is > 0)
-            propertyId = await persistence.Query<Unit>().AsNoTracking()
-                .Where(unit => unit.Id == request.UnitId && unit.PortfolioId == command.PortfolioId
-                    && unit.DeletedAt == null)
-                .Select(unit => (int?)unit.PropertyId)
-                .SingleOrDefaultAsync(ct);
-        return await AuthorizePropertyAsync(command, persistence, now, propertyId,
-            CapabilityKeys.LeasingApplicationsManage, requireAllProperties: propertyId is null, ct);
+        var references = await ResolveApplicationReferencesAsync(
+            command.PortfolioId, request.PropertyId, request.UnitId, persistence, ct);
+        return await AuthorizePropertyAsync(command, persistence, now, references.PropertyId,
+            CapabilityKeys.LeasingApplicationsManage,
+            requireAllProperties: references.PropertyId is null, ct);
     }
 
     private static async Task<bool> AuthorizeApplicationAsync(
@@ -573,17 +618,43 @@ public sealed class AtomicRentalMutationHandler
         IAtomicPersistenceSession persistence,
         CancellationToken ct)
     {
-        int? propertyId = null;
-        if (requestedPropertyId is > 0 && await persistence.Query<Property>().AnyAsync(property =>
-                property.Id == requestedPropertyId && property.PortfolioId == portfolioId
-                && property.DeletedAt == null, ct))
-            propertyId = requestedPropertyId;
-        int? unitId = null;
-        if (requestedUnitId is > 0 && await persistence.Query<Unit>().AnyAsync(unit =>
-                unit.Id == requestedUnitId && unit.PortfolioId == portfolioId
-                && unit.DeletedAt == null && (propertyId == null || unit.PropertyId == propertyId), ct))
-            unitId = requestedUnitId;
-        return (propertyId, unitId);
+        var resolved = await persistence.Query<Portfolio>().AsNoTracking()
+            .Where(portfolio => portfolio.Id == portfolioId && portfolio.DeletedAt == null)
+            .Select(portfolio => new
+            {
+                PropertyId = requestedPropertyId > 0
+                    ? persistence.Query<Property>()
+                        .Where(property => property.Id == requestedPropertyId
+                            && property.PortfolioId == portfolio.Id && property.DeletedAt == null)
+                        .Select(property => (int?)property.Id).SingleOrDefault()
+                    : null,
+                UnitId = requestedUnitId > 0
+                    ? persistence.Query<Unit>()
+                        .Where(unit => unit.Id == requestedUnitId
+                            && unit.PortfolioId == portfolio.Id && unit.DeletedAt == null)
+                        .Select(unit => (int?)unit.Id)
+                        .SingleOrDefault()
+                    : null,
+                UnitPropertyId = requestedUnitId > 0
+                    ? persistence.Query<Unit>()
+                        .Where(unit => unit.Id == requestedUnitId
+                            && unit.PortfolioId == portfolio.Id && unit.DeletedAt == null)
+                        .Select(unit => (int?)unit.PropertyId)
+                        .SingleOrDefault()
+                    : null,
+            })
+            .SingleOrDefaultAsync(ct)
+            ?? throw new DomainValidationException("Portfolio was not found.");
+
+        if (requestedPropertyId is > 0 && resolved.PropertyId is null)
+            throw new DomainValidationException("Selected property was not found in this portfolio.");
+        if (requestedUnitId is > 0 && resolved.UnitId is null)
+            throw new DomainValidationException("Selected unit was not found in this portfolio.");
+        if (resolved.PropertyId is > 0 && resolved.UnitPropertyId != null
+            && resolved.PropertyId != resolved.UnitPropertyId)
+            throw new DomainValidationException("Selected unit does not belong to the selected property.");
+
+        return (resolved.UnitPropertyId ?? resolved.PropertyId, resolved.UnitId);
     }
 
     private static Task<bool> OpenApplicationExistsAsync(
@@ -662,6 +733,55 @@ public sealed class AtomicRentalMutationHandler
         if (guard.HasDocument) throw Conflict("This unit has document history. Archive the documents instead of deleting the unit.");
     }
 
+    private static async Task FlushUnitAsync(IAtomicWriteAttempt attempt, CancellationToken ct)
+    {
+        try
+        {
+            await attempt.FlushBusinessAsync(ct);
+        }
+        catch (DbUpdateException ex) when (
+            FindPostgresException(ex) is PostgresException
+            {
+                SqlState: PostgresErrorCodes.UniqueViolation,
+                ConstraintName: "IX_Units_PropertyId_UnitNumber_CI",
+            })
+        {
+            throw new DomainValidationException(
+                "A live Unit with this number already exists on the property.", 409);
+        }
+    }
+
+    private static async Task FlushOpenApplicationAsync(
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        try
+        {
+            await attempt.FlushBusinessAsync(ct);
+        }
+        catch (DbUpdateException ex) when (
+            FindPostgresException(ex) is PostgresException
+            {
+                SqlState: PostgresErrorCodes.UniqueViolation,
+                ConstraintName: "IX_RentalApplications_PortfolioId_Email_Open_CI",
+            })
+        {
+            throw new DomainValidationException(
+                "An open application for this email address already exists. Review it before creating another.",
+                409);
+        }
+    }
+
+    private static PostgresException? FindPostgresException(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException!)
+        {
+            if (current is PostgresException postgres) return postgres;
+            if (current.InnerException is null) return null;
+        }
+        return null;
+    }
+
     private static void StageDataUpdate(
         IAtomicWriteAttempt attempt,
         AtomicRentalMutationCommand command,
@@ -727,7 +847,10 @@ public sealed class AtomicRentalMutationHandler
     private static DateTime? Utc(DateTime? value) => value is null ? null
         : value.Value.Kind == DateTimeKind.Utc ? value : value.Value.ToUniversalTime();
     private static AtomicRentalMutationResult Missing() => new(false, false, 0);
-    private static AtomicRentalMutationResult Applied(int id, int? relatedId = null) => new(true, true, id, relatedId);
+    private static AtomicRentalMutationResult Applied(
+        int id,
+        int? relatedId = null,
+        string? responseJson = null) => new(true, true, id, relatedId, responseJson);
     private static UnauthorizedAccessException Denied() => new("The record is not authorized in the current workspace scope.");
     private static DomainValidationException Conflict(string message) => new(message, 409);
 

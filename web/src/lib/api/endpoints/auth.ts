@@ -7,6 +7,7 @@ import type {
 	WorkspaceExperience
 } from '$lib/types/user';
 import { api, fetchPublicApi } from '../client';
+import { idempotentMutation } from '../idempotency';
 
 /**
  * Auth endpoints. The session lives in httpOnly cookies set by the API /
@@ -40,12 +41,19 @@ export const auth = {
 			body: JSON.stringify({ email })
 		}),
 	/** Change the signed-in user's password (Bearer-authenticated). */
-	changePassword: (currentPassword: string, newPassword: string) => {
-		const operationKey = crypto.randomUUID();
-		return api.post<{ message: string }>(
-			'/auth/change-password',
-			{ currentPassword, newPassword },
-			{ headers: { 'Idempotency-Key': operationKey } }
+	changePassword: async (currentPassword: string, newPassword: string) => {
+		const request = { currentPassword, newPassword };
+		const digest = await crypto.subtle.digest(
+			'SHA-256',
+			new TextEncoder().encode(JSON.stringify(request))
+		);
+		const requestScope = Array.from(new Uint8Array(digest), (byte) =>
+			byte.toString(16).padStart(2, '0')
+		).join('');
+		return idempotentMutation(`auth:change-password:${requestScope}`, (operationKey) =>
+			api.post<{ message: string }>('/auth/change-password', request, {
+				headers: { 'Idempotency-Key': operationKey }
+			})
 		);
 	},
 	/** Revoke the refresh token (cookie sent automatically via credentials). */

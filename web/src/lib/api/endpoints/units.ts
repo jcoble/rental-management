@@ -45,7 +45,12 @@ export const units = {
 
 	get: (id: number) => api.get<Unit>(`/units/${id}`),
 
-	update: (id: number, data: Record<string, unknown>) => api.patch<Unit>(`/units/${id}`, data),
+	update: (id: number, data: Record<string, unknown>) =>
+		idempotentMutation(`units:update:${id}:${JSON.stringify(data)}`, (operationKey) =>
+			api.patch<Unit>(`/units/${id}`, data, {
+				headers: { 'Idempotency-Key': operationKey }
+			})
+		),
 
 	/** The Unit Command Center at-a-glance aggregate (header, lease/tenant, stage, overview, timeline). */
 	dashboard: (id: number) => api.get<UnitDashboard>(`/units/${id}/dashboard`),
