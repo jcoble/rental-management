@@ -127,7 +127,7 @@ public sealed class NotificationFoundationModelTests
     }
 
     [Fact]
-    public void SuppliedTemplateWorkspaceCopy_IsOneConflictSafeInsertSelect()
+    public void SuppliedTemplateWorkspaceCopyAndDraftPolicies_AreOneConflictSafeCommand()
     {
         var createdAtUtc = new DateTime(2026, 7, 13, 1, 2, 3, DateTimeKind.Utc);
         var command = SuppliedNoticeTemplateBaseline.BuildWorkspaceV1CopyCommand(
@@ -140,8 +140,17 @@ public sealed class NotificationFoundationModelTests
         command.Format.Should().Contain("WHERE system.\"Version\" = 1");
         command.Format.Should().Contain(
             "ON CONFLICT (\"PortfolioId\", \"SystemKey\", \"Version\") DO NOTHING");
+        command.Format.Should().Contain("INSERT INTO \"TenantNoticePolicies\"");
+        command.Format.Should().Contain(
+            "ON CONFLICT (\"PortfolioId\", \"AutomationKey\") DO NOTHING");
         command.Format.Should().NotContain("UPDATE");
-        command.GetArguments().Should().Equal(41, 73, createdAtUtc);
+        command.GetArguments().Should().Equal(
+            41,
+            73,
+            createdAtUtc,
+            createdAtUtc,
+            createdAtUtc,
+            41);
     }
 
     [Fact]
