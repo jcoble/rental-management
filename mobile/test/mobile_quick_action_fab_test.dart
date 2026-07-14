@@ -160,6 +160,7 @@ void main() {
       final controller = MobileQuickActionController();
       addTearDown(controller.dispose);
       var primaryCount = 0;
+      var embeddedScanCount = 0;
 
       await tester.pumpWidget(
         _authenticatedApp(
@@ -175,7 +176,7 @@ void main() {
                 ),
                 onChat: () {},
                 onRecord: () {},
-                onScan: () {},
+                onScan: () => embeddedScanCount++,
               ),
             ),
             floatingActionButton: AnimatedBuilder(
@@ -186,7 +187,7 @@ void main() {
                 useNearestScope: false,
                 onChat: () {},
                 onRecord: () {},
-                onScan: () {},
+                onScan: controller.scanAction ?? () {},
               ),
             ),
           ),
@@ -195,6 +196,7 @@ void main() {
       await tester.pump();
 
       expect(find.byType(FloatingActionButton), findsOneWidget);
+      expect(controller.scanAction, isNotNull);
 
       await tester.tap(find.byTooltip('Scan / Add'));
       await tester.pumpAndSettle();
@@ -204,6 +206,14 @@ void main() {
       expect(find.text('Assistant'), findsOneWidget);
       expect(find.text('Record'), findsOneWidget);
       expect(find.text('Scan / Add'), findsOneWidget);
+
+      await tester.tap(find.text('Scan / Add'));
+      await tester.pumpAndSettle();
+
+      expect(embeddedScanCount, 1);
+
+      await tester.tap(find.byTooltip('Scan / Add'));
+      await tester.pumpAndSettle();
 
       await tester.tap(find.text('New work order'));
       await tester.pumpAndSettle();

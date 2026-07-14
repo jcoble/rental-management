@@ -229,4 +229,17 @@ void main() {
       expect(repositorySource, contains("'$route'"));
     }
   });
+
+  test('technician shell exposes only assignment-scoped scan capture', () {
+    final technicianSource = File(
+      'lib/features/technician/technician_landing_screen.dart',
+    ).readAsStringSync();
+
+    expect(technicianSource, contains("label: const Text('Scan / Add')"));
+    expect(
+      technicianSource,
+      contains('openAuthorizedMobileScan(context, ref)'),
+    );
+    expect(technicianSource, isNot(contains('openMobileScan(')));
+  });
 }

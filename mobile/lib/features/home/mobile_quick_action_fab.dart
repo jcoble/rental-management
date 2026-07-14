@@ -19,6 +19,7 @@ class MobileQuickAction {
 
 class MobileQuickActionController extends ChangeNotifier {
   final List<_MobileQuickActionRegistration> _registrations = [];
+  final List<_MobileScanActionRegistration> _scanRegistrations = [];
   final Set<Object> _hiddenOwners = <Object>{};
   bool _disposed = false;
   bool _notifyScheduled = false;
@@ -34,6 +35,9 @@ class MobileQuickActionController extends ChangeNotifier {
 
   MobileQuickAction? get primaryAction =>
       primaryActions.isEmpty ? null : primaryActions.first;
+
+  VoidCallback? get scanAction =>
+      _scanRegistrations.isEmpty ? null : _scanRegistrations.last.action;
 
   void setPrimaryAction(Object owner, MobileQuickAction? action) {
     setPrimaryActions(owner, action == null ? const [] : [action]);
@@ -68,6 +72,32 @@ class MobileQuickActionController extends ChangeNotifier {
     if (_registrations.length == previousLength) return;
     _notifyChanged();
   }
+
+  void setScanAction(Object owner, VoidCallback? action) {
+    if (_disposed) return;
+
+    final index = _scanRegistrations.indexWhere(
+      (entry) => identical(entry.owner, owner),
+    );
+    if (action == null) {
+      if (index == -1) return;
+      _scanRegistrations.removeAt(index);
+      _notifyChanged();
+      return;
+    }
+
+    if (index == -1) {
+      _scanRegistrations.add(_MobileScanActionRegistration(owner, action));
+      _notifyChanged();
+      return;
+    }
+
+    if (_scanRegistrations[index].action == action) return;
+    _scanRegistrations[index] = _MobileScanActionRegistration(owner, action);
+    _notifyChanged();
+  }
+
+  void clearScanAction(Object owner) => setScanAction(owner, null);
 
   void setHidden(Object owner, bool hidden) {
     if (_disposed) return;
@@ -114,6 +144,13 @@ class _MobileQuickActionRegistration {
 
   final Object owner;
   final List<MobileQuickAction> actions;
+}
+
+class _MobileScanActionRegistration {
+  const _MobileScanActionRegistration(this.owner, this.action);
+
+  final Object owner;
+  final VoidCallback action;
 }
 
 bool _listEquals<T>(List<T> a, List<T> b) {
@@ -244,6 +281,7 @@ class _MobileQuickActionFabState extends ConsumerState<MobileQuickActionFab> {
   @override
   void dispose() {
     _scopeController?.clearPrimaryAction(_scopeOwner);
+    _scopeController?.clearScanAction(_scopeOwner);
     _unregister();
     super.dispose();
   }
@@ -272,13 +310,16 @@ class _MobileQuickActionFabState extends ConsumerState<MobileQuickActionFab> {
     final nextController = MobileQuickActionScope.maybeOf(context);
     if (!identical(_scopeController, nextController)) {
       _scopeController?.clearPrimaryAction(_scopeOwner);
+      _scopeController?.clearScanAction(_scopeOwner);
       _scopeController = nextController;
     }
 
     if (_usesScope) {
       _scopeController!.setPrimaryActions(_scopeOwner, _primaryActions);
+      _scopeController!.setScanAction(_scopeOwner, widget.onScan);
     } else {
       _scopeController?.clearPrimaryAction(_scopeOwner);
+      _scopeController?.clearScanAction(_scopeOwner);
     }
   }
 

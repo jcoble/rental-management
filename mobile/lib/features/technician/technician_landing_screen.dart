@@ -4,6 +4,7 @@ import 'package:material_symbols_icons/symbols.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/auth/auth_controller.dart';
+import '../home/mobile_quick_action_helpers.dart';
 import '../home/mobile_shell_actions.dart';
 import 'technician_assignment_detail_screen.dart';
 import 'technician_repository.dart';
@@ -35,6 +36,12 @@ class _TechnicianLandingScreenState
         TechnicianAssignmentList(area: 'inbox'),
         _TechnicianProfile(),
       ],
+    ),
+    floatingActionButton: FloatingActionButton.extended(
+      heroTag: 'technician-assigned-work-scan',
+      onPressed: () => openAuthorizedMobileScan(context, ref),
+      icon: const Icon(Symbols.document_scanner_rounded),
+      label: const Text('Scan / Add'),
     ),
     bottomNavigationBar: NavigationBar(
       selectedIndex: _selectedIndex,
