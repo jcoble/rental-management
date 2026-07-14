@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Leasing;
@@ -19,6 +20,7 @@ internal static class CanonicalDemoLeaseSeeder
     public static async Task<CanonicalDemoLeaseSeedResult> SeedAsync(
         RentalCommandDbContext db,
         ILegalDocumentSourceVersionResolver sourceVersions,
+        IAtomicExecutionState atomicExecution,
         int portfolioId,
         int actorUserId,
         string currency,
@@ -28,6 +30,12 @@ internal static class CanonicalDemoLeaseSeeder
         IReadOnlyList<Tenant> tenants,
         CancellationToken ct)
     {
+        if (!atomicExecution.IsInfrastructureActive)
+        {
+            throw new AtomicArchitectureException(
+                "Canonical demo lease facts must be seeded inside the admitted infrastructure transaction.");
+        }
+
         var template = new DocumentTemplate
         {
             PortfolioId = portfolioId,

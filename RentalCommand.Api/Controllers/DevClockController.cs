@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Simulation;
 using RentalCommand.Api.Auth;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
@@ -31,12 +32,18 @@ public sealed class DevClockController : ControllerBase
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
     private readonly IClockStateProvider _clockState;
+    private readonly IAtomicInfrastructureUnitOfWork _infrastructure;
 
-    public DevClockController(RentalCommandDbContext db, TimeProvider timeProvider, IClockStateProvider clockState)
+    public DevClockController(
+        RentalCommandDbContext db,
+        TimeProvider timeProvider,
+        IClockStateProvider clockState,
+        IAtomicInfrastructureUnitOfWork infrastructure)
     {
         _db = db;
         _timeProvider = timeProvider;
         _clockState = clockState;
+        _infrastructure = infrastructure;
     }
 
     /// <summary>Current simulated clock — in-memory only, so it works anonymously and pre-login.</summary>
@@ -69,16 +76,16 @@ public sealed class DevClockController : ControllerBase
         var frozen = string.Equals(request.Mode, "frozen", StringComparison.OrdinalIgnoreCase);
         var realNow = TimeProvider.System.GetUtcNow().UtcDateTime;
 
-        var row = await LoadRowAsync(ct);
-        row.Mode = frozen ? ClockMode.Frozen : ClockMode.Offset;
-        row.SimAnchorUtc = instant;
-        // Offset ticks forward from (RealAnchor now → SimAnchor instant); Frozen never ticks.
-        row.RealAnchorUtc = frozen ? instant : realNow;
-        if (request.TimeZoneId is not null)
-            row.TimeZoneId = string.IsNullOrWhiteSpace(request.TimeZoneId) ? null : request.TimeZoneId;
-        row.UpdatedAtRealUtc = realNow;
-
-        return await SaveRefreshAndRespondAsync(ct);
+        return await MutateRefreshAndRespondAsync(row =>
+        {
+            row.Mode = frozen ? ClockMode.Frozen : ClockMode.Offset;
+            row.SimAnchorUtc = instant;
+            // Offset ticks forward from (RealAnchor now → SimAnchor instant); Frozen never ticks.
+            row.RealAnchorUtc = frozen ? instant : realNow;
+            if (request.TimeZoneId is not null)
+                row.TimeZoneId = string.IsNullOrWhiteSpace(request.TimeZoneId) ? null : request.TimeZoneId;
+            row.UpdatedAtRealUtc = realNow;
+        }, ct);
     }
 
     /// <summary>Shift the simulated clock forward (or back, with negatives) by a delta.</summary>
@@ -89,20 +96,20 @@ public sealed class DevClockController : ControllerBase
         var delta = new TimeSpan(request.Days, request.Hours, request.Minutes, request.Seconds);
         var realNow = TimeProvider.System.GetUtcNow().UtcDateTime;
 
-        var row = await LoadRowAsync(ct);
-        if (row.Mode == ClockMode.Real)
+        return await MutateRefreshAndRespondAsync(row =>
         {
-            // Advancing from real time re-anchors to Offset at "now" so the shift has a visible effect.
-            row.Mode = ClockMode.Offset;
-            row.RealAnchorUtc = realNow;
-            row.SimAnchorUtc = realNow;
-        }
+            if (row.Mode == ClockMode.Real)
+            {
+                // Advancing from real time re-anchors to Offset at "now" so the shift has a visible effect.
+                row.Mode = ClockMode.Offset;
+                row.RealAnchorUtc = realNow;
+                row.SimAnchorUtc = realNow;
+            }
 
-        // Shifting the anchor advances sim-now by delta in both Frozen and Offset modes.
-        row.SimAnchorUtc = row.SimAnchorUtc.Add(delta);
-        row.UpdatedAtRealUtc = realNow;
-
-        return await SaveRefreshAndRespondAsync(ct);
+            // Shifting the anchor advances sim-now by delta in both Frozen and Offset modes.
+            row.SimAnchorUtc = row.SimAnchorUtc.Add(delta);
+            row.UpdatedAtRealUtc = realNow;
+        }, ct);
     }
 
     /// <summary>Freeze the clock at the current simulated instant.</summary>
@@ -111,13 +118,13 @@ public sealed class DevClockController : ControllerBase
     public async Task<ActionResult<ClockStateResponse>> Freeze(CancellationToken ct)
     {
         var simNow = _timeProvider.GetUtcNow().UtcDateTime;
-        var row = await LoadRowAsync(ct);
-        row.Mode = ClockMode.Frozen;
-        row.SimAnchorUtc = simNow;
-        row.RealAnchorUtc = simNow;
-        row.UpdatedAtRealUtc = TimeProvider.System.GetUtcNow().UtcDateTime;
-
-        return await SaveRefreshAndRespondAsync(ct);
+        return await MutateRefreshAndRespondAsync(row =>
+        {
+            row.Mode = ClockMode.Frozen;
+            row.SimAnchorUtc = simNow;
+            row.RealAnchorUtc = simNow;
+            row.UpdatedAtRealUtc = TimeProvider.System.GetUtcNow().UtcDateTime;
+        }, ct);
     }
 
     /// <summary>Resume ticking from the currently-frozen instant (re-anchored Offset).</summary>
@@ -127,13 +134,13 @@ public sealed class DevClockController : ControllerBase
     {
         var simNow = _timeProvider.GetUtcNow().UtcDateTime;
         var realNow = TimeProvider.System.GetUtcNow().UtcDateTime;
-        var row = await LoadRowAsync(ct);
-        row.Mode = ClockMode.Offset;
-        row.SimAnchorUtc = simNow;
-        row.RealAnchorUtc = realNow;
-        row.UpdatedAtRealUtc = realNow;
-
-        return await SaveRefreshAndRespondAsync(ct);
+        return await MutateRefreshAndRespondAsync(row =>
+        {
+            row.Mode = ClockMode.Offset;
+            row.SimAnchorUtc = simNow;
+            row.RealAnchorUtc = realNow;
+            row.UpdatedAtRealUtc = realNow;
+        }, ct);
     }
 
     /// <summary>Return to real time (clears any timezone override).</summary>
@@ -141,17 +148,24 @@ public sealed class DevClockController : ControllerBase
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.AccountDestructiveActions)]
     public async Task<ActionResult<ClockStateResponse>> Reset(CancellationToken ct)
     {
-        var row = await LoadRowAsync(ct);
-        row.Mode = ClockMode.Real;
-        row.TimeZoneId = null;
-        row.UpdatedAtRealUtc = TimeProvider.System.GetUtcNow().UtcDateTime;
-
-        return await SaveRefreshAndRespondAsync(ct);
+        return await MutateRefreshAndRespondAsync(row =>
+        {
+            row.Mode = ClockMode.Real;
+            row.TimeZoneId = null;
+            row.UpdatedAtRealUtc = TimeProvider.System.GetUtcNow().UtcDateTime;
+        }, ct);
     }
 
     private async Task<SimulationClock> LoadRowAsync(CancellationToken ct)
     {
-        var row = await _db.SimulationClocks.FirstOrDefaultAsync(c => c.Id == 1, ct);
+        var row = await _db.SimulationClocks
+            .FromSql($$"""
+                SELECT clock.*
+                FROM "SimulationClocks" AS clock
+                WHERE clock."Id" = 1
+                FOR UPDATE
+                """)
+            .SingleOrDefaultAsync(ct);
         if (row is null)
         {
             // Defensive: the migration seeds row 1, but never NRE if it is somehow absent.
@@ -161,9 +175,18 @@ public sealed class DevClockController : ControllerBase
         return row;
     }
 
-    private async Task<ActionResult<ClockStateResponse>> SaveRefreshAndRespondAsync(CancellationToken ct)
+    private async Task<ActionResult<ClockStateResponse>> MutateRefreshAndRespondAsync(
+        Action<SimulationClock> mutation,
+        CancellationToken ct)
     {
-        await _db.SaveChangesAsync(ct);
+        await _infrastructure.ExecuteAsync(
+            AtomicInfrastructureOperation.SimulationClock,
+            async innerCt =>
+            {
+                var row = await LoadRowAsync(innerCt);
+                mutation(row);
+            },
+            ct);
         await _clockState.RefreshAsync(ct);
         return Ok(BuildResponse());
     }

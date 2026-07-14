@@ -3,8 +3,9 @@ using RentalCommand.Core.Enums;
 namespace RentalCommand.Core.Entities;
 
 /// <summary>
-/// Sole append-only audit record for Rental Command. Atomic command metadata ties each mutation to
-/// the retry-safe command attempt and idempotency receipt that committed it.
+/// Sole append-only audit record for Rental Command. Business-command metadata ties each mutation
+/// to the retry-safe receipt that committed it; explicitly classified infrastructure workflows use
+/// a unique receiptless attempt identity because they are not caller-replayable business commands.
 /// </summary>
 public sealed class AtomicAuditLog
 {

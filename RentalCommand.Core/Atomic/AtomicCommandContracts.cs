@@ -29,7 +29,40 @@ public interface IAtomicTransactionSafeDependency;
 public interface IAtomicExecutionState : IAtomicTransactionSafeDependency
 {
     bool IsActive { get; }
+    bool IsInfrastructureActive { get; }
     bool AllowsUnconvertedWrites { get; }
+}
+
+/// <summary>
+/// Deliberately narrow receiptless workflows owned by platform infrastructure rather than an end-user
+/// business command. These operations still run in one kernel-owned transaction and are never an
+/// escape hatch for ordinary domain mutations.
+/// </summary>
+public enum AtomicInfrastructureOperation
+{
+    DemoSeed,
+    SandboxTransition,
+    PortfolioQaDelivery,
+    SimulationClock,
+    SimulationWorkerCommand,
+    EngineHeartbeat,
+}
+
+/// <summary>
+/// Runs an explicitly classified infrastructure workflow in one kernel-owned transaction. Nested
+/// infrastructure calls join their owner transaction; callers cannot begin, commit, or roll back it.
+/// </summary>
+public interface IAtomicInfrastructureUnitOfWork
+{
+    Task ExecuteAsync(
+        AtomicInfrastructureOperation operation,
+        Func<CancellationToken, Task> action,
+        CancellationToken ct = default);
+
+    Task<TResult> ExecuteAsync<TResult>(
+        AtomicInfrastructureOperation operation,
+        Func<CancellationToken, Task<TResult>> action,
+        CancellationToken ct = default);
 }
 
 /// <summary>

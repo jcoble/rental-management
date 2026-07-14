@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Leasing;
@@ -24,17 +25,23 @@ public class DemoDataSeeder
     private readonly ILogger<DemoDataSeeder> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly ILegalDocumentSourceVersionResolver _sourceVersions;
+    private readonly IAtomicInfrastructureUnitOfWork _infrastructure;
+    private readonly IAtomicExecutionState _atomicExecution;
 
     public DemoDataSeeder(
         RentalCommandDbContext db,
         ILogger<DemoDataSeeder> logger,
         TimeProvider timeProvider,
-        ILegalDocumentSourceVersionResolver sourceVersions)
+        ILegalDocumentSourceVersionResolver sourceVersions,
+        IAtomicInfrastructureUnitOfWork infrastructure,
+        IAtomicExecutionState atomicExecution)
     {
         _db = db;
         _logger = logger;
         _timeProvider = timeProvider;
         _sourceVersions = sourceVersions;
+        _infrastructure = infrastructure;
+        _atomicExecution = atomicExecution;
     }
 
     /// <summary>Startup convenience: seeds the dev-admin portfolio (id 1).</summary>
@@ -45,8 +52,34 @@ public class DemoDataSeeder
     /// already has any properties. Atomic: a failure mid-way rolls the whole thing back, so a partial
     /// dataset can never strand the idempotency guard (which checks for any property).
     /// </summary>
-    public async Task SeedPortfolioAsync(int portfolioId, CancellationToken ct = default)
+    public Task SeedPortfolioAsync(int portfolioId, CancellationToken ct = default) =>
+        _infrastructure.ExecuteAsync(
+            AtomicInfrastructureOperation.DemoSeed,
+            innerCt => SeedPortfolioCoreAsync(portfolioId, innerCt),
+            ct);
+
+    private async Task SeedPortfolioCoreAsync(int portfolioId, CancellationToken ct)
     {
+        // Serialize the idempotency check and complete seed beneath the portfolio row. The
+        // infrastructure kernel owns the enclosing transaction, including every intermediate flush.
+        var lockedPortfolioId = _db.Database.IsNpgsql()
+            ? await _db.Database
+                .SqlQuery<int>($$"""
+                    SELECT portfolio."Id" AS "Value"
+                    FROM "Portfolios" AS portfolio
+                    WHERE portfolio."Id" = {{portfolioId}}
+                    FOR UPDATE
+                    """)
+                .SingleOrDefaultAsync(ct)
+            : await _db.Portfolios
+                .Where(portfolio => portfolio.Id == portfolioId)
+                .Select(portfolio => portfolio.Id)
+                .SingleOrDefaultAsync(ct);
+        if (lockedPortfolioId == 0)
+        {
+            throw new InvalidOperationException($"Portfolio {portfolioId} does not exist.");
+        }
+
         // Idempotency guard — if any properties exist for this portfolio we are already seeded.
         if (await _db.Properties.AnyAsync(p => p.PortfolioId == portfolioId, ct))
         {
@@ -73,10 +106,6 @@ public class DemoDataSeeder
         var actorUserId = seedContext.ActorUserId
             ?? throw new InvalidOperationException($"Portfolio {portfolioId} has no administering user for demo facts.");
         var currency = seedContext.Currency.Trim().ToUpperInvariant();
-
-        // Seed atomically: if any step fails the whole thing rolls back, so a partial
-        // dataset can never strand the idempotency guard (which checks for any property).
-        await using var tx = await _db.Database.BeginTransactionAsync(ct);
 
         // ── 1. OwnerEntities ──────────────────────────────────────────────────────────
         var ownerEntities = new List<OwnerEntity>
@@ -346,6 +375,7 @@ public class DemoDataSeeder
         var leaseSeed = await CanonicalDemoLeaseSeeder.SeedAsync(
             _db,
             _sourceVersions,
+            _atomicExecution,
             portfolioId,
             actorUserId,
             currency,
@@ -753,8 +783,6 @@ public class DemoDataSeeder
 
         _db.Inspections.AddRange(inspections);
         await _db.SaveChangesAsync(ct);
-
-        await tx.CommitAsync(ct);
 
         // ── Done ──────────────────────────────────────────────────────────────────────
         _logger.LogInformation(

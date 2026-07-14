@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -21,6 +22,7 @@ public class PortfolioQaService : IPortfolioQaService
     private readonly IKnowledgeBaseService _kb;
     private readonly ILogger<PortfolioQaService> _logger;
     private readonly TimeProvider _timeProvider;
+    private readonly IAtomicInfrastructureUnitOfWork _infrastructure;
 
     // Compact JSON serializer — no indentation to minimise tokens.
     private static readonly JsonSerializerOptions _json = new()
@@ -130,7 +132,8 @@ public class PortfolioQaService : IPortfolioQaService
         IMessagePublisher publisher,
         IKnowledgeBaseService kb,
         ILogger<PortfolioQaService> logger,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IAtomicInfrastructureUnitOfWork infrastructure)
     {
         _db = db;
         _llm = llm;
@@ -139,6 +142,7 @@ public class PortfolioQaService : IPortfolioQaService
         _kb = kb;
         _logger = logger;
         _timeProvider = timeProvider;
+        _infrastructure = infrastructure;
     }
 
     // ---------------------------------------------------------------------------
@@ -472,69 +476,75 @@ public class PortfolioQaService : IPortfolioQaService
         if (delivery is not { AnyRequested: true })
             return null;
 
-        var delivered = new List<string>();
         var subject = "Your Rental Command answer";
         var body = $"You asked:\n{question}\n\nAnswer:\n{answer}";
 
         try
         {
-            if (delivery.ViaEmail)
-            {
-                var to = string.IsNullOrWhiteSpace(delivery.ToEmail) ? null : delivery.ToEmail!.Trim();
-                if (to is not null)
+            var delivered = await _infrastructure.ExecuteAsync(
+                AtomicInfrastructureOperation.PortfolioQaDelivery,
+                async innerCt =>
                 {
-                    await _publisher.PublishAsync(
-                        portfolioId,
-                        "email",
-                        RentalCommand.Core.Outbox.OutboxIdempotency.Create(
-                            "portfolio-qa", portfolioId, "email", to, question, answer),
-                        new { to, subject, body },
-                        ct);
-                    delivered.Add("Email");
-                }
-                else
-                {
-                    _logger.LogInformation(
-                        "Q&A email delivery requested for portfolio {PortfolioId} but no recipient was available; skipped.",
-                        portfolioId);
-                }
-            }
+                    var queued = new List<string>();
+                    if (delivery.ViaEmail)
+                    {
+                        var to = string.IsNullOrWhiteSpace(delivery.ToEmail)
+                            ? null
+                            : delivery.ToEmail!.Trim();
+                        if (to is not null)
+                        {
+                            await _publisher.PublishAsync(
+                                portfolioId,
+                                "email",
+                                RentalCommand.Core.Outbox.OutboxIdempotency.Create(
+                                    "portfolio-qa", portfolioId, "email", to, question, answer),
+                                new { to, subject, body },
+                                innerCt);
+                            queued.Add("Email");
+                        }
+                        else
+                        {
+                            _logger.LogInformation(
+                                "Q&A email delivery requested for portfolio {PortfolioId} but no recipient was available; skipped.",
+                                portfolioId);
+                        }
+                    }
 
-            if (delivery.ViaSms)
-            {
-                var to = string.IsNullOrWhiteSpace(delivery.ToSms) ? null : delivery.ToSms!.Trim();
-                if (!string.IsNullOrWhiteSpace(to))
-                {
-                    await _publisher.PublishAsync(
-                        portfolioId,
-                        "sms",
-                        RentalCommand.Core.Outbox.OutboxIdempotency.Create(
-                            "portfolio-qa", portfolioId, "sms", to, question, answer),
-                        new { to, message = body },
-                        ct);
-                    delivered.Add("Sms");
-                }
-                else
-                {
-                    _logger.LogInformation(
-                        "Q&A SMS delivery requested for portfolio {PortfolioId} but no phone was available; skipped.",
-                        portfolioId);
-                }
-            }
+                    if (delivery.ViaSms)
+                    {
+                        var to = string.IsNullOrWhiteSpace(delivery.ToSms)
+                            ? null
+                            : delivery.ToSms!.Trim();
+                        if (!string.IsNullOrWhiteSpace(to))
+                        {
+                            await _publisher.PublishAsync(
+                                portfolioId,
+                                "sms",
+                                RentalCommand.Core.Outbox.OutboxIdempotency.Create(
+                                    "portfolio-qa", portfolioId, "sms", to, question, answer),
+                                new { to, message = body },
+                                innerCt);
+                            queued.Add("Sms");
+                        }
+                        else
+                        {
+                            _logger.LogInformation(
+                                "Q&A SMS delivery requested for portfolio {PortfolioId} but no phone was available; skipped.",
+                                portfolioId);
+                        }
+                    }
 
-            if (delivered.Count > 0)
-            {
-                await _db.SaveChangesAsync(ct);
-            }
+                    return queued;
+                },
+                ct);
+            return delivered.Count == 0 ? null : delivered;
         }
         catch (Exception ex)
         {
             // Delivery is best-effort — never fail the answer because a channel could not be queued.
             _logger.LogError(ex, "Q&A answer delivery failed for portfolio {PortfolioId}", portfolioId);
-            delivered.Clear();
+            return null;
         }
-
-        return delivered.Count == 0 ? null : delivered;
     }
 
     // ---------------------------------------------------------------------------

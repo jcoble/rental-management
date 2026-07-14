@@ -585,7 +585,8 @@ public sealed class PortfolioQaServiceTests : IDisposable
             publisher,
             new EmptyKnowledgeBaseService(),
             NullLogger<PortfolioQaService>.Instance,
-            TimeProvider.System);
+            TimeProvider.System,
+            new TestAtomicInfrastructureUnitOfWork(_db));
 
         var response = await sut.AskAsync(
             _scope,
@@ -664,7 +665,8 @@ public sealed class PortfolioQaServiceTests : IDisposable
             new NoopMessagePublisher(),
             new EmptyKnowledgeBaseService(),
             NullLogger<PortfolioQaService>.Instance,
-            TimeProvider.System);
+            TimeProvider.System,
+            new TestAtomicInfrastructureUnitOfWork(_db));
 
         var response = await sut.AskAsync(scope ?? _scope, question, history: null);
         response.ToolsUsed.Should().ContainSingle().Which.Should().Be(toolName);

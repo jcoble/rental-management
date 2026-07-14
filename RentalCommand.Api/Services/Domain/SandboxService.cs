@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 
@@ -12,17 +13,20 @@ public sealed class SandboxService : ISandboxService
     private readonly Auth.DemoDataSeeder _demoSeeder;
     private readonly ILogger<SandboxService> _logger;
     private readonly TimeProvider _timeProvider;
+    private readonly IAtomicInfrastructureUnitOfWork _infrastructure;
 
     public SandboxService(
         RentalCommandDbContext db,
         Auth.DemoDataSeeder demoSeeder,
         ILogger<SandboxService> logger,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IAtomicInfrastructureUnitOfWork infrastructure)
     {
         _db = db;
         _demoSeeder = demoSeeder;
         _logger = logger;
         _timeProvider = timeProvider;
+        _infrastructure = infrastructure;
     }
 
     public async Task<SandboxStateResponse?> GetStateAsync(int portfolioId, CancellationToken ct = default)
@@ -34,11 +38,16 @@ public sealed class SandboxService : ISandboxService
         return portfolio is null ? null : ToState(portfolio);
     }
 
-    public async Task<SandboxStateResponse?> GoLiveAsync(int portfolioId, CancellationToken ct = default)
+    public Task<SandboxStateResponse?> GoLiveAsync(int portfolioId, CancellationToken ct = default) =>
+        _infrastructure.ExecuteAsync(
+            AtomicInfrastructureOperation.SandboxTransition,
+            innerCt => GoLiveCoreAsync(portfolioId, innerCt),
+            ct);
+
+    private async Task<SandboxStateResponse?> GoLiveCoreAsync(int portfolioId, CancellationToken ct)
     {
         // Scope strictly to the caller's own portfolio (IDOR guard): we only ever load + mutate this id.
-        var portfolio = await _db.Portfolios
-            .FirstOrDefaultAsync(p => p.Id == portfolioId, ct);
+        var portfolio = await LoadPortfolioForUpdateAsync(portfolioId, ct);
 
         if (portfolio is null)
         {
@@ -51,18 +60,11 @@ public sealed class SandboxService : ISandboxService
             return ToState(portfolio);
         }
 
-        // Transactional: the data wipe and the flag flip commit together. A failure rolls everything
-        // back so we can never end up Live-but-still-holding-demo-data (or vice-versa).
-        await using var tx = await _db.Database.BeginTransactionAsync(ct);
-
         await WipePortfolioDataAsync(portfolioId, ct);
 
         portfolio.IsSandbox = false;
         portfolio.SandboxSeededAtUtc = null;
         portfolio.UpdatedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
-
-        await tx.CommitAsync(ct);
 
         _logger.LogInformation(
             "Portfolio {PortfolioId} graduated from Sandbox to Live — demo data wiped.", portfolioId);
@@ -70,12 +72,18 @@ public sealed class SandboxService : ISandboxService
         return ToState(portfolio);
     }
 
-    public async Task<SandboxStateResponse?> ApplyOnboardingChoiceAsync(
-        int portfolioId, OnboardingChoice choice, CancellationToken ct = default)
+    public Task<SandboxStateResponse?> ApplyOnboardingChoiceAsync(
+        int portfolioId, OnboardingChoice choice, CancellationToken ct = default) =>
+        _infrastructure.ExecuteAsync(
+            AtomicInfrastructureOperation.SandboxTransition,
+            innerCt => ApplyOnboardingChoiceCoreAsync(portfolioId, choice, innerCt),
+            ct);
+
+    private async Task<SandboxStateResponse?> ApplyOnboardingChoiceCoreAsync(
+        int portfolioId, OnboardingChoice choice, CancellationToken ct)
     {
         // Scope strictly to the caller's own portfolio (IDOR guard): we only ever load + mutate this id.
-        var portfolio = await _db.Portfolios
-            .FirstOrDefaultAsync(p => p.Id == portfolioId, ct);
+        var portfolio = await LoadPortfolioForUpdateAsync(portfolioId, ct);
 
         if (portfolio is null)
         {
@@ -111,12 +119,33 @@ public sealed class SandboxService : ISandboxService
 
         portfolio.Settings = PortfolioOnboarding.WriteChoice(portfolio.Settings, choice);
         portfolio.UpdatedAt = now;
-        await _db.SaveChangesAsync(ct);
 
         _logger.LogInformation(
             "Portfolio {PortfolioId} recorded first-login onboarding choice: {Choice}.", portfolioId, choice);
 
         return ToState(portfolio);
+    }
+
+    private async Task<Core.Entities.Portfolio?> LoadPortfolioForUpdateAsync(
+        int portfolioId,
+        CancellationToken ct)
+    {
+        var lockedId = _db.Database.IsNpgsql()
+            ? await _db.Database
+                .SqlQuery<int>($$"""
+                    SELECT portfolio."Id" AS "Value"
+                    FROM "Portfolios" AS portfolio
+                    WHERE portfolio."Id" = {{portfolioId}}
+                    FOR UPDATE
+                    """)
+                .SingleOrDefaultAsync(ct)
+            : await _db.Portfolios
+                .Where(portfolio => portfolio.Id == portfolioId)
+                .Select(portfolio => portfolio.Id)
+                .SingleOrDefaultAsync(ct);
+        return lockedId == 0
+            ? null
+            : await _db.Portfolios.SingleAsync(portfolio => portfolio.Id == lockedId, ct);
     }
 
     // Kept beside the executable deletes so IntegrationTests can prove that this service and the
