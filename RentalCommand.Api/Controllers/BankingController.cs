@@ -134,7 +134,7 @@ public class BankingController : ManagementControllerBase
     }
 
     [HttpPut("transactions/{id:int}/route")]
-    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.BankConnectionsManage)]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.MoneyReconciliationOperate)]
     [ProducesResponseType(typeof(BankTransactionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]

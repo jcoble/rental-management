@@ -482,7 +482,7 @@ public sealed class ReconcileBankTransactionHandler
                 command.AuthSessionId, command.AccessContextId, command.ExpectedAccessRevision,
                 command.RequiredCapability, attempt.Persistence, now, ct))
         {
-            return Result(ReconcileBankTransactionOutcome.AccessDenied, transaction.Id);
+            throw new UnauthorizedAccessException();
         }
         if (transaction.UpdatedAt != command.ExpectedUpdatedAtUtc)
         {
@@ -646,11 +646,7 @@ public sealed class RouteBankTransactionHandler
         await attempt.Locking.AcquireAsync(AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
         await attempt.Locking.AcquireAsync(AtomicLockResource.BankTransaction, command.TransactionId, ct);
         var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await BankingAuthorizationSupport.HasWorkspaceAuthorityAsync(
-                command.PortfolioId, command.ActorUserId, command.AuthSessionId,
-                command.AccessContextId, command.ExpectedAccessRevision,
-                CapabilityKeys.BankConnectionsManage, attempt.Persistence, now, ct))
-            return Result(RouteBankTransactionOutcome.AccessDenied, command.TransactionId);
+        await AuthorizeAsync(command, attempt.Persistence, now, ct);
 
         var transaction = await attempt.Persistence.Query<BankTransaction>()
             .SingleOrDefaultAsync(row => row.Id == command.TransactionId
@@ -681,11 +677,25 @@ public sealed class RouteBankTransactionHandler
     {
         BankingAuthorizationSupport.Validate(command);
         var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await BankingAuthorizationSupport.HasWorkspaceAuthorityAsync(
+        await AuthorizeAsync(command, persistence, now, ct);
+    }
+
+    private static async Task AuthorizeAsync(
+        RouteBankTransactionCommand command,
+        IAtomicPersistenceSession persistence,
+        DateTime now,
+        CancellationToken ct)
+    {
+        var authorized = command.PropertyId is { } propertyId
+            ? await BankingAuthorizationSupport.HasPropertyAuthorityAsync(
+                command.PortfolioId, propertyId, command.ActorUserId, command.AuthSessionId,
+                command.AccessContextId, command.ExpectedAccessRevision,
+                CapabilityKeys.MoneyReconciliationOperate, persistence, now, ct)
+            : await BankingAuthorizationSupport.HasWorkspaceAuthorityAsync(
                 command.PortfolioId, command.ActorUserId, command.AuthSessionId,
                 command.AccessContextId, command.ExpectedAccessRevision,
-                CapabilityKeys.BankConnectionsManage, persistence, now, ct))
-            throw new UnauthorizedAccessException();
+                CapabilityKeys.MoneyReconciliationDestructive, persistence, now, ct);
+        if (!authorized) throw new UnauthorizedAccessException();
     }
 
     private static RouteBankTransactionResult Result(RouteBankTransactionOutcome outcome, int id) => new(outcome, id);
@@ -703,7 +713,10 @@ internal static class BankingAuthorizationSupport
     internal static void Validate(RouteBankTransactionCommand command)
     {
         Validate(command.PortfolioId, command.TransactionId, command.ActorUserId, command.AuthSessionId,
-            command.AccessContextId, command.ExpectedAccessRevision, CapabilityKeys.BankConnectionsManage,
+            command.AccessContextId, command.ExpectedAccessRevision,
+            command.PropertyId is null
+                ? CapabilityKeys.MoneyReconciliationDestructive
+                : CapabilityKeys.MoneyReconciliationOperate,
             command.OperationKey);
     }
 
