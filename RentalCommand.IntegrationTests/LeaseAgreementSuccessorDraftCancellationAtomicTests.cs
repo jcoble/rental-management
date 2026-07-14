@@ -192,7 +192,6 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
                 agreement => agreement.Id == issued.ReplacesAgreementId);
             var predecessorArtifactId = await AddArtifactAsync(
                 arrange, _scenario.PortfolioId, predecessor.Id, 30_003, DateTime.UtcNow);
-            issued.GoverningFromOn = new DateOnly(2026, 6, 1);
             predecessor.IssuedArtifactId = predecessorArtifactId;
             predecessor.ExecutedArtifactId = predecessorArtifactId;
             predecessor.IssuedAtUtc = DateTime.UtcNow;
@@ -761,6 +760,7 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         var issuedArtifactId = await AddArtifactAsync(db, portfolio.Id, successorIds[1], 30_001, now);
         var executedArtifactId = await AddArtifactAsync(db, portfolio.Id, successorIds[2], 30_002, now);
         var issued = await db.LeaseAgreements.SingleAsync(agreement => agreement.Id == successorIds[1]);
+        issued.GoverningFromOn = new DateOnly(2026, 6, 1);
         issued.IssuedArtifactId = issuedArtifactId;
         issued.IssuedAtUtc = now;
         var executed = await db.LeaseAgreements.SingleAsync(agreement => agreement.Id == successorIds[2]);
