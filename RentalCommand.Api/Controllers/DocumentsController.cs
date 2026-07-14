@@ -459,11 +459,11 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         var utcNow = DateTime.UtcNow;
         if (target == StoredDocumentTarget.WorkOrder)
         {
-            var capabilities = write
+            var workOrderCapabilities = write
                 ? new[] { CapabilityKeys.WorkManage, CapabilityKeys.AssignedWorkUpdate }
                 : new[] { CapabilityKeys.WorkRead, CapabilityKeys.AssignedWorkRead };
             return _db.WorkOrders.AsNoTracking()
-                .WhereAuthorized(_db, scope, capabilities, utcNow)
+                .WhereAuthorized(_db, scope, workOrderCapabilities, utcNow)
                 .AnyAsync(workOrder => workOrder.Id == entityId, ct);
         }
 
