@@ -204,7 +204,7 @@ public sealed class OwnerPortalRelationshipBoundaryPostgreSqlTests : IAsyncLifet
         page.Items.Should().ContainSingle(item => item.Name == "Bravo House");
         _commands.Should().HaveCount(2, "count and bounded page data are the only database round trips");
         _commands.Should().ContainSingle(sql =>
-            sql.Contains("count", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("SELECT count(*)::int", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase));
         _commands.Should().ContainSingle(sql =>
             sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase) &&

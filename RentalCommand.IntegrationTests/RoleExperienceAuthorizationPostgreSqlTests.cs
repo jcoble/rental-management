@@ -47,7 +47,7 @@ public sealed class RoleExperienceAuthorizationPostgreSqlTests : IAsyncLifetime
         allowed.Items.Should().NotContain(item => item.UnitId == scenario.OtherPortfolioUnitId);
         _commands.Should().HaveCount(2, "count and bounded page data must be the only database round trips");
         _commands.Should().ContainSingle(sql =>
-            sql.Contains("count", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("SELECT count(*)::int", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase));
         _commands.Should().ContainSingle(sql =>
             sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase) &&
@@ -222,6 +222,7 @@ public sealed class RoleExperienceAuthorizationPostgreSqlTests : IAsyncLifetime
         db.AddRange(authority.Assignment, authority.Session);
         await db.SaveChangesAsync();
 
+        var assignedAt = now.AddMinutes(-1);
         var responsibility = new WorkOrderResponsibility
         {
             Id = Guid.NewGuid(),
@@ -231,11 +232,11 @@ public sealed class RoleExperienceAuthorizationPostgreSqlTests : IAsyncLifetime
             WorkspaceMembershipId = authority.Membership.Id,
             MembershipRoleAssignmentId = authority.Assignment.Id,
             Kind = WorkOrderResponsibilityKind.Primary,
-            EffectiveFromUtc = now.AddMinutes(-1),
+            EffectiveFromUtc = assignedAt,
             AssignedByUserId = user.Id,
             AssignedByAccessContextId = authority.Context.Id,
             AssignedReason = "Adversarial role-boundary proof",
-            AssignedAtUtc = now,
+            AssignedAtUtc = assignedAt,
         };
         db.WorkOrderResponsibilities.Add(responsibility);
         await db.SaveChangesAsync();
