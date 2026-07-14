@@ -1,8 +1,11 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import '../../core/models/models.dart' show Property, Unit;
 import '../properties/properties_repository.dart';
 import '../vendors/vendors_models.dart' show Vendor;
@@ -65,9 +68,13 @@ class RecurringMaintenanceRepository {
   /// category?, recurrenceInterval, nextDueDate, isActive, priority }
   Future<RecurringMaintenanceTask> create(Map<String, dynamic> data) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/recurring-maintenance',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'recurring-maintenance:create:${jsonEncode(data)}',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/recurring-maintenance',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -88,9 +95,13 @@ class RecurringMaintenanceRepository {
     Map<String, dynamic> data,
   ) async {
     try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/recurring-maintenance/$id',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'recurring-maintenance:update:$id:${jsonEncode(data)}',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/recurring-maintenance/$id',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -108,9 +119,13 @@ class RecurringMaintenanceRepository {
   /// PATCH /recurring-maintenance/{id}/active  body: { isActive }
   Future<RecurringMaintenanceTask> setActive(int id, bool isActive) async {
     try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/recurring-maintenance/$id/active',
-        data: {'isActive': isActive},
+      final response = await IdempotentMutation.run(
+        'recurring-maintenance:active:$id:$isActive',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/recurring-maintenance/$id/active',
+          data: {'isActive': isActive},
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final data = response.data;
       if (data == null) {
@@ -128,7 +143,13 @@ class RecurringMaintenanceRepository {
   /// Soft delete.
   Future<void> delete(int id) async {
     try {
-      await _dio.delete<dynamic>('/recurring-maintenance/$id');
+      await IdempotentMutation.run(
+        'recurring-maintenance:delete:$id',
+        (key) => _dio.delete<dynamic>(
+          '/recurring-maintenance/$id',
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
