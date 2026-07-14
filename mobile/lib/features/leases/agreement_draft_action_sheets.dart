@@ -11,6 +11,7 @@ Future<LeaseSuccessorDraftResult?> showEditAgreementDraftSheet(
   required LeaseAgreementDraftDetail draft,
   required String propertyName,
   required String unitNumber,
+  LeaseAgreementHistory? source,
 }) => showModalBottomSheet<LeaseSuccessorDraftResult>(
   context: context,
   isScrollControlled: true,
@@ -19,6 +20,7 @@ Future<LeaseSuccessorDraftResult?> showEditAgreementDraftSheet(
     draft: draft,
     propertyName: propertyName,
     unitNumber: unitNumber,
+    source: source,
   ),
 );
 
@@ -43,11 +45,13 @@ class _EditAgreementDraftSheet extends ConsumerStatefulWidget {
     required this.draft,
     required this.propertyName,
     required this.unitNumber,
+    required this.source,
   });
 
   final LeaseAgreementDraftDetail draft;
   final String propertyName;
   final String unitNumber;
+  final LeaseAgreementHistory? source;
 
   @override
   ConsumerState<_EditAgreementDraftSheet> createState() =>
@@ -82,10 +86,24 @@ class _EditAgreementDraftSheetState
     );
     _lateFee = TextEditingController(text: _numberText(draft.lateFeeAmount));
     _grace = TextEditingController(text: '${draft.gracePeriodDays}');
+    for (final controller in [
+      _agreementNumber,
+      _rent,
+      _dueDay,
+      _deposit,
+      _lateFee,
+      _grace,
+    ]) {
+      controller.addListener(_draftChanged);
+    }
     _termType = draft.termType;
     _termStart = draft.termStartOn;
     _termEnd = draft.termEndOn;
     _governingFrom = draft.governingFromOn;
+  }
+
+  void _draftChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
@@ -168,7 +186,9 @@ class _EditAgreementDraftSheetState
 
   @override
   Widget build(BuildContext context) => TabbedFormSheet(
-    title: 'Edit agreement draft',
+    title: widget.draft.changeType == 'Correction'
+        ? 'Review correction draft'
+        : 'Edit agreement draft',
     saveLabel: 'Save draft',
     saving: _saving,
     error: _error,
@@ -197,6 +217,32 @@ class _EditAgreementDraftSheetState
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       _unitContext(widget.propertyName, widget.unitNumber),
+      if (widget.draft.changeType == 'Correction') ...[
+        Card(
+          color: Theme.of(context).colorScheme.primaryContainer,
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'The old agreement still governs',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'This replacement stays a draft until it is fully signed and executed.',
+                ),
+                if (widget.draft.correctionReason case final reason?) ...[
+                  const SizedBox(height: 8),
+                  Text('Reason: $reason'),
+                ],
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+      ],
       TextFormField(
         controller: _agreementNumber,
         decoration: const InputDecoration(labelText: 'Agreement number'),
@@ -269,12 +315,90 @@ class _EditAgreementDraftSheetState
       _ReviewFact(label: 'Term', value: _termType),
       _ReviewFact(label: 'Rent', value: _rent.text),
       _ReviewFact(label: 'Signers', value: '${widget.draft.signers.length}'),
+      if (widget.draft.changeType == 'Correction' && widget.source != null) ...[
+        const SizedBox(height: 16),
+        Text(
+          'Old agreement vs correction',
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Changed fields stay visible. Unchanged copied content is collapsed.',
+        ),
+        const SizedBox(height: 8),
+        ..._correctionComparison(context),
+      ],
       const SizedBox(height: 12),
       const Text(
         'The template, structured terms, and ordered signer snapshot are preserved from the canonical draft read.',
       ),
     ],
   );
+
+  List<Widget> _correctionComparison(BuildContext context) {
+    final source = widget.source!;
+    final rows = <({String label, String oldValue, String newValue})>[
+      (
+        label: 'Agreement number',
+        oldValue: source.agreementNumber,
+        newValue: _agreementNumber.text,
+      ),
+      (label: 'Term type', oldValue: source.termType, newValue: _termType),
+      (
+        label: 'Term starts',
+        oldValue: _date(source.termStartOn),
+        newValue: _date(_termStart),
+      ),
+      (
+        label: 'Term ends',
+        oldValue: source.termEndOn == null
+            ? 'Month-to-month'
+            : _date(source.termEndOn!),
+        newValue: _termEnd == null ? 'Month-to-month' : _date(_termEnd!),
+      ),
+      (
+        label: 'Governs from',
+        oldValue: _date(source.governingFromOn),
+        newValue: _date(_governingFrom),
+      ),
+      (
+        label: 'Monthly rent',
+        oldValue: _numberText(source.baseRentAmount),
+        newValue: _rent.text,
+      ),
+    ];
+    final changed = rows.where((row) => row.oldValue != row.newValue).toList();
+    final unchanged = rows
+        .where((row) => row.oldValue == row.newValue)
+        .toList();
+    return [
+      if (changed.isEmpty)
+        const ListTile(
+          contentPadding: EdgeInsets.zero,
+          title: Text('No tracked agreement fields have changed yet.'),
+        ),
+      for (final row in changed)
+        Card(
+          color: Theme.of(context).colorScheme.primaryContainer,
+          child: ListTile(
+            title: Text(row.label),
+            subtitle: Text('Old: ${row.oldValue}\nNew: ${row.newValue}'),
+            isThreeLine: true,
+          ),
+        ),
+      if (unchanged.isNotEmpty)
+        ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          title: Text(
+            '${unchanged.length} unchanged copied field${unchanged.length == 1 ? '' : 's'}',
+          ),
+          children: [
+            for (final row in unchanged)
+              ListTile(title: Text(row.label), subtitle: Text(row.newValue)),
+          ],
+        ),
+    ];
+  }
 }
 
 class _IssueAgreementSheet extends ConsumerStatefulWidget {

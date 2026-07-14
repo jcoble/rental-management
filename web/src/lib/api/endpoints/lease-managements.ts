@@ -105,6 +105,7 @@ export interface LeaseAgreementDraftDetail {
   draftRevision: number;
   agreementNumber: string;
   changeType: LeaseAgreementChangeType;
+  correctionReason: string | null;
   termType: LeaseAgreementTermType;
   termStartOn: string;
   termEndOn: string | null;
@@ -156,6 +157,7 @@ export interface CreateLeaseAgreementSuccessorDraftRequest {
     LeaseAgreementChangeType,
     "Correction" | "Restatement" | "Renewal" | "MonthToMonth"
   >;
+  correctionReason: string | null;
   termStartOn: string;
   termEndOn: string | null;
   governingFromOn: string;
@@ -163,6 +165,15 @@ export interface CreateLeaseAgreementSuccessorDraftRequest {
     sourceAddendumSeriesPublicId: string;
     decision: LeaseRenewalAddendumDecisionType;
   }>;
+}
+
+export interface CancelLeaseAgreementSuccessorDraftResponse {
+  leaseManagementId: number;
+  leaseAgreementId: number;
+  draftCanceledAtUtc: string;
+  draftCanceledByUserId: number;
+  draftCancellationReason: string;
+  replayed: boolean;
 }
 
 export interface LeaseAgreementDraftMutationResponse {
@@ -514,6 +525,18 @@ export const leaseManagements = {
       `/lease-managements/${leaseManagementId}/agreements/${sourceAgreementId}/successor-drafts`,
       "POST",
       request,
+      operationKey
+    ),
+  cancelAgreementSuccessorDraft: (
+    leaseManagementId: number,
+    leaseAgreementId: number,
+    cancellationReason: string,
+    operationKey: string
+  ) =>
+    idempotentJson<CancelLeaseAgreementSuccessorDraftResponse>(
+      `/lease-managements/${leaseManagementId}/agreements/${leaseAgreementId}/cancel-draft`,
+      "POST",
+      { cancellationReason },
       operationKey
     ),
   prepareAgreementIssuance: (

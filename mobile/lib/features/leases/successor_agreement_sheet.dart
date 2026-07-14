@@ -40,6 +40,7 @@ class LeaseSuccessorDates {
     required this.governingFrom,
     this.operationKey = '',
     this.addendumDecisions = const [],
+    this.correctionReason,
   });
 
   final DateTime termStart;
@@ -47,6 +48,7 @@ class LeaseSuccessorDates {
   final DateTime governingFrom;
   final String operationKey;
   final List<LeaseRenewalAddendumDecisionInput> addendumDecisions;
+  final String? correctionReason;
 }
 
 LeaseSuccessorDates initialLeaseSuccessorDates(
@@ -149,6 +151,7 @@ class _SuccessorAgreementSheetState extends State<_SuccessorAgreementSheet> {
   DateTime? _end;
   late DateTime _governingFrom;
   late final String _operationKey;
+  late final TextEditingController _correctionReason;
   final Map<String, String> _addendumDecisions = <String, String>{};
 
   @override
@@ -160,10 +163,22 @@ class _SuccessorAgreementSheetState extends State<_SuccessorAgreementSheet> {
       businessDate: widget.businessDate,
     );
     _operationKey = LeaseManagementsRepository.newOperationKey();
+    _correctionReason = TextEditingController();
     _start = initial.termStart;
     _end = initial.termEnd;
     _governingFrom = initial.governingFrom;
   }
+
+  @override
+  void dispose() {
+    _correctionReason.dispose();
+    super.dispose();
+  }
+
+  bool get _correctionReasonValid =>
+      widget.operation != LeaseSuccessorOperation.correction ||
+      (_correctionReason.text.trim().isNotEmpty &&
+          _correctionReason.text.trim().length <= 1000);
 
   bool get _datesValid {
     final source = widget.source;
@@ -227,7 +242,11 @@ class _SuccessorAgreementSheetState extends State<_SuccessorAgreementSheet> {
     saveLabel: 'Create draft',
     saving: false,
     onSave: () async {
-      if (!_datesValid || !_addendumDecisionsComplete) return;
+      if (!_datesValid ||
+          !_correctionReasonValid ||
+          !_addendumDecisionsComplete) {
+        return;
+      }
       Navigator.of(context).pop(
         LeaseSuccessorDates(
           termStart: _start,
@@ -235,13 +254,19 @@ class _SuccessorAgreementSheetState extends State<_SuccessorAgreementSheet> {
           governingFrom: _governingFrom,
           operationKey: _operationKey,
           addendumDecisions: _exactAddendumDecisions(),
+          correctionReason:
+              widget.operation == LeaseSuccessorOperation.correction
+              ? _correctionReason.text.trim()
+              : null,
         ),
       );
     },
     tabs: [
       TabbedFormStepSpec(
-        label: 'Dates',
-        validate: () => _datesValid,
+        label: widget.operation == LeaseSuccessorOperation.correction
+            ? 'Correction'
+            : 'Dates',
+        validate: () => _datesValid && _correctionReasonValid,
         child: _datesStep(),
       ),
       if (widget.operation.requiresEffectiveAddendumDecisions)
@@ -253,7 +278,8 @@ class _SuccessorAgreementSheetState extends State<_SuccessorAgreementSheet> {
         ),
       TabbedFormStepSpec(
         label: 'Review',
-        validate: () => _datesValid && _addendumDecisionsComplete,
+        validate: () =>
+            _datesValid && _correctionReasonValid && _addendumDecisionsComplete,
         child: _reviewStep(),
       ),
     ],
@@ -272,10 +298,26 @@ class _SuccessorAgreementSheetState extends State<_SuccessorAgreementSheet> {
         const SizedBox(height: 8),
         Text(
           replacement
-              ? 'A correction or restatement preserves the signed term dates. Choose when the replacement version becomes governing.'
+              ? 'The old agreement keeps governing until the replacement is fully signed and executed. Its signed term dates are copied into this draft.'
               : 'This creates a successor draft. The signed agreement remains immutable.',
         ),
         const SizedBox(height: 12),
+        if (widget.operation == LeaseSuccessorOperation.correction) ...[
+          TextFormField(
+            controller: _correctionReason,
+            decoration: const InputDecoration(
+              labelText: 'Why is this correction needed?',
+              helperText: 'Required and saved with agreement history',
+            ),
+            minLines: 2,
+            maxLines: 4,
+            maxLength: 1000,
+            validator: (value) => value == null || value.trim().isEmpty
+                ? 'Explain what the replacement corrects'
+                : null,
+          ),
+          const SizedBox(height: 8),
+        ],
         _DateTile(
           label: 'Term starts',
           value: _start,
@@ -443,6 +485,8 @@ class _SuccessorAgreementSheetState extends State<_SuccessorAgreementSheet> {
       ),
       const Divider(),
       _ReviewFact(label: 'Change', value: widget.operation.changeLabel),
+      if (widget.operation == LeaseSuccessorOperation.correction)
+        _ReviewFact(label: 'Reason', value: _correctionReason.text.trim()),
       _ReviewFact(label: 'Term starts', value: _date(_start)),
       _ReviewFact(
         label: 'Term ends',
@@ -466,7 +510,7 @@ class _SuccessorAgreementSheetState extends State<_SuccessorAgreementSheet> {
       ],
       const SizedBox(height: 12),
       const Text(
-        'The new version remains a draft. Review its copied terms and signer snapshot before issuance.',
+        'The new version remains a draft. The old agreement keeps governing until this replacement is fully signed and executed.',
       ),
     ],
   );

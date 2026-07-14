@@ -400,6 +400,7 @@ export interface LeaseManagementSummary {
 	unitId: number;
 	unitNumber: string;
 	lifecycle: string;
+	businessDate: string;
 	leaseAgreementId?: number | null;
 	agreementNumber?: string | null;
 	agreementStatus?: string | null;
@@ -470,6 +471,7 @@ export interface LeaseAgreementSummary {
 	versionNumber: number;
 	agreementNumber: string;
 	changeType: string;
+	correctionReason?: string | null;
 	replacesAgreementId?: number | null;
 	renewsAgreementId?: number | null;
 	termType: string;
@@ -487,6 +489,9 @@ export interface LeaseAgreementSummary {
 	issuedAtUtc?: string | null;
 	fullyExecutedAtUtc?: string | null;
 	voidedAtUtc?: string | null;
+	draftCanceledAtUtc?: string | null;
+	draftCanceledByUserId?: number | null;
+	draftCancellationReason?: string | null;
 	createdAtUtc: string;
 	updatedAtUtc: string;
 }

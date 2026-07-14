@@ -469,7 +469,9 @@ class _AgreementHistoryCard extends ConsumerWidget {
                   subtitle: Text(
                     '${agreement.changeType} · ${agreement.status}\n'
                     '${_date(agreement.termStartOn)} – '
-                    '${agreement.termEndOn == null ? 'Month-to-month' : _date(agreement.termEndOn!)}',
+                    '${agreement.termEndOn == null ? 'Month-to-month' : _date(agreement.termEndOn!)}'
+                    '${agreement.correctionReason == null ? '' : '\nReason: ${agreement.correctionReason}'}'
+                    '${agreement.draftCancellationReason == null ? '' : '\nCanceled: ${agreement.draftCancellationReason}'}',
                   ),
                   isThreeLine: true,
                 ),
@@ -518,6 +520,14 @@ class _AgreementHistoryCard extends ConsumerWidget {
                         icon: const Icon(Icons.send_outlined),
                         label: const Text('Issue for signature'),
                       ),
+                      if (agreement.replacesAgreementId != null ||
+                          agreement.renewsAgreementId != null)
+                        OutlinedButton.icon(
+                          onPressed: () =>
+                              _cancelDraft(context, ref, agreement),
+                          icon: const Icon(Icons.delete_outline),
+                          label: const Text('Cancel draft'),
+                        ),
                     ],
                   ),
                 if (agreement.isGoverning)
@@ -636,6 +646,7 @@ class _AgreementHistoryCard extends ConsumerWidget {
       draft: draft,
       propertyName: propertyName,
       unitNumber: unitNumber,
+      source: _sourceFor(agreement),
     );
     if (result == null || !context.mounted) return;
     await _refresh(context, ref);
@@ -645,6 +656,52 @@ class _AgreementHistoryCard extends ConsumerWidget {
           content: Text('Draft revision ${result.draftRevision} saved.'),
         ),
       );
+    }
+  }
+
+  LeaseAgreementHistory? _sourceFor(LeaseAgreementHistory agreement) {
+    final sourceId =
+        agreement.replacesAgreementId ?? agreement.renewsAgreementId;
+    if (sourceId == null) return null;
+    for (final candidate in agreements) {
+      if (candidate.id == sourceId) return candidate;
+    }
+    return null;
+  }
+
+  Future<void> _cancelDraft(
+    BuildContext context,
+    WidgetRef ref,
+    LeaseAgreementHistory agreement,
+  ) async {
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (_) => const _CancelSuccessorDraftDialog(),
+    );
+    if (reason == null || !context.mounted) return;
+    final operationKey = LeaseManagementsRepository.newOperationKey();
+    try {
+      final canceled = await _runWithStableRetry(
+        context,
+        actionLabel: 'cancel successor draft',
+        action: () => ref
+            .read(leaseManagementsRepositoryProvider)
+            .cancelSuccessorDraft(
+              leaseManagementId: leaseManagementId,
+              leaseAgreementId: agreement.id,
+              cancellationReason: reason,
+              operationKey: operationKey,
+            ),
+      );
+      if (canceled == null || !context.mounted) return;
+      await _refresh(context, ref);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Successor draft canceled.')),
+        );
+      }
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
     }
   }
 
@@ -737,6 +794,7 @@ class _AgreementHistoryCard extends ConsumerWidget {
               termStartOn: result.termStart,
               termEndOn: result.termEnd,
               governingFromOn: result.governingFrom,
+              correctionReason: result.correctionReason,
               addendumDecisions: result.addendumDecisions,
               operationKey: result.operationKey,
             ),
@@ -746,11 +804,30 @@ class _AgreementHistoryCard extends ConsumerWidget {
         ref.refresh(leaseManagementDetailProvider(leaseManagementId).future),
         ref.refresh(leaseAgreementHistoryProvider(leaseManagementId).future),
       ]);
-      if (context.mounted) {
+      if (!context.mounted) return;
+      final createdDraft = await ref
+          .read(leaseManagementsRepositoryProvider)
+          .agreementDraft(
+            leaseManagementId: leaseManagementId,
+            leaseAgreementId: created.leaseAgreementId,
+          );
+      if (!context.mounted) return;
+      if (createdDraft.documentTemplateId != null) {
+        final edited = await showEditAgreementDraftSheet(
+          context,
+          draft: createdDraft,
+          propertyName: propertyName,
+          unitNumber: unitNumber,
+          source: source,
+        );
+        if (edited != null && context.mounted) {
+          await _refresh(context, ref);
+        }
+      } else if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Draft v${created.versionNumber} created and loaded into agreement history.',
+              'Draft v${created.versionNumber} created. Open it from agreement history to continue.',
             ),
           ),
         );
@@ -759,6 +836,60 @@ class _AgreementHistoryCard extends ConsumerWidget {
       if (context.mounted) _showError(context, error);
     }
   }
+}
+
+class _CancelSuccessorDraftDialog extends StatefulWidget {
+  const _CancelSuccessorDraftDialog();
+
+  @override
+  State<_CancelSuccessorDraftDialog> createState() =>
+      _CancelSuccessorDraftDialogState();
+}
+
+class _CancelSuccessorDraftDialogState
+    extends State<_CancelSuccessorDraftDialog> {
+  final _reason = TextEditingController();
+
+  @override
+  void dispose() {
+    _reason.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Cancel successor draft?'),
+    content: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'The source agreement is unchanged and keeps governing. Explain why this draft is being abandoned.',
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _reason,
+          decoration: const InputDecoration(labelText: 'Cancellation reason'),
+          minLines: 2,
+          maxLines: 4,
+          maxLength: 1000,
+          onChanged: (_) => setState(() {}),
+        ),
+      ],
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(),
+        child: const Text('Keep draft'),
+      ),
+      FilledButton(
+        onPressed: _reason.text.trim().isEmpty
+            ? null
+            : () => Navigator.of(context).pop(_reason.text.trim()),
+        child: const Text('Cancel draft'),
+      ),
+    ],
+  );
 }
 
 class _AddendumHistoryCard extends ConsumerStatefulWidget {

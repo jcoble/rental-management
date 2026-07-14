@@ -126,6 +126,40 @@ void main() {
     expect(detail, contains('_runWithStableRetry('));
   });
 
+  test(
+    'correction successor UX explains governing state and supports cancel',
+    () {
+      final sheet = File(
+        'lib/features/leases/successor_agreement_sheet.dart',
+      ).readAsStringSync();
+      final editor = File(
+        'lib/features/leases/agreement_draft_action_sheets.dart',
+      ).readAsStringSync();
+      final detail = File(
+        'lib/features/leases/lease_detail_screen.dart',
+      ).readAsStringSync();
+      final repository = File(
+        'lib/features/leases/leases_repository.dart',
+      ).readAsStringSync();
+
+      expect(sheet, contains("labelText: 'Why is this correction needed?'"));
+      expect(sheet, contains('_correctionReasonValid'));
+      expect(
+        sheet,
+        contains(
+          'keeps governing until the replacement is fully signed and executed',
+        ),
+      );
+      expect(editor, contains('Old agreement vs correction'));
+      expect(editor, contains('unchanged copied field'));
+      expect(detail, contains('source: source'));
+      expect(detail, contains('.agreementDraft('));
+      expect(detail, contains("label: const Text('Cancel draft')"));
+      expect(repository, contains("'correctionReason': correctionReason"));
+      expect(repository, contains(r'$leaseAgreementId/cancel-draft'));
+    },
+  );
+
   test('agreement history keeps issued and executed artifacts distinct', () {
     final detail = File(
       'lib/features/leases/lease_detail_screen.dart',
