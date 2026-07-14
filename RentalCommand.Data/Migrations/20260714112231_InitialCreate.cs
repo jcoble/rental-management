@@ -550,19 +550,50 @@ namespace RentalCommand.Data.Migrations
                     ActionUrl = table.Column<string>(type: "character varying(500)", maxLength: 500, nullable: true),
                     RelatedEntityType = table.Column<string>(type: "character varying(120)", maxLength: 120, nullable: true),
                     RelatedEntityId = table.Column<int>(type: "integer", nullable: true),
-                    IsRead = table.Column<bool>(type: "boolean", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    ReadAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true)
+                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
                 },
                 constraints: table =>
                 {
                     table.PrimaryKey("PK_Notifications", x => x.Id);
+                    table.UniqueConstraint("AK_Notifications_Id_PortfolioId", x => new { x.Id, x.PortfolioId });
                     table.ForeignKey(
                         name: "FK_Notifications_Portfolios_PortfolioId",
                         column: x => x.PortfolioId,
                         principalTable: "Portfolios",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "NotificationReadStates",
+                columns: table => new
+                {
+                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
+                    NotificationId = table.Column<int>(type: "integer", nullable: false),
+                    UserId = table.Column<int>(type: "integer", nullable: false),
+                    ReadAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_NotificationReadStates", x => new { x.PortfolioId, x.NotificationId, x.UserId });
+                    table.ForeignKey(
+                        name: "FK_NotificationReadStates_AspNetUsers_UserId",
+                        column: x => x.UserId,
+                        principalTable: "AspNetUsers",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                    table.ForeignKey(
+                        name: "FK_NotificationReadStates_Notifications_NotificationId_Portfo~",
+                        columns: x => new { x.NotificationId, x.PortfolioId },
+                        principalTable: "Notifications",
+                        principalColumns: new[] { "Id", "PortfolioId" },
+                        onDelete: ReferentialAction.Cascade);
+                    table.ForeignKey(
+                        name: "FK_NotificationReadStates_Portfolios_PortfolioId",
+                        column: x => x.PortfolioId,
+                        principalTable: "Portfolios",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
                 });
 
             migrationBuilder.CreateTable(
@@ -6813,11 +6844,6 @@ namespace RentalCommand.Data.Migrations
                 column: "CreatedAt");
 
             migrationBuilder.CreateIndex(
-                name: "IX_Notifications_IsRead",
-                table: "Notifications",
-                column: "IsRead");
-
-            migrationBuilder.CreateIndex(
                 name: "IX_Notifications_PortfolioId",
                 table: "Notifications",
                 column: "PortfolioId");
@@ -6825,6 +6851,21 @@ namespace RentalCommand.Data.Migrations
             migrationBuilder.CreateIndex(
                 name: "IX_Notifications_UserId",
                 table: "Notifications",
+                column: "UserId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_NotificationReadStates_NotificationId_PortfolioId",
+                table: "NotificationReadStates",
+                columns: new[] { "NotificationId", "PortfolioId" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_NotificationReadStates_PortfolioId_UserId_NotificationId",
+                table: "NotificationReadStates",
+                columns: new[] { "PortfolioId", "UserId", "NotificationId" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_NotificationReadStates_UserId",
+                table: "NotificationReadStates",
                 column: "UserId");
 
             migrationBuilder.CreateIndex(
@@ -8554,6 +8595,9 @@ namespace RentalCommand.Data.Migrations
 
             migrationBuilder.DropTable(
                 name: "NoticeDrafts");
+
+            migrationBuilder.DropTable(
+                name: "NotificationReadStates");
 
             migrationBuilder.DropTable(
                 name: "Notifications");

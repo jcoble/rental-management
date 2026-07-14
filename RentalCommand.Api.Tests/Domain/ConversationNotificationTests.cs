@@ -253,6 +253,64 @@ public class ConversationNotificationTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task BroadcastReadState_IsIndependentForEachStaffAndTenantUser()
+    {
+        SeedTenantWithStaffAndTenantUsers();
+        var now = DateTime.UtcNow;
+        _ctx.Db.Notifications.Add(new Notification
+        {
+            PortfolioId = 1,
+            Type = "System",
+            Title = "Water interruption",
+            Message = "Water will be off from noon until two.",
+            CreatedAt = now,
+        });
+        var contexts = await _ctx.Db.WorkspaceAccessContexts
+            .Where(context => context.PortfolioId == 1)
+            .ToDictionaryAsync(context => context.UserId);
+        var sessions = contexts.Values.Select(context => new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = context.UserId,
+            ActiveAccessContextId = context.Id,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        }).ToDictionary(session => session.UserId);
+        _ctx.Db.AuthSessions.AddRange(sessions.Values);
+        await _ctx.Db.SaveChangesAsync();
+        var notificationId = await _ctx.Db.Notifications.Select(notification => notification.Id).SingleAsync();
+        var sut = new NotificationService(
+            _ctx.Db, TimeProvider.System, _services.GetRequiredService<IAtomicUnitOfWork>());
+
+        var staffContext = contexts[10];
+        var staffScope = new WorkspaceReadScope(
+            1, 10, sessions[10].Id, staffContext.Id, staffContext.AccessRevision);
+        (await sut.MarkAsReadAsync(staffScope, notificationId, "read-water-interruption"))
+            .Should().BeTrue();
+
+        (await sut.ListAsync(1, 10)).Should().ContainSingle().Which.IsRead.Should().BeTrue();
+        (await sut.ListAsync(1, 30)).Should().ContainSingle().Which.IsRead.Should().BeFalse();
+        (await sut.ListAsync(1, 20)).Should().ContainSingle().Which.IsRead.Should().BeFalse();
+        (await sut.GetUnreadCountAsync(1, 10)).Should().Be(0);
+        (await sut.GetUnreadCountAsync(1, 30)).Should().Be(1);
+        (await sut.GetUnreadCountAsync(1, 20)).Should().Be(1);
+
+        var secondStaffContext = contexts[30];
+        var secondStaffScope = new WorkspaceReadScope(
+            1, 30, sessions[30].Id, secondStaffContext.Id, secondStaffContext.AccessRevision);
+        await sut.MarkAllAsReadAsync(secondStaffScope, "read-all-water-interruption");
+
+        (await sut.GetUnreadCountAsync(1, 30)).Should().Be(0);
+        (await sut.GetUnreadCountAsync(1, 20)).Should().Be(1);
+        (await _ctx.Db.NotificationReadStates.AsNoTracking()
+            .OrderBy(readState => readState.UserId)
+            .Select(readState => readState.UserId)
+            .ToListAsync()).Should().Equal(10, 30);
+    }
+
+    [Fact]
     public async Task ListAndGetAsync_AreReadOnlyAndProjectMessageCountsAndOrderedMessagesFromDatabase()
     {
         var tenant = SeedTenantWithStaffAndTenantUsers();

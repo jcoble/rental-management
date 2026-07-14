@@ -18,6 +18,28 @@ public sealed class NotificationFoundationModelTests
     }
 
     [Fact]
+    public void NotificationReadState_IsUserScopedAndCannotCrossPortfolios()
+    {
+        using var db = CreateDb();
+        var notification = db.Model.FindEntityType(typeof(Notification))!;
+        var readState = db.Model.FindEntityType(typeof(NotificationReadState))!;
+
+        notification.FindProperty("IsRead").Should().BeNull();
+        notification.FindProperty("ReadAt").Should().BeNull();
+        readState.FindPrimaryKey()!.Properties.Select(property => property.Name).Should().Equal(
+            nameof(NotificationReadState.PortfolioId),
+            nameof(NotificationReadState.NotificationId),
+            nameof(NotificationReadState.UserId));
+        readState.GetForeignKeys().Should().Contain(foreignKey =>
+            foreignKey.PrincipalEntityType.ClrType == typeof(Notification) &&
+            foreignKey.Properties.Select(property => property.Name).SequenceEqual(new[]
+            {
+                nameof(NotificationReadState.NotificationId),
+                nameof(NotificationReadState.PortfolioId),
+            }));
+    }
+
+    [Fact]
     public void PersonalAlerts_AreUniquePerWorkspaceAndUser()
     {
         using var db = CreateDb();

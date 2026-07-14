@@ -447,13 +447,11 @@ public sealed class AtomicNotificationMutationHandler
             && (candidate.UserId == null || candidate.UserId == command.ActorUserId)
             && (isStaff || candidate.Type != "TenantMessage"), ct);
         if (notification is null) return Missing();
-        if (!notification.IsRead)
+        if (await attempt.Notifications.MarkReadAsync(
+                command.PortfolioId, notification.Id, command.ActorUserId, isStaff, now, ct))
         {
-            notification.IsRead = true;
-            notification.ReadAt = now;
-            attempt.BindSemanticAudit(notification, Audit(command, nameof(Notification), AuditLogOperation.Updated,
-                "Notification marked read", notification.Id));
-            await attempt.FlushBusinessAsync(ct);
+            attempt.StageSemanticEvent(Audit(command, nameof(NotificationReadState), AuditLogOperation.Created,
+                "Notification marked read", notification.Id), now);
             StageDataUpdate(attempt, command, nameof(Notification), notification.Id, now);
             return new(true, true, notification.Id, 1);
         }
@@ -575,7 +573,7 @@ public sealed class AtomicNotificationMutationHandler
             command.PortfolioId, command.ActorUserId, isStaff, now, ct);
         if (count > 0)
         {
-            attempt.StageSemanticEvent(Audit(command, nameof(Notification), AuditLogOperation.Updated,
+            attempt.StageSemanticEvent(Audit(command, nameof(NotificationReadState), AuditLogOperation.Created,
                 $"{count} notifications marked read", 0), now);
             StageDataUpdate(attempt, command, nameof(Notification), 0, now);
         }
@@ -942,7 +940,7 @@ public sealed class AtomicNotificationMutationHandler
                 ActionUrl = notification.ActionUrl,
                 RelatedEntityType = notification.RelatedEntityType,
                 RelatedEntityId = notification.RelatedEntityId,
-                IsRead = notification.IsRead,
+                IsRead = false,
                 CreatedAt = notification.CreatedAt,
             });
 

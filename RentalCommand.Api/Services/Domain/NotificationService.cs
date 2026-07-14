@@ -44,7 +44,10 @@ public class NotificationService : INotificationService
 
         if (unreadOnly)
         {
-            query = query.Where(n => !n.IsRead);
+            query = query.Where(n => !_db.NotificationReadStates.Any(readState =>
+                readState.PortfolioId == portfolioId &&
+                readState.NotificationId == n.Id &&
+                readState.UserId == userId));
         }
 
         return await query
@@ -61,7 +64,10 @@ public class NotificationService : INotificationService
                 ActionUrl = notification.ActionUrl,
                 RelatedEntityType = notification.RelatedEntityType,
                 RelatedEntityId = notification.RelatedEntityId,
-                IsRead = notification.IsRead,
+                IsRead = _db.NotificationReadStates.Any(readState =>
+                    readState.PortfolioId == portfolioId &&
+                    readState.NotificationId == notification.Id &&
+                    readState.UserId == userId),
                 CreatedAt = notification.CreatedAt,
             })
             .ToListAsync(ct);
@@ -71,7 +77,12 @@ public class NotificationService : INotificationService
     {
         var query = _db.Notifications
             .AsNoTracking()
-            .Where(n => n.PortfolioId == portfolioId && (n.UserId == null || n.UserId == userId) && !n.IsRead);
+            .Where(n => n.PortfolioId == portfolioId &&
+                (n.UserId == null || n.UserId == userId) &&
+                !_db.NotificationReadStates.Any(readState =>
+                    readState.PortfolioId == portfolioId &&
+                    readState.NotificationId == n.Id &&
+                    readState.UserId == userId));
         if (!await IsStaffUserAsync(portfolioId, userId, ct))
         {
             query = query.Where(n => n.Type != "TenantMessage");

@@ -15,6 +15,28 @@ internal sealed class AtomicNotificationPersistence : IAtomicNotificationPersist
         _scope = scope;
     }
 
+    public async Task<bool> MarkReadAsync(
+        int portfolioId,
+        int notificationId,
+        int userId,
+        bool includeStaffOnlyNotifications,
+        DateTime readAtUtc,
+        CancellationToken ct = default)
+    {
+        using var lease = _scope.BeginInternalRawDml(
+            "NotificationReadStates", AtomicRawDmlOperation.Insert);
+        return await _db.Database.ExecuteSqlInterpolatedAsync($$"""
+            INSERT INTO "NotificationReadStates" ("PortfolioId", "NotificationId", "UserId", "ReadAt")
+            SELECT notification."PortfolioId", notification."Id", {{userId}}, {{readAtUtc}}
+            FROM "Notifications" notification
+            WHERE notification."PortfolioId" = {{portfolioId}}
+              AND notification."Id" = {{notificationId}}
+              AND (notification."UserId" IS NULL OR notification."UserId" = {{userId}})
+              AND ({{includeStaffOnlyNotifications}} OR notification."Type" <> 'TenantMessage')
+            ON CONFLICT ("PortfolioId", "NotificationId", "UserId") DO NOTHING
+            """, ct) == 1;
+    }
+
     public async Task<int> MarkAllReadAsync(
         int portfolioId,
         int userId,
@@ -22,15 +44,16 @@ internal sealed class AtomicNotificationPersistence : IAtomicNotificationPersist
         DateTime readAtUtc,
         CancellationToken ct = default)
     {
-        using var lease = _scope.BeginInternalRawDml("Notifications", AtomicRawDmlOperation.Update);
+        using var lease = _scope.BeginInternalRawDml(
+            "NotificationReadStates", AtomicRawDmlOperation.Insert);
         return await _db.Database.ExecuteSqlInterpolatedAsync($$"""
-            UPDATE "Notifications"
-            SET "IsRead" = TRUE,
-                "ReadAt" = {{readAtUtc}}
-            WHERE "PortfolioId" = {{portfolioId}}
-              AND ("UserId" IS NULL OR "UserId" = {{userId}})
-              AND "IsRead" = FALSE
-              AND ({{includeStaffOnlyNotifications}} OR "Type" <> 'TenantMessage')
+            INSERT INTO "NotificationReadStates" ("PortfolioId", "NotificationId", "UserId", "ReadAt")
+            SELECT notification."PortfolioId", notification."Id", {{userId}}, {{readAtUtc}}
+            FROM "Notifications" notification
+            WHERE notification."PortfolioId" = {{portfolioId}}
+              AND (notification."UserId" IS NULL OR notification."UserId" = {{userId}})
+              AND ({{includeStaffOnlyNotifications}} OR notification."Type" <> 'TenantMessage')
+            ON CONFLICT ("PortfolioId", "NotificationId", "UserId") DO NOTHING
             """, ct);
     }
 

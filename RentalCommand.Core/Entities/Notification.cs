@@ -12,9 +12,8 @@ public class Notification : Interfaces.IAuditable, Interfaces.IPortfolioScoped
     public string? ActionUrl { get; set; }
     public string? RelatedEntityType { get; set; }
     public int? RelatedEntityId { get; set; }
-    public bool IsRead { get; set; }
     public DateTime CreatedAt { get; set; }
-    public DateTime? ReadAt { get; set; }
 
     public Portfolio? Portfolio { get; set; }
+    public ICollection<NotificationReadState> ReadStates { get; set; } = new List<NotificationReadState>();
 }
