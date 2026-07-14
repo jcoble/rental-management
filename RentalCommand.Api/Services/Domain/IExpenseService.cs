@@ -6,7 +6,8 @@ namespace RentalCommand.Api.Services.Domain;
 /// <summary>
 /// Portfolio-scoped CRUD for <see cref="Core.Entities.Expense"/>. Every query is filtered by the caller's
 /// portfolio id (sourced from the JWT claim, never a client parameter). Soft-delete is used for removal.
-/// Create/update/delete broadcast realtime updates via <see cref="Core.Interfaces.IDataUpdateService"/>.
+/// Create/update/delete are receipt-backed atomic commands that stage realtime delivery in the
+/// same database transaction as the business mutation.
 /// </summary>
 public interface IExpenseService
 {
@@ -30,10 +31,7 @@ public interface IExpenseService
         bool workOrderLinkedOnly, ListQuery query, CancellationToken ct = default);
     Task<ExpenseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
     Task<ExpenseResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default);
-    Task<ExpenseResponse?> CreateAsync(int portfolioId, CreateExpenseRequest request, CancellationToken ct = default);
     Task<ExpenseResponse?> CreateAsync(WorkspaceReadScope scope, CreateExpenseRequest request, string idempotencyKey, CancellationToken ct = default);
-    Task<ExpenseResponse?> UpdateAsync(int portfolioId, int id, UpdateExpenseRequest request, CancellationToken ct = default);
     Task<ExpenseResponse?> UpdateAsync(WorkspaceReadScope scope, int id, UpdateExpenseRequest request, string idempotencyKey, CancellationToken ct = default);
-    Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default);
     Task<bool> DeleteAsync(WorkspaceReadScope scope, int id, string idempotencyKey, CancellationToken ct = default);
 }

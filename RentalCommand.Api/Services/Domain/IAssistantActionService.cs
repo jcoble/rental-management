@@ -13,5 +13,6 @@ public interface IAssistantActionService
     Task<AssistantActionExecuteResponse> ExecuteAsync(
         WorkspaceReadScope scope,
         AssistantActionExecuteRequest request,
+        string idempotencyKey,
         CancellationToken ct = default);
 }

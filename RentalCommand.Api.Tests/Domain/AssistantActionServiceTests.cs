@@ -9,7 +9,6 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
-using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -23,6 +22,7 @@ public sealed class AssistantActionServiceTests : IDisposable
     private readonly List<string> _commands = [];
     private readonly AssistantActionService _sut;
     private readonly WorkspaceReadScope _scope;
+    private readonly Mock<IExpenseService> _expenses = new();
 
     public AssistantActionServiceTests()
     {
@@ -59,8 +59,26 @@ public sealed class AssistantActionServiceTests : IDisposable
         _db.SaveChanges();
         _scope = SeedAdministratorScope();
 
-        var expenseService = new ExpenseService(_db, new NoopDataUpdateService(), Mock.Of<IFileStorage>(), TimeProvider.System);
-        _sut = new AssistantActionService(_db, expenseService, TimeProvider.System);
+        _expenses.Setup(service => service.CreateAsync(
+                It.IsAny<WorkspaceReadScope>(),
+                It.IsAny<CreateExpenseRequest>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((WorkspaceReadScope scope, CreateExpenseRequest request, string _, CancellationToken _) =>
+                new ExpenseResponse
+                {
+                    Id = 41,
+                    PortfolioId = scope.PortfolioId,
+                    PropertyId = request.PropertyId,
+                    Category = request.Category,
+                    Description = request.Description,
+                    Status = request.Status,
+                    Amount = request.Amount,
+                    IncurredAt = request.IncurredAt,
+                    PaidAt = request.PaidAt,
+                    Notes = request.Notes,
+                });
+        _sut = new AssistantActionService(_db, _expenses.Object, TimeProvider.System);
     }
 
     public void Dispose()
@@ -148,7 +166,7 @@ public sealed class AssistantActionServiceTests : IDisposable
                 WriteModeEnabled = false,
                 Confirmed = true,
                 Draft = draft,
-            });
+            }, "assistant-no-write");
 
         noWriteMode.Status.Should().Be(AssistantActionStatus.WriteModeRequired);
         (await _db.Expenses.CountAsync()).Should().Be(0);
@@ -160,7 +178,7 @@ public sealed class AssistantActionServiceTests : IDisposable
                 WriteModeEnabled = true,
                 Confirmed = false,
                 Draft = draft,
-            });
+            }, "assistant-not-confirmed");
 
         notConfirmed.Status.Should().Be(AssistantActionStatus.NotConfirmed);
         (await _db.Expenses.CountAsync()).Should().Be(0);
@@ -184,18 +202,22 @@ public sealed class AssistantActionServiceTests : IDisposable
                 WriteModeEnabled = true,
                 Confirmed = true,
                 Draft = draft,
-            });
+            }, "assistant-confirmed");
 
         result.Status.Should().Be(AssistantActionStatus.Created);
         result.EntityId.Should().NotBeNull();
         result.DetailHref.Should().Be($"/expenses/{result.EntityId}");
         result.Expense!.Amount.Should().Be(275.20m);
 
-        var fromDb = await _db.Expenses.AsNoTracking().SingleAsync();
-        fromDb.Amount.Should().Be(275.20m);
-        fromDb.Category.Should().Be(ScheduleECategory.Repairs);
-        fromDb.Description.Should().Contain("plumbing");
-        fromDb.Notes.Should().Contain("explicit user confirmation");
+        _expenses.Verify(service => service.CreateAsync(
+            It.Is<WorkspaceReadScope>(scope => scope == _scope),
+            It.Is<CreateExpenseRequest>(request =>
+                request.Amount == 275.20m &&
+                request.Category == ScheduleECategory.Repairs &&
+                request.Description.Contains("plumbing") &&
+                request.Notes!.Contains("explicit user confirmation")),
+            "assistant-confirmed",
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -236,7 +258,7 @@ public sealed class AssistantActionServiceTests : IDisposable
                         IncurredAt = now,
                     },
                 },
-            });
+            }, "assistant-unassigned");
 
         result.Status.Should().Be(AssistantActionStatus.InvalidDraft);
         (await _db.Expenses.CountAsync()).Should().Be(0);
@@ -365,15 +387,6 @@ public sealed class AssistantActionServiceTests : IDisposable
         _db.SaveChanges();
         return new WorkspaceReadScope(
             PortfolioId, user.Id, session.Id, accessContext.Id, accessContext.AccessRevision);
-    }
-
-    private sealed class NoopDataUpdateService : IDataUpdateService
-    {
-        public Task BroadcastEntityUpdateAsync(int portfolioId, string entityType, int entityId, object data, CancellationToken ct = default) =>
-            Task.CompletedTask;
-
-        public Task BroadcastEntityDeleteAsync(int portfolioId, string entityType, int entityId, CancellationToken ct = default) =>
-            Task.CompletedTask;
     }
 
     private sealed class RecordingCommandInterceptor : DbCommandInterceptor

@@ -24,7 +24,11 @@ public sealed record AtomicMoneyMutationCommand(
     string IdempotencyKey,
     string RequestJson) : IAtomicCommandData;
 
-public sealed record AtomicMoneyMutationResult(bool Found, bool Applied, int EntityId) : IAtomicResultData;
+public sealed record AtomicMoneyMutationResult(
+    bool Found,
+    bool Applied,
+    int EntityId,
+    string? ResponseJson = null) : IAtomicResultData;
 
 public sealed class AtomicMoneyMutationHandler
     : IAtomicCommandHandler<AtomicMoneyMutationCommand, AtomicMoneyMutationResult>,
@@ -57,8 +61,66 @@ public sealed class AtomicMoneyMutationHandler
     {
         Validate(command);
         var now = await persistence.ReadDatabaseClockUtcAsync(ct);
-        if (!await HasLiveAccessAsync(command, persistence, now, ct))
+        if (!await HasReplayAuthorityAsync(command, persistence, now, ct))
             throw Denied("Your workspace access changed. Refresh and try again.");
+    }
+
+    private static async Task<bool> HasReplayAuthorityAsync(
+        AtomicMoneyMutationCommand command,
+        IAtomicPersistenceSession persistence,
+        DateTime now,
+        CancellationToken ct)
+    {
+        if (command.Domain == AtomicMoneyDomain.OwnerDistribution)
+            return await HasWorkspaceAuthorityAsync(command, persistence, now, ct);
+
+        if (command.Domain == AtomicMoneyDomain.Expense)
+        {
+            if (command.Operation == AtomicMoneyOperation.Create)
+            {
+                var request = Read<CreateExpenseRequest>(command);
+                return await HasPropertyAuthorityAsync(command, persistence, now,
+                    request.PropertyId, request.UnitId, request.WorkOrderId, ct);
+            }
+
+            var target = await persistence.Query<Expense>()
+                .Where(row => row.Id == command.EntityId && row.PortfolioId == command.PortfolioId)
+                .Select(row => new { row.PropertyId, row.UnitId, row.WorkOrderId })
+                .SingleOrDefaultAsync(ct);
+            return target is not null && await HasPropertyAuthorityAsync(command, persistence, now,
+                target.PropertyId, target.UnitId, target.WorkOrderId, ct);
+        }
+
+        if (command.Domain == AtomicMoneyDomain.RecurringExpense)
+        {
+            if (command.Operation == AtomicMoneyOperation.Create)
+            {
+                var request = Read<CreateRecurringExpenseRequest>(command);
+                return await HasPropertyAuthorityAsync(command, persistence, now,
+                    request.PropertyId, request.UnitId, null, ct);
+            }
+
+            var target = await persistence.Query<RecurringExpense>()
+                .Where(row => row.Id == command.EntityId && row.PortfolioId == command.PortfolioId)
+                .Select(row => new { row.PropertyId, row.UnitId })
+                .SingleOrDefaultAsync(ct);
+            return target is not null && await HasPropertyAuthorityAsync(command, persistence, now,
+                target.PropertyId, target.UnitId, null, ct);
+        }
+
+        if (command.Operation == AtomicMoneyOperation.Create)
+        {
+            var request = Read<CreateLoanRequest>(command);
+            return await HasPropertyAuthorityAsync(command, persistence, now,
+                request.PropertyId, null, null, ct);
+        }
+
+        var loanTarget = await persistence.Query<Loan>()
+            .Where(row => row.Id == command.EntityId && row.PortfolioId == command.PortfolioId)
+            .Select(row => new { row.PropertyId })
+            .SingleOrDefaultAsync(ct);
+        return loanTarget is not null && await HasPropertyAuthorityAsync(command, persistence, now,
+            loanTarget.PropertyId, null, null, ct);
     }
 
     private static async Task<AtomicMoneyMutationResult> MutateExpenseAsync(
@@ -76,16 +138,17 @@ public sealed class AtomicMoneyMutationHandler
             if (entity is null) return Missing();
             if (!await HasPropertyAuthorityAsync(command, persistence, now,
                     entity.PropertyId, entity.UnitId, entity.WorkOrderId, ct))
-                throw Denied(command.Operation == AtomicMoneyOperation.Delete
-                    ? "You can view this expense but cannot delete it."
-                    : "You can view this expense but cannot change it.");
+                return Missing();
         }
 
         if (command.Operation == AtomicMoneyOperation.Delete)
         {
             entity!.DeletedAt = now;
             entity.UpdatedAt = now;
+            attempt.BindSemanticAudit(entity, Audit(command, nameof(Expense), AuditLogOperation.Deleted,
+                $"Expense {entity.Id} deleted"));
             await attempt.FlushBusinessAsync(ct);
+            StageDataUpdate(attempt, command, nameof(Expense), entity.Id, now, deleted: true);
             return Applied(entity.Id);
         }
 
@@ -96,7 +159,7 @@ public sealed class AtomicMoneyMutationHandler
                     request.VendorId, request.WorkOrderId, persistence, ct)) return Missing();
             if (!await HasPropertyAuthorityAsync(command, persistence, now,
                     request.PropertyId, request.UnitId, request.WorkOrderId, ct))
-                throw Denied("You cannot create expenses outside your assigned properties.");
+                return Missing();
             entity = new Expense
             {
                 PortfolioId = command.PortfolioId, PropertyId = request.PropertyId, UnitId = request.UnitId,
@@ -114,6 +177,8 @@ public sealed class AtomicMoneyMutationHandler
                     UnitPrice = line.UnitPrice, Amount = line.Amount, LineNumber = line.LineNumber,
                 });
             persistence.Add(entity);
+            attempt.BindSemanticAudit(entity, Audit(command, nameof(Expense), AuditLogOperation.Created,
+                $"Expense {entity.Description} created", entityId: 0));
         }
         else
         {
@@ -125,7 +190,7 @@ public sealed class AtomicMoneyMutationHandler
                     request.VendorId, effectiveWorkOrderId, persistence, ct)) return Missing();
             if (!await HasPropertyAuthorityAsync(command, persistence, now,
                     effectivePropertyId, effectiveUnitId, effectiveWorkOrderId, ct))
-                throw Denied("You cannot move an expense outside your assigned properties.");
+                return Missing();
             if (request.PropertyId.HasValue) entity!.PropertyId = request.PropertyId;
             if (request.UnitId.HasValue) entity!.UnitId = request.UnitId;
             if (request.VendorId.HasValue) entity!.VendorId = request.VendorId;
@@ -158,10 +223,14 @@ public sealed class AtomicMoneyMutationHandler
                 }
             }
             entity!.UpdatedAt = now;
+            attempt.BindSemanticAudit(entity, Audit(command, nameof(Expense), AuditLogOperation.Updated,
+                $"Expense {entity.Id} updated"));
         }
 
         await attempt.FlushBusinessAsync(ct);
-        return Applied(entity!.Id);
+        var responseJson = await SnapshotExpenseAsync(entity!.Id, command.PortfolioId, persistence, ct);
+        StageDataUpdate(attempt, command, nameof(Expense), entity.Id, now, responseJson: responseJson);
+        return Applied(entity.Id, responseJson);
     }
 
     private static async Task<AtomicMoneyMutationResult> MutateRecurringExpenseAsync(
@@ -329,6 +398,63 @@ public sealed class AtomicMoneyMutationHandler
         await attempt.FlushBusinessAsync(ct); return Applied(entity!.Id);
     }
 
+    private static async Task<string> SnapshotExpenseAsync(
+        int entityId,
+        int portfolioId,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        var response = await MoneyResponseProjection.ExpenseDetails(
+                persistence.Query<Expense>().AsNoTracking().Where(expense =>
+                    expense.Id == entityId && expense.PortfolioId == portfolioId),
+                persistence.Query<StoredFile>().AsNoTracking())
+            .SingleAsync(ct);
+        return JsonSerializer.Serialize(response);
+    }
+
+    private static void StageDataUpdate(
+        IAtomicWriteAttempt attempt,
+        AtomicMoneyMutationCommand command,
+        string entityType,
+        int entityId,
+        DateTime now,
+        string? responseJson = null,
+        bool deleted = false)
+    {
+        object data = responseJson is null
+            ? new { }
+            : JsonSerializer.Deserialize<JsonElement>(responseJson);
+        attempt.StageOutbox(new OutboxMessage
+        {
+            PortfolioId = command.PortfolioId,
+            MessageType = "data-update",
+            Payload = JsonSerializer.Serialize(new
+            {
+                entityType,
+                entityId,
+                operation = deleted ? "delete" : "update",
+                data,
+            }),
+            IdempotencyKey = $"money:{command.PortfolioId}:{command.AccessContextId}:" +
+                $"{command.Domain}:{command.Operation}:{entityId}:{command.IdempotencyKey}:data-update",
+            CreatedAtUtc = now,
+            NextAttemptAtUtc = now,
+        });
+    }
+
+    private static AtomicSemanticAudit Audit(
+        AtomicMoneyMutationCommand command,
+        string entityType,
+        AuditLogOperation operation,
+        string reason,
+        int? entityId = null) => new(
+            command.PortfolioId,
+            entityType,
+            entityId ?? command.EntityId,
+            operation,
+            UserId: command.ActorUserId,
+            ChangeReason: reason);
+
     private static IQueryable<Property> AuthorizedProperties(
         AtomicMoneyMutationCommand command, IAtomicPersistenceSession persistence, DateTime now)
     {
@@ -342,8 +468,10 @@ public sealed class AtomicMoneyMutationHandler
     }
 
     private static IQueryable<MembershipRoleAssignment> LiveAssignments(
-        AtomicMoneyMutationCommand command, IAtomicPersistenceSession persistence, DateTime now) =>
-        persistence.Query<MembershipRoleAssignment>().Where(assignment =>
+        AtomicMoneyMutationCommand command, IAtomicPersistenceSession persistence, DateTime now)
+    {
+        var requiredTargetKind = RequiredTargetKind(command);
+        return persistence.Query<MembershipRoleAssignment>().Where(assignment =>
             assignment.PortfolioId == command.PortfolioId &&
             assignment.Status == MembershipRoleAssignmentStatus.Active && assignment.SuspendedAtUtc == null &&
             assignment.RevokedAtUtc == null && assignment.EffectiveFromUtc <= now &&
@@ -365,11 +493,9 @@ public sealed class AtomicMoneyMutationHandler
                 session.ActiveAccessContextId == command.AccessContextId && session.Status == AuthSessionStatus.Active &&
                 session.RevokedAtUtc == null && session.ExpiresAtUtc > now) &&
             assignment.RoleProfile!.Capabilities.Any(capability =>
-                capability.CapabilityDefinition!.Key == command.RequiredCapability));
-
-    private static Task<bool> HasLiveAccessAsync(
-        AtomicMoneyMutationCommand command, IAtomicPersistenceSession persistence, DateTime now, CancellationToken ct) =>
-        LiveAssignments(command, persistence, now).AnyAsync(ct);
+                capability.CapabilityDefinition!.Key == command.RequiredCapability &&
+                capability.CapabilityDefinition.AuthorizationTargetKind == requiredTargetKind));
+    }
 
     private static Task<bool> HasWorkspaceAuthorityAsync(
         AtomicMoneyMutationCommand command, IAtomicPersistenceSession persistence, DateTime now, CancellationToken ct) =>
@@ -447,14 +573,19 @@ public sealed class AtomicMoneyMutationHandler
     private static DateTime Utc(DateTime value) => value.Kind == DateTimeKind.Utc ? value : value.ToUniversalTime();
     private static DateTime? Utc(DateTime? value) => value.HasValue ? Utc(value.Value) : null;
     private static AtomicMoneyMutationResult Missing() => new(false, false, 0);
-    private static AtomicMoneyMutationResult Applied(int id) => new(true, true, id);
+    private static AtomicMoneyMutationResult Applied(int id, string? responseJson = null) =>
+        new(true, true, id, responseJson);
+    private static CapabilityAuthorizationTargetKind RequiredTargetKind(AtomicMoneyMutationCommand command) =>
+        command.Domain == AtomicMoneyDomain.OwnerDistribution
+            ? CapabilityAuthorizationTargetKind.Workspace
+            : CapabilityAuthorizationTargetKind.Property;
     private static UnauthorizedAccessException Denied(string message) => new(message);
 }
 
 public static class AtomicMoneyMutation
 {
     public static readonly AtomicJsonResultCodec<AtomicMoneyMutationResult> Codec =
-        new("money.scoped-mutation.v1");
+        new("money.scoped-mutation.v2");
 
     public static AtomicMoneyMutationCommand Command<TRequest>(
         WorkspaceReadScope scope, string capability, AtomicMoneyDomain domain,
