@@ -35,9 +35,15 @@ public sealed class NotificationFoundationController : AuthenticatedPortfolioCon
 
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.NotificationsManage)]
     [HttpPut("morning-briefing")]
-    public Task<MorningBriefingSettingsResponse> UpdateMorningBriefingSettings(
-        UpdateMorningBriefingSettingsRequest request, CancellationToken ct) =>
-        _service.UpdateMorningBriefingSettingsAsync(GetPortfolioId(), request, ct);
+    public async Task<ActionResult<MorningBriefingSettingsResponse>> UpdateMorningBriefingSettings(
+        UpdateMorningBriefingSettingsRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey)) return InvalidKey();
+        return await _service.UpdateMorningBriefingSettingsAsync(
+            GetMutationScope(), request, operationKey, ct);
+    }
 
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.NotificationsManage)]
     [HttpGet("team-routing")]

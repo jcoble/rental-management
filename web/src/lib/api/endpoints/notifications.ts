@@ -87,9 +87,14 @@ export const notifications = {
         "/notification-settings/morning-briefing"
       ),
     update: (request: UpdateMorningBriefingSettingsRequest) =>
-      api.put<MorningBriefingSettingsResponse>(
-        "/notification-settings/morning-briefing",
-        request
+      idempotentMutation(
+        `notification-settings:morning-briefing:${JSON.stringify(request)}`,
+        (operationKey) =>
+          api.put<MorningBriefingSettingsResponse>(
+            "/notification-settings/morning-briefing",
+            request,
+            { headers: { "Idempotency-Key": operationKey } }
+          )
       ),
   },
   teamRouting: {

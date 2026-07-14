@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import '../../core/auth/auth_controller.dart';
 import 'message_models.dart';
 
@@ -72,8 +73,17 @@ class MessagesRepository {
   /// GET /conversations/{id} → full thread with messages (asc).
   Future<Conversation> getConversation(int id) async {
     try {
+      final prefix = tenantMode ? '/portal' : '';
+      await IdempotentMutation.run(
+        '${tenantMode ? 'portal:' : ''}conversations:read:$id',
+        (operationKey) => _dio.post<void>(
+          '$prefix/conversations/$id/read',
+          data: const <String, dynamic>{},
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        ),
+      );
       final response = await _dio.get<Map<String, dynamic>>(
-        tenantMode ? '/portal/conversations/$id' : '/conversations/$id',
+        '$prefix/conversations/$id',
       );
       final data = response.data;
       if (data == null) {

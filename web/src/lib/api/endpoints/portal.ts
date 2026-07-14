@@ -278,8 +278,15 @@ export const portal = {
 	conversations: {
 		/** List the tenant's conversations, newest activity first. */
 		list: () => api.get<ConversationSummary[]>('/portal/conversations'),
-		/** Fetch one thread's full history. Marks it read for the tenant. */
-		get: (id: number) => api.get<Conversation>(`/portal/conversations/${id}`),
+		/** Mark one thread read, then fetch its full history. */
+		get: async (id: number) => {
+			await idempotentMutation(`portal:conversations:read:${id}`, (operationKey) =>
+				api.post<void>(`/portal/conversations/${id}/read`, {}, {
+					headers: { 'Idempotency-Key': operationKey }
+				})
+			);
+			return api.get<Conversation>(`/portal/conversations/${id}`);
+		},
 		/** Start a new thread to the landlord. */
 		start: (data: StartPortalConversationRequest) => api.post<Conversation>('/portal/conversations', data),
 		/** Reply to an existing thread. */

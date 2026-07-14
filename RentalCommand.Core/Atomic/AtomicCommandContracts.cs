@@ -183,6 +183,30 @@ public interface IAtomicNotificationPersistence
         bool includeStaffOnlyNotifications,
         DateTime readAtUtc,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Resolves due workspaces, authorized recipients, preferences, destinations, and the bounded
+    /// 25-item digest in one PostgreSQL statement.
+    /// </summary>
+    Task<IReadOnlyList<AtomicMorningBriefingDigest>> ReadDueMorningBriefingsAsync(
+        DateTime evaluationUtc,
+        CancellationToken ct = default);
+}
+
+public sealed class AtomicMorningBriefingDigest : IAtomicResultData
+{
+    public int PortfolioId { get; set; }
+    public string PortfolioName { get; set; } = string.Empty;
+    public int UserId { get; set; }
+    public string LocalDate { get; set; } = string.Empty;
+    public string? Email { get; set; }
+    public string? PhoneNumber { get; set; }
+    public bool EnableEmail { get; set; }
+    public bool EnableSms { get; set; }
+    public bool EnablePush { get; set; }
+    public int ItemCount { get; set; }
+    public string ItemsJson { get; set; } = "[]";
+    public string DeviceTokensJson { get; set; } = "[]";
 }
 
 /// <summary>

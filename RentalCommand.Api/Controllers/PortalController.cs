@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Payments;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -370,7 +371,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         return Ok(items);
     }
 
-    /// <summary>Fetch one of the tenant's conversations with its full history; resets the tenant's unread count.</summary>
+    /// <summary>Fetch one of the tenant's conversations with its full history.</summary>
     [HttpGet("conversations/{id:int}")]
     [ProducesResponseType(typeof(ConversationDetail), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
@@ -385,6 +386,28 @@ public class PortalController : AuthenticatedPortfolioControllerBase
 
         var item = await _conversations.GetForTenantAsync(GetPortfolioId(), tenantId.Value, id, ct);
         return item == null ? NotFound(new { error = "Conversation not found" }) : Ok(item);
+    }
+
+    [HttpPost("conversations/{id:int}/read")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> MarkConversationRead(
+        int id,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        var tenantId = await GetTenantIdAsync(ct);
+        if (tenantId == null) return Forbid();
+        var operationKey = idempotencyKey?.Trim() ?? string.Empty;
+        if (operationKey.Length is <= 0 or > 128)
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var active = GetActiveAccessContext();
+        var scope = new WorkspaceReadScope(active.PortfolioId, active.UserId, active.SessionId,
+            active.AccessContextId, active.AccessRevision);
+        var found = await _conversations.MarkReadForTenantAsync(
+            scope, tenantId.Value, id, operationKey, ct);
+        return found ? NoContent() : NotFound(new { error = "Conversation not found" });
     }
 
     /// <summary>Tenant opens a new topic thread with the landlord.</summary>

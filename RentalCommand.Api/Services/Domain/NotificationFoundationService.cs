@@ -47,19 +47,17 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
         await MorningBriefingSettingsQuery(portfolioId).SingleAsync(ct);
 
     public async Task<MorningBriefingSettingsResponse> UpdateMorningBriefingSettingsAsync(
-        int portfolioId, UpdateMorningBriefingSettingsRequest request, CancellationToken ct)
+        WorkspaceReadScope scope,
+        UpdateMorningBriefingSettingsRequest request,
+        string operationKey,
+        CancellationToken ct)
     {
-        if (request.SendHourLocal is < 0 or > 23)
-            throw new InvalidOperationException("Morning Briefing send hour must be between 0 and 23.");
-
-        var row = await _db.AutomationSettings
-            .SingleAsync(settings => settings.PortfolioId == portfolioId, ct);
-        row.EnableMorningBriefing = request.Enabled;
-        row.MorningBriefingSendHourLocal = request.SendHourLocal;
-        row.MorningBriefingIncludeEmpty = request.IncludeEmpty;
-        row.UpdatedAtUtc = _clock.GetUtcNow().UtcDateTime;
-        await _db.SaveChangesAsync(ct);
-        return await MorningBriefingSettingsQuery(portfolioId).SingleAsync(ct);
+        var command = AtomicNotificationMutation.Command(scope,
+            AtomicNotificationMutationDomain.MorningBriefingSettings, 0, string.Empty,
+            operationKey, request);
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        return ReadSnapshot<MorningBriefingSettingsResponse>(outcome.Value);
     }
 
     public async Task<IReadOnlyList<TeamRoutingRuleResponse>> ListTeamRoutingRulesAsync(
