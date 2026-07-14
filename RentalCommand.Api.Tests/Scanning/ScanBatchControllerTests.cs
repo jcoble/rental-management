@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
@@ -16,6 +17,10 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Scanning;
 using RentalCommand.Data;
+using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Auditing;
+using RentalCommand.Data.Scanning;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Scanning;
 
@@ -31,6 +36,7 @@ public class ScanBatchControllerTests : IDisposable
 
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
+    private readonly ServiceProvider _services;
     private readonly List<string> _executedSql = [];
     private readonly CanonicalScanTestAuthorization _authorization;
 
@@ -47,6 +53,20 @@ public class ScanBatchControllerTests : IDisposable
         _db = new RentalCommandTestDbContext(options);
         _db.Database.EnsureCreated();
 
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddAtomicCommandHandler<
+            RetryScanDraftCommand,
+            ScanDraftMutationResult,
+            RetryScanDraftHandler>();
+        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+            builder.UseSqlite(_conn)
+                .AddInterceptors(SqliteDatabaseClockInterceptor.Instance)
+                .UseAtomicPersistenceKernel(provider));
+        _services = services.BuildServiceProvider();
+
         SeedPortfolio(PortfolioId);
         _authorization = CanonicalScanAuthorizationTestData.SeedWorkspaceAdministrator(
             _db, PortfolioId, userId: 7, sessionId: SessionId);
@@ -54,6 +74,7 @@ public class ScanBatchControllerTests : IDisposable
 
     public void Dispose()
     {
+        _services.Dispose();
         _db.Dispose();
         _conn.Dispose();
     }
@@ -486,7 +507,8 @@ public class ScanBatchControllerTests : IDisposable
     {
         var files = Mock.Of<IFileStorage>();
         var controller = new ScanController(
-            scan, uploads ?? Mock.Of<IScanUploadService>(), Mock.Of<IAtomicUnitOfWork>(), _db, files,
+            scan, uploads ?? Mock.Of<IScanUploadService>(),
+            _services.GetRequiredService<IAtomicUnitOfWork>(), _db, files,
             TimeProvider.System)
         {
             ControllerContext = new ControllerContext
