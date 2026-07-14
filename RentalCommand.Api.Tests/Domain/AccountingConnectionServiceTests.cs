@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -88,7 +89,11 @@ public class AccountingConnectionServiceTests : IDisposable
         (await _ctx.Db.OAuthStates.CountAsync()).Should().Be(0);
 
         // Disconnect blanks the tokens.
-        await sut.DisconnectAsync(1, AccountingProvider.QuickBooks, CancellationToken.None);
+        await sut.DisconnectAsync(
+            new WorkspaceReadScope(1, 1, Guid.NewGuid(), 1, 1),
+            AccountingProvider.QuickBooks,
+            "accounting-disconnect-test",
+            CancellationToken.None);
         var afterDisconnect = await _ctx.Db.AccountingConnections.AsNoTracking()
             .SingleAsync(c => c.PortfolioId == 1 && c.Provider == AccountingProvider.QuickBooks);
         afterDisconnect.Status.Should().Be(AccountingConnectionStatus.Disconnected);
