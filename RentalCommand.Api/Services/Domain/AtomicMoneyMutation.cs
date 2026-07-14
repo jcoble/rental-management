@@ -245,13 +245,15 @@ public sealed class AtomicMoneyMutationHandler
         if (command.Operation != AtomicMoneyOperation.Create && entity is null) return Missing();
         if (entity is not null && !await HasPropertyAuthorityAsync(
                 command, persistence, now, entity.PropertyId, entity.UnitId, null, ct))
-            throw Denied(command.Operation == AtomicMoneyOperation.Delete
-                ? "You can view this recurring expense but cannot delete it."
-                : "You can view this recurring expense but cannot change it.");
+            return Missing();
         if (command.Operation == AtomicMoneyOperation.Delete)
         {
             entity!.DeletedAt = now; entity.UpdatedAt = now;
-            await attempt.FlushBusinessAsync(ct); return Applied(entity.Id);
+            attempt.BindSemanticAudit(entity, Audit(command, nameof(RecurringExpense), AuditLogOperation.Deleted,
+                $"Recurring expense {entity.Id} deleted"));
+            await attempt.FlushBusinessAsync(ct);
+            StageDataUpdate(attempt, command, nameof(RecurringExpense), entity.Id, now, deleted: true);
+            return Applied(entity.Id);
         }
         if (command.Operation == AtomicMoneyOperation.Create)
         {
@@ -260,7 +262,7 @@ public sealed class AtomicMoneyMutationHandler
                     command.PortfolioId, request.PropertyId, request.UnitId, persistence, ct)) return Missing();
             if (!await HasPropertyAuthorityAsync(command, persistence, now,
                     request.PropertyId, request.UnitId, null, ct))
-                throw Denied("You cannot create recurring expenses outside your assigned properties.");
+                return Missing();
             var start = Utc(request.StartDate);
             entity = new RecurringExpense
             {
@@ -270,6 +272,8 @@ public sealed class AtomicMoneyMutationHandler
                 Active = request.Active, Notes = request.Notes, CreatedAt = now, UpdatedAt = now,
             };
             persistence.Add(entity);
+            attempt.BindSemanticAudit(entity, Audit(command, nameof(RecurringExpense), AuditLogOperation.Created,
+                $"Recurring expense {entity.Description} created", entityId: 0));
         }
         else
         {
@@ -280,7 +284,7 @@ public sealed class AtomicMoneyMutationHandler
                     command.PortfolioId, effectiveProperty, effectiveUnit, persistence, ct, effectiveProperty)) return Missing();
             if (!await HasPropertyAuthorityAsync(command, persistence, now,
                     effectiveProperty, effectiveUnit, null, ct))
-                throw Denied("You cannot move a recurring expense outside your assigned properties.");
+                return Missing();
             if (request.PropertyId.HasValue) entity!.PropertyId = request.PropertyId;
             if (request.UnitId.HasValue) entity!.UnitId = request.UnitId;
             if (request.Category.HasValue) entity!.Category = request.Category.Value;
@@ -292,8 +296,14 @@ public sealed class AtomicMoneyMutationHandler
             if (request.Active.HasValue) entity!.Active = request.Active.Value;
             if (request.Notes is not null) entity!.Notes = request.Notes;
             entity!.UpdatedAt = now;
+            attempt.BindSemanticAudit(entity, Audit(command, nameof(RecurringExpense), AuditLogOperation.Updated,
+                $"Recurring expense {entity.Id} updated"));
         }
-        await attempt.FlushBusinessAsync(ct); return Applied(entity!.Id);
+        await attempt.FlushBusinessAsync(ct);
+        var responseJson = await SnapshotRecurringExpenseAsync(
+            entity!.Id, command.PortfolioId, persistence, ct);
+        StageDataUpdate(attempt, command, nameof(RecurringExpense), entity.Id, now, responseJson: responseJson);
+        return Applied(entity.Id, responseJson);
     }
 
     private static async Task<AtomicMoneyMutationResult> MutateLoanAsync(
@@ -432,6 +442,19 @@ public sealed class AtomicMoneyMutationHandler
         var response = await MoneyResponseProjection.Loans(
                 persistence.Query<Loan>().AsNoTracking().Where(loan =>
                     loan.Id == entityId && loan.PortfolioId == portfolioId))
+            .SingleAsync(ct);
+        return JsonSerializer.Serialize(response);
+    }
+
+    private static async Task<string> SnapshotRecurringExpenseAsync(
+        int entityId,
+        int portfolioId,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        var response = await MoneyResponseProjection.RecurringExpenses(
+                persistence.Query<RecurringExpense>().AsNoTracking().Where(expense =>
+                    expense.Id == entityId && expense.PortfolioId == portfolioId))
             .SingleAsync(ct);
         return JsonSerializer.Serialize(response);
     }
