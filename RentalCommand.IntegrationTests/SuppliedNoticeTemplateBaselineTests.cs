@@ -1,11 +1,15 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Notifications;
 using RentalCommand.Engine.Services;
 using Testcontainers.PostgreSql;
@@ -23,6 +27,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
     private PostgreSqlContainer? _postgres;
     private bool _dockerAvailable;
     private string _connectionString = string.Empty;
+    private ServiceProvider? _services;
 
     public async Task InitializeAsync()
     {
@@ -51,10 +56,22 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         await db.Database.ExecuteSqlRawAsync(LeaseAgreementStatusViewSql.Create);
         await db.Database.ExecuteSqlRawAsync(LeaseManagementLifecycleViewSql.Create);
         await db.Database.ExecuteSqlRawAsync(TenantChargeBalanceViewSql.Create);
+
+        var services = new ServiceCollection();
+        services.AddSingleton(TimeProvider.System);
+        services.AddAtomicPersistenceKernel();
+        services.AddAtomicCommandHandler<
+            AtomicNotificationMutationCommand,
+            AtomicNotificationMutationResult,
+            AtomicNotificationMutationHandler>();
+        services.AddDbContext<RentalCommandDbContext>((provider, options) =>
+            options.UseNpgsql(_connectionString).UseAtomicPersistenceKernel(provider));
+        _services = services.BuildServiceProvider();
     }
 
     public async Task DisposeAsync()
     {
+        if (_services is not null) await _services.DisposeAsync();
         if (_postgres is not null)
         {
             await _postgres.DisposeAsync();
@@ -68,6 +85,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
 
         int portfolioId;
         int actorUserId;
+        WorkspaceReadScope scope = default;
         await using (var setup = NewContext())
         {
             var now = DateTime.UtcNow;
@@ -94,14 +112,16 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             await setup.SaveChangesAsync();
             portfolioId = portfolio.Id;
             actorUserId = actor.Id;
+            scope = await SeedAdministratorScopeAsync(setup, portfolio, actor, now);
         }
 
         const int callers = 8;
-        await Task.WhenAll(Enumerable.Range(0, callers).Select(_ => Task.Run(async () =>
+        await Task.WhenAll(Enumerable.Range(0, callers).Select(index => Task.Run(async () =>
         {
             await using var db = NewContext();
-            var service = new NotificationFoundationService(db, TimeProvider.System);
-            await service.SeedSuppliedTemplatesAsync(portfolioId, actorUserId, CancellationToken.None);
+            var service = new NotificationFoundationService(db, TimeProvider.System, Atomic);
+            await service.SeedSuppliedTemplatesAsync(
+                scope, $"seed-concurrent-{index}", CancellationToken.None);
         })));
 
         await using var verify = NewContext();
@@ -139,67 +159,14 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task SeedSuppliedTemplates_RollsBackWithCallerTransaction()
-    {
-        Skip.IfNot(_dockerAvailable, "Docker is unavailable; PostgreSQL notice baseline proof skipped.");
-
-        int portfolioId;
-        int actorUserId;
-        await using (var setup = NewContext())
-        {
-            var now = DateTime.UtcNow;
-            var actor = new ApplicationUser
-            {
-                UserName = "rollback-owner@example.test",
-                NormalizedUserName = "ROLLBACK-OWNER@EXAMPLE.TEST",
-                Email = "rollback-owner@example.test",
-                NormalizedEmail = "ROLLBACK-OWNER@EXAMPLE.TEST",
-                DisplayName = "Rollback Owner",
-                CreatedAt = now,
-            };
-            var portfolio = new Portfolio
-            {
-                Name = "Rollback Workspace",
-                ManagementCompanyName = "Rollback Workspace",
-                Status = PortfolioStatus.Active,
-                Currency = "USD",
-                CreatedAt = now,
-                UpdatedAt = now,
-            };
-            setup.Users.Add(actor);
-            setup.Portfolios.Add(portfolio);
-            await setup.SaveChangesAsync();
-            portfolioId = portfolio.Id;
-            actorUserId = actor.Id;
-        }
-
-        await using (var command = NewContext())
-        await using (var transaction = await command.Database.BeginTransactionAsync())
-        {
-            var service = new NotificationFoundationService(command, TimeProvider.System);
-            await service.SeedSuppliedTemplatesAsync(portfolioId, actorUserId, CancellationToken.None);
-            (await command.WorkspaceNoticeTemplateVersions.AsNoTracking()
-                .CountAsync(row => row.PortfolioId == portfolioId))
-                .Should().Be(SuppliedNoticeTemplateBaseline.V1.Count);
-            await transaction.RollbackAsync();
-        }
-
-        await using var verify = NewContext();
-        (await verify.WorkspaceNoticeTemplateVersions.AsNoTracking()
-            .CountAsync(row => row.PortfolioId == portfolioId)).Should().Be(0);
-        (await verify.TenantNoticePolicies.AsNoTracking()
-            .CountAsync(row => row.PortfolioId == portfolioId)).Should().Be(0);
-    }
-
-    [SkippableFact]
     public async Task CreateTemplateVersion_AppendsAndBindsPolicyInOneTransaction()
     {
         Skip.IfNot(_dockerAvailable, "Docker is unavailable; PostgreSQL notice template binding proof skipped.");
 
         var now = DateTime.UtcNow;
         int portfolioId;
-        int actorUserId;
         int originalTemplateId;
+        WorkspaceReadScope scope = default;
         await using (var setup = NewContext())
         {
             var actor = new ApplicationUser
@@ -222,28 +189,29 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             };
             setup.AddRange(actor, portfolio);
             await setup.SaveChangesAsync();
-            var service = new NotificationFoundationService(setup, TimeProvider.System);
-            await service.SeedSuppliedTemplatesAsync(portfolio.Id, actor.Id, CancellationToken.None);
+            scope = await SeedAdministratorScopeAsync(setup, portfolio, actor, now);
+            var service = new NotificationFoundationService(setup, TimeProvider.System, Atomic);
+            await service.SeedSuppliedTemplatesAsync(
+                scope, "seed-template-binding", CancellationToken.None);
             var original = await setup.TenantNoticePolicies.AsNoTracking().SingleAsync(row =>
                 row.PortfolioId == portfolio.Id && row.AutomationKey == "rent-reminder");
             portfolioId = portfolio.Id;
-            actorUserId = actor.Id;
             originalTemplateId = original.WorkspaceNoticeTemplateVersionId;
         }
 
         TenantNoticePolicyResponse saved;
         await using (var command = NewContext())
         {
-            var service = new NotificationFoundationService(command, TimeProvider.System);
+            var service = new NotificationFoundationService(command, TimeProvider.System, Atomic);
             saved = await service.CreateTemplateVersionAsync(
-                portfolioId,
-                actorUserId,
+                scope,
                 "rent-reminder",
                 new CreateWorkspaceNoticeTemplateVersionRequest(
                     "Your rent is coming due",
                     "Hello {{tenant_name}}, this is your rent reminder.",
                     null,
                     false),
+                "template-version-rent-reminder",
                 CancellationToken.None);
         }
 
@@ -273,6 +241,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         int portfolioId;
         long upcomingRentId;
         long overdueRentId;
+        WorkspaceReadScope scope = default;
         await using (var setup = NewContext())
         {
             var actor = new ApplicationUser
@@ -298,6 +267,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             };
             setup.AddRange(actor, portfolio);
             await setup.SaveChangesAsync();
+            scope = await SeedAdministratorScopeAsync(setup, portfolio, actor, now);
             setup.SimulationClocks.Add(new SimulationClock
             {
                 Id = 1,
@@ -454,8 +424,9 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             setup.AddRange(upcomingRent, overdueRent, overdueLateFee);
             await setup.SaveChangesAsync();
 
-            var foundation = new NotificationFoundationService(setup, TimeProvider.System);
-            await foundation.SeedSuppliedTemplatesAsync(portfolio.Id, actor.Id, CancellationToken.None);
+            var foundation = new NotificationFoundationService(setup, TimeProvider.System, Atomic);
+            await foundation.SeedSuppliedTemplatesAsync(
+                scope, "seed-candidate-generation", CancellationToken.None);
             portfolioId = portfolio.Id;
             upcomingRentId = upcomingRent.Id;
             overdueRentId = overdueRent.Id;
@@ -495,6 +466,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         int portfolioId;
         int draftId;
         long workItemId;
+        WorkspaceReadScope scope = default;
         var claimToken = Guid.NewGuid();
         await using (var setup = NewContext())
         {
@@ -519,6 +491,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             };
             setup.AddRange(actor, portfolio);
             await setup.SaveChangesAsync();
+            scope = await SeedAdministratorScopeAsync(setup, portfolio, actor, now);
 
             var property = new Property
             {
@@ -595,8 +568,9 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             setup.AddRange(account, party);
             await setup.SaveChangesAsync();
 
-            var foundation = new NotificationFoundationService(setup, TimeProvider.System);
-            await foundation.SeedSuppliedTemplatesAsync(portfolio.Id, actor.Id, CancellationToken.None);
+            var foundation = new NotificationFoundationService(setup, TimeProvider.System, Atomic);
+            await foundation.SeedSuppliedTemplatesAsync(
+                scope, "seed-notice-delivery", CancellationToken.None);
             var policy = await setup.TenantNoticePolicies
                 .SingleAsync(row => row.PortfolioId == portfolio.Id && row.AutomationKey == "rent-reminder");
             policy.Mode = TenantNoticeMode.Auto;
@@ -641,7 +615,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
 
         await using (var stale = NewContext())
         {
-            var foundation = new NotificationFoundationService(stale, TimeProvider.System);
+            var foundation = new NotificationFoundationService(stale, TimeProvider.System, Atomic);
             var act = () => foundation.ApproveAndQueueAsync(
                 portfolioId,
                 null,
@@ -669,7 +643,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
 
         await using (var command = NewContext())
         {
-            var foundation = new NotificationFoundationService(command, TimeProvider.System);
+            var foundation = new NotificationFoundationService(command, TimeProvider.System, Atomic);
             await foundation.ApproveAndQueueAsync(
                 portfolioId,
                 null,
@@ -717,7 +691,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
 
         await using (var verify = NewContext())
         {
-            var foundation = new NotificationFoundationService(verify, TimeProvider.System);
+            var foundation = new NotificationFoundationService(verify, TimeProvider.System, Atomic);
             var statuses = await foundation.ListDeliveryStatusesAsync(portfolioId, 50, CancellationToken.None);
             statuses.Should().HaveCount(3);
             statuses.Should().ContainSingle(row => row.Channel == NoticeDeliveryChannel.TenantPortal && row.Status == "Accepted");
@@ -732,6 +706,60 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             .UseNpgsql(_connectionString)
             .Options;
         return new RentalCommandDbContext(options);
+    }
+
+    private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();
+
+    private static async Task<WorkspaceReadScope> SeedAdministratorScopeAsync(
+        RentalCommandDbContext db,
+        Portfolio portfolio,
+        ApplicationUser actor,
+        DateTime now)
+    {
+        var context = new WorkspaceAccessContext
+        {
+            UserId = actor.Id,
+            PortfolioId = portfolio.Id,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = context,
+            PortfolioId = portfolio.Id,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = portfolio.Id,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = actor.Id,
+            ActiveAccessContext = context,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        db.AddRange(assignment, session);
+        await db.SaveChangesAsync();
+        return new WorkspaceReadScope(
+            portfolio.Id, actor.Id, session.Id, context.Id, context.AccessRevision);
     }
 
     private static StoredFile StoredFile(int portfolioId, string fileName, DateTime now) => new()
