@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
@@ -18,6 +19,7 @@ public sealed class UnitServiceDeleteTests : IAsyncLifetime
 
     private readonly MigratedPostgreSqlFixture _fixture;
     private MigratedPostgreSqlTestContext _ctx = null!;
+    private ServiceProvider _services = null!;
     private UnitService _sut = null!;
     private WorkspaceReadScope _scope;
 
@@ -29,12 +31,17 @@ public sealed class UnitServiceDeleteTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _ctx = await _fixture.CreateContextAsync();
+        _services = AtomicDomainTestKernel.CreateForRentalCrudPostgreSql(_ctx.ConnectionString);
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(UnitServiceDeleteTests));
         _sut = new UnitService(_ctx.Db, Mock.Of<IDataUpdateService>(), Mock.Of<IAuditTrailService>(),
-            TimeProvider.System, Mock.Of<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
+            TimeProvider.System, _services.GetRequiredService<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
     }
 
-    public async Task DisposeAsync() => await _ctx.DisposeAsync();
+    public async Task DisposeAsync()
+    {
+        await _services.DisposeAsync();
+        await _ctx.DisposeAsync();
+    }
 
     [Fact]
     public async Task DeleteAsync_RejectsUnitWithLeaseHistory()
