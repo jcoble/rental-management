@@ -115,9 +115,15 @@ public sealed class AtomicCoreCsvImportHandler
         DateTime now,
         CancellationToken ct)
     {
-        var allowedCapabilities = command.Domain == AtomicCoreCsvImportDomain.Property
-            ? new[] { CapabilityKeys.RentalsManage }
-            : new[] { CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage };
+        string[] allowedCapabilities = command.Domain switch
+        {
+            AtomicCoreCsvImportDomain.Property => [CapabilityKeys.RentalsManage],
+            AtomicCoreCsvImportDomain.Tenant =>
+                [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage],
+            AtomicCoreCsvImportDomain.Expense or AtomicCoreCsvImportDomain.Loan =>
+                [CapabilityKeys.MoneyExpensesManage],
+            _ => throw new ArgumentOutOfRangeException(nameof(command.Domain)),
+        };
         return persistence.Query<AuthSession>().AsNoTracking().AnyAsync(session =>
             session.Id == command.AuthSessionId
             && session.UserId == command.ActorUserId

@@ -73,7 +73,8 @@ public sealed class AtomicCoreCsvImportPersistence
                 "Errors" text[])
         ), classified AS (
             SELECT input.*,
-                   COALESCE(input."Errors", ARRAY[]::text[]) AS "FinalErrors"
+                   COALESCE(input."Errors", ARRAY[]::text[]) AS "FinalErrors",
+                   false AS "IsDuplicate"
             FROM input
         )
         """;
@@ -90,8 +91,104 @@ public sealed class AtomicCoreCsvImportPersistence
                 "Errors" text[])
         ), classified AS (
             SELECT input.*,
-                   COALESCE(input."Errors", ARRAY[]::text[]) AS "FinalErrors"
+                   COALESCE(input."Errors", ARRAY[]::text[]) AS "FinalErrors",
+                   false AS "IsDuplicate"
             FROM input
+        )
+        """;
+
+    private const string ExpenseInputSql = """
+        , input AS (
+            SELECT *
+            FROM jsonb_to_recordset(@rows::jsonb) AS row(
+                "RowNumber" integer,
+                "PropertyName" text,
+                "Category" integer,
+                "Description" text,
+                "Amount" numeric,
+                "IncurredAt" timestamptz,
+                "PaidAt" timestamptz,
+                "Notes" text,
+                "Errors" text[])
+        ), resolved AS (
+            SELECT input.*, property_match."PropertyId", property_match."MatchCount",
+                   row_number() OVER (
+                       PARTITION BY property_match."PropertyId", input."Amount", input."IncurredAt",
+                                    lower(trim(input."Description"))
+                       ORDER BY input."RowNumber") AS "NaturalKeyOrdinal",
+                   EXISTS (
+                       SELECT 1 FROM "Expenses" existing
+                       WHERE existing."PortfolioId" = @portfolioId
+                         AND existing."PropertyId" = property_match."PropertyId"
+                         AND existing."Amount" = input."Amount"
+                         AND existing."IncurredAt" = input."IncurredAt"
+                         AND lower(trim(existing."Description")) = lower(trim(input."Description"))
+                         AND existing."DeletedAt" IS NULL) AS "AlreadyExists"
+            FROM input
+            LEFT JOIN LATERAL (
+                SELECT min(property."Id") AS "PropertyId", count(*)::integer AS "MatchCount"
+                FROM "Properties" property
+                WHERE property."PortfolioId" = @portfolioId
+                  AND property."DeletedAt" IS NULL
+                  AND lower(property."Name") = lower(trim(input."PropertyName"))
+            ) property_match ON TRUE
+        ), classified AS (
+            SELECT resolved.*,
+                   COALESCE(resolved."Errors", ARRAY[]::text[]) || CASE
+                       WHEN resolved."MatchCount" = 0 THEN ARRAY['Property was not found in this portfolio.']::text[]
+                       WHEN resolved."MatchCount" > 1 THEN ARRAY['Property name is ambiguous.']::text[]
+                       ELSE ARRAY[]::text[] END AS "FinalErrors",
+                   resolved."AlreadyExists" OR resolved."NaturalKeyOrdinal" > 1 AS "IsDuplicate"
+            FROM resolved
+        )
+        """;
+
+    private const string LoanInputSql = """
+        , input AS (
+            SELECT *
+            FROM jsonb_to_recordset(@rows::jsonb) AS row(
+                "RowNumber" integer,
+                "PropertyName" text,
+                "Lender" text,
+                "OriginalAmount" numeric,
+                "CurrentBalance" numeric,
+                "AnnualInterestRatePct" numeric,
+                "TermMonths" integer,
+                "StartDate" timestamptz,
+                "DayOfMonthDue" integer,
+                "MonthlyPrincipalInterest" numeric,
+                "MonthlyEscrow" numeric,
+                "Errors" text[])
+        ), resolved AS (
+            SELECT input.*, property_match."PropertyId", property_match."MatchCount",
+                   row_number() OVER (
+                       PARTITION BY property_match."PropertyId", lower(trim(input."Lender")),
+                                    input."OriginalAmount", input."StartDate"
+                       ORDER BY input."RowNumber") AS "NaturalKeyOrdinal",
+                   EXISTS (
+                       SELECT 1 FROM "Loans" existing
+                       WHERE existing."PortfolioId" = @portfolioId
+                         AND existing."PropertyId" = property_match."PropertyId"
+                         AND lower(trim(existing."Lender")) = lower(trim(input."Lender"))
+                         AND existing."OriginalAmount" = input."OriginalAmount"
+                         AND existing."StartDate" = input."StartDate"
+                         AND existing."DeletedAt" IS NULL) AS "AlreadyExists"
+            FROM input
+            LEFT JOIN LATERAL (
+                SELECT min(property."Id") AS "PropertyId", count(*)::integer AS "MatchCount"
+                FROM "Properties" property
+                WHERE property."PortfolioId" = @portfolioId
+                  AND property."DeletedAt" IS NULL
+                  AND lower(property."Name") = lower(trim(input."PropertyName"))
+            ) property_match ON TRUE
+        ), classified AS (
+            SELECT resolved.*,
+                   COALESCE(resolved."Errors", ARRAY[]::text[]) || CASE
+                       WHEN resolved."MatchCount" = 0 THEN ARRAY['Property was not found in this portfolio.']::text[]
+                       WHEN resolved."MatchCount" > 1 THEN ARRAY['Property name is ambiguous.']::text[]
+                       ELSE ARRAY[]::text[] END AS "FinalErrors",
+                   resolved."AlreadyExists" OR resolved."NaturalKeyOrdinal" > 1 AS "IsDuplicate"
+            FROM resolved
         )
         """;
 
@@ -99,7 +196,7 @@ public sealed class AtomicCoreCsvImportPersistence
         , output AS (
             SELECT classified."RowNumber",
                    cardinality(classified."FinalErrors") = 0 AS "Valid",
-                   false AS "IsDuplicate",
+                   COALESCE(classified."IsDuplicate", false) AS "IsDuplicate",
                    NULL::integer AS "CreatedId",
                    NULL::integer AS "RelatedId",
                    classified."FinalErrors" AS "Errors"
@@ -111,7 +208,7 @@ public sealed class AtomicCoreCsvImportPersistence
                count(output."RowNumber")::integer AS "TotalRows",
                count(output."RowNumber") FILTER (WHERE output."Valid")::integer AS "ValidRows",
                0::integer AS "CreatedCount",
-               0::integer AS "DuplicateRows"
+               count(output."RowNumber") FILTER (WHERE output."IsDuplicate")::integer AS "DuplicateRows"
         FROM authorization
         LEFT JOIN output ON TRUE
         GROUP BY authorization."Authorized"
@@ -225,6 +322,98 @@ public sealed class AtomicCoreCsvImportPersistence
         GROUP BY authorization."Authorized"
         """;
 
+    private const string ExpenseImportSql = """
+        , inserted AS (
+            INSERT INTO "Expenses" (
+                "PortfolioId", "PropertyId", "Category", "Description", "Status", "Amount",
+                "IncurredAt", "PaidAt", "BillableToOwner", "Notes", "CreatedAt", "UpdatedAt")
+            SELECT @portfolioId, classified."PropertyId", classified."Category",
+                   trim(classified."Description"),
+                   CASE WHEN classified."PaidAt" IS NULL THEN 0 ELSE 2 END,
+                   classified."Amount", classified."IncurredAt", classified."PaidAt", false,
+                   nullif(trim(classified."Notes"), ''), @createdAt, @createdAt
+            FROM classified CROSS JOIN authorization
+            WHERE authorization."Authorized"
+              AND cardinality(classified."FinalErrors") = 0
+              AND NOT classified."IsDuplicate"
+            ORDER BY classified."RowNumber"
+            RETURNING "Id", "PropertyId", "Amount", "IncurredAt", "Description"
+        ), output AS (
+            SELECT classified."RowNumber",
+                   cardinality(classified."FinalErrors") = 0 AS "Valid",
+                   classified."IsDuplicate" AS "IsDuplicate",
+                   inserted."Id" AS "CreatedId",
+                   classified."PropertyId" AS "RelatedId",
+                   classified."FinalErrors" AS "Errors"
+            FROM classified CROSS JOIN authorization
+            LEFT JOIN inserted
+              ON inserted."PropertyId" = classified."PropertyId"
+             AND inserted."Amount" = classified."Amount"
+             AND inserted."IncurredAt" = classified."IncurredAt"
+             AND lower(trim(inserted."Description")) = lower(trim(classified."Description"))
+             AND classified."NaturalKeyOrdinal" = 1
+             AND NOT classified."AlreadyExists"
+        )
+        SELECT authorization."Authorized",
+               COALESCE(jsonb_agg(to_jsonb(output) ORDER BY output."RowNumber"), '[]'::jsonb)::text AS "ResultsJson",
+               COALESCE(jsonb_agg(to_jsonb(output) ORDER BY output."RowNumber")
+                   FILTER (WHERE output."CreatedId" IS NOT NULL), '[]'::jsonb)::text AS "CreatedRowsJson",
+               count(output."RowNumber")::integer AS "TotalRows",
+               count(output."RowNumber") FILTER (WHERE output."Valid")::integer AS "ValidRows",
+               count(output."CreatedId")::integer AS "CreatedCount",
+               count(output."RowNumber") FILTER (WHERE output."IsDuplicate")::integer AS "DuplicateRows"
+        FROM authorization LEFT JOIN output ON TRUE
+        GROUP BY authorization."Authorized"
+        """;
+
+    private const string LoanImportSql = """
+        , inserted AS (
+            INSERT INTO "Loans" (
+                "PortfolioId", "PropertyId", "Lender", "OriginalAmount", "CurrentBalance",
+                "AnnualInterestRatePct", "TermMonths", "StartDate", "DayOfMonthDue",
+                "MonthlyPrincipalInterest", "MonthlyEscrow", "EscrowCoversTaxes",
+                "EscrowCoversInsurance", "Status", "CreatedAt", "UpdatedAt", "WorkerClaimAttemptCount")
+            SELECT @portfolioId, classified."PropertyId", trim(classified."Lender"),
+                   classified."OriginalAmount",
+                   COALESCE(classified."CurrentBalance", classified."OriginalAmount"),
+                   classified."AnnualInterestRatePct", classified."TermMonths",
+                   classified."StartDate", classified."DayOfMonthDue",
+                   classified."MonthlyPrincipalInterest", classified."MonthlyEscrow",
+                   false, false, 0, @createdAt, @createdAt, 0
+            FROM classified CROSS JOIN authorization
+            WHERE authorization."Authorized"
+              AND cardinality(classified."FinalErrors") = 0
+              AND NOT classified."IsDuplicate"
+            ORDER BY classified."RowNumber"
+            RETURNING "Id", "PropertyId", "Lender", "OriginalAmount", "StartDate"
+        ), output AS (
+            SELECT classified."RowNumber",
+                   cardinality(classified."FinalErrors") = 0 AS "Valid",
+                   classified."IsDuplicate" AS "IsDuplicate",
+                   inserted."Id" AS "CreatedId",
+                   classified."PropertyId" AS "RelatedId",
+                   classified."FinalErrors" AS "Errors"
+            FROM classified CROSS JOIN authorization
+            LEFT JOIN inserted
+              ON inserted."PropertyId" = classified."PropertyId"
+             AND lower(trim(inserted."Lender")) = lower(trim(classified."Lender"))
+             AND inserted."OriginalAmount" = classified."OriginalAmount"
+             AND inserted."StartDate" = classified."StartDate"
+             AND classified."NaturalKeyOrdinal" = 1
+             AND NOT classified."AlreadyExists"
+        )
+        SELECT authorization."Authorized",
+               COALESCE(jsonb_agg(to_jsonb(output) ORDER BY output."RowNumber"), '[]'::jsonb)::text AS "ResultsJson",
+               COALESCE(jsonb_agg(to_jsonb(output) ORDER BY output."RowNumber")
+                   FILTER (WHERE output."CreatedId" IS NOT NULL), '[]'::jsonb)::text AS "CreatedRowsJson",
+               count(output."RowNumber")::integer AS "TotalRows",
+               count(output."RowNumber") FILTER (WHERE output."Valid")::integer AS "ValidRows",
+               count(output."CreatedId")::integer AS "CreatedCount",
+               count(output."RowNumber") FILTER (WHERE output."IsDuplicate")::integer AS "DuplicateRows"
+        FROM authorization LEFT JOIN output ON TRUE
+        GROUP BY authorization."Authorized"
+        """;
+
     private readonly RentalCommandDbContext _db;
     private readonly AtomicAuditScope _scope;
 
@@ -262,13 +451,31 @@ public sealed class AtomicCoreCsvImportPersistence
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(scope.PortfolioId);
         if (string.IsNullOrWhiteSpace(rowsJson)) throw new ArgumentException("CSV rows are required.");
 
-        var inputSql = domain == AtomicCoreCsvImportDomain.Property ? PropertyInputSql : TenantInputSql;
+        var inputSql = domain switch
+        {
+            AtomicCoreCsvImportDomain.Property => PropertyInputSql,
+            AtomicCoreCsvImportDomain.Tenant => TenantInputSql,
+            AtomicCoreCsvImportDomain.Expense => ExpenseInputSql,
+            AtomicCoreCsvImportDomain.Loan => LoanInputSql,
+            _ => throw new ArgumentOutOfRangeException(nameof(domain)),
+        };
         var suffixSql = write
-            ? domain == AtomicCoreCsvImportDomain.Property ? PropertyImportSql : TenantImportSql
+            ? domain switch
+            {
+                AtomicCoreCsvImportDomain.Property => PropertyImportSql,
+                AtomicCoreCsvImportDomain.Tenant => TenantImportSql,
+                AtomicCoreCsvImportDomain.Expense => ExpenseImportSql,
+                AtomicCoreCsvImportDomain.Loan => LoanImportSql,
+                _ => throw new ArgumentOutOfRangeException(nameof(domain)),
+            }
             : PreviewSql;
-        var capabilities = domain == AtomicCoreCsvImportDomain.Property
-            ? new[] { "rentals.manage" }
-            : new[] { "rentals.manage", "leasing.onboarding.manage" };
+        string[] capabilities = domain switch
+        {
+            AtomicCoreCsvImportDomain.Property => ["rentals.manage"],
+            AtomicCoreCsvImportDomain.Tenant => ["rentals.manage", "leasing.onboarding.manage"],
+            AtomicCoreCsvImportDomain.Expense or AtomicCoreCsvImportDomain.Loan => ["money.expenses.manage"],
+            _ => throw new ArgumentOutOfRangeException(nameof(domain)),
+        };
         var parameters = new List<NpgsqlParameter>
         {
             new("rows", NpgsqlDbType.Jsonb) { Value = rowsJson },
@@ -285,7 +492,14 @@ public sealed class AtomicCoreCsvImportPersistence
 
         using var primaryPermit = write
             ? _scope.BeginInternalRawDml(
-                domain == AtomicCoreCsvImportDomain.Property ? "Properties" : "Tenants",
+                domain switch
+                {
+                    AtomicCoreCsvImportDomain.Property => "Properties",
+                    AtomicCoreCsvImportDomain.Tenant => "Tenants",
+                    AtomicCoreCsvImportDomain.Expense => "Expenses",
+                    AtomicCoreCsvImportDomain.Loan => "Loans",
+                    _ => throw new ArgumentOutOfRangeException(nameof(domain)),
+                },
                 AtomicRawDmlOperation.Insert)
             : null;
         using var unitPermit = write && domain == AtomicCoreCsvImportDomain.Property

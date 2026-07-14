@@ -230,6 +230,8 @@ public enum AtomicCoreCsvImportDomain
 {
     Property,
     Tenant,
+    Expense,
+    Loan,
 }
 
 public sealed record AtomicCoreCsvImportRowResult(
@@ -250,7 +252,7 @@ public sealed record AtomicCoreCsvImportBatchResult(
     int DuplicateRows) : IAtomicResultData;
 
 /// <summary>
-/// Executes one typed Property or Tenant CSV batch as one PostgreSQL statement inside the owning
+/// Executes one typed Property, Tenant, Expense, or Loan CSV batch as one PostgreSQL statement inside the owning
 /// command transaction. Resolution, authorization, classification, insertion, and result counts
 /// remain database-owned.
 /// </summary>
@@ -265,7 +267,7 @@ public interface IAtomicCoreCsvImportPersistence
 }
 
 /// <summary>
-/// Read-only Property/Tenant CSV preview. It opens no receipt and admits no write permit or DML.
+/// Read-only typed CSV preview. It opens no receipt and admits no write permit or DML.
 /// </summary>
 public interface ICoreCsvImportPreviewQuery
 {
