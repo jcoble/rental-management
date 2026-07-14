@@ -74,6 +74,18 @@ public class AppointmentListResponse
     public int Take { get; set; }
 }
 
+/// <summary>
+/// Minimal shell read model for the signed-in staff user's authorized schedule. The window is
+/// half-open: appointments starting at <see cref="WindowStartUtc"/> are included and appointments
+/// starting exactly at <see cref="WindowEndUtc"/> are excluded.
+/// </summary>
+public sealed class AppointmentScheduleSummaryResponse
+{
+    public int NextSevenDaysCount { get; set; }
+    public DateTime WindowStartUtc { get; set; }
+    public DateTime WindowEndUtc { get; set; }
+}
+
 public class AppointmentListQuery : ListQuery
 {
     public int? PropertyId { get; set; }

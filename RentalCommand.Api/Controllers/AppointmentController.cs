@@ -41,6 +41,20 @@ public class AppointmentController : ManagementControllerBase
         return Ok(page);
     }
 
+    /// <summary>
+    /// Returns the current staff user's authorized appointment count for the half-open
+    /// <c>[now, now + 7 days)</c> window. The service performs authorization and aggregation in one
+    /// PostgreSQL statement; this endpoint does not accept client-owned scope or clock values.
+    /// </summary>
+    [HttpGet("schedule-summary")]
+    [ProducesResponseType(typeof(AppointmentScheduleSummaryResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<AppointmentScheduleSummaryResponse>> ScheduleSummary(
+        CancellationToken ct)
+    {
+        var summary = await _service.GetScheduleSummaryAuthorizedAsync(GetWorkspaceReadScope(), ct);
+        return Ok(summary);
+    }
+
     [HttpGet("{id:int}")]
     [ProducesResponseType(typeof(AppointmentResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

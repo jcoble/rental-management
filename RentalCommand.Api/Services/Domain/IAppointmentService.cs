@@ -15,6 +15,8 @@ public interface IAppointmentService
         CancellationToken ct = default);
     Task<AppointmentListResponse> ListPageAuthorizedAsync(
         WorkspaceReadScope scope, AppointmentListQuery query, CancellationToken ct = default);
+    Task<AppointmentScheduleSummaryResponse> GetScheduleSummaryAuthorizedAsync(
+        WorkspaceReadScope scope, CancellationToken ct = default);
     Task<AppointmentResponse?> GetAuthorizedAsync(
         WorkspaceReadScope scope, int id, CancellationToken ct = default);
     Task<AppointmentResponse?> CreateAuthorizedAsync(
