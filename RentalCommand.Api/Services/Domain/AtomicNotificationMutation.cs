@@ -55,6 +55,7 @@ public sealed class AtomicNotificationMutationHandler
         await attempt.Locking.AcquireAsync(AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
         await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
         var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        attempt.UseDatabaseWallClockForAudit(now);
         await AuthorizeAsync(command, attempt.Persistence, now, ct);
 
         return command.Domain switch
