@@ -8,7 +8,6 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
-using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.TestCommon;
 
@@ -62,7 +61,7 @@ public class ReportsServiceTests : IDisposable
             _db,
             new OwnerStatementService(_db, TimeProvider.System),
             new ScheduleEService(_db),
-            new PropertyDispositionService(_db, new NoopDataUpdateService(), TimeProvider.System, new TestActor()),
+            new PropertyDispositionService(_db, TimeProvider.System),
             TimeProvider.System);
     }
 
@@ -132,24 +131,6 @@ public class ReportsServiceTests : IDisposable
     {
         _db.Dispose();
         _conn.Dispose();
-    }
-
-    private sealed class NoopDataUpdateService : IDataUpdateService
-    {
-        public Task BroadcastEntityUpdateAsync(
-            int portfolioId, string entityType, int entityId, object data, CancellationToken ct = default)
-            => Task.CompletedTask;
-
-        public Task BroadcastEntityDeleteAsync(
-            int portfolioId, string entityType, int entityId, CancellationToken ct = default)
-            => Task.CompletedTask;
-    }
-
-    private sealed class TestActor : ICurrentActor
-    {
-        public int? UserId => 1;
-        public string? ActorLabel => "reports-test";
-        public string? IpAddress => null;
     }
 
     // ── Pure-function unit tests (no DB) ───────────────────────────────────────────────────────────

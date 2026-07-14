@@ -65,18 +65,26 @@ public class PropertyDispositionsController : ManagementControllerBase
     [ProducesResponseType(typeof(PropertyDispositionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<PropertyDispositionResponse>> Update(
-        int id, [FromBody] UpdatePropertyDispositionRequest request, CancellationToken ct)
+        int id, [FromBody] UpdatePropertyDispositionRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var updated = await _service.UpdateAuthorizedAsync(GetWorkspaceReadScope(), id, request, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var updated = await _service.UpdateAuthorizedAsync(
+            GetWorkspaceReadScope(), id, request, operationKey, ct);
         return updated is null ? NotFound(new { error = "Property disposition not found" }) : Ok(updated);
     }
 
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        int id, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
-        var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, operationKey, ct);
         return deleted ? NoContent() : NotFound(new { error = "Property disposition not found" });
     }
 }

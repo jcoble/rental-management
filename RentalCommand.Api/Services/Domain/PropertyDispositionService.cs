@@ -6,9 +6,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
-using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Leasing;
-using RentalCommand.Core.Services;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
@@ -17,29 +15,22 @@ namespace RentalCommand.Api.Services.Domain;
 
 public class PropertyDispositionService : IPropertyDispositionService
 {
-    private const string EntityType = "PropertyDisposition";
     private static readonly string[] ReadCapabilities = [CapabilityKeys.MoneyOwnerReportsRead];
-    private static readonly string[] WriteCapabilities = [CapabilityKeys.RentalsManage];
 
     private readonly RentalCommandDbContext _db;
     private static readonly AtomicJsonResultCodec<CreatePropertyDispositionResult> CreateCodec =
         new("property-disposition.create.v1");
     private readonly IAtomicUnitOfWork? _atomic;
-    private readonly IDataUpdateService _dataUpdate;
     private readonly TimeProvider _timeProvider;
 
     public PropertyDispositionService(
         RentalCommandDbContext db,
-        IDataUpdateService dataUpdate,
         TimeProvider timeProvider,
-        ICurrentActor actor,
         IAtomicUnitOfWork? atomic = null)
     {
         _db = db;
         _atomic = atomic;
-        _dataUpdate = dataUpdate;
         _timeProvider = timeProvider;
-        _ = actor;
     }
 
     public async Task<IReadOnlyList<PropertyDispositionResponse>> ListAsync(
@@ -133,108 +124,37 @@ public class PropertyDispositionService : IPropertyDispositionService
             ?? throw new InvalidOperationException("Committed property disposition could not be read back.");
     }
 
-    public async Task<PropertyDispositionResponse?> UpdateAsync(
-        int portfolioId, int id, UpdatePropertyDispositionRequest request, CancellationToken ct = default)
-        => await UpdateCoreAsync(
-            portfolioId,
-            _db.PropertyDispositions.Where(item => item.PortfolioId == portfolioId),
-            id,
-            request,
-            broadcast: true,
-            ct);
-
     public async Task<PropertyDispositionResponse?> UpdateAuthorizedAsync(
         WorkspaceReadScope scope,
         int id,
         UpdatePropertyDispositionRequest request,
+        string operationKey,
         CancellationToken ct = default)
     {
-        var response = await _db.ExecuteAuthorizedMutationAsync(
-            innerCt => UpdateCoreAsync(
-                scope.PortfolioId,
-                AuthorizedDispositions(scope, WriteCapabilities, tracking: true),
-                id,
-                request,
-                broadcast: false,
-                innerCt),
-            ct);
-        if (response != null)
-            await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, id, response, ct);
-        return response;
+        var atomic = _atomic
+            ?? throw new InvalidOperationException("Atomic property disposition is not configured.");
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.RentalsManage,
+            AtomicMoneyDomain.PropertyDisposition, AtomicMoneyOperation.Update, id, operationKey, request);
+        var outcome = await atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        return outcome.Value.Found
+            ? await GetAsync(scope.PortfolioId, outcome.Value.EntityId, ct)
+            : null;
     }
-
-    private async Task<PropertyDispositionResponse?> UpdateCoreAsync(
-        int portfolioId,
-        IQueryable<PropertyDisposition> dispositions,
-        int id,
-        UpdatePropertyDispositionRequest request,
-        bool broadcast,
-        CancellationToken ct)
-    {
-        var entity = await dispositions.FirstOrDefaultAsync(d => d.Id == id, ct);
-        if (entity is null)
-            return null;
-
-        if (request.ClosedOnDate.HasValue) entity.ClosedOnDate = request.ClosedOnDate.Value.ToUtc().Date;
-        if (request.SalePrice.HasValue) entity.SalePrice = request.SalePrice.Value;
-        if (request.SellingCosts.HasValue) entity.SellingCosts = request.SellingCosts.Value;
-        if (request.BuyerName != null) entity.BuyerName = Normalize(request.BuyerName);
-        if (request.Memo != null) entity.Memo = Normalize(request.Memo);
-        entity.UpdatedAt = _timeProvider.UtcNow();
-
-        await _db.SaveChangesAsync(ct);
-
-        var response = await GetAsync(portfolioId, entity.Id, ct) ?? PropertyDispositionResponse.FromEntity(entity);
-        if (broadcast)
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
-    }
-
-    public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
-        => await DeleteCoreAsync(
-            portfolioId,
-            _db.PropertyDispositions.Where(item => item.PortfolioId == portfolioId),
-            id,
-            broadcast: true,
-            ct);
 
     public async Task<bool> DeleteAuthorizedAsync(
         WorkspaceReadScope scope,
         int id,
+        string operationKey,
         CancellationToken ct = default)
     {
-        var deleted = await _db.ExecuteAuthorizedMutationAsync(
-            innerCt => DeleteCoreAsync(
-                scope.PortfolioId,
-                AuthorizedDispositions(scope, WriteCapabilities, tracking: true),
-                id,
-                broadcast: false,
-                innerCt),
-            ct);
-        if (deleted)
-            await _dataUpdate.BroadcastEntityDeleteAsync(scope.PortfolioId, EntityType, id, ct);
-        return deleted;
-    }
-
-    private async Task<bool> DeleteCoreAsync(
-        int portfolioId,
-        IQueryable<PropertyDisposition> dispositions,
-        int id,
-        bool broadcast,
-        CancellationToken ct)
-    {
-        var entity = await dispositions.FirstOrDefaultAsync(d => d.Id == id, ct);
-        if (entity is null)
-            return false;
-
-        var now = _timeProvider.UtcNow();
-        entity.DeletedAt = now;
-        entity.UpdatedAt = now;
-        await _db.SaveChangesAsync(ct);
-
-        if (broadcast)
-            await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
-        return true;
+        var atomic = _atomic
+            ?? throw new InvalidOperationException("Atomic property disposition is not configured.");
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.RentalsManage,
+            AtomicMoneyDomain.PropertyDisposition, AtomicMoneyOperation.Delete, id, operationKey, new object());
+        var outcome = await atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        return outcome.Value.Found;
     }
 
     private static IQueryable<PropertyDisposition> BuildListQuery(
@@ -358,15 +278,11 @@ public class PropertyDispositionService : IPropertyDispositionService
 
     private IQueryable<PropertyDisposition> AuthorizedDispositions(
         WorkspaceReadScope scope,
-        IReadOnlyCollection<string> capabilities,
-        bool tracking = false)
+        IReadOnlyCollection<string> capabilities)
     {
         var authorizedProperties = _db.Properties.AsNoTracking()
             .WhereAuthorized(_db, scope, capabilities, _timeProvider.UtcNow());
-        var dispositions = tracking
-            ? _db.PropertyDispositions
-            : _db.PropertyDispositions.AsNoTracking();
-        return dispositions.Where(disposition =>
+        return _db.PropertyDispositions.AsNoTracking().Where(disposition =>
             disposition.PortfolioId == scope.PortfolioId &&
             authorizedProperties.Any(property =>
                 property.Id == disposition.PropertyId &&

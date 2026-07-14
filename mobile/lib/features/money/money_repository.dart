@@ -326,9 +326,13 @@ class MoneyRepository {
     Map<String, dynamic> data,
   ) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/expenses/$id/capitalize',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'expenses:capitalize:$id:${jsonEncode(data)}',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/expenses/$id/capitalize',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {

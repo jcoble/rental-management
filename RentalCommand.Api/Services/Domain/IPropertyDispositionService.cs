@@ -12,8 +12,10 @@ public interface IPropertyDispositionService
     Task<PropertyDispositionResponse?> GetAuthorizedAsync(
         WorkspaceReadScope scope, int id, CancellationToken ct = default);
     Task<PropertyDispositionResponse?> UpdateAuthorizedAsync(
-        WorkspaceReadScope scope, int id, UpdatePropertyDispositionRequest request, CancellationToken ct = default);
-    Task<bool> DeleteAuthorizedAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default);
+        WorkspaceReadScope scope, int id, UpdatePropertyDispositionRequest request, string operationKey,
+        CancellationToken ct = default);
+    Task<bool> DeleteAuthorizedAsync(
+        WorkspaceReadScope scope, int id, string operationKey, CancellationToken ct = default);
 
     Task<IReadOnlyList<PropertyDispositionResponse>> ListAsync(
         int portfolioId, PropertyDispositionListQuery query, CancellationToken ct = default);
@@ -29,8 +31,4 @@ public interface IPropertyDispositionService
         string operationKey,
         CancellationToken ct = default);
 
-    Task<PropertyDispositionResponse?> UpdateAsync(
-        int portfolioId, int id, UpdatePropertyDispositionRequest request, CancellationToken ct = default);
-
-    Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default);
 }

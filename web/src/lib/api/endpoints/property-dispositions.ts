@@ -1,4 +1,5 @@
 import { api } from '../client';
+import { idempotentMutation } from '../idempotency';
 import { buildListQuery, type ListParams } from '../list-params';
 
 export interface PropertyDisposition {
@@ -61,8 +62,19 @@ export const propertyDispositions = {
 		),
 	get: (id: number) => api.get<PropertyDisposition>(`/property-dispositions/${id}`),
 	create: (data: CreatePropertyDispositionRequest) =>
-		api.post<PropertyDisposition>('/property-dispositions', data),
+		idempotentMutation(`property-dispositions:create:${JSON.stringify(data)}`, (key) =>
+			api.post<PropertyDisposition>('/property-dispositions', data, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
 	update: (id: number, data: Record<string, unknown>) =>
-		api.patch<PropertyDisposition>(`/property-dispositions/${id}`, data),
-	remove: (id: number) => api.delete(`/property-dispositions/${id}`)
+		idempotentMutation(`property-dispositions:update:${id}:${JSON.stringify(data)}`, (key) =>
+			api.patch<PropertyDisposition>(`/property-dispositions/${id}`, data, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
+	remove: (id: number) =>
+		idempotentMutation(`property-dispositions:delete:${id}`, (key) =>
+			api.delete(`/property-dispositions/${id}`, { headers: { 'Idempotency-Key': key } })
+		)
 };
