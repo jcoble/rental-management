@@ -534,7 +534,7 @@ internal static class FoundationBaselinePostgreSql
             "GRANT USAGE ON SCHEMA public TO rentalcommand_engine;",
             "GRANT USAGE ON SCHEMA public TO rentalcommand_rls_authority;",
             "GRANT SELECT ON TABLE \"AuthSessions\", \"WorkspaceAccessContexts\", \"WorkspaceMemberships\" TO rentalcommand_rls_authority;",
-            "GRANT SELECT ON TABLE \"MembershipRoleAssignments\", \"RoleProfileCapabilities\", \"CapabilityDefinitions\", \"RoleProfiles\", \"OwnerUserAccesses\", \"Portfolios\" TO rentalcommand_rls_authority;",
+            "GRANT SELECT ON TABLE \"MembershipRoleAssignments\", \"RoleProfileCapabilities\", \"CapabilityDefinitions\", \"RoleProfiles\", \"OwnerUserAccesses\", \"OwnerEntities\", \"Portfolios\" TO rentalcommand_rls_authority;",
             "GRANT SELECT ON TABLE \"vw_effective_tenant_access\" TO rentalcommand_rls_authority;",
             "GRANT INSERT ON TABLE \"Portfolios\", \"OwnerEntities\", \"WorkspaceAccessContexts\", \"WorkspaceMemberships\", \"MembershipRoleAssignments\", \"OwnerUserAccesses\", \"AutomationSettings\", \"UserAlertPreferences\", \"TeamRoutingRules\", \"WorkspaceNoticeTemplateVersions\", \"TenantNoticePolicies\" TO rentalcommand_rls_authority;",
             "GRANT SELECT ON TABLE \"AspNetUsers\", \"SystemNoticeTemplateVersions\", \"WorkspaceNoticeTemplateVersions\" TO rentalcommand_rls_authority;",
@@ -570,7 +570,7 @@ internal static class FoundationBaselinePostgreSql
         statements.Add("REVOKE USAGE ON SCHEMA public FROM rentalcommand_api;");
         statements.Add("REVOKE USAGE ON SCHEMA public FROM rentalcommand_engine;");
         statements.Add("REVOKE SELECT ON TABLE \"AuthSessions\", \"WorkspaceAccessContexts\", \"WorkspaceMemberships\" FROM rentalcommand_rls_authority;");
-        statements.Add("REVOKE SELECT ON TABLE \"MembershipRoleAssignments\", \"RoleProfileCapabilities\", \"CapabilityDefinitions\", \"RoleProfiles\", \"OwnerUserAccesses\", \"Portfolios\" FROM rentalcommand_rls_authority;");
+        statements.Add("REVOKE SELECT ON TABLE \"MembershipRoleAssignments\", \"RoleProfileCapabilities\", \"CapabilityDefinitions\", \"RoleProfiles\", \"OwnerUserAccesses\", \"OwnerEntities\", \"Portfolios\" FROM rentalcommand_rls_authority;");
         statements.Add("REVOKE SELECT ON TABLE \"vw_effective_tenant_access\" FROM rentalcommand_rls_authority;");
         statements.Add("REVOKE INSERT ON TABLE \"Portfolios\", \"OwnerEntities\", \"WorkspaceAccessContexts\", \"WorkspaceMemberships\", \"MembershipRoleAssignments\", \"OwnerUserAccesses\", \"AutomationSettings\", \"UserAlertPreferences\", \"TeamRoutingRules\", \"WorkspaceNoticeTemplateVersions\", \"TenantNoticePolicies\" FROM rentalcommand_rls_authority;");
         statements.Add("REVOKE SELECT ON TABLE \"AspNetUsers\", \"SystemNoticeTemplateVersions\", \"WorkspaceNoticeTemplateVersions\" FROM rentalcommand_rls_authority;");

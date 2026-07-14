@@ -237,4 +237,18 @@ public sealed class FoundationBaselinePostgreSqlTests
         DropSql.Should().NotContain("DROP ROLE");
         DropSql.Should().NotContain("REVOKE rentalcommand_api, rentalcommand_engine FROM %I");
     }
+
+    [Fact]
+    public void InitialWorkspaceBootstrapAuthority_CanReadEveryReturnedIdentity()
+    {
+        CreateSql.Should().Contain(
+            "GRANT SELECT ON TABLE \"AuthSessions\", \"WorkspaceAccessContexts\", \"WorkspaceMemberships\" TO rentalcommand_rls_authority;");
+        CreateSql.Should().Contain(
+            "GRANT SELECT ON TABLE \"MembershipRoleAssignments\", \"RoleProfileCapabilities\", \"CapabilityDefinitions\", \"RoleProfiles\", \"OwnerUserAccesses\", \"OwnerEntities\", \"Portfolios\" TO rentalcommand_rls_authority;");
+        CreateSql.Should().Contain("INSERT INTO public.\"OwnerEntities\"");
+        CreateSql.Should().Contain("RETURNING \"Id\" INTO new_owner_entity_id;");
+        CreateSql.Should().Contain("Initial workspace bootstrap is API-only");
+        DropSql.Should().Contain(
+            "REVOKE SELECT ON TABLE \"MembershipRoleAssignments\", \"RoleProfileCapabilities\", \"CapabilityDefinitions\", \"RoleProfiles\", \"OwnerUserAccesses\", \"OwnerEntities\", \"Portfolios\" FROM rentalcommand_rls_authority;");
+    }
 }
