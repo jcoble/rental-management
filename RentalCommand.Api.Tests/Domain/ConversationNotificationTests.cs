@@ -253,7 +253,7 @@ public class ConversationNotificationTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ListAndGetAsync_ProjectMessageCountsAndOrderedMessagesFromDatabase()
+    public async Task ListAndGetAsync_AreReadOnlyAndProjectMessageCountsAndOrderedMessagesFromDatabase()
     {
         var tenant = SeedTenantWithStaffAndTenantUsers();
         var now = DateTime.UtcNow;
@@ -299,10 +299,10 @@ public class ConversationNotificationTests : IAsyncLifetime
         var detail = await sut.GetAsync(1, conversation.Id);
         detail.Should().NotBeNull();
         detail!.MessageCount.Should().Be(2);
-        detail.UnreadCount.Should().Be(0);
+        detail.UnreadCount.Should().Be(2);
         detail.Messages.Select(m => m.Body).Should().Equal("First reply", "Second message");
 
-        _ctx.Db.Conversations.Single(c => c.Id == conversation.Id).LandlordUnreadCount.Should().Be(0);
+        _ctx.Db.Conversations.Single(c => c.Id == conversation.Id).LandlordUnreadCount.Should().Be(2);
     }
 
     [Fact]
