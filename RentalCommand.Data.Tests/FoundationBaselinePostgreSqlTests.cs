@@ -1,7 +1,9 @@
+using System.Text.RegularExpressions;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data.Tests;
 
@@ -239,16 +241,113 @@ public sealed class FoundationBaselinePostgreSqlTests
     }
 
     [Fact]
-    public void InitialWorkspaceBootstrapAuthority_CanReadEveryReturnedIdentity()
+    public void RlsAuthority_GrantsCoverTheCompleteReviewedDependencySet()
     {
-        CreateSql.Should().Contain(
-            "GRANT SELECT ON TABLE \"AuthSessions\", \"WorkspaceAccessContexts\", \"WorkspaceMemberships\" TO rentalcommand_rls_authority;");
-        CreateSql.Should().Contain(
-            "GRANT SELECT ON TABLE \"MembershipRoleAssignments\", \"RoleProfileCapabilities\", \"CapabilityDefinitions\", \"RoleProfiles\", \"OwnerUserAccesses\", \"OwnerEntities\", \"Portfolios\" TO rentalcommand_rls_authority;");
+        FoundationBaselinePostgreSql.RlsAuthoritySelectTables.Should().BeEquivalentTo(
+        [
+            "AspNetUsers", "AuthSessions", "CapabilityDefinitions", "LeaseManagementParties",
+            "LeaseManagements", "MembershipRoleAssignments", "OwnerEntities", "OwnerUserAccesses",
+            "Portfolios", "RoleProfileCapabilities", "RoleProfiles", "SimulationClocks",
+            "SystemNoticeTemplateVersions", "TenantAccounts", "TenantUserAccesses",
+            "WorkspaceAccessContexts", "WorkspaceMemberships", "WorkspaceNoticeTemplateVersions",
+        ]);
+        FoundationBaselinePostgreSql.RlsAuthoritySelectViews.Should().BeEquivalentTo(
+            ["vw_effective_tenant_access"]);
+        FoundationBaselinePostgreSql.RlsAuthorityInsertTables.Should().BeEquivalentTo(
+        [
+            "AutomationSettings", "MembershipRoleAssignments", "OwnerEntities", "OwnerUserAccesses",
+            "Portfolios", "TeamRoutingRules", "TenantNoticePolicies", "UserAlertPreferences",
+            "WorkspaceAccessContexts", "WorkspaceMemberships", "WorkspaceNoticeTemplateVersions",
+        ]);
+        FoundationBaselinePostgreSql.RlsAuthorityExecuteFunctions.Should().BeEquivalentTo(
+            ["rc_business_date(integer)", "rc_effective_now_utc(integer)"]);
+        FoundationBaselinePostgreSql.RlsAuthorityOwnedFunctions.Should().BeEquivalentTo(
+        [
+            "rc_api_scope_allows(integer)",
+            "rc_sandbox_graduation_allows(integer)",
+            "rc_access_context_is_effective(integer, integer, timestamp with time zone)",
+            "rc_list_effective_access_contexts(integer, timestamp with time zone)",
+            "rc_bootstrap_initial_workspace(integer, text, text, text, text, timestamp with time zone)",
+        ]);
+
+        var normalizedAuthoritySql = Regex.Replace(
+            FoundationBaselinePostgreSql.RlsAuthorityFunctionSql, @"\s+", " ");
+        Regex.Matches(normalizedAuthoritySql, "SECURITY DEFINER").Should().HaveCount(
+            FoundationBaselinePostgreSql.RlsAuthorityOwnedFunctions.Count);
+        foreach (var function in FoundationBaselinePostgreSql.RlsAuthorityOwnedFunctions)
+        {
+            normalizedAuthoritySql.Should().Contain(
+                $"ALTER FUNCTION {function} OWNER TO rentalcommand_rls_authority;");
+        }
+
+        var directlyReferencedRelations = Regex.Matches(
+                FoundationBaselinePostgreSql.RlsAuthorityFunctionSql,
+                "public\\.\\\"(?<relation>[^\\\"]+)\\\"")
+            .Select(match => match.Groups["relation"].Value)
+            .ToHashSet(StringComparer.Ordinal);
+        directlyReferencedRelations.Should().BeSubsetOf(
+            FoundationBaselinePostgreSql.RlsAuthoritySelectTables
+                .Concat(FoundationBaselinePostgreSql.RlsAuthoritySelectViews)
+                .Concat(FoundationBaselinePostgreSql.RlsAuthorityInsertTables),
+            "every directly referenced authority relation must have an explicit minimum grant");
+
+        var insertTargets = Regex.Matches(
+                FoundationBaselinePostgreSql.RlsAuthorityFunctionSql,
+                "INSERT INTO public\\.\\\"(?<relation>[^\\\"]+)\\\"")
+            .Select(match => match.Groups["relation"].Value)
+            .ToHashSet(StringComparer.Ordinal);
+        insertTargets.Should().BeEquivalentTo(FoundationBaselinePostgreSql.RlsAuthorityInsertTables);
+
+        var tenantAccessViewDependencies = new[]
+        {
+            "Portfolios", "WorkspaceAccessContexts", "TenantUserAccesses",
+            "LeaseManagementParties", "LeaseManagements", "TenantAccounts",
+        };
+        foreach (var table in tenantAccessViewDependencies)
+        {
+            RelationshipAccessProjectionSql.Create.Should().Contain($"\"{table}\"");
+            FoundationBaselinePostgreSql.RlsAuthoritySelectTables.Should().Contain(table);
+        }
+        LeaseEffectiveClockSql.CreateBusinessDate.Should().Contain("rc_effective_now_utc(portfolio_id)");
+        LeaseEffectiveClockSql.CreateBusinessDate.Should().Contain("\"SimulationClocks\"");
+        LeaseEffectiveClockSql.CreateEffectiveNowUtc.Should().Contain("\"SimulationClocks\"");
+
+        foreach (var table in FoundationBaselinePostgreSql.RlsAuthoritySelectTables)
+        {
+            CreateSql.Should().Contain(
+                $"GRANT SELECT ON TABLE \"{table}\" TO rentalcommand_rls_authority;");
+            DropSql.Should().Contain(
+                $"REVOKE SELECT ON TABLE \"{table}\" FROM rentalcommand_rls_authority;");
+        }
+        foreach (var view in FoundationBaselinePostgreSql.RlsAuthoritySelectViews)
+        {
+            CreateSql.Should().Contain(
+                $"GRANT SELECT ON TABLE \"{view}\" TO rentalcommand_rls_authority;");
+            DropSql.Should().Contain(
+                $"REVOKE SELECT ON TABLE \"{view}\" FROM rentalcommand_rls_authority;");
+        }
+        foreach (var table in FoundationBaselinePostgreSql.RlsAuthorityInsertTables)
+        {
+            CreateSql.Should().Contain(
+                $"GRANT INSERT ON TABLE \"{table}\" TO rentalcommand_rls_authority;");
+            DropSql.Should().Contain(
+                $"REVOKE INSERT ON TABLE \"{table}\" FROM rentalcommand_rls_authority;");
+        }
+        foreach (var function in FoundationBaselinePostgreSql.RlsAuthorityExecuteFunctions)
+        {
+            CreateSql.Should().Contain(
+                $"GRANT EXECUTE ON FUNCTION {function} TO rentalcommand_rls_authority;");
+            DropSql.Should().Contain(
+                $"REVOKE EXECUTE ON FUNCTION {function} FROM rentalcommand_rls_authority;");
+        }
+
         CreateSql.Should().Contain("INSERT INTO public.\"OwnerEntities\"");
         CreateSql.Should().Contain("RETURNING \"Id\" INTO new_owner_entity_id;");
+        CreateSql.Should().Contain("FROM public.\"vw_effective_tenant_access\"");
+        CreateSql.Should().Contain("GRANT SELECT ON TABLE \"TenantUserAccesses\" TO rentalcommand_rls_authority;");
+        CreateSql.Should().Contain("GRANT SELECT ON TABLE \"SimulationClocks\" TO rentalcommand_rls_authority;");
         CreateSql.Should().Contain("Initial workspace bootstrap is API-only");
-        DropSql.Should().Contain(
-            "REVOKE SELECT ON TABLE \"MembershipRoleAssignments\", \"RoleProfileCapabilities\", \"CapabilityDefinitions\", \"RoleProfiles\", \"OwnerUserAccesses\", \"OwnerEntities\", \"Portfolios\" FROM rentalcommand_rls_authority;");
+        CreateSql.Should().NotContain(
+            "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO rentalcommand_rls_authority;");
     }
 }

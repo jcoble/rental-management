@@ -32,7 +32,7 @@ internal static class FoundationBaselinePostgreSql
         AccountingParkedTransactionViewSql.Create,
         CreateWorkOrderResponsibilityInfrastructure,
         BuildRolesAndGrantSql(),
-        CreateRlsAuthorityFunctions,
+        RlsAuthorityFunctionSql,
         BuildCreateRlsSql(),
         CreateSandboxGraduationGlobalDeleteGuards,
     ]);
@@ -248,6 +248,68 @@ internal static class FoundationBaselinePostgreSql
         "vw_effective_tenant_access",
         "vw_access_envelopes",
         "vw_accounting_parked_transactions",
+    ];
+
+    /// <summary>
+    /// Complete base-table read surface of the NOLOGIN RLS authority. This includes transitive
+    /// dependencies of the security-invoker tenant-access view and its effective-clock functions;
+    /// adding a relation to an authority function must update this reviewed inventory.
+    /// </summary>
+    internal static IReadOnlyList<string> RlsAuthoritySelectTables { get; } =
+    [
+        "AspNetUsers",
+        "AuthSessions",
+        "CapabilityDefinitions",
+        "LeaseManagementParties",
+        "LeaseManagements",
+        "MembershipRoleAssignments",
+        "OwnerEntities",
+        "OwnerUserAccesses",
+        "Portfolios",
+        "RoleProfileCapabilities",
+        "RoleProfiles",
+        "SimulationClocks",
+        "SystemNoticeTemplateVersions",
+        "TenantAccounts",
+        "TenantUserAccesses",
+        "WorkspaceAccessContexts",
+        "WorkspaceMemberships",
+        "WorkspaceNoticeTemplateVersions",
+    ];
+
+    internal static IReadOnlyList<string> RlsAuthoritySelectViews { get; } =
+    [
+        "vw_effective_tenant_access",
+    ];
+
+    internal static IReadOnlyList<string> RlsAuthorityInsertTables { get; } =
+    [
+        "AutomationSettings",
+        "MembershipRoleAssignments",
+        "OwnerEntities",
+        "OwnerUserAccesses",
+        "Portfolios",
+        "TeamRoutingRules",
+        "TenantNoticePolicies",
+        "UserAlertPreferences",
+        "WorkspaceAccessContexts",
+        "WorkspaceMemberships",
+        "WorkspaceNoticeTemplateVersions",
+    ];
+
+    internal static IReadOnlyList<string> RlsAuthorityExecuteFunctions { get; } =
+    [
+        "rc_business_date(integer)",
+        "rc_effective_now_utc(integer)",
+    ];
+
+    internal static IReadOnlyList<string> RlsAuthorityOwnedFunctions { get; } =
+    [
+        "rc_api_scope_allows(integer)",
+        "rc_sandbox_graduation_allows(integer)",
+        "rc_access_context_is_effective(integer, integer, timestamp with time zone)",
+        "rc_list_effective_access_contexts(integer, timestamp with time zone)",
+        "rc_bootstrap_initial_workspace(integer, text, text, text, text, timestamp with time zone)",
     ];
 
     private static IReadOnlyList<string> MappedTables { get; } =
@@ -533,13 +595,18 @@ internal static class FoundationBaselinePostgreSql
             "GRANT USAGE ON SCHEMA public TO rentalcommand_api;",
             "GRANT USAGE ON SCHEMA public TO rentalcommand_engine;",
             "GRANT USAGE ON SCHEMA public TO rentalcommand_rls_authority;",
-            "GRANT SELECT ON TABLE \"AuthSessions\", \"WorkspaceAccessContexts\", \"WorkspaceMemberships\" TO rentalcommand_rls_authority;",
-            "GRANT SELECT ON TABLE \"MembershipRoleAssignments\", \"RoleProfileCapabilities\", \"CapabilityDefinitions\", \"RoleProfiles\", \"OwnerUserAccesses\", \"OwnerEntities\", \"Portfolios\" TO rentalcommand_rls_authority;",
-            "GRANT SELECT ON TABLE \"vw_effective_tenant_access\" TO rentalcommand_rls_authority;",
-            "GRANT INSERT ON TABLE \"Portfolios\", \"OwnerEntities\", \"WorkspaceAccessContexts\", \"WorkspaceMemberships\", \"MembershipRoleAssignments\", \"OwnerUserAccesses\", \"AutomationSettings\", \"UserAlertPreferences\", \"TeamRoutingRules\", \"WorkspaceNoticeTemplateVersions\", \"TenantNoticePolicies\" TO rentalcommand_rls_authority;",
-            "GRANT SELECT ON TABLE \"AspNetUsers\", \"SystemNoticeTemplateVersions\", \"WorkspaceNoticeTemplateVersions\" TO rentalcommand_rls_authority;",
-            "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO rentalcommand_rls_authority;",
         };
+
+        statements.AddRange(RlsAuthoritySelectTables.Select(table =>
+            $"GRANT SELECT ON TABLE {Quote(table)} TO rentalcommand_rls_authority;"));
+        statements.AddRange(RlsAuthoritySelectViews.Select(view =>
+            $"GRANT SELECT ON TABLE {Quote(view)} TO rentalcommand_rls_authority;"));
+        statements.AddRange(RlsAuthorityInsertTables.Select(table =>
+            $"GRANT INSERT ON TABLE {Quote(table)} TO rentalcommand_rls_authority;"));
+        statements.AddRange(RlsAuthorityExecuteFunctions.Select(function =>
+            $"GRANT EXECUTE ON FUNCTION {function} TO rentalcommand_rls_authority;"));
+        statements.Add(BuildSequenceGrantSql(
+            "rentalcommand_rls_authority", RlsAuthorityInsertTables, revoke: false));
 
         statements.AddRange(MappedTables.Select(table =>
             GrantTableSql(table, ApiRole, ApiOperations(table))).OfType<string>());
@@ -569,12 +636,16 @@ internal static class FoundationBaselinePostgreSql
         statements.Add(BuildSequenceGrantSql(EngineRole, MappedTables.Where(table => EngineOperations(table).HasFlag(TableOperation.Insert)), revoke: true));
         statements.Add("REVOKE USAGE ON SCHEMA public FROM rentalcommand_api;");
         statements.Add("REVOKE USAGE ON SCHEMA public FROM rentalcommand_engine;");
-        statements.Add("REVOKE SELECT ON TABLE \"AuthSessions\", \"WorkspaceAccessContexts\", \"WorkspaceMemberships\" FROM rentalcommand_rls_authority;");
-        statements.Add("REVOKE SELECT ON TABLE \"MembershipRoleAssignments\", \"RoleProfileCapabilities\", \"CapabilityDefinitions\", \"RoleProfiles\", \"OwnerUserAccesses\", \"OwnerEntities\", \"Portfolios\" FROM rentalcommand_rls_authority;");
-        statements.Add("REVOKE SELECT ON TABLE \"vw_effective_tenant_access\" FROM rentalcommand_rls_authority;");
-        statements.Add("REVOKE INSERT ON TABLE \"Portfolios\", \"OwnerEntities\", \"WorkspaceAccessContexts\", \"WorkspaceMemberships\", \"MembershipRoleAssignments\", \"OwnerUserAccesses\", \"AutomationSettings\", \"UserAlertPreferences\", \"TeamRoutingRules\", \"WorkspaceNoticeTemplateVersions\", \"TenantNoticePolicies\" FROM rentalcommand_rls_authority;");
-        statements.Add("REVOKE SELECT ON TABLE \"AspNetUsers\", \"SystemNoticeTemplateVersions\", \"WorkspaceNoticeTemplateVersions\" FROM rentalcommand_rls_authority;");
-        statements.Add("REVOKE USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public FROM rentalcommand_rls_authority;");
+        statements.AddRange(RlsAuthorityExecuteFunctions.Select(function =>
+            $"REVOKE EXECUTE ON FUNCTION {function} FROM rentalcommand_rls_authority;"));
+        statements.AddRange(RlsAuthorityInsertTables.Select(table =>
+            $"REVOKE INSERT ON TABLE {Quote(table)} FROM rentalcommand_rls_authority;"));
+        statements.AddRange(RlsAuthoritySelectViews.Select(view =>
+            $"REVOKE SELECT ON TABLE {Quote(view)} FROM rentalcommand_rls_authority;"));
+        statements.AddRange(RlsAuthoritySelectTables.Select(table =>
+            $"REVOKE SELECT ON TABLE {Quote(table)} FROM rentalcommand_rls_authority;"));
+        statements.Add(BuildSequenceGrantSql(
+            "rentalcommand_rls_authority", RlsAuthorityInsertTables, revoke: true));
         statements.Add("REVOKE USAGE ON SCHEMA public FROM rentalcommand_rls_authority;");
         statements.Add("DO $revoke$ BEGIN EXECUTE format('REVOKE CONNECT ON DATABASE %I FROM rentalcommand_api', current_database()); END $revoke$;");
         statements.Add("DO $revoke$ BEGIN EXECUTE format('REVOKE CONNECT ON DATABASE %I FROM rentalcommand_engine', current_database()); END $revoke$;");
@@ -742,7 +813,7 @@ internal static class FoundationBaselinePostgreSql
     /// is a NOLOGIN role so FORCE RLS cannot recursively filter the two authority tables while the
     /// runtime API, Engine, and authority logins remain unable to assume the role.
     /// </summary>
-    private const string CreateRlsAuthorityFunctions = """
+    internal const string RlsAuthorityFunctionSql = """
         CREATE OR REPLACE FUNCTION rc_api_scope_allows(target_portfolio_id integer)
         RETURNS boolean
         LANGUAGE sql
