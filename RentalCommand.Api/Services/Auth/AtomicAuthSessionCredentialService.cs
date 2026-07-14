@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Extensions.Options;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
@@ -129,7 +131,9 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
         }
 
         var now = _timeProvider.GetUtcNow().UtcDateTime;
-        var credentialId = Guid.NewGuid();
+        var authSessionId = DeriveOperationGuid(request.OperationId, "session");
+        var refreshTokenFamilyId = DeriveOperationGuid(request.OperationId, "family");
+        var credentialId = DeriveOperationGuid(request.OperationId, "credential");
         var candidateBearer = _tokens.CreateBearer(credentialId);
         var credentialExpiresAt = now.AddDays(_options.CredentialLifetimeDays);
         var familyExpiresAt = now.AddDays(_options.FamilyAbsoluteLifetimeDays);
@@ -138,8 +142,8 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
             request.UserId,
             request.SelectedAccessContextId,
             request.ExpectedAccessRevision,
-            Guid.NewGuid(),
-            Guid.NewGuid(),
+            authSessionId,
+            refreshTokenFamilyId,
             credentialId,
             _tokens.HashBearer(candidateBearer),
             now,
@@ -167,6 +171,19 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
             value.AccessRevision,
             value.Started ? _tokens.CreateBearer(value.CredentialId) : null,
             outcome.Disposition);
+    }
+
+    private static Guid DeriveOperationGuid(Guid operationId, string purpose)
+    {
+        var material = Encoding.UTF8.GetBytes($"auth-session-start:{operationId:N}:{purpose}");
+        try
+        {
+            return new Guid(SHA256.HashData(material).AsSpan(0, 16));
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(material);
+        }
     }
 
     public async Task<AtomicLoginContextChallengeOutcome> IssueContextSelectionChallengeAsync(

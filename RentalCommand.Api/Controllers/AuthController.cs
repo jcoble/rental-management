@@ -368,9 +368,12 @@ public class AuthController : ControllerBase
             return Unauthorized(new { error = "No active access context" });
         }
 
-        var operationKey = string.IsNullOrWhiteSpace(idempotencyKey)
-            ? Guid.NewGuid().ToString("N")
-            : idempotencyKey.Trim();
+        if (string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            return BadRequest(new { error = "Idempotency-Key is required." });
+        }
+
+        var operationKey = idempotencyKey.Trim();
         if (operationKey.Length > 200)
         {
             return BadRequest(new { error = "Idempotency-Key cannot exceed 200 characters." });

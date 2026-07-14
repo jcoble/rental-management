@@ -59,6 +59,48 @@ public sealed class AtomicAuthSessionCredentialServiceTests
     }
 
     [Fact]
+    public async Task StartAsync_SameOperationProducesReplayCompatibleCommand()
+    {
+        var atomic = new CapturingAtomicUnitOfWork((command, resultType) =>
+        {
+            resultType.Should().Be(typeof(StartAuthSessionResult));
+            var start = command.Should().BeOfType<StartAuthSessionCommand>().Subject;
+            return new StartAuthSessionResult(
+                true,
+                start.AuthSessionId,
+                start.UserId,
+                start.SelectedAccessContextId,
+                9,
+                start.ExpectedAccessRevision,
+                start.RefreshTokenFamilyId,
+                start.CredentialId);
+        }, AtomicCommandDisposition.Executed);
+        var tokens = new RefreshCredentialTokenFactory(SigningKey);
+        var service = CreateService(atomic, tokens, new AdvancingTimeProvider());
+        var request = new AtomicAuthSessionStartRequest(
+            Guid.NewGuid(),
+            41,
+            72,
+            3,
+            Guid.NewGuid(),
+            "one-time-context-selection-secret");
+
+        var firstResult = await service.StartAsync(request);
+        var secondResult = await service.StartAsync(request);
+
+        atomic.Commands.Should().HaveCount(2);
+        var first = atomic.Commands[0].Should().BeOfType<StartAuthSessionCommand>().Subject;
+        var second = atomic.Commands[1].Should().BeOfType<StartAuthSessionCommand>().Subject;
+        first.IssuedAtUtc.Should().NotBe(second.IssuedAtUtc);
+        first.AuthSessionId.Should().Be(second.AuthSessionId);
+        first.RefreshTokenFamilyId.Should().Be(second.RefreshTokenFamilyId);
+        first.CredentialId.Should().Be(second.CredentialId);
+        first.CredentialTokenHash.Should().Be(second.CredentialTokenHash);
+        AtomicCommandFingerprint.Create(first).Should().Be(AtomicCommandFingerprint.Create(second));
+        firstResult.RefreshBearer.Should().Be(secondResult.RefreshBearer);
+    }
+
+    [Fact]
     public async Task RotateAsync_RecoveredReceiptReconstructsOriginalReplacementBearer()
     {
         var tokens = new RefreshCredentialTokenFactory(SigningKey);
@@ -114,7 +156,8 @@ public sealed class AtomicAuthSessionCredentialServiceTests
 
     private static AtomicAuthSessionCredentialService CreateService(
         IAtomicUnitOfWork atomic,
-        RefreshCredentialTokenFactory tokens) =>
+        RefreshCredentialTokenFactory tokens,
+        TimeProvider? timeProvider = null) =>
         new(
             atomic,
             tokens,
@@ -125,7 +168,19 @@ public sealed class AtomicAuthSessionCredentialServiceTests
                 FamilyAbsoluteLifetimeDays = 30,
                 SessionLifetimeDays = 30,
             }),
-            TimeProvider.System);
+            timeProvider ?? TimeProvider.System);
+
+    private sealed class AdvancingTimeProvider : TimeProvider
+    {
+        private DateTimeOffset _utcNow = new(2026, 7, 14, 0, 0, 0, TimeSpan.Zero);
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            var current = _utcNow;
+            _utcNow = _utcNow.AddSeconds(1);
+            return current;
+        }
+    }
 
     private sealed class CapturingAtomicUnitOfWork : IAtomicUnitOfWork
     {
@@ -141,6 +196,7 @@ public sealed class AtomicAuthSessionCredentialServiceTests
         }
 
         public object? LastCommand { get; private set; }
+        public List<object> Commands { get; } = [];
         public int CallCount { get; private set; }
 
         public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
@@ -153,6 +209,7 @@ public sealed class AtomicAuthSessionCredentialServiceTests
         {
             CallCount++;
             LastCommand = command;
+            Commands.Add(command);
             var value = (TResult)_resultFactory(command, typeof(TResult));
             return Task.FromResult(new AtomicCommandOutcome<TResult>(
                 value,
