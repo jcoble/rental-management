@@ -111,12 +111,12 @@ public sealed class RecordLeaseEndingDispositionHandler
         IAtomicPersistenceSession persistence,
         RecordLeaseEndingDispositionCommand command,
         DateTime nowUtc) =>
-        LeaseAgreementCommandAuthorization.AuthorizedRelationships(command, persistence, nowUtc)
+        LeaseAgreementDraftCommandSupport.AuthorizedRelationships(command, persistence, nowUtc)
             .Where(relationship => relationship.UnitId == command.UnitId);
 
     private static void Validate(RecordLeaseEndingDispositionCommand command)
     {
-        LeaseAgreementCommandAuthorization.ValidateAuthorizationShape(command);
+        LeaseAgreementDraftCommandSupport.ValidateAuthorizationShape(command);
         if (command.UnitId <= 0
             || !Enum.IsDefined(command.Disposition)
             || string.IsNullOrWhiteSpace(command.DecisionReason)
