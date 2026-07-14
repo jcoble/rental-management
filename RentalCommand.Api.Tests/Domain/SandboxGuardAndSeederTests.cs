@@ -124,11 +124,14 @@ public class SandboxGuardAndSeederTests : IDisposable
         _ctx.Db.WorkspaceAccessContexts.Add(accessContext);
         _ctx.Db.SaveChanges();
 
+        var infrastructure = new TestAtomicInfrastructureUnitOfWork(_ctx.Db);
         var seeder = new DemoDataSeeder(
             _ctx.Db,
             NullLogger<DemoDataSeeder>.Instance,
             TimeProvider.System,
-            new LegalDocumentSourceVersionTestResolver(_ctx.Db));
+            new LegalDocumentSourceVersionTestResolver(_ctx.Db),
+            infrastructure,
+            infrastructure);
         await seeder.SeedPortfolioAsync(2, CancellationToken.None);
 
         // Demo data landed under portfolio 2, all FK'd correctly.
@@ -169,11 +172,14 @@ public class SandboxGuardAndSeederTests : IDisposable
     [Fact]
     public async Task SeedPortfolio_IsIdempotent()
     {
+        var infrastructure = new TestAtomicInfrastructureUnitOfWork(_ctx.Db);
         var seeder = new DemoDataSeeder(
             _ctx.Db,
             NullLogger<DemoDataSeeder>.Instance,
             TimeProvider.System,
-            new LegalDocumentSourceVersionTestResolver(_ctx.Db));
+            new LegalDocumentSourceVersionTestResolver(_ctx.Db),
+            infrastructure,
+            infrastructure);
         await seeder.SeedPortfolioAsync(1, CancellationToken.None);
         var firstCount = await _ctx.Db.Properties.IgnoreQueryFilters().CountAsync(p => p.PortfolioId == 1);
         firstCount.Should().BeGreaterThan(0);

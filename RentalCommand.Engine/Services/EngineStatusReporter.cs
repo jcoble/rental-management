@@ -1,9 +1,8 @@
 using System.Reflection;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using RentalCommand.Core.Entities;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
 
@@ -12,16 +11,22 @@ namespace RentalCommand.Engine.Services;
 /// <summary>
 /// Persists worker health records (start, heartbeat, error) to the database.
 /// Called from <see cref="Workers.EngineWorkerBase"/> on each poll cycle and on errors.
-/// Registered as <b>Scoped</b> — each call site creates a fresh scope to isolate DB access.
+/// Registered as <b>Scoped</b>; its kernel-owned infrastructure transaction uses that scope's
+/// DbContext and performs each concurrent-safe upsert as one PostgreSQL statement.
 /// </summary>
 public class EngineStatusReporter
 {
-    private readonly IServiceProvider _serviceProvider;
+    private readonly RentalCommandDbContext _db;
+    private readonly IAtomicInfrastructureUnitOfWork _infrastructure;
     private readonly ILogger<EngineStatusReporter> _logger;
 
-    public EngineStatusReporter(IServiceProvider serviceProvider, ILogger<EngineStatusReporter> logger)
+    public EngineStatusReporter(
+        RentalCommandDbContext db,
+        IAtomicInfrastructureUnitOfWork infrastructure,
+        ILogger<EngineStatusReporter> logger)
     {
-        _serviceProvider = serviceProvider;
+        _db = db;
+        _infrastructure = infrastructure;
         _logger = logger;
     }
 
@@ -34,36 +39,26 @@ public class EngineStatusReporter
     {
         try
         {
-            using var scope = _serviceProvider.CreateScope();
-            var context = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-
-            var heartbeat = await context.EngineWorkerHeartbeats
-                .FirstOrDefaultAsync(h => h.WorkerName == workerName, cancellationToken);
-
             var now = DateTime.UtcNow;
-            if (heartbeat == null)
-            {
-                heartbeat = new EngineWorkerHeartbeat
+            await _infrastructure.ExecuteAsync(
+                AtomicInfrastructureOperation.EngineHeartbeat,
+                async ct =>
                 {
-                    WorkerName = workerName,
-                    LastHeartbeatUtc = now,
-                    Status = EngineWorkerStatus.Running,
-                    StartedAtUtc = now,
-                    ProcessedCount = 0,
-                    CycleCount = 0
-                };
-                context.EngineWorkerHeartbeats.Add(heartbeat);
-            }
-            else
-            {
-                heartbeat.StartedAtUtc = now;
-                heartbeat.LastHeartbeatUtc = now;
-                heartbeat.Status = EngineWorkerStatus.Running;
-                heartbeat.ProcessedCount = 0;
-                heartbeat.CycleCount = 0;
-            }
-
-            await context.SaveChangesAsync(cancellationToken);
+                    await _db.Database.ExecuteSqlInterpolatedAsync($$"""
+                        INSERT INTO "EngineWorkerHeartbeats"
+                            ("WorkerName", "LastHeartbeatUtc", "Status", "StartedAtUtc",
+                             "ProcessedCount", "CycleCount")
+                        VALUES
+                            ({{workerName}}, {{now}}, {{(int)EngineWorkerStatus.Running}}, {{now}}, 0, 0)
+                        ON CONFLICT ("WorkerName") DO UPDATE SET
+                            "StartedAtUtc" = EXCLUDED."StartedAtUtc",
+                            "LastHeartbeatUtc" = EXCLUDED."LastHeartbeatUtc",
+                            "Status" = EXCLUDED."Status",
+                            "ProcessedCount" = 0,
+                            "CycleCount" = 0
+                        """, ct);
+                },
+                cancellationToken);
         }
         catch (Exception ex)
         {
@@ -83,12 +78,6 @@ public class EngineStatusReporter
     {
         try
         {
-            using var scope = _serviceProvider.CreateScope();
-            var context = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-
-            var heartbeat = await context.EngineWorkerHeartbeats
-                .FirstOrDefaultAsync(h => h.WorkerName == workerName, cancellationToken);
-
             var now = DateTime.UtcNow;
             var metadata = JsonSerializer.Serialize(new
             {
@@ -99,33 +88,28 @@ public class EngineStatusReporter
                 lockContested = Program.LockContested
             });
 
-            if (heartbeat == null)
-            {
-                heartbeat = new EngineWorkerHeartbeat
+            await _infrastructure.ExecuteAsync(
+                AtomicInfrastructureOperation.EngineHeartbeat,
+                async ct =>
                 {
-                    WorkerName = workerName,
-                    LastHeartbeatUtc = now,
-                    Status = EngineWorkerStatus.Running,
-                    StartedAtUtc = now,
-                    ProcessedCount = processedDelta,
-                    CycleCount = 1,
-                    Metadata = metadata
-                };
-                context.EngineWorkerHeartbeats.Add(heartbeat);
-            }
-            else
-            {
-                heartbeat.LastHeartbeatUtc = now;
-                heartbeat.Status = EngineWorkerStatus.Running;
-                heartbeat.ProcessedCount += processedDelta;
-                heartbeat.CycleCount++;
-                heartbeat.Metadata = metadata;
-                // Clear stale error fields on recovery
-                heartbeat.LastErrorMessage = null;
-                heartbeat.LastErrorUtc = null;
-            }
-
-            await context.SaveChangesAsync(cancellationToken);
+                    await _db.Database.ExecuteSqlInterpolatedAsync($$"""
+                        INSERT INTO "EngineWorkerHeartbeats"
+                            ("WorkerName", "LastHeartbeatUtc", "Status", "StartedAtUtc",
+                             "ProcessedCount", "CycleCount", "Metadata")
+                        VALUES
+                            ({{workerName}}, {{now}}, {{(int)EngineWorkerStatus.Running}}, {{now}},
+                             {{processedDelta}}, 1, CAST({{metadata}} AS jsonb))
+                        ON CONFLICT ("WorkerName") DO UPDATE SET
+                            "LastHeartbeatUtc" = EXCLUDED."LastHeartbeatUtc",
+                            "Status" = EXCLUDED."Status",
+                            "ProcessedCount" = "EngineWorkerHeartbeats"."ProcessedCount" + EXCLUDED."ProcessedCount",
+                            "CycleCount" = "EngineWorkerHeartbeats"."CycleCount" + 1,
+                            "Metadata" = EXCLUDED."Metadata",
+                            "LastErrorMessage" = NULL,
+                            "LastErrorUtc" = NULL
+                        """, ct);
+                },
+                cancellationToken);
         }
         catch (Exception ex)
         {
@@ -141,34 +125,25 @@ public class EngineStatusReporter
     {
         try
         {
-            using var scope = _serviceProvider.CreateScope();
-            var context = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-
-            var heartbeat = await context.EngineWorkerHeartbeats
-                .FirstOrDefaultAsync(h => h.WorkerName == workerName, cancellationToken);
-
             var now = DateTime.UtcNow;
-            if (heartbeat == null)
-            {
-                heartbeat = new EngineWorkerHeartbeat
+            await _infrastructure.ExecuteAsync(
+                AtomicInfrastructureOperation.EngineHeartbeat,
+                async ct =>
                 {
-                    WorkerName = workerName,
-                    LastHeartbeatUtc = now,
-                    Status = EngineWorkerStatus.Error,
-                    LastErrorMessage = ex.Message,
-                    LastErrorUtc = now,
-                    StartedAtUtc = now
-                };
-                context.EngineWorkerHeartbeats.Add(heartbeat);
-            }
-            else
-            {
-                heartbeat.Status = EngineWorkerStatus.Error;
-                heartbeat.LastErrorMessage = ex.Message;
-                heartbeat.LastErrorUtc = now;
-            }
-
-            await context.SaveChangesAsync(cancellationToken);
+                    await _db.Database.ExecuteSqlInterpolatedAsync($$"""
+                        INSERT INTO "EngineWorkerHeartbeats"
+                            ("WorkerName", "LastHeartbeatUtc", "LastErrorMessage", "LastErrorUtc",
+                             "Status", "ProcessedCount", "StartedAtUtc", "CycleCount")
+                        VALUES
+                            ({{workerName}}, {{now}}, {{ex.Message}}, {{now}},
+                             {{(int)EngineWorkerStatus.Error}}, 0, {{now}}, 0)
+                        ON CONFLICT ("WorkerName") DO UPDATE SET
+                            "Status" = EXCLUDED."Status",
+                            "LastErrorMessage" = EXCLUDED."LastErrorMessage",
+                            "LastErrorUtc" = EXCLUDED."LastErrorUtc"
+                        """, ct);
+                },
+                cancellationToken);
         }
         catch (Exception loggingEx)
         {

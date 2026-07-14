@@ -23,13 +23,16 @@ public class SandboxServiceTests : IDisposable
 
     private SandboxService BuildService()
     {
+        var infrastructure = new TestAtomicInfrastructureUnitOfWork(_ctx.Db);
         var seeder = new RentalCommand.Api.Services.Auth.DemoDataSeeder(
             _ctx.Db,
             NullLogger<RentalCommand.Api.Services.Auth.DemoDataSeeder>.Instance,
             TimeProvider.System,
-            new LegalDocumentSourceVersionTestResolver(_ctx.Db));
+            new LegalDocumentSourceVersionTestResolver(_ctx.Db),
+            infrastructure,
+            infrastructure);
         return new SandboxService(
-            _ctx.Db, seeder, NullLogger<SandboxService>.Instance, TimeProvider.System);
+            _ctx.Db, seeder, NullLogger<SandboxService>.Instance, TimeProvider.System, infrastructure);
     }
 
     // -----------------------------------------------------------------------

@@ -34,9 +34,11 @@ internal sealed class AtomicAuditScope : IAtomicExecutionState, IAtomicInfrastru
     private AtomicSetBasedTarget? _activeSetBasedTarget;
     private IReadOnlyList<AtomicRawDmlPermit>? _activeRawDmlPermits;
     private DateTime? _trackedMutationTimestampUtc;
+    private AtomicInfrastructureOperation? _infrastructureOperation;
 
     public Guid ScopeId { get; } = Guid.NewGuid();
     public bool IsActive => _command is not null;
+    public bool IsInfrastructureActive => _infrastructureOperation is not null;
     public bool AllowsUnconvertedWrites => _mode.AllowUnconvertedWrites;
     public long CurrentMutationOrdinal => _ordinal;
 
@@ -73,6 +75,39 @@ internal sealed class AtomicAuditScope : IAtomicExecutionState, IAtomicInfrastru
                 _mutations.Clear();
                 _rows.Clear();
             }
+        });
+    }
+
+    public IDisposable BeginInfrastructureAttempt(
+        AtomicInfrastructureOperation operation,
+        Guid attemptId)
+    {
+        lock (_gate)
+        {
+            if (_infrastructureOperation is not null)
+            {
+                throw new AtomicArchitectureException(
+                    "An infrastructure workflow is already active in this scope.");
+            }
+        }
+
+        var attemptLease = BeginAttempt(
+            new AtomicCommandIdentity(
+                $"infrastructure.{operation.ToString().ToLowerInvariant()}",
+                attemptId.ToString("N")),
+            attemptId);
+        lock (_gate)
+        {
+            _infrastructureOperation = operation;
+        }
+
+        return new Lease(() =>
+        {
+            lock (_gate)
+            {
+                _infrastructureOperation = null;
+            }
+            attemptLease.Dispose();
         });
     }
 
@@ -184,6 +219,13 @@ internal sealed class AtomicAuditScope : IAtomicExecutionState, IAtomicInfrastru
         {
             var permit = _activeRawDmlPermits?.SingleOrDefault(candidate =>
                 candidate.TableName == tableName && candidate.Operation == operation);
+            if (permit is null
+                && _infrastructureOperation == AtomicInfrastructureOperation.EngineHeartbeat
+                && tableName == "EngineWorkerHeartbeats"
+                && operation == AtomicRawDmlOperation.Insert)
+            {
+                return;
+            }
             if (permit is null
                 || (_command is null && !permit.AllowWithoutAttempt)
                 || (_command is not null && permit.AllowWithoutAttempt))
@@ -407,6 +449,10 @@ internal sealed class AtomicAuditScope : IAtomicExecutionState, IAtomicInfrastru
         RequireActive();
         lock (_gate)
         {
+            if (_infrastructureOperation == AtomicInfrastructureOperation.SandboxTransition)
+            {
+                return;
+            }
             if (_activeSetBasedTarget is null
                 || _activeSetBasedTarget.EntityClrType != entityType
                 || _activeSetBasedTarget.Operation != operation)
