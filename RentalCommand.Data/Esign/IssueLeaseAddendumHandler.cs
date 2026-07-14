@@ -156,6 +156,10 @@ public sealed class IssueLeaseAddendumHandler
         addendum.IssuedArtifactId = artifact.Id;
         addendum.IssuedAtUtc = times.WallClockUtc;
         addendum.UpdatedAtUtc = times.WallClockUtc;
+        attempt.BindSemanticAudit(addendum, new AtomicSemanticAudit(command.PortfolioId,
+            nameof(LeaseAddendum), addendum.Id, AuditLogOperation.Updated, UserId: command.ActorUserId,
+            NewValues: JsonSerializer.Serialize(new { addendum.IssuedArtifactId, addendum.IssuedAtUtc }),
+            ChangeReason: "Issued immutable Addendum artifact and froze its signer/effect snapshot."));
         var packet = new SignatureRequest
         {
             PortfolioId = command.PortfolioId, LeaseAddendumId = addendum.Id, Provider = "native",
@@ -191,10 +195,6 @@ public sealed class IssueLeaseAddendumHandler
         pending.State = PendingFileUploadState.Finalized;
         pending.StoredFileId = storedFile.Id;
         pending.UpdatedAtUtc = times.WallClockUtc;
-        attempt.BindSemanticAudit(addendum, new AtomicSemanticAudit(command.PortfolioId,
-            nameof(LeaseAddendum), addendum.Id, AuditLogOperation.Updated, UserId: command.ActorUserId,
-            NewValues: JsonSerializer.Serialize(new { addendum.IssuedArtifactId, addendum.IssuedAtUtc }),
-            ChangeReason: "Issued immutable Addendum artifact and froze its signer/effect snapshot."));
         attempt.StageSemanticEvent(new AtomicSemanticAudit(command.PortfolioId, nameof(SignatureRequest),
             packet.Id, AuditLogOperation.Created, UserId: command.ActorUserId,
             ChangeReason: "Created canonical Addendum signature packet."), times.WallClockUtc);
