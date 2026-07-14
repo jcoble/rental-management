@@ -289,18 +289,23 @@ internal static class StoredDocumentAuthorization
                     portfolioId, entityId, access, utcNow, persistence, ct)
                 : ManagedWorkOrderExistsAsync(portfolioId, entityId, access, utcNow, persistence, ct);
 
-        var capability = target switch
+        IReadOnlyCollection<string>? capabilities = target switch
         {
             StoredDocumentTarget.Property or StoredDocumentTarget.Unit or StoredDocumentTarget.Tenant =>
-                CapabilityKeys.RentalsManage,
-            StoredDocumentTarget.LeaseAgreement => CapabilityKeys.LeasingAgreementsPrepare,
-            StoredDocumentTarget.Expense => CapabilityKeys.MoneyExpensesManage,
+                [CapabilityKeys.RentalsManage],
+            StoredDocumentTarget.LeaseAgreement or StoredDocumentTarget.LegalDocumentArtifact =>
+                [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingAgreementsPrepare],
+            StoredDocumentTarget.TenantAccount or StoredDocumentTarget.TenantLedgerEntry =>
+                [CapabilityKeys.MoneyChargesManage, CapabilityKeys.MoneyPaymentsManage],
+            StoredDocumentTarget.Expense => [CapabilityKeys.MoneyExpensesManage],
             StoredDocumentTarget.WorkOrder or StoredDocumentTarget.Appointment or StoredDocumentTarget.Inspection or
-                StoredDocumentTarget.Vendor => CapabilityKeys.WorkManage,
+                StoredDocumentTarget.Vendor => [CapabilityKeys.WorkManage],
+            StoredDocumentTarget.SecurityDepositAccount => [CapabilityKeys.MoneyDepositsManage],
+            StoredDocumentTarget.OwnerEntity => [CapabilityKeys.RentalsManage],
             _ => null,
         };
-        if (capability is null) return Task.FromResult(false);
-        var assignments = AuthorizedAssignments(persistence, portfolioId, access, capability, utcNow);
+        if (capabilities is null) return Task.FromResult(false);
+        var assignments = AuthorizedAssignments(persistence, portfolioId, access, capabilities, utcNow);
 
         return target switch
         {
@@ -329,6 +334,40 @@ internal static class StoredDocumentAuthorization
                         assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
                         assignment.SelectedProperties.Any(selected => selected.PortfolioId == portfolioId &&
                             selected.PropertyId == entity.LeaseManagement!.PropertyId)), ct),
+            StoredDocumentTarget.LegalDocumentArtifact => persistence.Query<LegalDocumentArtifact>().AnyAsync(
+                artifact => artifact.Id == entityId && artifact.PortfolioId == portfolioId &&
+                    (persistence.Query<LeaseAgreement>().Any(agreement =>
+                         agreement.PortfolioId == artifact.PortfolioId &&
+                         (agreement.IssuedArtifactId == artifact.Id ||
+                          agreement.ExecutedArtifactId == artifact.Id) &&
+                         assignments.Any(assignment =>
+                             assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                             assignment.SelectedProperties.Any(selected =>
+                                 selected.PortfolioId == portfolioId &&
+                                 selected.PropertyId == agreement.LeaseManagement!.PropertyId))) ||
+                     persistence.Query<LeaseAddendum>().Any(addendum =>
+                         addendum.PortfolioId == artifact.PortfolioId &&
+                         (addendum.IssuedArtifactId == artifact.Id ||
+                          addendum.ExecutedArtifactId == artifact.Id) &&
+                         assignments.Any(assignment =>
+                             assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                             assignment.SelectedProperties.Any(selected =>
+                                 selected.PortfolioId == portfolioId &&
+                                 selected.PropertyId == addendum.LeaseManagement!.PropertyId)))), ct),
+            StoredDocumentTarget.TenantAccount => persistence.Query<TenantAccount>().AnyAsync(account =>
+                account.Id == entityId && account.PortfolioId == portfolioId &&
+                assignments.Any(assignment =>
+                    assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                    assignment.SelectedProperties.Any(selected =>
+                        selected.PortfolioId == portfolioId &&
+                        selected.PropertyId == account.LeaseManagement!.PropertyId)), ct),
+            StoredDocumentTarget.TenantLedgerEntry => persistence.Query<TenantLedgerEntry>().AnyAsync(entry =>
+                entry.Id == entityId && entry.PortfolioId == portfolioId &&
+                assignments.Any(assignment =>
+                    assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                    assignment.SelectedProperties.Any(selected =>
+                        selected.PortfolioId == portfolioId &&
+                        selected.PropertyId == entry.TenantAccount!.LeaseManagement!.PropertyId)), ct),
             StoredDocumentTarget.Expense => persistence.Query<Expense>().AnyAsync(
                 entity => entity.Id == entityId && entity.PortfolioId == portfolioId &&
                     assignments.Any(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
@@ -336,7 +375,16 @@ internal static class StoredDocumentAuthorization
                             selected.PropertyId == entity.PropertyId)), ct),
             StoredDocumentTarget.Vendor => persistence.Query<Vendor>().AnyAsync(
                 entity => entity.Id == entityId && entity.PortfolioId == portfolioId &&
-                    assignments.Any(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties), ct),
+                    (entity.WorkOrders.Any(workOrder => workOrder.PortfolioId == portfolioId &&
+                         assignments.Any(assignment =>
+                             assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                             assignment.SelectedProperties.Any(selected => selected.PortfolioId == portfolioId &&
+                                 selected.PropertyId == workOrder.PropertyId))) ||
+                     entity.Expenses.Any(expense => expense.PortfolioId == portfolioId &&
+                         expense.PropertyId != null && assignments.Any(assignment =>
+                             assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                             assignment.SelectedProperties.Any(selected => selected.PortfolioId == portfolioId &&
+                                 selected.PropertyId == expense.PropertyId)))), ct),
             StoredDocumentTarget.WorkOrder => persistence.Query<WorkOrder>().AnyAsync(
                 entity => entity.Id == entityId && entity.PortfolioId == portfolioId &&
                     assignments.Any(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
@@ -352,6 +400,21 @@ internal static class StoredDocumentAuthorization
                     assignments.Any(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
                         assignment.SelectedProperties.Any(selected => selected.PortfolioId == portfolioId &&
                             selected.PropertyId == entity.PropertyId)), ct),
+            StoredDocumentTarget.SecurityDepositAccount => persistence.Query<SecurityDepositAccount>().AnyAsync(
+                deposit => deposit.Id == entityId && deposit.PortfolioId == portfolioId &&
+                    assignments.Any(assignment =>
+                        assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                        assignment.SelectedProperties.Any(selected =>
+                            selected.PortfolioId == portfolioId &&
+                            selected.PropertyId == deposit.TenantAccount!.LeaseManagement!.PropertyId)), ct),
+            StoredDocumentTarget.OwnerEntity => persistence.Query<OwnerEntity>().AnyAsync(owner =>
+                owner.Id == entityId && owner.PortfolioId == portfolioId &&
+                persistence.Query<Property>().Any(property =>
+                    property.PortfolioId == owner.PortfolioId && property.OwnerEntityId == owner.Id &&
+                    assignments.Any(assignment =>
+                        assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                        assignment.SelectedProperties.Any(selected =>
+                            selected.PortfolioId == portfolioId && selected.PropertyId == property.Id))), ct),
             _ => Task.FromResult(false),
         };
     }

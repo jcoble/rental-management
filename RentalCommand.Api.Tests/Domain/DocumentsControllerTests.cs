@@ -34,6 +34,7 @@ public sealed class DocumentsControllerTests : IDisposable
     [Fact]
     public async Task GetFile_WithThumbForImage_ReturnsJpegThumbnail()
     {
+        var unitId = SeedDocumentTarget(nameof(StoredDocumentTarget.Unit));
         var documents = new Mock<IDocumentService>();
         documents
             .Setup(d => d.FindAsync(PortfolioId, 7, It.IsAny<CancellationToken>()))
@@ -42,7 +43,7 @@ public sealed class DocumentsControllerTests : IDisposable
                 Id = 7,
                 PortfolioId = PortfolioId,
                 EntityType = "Unit",
-                EntityId = 3,
+                EntityId = unitId,
                 FileName = "inspection.png",
                 FilePath = "stored/inspection.png",
                 ContentType = "image/png",
@@ -70,17 +71,8 @@ public sealed class DocumentsControllerTests : IDisposable
 
     public static IEnumerable<object[]> StaffUploadTargets()
     {
-        yield return ["Unit"];
-        yield return ["LeaseAgreement"];
-        yield return ["LegalDocumentArtifact"];
-        yield return ["TenantAccount"];
-        yield return ["TenantLedgerEntry"];
-        yield return ["WorkOrder"];
-        yield return ["Appointment"];
-        yield return ["Tenant"];
-        yield return ["OwnerEntity"];
-        yield return ["SecurityDepositAccount"];
-        yield return ["Inspection"];
+        foreach (var target in Enum.GetNames<StoredDocumentTarget>())
+            yield return [target];
     }
 
     [Theory]
@@ -381,16 +373,17 @@ public sealed class DocumentsControllerTests : IDisposable
     [Fact]
     public async Task List_WithCanonicalStaffContext_AllowsPortfolioEntity()
     {
-        var expected = new[] { new DocumentDto { Id = 45, EntityType = "Unit", EntityId = 10 } };
+        var unitId = SeedDocumentTarget(nameof(StoredDocumentTarget.Unit));
+        var expected = new[] { new DocumentDto { Id = 45, EntityType = "Unit", EntityId = unitId } };
         var documents = new Mock<IDocumentService>();
-        documents.Setup(d => d.ListAsync(PortfolioId, "Unit", 10, It.IsAny<CancellationToken>()))
+        documents.Setup(d => d.ListAsync(PortfolioId, "Unit", unitId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(expected);
         var controller = CreateController(
             documents.Object,
             Mock.Of<IFileStorage>(),
             isManagement: true);
 
-        var result = await controller.List("Unit", 10, CancellationToken.None);
+        var result = await controller.List("Unit", unitId, CancellationToken.None);
 
         result.Result.Should().BeOfType<OkObjectResult>()
             .Which.Value.Should().BeSameAs(expected);
@@ -435,6 +428,11 @@ public sealed class DocumentsControllerTests : IDisposable
         var tenantClaim = claims.SingleOrDefault(claim => claim.Type == "tenantId")?.Value;
         if (int.TryParse(tenantClaim, out var tenantId))
             EnsureTenantRelationship(context, user, tenantId);
+        var activeContext = isManagement
+            ? EnsureManagementAuthorization(context, user)
+            : new ActiveAccessContext(
+                Guid.NewGuid(), user.Id, context.Id, PortfolioId, context.AccessRevision,
+                WorkspaceExperience.Tenant, null, WorkspaceExperience.Tenant);
 
         var baseClaims = new List<Claim>
         {
@@ -462,11 +460,7 @@ public sealed class DocumentsControllerTests : IDisposable
                 },
             },
         };
-        controller.HttpContext.Items[CanonicalAccessContextHttpItem.Key] = new ActiveAccessContext(
-            Guid.NewGuid(), user.Id, context.Id, PortfolioId, 1,
-            isManagement ? WorkspaceExperience.Management : WorkspaceExperience.Tenant,
-            isManagement ? 1 : null,
-            isManagement ? WorkspaceExperience.Management : WorkspaceExperience.Tenant);
+        controller.HttpContext.Items[CanonicalAccessContextHttpItem.Key] = activeContext;
 
         return controller;
     }
@@ -513,6 +507,57 @@ public sealed class DocumentsControllerTests : IDisposable
         _ctx.Db.WorkspaceAccessContexts.Add(context);
         _ctx.Db.SaveChanges();
         return context;
+    }
+
+    private ActiveAccessContext EnsureManagementAuthorization(
+        WorkspaceAccessContext context,
+        ApplicationUser user)
+    {
+        var now = DateTime.UtcNow;
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = context,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = PortfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            User = user,
+            ActiveAccessContext = context,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        _ctx.Db.AddRange(assignment, session);
+        _ctx.Db.SaveChanges();
+
+        return new ActiveAccessContext(
+            session.Id,
+            user.Id,
+            context.Id,
+            PortfolioId,
+            context.AccessRevision,
+            WorkspaceExperience.Management,
+            membership.Id,
+            membership.DefaultExperience);
     }
 
     private void EnsureTenantRelationship(
@@ -623,12 +668,22 @@ public sealed class DocumentsControllerTests : IDisposable
         };
     }
 
-    private int SeedDocumentTarget(string entityType)
+    private long SeedDocumentTarget(string entityType)
     {
         var now = DateTime.UtcNow;
+        var user = EnsureUser();
+        var owner = new OwnerEntity
+        {
+            PortfolioId = PortfolioId,
+            Name = $"Owner {entityType}",
+            OwnerEntityType = OwnerEntityType.Person,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
         var property = new Property
         {
             PortfolioId = PortfolioId,
+            OwnerEntity = owner,
             Name = $"Property {entityType}",
             AddressLine1 = "100 Test",
             City = "Columbus",
@@ -652,16 +707,34 @@ public sealed class DocumentsControllerTests : IDisposable
             CreatedAt = now,
             UpdatedAt = now,
         };
-        _ctx.Db.AddRange(property, unit, tenant);
+        _ctx.Db.AddRange(owner, property, unit, tenant);
         _ctx.Db.SaveChanges();
+
+        if (entityType is nameof(StoredDocumentTarget.Tenant)
+            or nameof(StoredDocumentTarget.LeaseAgreement)
+            or nameof(StoredDocumentTarget.LegalDocumentArtifact)
+            or nameof(StoredDocumentTarget.TenantAccount)
+            or nameof(StoredDocumentTarget.TenantLedgerEntry)
+            or nameof(StoredDocumentTarget.SecurityDepositAccount))
+        {
+            var canonical = SeedCanonicalLeaseDocumentTargets(property, unit, tenant, user, now);
+            return entityType switch
+            {
+                nameof(StoredDocumentTarget.Tenant) => tenant.Id,
+                nameof(StoredDocumentTarget.LeaseAgreement) => canonical.Agreement.Id,
+                nameof(StoredDocumentTarget.LegalDocumentArtifact) => canonical.Artifact.Id,
+                nameof(StoredDocumentTarget.TenantAccount) => canonical.Account.Id,
+                nameof(StoredDocumentTarget.TenantLedgerEntry) => canonical.LedgerEntry.Id,
+                nameof(StoredDocumentTarget.SecurityDepositAccount) => canonical.DepositAccount.Id,
+                _ => throw new InvalidOperationException("The canonical target set is incomplete."),
+            };
+        }
 
         return entityType switch
         {
-            "Property" => property.Id,
-            "Unit" => unit.Id,
-            "Tenant" => tenant.Id,
-            "LeaseAgreement" or "LegalDocumentArtifact" or "TenantAccount" or "TenantLedgerEntry" => property.Id,
-            "WorkOrder" => AddAndSave(new WorkOrder
+            nameof(StoredDocumentTarget.Property) => property.Id,
+            nameof(StoredDocumentTarget.Unit) => unit.Id,
+            nameof(StoredDocumentTarget.WorkOrder) => AddAndSave(new WorkOrder
             {
                 PortfolioId = PortfolioId,
                 PropertyId = property.Id,
@@ -672,7 +745,7 @@ public sealed class DocumentsControllerTests : IDisposable
                 RequestedAt = now,
                 UpdatedAt = now,
             }).Id,
-            "Appointment" => AddAndSave(new Appointment
+            nameof(StoredDocumentTarget.Appointment) => AddAndSave(new Appointment
             {
                 PortfolioId = PortfolioId,
                 PropertyId = property.Id,
@@ -683,7 +756,7 @@ public sealed class DocumentsControllerTests : IDisposable
                 CreatedAt = now,
                 UpdatedAt = now,
             }).Id,
-            "Inspection" => AddAndSave(new Inspection
+            nameof(StoredDocumentTarget.Inspection) => AddAndSave(new Inspection
             {
                 PortfolioId = PortfolioId,
                 PropertyId = property.Id,
@@ -692,18 +765,198 @@ public sealed class DocumentsControllerTests : IDisposable
                 CreatedAt = now,
                 UpdatedAt = now,
             }).Id,
-            "SecurityDepositAccount" => property.Id,
-            "OwnerEntity" => AddAndSave(new OwnerEntity
+            nameof(StoredDocumentTarget.Expense) => AddAndSave(new Expense
             {
                 PortfolioId = PortfolioId,
-                Name = "Test Owner",
-                OwnerEntityType = OwnerEntityType.Person,
+                PropertyId = property.Id,
+                UnitId = unit.Id,
+                Description = "Document target expense",
+                Amount = 25m,
+                IncurredAt = now,
                 CreatedAt = now,
                 UpdatedAt = now,
             }).Id,
+            nameof(StoredDocumentTarget.Vendor) => SeedVendorTarget(property, unit, tenant, now),
+            nameof(StoredDocumentTarget.OwnerEntity) => owner.Id,
             _ => throw new ArgumentOutOfRangeException(nameof(entityType), entityType, null),
         };
     }
+
+    private CanonicalLeaseDocumentTargets SeedCanonicalLeaseDocumentTargets(
+        Property property,
+        Unit unit,
+        Tenant tenant,
+        ApplicationUser user,
+        DateTime now)
+    {
+        var storedFile = new StoredFile
+        {
+            PortfolioId = PortfolioId,
+            FileName = $"agreement-{Guid.NewGuid():N}.pdf",
+            FilePath = $"stored/agreement-{Guid.NewGuid():N}.pdf",
+            ContentType = "application/pdf",
+            FileSize = 1,
+            UploadedAt = now,
+        };
+        _ctx.Db.StoredFiles.Add(storedFile);
+        _ctx.Db.SaveChanges();
+
+        var artifact = new LegalDocumentArtifact
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            StoredFileId = storedFile.Id,
+            ArtifactKind = LegalDocumentArtifactKind.IssuedAgreement,
+            StorageKey = storedFile.FilePath,
+            FileName = storedFile.FileName,
+            ContentType = storedFile.ContentType,
+            ByteLength = storedFile.FileSize,
+            ContentSha256 = new string('a', 64),
+            LegalIssuanceFingerprint = new string('b', 64),
+            CreatedAtUtc = now,
+            CreatedByUserId = user.Id,
+        };
+        var source = new LegalDocumentSourceVersion
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            SourceKind = LegalDocumentSourceKind.BuiltInRenderer,
+            BusinessKey = $"documents-test:{Guid.NewGuid():N}",
+            RendererKey = $"documents-test-{Guid.NewGuid():N}",
+            RendererVersion = 1,
+            SnapshotPayload = "{}",
+            CreatedAtUtc = now,
+            CreatedByUserId = user.Id,
+        };
+        var management = new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            RelationshipNumber = $"DOC-{Guid.NewGuid():N}",
+            CreatedAtUtc = now,
+            CreatedByUserId = user.Id,
+            UpdatedAtUtc = now,
+            RowVersion = Guid.NewGuid(),
+        };
+        _ctx.Db.AddRange(artifact, source, management);
+        _ctx.Db.SaveChanges();
+
+        var agreement = new LeaseAgreement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            VersionNumber = 1,
+            AgreementNumber = $"AGR-{Guid.NewGuid():N}",
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = DateOnly.FromDateTime(now),
+            TermEndOn = DateOnly.FromDateTime(now.AddYears(1)),
+            GoverningFromOn = DateOnly.FromDateTime(now),
+            BaseRentAmount = 1_000m,
+            RentDueDay = 1,
+            SecurityDepositObligation = 1_000m,
+            LateFeeAmount = 50m,
+            GracePeriodDays = 5,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            DocumentSourceVersionId = source.Id,
+            IssuedArtifactId = artifact.Id,
+            IssuedAtUtc = now,
+            CreatedAtUtc = now,
+            CreatedByUserId = user.Id,
+            UpdatedAtUtc = now,
+        };
+        var party = new LeaseManagementParty
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(now),
+            ChangeReason = "Document target test",
+            CreatedAtUtc = now,
+            CreatedByUserId = user.Id,
+        };
+        var account = new TenantAccount
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            AccountNumber = $"TA-{Guid.NewGuid():N}",
+            Currency = "USD",
+            OpenedAtUtc = now,
+            CreatedAtUtc = now,
+            CreatedByUserId = user.Id,
+        };
+        _ctx.Db.AddRange(agreement, party, account);
+        _ctx.Db.SaveChanges();
+
+        var ledgerEntry = new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.OpeningBalance,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = 100m,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(now),
+            PostedAtUtc = now,
+            Description = "Document target opening balance",
+            BusinessKey = $"documents-test:{Guid.NewGuid():N}",
+            CreatedByUserId = user.Id,
+        };
+        var depositAccount = new SecurityDepositAccount
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = account.Id,
+            OriginatingAgreementId = agreement.Id,
+            Currency = "USD",
+            CreatedAtUtc = now,
+            CreatedByUserId = user.Id,
+        };
+        _ctx.Db.AddRange(ledgerEntry, depositAccount);
+        _ctx.Db.SaveChanges();
+
+        return new CanonicalLeaseDocumentTargets(
+            agreement, artifact, account, ledgerEntry, depositAccount);
+    }
+
+    private long SeedVendorTarget(Property property, Unit unit, Tenant tenant, DateTime now)
+    {
+        var vendor = AddAndSave(new Vendor
+        {
+            PortfolioId = PortfolioId,
+            Name = "Document Target Vendor",
+            ServiceType = "General",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        AddAndSave(new WorkOrder
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = tenant.Id,
+            VendorId = vendor.Id,
+            Title = "Vendor document relationship",
+            Description = "Vendor document relationship",
+            RequestedAt = now,
+            UpdatedAt = now,
+        });
+        return vendor.Id;
+    }
+
+    private sealed record CanonicalLeaseDocumentTargets(
+        LeaseAgreement Agreement,
+        LegalDocumentArtifact Artifact,
+        TenantAccount Account,
+        TenantLedgerEntry LedgerEntry,
+        SecurityDepositAccount DepositAccount);
 
     private T AddAndSave<T>(T entity) where T : class
     {
