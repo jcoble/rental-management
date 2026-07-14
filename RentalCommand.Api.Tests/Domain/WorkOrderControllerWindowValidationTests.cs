@@ -51,11 +51,11 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
             Description = "End before start",
             ScheduledFor = new DateTimeOffset(2026, 6, 20, 16, 0, 0, TimeSpan.FromHours(-4)),
             ScheduledWindowEnd = new DateTimeOffset(2026, 6, 20, 14, 0, 0, TimeSpan.FromHours(-4)),
-        }, CancellationToken.None);
+        }, "create-invalid-window", CancellationToken.None);
 
         result.Result.Should().BeOfType<BadRequestObjectResult>();
         service.Verify(s => s.CreateAuthorizedAsync(It.IsAny<WorkspaceReadScope>(), It.IsAny<CreateWorkOrderRequest>(),
-            It.IsAny<int?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -72,7 +72,7 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
             Description = "End equals start",
             ScheduledFor = same,
             ScheduledWindowEnd = same,
-        }, CancellationToken.None);
+        }, "create-zero-window", CancellationToken.None);
 
         result.Result.Should().BeOfType<BadRequestObjectResult>();
     }
@@ -87,11 +87,11 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
         {
             ScheduledFor = new DateTimeOffset(2026, 6, 20, 16, 0, 0, TimeSpan.FromHours(-4)),
             ScheduledWindowEnd = new DateTimeOffset(2026, 6, 20, 15, 0, 0, TimeSpan.FromHours(-4)),
-        }, CancellationToken.None);
+        }, "update-invalid-window", CancellationToken.None);
 
         result.Result.Should().BeOfType<BadRequestObjectResult>();
         service.Verify(s => s.UpdateAuthorizedAsync(It.IsAny<WorkspaceReadScope>(), It.IsAny<int>(), It.IsAny<UpdateWorkOrderRequest>(),
-            It.IsAny<int?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -99,7 +99,7 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
     {
         var service = new Mock<IWorkOrderService>();
         service.Setup(s => s.CreateAuthorizedAsync(It.IsAny<WorkspaceReadScope>(), It.IsAny<CreateWorkOrderRequest>(),
-                It.IsAny<int?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+                It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new WorkOrderResponse { Id = 11, Title = "Valid window" });
         var controller = CreateController(service.Object);
 
@@ -110,11 +110,11 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
             Description = "End after start",
             ScheduledFor = new DateTimeOffset(2026, 6, 20, 14, 0, 0, TimeSpan.FromHours(-4)),
             ScheduledWindowEnd = new DateTimeOffset(2026, 6, 20, 16, 0, 0, TimeSpan.FromHours(-4)),
-        }, CancellationToken.None);
+        }, "create-valid-window", CancellationToken.None);
 
         result.Result.Should().BeOfType<CreatedAtActionResult>();
         service.Verify(s => s.CreateAuthorizedAsync(It.IsAny<WorkspaceReadScope>(), It.IsAny<CreateWorkOrderRequest>(),
-            It.IsAny<int?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
+            It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -123,7 +123,7 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
         // A window-end with no start is a partial shape; the invariant only fires when both are present.
         var service = new Mock<IWorkOrderService>();
         service.Setup(s => s.CreateAuthorizedAsync(It.IsAny<WorkspaceReadScope>(), It.IsAny<CreateWorkOrderRequest>(),
-                It.IsAny<int?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+                It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new WorkOrderResponse { Id = 12, Title = "End only" });
         var controller = CreateController(service.Object);
 
@@ -133,7 +133,7 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
             Title = "End only",
             Description = "No start",
             ScheduledWindowEnd = new DateTimeOffset(2026, 6, 20, 16, 0, 0, TimeSpan.FromHours(-4)),
-        }, CancellationToken.None);
+        }, "create-end-only", CancellationToken.None);
 
         result.Result.Should().BeOfType<CreatedAtActionResult>();
     }
