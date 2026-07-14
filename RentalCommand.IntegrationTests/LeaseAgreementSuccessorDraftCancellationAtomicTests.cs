@@ -276,6 +276,12 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         executed.IssuedAtUtc = now;
         executed.ExecutedArtifactId = executedArtifactId;
         executed.FullyExecutedAtUtc = now;
+        executed.GoverningFromOn = new DateOnly(2026, 2, 1);
+        var executedPredecessor = await db.LeaseAgreements.SingleAsync(
+            agreement => agreement.Id == sourceIds[2]);
+        executedPredecessor.SupersededEffectiveOn = executed.GoverningFromOn;
+        executedPredecessor.SupersededByAgreementId = executed.Id;
+        executedPredecessor.SupersessionRecordedAtUtc = now;
         db.LeaseAgreementSigners.AddRange(
             RequiredTenantSigner(portfolio.Id, successorIds[1], "issued-signer@example.test"),
             RequiredTenantSigner(portfolio.Id, successorIds[2], "executed-signer@example.test"));
