@@ -3,13 +3,16 @@ using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Notifications;
 using Testcontainers.PostgreSql;
 using Xunit;
@@ -22,6 +25,7 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
     private PostgreSqlContainer? _postgres;
     private bool _dockerAvailable;
     private string _connectionString = string.Empty;
+    private ServiceProvider? _services;
 
     public async Task InitializeAsync()
     {
@@ -49,10 +53,22 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
         await db.Database.ExecuteSqlRawAsync(LeaseAgreementStatusViewSql.Create);
         await db.Database.ExecuteSqlRawAsync(LeaseManagementLifecycleViewSql.Create);
         await db.Database.ExecuteSqlRawAsync(TenantChargeBalanceViewSql.Create);
+
+        var services = new ServiceCollection();
+        services.AddSingleton(TimeProvider.System);
+        services.AddAtomicPersistenceKernel();
+        services.AddAtomicCommandHandler<
+            AtomicNotificationMutationCommand,
+            AtomicNotificationMutationResult,
+            AtomicNotificationMutationHandler>();
+        services.AddDbContext<RentalCommandDbContext>((provider, options) =>
+            options.UseNpgsql(_connectionString).UseAtomicPersistenceKernel(provider));
+        _services = services.BuildServiceProvider();
     }
 
     public async Task DisposeAsync()
     {
+        if (_services is not null) await _services.DisposeAsync();
         if (_postgres is not null) await _postgres.DisposeAsync();
     }
 
@@ -115,8 +131,9 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
             var second = await SeedRelationshipAsync(setup, portfolio, actor, "B", now);
             selectedPropertyScope = await SeedPropertyManagerScopeAsync(
                 setup, portfolio.Id, first.PropertyId, now);
-            var foundation = new NotificationFoundationService(setup, TimeProvider.System);
-            await foundation.SeedSuppliedTemplatesAsync(portfolio.Id, actor.Id, CancellationToken.None);
+            var foundation = new NotificationFoundationService(setup, TimeProvider.System, Atomic);
+            await foundation.SeedSuppliedTemplatesAsync(
+                manualScope, "seed-notice-draft-templates", CancellationToken.None);
             var policy = await setup.TenantNoticePolicies.SingleAsync(row =>
                 row.PortfolioId == portfolio.Id && row.AutomationKey == "rent-reminder");
             policy.Mode = TenantNoticeMode.Draft;
@@ -606,6 +623,8 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
         if (recorder is not null) options.AddInterceptors(recorder);
         return new RentalCommandDbContext(options.Options);
     }
+
+    private IAtomicUnitOfWork Atomic => _services!.GetRequiredService<IAtomicUnitOfWork>();
 
     private static StoredFile StoredFile(int portfolioId, string fileName, DateTime now) => new()
     {

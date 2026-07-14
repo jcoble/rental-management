@@ -7,6 +7,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -42,6 +44,10 @@ public class ConversationNotificationTests : IAsyncLifetime
             SendConversationMessageCommand,
             SendConversationMessageResult,
             SendConversationMessageHandler>();
+        services.AddAtomicCommandHandler<
+            AtomicNotificationMutationCommand,
+            AtomicNotificationMutationResult,
+            AtomicNotificationMutationHandler>();
         services.AddDbContext<RentalCommand.Data.RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(_ctx.ConnectionString)
                 .UseAtomicPersistenceKernel(provider));
@@ -194,7 +200,8 @@ public class ConversationNotificationTests : IAsyncLifetime
             });
         _ctx.Db.SaveChanges();
 
-        var sut = new NotificationService(_ctx.Db, TimeProvider.System, new NoopDataUpdateService());
+        var sut = new NotificationService(
+            _ctx.Db, TimeProvider.System, _services.GetRequiredService<IAtomicUnitOfWork>());
 
         var tenantItems = await sut.ListAsync(1, userId: 20);
         tenantItems.Select(n => n.Title).Should().Equal("Pool closed");
@@ -205,16 +212,35 @@ public class ConversationNotificationTests : IAsyncLifetime
     [Fact]
     public async Task CreateBroadcastAsync_NormalizesSeverityAndCountsAsUnreadForPortfolioUsers()
     {
-        var sut = new NotificationService(_ctx.Db, TimeProvider.System, new NoopDataUpdateService());
+        SeedTenantWithStaffAndTenantUsers();
+        var context = await _ctx.Db.WorkspaceAccessContexts.SingleAsync(row =>
+            row.PortfolioId == 1 && row.UserId == 10);
+        var now = DateTime.UtcNow;
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = 10,
+            ActiveAccessContextId = context.Id,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        _ctx.Db.AuthSessions.Add(session);
+        await _ctx.Db.SaveChangesAsync();
+        var scope = new WorkspaceReadScope(1, 10, session.Id, context.Id, context.AccessRevision);
+        var sut = new NotificationService(
+            _ctx.Db, TimeProvider.System, _services.GetRequiredService<IAtomicUnitOfWork>());
 
         var created = await sut.CreateBroadcastAsync(
-            1,
+            scope,
             new CreateBroadcastNotificationRequest
             {
                 Title = "Pool closed",
                 Message = "The pool is closed for maintenance.",
                 Severity = "critical",
-            });
+            },
+            "broadcast-pool-closed");
 
         created.Severity.Should().Be("Critical");
         created.IsRead.Should().BeFalse();
