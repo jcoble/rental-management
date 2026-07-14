@@ -619,6 +619,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         new(
             _userId,
             _firstContextId,
+            1,
             Guid.NewGuid(),
             Guid.NewGuid(),
             Guid.NewGuid(),

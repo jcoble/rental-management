@@ -22,7 +22,8 @@ public sealed class CoreCrudAtomicContractTests
 
         mutations.Should().HaveCount(3);
         mutations.Should().OnlyContain(method => method.GetParameters().Any(parameter =>
-            parameter.GetCustomAttribute<FromHeaderAttribute>() is { Name: "Idempotency-Key" }));
+            parameter.GetCustomAttribute<FromHeaderAttribute>() != null &&
+            parameter.GetCustomAttribute<FromHeaderAttribute>()!.Name == "Idempotency-Key"));
     }
 
     [Fact]

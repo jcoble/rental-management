@@ -15,6 +15,7 @@ using RentalCommand.Core.Auth;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.TestCommon;
 
