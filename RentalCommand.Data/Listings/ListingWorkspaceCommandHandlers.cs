@@ -117,8 +117,8 @@ public sealed class FinalizeListingPhotoUploadHandler
         FinalizeListingPhotoUploadCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
     {
         var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, attempt, ct);
-        var photo = await (from listing in ListingWorkspaceCommandSupport.AuthorizedListings(command, attempt.Persistence, now)
-                           join item in attempt.Persistence.Query<ListingPhoto>() on listing.Id equals item.RentalListingId
+        var photo = await (from authorizedListing in ListingWorkspaceCommandSupport.AuthorizedListings(command, attempt.Persistence, now)
+                           join item in attempt.Persistence.Query<ListingPhoto>() on authorizedListing.Id equals item.RentalListingId
                            where item.Id == command.PhotoId && item.PortfolioId == command.PortfolioId
                            select item).SingleOrDefaultAsync(ct);
         if (photo is null) return ListingWorkspaceCommandSupport.NotFound(command);

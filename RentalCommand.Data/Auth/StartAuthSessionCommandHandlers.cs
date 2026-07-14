@@ -131,7 +131,7 @@ public sealed class StartAuthSessionHandler
         }
 
         LoginContextSelectionChallenge? challenge = null;
-        if (target.EffectiveContextCount > 1)
+        if (target.TotalEffectiveContexts > 1)
         {
             if (command.ContextSelectionChallengeId is null ||
                 string.IsNullOrWhiteSpace(command.ContextSelectionChallengeTokenHash))
