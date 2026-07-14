@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -947,251 +949,33 @@ public class InspectionService : IInspectionService
         return DeserializeSnapshot<InspectionItemResponse>(outcome.Value);
     }
 
-    internal Task<(CompleteInspectionResponse? Result, string? Error)> CompleteAsync(int portfolioId, int id, int userId, CancellationToken ct = default)
-        => CompleteCoreAsync(portfolioId, id, userId, broadcast: true, ct);
-
-    private async Task<(CompleteInspectionResponse? Result, string? Error)> CompleteCoreAsync(
-        int portfolioId,
-        int id,
-        int userId,
-        bool broadcast,
-        CancellationToken ct)
-    {
-        var inspection = await _db.Inspections
-            .FirstOrDefaultAsync(i => i.Id == id && i.PortfolioId == portfolioId, ct);
-        if (inspection == null)
-        {
-            return (null, null); // not found → controller maps to 404
-        }
-
-        if (inspection.Status == InspectionStatus.Completed)
-        {
-            return (null, "Inspection is already completed.");
-        }
-
-        var items = await _db.InspectionItems
-            .Where(it => it.InspectionId == id && it.PortfolioId == portfolioId)
-            .OrderBy(it => it.SortOrder).ThenBy(it => it.Id)
-            .ToListAsync(ct);
-
-        // A completed inspection must have actually inspected something. Block completing an
-        // inspection with no checklist items, or one where every item is still Pending (nothing
-        // was walked). Guards meaningless "Completed, 0 PASS / 0 FAIL" records that are useless
-        // for move-out disputes and owner reports.
-        if (items.Count == 0)
-        {
-            return (null, "Add a checklist (pick a template) before completing this inspection — a completed inspection must record what was inspected.");
-        }
-        if (items.All(it => it.Result == InspectionItemResult.Pending))
-        {
-            return (null, "Mark at least one checklist item Pass, Fail, or N/A before completing — a completed inspection must record what was inspected.");
-        }
-
-        var now = _timeProvider.UtcNow();
-        var failedItems = items.Where(it => it.Result == InspectionItemResult.Fail).ToList();
-        var workOrderIdByItemId = new Dictionary<int, int>();
-        var newWorkOrderLinks = new List<(InspectionItem Item, WorkOrder WorkOrder)>();
-
-        // ---- Auto-create a work order per Fail item (links SpawnedWorkOrderId + initial status event). ----
-        foreach (var item in failedItems)
-        {
-            // Skip if this item already spawned a work order (idempotency on re-entry).
-            if (item.SpawnedWorkOrderId.HasValue)
-            {
-                workOrderIdByItemId[item.Id] = item.SpawnedWorkOrderId.Value;
-                continue;
-            }
-
-            var workOrder = BuildInspectionWorkOrder(
-                portfolioId,
-                inspection,
-                item,
-                now,
-                userId);
-
-            item.SpawnedWorkOrder = workOrder;
-            _db.WorkOrders.Add(workOrder);
-            newWorkOrderLinks.Add((item, workOrder));
-        }
-
-        // ---- Status + completion timestamp (saved with the spawned-WO links). ----
-        inspection.Status = InspectionStatus.Completed;
-        inspection.CompletedAt ??= now;
-        inspection.UpdatedAt = now;
-        await _db.SaveChangesAsync(ct);
-
-        foreach (var (item, workOrder) in newWorkOrderLinks)
-        {
-            workOrderIdByItemId[item.Id] = workOrder.Id;
-        }
-
-        var createdWorkOrderIds = failedItems
-            .Where(item => workOrderIdByItemId.ContainsKey(item.Id))
-            .Select(item => workOrderIdByItemId[item.Id])
-            .ToList();
-
-        var newWorkOrderIds = newWorkOrderLinks
-            .Select(link => link.WorkOrder.Id)
-            .ToList();
-        if (broadcast)
-        {
-            foreach (var workOrder in await LoadWorkOrderBroadcastsAsync(portfolioId, newWorkOrderIds, ct))
-            {
-                await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, WorkOrderEntityType, workOrder.Id, workOrder, ct);
-            }
-        }
-
-        // ---- Generate + store the PDF report (commit DB rows first, then blob). ----
-        int? reportFileId = null;
-        try
-        {
-            reportFileId = await GenerateAndStoreReportAsync(portfolioId, inspection, items, createdWorkOrderIds, ct);
-            if (reportFileId.HasValue)
-            {
-                inspection.ReportStoredFileId = reportFileId;
-                await _db.SaveChangesAsync(ct);
-            }
-        }
-        catch (Exception ex)
-        {
-            // Report generation must never block completion: the inspection is already Completed and the
-            // work orders are created. Log and return without a report id (the download will 404 until regenerated).
-            _logger.LogError(ex, "Inspection {InspectionId} report generation failed; completion stands.", id);
-        }
-
-        var summary = new CompleteInspectionResponse
-        {
-            InspectionId = id,
-            Status = inspection.Status,
-            TotalItems = items.Count,
-            PassCount = items.Count(it => it.Result == InspectionItemResult.Pass),
-            FailCount = items.Count(it => it.Result == InspectionItemResult.Fail),
-            NotApplicableCount = items.Count(it => it.Result == InspectionItemResult.NotApplicable),
-            PendingCount = items.Count(it => it.Result == InspectionItemResult.Pending),
-            ReportStoredFileId = reportFileId,
-            CreatedWorkOrderIds = createdWorkOrderIds,
-        };
-
-        if (broadcast)
-        {
-            var response = InspectionResponse.FromEntity(inspection);
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, inspection.Id, response, ct);
-        }
-        return (summary, null);
-    }
-
     public async Task<(CompleteInspectionResponse? Result, string? Error)> CompleteAuthorizedAsync(
         WorkspaceReadScope scope,
         int id,
         int userId,
+        string operationKey,
         CancellationToken ct = default)
     {
-        var outcome = await ExecuteForAuthorizedInspectionAsync(
-            scope, id,
-            innerCt => CompleteCoreAsync(scope.PortfolioId, id, userId, broadcast: false, innerCt), ct);
-        if (outcome.Result is not null)
-        {
-            foreach (var workOrder in await LoadWorkOrderBroadcastsAsync(
-                         scope.PortfolioId, outcome.Result.CreatedWorkOrderIds, ct))
-            {
-                await _dataUpdate.BroadcastEntityUpdateAsync(
-                    scope.PortfolioId, WorkOrderEntityType, workOrder.Id, workOrder, ct);
-            }
+        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Inspection,
+            AtomicInspectionMutationOperation.Complete, id, 0, operationKey, new object());
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        if (!outcome.Value.Found) return (null, null);
+        if (outcome.Value.Error is not null) return (null, outcome.Value.Error);
+        var summary = DeserializeSnapshot<CompleteInspectionResponse>(outcome.Value)
+            ?? throw new AtomicReceiptInvariantException("Completed inspection receipt has no summary.");
 
-            var inspection = await GetAuthorizedAsync(scope, id, ct);
-            if (inspection is not null)
-            {
-                await _dataUpdate.BroadcastEntityUpdateAsync(
-                    scope.PortfolioId, EntityType, inspection.Id, inspection, ct);
-            }
+        try
+        {
+            summary.ReportStoredFileId = await EnsureInspectionReportAsync(
+                scope, id, summary, operationKey, ct);
         }
-        return outcome;
-    }
-
-    private static WorkOrder BuildInspectionWorkOrder(
-        int portfolioId,
-        Inspection inspection,
-        InspectionItem item,
-        DateTime now,
-        int changedByUserId)
-    {
-        var title = string.IsNullOrWhiteSpace(item.Label) ? "Inspection follow-up" : item.Label.Trim();
-        var area = string.IsNullOrWhiteSpace(item.Area) ? "General" : item.Area.Trim();
-        var description = string.IsNullOrWhiteSpace(item.Note)
-            ? $"Failed inspection item ({area}) from inspection #{inspection.Id}."
-            : item.Note.Trim();
-
-        var workOrder = new WorkOrder
+        catch (Exception ex)
         {
-            PortfolioId = portfolioId,
-            PropertyId = inspection.PropertyId,
-            UnitId = inspection.UnitId,
-            Title = title.Length > 200 ? title[..200] : title,
-            Description = description.Length > 4000 ? description[..4000] : description,
-            Category = "Inspection",
-            Priority = WorkOrderPriority.Normal,
-            Status = WorkOrderStatus.New,
-            RequestedAt = now,
-            UpdatedAt = now,
-        };
-
-        workOrder.StatusEvents.Add(new WorkOrderStatusEvent
-        {
-            PortfolioId = portfolioId,
-            FromStatus = null,
-            ToStatus = workOrder.Status,
-            Note = null,
-            ChangedByUserId = changedByUserId,
-            ChangedByLabel = "Inspection",
-            CreatedAtUtc = now,
-        });
-
-        return workOrder;
-    }
-
-    private async Task<IReadOnlyList<WorkOrderResponse>> LoadWorkOrderBroadcastsAsync(
-        int portfolioId,
-        IReadOnlyCollection<int> workOrderIds,
-        CancellationToken ct)
-    {
-        if (workOrderIds.Count == 0)
-        {
-            return [];
+            _logger.LogError(ex,
+                "Inspection {InspectionId} report generation failed; atomic completion remains committed.", id);
         }
-
-        var rows = await _db.WorkOrders
-            .AsNoTracking()
-            .Where(w => w.PortfolioId == portfolioId && workOrderIds.Contains(w.Id))
-            .Select(w => new InspectionWorkOrderBroadcastRow(
-                w,
-                w.Property != null ? w.Property.Name : null,
-                w.Unit != null ? w.Unit.UnitNumber : null,
-                w.Vendor != null ? w.Vendor.Name : null,
-                w.Tenant != null ? ((w.Tenant.FirstName + " " + w.Tenant.LastName)).Trim() : null))
-            .ToListAsync(ct);
-
-        var responseById = rows.ToDictionary(row => row.WorkOrder.Id, ToWorkOrderBroadcast);
-        return workOrderIds
-            .Where(responseById.ContainsKey)
-            .Select(id => responseById[id])
-            .ToList();
-    }
-
-    private sealed record InspectionWorkOrderBroadcastRow(
-        WorkOrder WorkOrder,
-        string? PropertyName,
-        string? UnitNumber,
-        string? VendorName,
-        string? TenantName);
-
-    private static WorkOrderResponse ToWorkOrderBroadcast(InspectionWorkOrderBroadcastRow row)
-    {
-        var response = WorkOrderResponse.FromEntity(row.WorkOrder);
-        response.PropertyName = row.PropertyName;
-        response.UnitNumber = row.UnitNumber;
-        response.VendorName = row.VendorName;
-        response.TenantName = row.TenantName;
-        return response;
+        return (summary, null);
     }
 
     internal async Task<(Stream Stream, string FileName, string ContentType)?> GetReportAsync(int portfolioId, int id, CancellationToken ct = default)
@@ -1488,114 +1272,134 @@ public class InspectionService : IInspectionService
         }
     }
 
-    private async Task<int?> GenerateAndStoreReportAsync(
-        int portfolioId,
-        Inspection inspection,
-        IReadOnlyList<InspectionItem> items,
-        IReadOnlyList<int> createdWorkOrderIds,
+    private async Task<int?> EnsureInspectionReportAsync(
+        WorkspaceReadScope scope,
+        int inspectionId,
+        CompleteInspectionResponse summary,
+        string operationKey,
         CancellationToken ct)
     {
-        var property = await _db.Properties
-            .AsNoTracking()
-            .FirstOrDefaultAsync(p => p.Id == inspection.PropertyId && p.PortfolioId == portfolioId, ct);
-
-        string? unitLine = null;
-        if (inspection.UnitId.HasValue)
-        {
-            var unit = await _db.Units
-                .AsNoTracking()
-                .FirstOrDefaultAsync(u => u.Id == inspection.UnitId.Value, ct);
-            if (unit != null)
+        var header = await AuthorizedInspections(scope, WriteCapabilities)
+            .Where(inspection => inspection.Id == inspectionId)
+            .Select(inspection => new InspectionReportHeader
             {
-                unitLine = $"Unit {unit.UnitNumber}";
-            }
-        }
+                ReportStoredFileId = inspection.ReportStoredFileId,
+                PropertyId = inspection.PropertyId,
+                PropertyName = inspection.Property!.Name,
+                AddressLine1 = inspection.Property.AddressLine1,
+                City = inspection.Property.City,
+                State = inspection.Property.State,
+                PostalCode = inspection.Property.PostalCode,
+                UnitNumber = inspection.Unit == null ? null : inspection.Unit.UnitNumber,
+                Type = inspection.Type,
+                Status = inspection.Status,
+                ScheduledFor = inspection.ScheduledFor,
+                CompletedAt = inspection.CompletedAt,
+                Inspector = inspection.Inspector,
+            })
+            .SingleOrDefaultAsync(ct);
+        if (header is null) return null;
+        if (header.ReportStoredFileId.HasValue) return header.ReportStoredFileId.Value;
 
-        var propertyLine = property == null
-            ? $"Property #{inspection.PropertyId}"
-            : $"{property.Name} — {property.AddressLine1}, {property.City}, {property.State} {property.PostalCode}";
+        var authorized = AuthorizedInspections(scope, WriteCapabilities);
+        var items = await _db.InspectionItems.AsNoTracking()
+            .Where(item => item.PortfolioId == scope.PortfolioId
+                && item.InspectionId == inspectionId
+                && authorized.Any(inspection => inspection.Id == item.InspectionId))
+            .OrderBy(item => item.SortOrder).ThenBy(item => item.Id)
+            .Select(item => new InspectionReportItem
+            {
+                Id = item.Id,
+                Area = item.Area,
+                Label = item.Label,
+                Result = item.Result,
+                Note = item.Note,
+                SpawnedWorkOrderId = item.SpawnedWorkOrderId,
+            })
+            .ToListAsync(ct);
+        var photoReferences = await _db.InspectionItems.AsNoTracking()
+            .Where(item => item.PortfolioId == scope.PortfolioId
+                && item.InspectionId == inspectionId
+                && item.PhotoStoredFileId != null
+                && item.PhotoStoredFile != null
+                && item.PhotoStoredFile.DeletedAt == null
+                && authorized.Any(inspection => inspection.Id == item.InspectionId))
+            .Select(item => new InspectionPhotoReference(item.Id, item.PhotoStoredFile!.FilePath))
+            .ToListAsync(ct);
 
-        // Load photo bytes for items that have a photo (best-effort; skip any that fail to load).
-        // Resolve the StoredFile metadata for every photo in ONE query (keyed by file id), instead of
-        // a FirstOrDefaultAsync per item (N+1). The per-file binary download still happens in the loop
-        // — that's an unavoidable per-object stream fetch from blob storage, not a DB round-trip.
         var photos = new Dictionary<int, byte[]>();
-        var photoItems = items.Where(it => it.PhotoStoredFileId.HasValue).ToList();
-        if (photoItems.Count > 0)
+        foreach (var photo in photoReferences)
         {
-            var photoFileIds = photoItems.Select(it => it.PhotoStoredFileId!.Value).Distinct().ToList();
-            var filePathById = await _db.StoredFiles
-                .AsNoTracking()
-                .Where(f => photoFileIds.Contains(f.Id) && f.PortfolioId == portfolioId)
-                .Select(f => new { f.Id, f.FilePath })
-                .ToDictionaryAsync(f => f.Id, f => f.FilePath, ct);
-
-            foreach (var item in photoItems)
+            try
             {
-                if (!filePathById.TryGetValue(item.PhotoStoredFileId!.Value, out var filePath)) continue;
-
-                try
-                {
-                    await using var s = await _storage.DownloadAsync(filePath, ct);
-                    using var ms = new MemoryStream();
-                    await s.CopyToAsync(ms, ct);
-                    photos[item.Id] = ms.ToArray();
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Could not load photo for inspection item {ItemId}; omitting from report.", item.Id);
-                }
+                await using var stream = await _storage.DownloadAsync(photo.FilePath, ct);
+                using var buffer = new MemoryStream();
+                await stream.CopyToAsync(buffer, ct);
+                photos[photo.ItemId] = buffer.ToArray();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Could not load photo for inspection item {ItemId}; omitting from report.", photo.ItemId);
             }
         }
-
-        var workOrderByItem = items
-            .Where(it => it.SpawnedWorkOrderId.HasValue)
-            .ToDictionary(it => it.Id, it => it.SpawnedWorkOrderId!.Value);
 
         var data = new InspectionReportData
         {
-            Inspection = inspection,
+            Type = header.Type,
+            Status = header.Status,
+            ScheduledFor = header.ScheduledFor,
+            CompletedAt = header.CompletedAt,
+            Inspector = header.Inspector,
+            TotalItems = summary.TotalItems,
+            PassCount = summary.PassCount,
+            FailCount = summary.FailCount,
+            NotApplicableCount = summary.NotApplicableCount,
+            PendingCount = summary.PendingCount,
             Items = items,
-            PropertyLine = propertyLine,
-            UnitLine = unitLine,
+            PropertyLine = $"{header.PropertyName} — {header.AddressLine1}, {header.City}, {header.State} {header.PostalCode}",
+            UnitLine = header.UnitNumber is null ? null : $"Unit {header.UnitNumber}",
             PhotosByItemId = photos,
-            WorkOrderIdByItemId = workOrderByItem,
         };
-
         var pdfBytes = _pdf.Generate(data);
+        var fileName = $"inspection-{inspectionId}-report.pdf";
+        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+            $"{scope.PortfolioId}:{inspectionId}:{operationKey}"))).ToLowerInvariant()[..24];
+        var storagePath = $"inspection-{inspectionId}-{digest}-report.pdf";
+        await using (var content = new MemoryStream(pdfBytes))
+            await _storage.UploadAtAsync(content, storagePath, fileName, "application/pdf", ct);
 
-        // Commit the StoredFile row BEFORE writing the blob name is recorded — here we write the blob
-        // first to get its key, then persist the row, then clean up the blob if the row fails.
-        var fileName = $"inspection-{inspection.Id}-report.pdf";
-        string storageKey;
-        await using (var ms = new MemoryStream(pdfBytes))
-        {
-            storageKey = await _storage.UploadAsync(ms, fileName, "application/pdf", ct);
-        }
-
-        var stored = new StoredFile
-        {
-            PortfolioId = portfolioId,
-            FileName = fileName,
-            FilePath = storageKey,
-            ContentType = "application/pdf",
-            FileSize = pdfBytes.Length,
-            EntityType = EntityType,
-            EntityId = inspection.Id,
-            UploadedAt = _timeProvider.UtcNow(),
-        };
-
-        try
-        {
-            _db.StoredFiles.Add(stored);
-            await _db.SaveChangesAsync(ct);
-        }
-        catch
-        {
-            try { await _storage.DeleteAsync(storageKey, ct); } catch { /* best-effort */ }
-            throw;
-        }
-
-        return stored.Id;
+        var request = new AttachInspectionReportRequest(
+            fileName, storagePath, "application/pdf", pdfBytes.LongLength);
+        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Inspection,
+            AtomicInspectionMutationOperation.AttachReport, inspectionId, 0, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        if (!outcome.Value.Found)
+            throw new AtomicReceiptInvariantException("Inspection disappeared before its report was attached.");
+        if (outcome.Value.Error is not null)
+            throw new DomainValidationException(outcome.Value.Error);
+        return outcome.Value.ResponseJson is null
+            ? throw new AtomicReceiptInvariantException("Inspection report receipt has no StoredFile id.")
+            : JsonSerializer.Deserialize<int>(outcome.Value.ResponseJson);
     }
+
+    private sealed class InspectionReportHeader
+    {
+        public int? ReportStoredFileId { get; init; }
+        public int PropertyId { get; init; }
+        public string PropertyName { get; init; } = string.Empty;
+        public string AddressLine1 { get; init; } = string.Empty;
+        public string City { get; init; } = string.Empty;
+        public string State { get; init; } = string.Empty;
+        public string PostalCode { get; init; } = string.Empty;
+        public string? UnitNumber { get; init; }
+        public InspectionType Type { get; init; }
+        public InspectionStatus Status { get; init; }
+        public DateTime ScheduledFor { get; init; }
+        public DateTime? CompletedAt { get; init; }
+        public string? Inspector { get; init; }
+    }
+
+    private sealed record InspectionPhotoReference(int ItemId, string FilePath);
 }

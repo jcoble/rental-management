@@ -1,7 +1,6 @@
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
-using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -9,8 +8,17 @@ namespace RentalCommand.Api.Services.Domain;
 /// <summary>Data needed to render an inspection report PDF (kept provider-agnostic).</summary>
 public sealed class InspectionReportData
 {
-    public required Inspection Inspection { get; init; }
-    public required IReadOnlyList<InspectionItem> Items { get; init; }
+    public InspectionType Type { get; init; }
+    public InspectionStatus Status { get; init; }
+    public DateTime ScheduledFor { get; init; }
+    public DateTime? CompletedAt { get; init; }
+    public string? Inspector { get; init; }
+    public int TotalItems { get; init; }
+    public int PassCount { get; init; }
+    public int FailCount { get; init; }
+    public int NotApplicableCount { get; init; }
+    public int PendingCount { get; init; }
+    public required IReadOnlyList<InspectionReportItem> Items { get; init; }
     public string PropertyLine { get; init; } = string.Empty;
     public string? UnitLine { get; init; }
 
@@ -18,9 +26,16 @@ public sealed class InspectionReportData
     public IReadOnlyDictionary<int, byte[]> PhotosByItemId { get; init; } =
         new Dictionary<int, byte[]>();
 
-    /// <summary>Item id → spawned work-order id (for the failed-items summary).</summary>
-    public IReadOnlyDictionary<int, int> WorkOrderIdByItemId { get; init; } =
-        new Dictionary<int, int>();
+}
+
+public sealed class InspectionReportItem
+{
+    public int Id { get; init; }
+    public string Area { get; init; } = string.Empty;
+    public string Label { get; init; } = string.Empty;
+    public InspectionItemResult Result { get; init; }
+    public string? Note { get; init; }
+    public int? SpawnedWorkOrderId { get; init; }
 }
 
 /// <summary>Renders a clean inspection report PDF via QuestPDF.</summary>
@@ -39,10 +54,6 @@ public sealed class InspectionReportPdfGenerator : IInspectionReportPdfGenerator
 
     public byte[] Generate(InspectionReportData data)
     {
-        var inspection = data.Inspection;
-        var items = data.Items.OrderBy(i => i.SortOrder).ThenBy(i => i.Id).ToList();
-        var failed = items.Where(i => i.Result == InspectionItemResult.Fail).ToList();
-
         var document = Document.Create(container =>
         {
             container.Page(page =>
@@ -52,7 +63,7 @@ public sealed class InspectionReportPdfGenerator : IInspectionReportPdfGenerator
                 page.DefaultTextStyle(t => t.FontSize(10).FontColor(Colors.Black));
 
                 page.Header().Element(e => ComposeHeader(e, data));
-                page.Content().Element(e => ComposeContent(e, data, items, failed));
+                page.Content().Element(e => ComposeContent(e, data));
                 page.Footer().AlignCenter().Text(txt =>
                 {
                     txt.Span("Page ");
@@ -68,7 +79,6 @@ public sealed class InspectionReportPdfGenerator : IInspectionReportPdfGenerator
 
     private static void ComposeHeader(IContainer container, InspectionReportData data)
     {
-        var inspection = data.Inspection;
         container.Column(col =>
         {
             col.Item().Text("Inspection Report").FontSize(20).Bold();
@@ -78,138 +88,92 @@ public sealed class InspectionReportPdfGenerator : IInspectionReportPdfGenerator
 
             col.Item().PaddingTop(6).Row(row =>
             {
-                row.RelativeItem().Text($"Type: {SplitCamel(inspection.Type.ToString())}");
-                row.RelativeItem().Text($"Status: {inspection.Status}");
+                row.RelativeItem().Text($"Type: {SplitCamel(data.Type.ToString())}");
+                row.RelativeItem().Text($"Status: {data.Status}");
             });
             col.Item().Row(row =>
             {
-                var date = inspection.CompletedAt ?? inspection.ScheduledFor;
+                var date = data.CompletedAt ?? data.ScheduledFor;
                 row.RelativeItem().Text($"Date: {date:yyyy-MM-dd}");
-                row.RelativeItem().Text($"Inspector: {(string.IsNullOrWhiteSpace(inspection.Inspector) ? "—" : inspection.Inspector)}");
+                row.RelativeItem().Text($"Inspector: {(string.IsNullOrWhiteSpace(data.Inspector) ? "—" : data.Inspector)}");
             });
 
             col.Item().PaddingTop(8).LineHorizontal(1).LineColor(Colors.Grey.Lighten1);
         });
     }
 
-    private static void ComposeContent(
-        IContainer container,
-        InspectionReportData data,
-        IReadOnlyList<InspectionItem> items,
-        IReadOnlyList<InspectionItem> failed)
+    private static void ComposeContent(IContainer container, InspectionReportData data)
     {
         container.PaddingTop(8).Column(col =>
         {
             // ---- Summary counts ----
-            var pass = items.Count(i => i.Result == InspectionItemResult.Pass);
-            var fail = failed.Count;
-            var na = items.Count(i => i.Result == InspectionItemResult.NotApplicable);
-            var pending = items.Count(i => i.Result == InspectionItemResult.Pending);
-
             col.Item().Text(t =>
             {
-                t.Span($"{items.Count} items  ·  ");
-                t.Span($"{pass} pass").FontColor(PassColor);
+                t.Span($"{data.TotalItems} items  ·  ");
+                t.Span($"{data.PassCount} pass").FontColor(PassColor);
                 t.Span("  ·  ");
-                t.Span($"{fail} fail").FontColor(FailColor);
+                t.Span($"{data.FailCount} fail").FontColor(FailColor);
                 t.Span("  ·  ");
-                t.Span($"{na} n/a").FontColor(NaColor);
-                if (pending > 0)
+                t.Span($"{data.NotApplicableCount} n/a").FontColor(NaColor);
+                if (data.PendingCount > 0)
                 {
                     t.Span("  ·  ");
-                    t.Span($"{pending} not checked").FontColor(PendingColor);
+                    t.Span($"{data.PendingCount} not checked").FontColor(PendingColor);
                 }
             });
 
-            if (items.Count == 0)
+            if (data.TotalItems == 0)
             {
                 col.Item().PaddingTop(12).Text("No checklist items were recorded for this inspection.")
                     .Italic().FontColor(Colors.Grey.Darken1);
             }
 
-            // ---- Items grouped by area ----
-            foreach (var group in items.GroupBy(i => i.Area))
+            col.Item().PaddingTop(14).Table(table =>
             {
-                col.Item().PaddingTop(14).Text(string.IsNullOrWhiteSpace(group.Key) ? "General" : group.Key)
-                    .FontSize(13).Bold().FontColor(Colors.Blue.Darken2);
-
-                col.Item().PaddingTop(4).Table(table =>
+                table.ColumnsDefinition(cols =>
                 {
-                    table.ColumnsDefinition(cols =>
-                    {
-                        cols.RelativeColumn(4); // label
-                        cols.ConstantColumn(70); // result
-                        cols.RelativeColumn(5); // note + photo
-                    });
+                    cols.RelativeColumn(2); // area
+                    cols.RelativeColumn(4); // label
+                    cols.ConstantColumn(70); // result
+                    cols.RelativeColumn(5); // note + photo
+                });
 
-                    table.Header(header =>
-                    {
-                        header.Cell().Element(HeaderCell).Text("Item");
-                        header.Cell().Element(HeaderCell).Text("Result");
-                        header.Cell().Element(HeaderCell).Text("Notes");
-                    });
+                table.Header(header =>
+                {
+                    header.Cell().Element(HeaderCell).Text("Area");
+                    header.Cell().Element(HeaderCell).Text("Item");
+                    header.Cell().Element(HeaderCell).Text("Result");
+                    header.Cell().Element(HeaderCell).Text("Notes");
+                });
 
-                    foreach (var item in group)
-                    {
-                        table.Cell().Element(BodyCell).Text(item.Label);
-                        table.Cell().Element(BodyCell).Text(ResultLabel(item.Result))
-                            .FontColor(ResultColor(item.Result)).SemiBold();
+                foreach (var item in data.Items)
+                {
+                    table.Cell().Element(BodyCell).Text(
+                        string.IsNullOrWhiteSpace(item.Area) ? "General" : item.Area);
+                    table.Cell().Element(BodyCell).Text(item.Label);
+                    table.Cell().Element(BodyCell).Text(ResultLabel(item.Result))
+                        .FontColor(ResultColor(item.Result)).SemiBold();
 
-                        table.Cell().Element(BodyCell).Column(noteCol =>
+                    table.Cell().Element(BodyCell).Column(noteCol =>
+                    {
+                        if (!string.IsNullOrWhiteSpace(item.Note))
+                            noteCol.Item().Text(item.Note);
+
+                        if (data.PhotosByItemId.TryGetValue(item.Id, out var photo) && photo.Length > 0)
                         {
-                            if (!string.IsNullOrWhiteSpace(item.Note))
-                                noteCol.Item().Text(item.Note);
+                            noteCol.Item().PaddingTop(4).MaxWidth(180).Image(photo).FitWidth();
+                        }
 
-                            if (data.PhotosByItemId.TryGetValue(item.Id, out var photo) && photo.Length > 0)
-                            {
-                                noteCol.Item().PaddingTop(4).MaxWidth(180).Image(photo).FitWidth();
-                            }
-
-                            if (data.WorkOrderIdByItemId.TryGetValue(item.Id, out var woId))
-                            {
-                                noteCol.Item().PaddingTop(2)
-                                    .Text($"→ Work order #{woId} created")
-                                    .FontColor(FailColor).Italic().FontSize(9);
-                            }
-                        });
-                    }
-                });
-            }
-
-            // ---- Failed-items summary ----
-            if (failed.Count > 0)
-            {
-                col.Item().PaddingTop(18).LineHorizontal(1).LineColor(Colors.Grey.Lighten1);
-                col.Item().PaddingTop(8).Text("Failed items & work orders created")
-                    .FontSize(13).Bold().FontColor(FailColor);
-
-                col.Item().PaddingTop(4).Table(table =>
-                {
-                    table.ColumnsDefinition(cols =>
-                    {
-                        cols.RelativeColumn(3); // area
-                        cols.RelativeColumn(4); // item
-                        cols.ConstantColumn(90); // work order
+                        if (item.SpawnedWorkOrderId.HasValue)
+                        {
+                            noteCol.Item().PaddingTop(2)
+                                .Text($"→ Work order #{item.SpawnedWorkOrderId.Value} created")
+                                .FontColor(FailColor).Italic().FontSize(9);
+                        }
                     });
+                }
+            });
 
-                    table.Header(header =>
-                    {
-                        header.Cell().Element(HeaderCell).Text("Area");
-                        header.Cell().Element(HeaderCell).Text("Item");
-                        header.Cell().Element(HeaderCell).Text("Work Order");
-                    });
-
-                    foreach (var item in failed)
-                    {
-                        table.Cell().Element(BodyCell).Text(string.IsNullOrWhiteSpace(item.Area) ? "General" : item.Area);
-                        table.Cell().Element(BodyCell).Text(item.Label);
-                        var woText = data.WorkOrderIdByItemId.TryGetValue(item.Id, out var woId)
-                            ? $"#{woId}"
-                            : "—";
-                        table.Cell().Element(BodyCell).Text(woText);
-                    }
-                });
-            }
         });
     }
 
