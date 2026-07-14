@@ -1058,14 +1058,28 @@ public class BankingService : IBankingService
                 Reason = "Withdrawal amount and date line up with an expense.",
             };
 
-        return receiptCandidates
-            .Concat(expenseCandidates)
+        // Deposits and withdrawals are disjoint by construction, so a transaction can never
+        // have candidates in both relations. Rank each relation before UNION ALL: EF/Npgsql can
+        // translate each GroupBy + ordered First into a ROW_NUMBER partition, while grouping the
+        // union itself is not translatable. The database still selects exactly one winner per bank
+        // line in one statement; no candidate rows cross the materialization boundary.
+        var rankedReceiptCandidates = receiptCandidates
             .GroupBy(c => c.TransactionId)
             .Select(g => g
                 .OrderByDescending(c => c.Confidence)
                 .ThenBy(c => c.EntityType)
                 .ThenBy(c => c.EntityId)
                 .First());
+
+        var rankedExpenseCandidates = expenseCandidates
+            .GroupBy(c => c.TransactionId)
+            .Select(g => g
+                .OrderByDescending(c => c.Confidence)
+                .ThenBy(c => c.EntityType)
+                .ThenBy(c => c.EntityId)
+                .First());
+
+        return rankedReceiptCandidates.Concat(rankedExpenseCandidates);
     }
 
     /// <summary>
