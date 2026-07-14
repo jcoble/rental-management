@@ -14,6 +14,7 @@
 	} from '$lib/api/endpoints/document-templates';
 	import { leaseManagements } from '$lib/api/endpoints/lease-managements';
 	import { documentFileHref, fileBlob } from '$lib/api/endpoints/documents';
+	import { idempotentMutation } from '$lib/api/idempotency';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import type { LeaseManagementSummary } from '$lib/types';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
@@ -267,7 +268,10 @@
 
 	const addFieldMutation = createMutation(() => ({
 		mutationFn: (request: CreateDocumentTemplateFieldRequest) =>
-			documentTemplates.addField(templateId, request),
+			idempotentMutation(
+				`document-template:${templateId}:field-add:${JSON.stringify(request)}`,
+				(operationKey) => documentTemplates.addField(templateId, request, operationKey)
+			),
 		onMutate: () => {
 			saveErrorMessage = null;
 		},
@@ -287,7 +291,12 @@
 		}: {
 			field: DocumentTemplateField;
 			request: UpdateDocumentTemplateFieldRequest;
-		}) => documentTemplates.updateField(templateId, field.id, request),
+		}) =>
+			idempotentMutation(
+				`document-template:${templateId}:field-update:${field.id}:${JSON.stringify(request)}`,
+				(operationKey) =>
+					documentTemplates.updateField(templateId, field.id, request, operationKey)
+			),
 		onMutate: () => {
 			saveErrorMessage = null;
 		},
@@ -304,7 +313,10 @@
 	}));
 
 	const deleteFieldMutation = createMutation(() => ({
-		mutationFn: (field: DocumentTemplateField) => documentTemplates.deleteField(templateId, field.id),
+		mutationFn: (field: DocumentTemplateField) =>
+			idempotentMutation(`document-template:${templateId}:field-delete:${field.id}`, (operationKey) =>
+				documentTemplates.deleteField(templateId, field.id, operationKey)
+			),
 		onMutate: () => {
 			saveErrorMessage = null;
 		},

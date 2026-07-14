@@ -2,12 +2,18 @@ using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Data;
+using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Auditing;
+using RentalCommand.Data.Documents;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -22,15 +28,37 @@ public sealed class DocumentTemplateServiceTests : IDisposable
     private readonly InMemoryFileStorage _files = new();
     private readonly DocumentTemplateService _sut;
     private readonly WorkspaceReadScope _scope;
+    private readonly ServiceProvider _services;
 
     public DocumentTemplateServiceTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(DocumentTemplateServiceTests));
-        _sut = new DocumentTemplateService(_ctx.Db, _catalog, _files, TimeProvider.System);
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddAtomicCommandHandler<
+            RentalCommand.Core.Documents.CreateDocumentTemplateCommand,
+            RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+            CreateDocumentTemplateHandler>();
+        services.AddAtomicCommandHandler<
+            RentalCommand.Core.Documents.AddDocumentTemplateFieldCommand,
+            RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+            AddDocumentTemplateFieldHandler>();
+        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+            builder.UseSqlite(_ctx.ConnectionString).UseAtomicPersistenceKernel(provider));
+        _services = services.BuildServiceProvider();
+        _sut = new DocumentTemplateService(
+            _ctx.Db, _catalog, _files, TimeProvider.System,
+            _services.GetRequiredService<IAtomicUnitOfWork>());
     }
 
-    public void Dispose() => _ctx.Dispose();
+    public void Dispose()
+    {
+        _services.Dispose();
+        _ctx.Dispose();
+    }
 
     [Fact]
     public void LeaseCatalog_IncludesRentAndRequiredTenantSigningFields()
@@ -126,7 +154,7 @@ public sealed class DocumentTemplateServiceTests : IDisposable
             Kind = DocumentTemplateKind.Lease,
             RenderMode = DocumentTemplateRenderMode.Overlay,
             Name = "Dad's lease",
-        })).Value!;
+        }, "create-dads-lease")).Value!;
 
         var result = await _sut.AddFieldAsync(_scope, template.Id, new CreateDocumentTemplateFieldRequest
         {
@@ -138,7 +166,7 @@ public sealed class DocumentTemplateServiceTests : IDisposable
             YPct = 0.72,
             WidthPct = 0.2,
             HeightPct = 0.04,
-        });
+        }, "add-dads-signature");
 
         result.Outcome.Should().Be(DocumentTemplateOperationOutcome.Success);
         result.Value!.Label.Should().Be("Tenant signature");
@@ -156,7 +184,7 @@ public sealed class DocumentTemplateServiceTests : IDisposable
             Kind = DocumentTemplateKind.Lease,
             RenderMode = DocumentTemplateRenderMode.Overlay,
             Name = "Overlay lease",
-        })).Value!;
+        }, "create-overlay-lease")).Value!;
 
         var result = await _sut.AddFieldAsync(_scope, template.Id, new CreateDocumentTemplateFieldRequest
         {
@@ -168,7 +196,7 @@ public sealed class DocumentTemplateServiceTests : IDisposable
             YPct = 0.1,
             WidthPct = 0.1,
             HeightPct = 0.03,
-        });
+        }, "add-invalid-overlay-field");
 
         result.Outcome.Should().Be(DocumentTemplateOperationOutcome.Invalid);
         result.Error.Should().Contain("right edge");

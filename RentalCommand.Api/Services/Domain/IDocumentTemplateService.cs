@@ -15,7 +15,8 @@ public interface IDocumentTemplateService
     Task<DocumentTemplateResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default);
 
     Task<DocumentTemplateOperationResult<DocumentTemplateResponse>> CreateAsync(
-        WorkspaceReadScope scope, CreateDocumentTemplateRequest request, CancellationToken ct = default);
+        WorkspaceReadScope scope, CreateDocumentTemplateRequest request,
+        string idempotencyKey, CancellationToken ct = default);
 
     Task<DocumentTemplateOperationResult<DocumentTemplateResponse>> UploadPdfAsync(
         WorkspaceReadScope scope,
@@ -30,16 +31,20 @@ public interface IDocumentTemplateService
         CancellationToken ct = default);
 
     Task<DocumentTemplateOperationResult<DocumentTemplateResponse>> UpdateAsync(
-        WorkspaceReadScope scope, int id, UpdateDocumentTemplateRequest request, CancellationToken ct = default);
+        WorkspaceReadScope scope, int id, UpdateDocumentTemplateRequest request,
+        string idempotencyKey, CancellationToken ct = default);
 
     Task<DocumentTemplateOperationResult<DocumentTemplateFieldResponse>> AddFieldAsync(
-        WorkspaceReadScope scope, int templateId, CreateDocumentTemplateFieldRequest request, CancellationToken ct = default);
+        WorkspaceReadScope scope, int templateId, CreateDocumentTemplateFieldRequest request,
+        string idempotencyKey, CancellationToken ct = default);
 
     Task<DocumentTemplateOperationResult<DocumentTemplateFieldResponse>> UpdateFieldAsync(
-        WorkspaceReadScope scope, int templateId, int fieldId, UpdateDocumentTemplateFieldRequest request, CancellationToken ct = default);
+        WorkspaceReadScope scope, int templateId, int fieldId, UpdateDocumentTemplateFieldRequest request,
+        string idempotencyKey, CancellationToken ct = default);
 
     Task<DocumentTemplateOperationResult<bool>> DeleteFieldAsync(
-        WorkspaceReadScope scope, int templateId, int fieldId, CancellationToken ct = default);
+        WorkspaceReadScope scope, int templateId, int fieldId,
+        string idempotencyKey, CancellationToken ct = default);
 
     Task<DocumentTemplateOperationResult<DocumentTemplatePreviewResult>> PreviewLeasePdfAsync(
         WorkspaceReadScope scope, int templateId, int leaseAgreementId, CancellationToken ct = default);

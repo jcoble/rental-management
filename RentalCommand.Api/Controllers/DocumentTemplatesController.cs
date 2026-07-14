@@ -102,16 +102,21 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<DocumentTemplateResponse>> Create(
         [FromBody] CreateDocumentTemplateRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var key))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
-        var result = await _service.CreateAsync(scope, request, ct);
-        if (result.Outcome == DocumentTemplateOperationOutcome.Invalid)
+        var result = await _service.CreateAsync(scope, request, key, ct);
+        return result.Outcome switch
         {
-            return BadRequest(new { error = result.Error });
-        }
-
-        return CreatedAtAction(nameof(Get), new { id = result.Value!.Id }, result.Value);
+            DocumentTemplateOperationOutcome.Success =>
+                CreatedAtAction(nameof(Get), new { id = result.Value!.Id }, result.Value),
+            DocumentTemplateOperationOutcome.NotFound => NotFound(new { error = result.Error }),
+            DocumentTemplateOperationOutcome.Invalid => BadRequest(new { error = result.Error }),
+            _ => StatusCode(StatusCodes.Status500InternalServerError),
+        };
     }
 
     [HttpPost("upload")]
@@ -186,10 +191,13 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
     public async Task<ActionResult<DocumentTemplateResponse>> Update(
         int id,
         [FromBody] UpdateDocumentTemplateRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var key))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
-        var result = await _service.UpdateAsync(scope, id, request, ct);
+        var result = await _service.UpdateAsync(scope, id, request, key, ct);
         return Map(result);
     }
 
@@ -200,10 +208,13 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
     public async Task<ActionResult<DocumentTemplateFieldResponse>> AddField(
         int id,
         [FromBody] CreateDocumentTemplateFieldRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var key))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
-        var result = await _service.AddFieldAsync(scope, id, request, ct);
+        var result = await _service.AddFieldAsync(scope, id, request, key, ct);
         return result.Outcome switch
         {
             DocumentTemplateOperationOutcome.Success => CreatedAtAction(nameof(Get), new { id }, result.Value),
@@ -221,20 +232,29 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
         int id,
         int fieldId,
         [FromBody] UpdateDocumentTemplateFieldRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var key))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
-        var result = await _service.UpdateFieldAsync(scope, id, fieldId, request, ct);
+        var result = await _service.UpdateFieldAsync(scope, id, fieldId, request, key, ct);
         return Map(result);
     }
 
     [HttpDelete("{id:int}/fields/{fieldId:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> DeleteField(int id, int fieldId, CancellationToken ct)
+    public async Task<IActionResult> DeleteField(
+        int id,
+        int fieldId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var key))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
-        var result = await _service.DeleteFieldAsync(scope, id, fieldId, ct);
+        var result = await _service.DeleteFieldAsync(scope, id, fieldId, key, ct);
         return result.Outcome switch
         {
             DocumentTemplateOperationOutcome.Success => NoContent(),
@@ -251,6 +271,12 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
         DocumentTemplateOperationOutcome.Invalid => BadRequest(new { error = result.Error }),
         _ => StatusCode(StatusCodes.Status500InternalServerError),
     };
+
+    private static bool TryValidateIdempotencyKey(string? value, out string normalized)
+    {
+        normalized = value?.Trim() ?? string.Empty;
+        return normalized.Length is > 0 and <= 128;
+    }
 
     private static ContentResult JsonError(int statusCode, string? error) => new()
     {
