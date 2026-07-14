@@ -46,6 +46,7 @@ public sealed record AtomicAuthSessionStartRequest(
     Guid OperationId,
     int UserId,
     int SelectedAccessContextId,
+    long ExpectedAccessRevision,
     Guid? ContextSelectionChallengeId = null,
     string? ContextSelectionChallengeBearer = null);
 
@@ -113,7 +114,7 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
         ArgumentNullException.ThrowIfNull(request);
         if (request.OperationId == Guid.Empty ||
             request.UserId <= 0 ||
-            request.SelectedAccessContextId <= 0 ||
+            request.SelectedAccessContextId <= 0 || request.ExpectedAccessRevision <= 0 ||
             request.ContextSelectionChallengeId == Guid.Empty)
         {
             throw new ArgumentOutOfRangeException(nameof(request));
@@ -136,6 +137,7 @@ public sealed class AtomicAuthSessionCredentialService : IAtomicAuthSessionCrede
         var command = new StartAuthSessionCommand(
             request.UserId,
             request.SelectedAccessContextId,
+            request.ExpectedAccessRevision,
             Guid.NewGuid(),
             Guid.NewGuid(),
             credentialId,

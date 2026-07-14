@@ -352,7 +352,10 @@ public class AuthController : ControllerBase
 
     [HttpPost("change-password")]
     [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
-    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
+    public async Task<IActionResult> ChangePassword(
+        [FromBody] ChangePasswordRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         if (string.IsNullOrEmpty(userId))
@@ -365,11 +368,19 @@ public class AuthController : ControllerBase
             return Unauthorized(new { error = "No active access context" });
         }
 
+        var operationKey = string.IsNullOrWhiteSpace(idempotencyKey)
+            ? Guid.NewGuid().ToString("N")
+            : idempotencyKey.Trim();
+        if (operationKey.Length > 200)
+        {
+            return BadRequest(new { error = "Idempotency-Key cannot exceed 200 characters." });
+        }
         var result = await _authService.ChangePasswordAsync(
-            userId,
-            active.AccessContextId,
+            active,
             request.CurrentPassword,
-            request.NewPassword);
+            request.NewPassword,
+            operationKey,
+            ct);
         if (!result.Success)
         {
             if (result.ErrorType == AuthErrorType.NotFound)

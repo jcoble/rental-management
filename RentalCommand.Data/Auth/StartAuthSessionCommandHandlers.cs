@@ -22,22 +22,16 @@ public sealed class IssueLoginContextSelectionChallengeHandler
             command.ChallengeId,
             ct);
 
-        // The count and every effective-state predicate remain in one translated SQL statement.
-        // Team assignments and Owner/Tenant relationships share this one DB-side effective-state predicate.
-        var effectiveContexts = attempt.Persistence.Query<WorkspaceAccessContext>()
-            .AsNoTracking()
-            .Where(context => context.UserId == command.UserId &&
-                AccessAuthorityDbFunctions.IsEffective(
-                    context.Id,
-                    command.UserId,
-                    command.IssuedAtUtc));
-        var auditRoot = await effectiveContexts
-            .OrderBy(context => context.Id)
-            .Select(context => new ChallengeAuditRoot(
-                context.Id,
-                context.PortfolioId,
-                effectiveContexts.Count()))
-            .FirstOrDefaultAsync(ct);
+        // Pre-login RLS cannot see authority tables because no AuthSession exists yet. The DB-owned
+        // projection returns the first audit root and total effective-context count in one statement.
+        var projectedRoot = await attempt.Persistence.ReadEffectiveLoginContextRootAsync(
+            command.UserId, command.IssuedAtUtc, ct);
+        var auditRoot = projectedRoot is null
+            ? null
+            : new ChallengeAuditRoot(
+                projectedRoot.AccessContextId,
+                projectedRoot.PortfolioId,
+                projectedRoot.TotalEffectiveContexts);
 
         if (auditRoot is null || auditRoot.EffectiveContextCount < 2)
         {
@@ -103,7 +97,8 @@ public sealed class IssueLoginContextSelectionChallengeHandler
 }
 
 public sealed class StartAuthSessionHandler
-    : IAtomicCommandHandler<StartAuthSessionCommand, StartAuthSessionResult>
+    : IAtomicCommandHandler<StartAuthSessionCommand, StartAuthSessionResult>,
+      IAtomicReplayAuthorizer<StartAuthSessionCommand>
 {
     public async Task<StartAuthSessionResult> HandleAsync(
         StartAuthSessionCommand command,
@@ -120,24 +115,17 @@ public sealed class StartAuthSessionHandler
                 ct);
         }
 
-        var effectiveContexts = attempt.Persistence.Query<WorkspaceAccessContext>()
-            .Where(context => context.UserId == command.UserId &&
-                AccessAuthorityDbFunctions.IsEffective(
-                    context.Id,
-                    command.UserId,
-                    command.IssuedAtUtc));
+        // A login has no AuthSession yet, so ordinary RLS must not be widened to expose authority
+        // tables. Read only the selected effective context through the DB-owned SECURITY DEFINER
+        // projection; the function also supplies the total count in this same SQL statement.
+        var effectiveAtUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var target = await attempt.Persistence.ReadEffectiveLoginContextAsync(
+            command.UserId,
+            command.SelectedAccessContextId,
+            effectiveAtUtc,
+            ct);
 
-        // Selected context and total effective-context count are projected by PostgreSQL together.
-        var target = await effectiveContexts
-            .Where(context => context.Id == command.SelectedAccessContextId)
-            .Select(context => new SelectedContext(
-                context,
-                context.PortfolioId,
-                context.AccessRevision,
-                effectiveContexts.Count()))
-            .SingleOrDefaultAsync(ct);
-
-        if (target is null)
+        if (target is null || target.AccessRevision != command.ExpectedAccessRevision)
         {
             return Rejected(command);
         }
@@ -174,7 +162,7 @@ public sealed class StartAuthSessionHandler
         {
             Id = command.AuthSessionId,
             UserId = command.UserId,
-            ActiveAccessContextId = target.Context.Id,
+            ActiveAccessContextId = target.AccessContextId,
             Status = AuthSessionStatus.Active,
             CreatedAtUtc = command.IssuedAtUtc,
             LastSeenAtUtc = command.IssuedAtUtc,
@@ -206,14 +194,14 @@ public sealed class StartAuthSessionHandler
         attempt.StageSemanticEvent(new AtomicSemanticAudit(
             target.PortfolioId,
             nameof(WorkspaceAccessContext),
-            target.Context.Id,
+            target.AccessContextId,
             AuditLogOperation.Updated,
             command.UserId,
             ActorLabel: "authentication:session",
             NewValues: JsonSerializer.Serialize(new
             {
                 command.AuthSessionId,
-                AuditRootAccessContextId = target.Context.Id,
+                AuditRootAccessContextId = target.AccessContextId,
                 target.AccessRevision,
                 command.RefreshTokenFamilyId,
                 command.CredentialId,
@@ -225,11 +213,43 @@ public sealed class StartAuthSessionHandler
             true,
             command.AuthSessionId,
             command.UserId,
-            target.Context.Id,
+            target.AccessContextId,
             target.PortfolioId,
             target.AccessRevision,
             command.RefreshTokenFamilyId,
             command.CredentialId);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        StartAuthSessionCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        Validate(command);
+        var effectiveAtUtc = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var target = await persistence.ReadEffectiveLoginContextAsync(
+            command.UserId,
+            command.SelectedAccessContextId,
+            effectiveAtUtc,
+            ct) ?? throw new UnauthorizedAccessException("The selected workspace is no longer available.");
+        if (target.AccessRevision != command.ExpectedAccessRevision)
+        {
+            throw new UnauthorizedAccessException("The selected workspace access revision changed.");
+        }
+        var exactSessionExists = await persistence.Query<AuthSession>()
+            .AsNoTracking()
+            .AnyAsync(session =>
+                session.Id == command.AuthSessionId &&
+                session.UserId == command.UserId &&
+                session.ActiveAccessContextId == target.AccessContextId &&
+                session.Status == AuthSessionStatus.Active &&
+                session.RevokedAtUtc == null &&
+                session.ExpiresAtUtc > effectiveAtUtc,
+                ct);
+        if (!exactSessionExists)
+        {
+            throw new UnauthorizedAccessException("The original authentication session is unavailable.");
+        }
     }
 
     private static StartAuthSessionResult Rejected(StartAuthSessionCommand command) =>
@@ -247,6 +267,7 @@ public sealed class StartAuthSessionHandler
     {
         if (command.UserId <= 0 ||
             command.SelectedAccessContextId <= 0 ||
+            command.ExpectedAccessRevision <= 0 ||
             command.AuthSessionId == Guid.Empty ||
             command.RefreshTokenFamilyId == Guid.Empty ||
             command.CredentialId == Guid.Empty)
@@ -287,9 +308,4 @@ public sealed class StartAuthSessionHandler
         }
     }
 
-    private sealed record SelectedContext(
-        WorkspaceAccessContext Context,
-        int PortfolioId,
-        long AccessRevision,
-        int EffectiveContextCount);
 }

@@ -12,6 +12,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Scanning;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Tests.Scanning;
@@ -30,7 +31,6 @@ public class ScanServiceTests : IDisposable
 
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
-    private readonly RecordingAuditService _audit;
     private readonly ScanService _sut;
     private readonly WorkspaceReadScope _scope;
 
@@ -61,11 +61,9 @@ public class ScanServiceTests : IDisposable
         _scope = CanonicalScanAuthorizationTestData.SeedWorkspaceAdministrator(
             _db, PortfolioId, userId: 3, sessionId: SessionId).Scope;
 
-        _audit        = new RecordingAuditService();
-
         _sut = new ScanService(
             _db,
-            _audit,
+            new ScanRejectAtomicUnitOfWork(_db),
             NullLogger<ScanService>.Instance,
             TimeProvider.System);
     }
@@ -238,8 +236,6 @@ public class ScanServiceTests : IDisposable
         rejectedDraft.ReviewedBy.Should().Be("3");
         rejectedDraft.FailureReason.Should().Be("Not a valid receipt");
 
-        _audit.Calls.Should().HaveCount(1);
-        _audit.Calls[0].operation.Should().Be(AuditLogOperation.Rejected);
     }
 
     [Fact]
@@ -285,20 +281,32 @@ public class ScanServiceTests : IDisposable
     // Test doubles
     // -------------------------------------------------------------------------
 
-    private sealed class RecordingAuditService : IAuditTrailService
+    private sealed class ScanRejectAtomicUnitOfWork(RentalCommandDbContext db) : IAtomicUnitOfWork
     {
-        public List<(int portfolioId, string entityType, int entityId, AuditLogOperation operation)> Calls { get; } = [];
-
-        public void EnsureAtomicCommand() { }
-
-        public Task LogAsync(
-            int portfolioId, string entityType, int entityId, AuditLogOperation operation,
-            int? userId = null, string? actorLabel = null, string? oldValues = null,
-            string? newValues = null, string? changeReason = null, string? ipAddress = null,
+        public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            AtomicCommandIdentity identity,
+            TCommand command,
+            IAtomicResultCodec<TResult> resultCodec,
             CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull
         {
-            Calls.Add((portfolioId, entityType, entityId, operation));
-            return Task.CompletedTask;
+            var reject = command.Should().BeOfType<RejectScanDraftCommand>().Subject;
+            var draft = await db.ScanDrafts.SingleAsync(item => item.Id == reject.DraftId, ct);
+            var rejected = draft.Status is not ("Confirmed" or "Rejected" or "Confirming");
+            if (rejected)
+            {
+                draft.Status = "Rejected";
+                draft.ReviewedAt = DateTime.UtcNow;
+                draft.ReviewedBy = reject.UserId.ToString();
+                if (!string.IsNullOrWhiteSpace(reject.Reason)) draft.FailureReason = reject.Reason;
+                await db.SaveChangesAsync(ct);
+            }
+            var result = new RejectScanDraftResult(rejected, reject.DraftId);
+            return new AtomicCommandOutcome<TResult>(
+                (TResult)(object)result,
+                AtomicCommandDisposition.Executed,
+                Guid.NewGuid());
         }
     }
 }

@@ -169,6 +169,14 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Api.Services.Domain.AtomicMoneyMutationResult,
     RentalCommand.Api.Services.Domain.AtomicMoneyMutationHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.ChangePasswordCommand,
+    RentalCommand.Core.Auth.ChangePasswordResult,
+    RentalCommand.Data.Auth.ChangePasswordHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Scanning.RejectScanDraftCommand,
+    RentalCommand.Core.Scanning.RejectScanDraftResult,
+    RentalCommand.Data.Scanning.RejectScanDraftHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Leasing.CreatePropertyDispositionCommand,
     RentalCommand.Core.Leasing.CreatePropertyDispositionResult,
     RentalCommand.Data.Leasing.CreatePropertyDispositionHandler>();

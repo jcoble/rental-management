@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Linq.Expressions;
 using RentalCommand.Core.Banking;
 using RentalCommand.Core.Accounting;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -336,6 +337,7 @@ public enum AtomicLockResource
     Property = 18,
     Portfolio = 19,
     TenantIdentityEmail = 20,
+    ApplicationUser = 21,
 }
 
 public enum AtomicScanDraftClaimOutcome
@@ -382,6 +384,19 @@ public interface IAtomicScanConfirmationPersistence
         int confirmedByUserId,
         DateTime confirmedAtUtc,
         CancellationToken ct = default);
+
+    Task<bool> RejectAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int draftId,
+        string? reason,
+        DateTime rejectedAtUtc,
+        CancellationToken ct = default);
+
+    Task<bool> IsAuthorizedForReviewAsync(
+        WorkspaceReadScope scope,
+        int draftId,
+        DateTime utcNow,
+        CancellationToken ct = default);
 }
 
 /// <summary>
@@ -408,6 +423,27 @@ public interface IAtomicPersistenceSession
     /// </summary>
     Task<DateTime> ReadDatabaseClockUtcAsync(CancellationToken ct = default);
 
+    /// <summary>
+    /// Reads one effective pre-login context through the DB-owned SECURITY DEFINER projection.
+    /// This is deliberately narrower than exposing authority tables before an AuthSession exists.
+    /// </summary>
+    Task<AtomicEffectiveLoginContext?> ReadEffectiveLoginContextAsync(
+        int userId,
+        int selectedAccessContextId,
+        DateTime effectiveAtUtc,
+        CancellationToken ct = default);
+
+    Task<AtomicEffectiveLoginContext?> ReadEffectiveLoginContextRootAsync(
+        int userId,
+        DateTime effectiveAtUtc,
+        CancellationToken ct = default);
+
+    Task<bool> IsScanDraftAuthorizedForReviewAsync(
+        WorkspaceReadScope scope,
+        int draftId,
+        DateTime utcNow,
+        CancellationToken ct = default);
+
     /// <summary>Reads the simulation-aware business date for one portfolio in PostgreSQL.</summary>
     Task<DateOnly> ReadBusinessDateAsync(int portfolioId, CancellationToken ct = default);
 
@@ -419,6 +455,12 @@ public interface IAtomicPersistenceSession
     void AddRange<TEntity>(IEnumerable<TEntity> entities) where TEntity : class;
     void Remove<TEntity>(TEntity entity) where TEntity : class;
 }
+
+public sealed record AtomicEffectiveLoginContext(
+    int AccessContextId,
+    int PortfolioId,
+    long AccessRevision,
+    int TotalEffectiveContexts);
 
 public sealed record AtomicCommandTimes(DateTime WallClockUtc, DateOnly BusinessDate);
 
