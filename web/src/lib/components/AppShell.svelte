@@ -130,6 +130,7 @@
 			icon: Briefcase,
 			items: [
 				{ href: '/properties', label: 'Properties', icon: Building },
+				{ href: '/owners', label: 'Owners', icon: BadgeDollarSign },
 				{ href: '/units', label: 'Units', icon: Home },
 				{ href: '/tenants', label: 'Tenants', icon: Users },
 				{ href: '/leases', label: 'Leases', icon: FileText },
@@ -180,7 +181,6 @@
 			{ href: '/settings/notifications/my-alerts', label: 'My alerts', icon: BellRing },
 			{ href: '/settings', label: 'Settings', icon: Settings },
 			{ href: '/admin/users', label: 'Team', icon: Shield },
-			{ href: '/owners', label: 'Owners', icon: BadgeDollarSign },
 			{ href: '/audit', label: 'Activity history', icon: History }
 		]
 	};

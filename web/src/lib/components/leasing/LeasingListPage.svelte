@@ -40,7 +40,7 @@
 	function itemHref(item: Record<string, unknown>): string {
 		if (kind === 'rentals') return `/units/${item.unitId}?tab=leasing&view=listing`;
 		if (kind === 'calendar') return `/appointments/${item.id}`;
-		if (kind === 'inbox') return `/messages/${item.id}`;
+		if (kind === 'inbox') return `/messages?${new URLSearchParams({ conversation: String(item.id) })}`;
 		if (item.kind === 'Application') return `/applications/${item.recordId}`;
 		if (item.kind === 'Listing') return `/units/${item.unitId}?tab=leasing&view=listing`;
 		return `/units/${item.unitId}?tab=tenant-lease&view=agreements&leaseManagementId=${item.recordId}`;
