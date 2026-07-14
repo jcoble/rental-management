@@ -2,7 +2,6 @@ using System.Text;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
-using Moq;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Import;
 using RentalCommand.Api.Tests.Domain;
@@ -47,14 +46,11 @@ public class CsvImportServiceTests : IDisposable
         });
         _ctx.Db.SaveChanges();
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(CsvImportServiceTests));
-        var noop = new NoopDataUpdateService();
         _sut = new CsvImportService(
             _ctx.Db,
             _atomic,
             _atomic,
-            _atomic,
-            new ExpenseService(_ctx.Db, noop, Mock.Of<IFileStorage>(), TimeProvider.System),
-            new LoanService(_ctx.Db, noop, TimeProvider.System));
+            _atomic);
     }
 
     public void Dispose() => _ctx.Dispose();
@@ -270,10 +266,8 @@ public class CsvImportServiceTests : IDisposable
         first.DuplicateRows.Should().Be(1);
         first.Rows[1].IsDuplicate.Should().BeTrue();
 
-        var stored = await _ctx.Db.Expenses.SingleAsync();
-        stored.Category.Should().Be(ScheduleECategory.MortgageInterest);
-        stored.Status.Should().Be(ExpenseStatus.Paid);
-        stored.Amount.Should().Be(800m);
+        _atomic.CoreCommands.Should().ContainSingle();
+        _atomic.CoreCommands.Single().Domain.Should().Be(AtomicCoreCsvImportDomain.Expense);
 
         var second = await _sut.ImportAsync(
             _scope, "mortgage payments", Csv(csv), dryRun: false, commandContext: LiveCommandContext);
@@ -281,7 +275,7 @@ public class CsvImportServiceTests : IDisposable
         second.CreatedRows.Should().Be(0);
         second.DuplicateRows.Should().Be(2);
         second.Rows[0].IsDuplicate.Should().BeTrue();
-        (await _ctx.Db.Expenses.CountAsync()).Should().Be(1);
+        _atomic.CoreCommands.Should().HaveCount(2);
     }
 
     [Fact]
@@ -302,10 +296,8 @@ public class CsvImportServiceTests : IDisposable
         first.DuplicateRows.Should().Be(1);
         first.Rows[1].IsDuplicate.Should().BeTrue();
 
-        var stored = await _ctx.Db.Loans.SingleAsync();
-        stored.Lender.Should().Be("Acme Bank");
-        stored.OriginalAmount.Should().Be(200000m);
-        stored.CurrentBalance.Should().Be(198500m);
+        _atomic.CoreCommands.Should().ContainSingle();
+        _atomic.CoreCommands.Single().Domain.Should().Be(AtomicCoreCsvImportDomain.Loan);
 
         var second = await _sut.ImportAsync(
             _scope, "loan", Csv(csv), dryRun: false, commandContext: LiveCommandContext);
@@ -313,7 +305,7 @@ public class CsvImportServiceTests : IDisposable
         second.CreatedRows.Should().Be(0);
         second.DuplicateRows.Should().Be(2);
         second.Rows[0].IsDuplicate.Should().BeTrue();
-        (await _ctx.Db.Loans.CountAsync()).Should().Be(1);
+        _atomic.CoreCommands.Should().HaveCount(2);
     }
 
     // -------------------------------------------------------------------------
@@ -406,6 +398,7 @@ public class CsvImportServiceTests : IDisposable
     {
         public List<RecordTenantReceiptCommand> Commands { get; } = [];
         public List<AtomicCoreCsvImportCommand> CoreCommands { get; } = [];
+        private readonly HashSet<string> _coreKeys = new(StringComparer.Ordinal);
 
         public Task<AtomicUnitImportBatchResult> PreviewAsync(
             WorkspaceReadScope scope,
@@ -417,7 +410,7 @@ public class CsvImportServiceTests : IDisposable
             AtomicCoreCsvImportDomain domain,
             string rowsJson,
             CancellationToken ct = default) =>
-            Task.FromResult(CoreResult(rowsJson, created: false));
+            Task.FromResult(CoreResult(domain, rowsJson, created: false));
 
         public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
             AtomicCommandIdentity identity,
@@ -442,7 +435,7 @@ public class CsvImportServiceTests : IDisposable
                 && typeof(TResult) == typeof(AtomicCoreCsvImportResult))
             {
                 CoreCommands.Add(core);
-                var batch = CoreResult(core.RowsJson, created: true);
+                var batch = CoreResult(core.Domain, core.RowsJson, created: true);
                 var result = new AtomicCoreCsvImportResult(
                     batch.Rows.ToArray(), batch.TotalRows, batch.ValidRows,
                     batch.CreatedCount, batch.DuplicateRows);
@@ -484,18 +477,39 @@ public class CsvImportServiceTests : IDisposable
                 results.Count(row => row.IsDuplicate));
         }
 
-        private static AtomicCoreCsvImportBatchResult CoreResult(string rowsJson, bool created)
+        private AtomicCoreCsvImportBatchResult CoreResult(
+            AtomicCoreCsvImportDomain domain,
+            string rowsJson,
+            bool created)
         {
             using var document = JsonDocument.Parse(rowsJson);
+            var seen = new HashSet<string>(StringComparer.Ordinal);
             var results = document.RootElement.EnumerateArray().Select((row, index) =>
             {
                 var errors = row.GetProperty("Errors").EnumerateArray()
                     .Select(error => error.GetString() ?? string.Empty).ToArray();
+                var key = domain switch
+                {
+                    AtomicCoreCsvImportDomain.Expense => string.Join("|",
+                        row.GetProperty("PropertyName").GetString(),
+                        row.GetProperty("Amount").GetDecimal(),
+                        row.GetProperty("IncurredAt").GetDateTime(),
+                        row.GetProperty("Description").GetString()),
+                    AtomicCoreCsvImportDomain.Loan => string.Join("|",
+                        row.GetProperty("PropertyName").GetString(),
+                        row.GetProperty("Lender").GetString(),
+                        row.GetProperty("OriginalAmount").GetDecimal(),
+                        row.GetProperty("StartDate").GetDateTime()),
+                    _ => $"{domain}:{index}",
+                };
+                var duplicate = errors.Length == 0
+                    && (!seen.Add(key) || _coreKeys.Contains(key));
+                if (created && errors.Length == 0 && !duplicate) _coreKeys.Add(key);
                 return new AtomicCoreCsvImportRowResult(
                     row.GetProperty("RowNumber").GetInt32(),
                     errors.Length == 0,
-                    false,
-                    created && errors.Length == 0 ? 60_000 + index : null,
+                    duplicate,
+                    created && errors.Length == 0 && !duplicate ? 60_000 + index : null,
                     null,
                     errors);
             }).ToArray();
