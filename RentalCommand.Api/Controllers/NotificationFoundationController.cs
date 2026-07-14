@@ -19,8 +19,14 @@ public sealed class NotificationFoundationController : AuthenticatedPortfolioCon
         _service.GetMyAlertsAsync(GetPortfolioId(), GetUserId(), ct);
 
     [HttpPut("my-alerts")]
-    public Task<MyAlertsResponse> UpdateMyAlerts(UpdateMyAlertsRequest request, CancellationToken ct) =>
-        _service.UpdateMyAlertsAsync(GetPortfolioId(), GetUserId(), request, ct);
+    public async Task<ActionResult<MyAlertsResponse>> UpdateMyAlerts(
+        UpdateMyAlertsRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey)) return InvalidKey();
+        return await _service.UpdateMyAlertsAsync(GetMutationScope(), request, operationKey, ct);
+    }
 
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.NotificationsManage)]
     [HttpGet("morning-briefing")]
@@ -40,8 +46,14 @@ public sealed class NotificationFoundationController : AuthenticatedPortfolioCon
 
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.NotificationsManage)]
     [HttpPut("team-routing")]
-    public Task<TeamRoutingRuleResponse> ReplaceTeamRouting(UpsertTeamRoutingRuleRequest request, CancellationToken ct) =>
-        _service.ReplaceTeamRoutingRuleAsync(GetPortfolioId(), request, ct);
+    public async Task<ActionResult<TeamRoutingRuleResponse>> ReplaceTeamRouting(
+        UpsertTeamRoutingRuleRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey)) return InvalidKey();
+        return await _service.ReplaceTeamRoutingRuleAsync(GetMutationScope(), request, operationKey, ct);
+    }
 
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.NotificationsManage)]
     [HttpGet("team-routing/{ruleId:int}/recipients")]
@@ -62,11 +74,15 @@ public sealed class NotificationFoundationController : AuthenticatedPortfolioCon
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.NotificationsManage)]
     [HttpPut("tenant-notices/{automationKey}")]
     public async Task<ActionResult<TenantNoticePolicyResponse>> UpsertTenantNoticePolicy(
-        string automationKey, UpsertTenantNoticePolicyRequest request, CancellationToken ct)
+        string automationKey,
+        UpsertTenantNoticePolicyRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
         if (!string.Equals(automationKey, request.AutomationKey, StringComparison.Ordinal))
             return BadRequest();
-        return await _service.UpsertTenantNoticePolicyAsync(GetPortfolioId(), GetUserId(), request, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey)) return InvalidKey();
+        return await _service.UpsertTenantNoticePolicyAsync(GetMutationScope(), request, operationKey, ct);
     }
 
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.NotificationsManage)]
@@ -76,22 +92,38 @@ public sealed class NotificationFoundationController : AuthenticatedPortfolioCon
 
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.NotificationsManage)]
     [HttpPost("tenant-notices/templates/seed")]
-    public async Task<IActionResult> SeedTemplates(CancellationToken ct)
+    public async Task<IActionResult> SeedTemplates(
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        await _service.SeedSuppliedTemplatesAsync(GetPortfolioId(), GetUserId(), ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey)) return InvalidKey();
+        await _service.SeedSuppliedTemplatesAsync(GetMutationScope(), operationKey, ct);
         return NoContent();
     }
 
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.NotificationsManage)]
     [HttpPost("tenant-notices/templates/{systemKey}/versions")]
-    public Task<TenantNoticePolicyResponse> CreateTemplateVersion(
-        string systemKey, CreateWorkspaceNoticeTemplateVersionRequest request, CancellationToken ct) =>
-        _service.CreateTemplateVersionAsync(GetPortfolioId(), GetUserId(), systemKey, request, ct);
+    public async Task<ActionResult<TenantNoticePolicyResponse>> CreateTemplateVersion(
+        string systemKey,
+        CreateWorkspaceNoticeTemplateVersionRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey)) return InvalidKey();
+        return await _service.CreateTemplateVersionAsync(
+            GetMutationScope(), systemKey, request, operationKey, ct);
+    }
 
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.NotificationsManage)]
     [HttpPost("tenant-notices/templates/{systemKey}/restore-default")]
-    public Task<TenantNoticePolicyResponse> RestoreDefault(string systemKey, CancellationToken ct) =>
-        _service.RestoreDefaultAsync(GetPortfolioId(), GetUserId(), systemKey, ct);
+    public async Task<ActionResult<TenantNoticePolicyResponse>> RestoreDefault(
+        string systemKey,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey)) return InvalidKey();
+        return await _service.RestoreDefaultAsync(GetMutationScope(), systemKey, operationKey, ct);
+    }
 
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.NotificationsManage)]
     [HttpPost("tenant-notices/drafts/{draftId:int}/approve-and-queue")]
@@ -109,4 +141,20 @@ public sealed class NotificationFoundationController : AuthenticatedPortfolioCon
         [FromQuery] int take = 50,
         CancellationToken ct = default) =>
         _service.ListDeliveryStatusesAsync(GetPortfolioId(), take, ct);
+
+    private WorkspaceReadScope GetMutationScope()
+    {
+        var active = GetActiveAccessContext();
+        return new WorkspaceReadScope(active.PortfolioId, active.UserId, active.SessionId,
+            active.AccessContextId, active.AccessRevision);
+    }
+
+    private static bool TryValidateIdempotencyKey(string? raw, out string key)
+    {
+        key = raw?.Trim() ?? string.Empty;
+        return key.Length is > 0 and <= 128;
+    }
+
+    private BadRequestObjectResult InvalidKey() =>
+        BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
 }

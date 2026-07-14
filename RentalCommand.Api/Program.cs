@@ -529,6 +529,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Leasing.CancelPlannedRelationshipResult,
     RentalCommand.Data.Leasing.CancelPlannedRelationshipHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.AtomicNotificationMutationCommand,
+    RentalCommand.Api.Services.Domain.AtomicNotificationMutationResult,
+    RentalCommand.Api.Services.Domain.AtomicNotificationMutationHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Leasing.TransferLeaseManagementCommand,
     RentalCommand.Core.Leasing.TransferLeaseManagementResult,
     RentalCommand.Data.Leasing.TransferLeaseManagementHandler>();

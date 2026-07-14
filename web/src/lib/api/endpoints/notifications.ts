@@ -1,4 +1,5 @@
 import { api } from "../client";
+import { idempotentMutation } from "../idempotency";
 import type {
   NotificationItem,
   NotificationListParams,
@@ -32,18 +33,53 @@ export const notifications = {
 
   unreadCount: () =>
     api.get<UnreadCountResponse>("/notifications/unread-count"),
-  markAsRead: (id: number) => api.post<void>(`/notifications/${id}/read`, {}),
-  markAllAsRead: () => api.post<void>("/notifications/read-all", {}),
+  markAsRead: (id: number) =>
+    idempotentMutation(`notifications:read:${id}`, (operationKey) =>
+      api.post<void>(
+        `/notifications/${id}/read`,
+        {},
+        {
+          headers: { "Idempotency-Key": operationKey },
+        }
+      )
+    ),
+  markAllAsRead: () =>
+    idempotentMutation("notifications:read-all", (operationKey) =>
+      api.post<void>(
+        "/notifications/read-all",
+        {},
+        {
+          headers: { "Idempotency-Key": operationKey },
+        }
+      )
+    ),
   broadcast: (data: {
     title: string;
     message: string;
     severity?: string;
     actionUrl?: string | null;
-  }) => api.post<NotificationItem>("/notifications/broadcast", data),
+  }) =>
+    idempotentMutation(
+      `notifications:broadcast:${JSON.stringify(data)}`,
+      (operationKey) =>
+        api.post<NotificationItem>("/notifications/broadcast", data, {
+          headers: { "Idempotency-Key": operationKey },
+        })
+    ),
   myAlerts: {
     get: () => api.get<MyAlertsResponse>("/notification-settings/my-alerts"),
     update: (request: UpdateMyAlertsRequest) =>
-      api.put<MyAlertsResponse>("/notification-settings/my-alerts", request),
+      idempotentMutation(
+        `notification-settings:my-alerts:${JSON.stringify(request)}`,
+        (operationKey) =>
+          api.put<MyAlertsResponse>(
+            "/notification-settings/my-alerts",
+            request,
+            {
+              headers: { "Idempotency-Key": operationKey },
+            }
+          )
+      ),
   },
   morningBriefing: {
     get: () =>
@@ -60,9 +96,14 @@ export const notifications = {
     list: () =>
       api.get<TeamRoutingRuleResponse[]>("/notification-settings/team-routing"),
     replace: (request: UpsertTeamRoutingRuleRequest) =>
-      api.put<TeamRoutingRuleResponse>(
-        "/notification-settings/team-routing",
-        request
+      idempotentMutation(
+        `notification-settings:team-routing:${JSON.stringify(request)}`,
+        (operationKey) =>
+          api.put<TeamRoutingRuleResponse>(
+            "/notification-settings/team-routing",
+            request,
+            { headers: { "Idempotency-Key": operationKey } }
+          )
       ),
     recipients: (ruleId: number) =>
       api.get<TeamRoutingRuleRecipientResponse[]>(
@@ -82,11 +123,18 @@ export const notifications = {
       automationKey: string,
       request: UpsertTenantNoticePolicyRequest
     ) =>
-      api.put<TenantNoticePolicyResponse>(
-        `/notification-settings/tenant-notices/${encodeURIComponent(
-          automationKey
+      idempotentMutation(
+        `notification-settings:tenant-notice:${automationKey}:${JSON.stringify(
+          request
         )}`,
-        request
+        (operationKey) =>
+          api.put<TenantNoticePolicyResponse>(
+            `/notification-settings/tenant-notices/${encodeURIComponent(
+              automationKey
+            )}`,
+            request,
+            { headers: { "Idempotency-Key": operationKey } }
+          )
       ),
     listTemplates: () =>
       api.get<WorkspaceNoticeTemplateResponse[]>(
@@ -99,26 +147,43 @@ export const notifications = {
         )}`
       ),
     seedTemplates: () =>
-      api.post<void>(
-        "/notification-settings/tenant-notices/templates/seed",
-        {}
+      idempotentMutation(
+        "notification-settings:tenant-notices:seed",
+        (operationKey) =>
+          api.post<void>(
+            "/notification-settings/tenant-notices/templates/seed",
+            {},
+            { headers: { "Idempotency-Key": operationKey } }
+          )
       ),
     createTemplateVersion: (
       systemKey: string,
       request: CreateWorkspaceNoticeTemplateVersionRequest
     ) =>
-      api.post<TenantNoticePolicyResponse>(
-        `/notification-settings/tenant-notices/templates/${encodeURIComponent(
-          systemKey
-        )}/versions`,
-        request
+      idempotentMutation(
+        `notification-settings:tenant-notice-template:${systemKey}:${JSON.stringify(
+          request
+        )}`,
+        (operationKey) =>
+          api.post<TenantNoticePolicyResponse>(
+            `/notification-settings/tenant-notices/templates/${encodeURIComponent(
+              systemKey
+            )}/versions`,
+            request,
+            { headers: { "Idempotency-Key": operationKey } }
+          )
       ),
     restoreDefault: (systemKey: string) =>
-      api.post<TenantNoticePolicyResponse>(
-        `/notification-settings/tenant-notices/templates/${encodeURIComponent(
-          systemKey
-        )}/restore-default`,
-        {}
+      idempotentMutation(
+        `notification-settings:tenant-notice-template:${systemKey}:restore`,
+        (operationKey) =>
+          api.post<TenantNoticePolicyResponse>(
+            `/notification-settings/tenant-notices/templates/${encodeURIComponent(
+              systemKey
+            )}/restore-default`,
+            {},
+            { headers: { "Idempotency-Key": operationKey } }
+          )
       ),
   },
 };

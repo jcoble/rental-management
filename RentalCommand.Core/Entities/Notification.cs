@@ -1,6 +1,6 @@
 namespace RentalCommand.Core.Entities;
 
-public class Notification
+public class Notification : Interfaces.IAuditable, Interfaces.IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
