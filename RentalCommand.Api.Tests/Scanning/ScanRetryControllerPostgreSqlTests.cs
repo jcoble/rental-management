@@ -189,7 +189,6 @@ public sealed class ScanRetryControllerPostgreSqlTests : IAsyncLifetime
             ExtractedFields = extractedFields,
             FailureReason = failureReason,
             CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
         };
         _db.ScanDrafts.Add(draft);
         _db.SaveChanges();
