@@ -7,6 +7,7 @@ import '../../core/models/lease.dart';
 import '../tenants/tenant_detail_screen.dart';
 import 'addendum_action_sheets.dart';
 import 'agreement_draft_action_sheets.dart';
+import 'ending_disposition_sheet.dart';
 import 'lease_ledger_view.dart';
 import 'leases_repository.dart';
 import 'return_possession_sheet.dart';
@@ -120,6 +121,12 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
                       management.summary.possessionReturnedAt == null &&
                       management.summary.canceledAt == null
                   ? () => _returnPossession(context, ref, management)
+                  : null,
+              onEndingDisposition:
+                  management.summary.possessionGivenAt != null &&
+                      management.summary.possessionReturnedAt == null &&
+                      management.summary.canceledAt == null
+                  ? () => _recordEndingDisposition(context, ref, management)
                   : null,
             ),
           ],
@@ -297,6 +304,42 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
       if (context.mounted) _showError(context, error);
     }
   }
+
+  Future<void> _recordEndingDisposition(
+    BuildContext context,
+    WidgetRef ref,
+    LeaseManagementDetail management,
+  ) async {
+    final summary = management.summary;
+    final input = await showEndingDispositionSheet(context, summary: summary);
+    if (input == null || !context.mounted) return;
+    try {
+      final result = await _runWithStableRetry(
+        context,
+        actionLabel: 'record ending decision',
+        action: () => ref
+            .read(leaseManagementsRepositoryProvider)
+            .recordEndingDisposition(
+              leaseManagementId: summary.id,
+              unitId: summary.unitId,
+              disposition: input.disposition,
+              noticeGivenAt: input.noticeGivenAt,
+              plannedMoveOutAt: input.plannedMoveOutAt,
+              decisionReason: input.decisionReason,
+              operationKey: input.operationKey,
+            ),
+      );
+      if (result == null || !context.mounted) return;
+      await ref.refresh(leaseManagementDetailProvider(summary.id).future);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Lease ending decision recorded.')),
+        );
+      }
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+    }
+  }
 }
 
 class _RelationshipHeader extends StatelessWidget {
@@ -352,9 +395,26 @@ class _RelationshipHeader extends StatelessWidget {
                   : _money(summary.baseRentAmount!),
             ),
             if (summary.upcomingAgreementId != null)
-              const _Fact(
+              _Fact(
                 label: 'Upcoming',
-                value: 'A future agreement is already prepared',
+                value:
+                    '${summary.upcomingAgreementNumber ?? 'Future agreement'}'
+                    '${summary.upcomingTermStartOn == null ? '' : ' · starts ${_date(summary.upcomingTermStartOn!)}'}'
+                    '${summary.upcomingAgreementStatus == null ? '' : ' · ${summary.upcomingAgreementStatus}'}',
+              ),
+            _Fact(
+              label: 'Ending plan',
+              value: _endingDispositionLabel(summary.endingDisposition),
+            ),
+            if (summary.endingDispositionDecidedAt != null)
+              _Fact(
+                label: 'Decision recorded',
+                value: _date(summary.endingDispositionDecidedAt!),
+              ),
+            if (summary.plannedMoveOutAt != null)
+              _Fact(
+                label: 'Planned move-out',
+                value: _date(summary.plannedMoveOutAt!),
               ),
             if (summary.hasReconciliationException)
               Padding(
@@ -1181,12 +1241,14 @@ class _ActionsCard extends StatelessWidget {
     required this.onAsk,
     required this.onGivePossession,
     required this.onReturnPossession,
+    required this.onEndingDisposition,
   });
 
   final LeaseManagementDetail management;
   final VoidCallback onAsk;
   final VoidCallback? onGivePossession;
   final VoidCallback? onReturnPossession;
+  final VoidCallback? onEndingDisposition;
 
   @override
   Widget build(BuildContext context) => Card(
@@ -1200,6 +1262,14 @@ class _ActionsCard extends StatelessWidget {
             icon: const Icon(Icons.auto_awesome_outlined),
             label: const Text('Ask this tenant & lease'),
           ),
+          if (onEndingDisposition != null) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: onEndingDisposition,
+              icon: const Icon(Icons.event_available_outlined),
+              label: const Text('Record lease ending plan'),
+            ),
+          ],
           if (onGivePossession != null) ...[
             const SizedBox(height: 8),
             FilledButton.icon(
@@ -1343,3 +1413,10 @@ Future<T?> _runWithStableRetry<T>(
 String _date(DateTime value) => '${value.month}/${value.day}/${value.year}';
 
 String _money(double value) => '\$${value.toStringAsFixed(2)}';
+
+String _endingDispositionLabel(String value) => switch (value) {
+  'OfferRenewal' => 'Renew / continue',
+  'OfferMonthToMonth' => 'Continue month-to-month',
+  'NonRenewalMoveOut' => 'Move out / end',
+  _ => 'Not decided',
+};

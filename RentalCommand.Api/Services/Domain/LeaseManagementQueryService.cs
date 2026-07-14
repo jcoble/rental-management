@@ -73,6 +73,8 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         {
             Summary = header,
             EndingDisposition = header.EndingDisposition,
+            EndingDispositionDecidedAtUtc = header.EndingDispositionDecidedAtUtc,
+            EndingDispositionDecidedByUserId = header.EndingDispositionDecidedByUserId,
             NoticeGivenAtUtc = header.NoticeGivenAtUtc,
             CancellationReasonCode = header.CancellationReasonCode,
             CancellationNote = header.CancellationNote,
@@ -516,6 +518,20 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             on new { management.PortfolioId, AgreementId = lifecycle.CurrentAgreementId }
             equals new { agreementStatus.PortfolioId, AgreementId = (int?)agreementStatus.AgreementId } into statuses
         from agreementStatus in statuses.DefaultIfEmpty()
+        join upcomingAgreement in _db.LeaseAgreements.AsNoTracking()
+            on new { management.PortfolioId, AgreementId = lifecycle.UpcomingAgreementId }
+            equals new { upcomingAgreement.PortfolioId, AgreementId = (int?)upcomingAgreement.Id }
+            into upcomingAgreements
+        from upcomingAgreement in upcomingAgreements.DefaultIfEmpty()
+        join upcomingAgreementStatus in _db.LeaseAgreementStatusProjections.AsNoTracking()
+            on new { management.PortfolioId, AgreementId = lifecycle.UpcomingAgreementId }
+            equals new
+            {
+                upcomingAgreementStatus.PortfolioId,
+                AgreementId = (int?)upcomingAgreementStatus.AgreementId,
+            }
+            into upcomingStatuses
+        from upcomingAgreementStatus in upcomingStatuses.DefaultIfEmpty()
         select new LeaseManagementSummaryResponse
         {
             LeaseManagementId = management.Id,
@@ -534,6 +550,18 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             TermEndOn = agreement == null ? null : agreement.TermEndOn,
             BaseRentAmount = agreement == null ? null : agreement.BaseRentAmount,
             UpcomingLeaseAgreementId = lifecycle.UpcomingAgreementId,
+            UpcomingAgreementNumber = upcomingAgreement == null
+                ? null
+                : upcomingAgreement.AgreementNumber,
+            UpcomingAgreementStatus = upcomingAgreementStatus == null
+                ? null
+                : upcomingAgreementStatus.AgreementStatus,
+            UpcomingTermStartOn = upcomingAgreement == null
+                ? null
+                : upcomingAgreement.TermStartOn,
+            UpcomingTermEndOn = upcomingAgreement == null
+                ? null
+                : upcomingAgreement.TermEndOn,
             TenantAccountId = lifecycle.TenantAccountId,
             PrimaryTenantId = lifecycle.CurrentPrimaryTenantId,
             PrimaryTenantName = lifecycle.CurrentPrimaryTenantName,
@@ -548,6 +576,8 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             AccountClosedAtUtc = management.AccountClosedAtUtc,
             CanceledAtUtc = management.CanceledAtUtc,
             EndingDisposition = management.EndingDisposition,
+            EndingDispositionDecidedAtUtc = management.EndingDispositionDecidedAtUtc,
+            EndingDispositionDecidedByUserId = management.EndingDispositionDecidedByUserId,
             NoticeGivenAtUtc = management.NoticeGivenAtUtc,
             CancellationReasonCode = management.CancellationReasonCode,
             CancellationNote = management.CancellationNote,

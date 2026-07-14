@@ -30,6 +30,8 @@ public sealed class LeaseManagementController : ManagementControllerBase
         new("lease-management.give-possession.v1");
     private static readonly AtomicJsonResultCodec<ReturnPossessionResult> ReturnPossessionCodec =
         new("lease-management.return-possession.v1");
+    private static readonly AtomicJsonResultCodec<RecordLeaseEndingDispositionResult>
+        EndingDispositionCodec = new("lease-management.ending-disposition.v1");
     private static readonly AtomicJsonResultCodec<CancelPlannedRelationshipResult> CancelCodec =
         new("lease-management.cancel-planned.v1");
     private static readonly AtomicJsonResultCodec<TransferLeaseManagementResult> TransferCodec =
@@ -706,6 +708,77 @@ public sealed class LeaseManagementController : ManagementControllerBase
                 ReturnPossessionOutcome.PossessionNotGiven
                     or ReturnPossessionOutcome.InvalidPartyDisposition
                     or ReturnPossessionOutcome.InvalidAccessDisposition =>
+                    UnprocessableEntity(new { error = outcome.Value.Error }),
+                _ => StatusCode(StatusCodes.Status500InternalServerError),
+            };
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (ArgumentException exception) { return BadRequest(new { error = exception.Message }); }
+    }
+
+    [HttpPost("{leaseManagementId:int}/ending-disposition")]
+    [ProducesResponseType(typeof(RecordLeaseEndingDispositionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> RecordEndingDisposition(
+        int leaseManagementId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] RecordLeaseEndingDispositionRequest request,
+        CancellationToken ct)
+    {
+        if (!TryPrepareCommand(idempotencyKey, out var normalizedKey, out var sessionId,
+                out var accessContextId, out var accessRevision, out var failure))
+        {
+            return failure!;
+        }
+        if (request.Disposition is null
+            || !HasRequiredTextWithinLimit(request.DecisionReason, 1000))
+        {
+            return BadRequest(new
+            {
+                error = "Disposition and a decision reason of at most 1000 characters are required.",
+            });
+        }
+
+        var portfolioId = GetPortfolioId();
+        var userId = GetUserId();
+        var digest = Digest(normalizedKey!);
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "lease-management.ending-disposition",
+                    $"{portfolioId}:{leaseManagementId}:{digest}"),
+                new RecordLeaseEndingDispositionCommand(
+                    portfolioId,
+                    leaseManagementId,
+                    request.UnitId,
+                    request.Disposition.Value,
+                    request.NoticeGivenAtUtc,
+                    request.PlannedMoveOutAtUtc,
+                    request.DecisionReason,
+                    userId,
+                    sessionId,
+                    accessContextId,
+                    accessRevision,
+                    $"ending-disposition:{portfolioId}:{leaseManagementId}:{digest}"),
+                EndingDispositionCodec,
+                ct);
+
+            return outcome.Value.Outcome switch
+            {
+                RecordLeaseEndingDispositionOutcome.Recorded => Ok(
+                    new RecordLeaseEndingDispositionResponse(
+                        outcome.Value.LeaseManagementId,
+                        outcome.Value.EndingDisposition,
+                        outcome.Value.EndingDispositionDecidedAtUtc,
+                        outcome.Value.EndingDispositionDecidedByUserId,
+                        outcome.Value.NoticeGivenAtUtc,
+                        outcome.Value.PlannedMoveOutAtUtc,
+                        outcome.Disposition != AtomicCommandDisposition.Executed)),
+                RecordLeaseEndingDispositionOutcome.RelationshipNotEligible
+                    or RecordLeaseEndingDispositionOutcome.InvalidDates =>
                     UnprocessableEntity(new { error = outcome.Value.Error }),
                 _ => StatusCode(StatusCodes.Status500InternalServerError),
             };

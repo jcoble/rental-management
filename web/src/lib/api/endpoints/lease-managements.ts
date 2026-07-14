@@ -3,6 +3,7 @@ import type {
   LeaseManagementDetail,
   LeaseManagementLedger,
   LeaseManagementParty,
+  LeaseManagementEndingDisposition,
   LeaseManagementSummary,
   LeaseQuestionResponse,
 } from "$lib/types";
@@ -351,6 +352,24 @@ export interface ReturnPossessionResponse {
   replayed: boolean;
 }
 
+export interface RecordLeaseEndingDispositionRequest {
+  unitId: number;
+  disposition: LeaseManagementEndingDisposition;
+  noticeGivenAtUtc: string | null;
+  plannedMoveOutAtUtc: string | null;
+  decisionReason: string;
+}
+
+export interface RecordLeaseEndingDispositionResponse {
+  leaseManagementId: number;
+  endingDisposition: LeaseManagementEndingDisposition;
+  endingDispositionDecidedAtUtc: string | null;
+  endingDispositionDecidedByUserId: number | null;
+  noticeGivenAtUtc: string | null;
+  plannedMoveOutAtUtc: string | null;
+  replayed: boolean;
+}
+
 export interface ReturnPossessionActiveTenantUserAccess {
   tenantUserAccessId: number;
   publicId: string;
@@ -455,6 +474,17 @@ export const leaseManagements = {
   ) =>
     idempotentJson<ReturnPossessionResponse>(
       `/lease-managements/${leaseManagementId}/return-possession`,
+      "POST",
+      request,
+      operationKey
+    ),
+  recordEndingDisposition: (
+    leaseManagementId: number,
+    request: RecordLeaseEndingDispositionRequest,
+    operationKey: string
+  ) =>
+    idempotentJson<RecordLeaseEndingDispositionResponse>(
+      `/lease-managements/${leaseManagementId}/ending-disposition`,
       "POST",
       request,
       operationKey

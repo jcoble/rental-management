@@ -408,6 +408,10 @@ export interface LeaseManagementSummary {
 	termEndOn?: string | null;
 	baseRentAmount?: number | null;
 	upcomingLeaseAgreementId?: number | null;
+	upcomingAgreementNumber?: string | null;
+	upcomingAgreementStatus?: string | null;
+	upcomingTermStartOn?: string | null;
+	upcomingTermEndOn?: string | null;
 	tenantAccountId?: number | null;
 	primaryTenantId?: number | null;
 	primaryTenantName?: string | null;
@@ -421,12 +425,20 @@ export interface LeaseManagementSummary {
 	possessionReturnedAtUtc?: string | null;
 	accountClosedAtUtc?: string | null;
 	canceledAtUtc?: string | null;
-	endingDisposition: string;
+	endingDisposition: LeaseManagementEndingDisposition;
+	endingDispositionDecidedAtUtc?: string | null;
+	endingDispositionDecidedByUserId?: number | null;
 	noticeGivenAtUtc?: string | null;
 	cancellationReasonCode?: string | null;
 	cancellationNote?: string | null;
 	updatedAtUtc: string;
 }
+
+export type LeaseManagementEndingDisposition =
+	| 'Undecided'
+	| 'OfferRenewal'
+	| 'OfferMonthToMonth'
+	| 'NonRenewalMoveOut';
 
 export interface LeaseManagementParty {
 	leaseManagementPartyId: number;
@@ -443,7 +455,9 @@ export interface LeaseManagementParty {
 
 export interface LeaseManagementDetail {
 	summary: LeaseManagementSummary;
-	endingDisposition: string;
+	endingDisposition: LeaseManagementEndingDisposition;
+	endingDispositionDecidedAtUtc?: string | null;
+	endingDispositionDecidedByUserId?: number | null;
 	noticeGivenAtUtc?: string | null;
 	cancellationReasonCode?: string | null;
 	cancellationNote?: string | null;

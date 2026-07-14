@@ -47,6 +47,10 @@ public sealed class LeaseManagementSummaryResponse
     public DateOnly? TermEndOn { get; init; }
     public decimal? BaseRentAmount { get; init; }
     public int? UpcomingLeaseAgreementId { get; init; }
+    public string? UpcomingAgreementNumber { get; init; }
+    public string? UpcomingAgreementStatus { get; init; }
+    public DateOnly? UpcomingTermStartOn { get; init; }
+    public DateOnly? UpcomingTermEndOn { get; init; }
     public int? TenantAccountId { get; init; }
     public int? PrimaryTenantId { get; init; }
     public string? PrimaryTenantName { get; init; }
@@ -61,6 +65,8 @@ public sealed class LeaseManagementSummaryResponse
     public DateTime? AccountClosedAtUtc { get; init; }
     public DateTime? CanceledAtUtc { get; init; }
     public LeaseManagementEndingDisposition EndingDisposition { get; init; }
+    public DateTime? EndingDispositionDecidedAtUtc { get; init; }
+    public int? EndingDispositionDecidedByUserId { get; init; }
     public DateTime? NoticeGivenAtUtc { get; init; }
     public string? CancellationReasonCode { get; init; }
     public string? CancellationNote { get; init; }
@@ -71,6 +77,8 @@ public sealed class LeaseManagementDetailResponse
 {
     public LeaseManagementSummaryResponse Summary { get; init; } = new();
     public LeaseManagementEndingDisposition EndingDisposition { get; init; }
+    public DateTime? EndingDispositionDecidedAtUtc { get; init; }
+    public int? EndingDispositionDecidedByUserId { get; init; }
     public DateTime? NoticeGivenAtUtc { get; init; }
     public string? CancellationReasonCode { get; init; }
     public string? CancellationNote { get; init; }

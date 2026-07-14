@@ -277,6 +277,8 @@ public sealed class CanonicalLeaseReaderSqlTests
         sql.Should().Contain("vw_lease_management_lifecycle");
         sql.Should().Contain("LeaseAgreements");
         sql.Should().Contain("vw_lease_agreement_status");
+        sql.Should().Contain("UpcomingAgreementNumber");
+        sql.Should().Contain("EndingDispositionDecidedAtUtc");
         sql.Should().Contain("ILIKE");
         sql.Should().Contain("ORDER BY");
         sql.Should().Contain("LIMIT");

@@ -22,6 +22,10 @@ const possessionActionsSource = readFileSync(
 	new URL('../components/leases/PossessionActions.svelte', import.meta.url),
 	'utf8'
 );
+const endingDispositionSource = readFileSync(
+	new URL('../components/leases/EndingDispositionDialog.svelte', import.meta.url),
+	'utf8'
+);
 
 describe('canonical lease lifecycle action hub', () => {
 	it('uses typed canonical draft, successor, preparation, and issuance endpoints', () => {
@@ -102,5 +106,23 @@ describe('canonical lease lifecycle action hub', () => {
 		assert.match(possessionActionsSource, /returnContext\.activeTenantUserAccesses/);
 		assert.doesNotMatch(possessionActionsSource, /summary\.parties/);
 		assert.match(detailPageSource, /<PossessionActions \{summary\} onchanged=\{refreshLease\} \/>/);
+	});
+
+	it('records the approved ending disposition without mutating an agreement', () => {
+		assert.match(endpointSource, /recordEndingDisposition:/);
+		assert.match(endpointSource, /\/ending-disposition`/);
+		for (const disposition of [
+			'Undecided',
+			'OfferRenewal',
+			'OfferMonthToMonth',
+			'NonRenewalMoveOut'
+		]) {
+			assert.match(endingDispositionSource, new RegExp(`value="${disposition}"`));
+		}
+		assert.match(endingDispositionSource, /noticeGivenAtUtc/);
+		assert.match(endingDispositionSource, /plannedMoveOutAtUtc/);
+		assert.match(endingDispositionSource, /decisionReason/);
+		assert.match(endingDispositionSource, /does not edit or replace the governing agreement/i);
+		assert.match(detailPageSource, /<EndingDispositionDialog/);
 	});
 });

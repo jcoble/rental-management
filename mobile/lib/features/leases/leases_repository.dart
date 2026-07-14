@@ -559,6 +559,39 @@ class GivePossessionResult {
       );
 }
 
+class RecordLeaseEndingDispositionResult {
+  const RecordLeaseEndingDispositionResult({
+    required this.leaseManagementId,
+    required this.endingDisposition,
+    required this.replayed,
+    this.endingDispositionDecidedAt,
+    this.noticeGivenAt,
+    this.plannedMoveOutAt,
+  });
+
+  final int leaseManagementId;
+  final String endingDisposition;
+  final DateTime? endingDispositionDecidedAt;
+  final DateTime? noticeGivenAt;
+  final DateTime? plannedMoveOutAt;
+  final bool replayed;
+
+  factory RecordLeaseEndingDispositionResult.fromJson(
+    Map<String, dynamic> json,
+  ) => RecordLeaseEndingDispositionResult(
+    leaseManagementId: (json['leaseManagementId'] as num?)?.toInt() ?? 0,
+    endingDisposition: json['endingDisposition'] as String? ?? 'Undecided',
+    endingDispositionDecidedAt: DateTime.tryParse(
+      json['endingDispositionDecidedAtUtc'] as String? ?? '',
+    ),
+    noticeGivenAt: DateTime.tryParse(json['noticeGivenAtUtc'] as String? ?? ''),
+    plannedMoveOutAt: DateTime.tryParse(
+      json['plannedMoveOutAtUtc'] as String? ?? '',
+    ),
+    replayed: json['replayed'] as bool? ?? false,
+  );
+}
+
 class EditAgreementDraftInput {
   const EditAgreementDraftInput({
     required this.draftRevision,
@@ -1091,6 +1124,43 @@ class LeaseManagementsRepository {
         options: Options(headers: {'Idempotency-Key': operationKey}),
       );
       return GivePossessionResult.fromJson(_required(response.data));
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<RecordLeaseEndingDispositionResult> recordEndingDisposition({
+    required int leaseManagementId,
+    required int unitId,
+    required String disposition,
+    required String decisionReason,
+    required String operationKey,
+    DateTime? noticeGivenAt,
+    DateTime? plannedMoveOutAt,
+  }) async {
+    String? timestamp(DateTime? value) => value == null
+        ? null
+        : DateTime.utc(
+            value.year,
+            value.month,
+            value.day,
+            12,
+          ).toIso8601String();
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/lease-managements/$leaseManagementId/ending-disposition',
+        data: {
+          'unitId': unitId,
+          'disposition': disposition,
+          'noticeGivenAtUtc': timestamp(noticeGivenAt),
+          'plannedMoveOutAtUtc': timestamp(plannedMoveOutAt),
+          'decisionReason': decisionReason,
+        },
+        options: Options(headers: {'Idempotency-Key': operationKey}),
+      );
+      return RecordLeaseEndingDispositionResult.fromJson(
+        _required(response.data),
+      );
     } on DioException catch (error) {
       throw ApiException.fromDioException(error);
     }
