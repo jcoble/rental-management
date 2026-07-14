@@ -153,6 +153,18 @@ bool canOpenMobilePath({
     return path == '/notifications' || path.startsWith('/messages/');
   }
 
+  if (experience == WorkspaceExperience.maintenance) {
+    if (path == '/')
+      return capabilities.contains('maintenance.assigned-work.read');
+    if (path.startsWith('/technician/assignments/')) {
+      return capabilities.contains('maintenance.assigned-work.read');
+    }
+    if (path == '/settings' || path == '/settings/notifications/my-alerts') {
+      return true;
+    }
+    return false;
+  }
+
   if (path == '/settings' || path == '/settings/notifications/my-alerts') {
     return canManageOwnMobileAlerts(experience);
   }

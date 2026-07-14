@@ -142,6 +142,7 @@
 		propertyId: '',
 		title: '',
 		description: '',
+		technicianAccessInstructions: '',
 		priority: 'Normal',
 		category: 'General',
 		// Costs & timing (editable directly, including on Completed orders — no reopen workflow).
@@ -167,6 +168,7 @@
 			propertyId: String(wo.propertyId),
 			title: wo.title,
 			description: wo.description,
+			technicianAccessInstructions: wo.technicianAccessInstructions ?? '',
 			priority: wo.priority,
 			category: wo.category,
 			// Work-order timing fields are full timestamps; the DatePicker edits the calendar day,
@@ -601,6 +603,7 @@
 		<DetailCard title="Request" icon={Wrench} accent="primary" testid="work-order-detail-card" contentClass="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
 			<InlineField label="Title" bind:value={form.title} display={wo.title} {editing} error={formErrors.title} testid="work-order-detail-title-field" class="sm:col-span-2 lg:col-span-3" />
 			<InlineField label="Description" bind:value={form.description} display={wo.description} {editing} type="textarea" error={formErrors.description} testid="work-order-detail-description" class="sm:col-span-2 lg:col-span-3" />
+			<InlineField label="Safe technician access" bind:value={form.technicianAccessInstructions} display={wo.technicianAccessInstructions} {editing} type="textarea" testid="work-order-detail-technician-access" class="sm:col-span-2 lg:col-span-3" />
 			<InlineField label="Property" bind:value={form.propertyId} display={wo.propertyName} {editing} type="select" options={propertyOptions} error={formErrors.propertyId} testid="work-order-detail-property-field" />
 			<InlineField label="Priority" bind:value={form.priority} display={wo.priority} {editing} type="select" options={priorityOptions} testid="work-order-detail-priority" />
 			<InlineField label="Category" bind:value={form.category} display={wo.category} {editing} error={formErrors.category} testid="work-order-detail-category" />

@@ -1214,6 +1214,7 @@ export interface WorkOrder {
 	recurringMaintenanceTaskId?: number;
 	title: string;
 	description: string;
+	technicianAccessInstructions?: string;
 	category: string;
 	priority: WorkOrderPriority;
 	status: WorkOrderStatus;

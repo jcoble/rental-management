@@ -17,6 +17,7 @@ public class WorkOrderResponse
     public int? RecurringMaintenanceTaskId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
+    public string? TechnicianAccessInstructions { get; set; }
     public string Category { get; set; } = "General";
     public WorkOrderPriority Priority { get; set; }
     public WorkOrderStatus Status { get; set; }
@@ -59,6 +60,7 @@ public class WorkOrderResponse
         RecurringMaintenanceTaskId = e.RecurringMaintenanceTaskId,
         Title = e.Title,
         Description = e.Description,
+        TechnicianAccessInstructions = e.TechnicianAccessInstructions,
         Category = e.Category,
         Priority = e.Priority,
         Status = e.Status,
@@ -165,6 +167,7 @@ public class WorkOrderDetailResponse : WorkOrderResponse
             RecurringMaintenanceTaskId = e.RecurringMaintenanceTaskId,
             Title = e.Title,
             Description = e.Description,
+            TechnicianAccessInstructions = e.TechnicianAccessInstructions,
             Category = e.Category,
             Priority = e.Priority,
             Status = e.Status,
@@ -211,6 +214,13 @@ public class CreateWorkOrderRequest
     [Required]
     [MaxLength(4000)]
     public string Description { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Access details that are safe to show to the assigned maintenance technician.
+    /// Do not place financial, lease, or unrelated resident information here.
+    /// </summary>
+    [MaxLength(2000)]
+    public string? TechnicianAccessInstructions { get; set; }
 
     [MaxLength(120)]
     public string Category { get; set; } = "General";
@@ -274,6 +284,10 @@ public class UpdateWorkOrderRequest
 
     [MaxLength(4000)]
     public string? Description { get; set; }
+
+    /// <summary>Replacement access details shown to the assigned technician.</summary>
+    [MaxLength(2000)]
+    public string? TechnicianAccessInstructions { get; set; }
 
     [MaxLength(120)]
     public string? Category { get; set; }

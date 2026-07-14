@@ -383,7 +383,8 @@ public class WorkOrderService : IWorkOrderService
         var command = new CreateWorkOrderCommand(
             scope.PortfolioId, actor, request.PropertyId, request.UnitId, request.TenantId,
             request.LeaseManagementId, request.VendorId, request.Title, request.Description,
-            request.Category, request.Priority, request.Status, request.RequestedAt?.ToUtc(),
+            request.TechnicianAccessInstructions, request.Category, request.Priority, request.Status,
+            request.RequestedAt?.ToUtc(),
             request.ScheduledFor, request.ScheduledWindowEnd,
             request.ScheduledFor.ToUtcDateTime(), request.ScheduledWindowEnd.ToUtcDateTime(),
             request.CompletedAt.ToUtc(), request.EstimatedCost, request.ActualCost,
@@ -404,7 +405,8 @@ public class WorkOrderService : IWorkOrderService
             scope.PortfolioId, Actor(scope), id, request.UnitId, request.ClearUnit,
             request.TenantId, request.ClearTenant, request.LeaseManagementId,
             request.ClearLeaseManagement, request.VendorId, request.Title, request.Description,
-            request.Category, request.Priority, request.Status, request.StatusNote,
+            request.TechnicianAccessInstructions, request.Category, request.Priority, request.Status,
+            request.StatusNote,
             request.RequestedAt?.ToUtc(), request.ScheduledFor.ToUtcDateTime(),
             request.ScheduledWindowEnd.ToUtcDateTime(), request.CompletedAt.ToUtc(),
             request.EstimatedCost, request.ActualCost, idempotencyKey);

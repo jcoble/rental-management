@@ -1,0 +1,177 @@
+<script lang="ts">
+	import { page } from '$app/state';
+	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { technician, type TechnicianWorkEntryKind, type TechnicianWorkOrderStatus } from '$lib/api/endpoints/technician';
+	import { documentFileHref, documents } from '$lib/api/endpoints/documents';
+	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
+	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
+	import { ArrowLeft, CalendarClock, Camera, Clock3, Mail, MapPin, MessageSquare, Package, Phone, Send, UserRound } from '@lucide/svelte';
+
+	const id = $derived(Number(page.params.id));
+	const queryClient = useQueryClient();
+	const assignment = createQuery(() => ({
+		queryKey: ['technician', 'assignment', id],
+		queryFn: () => technician.detail(id),
+		enabled: Number.isInteger(id) && id > 0
+	}));
+
+	let status = $state<TechnicianWorkOrderStatus | ''>('');
+	let statusNote = $state('');
+	let entryKind = $state<TechnicianWorkEntryKind>('Note');
+	let entryNote = $state('');
+	let quantity = $state('');
+	let unit = $state('hours');
+	let message = $state('');
+	let photoFile = $state<File | null>(null);
+	let markedConversationRead = $state(false);
+
+	$effect(() => {
+		if (!status && assignment.data?.status) status = assignment.data.status;
+	});
+
+	$effect(() => {
+		if (!markedConversationRead && assignment.data?.conversationId) {
+			markedConversationRead = true;
+			technician.markConversationRead(id).then(refresh).catch(() => {});
+		}
+	});
+
+	function refresh() {
+		queryClient.invalidateQueries({ queryKey: ['technician'] });
+	}
+
+	const updateMutation = createMutation(() => ({
+		mutationFn: () => technician.updateAssignment(id, {
+			expectedUpdatedAtUtc: assignment.data!.updatedAtUtc,
+			status: status || undefined,
+			technicianNote: statusNote.trim() || undefined
+		}),
+		onSuccess: () => { showSuccess('Assignment updated.'); statusNote = ''; refresh(); },
+		onError: (error) => showError(apiErrorMessage(error))
+	}));
+
+	const entryMutation = createMutation(() => ({
+		mutationFn: async () => {
+			if (entryKind === 'Photo') {
+				if (!photoFile) throw new Error('Choose a photo first.');
+				const uploaded = await documents.upload('WorkOrder', id, photoFile, 'Technician photo', crypto.randomUUID());
+				return technician.recordEntry(id, { kind: 'Photo', note: entryNote.trim() || undefined, photoFileId: uploaded.id });
+			}
+			return technician.recordEntry(id, {
+				kind: entryKind,
+				note: entryNote.trim() || undefined,
+				quantity: entryKind === 'Time' || entryKind === 'Material' ? Number(quantity) : undefined,
+				unit: entryKind === 'Time' || entryKind === 'Material' ? unit.trim() : undefined
+			});
+		},
+		onSuccess: () => {
+			showSuccess(entryKind === 'Photo' ? 'Photo added.' : 'Work entry added.');
+			entryNote = ''; quantity = ''; photoFile = null; refresh();
+		},
+		onError: (error) => showError(apiErrorMessage(error))
+	}));
+
+	const messageMutation = createMutation(() => ({
+		mutationFn: () => technician.sendMessage(id, message.trim()),
+		onSuccess: () => { showSuccess('Message sent.'); message = ''; refresh(); },
+		onError: (error) => showError(apiErrorMessage(error))
+	}));
+
+	function when(value?: string | null): string {
+		return value ? new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'Not set';
+	}
+</script>
+
+<svelte:head><title>{assignment.data?.title ?? 'Assignment'} - Rental Command</title></svelte:head>
+
+<div class="mx-auto w-full max-w-6xl space-y-5 p-4 sm:p-6">
+	<a href="/my-work" class="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft class="h-4 w-4" />My work</a>
+
+	{#if assignment.isPending}
+		<div class="rounded-2xl border border-border bg-card p-10 text-center text-muted-foreground">Loading assignment…</div>
+	{:else if assignment.isError || !assignment.data}
+		<div class="rounded-2xl border border-destructive/40 bg-destructive/5 p-6 text-destructive">This assignment is unavailable or is no longer assigned to you.</div>
+	{:else}
+		{@const work = assignment.data}
+		<header class="rounded-3xl border border-border bg-card p-5 sm:p-6">
+			<div class="flex flex-wrap items-start justify-between gap-3">
+				<div><p class="text-sm text-muted-foreground">{work.category}</p><h1 class="mt-1 text-2xl font-semibold">{work.title}</h1></div>
+				<StatusBadge status={work.status} />
+			</div>
+			<p class="mt-4 whitespace-pre-wrap text-sm leading-6">{work.description}</p>
+		</header>
+
+		<div class="grid gap-5 lg:grid-cols-[minmax(0,1.25fr)_minmax(20rem,.75fr)]">
+			<div class="space-y-5">
+				<section class="rounded-2xl border border-border bg-card p-5">
+					<h2 class="font-semibold">Visit details</h2>
+					<div class="mt-4 space-y-3 text-sm">
+						<p class="flex gap-2"><MapPin class="mt-0.5 h-4 w-4 shrink-0 text-primary" /><span>{work.address}{work.unit ? ` · Unit ${work.unit}` : ''}</span></p>
+						<p class="flex gap-2"><CalendarClock class="mt-0.5 h-4 w-4 shrink-0 text-primary" /><span>{when(work.scheduledForUtc)}{work.scheduledWindowEndUtc ? ` – ${when(work.scheduledWindowEndUtc)}` : ''}</span></p>
+					</div>
+					{#if work.accessInstructions}<div class="mt-4 rounded-xl bg-secondary/60 p-4"><p class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Access instructions</p><p class="mt-2 whitespace-pre-wrap text-sm">{work.accessInstructions}</p></div>{/if}
+				</section>
+
+				<section class="rounded-2xl border border-border bg-card p-5">
+					<h2 class="font-semibold">Permitted contact</h2>
+					{#if work.contactName}
+						<div class="mt-4 space-y-2 text-sm">
+							<p class="flex items-center gap-2"><UserRound class="h-4 w-4" />{work.contactName}</p>
+							{#if work.contactPhone}<a class="flex items-center gap-2 text-primary" href="tel:{work.contactPhone}"><Phone class="h-4 w-4" />{work.contactPhone}</a>{/if}
+							{#if work.contactEmail}<a class="flex items-center gap-2 text-primary" href="mailto:{work.contactEmail}"><Mail class="h-4 w-4" />{work.contactEmail}</a>{/if}
+						</div>
+					{:else}<p class="mt-3 text-sm text-muted-foreground">No resident contact is shared for this assignment.</p>{/if}
+				</section>
+
+				<section class="rounded-2xl border border-border bg-card p-5">
+					<h2 class="font-semibold">Update progress</h2>
+					<div class="mt-4 grid gap-3 sm:grid-cols-[12rem_1fr_auto]">
+						<select bind:value={status} class="h-10 rounded-md border border-border bg-background px-3 text-sm" aria-label="Assignment status">
+							<option value="New">New</option><option value="Scheduled">Scheduled</option><option value="InProgress">In progress</option><option value="WaitingParts">Waiting for parts</option><option value="OnHold">On hold</option><option value="Completed">Completed</option>
+						</select>
+						<Input bind:value={statusNote} placeholder="Optional progress note" />
+						<Button disabled={updateMutation.isPending || (status === work.status && !statusNote.trim())} onclick={() => updateMutation.mutate()}>Save update</Button>
+					</div>
+				</section>
+
+				<section class="rounded-2xl border border-border bg-card p-5">
+					<h2 class="font-semibold">Field log</h2>
+					<div class="mt-4 grid gap-3 sm:grid-cols-[10rem_1fr_auto]">
+						<select bind:value={entryKind} class="h-10 rounded-md border border-border bg-background px-3 text-sm" aria-label="Entry type">
+							<option value="Note">Note</option><option value="Time">Time</option><option value="Material">Material</option><option value="Photo">Photo</option>
+						</select>
+						{#if entryKind === 'Time' || entryKind === 'Material'}
+							<div class="grid grid-cols-2 gap-2"><Input bind:value={quantity} type="number" min="0.001" step="0.25" placeholder="Quantity" /><Input bind:value={unit} placeholder={entryKind === 'Time' ? 'hours' : 'units'} /></div>
+						{:else if entryKind === 'Photo'}
+							<input type="file" accept="image/*" capture="environment" class="text-sm" onchange={(event) => photoFile = event.currentTarget.files?.[0] ?? null} />
+						{:else}<Input bind:value={entryNote} placeholder="What did you find or do?" />{/if}
+						<Button disabled={entryMutation.isPending || (entryKind === 'Note' && !entryNote.trim()) || ((entryKind === 'Time' || entryKind === 'Material') && (!quantity || !unit.trim())) || (entryKind === 'Photo' && !photoFile)} onclick={() => entryMutation.mutate()}>Add</Button>
+					</div>
+					<div class="mt-5 space-y-3">
+						{#each work.entries as entry (entry.id)}
+							<div class="rounded-xl border border-border p-3 text-sm">
+								<div class="flex items-center justify-between gap-2"><span class="flex items-center gap-2 font-medium">{#if entry.kind === 'Photo'}<Camera class="h-4 w-4" />{:else if entry.kind === 'Time'}<Clock3 class="h-4 w-4" />{:else if entry.kind === 'Material'}<Package class="h-4 w-4" />{/if}{entry.kind}</span><time class="text-xs text-muted-foreground">{when(entry.occurredAtUtc)}</time></div>
+								{#if entry.note}<p class="mt-2 whitespace-pre-wrap">{entry.note}</p>{/if}
+								{#if entry.quantity}<p class="mt-2">{entry.quantity} {entry.unit}</p>{/if}
+								{#if entry.photoFileId}<img class="mt-3 max-h-72 rounded-lg object-contain" src={documentFileHref(entry.photoFileId, { thumb: true })} alt="Technician work" />{/if}
+							</div>
+						{:else}<p class="text-sm text-muted-foreground">No field entries yet.</p>{/each}
+					</div>
+				</section>
+			</div>
+
+			<section id="conversation" class="h-fit rounded-2xl border border-border bg-card p-5 lg:sticky lg:top-20">
+				<h2 class="flex items-center gap-2 font-semibold"><MessageSquare class="h-4 w-4" />Assignment conversation</h2>
+				<p class="mt-1 text-xs text-muted-foreground">Messages stay attached to this assignment.</p>
+				<div class="mt-4 max-h-[28rem] space-y-3 overflow-y-auto">
+					{#each work.messages as item (item.id)}
+						<div class="rounded-xl p-3 text-sm {item.sender === 'You' ? 'ml-8 bg-primary text-primary-foreground' : 'mr-8 bg-secondary'}"><p class="text-xs font-semibold opacity-70">{item.sender}</p><p class="mt-1 whitespace-pre-wrap">{item.body}</p><time class="mt-2 block text-[11px] opacity-60">{when(item.createdAtUtc)}</time></div>
+					{:else}<p class="py-8 text-center text-sm text-muted-foreground">No messages yet.</p>{/each}
+				</div>
+				<div class="mt-4 flex gap-2"><Input bind:value={message} placeholder="Message the office or resident" onkeydown={(event) => { if (event.key === 'Enter' && message.trim()) messageMutation.mutate(); }} /><Button size="icon" aria-label="Send message" disabled={!message.trim() || messageMutation.isPending} onclick={() => messageMutation.mutate()}><Send class="h-4 w-4" /></Button></div>
+			</section>
+		</div>
+	{/if}
+</div>

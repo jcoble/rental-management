@@ -40,6 +40,12 @@ public class WorkOrder : IAuditable, IPortfolioScoped
     /// </summary>
     public string? ExtractedData { get; set; }
 
+    /// <summary>
+    /// Instructions approved for the assigned technician (lockbox, entry notice, pets, or hazards).
+    /// Kept separate from general Property/Unit notes so the field experience never leaks office notes.
+    /// </summary>
+    public string? TechnicianAccessInstructions { get; set; }
+
     public Portfolio? Portfolio { get; set; }
     public Property? Property { get; set; }
     public Unit? Unit { get; set; }
@@ -52,4 +58,5 @@ public class WorkOrder : IAuditable, IPortfolioScoped
     /// <summary>Append-only status timeline (Received → Assigned → In Progress → Done), oldest first.</summary>
     public List<WorkOrderStatusEvent> StatusEvents { get; set; } = [];
     public List<WorkOrderResponsibility> Responsibilities { get; set; } = [];
+    public List<TechnicianWorkEntry> TechnicianEntries { get; set; } = [];
 }

@@ -37,7 +37,9 @@
 		HelpCircle,
 		Activity,
 		Landmark,
-		Upload
+		Upload,
+		Clock3,
+		UserRound
 	} from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
@@ -217,7 +219,11 @@
 		'/leasing/pipeline': 'assignment',
 		'/leasing/rentals': 'home',
 		'/leasing/calendar': 'event',
-		'/leasing/inbox': 'forum'
+		'/leasing/inbox': 'forum',
+		'/my-work': 'build',
+		'/my-schedule': 'schedule',
+		'/assignment-inbox': 'forum',
+		'/profile': 'person'
 	};
 	// Material Symbols glyph per staff nav group id (collapsible section headers).
 	const navGlyphByGroup: Record<string, string> = {
@@ -246,6 +252,7 @@
 	let portalUser = $derived(activeExperience === 'Tenant');
 	let ownerUser = $derived(activeExperience === 'Owner');
 	let leasingUser = $derived(activeExperience === 'Leasing');
+	let technicianUser = $derived(activeExperience === 'Maintenance');
 	let relationshipUser = $derived(portalUser || ownerUser);
 	const userSecurityHref = $derived(portalUser ? '/portal/security' : '/settings/security');
 	const canOpenUserSecurity = $derived(!ownerUser);
@@ -259,14 +266,16 @@
 	const canOpenHeaderScan = $derived(
 		canAccessRoute('/scan', activeExperience, activeCapabilities)
 	);
+	const headerMessagesHref = $derived(
+		technicianUser ? '/assignment-inbox' : leasingUser ? '/leasing/inbox' : '/messages'
+	);
+	const headerAppointmentsHref = $derived(leasingUser ? '/leasing/calendar' : '/appointments');
 	const canOpenHeaderMessages = $derived(
-		canAccessRoute('/messages', activeExperience, activeCapabilities)
+		canAccessRoute(headerMessagesHref, activeExperience, activeCapabilities)
 	);
 	const canOpenHeaderAppointments = $derived(
-		canAccessRoute('/appointments', activeExperience, activeCapabilities)
+		canAccessRoute(headerAppointmentsHref, activeExperience, activeCapabilities)
 	);
-	const headerMessagesHref = $derived(leasingUser ? '/leasing/inbox' : '/messages');
-	const headerAppointmentsHref = $derived(leasingUser ? '/leasing/calendar' : '/appointments');
 
 	const portalNavItems: NavItem[] = [
 		{ href: '/portal', label: 'Dashboard', icon: Home },
@@ -294,6 +303,11 @@
 		{ href: '/leasing/rentals', label: 'Rentals & listings', icon: Home },
 		{ href: '/leasing/calendar', label: 'Calendar', icon: Calendar },
 		{ href: '/leasing/inbox', label: 'Inbox', icon: MessageSquare }
+	];
+	const technicianNavItems: NavItem[] = [
+		{ href: '/my-work', label: 'My work', icon: Wrench },
+		{ href: '/my-schedule', label: 'Schedule', icon: Clock3 },
+		{ href: '/assignment-inbox', label: 'Inbox', icon: MessageSquare }
 	];
 	const commandCenterTitleItem: NavItem = { href: '/units/', label: 'Command Center', icon: Home };
 
@@ -332,13 +346,15 @@
 				? ownerNavItems
 				: leasingUser
 					? leasingNavItems
-				: [
+					: technicianUser
+						? [...technicianNavItems, { href: '/profile', label: 'Profile', icon: UserRound }]
+						: [
 						...visiblePinned,
 						...(canSeeCommandCenter ? [commandCenterTitleItem] : []),
 						...visibleGroups.flatMap((g) => g.items),
 						...visibleBottomRail,
 						...(visibleSettingsGroup?.items ?? [])
-				]
+					]
 	);
 
 	function isActive(href: string): boolean {
@@ -701,6 +717,14 @@
 						{@render navLink(item)}
 					{/if}
 				{/each}
+			{:else if technicianUser}
+				{#each technicianNavItems as item}
+					{#if sidebarCollapsed && !isMobile}
+						{@render navLinkCollapsed(item)}
+					{:else}
+						{@render navLink(item)}
+					{/if}
+				{/each}
 			{:else if sidebarCollapsed && !isMobile}
 				<!-- Collapsed rail: pinned links plus icon-only group headers, matching EdiPlatform. -->
 				{#each visiblePinned as item}
@@ -773,6 +797,14 @@
 							</div>
 						</DropdownMenuLabel>
 						<DropdownMenuSeparator />
+						{#if technicianUser}
+							<DropdownMenuItem data-testid="user-menu-profile-collapsed">
+								<a href="/profile" class="flex w-full items-center gap-2">
+									<UserRound class="h-4 w-4" />
+									Profile
+								</a>
+							</DropdownMenuItem>
+						{/if}
 						{#if canOpenGuidedSetup}
 							<DropdownMenuItem data-testid="user-menu-guided-setup-collapsed">
 								<a href="/onboarding?from=account-menu" class="flex w-full items-center gap-2">
@@ -834,6 +866,14 @@
 							</div>
 						</DropdownMenuLabel>
 						<DropdownMenuSeparator />
+						{#if technicianUser}
+							<DropdownMenuItem data-testid="user-menu-profile">
+								<a href="/profile" class="flex w-full items-center gap-2">
+									<UserRound class="h-4 w-4" />
+									Profile
+								</a>
+							</DropdownMenuItem>
+						{/if}
 						{#if canOpenGuidedSetup}
 							<DropdownMenuItem data-testid="user-menu-guided-setup">
 								<a href="/onboarding?from=account-menu" class="flex w-full items-center gap-2">

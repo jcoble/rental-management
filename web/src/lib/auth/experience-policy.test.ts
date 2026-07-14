@@ -49,8 +49,13 @@ describe('experience route policy', () => {
 			CAPABILITY.assignedWorkRead,
 			CAPABILITY.assignedWorkConverse
 		]);
-		assert.equal(canAccessRoute('/maintenance/42', 'Maintenance', capabilities), true);
-		assert.equal(canAccessRoute('/messages', 'Maintenance', capabilities), true);
+		assert.equal(canAccessRoute('/my-work', 'Maintenance', capabilities), true);
+		assert.equal(canAccessRoute('/my-work/42', 'Maintenance', capabilities), true);
+		assert.equal(canAccessRoute('/my-schedule', 'Maintenance', capabilities), true);
+		assert.equal(canAccessRoute('/assignment-inbox', 'Maintenance', capabilities), true);
+		assert.equal(canAccessRoute('/profile', 'Maintenance', capabilities), true);
+		assert.equal(canAccessRoute('/maintenance/42', 'Maintenance', capabilities), false);
+		assert.equal(canAccessRoute('/messages', 'Maintenance', capabilities), false);
 		assert.equal(canAccessRoute('/scan', 'Maintenance', capabilities), false);
 		assert.equal(canAccessRoute('/units', 'Maintenance', capabilities), false);
 		assert.equal(canAccessRoute('/accounting', 'Maintenance', capabilities), false);

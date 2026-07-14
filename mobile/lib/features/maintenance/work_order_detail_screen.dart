@@ -1268,6 +1268,7 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _titleCtrl;
   late final TextEditingController _descCtrl;
+  late final TextEditingController _technicianAccessCtrl;
   late final TextEditingController _estCostCtrl;
   late final TextEditingController _actualCostCtrl;
   late int _selectedPropertyId;
@@ -1303,6 +1304,9 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
     super.initState();
     _titleCtrl = TextEditingController(text: widget.workOrder.title);
     _descCtrl = TextEditingController(text: widget.workOrder.description);
+    _technicianAccessCtrl = TextEditingController(
+      text: widget.workOrder.technicianAccessInstructions ?? '',
+    );
     _estCostCtrl = TextEditingController(
       text: widget.workOrder.estimatedCost?.toStringAsFixed(2) ?? '',
     );
@@ -1349,6 +1353,7 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
   void dispose() {
     _titleCtrl.dispose();
     _descCtrl.dispose();
+    _technicianAccessCtrl.dispose();
     _estCostCtrl.dispose();
     _actualCostCtrl.dispose();
     super.dispose();
@@ -1474,6 +1479,7 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
           .updateWorkOrder(widget.workOrder.id, {
             'title': _titleCtrl.text.trim(),
             'description': _descCtrl.text.trim(),
+            'technicianAccessInstructions': _technicianAccessCtrl.text.trim(),
             'priority': _priority,
             'category': _category,
             'unitId': ?_selectedUnitId,
@@ -1693,6 +1699,19 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
                   validator: (value) => (value == null || value.trim().isEmpty)
                       ? 'Description is required'
                       : null,
+                ),
+                gap,
+                TextFormField(
+                  key: const Key('work-order-technician-access-field'),
+                  controller: _technicianAccessCtrl,
+                  maxLines: 3,
+                  maxLength: 2000,
+                  textInputAction: TextInputAction.newline,
+                  decoration: const InputDecoration(
+                    labelText: 'Safe technician access (optional)',
+                    helperText:
+                        'Entry, lockbox, pet, or contact guidance safe for the assigned technician.',
+                  ),
                 ),
               ],
             ),

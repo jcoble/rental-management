@@ -61,10 +61,12 @@ public sealed class SendConversationMessageHandler
             if (command.SenderRole == ConversationSenderRole.Landlord)
             {
                 conversation.TenantUnreadCount += 1;
+                if (conversation.WorkOrderId is not null) conversation.TechnicianUnreadCount += 1;
             }
             else
             {
                 conversation.LandlordUnreadCount += 1;
+                if (conversation.WorkOrderId is not null) conversation.TechnicianUnreadCount += 1;
             }
         }
         else

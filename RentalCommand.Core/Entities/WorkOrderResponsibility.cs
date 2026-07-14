@@ -34,4 +34,5 @@ public sealed class WorkOrderResponsibility : IPortfolioScoped
     public WorkspaceAccessContext? AssignedByAccessContext { get; set; }
     public ApplicationUser? EndedByUser { get; set; }
     public WorkspaceAccessContext? EndedByAccessContext { get; set; }
+    public List<TechnicianWorkEntry> TechnicianEntries { get; set; } = [];
 }

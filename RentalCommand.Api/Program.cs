@@ -472,6 +472,18 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Conversations.SendConversationMessageResult,
     RentalCommand.Data.Conversations.SendConversationMessageHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.RecordTechnicianWorkEntryCommand,
+    RentalCommand.Core.Operations.RecordTechnicianWorkEntryResult,
+    RentalCommand.Data.Operations.RecordTechnicianWorkEntryHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.SendTechnicianAssignmentMessageCommand,
+    RentalCommand.Core.Operations.SendTechnicianAssignmentMessageResult,
+    RentalCommand.Data.Operations.SendTechnicianAssignmentMessageHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.MarkTechnicianAssignmentConversationReadCommand,
+    RentalCommand.Core.Operations.MarkTechnicianAssignmentConversationReadResult,
+    RentalCommand.Data.Operations.MarkTechnicianAssignmentConversationReadHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Auth.IssueSessionRefreshCredentialCommand,
     RentalCommand.Core.Auth.SessionRefreshMutationResult,
     RentalCommand.Data.Auth.IssueSessionRefreshCredentialHandler>();
