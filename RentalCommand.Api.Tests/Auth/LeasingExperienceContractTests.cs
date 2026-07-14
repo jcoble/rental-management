@@ -28,10 +28,10 @@ public sealed class LeasingExperienceContractTests
         var source = ReadSource(
             "RentalCommand.Api", "Services", "Domain", "LeasingWorkspaceService.cs");
 
-        source.Should().Contain(CapabilityKeys.LeasingApplicationsManage);
-        source.Should().Contain(CapabilityKeys.LeasingListingsManage);
-        source.Should().Contain(CapabilityKeys.LeasingShowingsManage);
-        source.Should().Contain(CapabilityKeys.LeasingOnboardingManage);
+        source.Should().Contain(nameof(CapabilityKeys.LeasingApplicationsManage));
+        source.Should().Contain(nameof(CapabilityKeys.LeasingListingsManage));
+        source.Should().Contain(nameof(CapabilityKeys.LeasingShowingsManage));
+        source.Should().Contain(nameof(CapabilityKeys.LeasingOnboardingManage));
         source.Should().Contain("WhereAuthorized");
         source.Should().Contain("CountAsync");
         source.Should().Contain("Skip(query.NormalizedSkip).Take(query.NormalizedTake)");
