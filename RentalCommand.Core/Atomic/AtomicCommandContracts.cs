@@ -528,6 +528,8 @@ public enum AtomicLockResource
     OwnerEntity = 22,
     Tenant = 23,
     Vendor = 24,
+    Inspection = 25,
+    InspectionTemplate = 26,
 }
 
 public enum AtomicScanDraftClaimOutcome

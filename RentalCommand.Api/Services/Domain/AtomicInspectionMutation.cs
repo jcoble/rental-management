@@ -1,0 +1,605 @@
+using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+using RentalCommand.Api.DTOs;
+using RentalCommand.Core;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
+
+namespace RentalCommand.Api.Services.Domain;
+
+public enum AtomicInspectionMutationDomain { Template, Inspection }
+public enum AtomicInspectionMutationOperation { Create, Update, Delete }
+
+public sealed record AtomicInspectionMutationCommand(
+    int PortfolioId,
+    int ActorUserId,
+    Guid AuthSessionId,
+    int AccessContextId,
+    long ExpectedAccessRevision,
+    AtomicInspectionMutationDomain Domain,
+    AtomicInspectionMutationOperation Operation,
+    int EntityId,
+    int RelatedEntityId,
+    string RequestJson,
+    string DeliveryIdempotencyKey) : IAtomicCommandData;
+
+public sealed record AtomicInspectionMutationResult(
+    bool Found,
+    bool Applied,
+    int EntityId,
+    string? ResponseJson = null,
+    string? Error = null) : IAtomicResultData;
+
+public sealed class AtomicInspectionMutationHandler
+    : IAtomicCommandHandler<AtomicInspectionMutationCommand, AtomicInspectionMutationResult>,
+      IAtomicReplayAuthorizer<AtomicInspectionMutationCommand>
+{
+    private const int MaxTemplateItems = 100;
+
+    public async Task<AtomicInspectionMutationResult> HandleAsync(
+        AtomicInspectionMutationCommand command,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        Validate(command);
+        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
+        await attempt.Locking.AcquireAsync(AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
+        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
+        if (command.EntityId > 0)
+        {
+            await attempt.Locking.AcquireAsync(
+                command.Domain == AtomicInspectionMutationDomain.Template
+                    ? AtomicLockResource.InspectionTemplate
+                    : AtomicLockResource.Inspection,
+                command.EntityId,
+                ct);
+        }
+
+        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        attempt.UseDatabaseWallClockForAudit(now);
+        await AuthorizeAsync(command, attempt.Persistence, now, ct);
+
+        return command.Domain switch
+        {
+            AtomicInspectionMutationDomain.Template =>
+                await MutateTemplateAsync(command, attempt, now, ct),
+            AtomicInspectionMutationDomain.Inspection =>
+                await MutateInspectionAsync(command, attempt, now, ct),
+            _ => throw new ArgumentOutOfRangeException(nameof(command.Domain)),
+        };
+    }
+
+    public async Task AuthorizeReplayAsync(
+        AtomicInspectionMutationCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        Validate(command);
+        await AuthorizeAsync(command, persistence, await persistence.ReadDatabaseClockUtcAsync(ct), ct);
+    }
+
+    private static async Task<AtomicInspectionMutationResult> MutateTemplateAsync(
+        AtomicInspectionMutationCommand command,
+        IAtomicWriteAttempt attempt,
+        DateTime now,
+        CancellationToken ct)
+    {
+        if (command.Operation != AtomicInspectionMutationOperation.Create
+            && InspectionTemplateCatalog.IsBuiltInId(command.EntityId))
+        {
+            throw new DomainValidationException(
+                "Built-in checklists are read-only. Copy one to a custom checklist before editing.");
+        }
+
+        var persistence = attempt.Persistence;
+        if (command.Operation == AtomicInspectionMutationOperation.Create)
+        {
+            var request = Read<CreateInspectionTemplateRequest>(command);
+            var normalized = NormalizeTemplate(request.Name, request.InspectionType, request.Items);
+            var template = new InspectionTemplate
+            {
+                PortfolioId = command.PortfolioId,
+                Name = normalized.Name,
+                InspectionType = normalized.Type,
+                IsBuiltIn = false,
+            };
+            AddTemplateItems(template, normalized.Items);
+            persistence.Add(template);
+            await attempt.FlushBusinessAsync(ct);
+            attempt.StageSemanticEvent(Audit(command, nameof(InspectionTemplate), template.Id,
+                AuditLogOperation.Created, "Custom inspection checklist created"), now);
+            StageDataUpdate(attempt, command, nameof(InspectionTemplate), template.Id, now);
+            return Applied(template.Id, await SnapshotTemplateAsync(persistence, command.PortfolioId, template.Id, ct));
+        }
+
+        var existing = await persistence.Query<InspectionTemplate>()
+            .SingleOrDefaultAsync(template => template.Id == command.EntityId
+                && template.PortfolioId == command.PortfolioId && !template.IsBuiltIn, ct);
+        if (existing is null) return Missing();
+
+        if (command.Operation == AtomicInspectionMutationOperation.Delete)
+        {
+            persistence.Remove(existing);
+            await attempt.FlushBusinessAsync(ct);
+            attempt.StageSemanticEvent(Audit(command, nameof(InspectionTemplate), existing.Id,
+                AuditLogOperation.Deleted, "Custom inspection checklist deleted"), now);
+            StageDataUpdate(attempt, command, nameof(InspectionTemplate), existing.Id, now, deleted: true);
+            return Applied(existing.Id);
+        }
+
+        if (command.Operation != AtomicInspectionMutationOperation.Update)
+            throw new ArgumentOutOfRangeException(nameof(command.Operation));
+
+        var update = Read<UpdateInspectionTemplateRequest>(command);
+        var replacement = NormalizeTemplate(update.Name, update.InspectionType, update.Items);
+        await persistence.Query<InspectionTemplateItem>()
+            .Where(item => item.TemplateId == existing.Id)
+            .ExecuteDeleteAsync(ct);
+        existing.Name = replacement.Name;
+        existing.InspectionType = replacement.Type;
+        AddTemplateItems(existing, replacement.Items);
+        await attempt.FlushBusinessAsync(ct);
+        attempt.StageSemanticEvent(Audit(command, nameof(InspectionTemplate), existing.Id,
+            AuditLogOperation.Updated, "Custom inspection checklist replaced"), now);
+        StageDataUpdate(attempt, command, nameof(InspectionTemplate), existing.Id, now);
+        return Applied(existing.Id, await SnapshotTemplateAsync(persistence, command.PortfolioId, existing.Id, ct));
+    }
+
+    private static async Task<AtomicInspectionMutationResult> MutateInspectionAsync(
+        AtomicInspectionMutationCommand command,
+        IAtomicWriteAttempt attempt,
+        DateTime now,
+        CancellationToken ct)
+    {
+        var persistence = attempt.Persistence;
+        if (command.Operation == AtomicInspectionMutationOperation.Create)
+        {
+            var request = Read<CreateInspectionRequest>(command);
+            if (request.Status == InspectionStatus.Completed)
+                throw new DomainValidationException(
+                    "Use the Complete action to finish an inspection so its checklist, work orders, and report stay consistent.");
+
+            var references = await AuthorizedProperties(command, persistence, now)
+                .Where(property => property.Id == request.PropertyId)
+                .Select(property => new InspectionReferenceValidation(
+                    true,
+                    request.UnitId == null || persistence.Query<Unit>().Any(unit =>
+                        unit.Id == request.UnitId && unit.PortfolioId == command.PortfolioId
+                        && unit.PropertyId == property.Id && unit.DeletedAt == null),
+                    request.LeaseManagementId == null || persistence.Query<LeaseManagement>().Any(management =>
+                        management.Id == request.LeaseManagementId && management.PortfolioId == command.PortfolioId
+                        && management.PropertyId == property.Id
+                        && (request.UnitId == null || management.UnitId == request.UnitId)),
+                    request.LeaseAgreementId == null || (request.LeaseManagementId != null
+                        && persistence.Query<LeaseAgreement>().Any(agreement =>
+                            agreement.Id == request.LeaseAgreementId
+                            && agreement.PortfolioId == command.PortfolioId
+                            && agreement.LeaseManagementId == request.LeaseManagementId)),
+                    request.TemplateId == null || request.TemplateId < 0
+                        || persistence.Query<InspectionTemplate>().Any(template =>
+                            template.Id == request.TemplateId && template.PortfolioId == command.PortfolioId
+                            && !template.IsBuiltIn)))
+                .SingleOrDefaultAsync(ct);
+            if (references is null || !references.UnitValid || !references.ManagementValid
+                || !references.AgreementValid || !references.TemplateValid)
+                return Missing();
+            if (request.TemplateId is < 0 && InspectionTemplateCatalog.FindBuiltIn(request.TemplateId.Value) is null)
+                return Missing();
+
+            var entity = new Inspection
+            {
+                PortfolioId = command.PortfolioId,
+                PropertyId = request.PropertyId,
+                UnitId = request.UnitId,
+                LeaseManagementId = request.LeaseManagementId,
+                LeaseAgreementId = request.LeaseAgreementId,
+                Type = request.Type,
+                Status = request.Status,
+                ScheduledFor = Utc(request.ScheduledFor),
+                CompletedAt = request.CompletedAt.HasValue ? Utc(request.CompletedAt.Value) : null,
+                Outcome = request.Outcome,
+                Notes = request.Notes,
+                Inspector = request.Inspector,
+                TemplateId = request.TemplateId,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            persistence.Add(entity);
+            attempt.BindSemanticAudit(entity, Audit(command, nameof(Inspection), 0,
+                AuditLogOperation.Created, "Inspection created"));
+
+            if (request.TemplateId is int templateId)
+            {
+                if (templateId < 0)
+                {
+                    foreach (var item in InspectionTemplateCatalog.FindBuiltIn(templateId)!.Items
+                                 .OrderBy(item => item.SortOrder))
+                    {
+                        entity.Items.Add(NewItem(command.PortfolioId, item.Area, item.Label, item.SortOrder));
+                    }
+                }
+                else
+                {
+                    var templateItems = await persistence.Query<InspectionTemplateItem>().AsNoTracking()
+                        .Where(item => item.TemplateId == templateId)
+                        .OrderBy(item => item.SortOrder).ThenBy(item => item.Id)
+                        .Select(item => new TemplateItemProjection(item.Area, item.Label, item.SortOrder))
+                        .ToListAsync(ct);
+                    foreach (var item in templateItems)
+                        entity.Items.Add(NewItem(command.PortfolioId, item.Area, item.Label, item.SortOrder));
+                }
+            }
+
+            await attempt.FlushBusinessAsync(ct);
+            StageDataUpdate(attempt, command, nameof(Inspection), entity.Id, now);
+            return Applied(entity.Id,
+                await SnapshotInspectionDetailAsync(persistence, command.PortfolioId, entity.Id, ct));
+        }
+
+        var inspection = await persistence.Query<Inspection>().SingleOrDefaultAsync(entity =>
+            entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId, ct);
+        if (inspection is null) return Missing();
+
+        if (command.Operation == AtomicInspectionMutationOperation.Delete)
+        {
+            persistence.Remove(inspection);
+            attempt.BindSemanticAudit(inspection, Audit(command, nameof(Inspection), inspection.Id,
+                AuditLogOperation.Deleted, "Inspection deleted"));
+            await attempt.FlushBusinessAsync(ct);
+            StageDataUpdate(attempt, command, nameof(Inspection), inspection.Id, now, deleted: true);
+            return Applied(inspection.Id);
+        }
+
+        if (command.Operation != AtomicInspectionMutationOperation.Update)
+            throw new ArgumentOutOfRangeException(nameof(command.Operation));
+
+        var requestUpdate = Read<UpdateInspectionRequest>(command);
+        if (requestUpdate.Status is InspectionStatus.Completed && inspection.Status != InspectionStatus.Completed)
+            throw new DomainValidationException(
+                "Use the Complete action to finish an inspection so its checklist is verified, failed items become work orders, and the report is generated.");
+
+        var effectiveUnitId = requestUpdate.UnitId ?? inspection.UnitId;
+        var effectiveManagementId = requestUpdate.LeaseManagementId ?? inspection.LeaseManagementId;
+        var referenceValid = await persistence.Query<Property>().AsNoTracking()
+            .Where(property => property.Id == inspection.PropertyId && property.PortfolioId == command.PortfolioId)
+            .Select(property => new
+            {
+                UnitValid = requestUpdate.UnitId == null || persistence.Query<Unit>().Any(unit =>
+                    unit.Id == requestUpdate.UnitId && unit.PortfolioId == command.PortfolioId
+                    && unit.PropertyId == property.Id && unit.DeletedAt == null),
+                ManagementValid = requestUpdate.LeaseManagementId == null
+                    || persistence.Query<LeaseManagement>().Any(management =>
+                        management.Id == requestUpdate.LeaseManagementId
+                        && management.PortfolioId == command.PortfolioId
+                        && management.PropertyId == property.Id
+                        && (effectiveUnitId == null || management.UnitId == effectiveUnitId)),
+                AgreementValid = requestUpdate.LeaseAgreementId == null || (effectiveManagementId != null
+                    && persistence.Query<LeaseAgreement>().Any(agreement =>
+                        agreement.Id == requestUpdate.LeaseAgreementId
+                        && agreement.PortfolioId == command.PortfolioId
+                        && agreement.LeaseManagementId == effectiveManagementId)),
+            }).SingleAsync(ct);
+        if (!referenceValid.UnitValid || !referenceValid.ManagementValid || !referenceValid.AgreementValid)
+            return Missing();
+
+        if (requestUpdate.UnitId.HasValue) inspection.UnitId = requestUpdate.UnitId;
+        if (requestUpdate.LeaseManagementId.HasValue) inspection.LeaseManagementId = requestUpdate.LeaseManagementId;
+        if (requestUpdate.LeaseAgreementId.HasValue) inspection.LeaseAgreementId = requestUpdate.LeaseAgreementId;
+        if (requestUpdate.Type.HasValue) inspection.Type = requestUpdate.Type.Value;
+        if (requestUpdate.Status.HasValue) inspection.Status = requestUpdate.Status.Value;
+        if (requestUpdate.ScheduledFor.HasValue) inspection.ScheduledFor = Utc(requestUpdate.ScheduledFor.Value);
+        if (requestUpdate.CompletedAt.HasValue) inspection.CompletedAt = Utc(requestUpdate.CompletedAt.Value);
+        if (requestUpdate.Outcome is not null) inspection.Outcome = requestUpdate.Outcome;
+        if (requestUpdate.Notes is not null) inspection.Notes = requestUpdate.Notes;
+        if (requestUpdate.Inspector is not null) inspection.Inspector = requestUpdate.Inspector;
+        inspection.UpdatedAt = now;
+        attempt.BindSemanticAudit(inspection, Audit(command, nameof(Inspection), inspection.Id,
+            AuditLogOperation.Updated, "Inspection updated"));
+        await attempt.FlushBusinessAsync(ct);
+        StageDataUpdate(attempt, command, nameof(Inspection), inspection.Id, now);
+        return Applied(inspection.Id,
+            await SnapshotInspectionAsync(persistence, command.PortfolioId, inspection.Id, ct));
+    }
+
+    private static async Task AuthorizeAsync(
+        AtomicInspectionMutationCommand command,
+        IAtomicPersistenceSession persistence,
+        DateTime now,
+        CancellationToken ct)
+    {
+        var authorized = command.Domain == AtomicInspectionMutationDomain.Template
+            ? await AuthorizedAssignments(command, persistence, now)
+                .AnyAsync(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties, ct)
+            : command.Operation == AtomicInspectionMutationOperation.Create
+                ? await AuthorizedProperties(command, persistence, now)
+                    .AnyAsync(property => property.Id == Read<CreateInspectionRequest>(command).PropertyId, ct)
+                : await persistence.Query<Inspection>().AsNoTracking().AnyAsync(inspection =>
+                    inspection.Id == command.EntityId && inspection.PortfolioId == command.PortfolioId
+                    && AuthorizedProperties(command, persistence, now)
+                        .Any(property => property.Id == inspection.PropertyId), ct);
+        if (!authorized)
+            throw new UnauthorizedAccessException("The inspection is outside the current Team role and property scope.");
+    }
+
+    private static IQueryable<MembershipRoleAssignment> AuthorizedAssignments(
+        AtomicInspectionMutationCommand command,
+        IAtomicPersistenceSession persistence,
+        DateTime now) =>
+        persistence.Query<MembershipRoleAssignment>().AsNoTracking().Where(assignment =>
+            assignment.PortfolioId == command.PortfolioId
+            && assignment.Status == MembershipRoleAssignmentStatus.Active
+            && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
+            && assignment.EffectiveFromUtc <= now
+            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now)
+            && assignment.WorkspaceMembership!.AccessContextId == command.AccessContextId
+            && assignment.WorkspaceMembership.PortfolioId == command.PortfolioId
+            && assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active
+            && assignment.WorkspaceMembership.SuspendedAtUtc == null
+            && assignment.WorkspaceMembership.RevokedAtUtc == null
+            && assignment.WorkspaceMembership.EffectiveFromUtc <= now
+            && (assignment.WorkspaceMembership.EffectiveToUtc == null
+                || assignment.WorkspaceMembership.EffectiveToUtc > now)
+            && persistence.Query<WorkspaceAccessContext>().Any(context =>
+                context.Id == command.AccessContextId && context.UserId == command.ActorUserId
+                && context.PortfolioId == command.PortfolioId
+                && context.AccessRevision == command.ExpectedAccessRevision
+                && context.Status == WorkspaceAccessContextStatus.Active
+                && context.SuspendedAtUtc == null && context.RevokedAtUtc == null)
+            && persistence.Query<AuthSession>().Any(session =>
+                session.Id == command.AuthSessionId && session.UserId == command.ActorUserId
+                && session.ActiveAccessContextId == command.AccessContextId
+                && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
+                && session.ExpiresAtUtc > now)
+            && assignment.RoleProfile!.Capabilities.Any(grant =>
+                grant.CapabilityDefinition!.Key == CapabilityKeys.WorkManage
+                && grant.CapabilityDefinition.AuthorizationTargetKind ==
+                    CapabilityAuthorizationTargetKind.Property));
+
+    private static IQueryable<Property> AuthorizedProperties(
+        AtomicInspectionMutationCommand command,
+        IAtomicPersistenceSession persistence,
+        DateTime now)
+    {
+        var assignments = AuthorizedAssignments(command, persistence, now);
+        return persistence.Query<Property>().AsNoTracking().Where(property =>
+            property.PortfolioId == command.PortfolioId && property.DeletedAt == null
+            && assignments.Any(assignment =>
+                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
+                || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
+                    && assignment.SelectedProperties.Any(selected =>
+                        selected.PortfolioId == command.PortfolioId
+                        && selected.PropertyId == property.Id))));
+    }
+
+    private static IQueryable<InspectionResponse> InspectionSnapshotQuery(
+        IAtomicPersistenceSession persistence,
+        int portfolioId) =>
+        persistence.Query<Inspection>().AsNoTracking().Where(inspection => inspection.PortfolioId == portfolioId)
+            .Select(inspection => new InspectionResponse
+            {
+                Id = inspection.Id,
+                PortfolioId = inspection.PortfolioId,
+                PropertyId = inspection.PropertyId,
+                UnitId = inspection.UnitId,
+                LeaseManagementId = inspection.LeaseManagementId,
+                LeaseAgreementId = inspection.LeaseAgreementId,
+                Type = inspection.Type,
+                Status = inspection.Status,
+                ScheduledFor = inspection.ScheduledFor,
+                CompletedAt = inspection.CompletedAt,
+                Outcome = inspection.Outcome,
+                Notes = inspection.Notes,
+                TemplateId = inspection.TemplateId,
+                ReportStoredFileId = inspection.ReportStoredFileId,
+                Inspector = inspection.Inspector,
+                PropertyName = inspection.Property!.Name,
+                UnitNumber = inspection.Unit == null ? null : inspection.Unit.UnitNumber,
+                CreatedAt = inspection.CreatedAt,
+                UpdatedAt = inspection.UpdatedAt,
+            });
+
+    private static async Task<string> SnapshotInspectionAsync(
+        IAtomicPersistenceSession persistence, int portfolioId, int inspectionId, CancellationToken ct) =>
+        JsonSerializer.Serialize(await InspectionSnapshotQuery(persistence, portfolioId)
+            .SingleAsync(inspection => inspection.Id == inspectionId, ct));
+
+    private static async Task<string> SnapshotInspectionDetailAsync(
+        IAtomicPersistenceSession persistence, int portfolioId, int inspectionId, CancellationToken ct)
+    {
+        var detail = await persistence.Query<Inspection>().AsNoTracking()
+            .Where(inspection => inspection.PortfolioId == portfolioId && inspection.Id == inspectionId)
+            .Select(inspection => new InspectionDetailResponse
+            {
+                Id = inspection.Id,
+                PortfolioId = inspection.PortfolioId,
+                PropertyId = inspection.PropertyId,
+                UnitId = inspection.UnitId,
+                LeaseManagementId = inspection.LeaseManagementId,
+                LeaseAgreementId = inspection.LeaseAgreementId,
+                Type = inspection.Type,
+                Status = inspection.Status,
+                ScheduledFor = inspection.ScheduledFor,
+                CompletedAt = inspection.CompletedAt,
+                Outcome = inspection.Outcome,
+                Notes = inspection.Notes,
+                TemplateId = inspection.TemplateId,
+                ReportStoredFileId = inspection.ReportStoredFileId,
+                Inspector = inspection.Inspector,
+                PropertyName = inspection.Property!.Name,
+                UnitNumber = inspection.Unit == null ? null : inspection.Unit.UnitNumber,
+                CreatedAt = inspection.CreatedAt,
+                UpdatedAt = inspection.UpdatedAt,
+                Items = inspection.Items.OrderBy(item => item.SortOrder).ThenBy(item => item.Id)
+                    .Select(item => new InspectionItemResponse
+                    {
+                        Id = item.Id,
+                        InspectionId = item.InspectionId,
+                        Area = item.Area,
+                        Label = item.Label,
+                        Result = item.Result,
+                        Note = item.Note,
+                        PhotoStoredFileId = item.PhotoStoredFileId,
+                        SpawnedWorkOrderId = item.SpawnedWorkOrderId,
+                        SortOrder = item.SortOrder,
+                    }).ToList(),
+            }).SingleAsync(ct);
+        return JsonSerializer.Serialize(detail);
+    }
+
+    private static async Task<string> SnapshotTemplateAsync(
+        IAtomicPersistenceSession persistence, int portfolioId, int templateId, CancellationToken ct)
+    {
+        var template = await persistence.Query<InspectionTemplate>().AsNoTracking()
+            .Where(row => row.PortfolioId == portfolioId && row.Id == templateId)
+            .Select(row => new InspectionTemplateResponse
+            {
+                Id = row.Id,
+                PortfolioId = row.PortfolioId,
+                Name = row.Name,
+                InspectionType = row.InspectionType,
+                IsBuiltIn = row.IsBuiltIn,
+                Items = row.Items.OrderBy(item => item.SortOrder).ThenBy(item => item.Id)
+                    .Select(item => new InspectionTemplateItemResponse
+                    {
+                        Area = item.Area,
+                        Label = item.Label,
+                        SortOrder = item.SortOrder,
+                    }).ToList(),
+            }).SingleAsync(ct);
+        return JsonSerializer.Serialize(template);
+    }
+
+    private static NormalizedTemplate NormalizeTemplate(
+        string name,
+        InspectionType type,
+        IReadOnlyList<UpsertInspectionTemplateItemRequest>? items)
+    {
+        var normalizedName = (name ?? string.Empty).Trim();
+        if (normalizedName.Length is 0 or > 200)
+            throw new DomainValidationException("Checklist name is required and must be 200 characters or fewer.");
+        if (items is null || items.Count == 0)
+            throw new DomainValidationException("Add at least one checklist question.");
+        if (items.Count > MaxTemplateItems)
+            throw new DomainValidationException($"A checklist can have at most {MaxTemplateItems} questions.");
+        var normalized = new List<NormalizedTemplateItem>(items.Count);
+        for (var index = 0; index < items.Count; index++)
+        {
+            var area = (items[index].Area ?? string.Empty).Trim();
+            var label = (items[index].Label ?? string.Empty).Trim();
+            if (area.Length is 0 or > 120)
+                throw new DomainValidationException($"Question {index + 1} area is required and must be 120 characters or fewer.");
+            if (label.Length is 0 or > 300)
+                throw new DomainValidationException($"Question {index + 1} item is required and must be 300 characters or fewer.");
+            normalized.Add(new NormalizedTemplateItem(area, label));
+        }
+        return new NormalizedTemplate(normalizedName, type, normalized);
+    }
+
+    private static void AddTemplateItems(InspectionTemplate template, IReadOnlyList<NormalizedTemplateItem> items)
+    {
+        for (var index = 0; index < items.Count; index++)
+            template.Items.Add(new InspectionTemplateItem
+            {
+                Template = template,
+                Area = items[index].Area,
+                Label = items[index].Label,
+                SortOrder = index,
+            });
+    }
+
+    private static InspectionItem NewItem(int portfolioId, string area, string label, int sortOrder) => new()
+    {
+        PortfolioId = portfolioId,
+        Area = area,
+        Label = label,
+        Result = InspectionItemResult.Pending,
+        SortOrder = sortOrder,
+    };
+
+    private static void StageDataUpdate(
+        IAtomicWriteAttempt attempt,
+        AtomicInspectionMutationCommand command,
+        string entityType,
+        int entityId,
+        DateTime now,
+        bool deleted = false,
+        string suffix = "entity") =>
+        attempt.StageOutbox(new OutboxMessage
+        {
+            PortfolioId = command.PortfolioId,
+            MessageType = "data-update",
+            Payload = JsonSerializer.Serialize(new
+            {
+                entityType,
+                entityId,
+                operation = deleted ? "delete" : "update",
+                data = new { },
+            }),
+            IdempotencyKey = $"{command.DeliveryIdempotencyKey}:{suffix}",
+            CreatedAtUtc = now,
+            NextAttemptAtUtc = now,
+        });
+
+    private static AtomicSemanticAudit Audit(
+        AtomicInspectionMutationCommand command,
+        string entityType,
+        int entityId,
+        AuditLogOperation operation,
+        string reason) => new(command.PortfolioId, entityType, entityId, operation,
+            UserId: command.ActorUserId, ChangeReason: reason);
+
+    private static T Read<T>(AtomicInspectionMutationCommand command) where T : class =>
+        JsonSerializer.Deserialize<T>(command.RequestJson)
+        ?? throw new ArgumentException("Inspection mutation request payload is invalid.");
+
+    private static void Validate(AtomicInspectionMutationCommand command)
+    {
+        if (command.PortfolioId <= 0 || command.ActorUserId <= 0
+            || command.AuthSessionId == Guid.Empty || command.AccessContextId <= 0
+            || command.ExpectedAccessRevision <= 0 || string.IsNullOrWhiteSpace(command.RequestJson)
+            || string.IsNullOrWhiteSpace(command.DeliveryIdempotencyKey)
+            || command.DeliveryIdempotencyKey.Length > 128
+            || (command.Operation != AtomicInspectionMutationOperation.Create && command.EntityId <= 0))
+            throw new ArgumentException(
+                "Portfolio, actor, access revision, operation, and delivery identifiers are required.");
+    }
+
+    private static DateTime Utc(DateTime value) => value.Kind == DateTimeKind.Utc
+        ? value
+        : value.ToUniversalTime();
+    private static AtomicInspectionMutationResult Missing() => new(false, false, 0);
+    private static AtomicInspectionMutationResult Applied(int id, string? responseJson = null) =>
+        new(true, true, id, responseJson);
+
+    private sealed record InspectionReferenceValidation(
+        bool PropertyValid, bool UnitValid, bool ManagementValid, bool AgreementValid, bool TemplateValid);
+    private sealed record TemplateItemProjection(string Area, string Label, int SortOrder);
+    private sealed record NormalizedTemplate(string Name, InspectionType Type, IReadOnlyList<NormalizedTemplateItem> Items);
+    private sealed record NormalizedTemplateItem(string Area, string Label);
+}
+
+public static class AtomicInspectionMutation
+{
+    public static readonly AtomicJsonResultCodec<AtomicInspectionMutationResult> Codec =
+        new("rental.inspection-mutation.v1");
+
+    public static AtomicInspectionMutationCommand Command<TRequest>(
+        WorkspaceReadScope scope,
+        AtomicInspectionMutationDomain domain,
+        AtomicInspectionMutationOperation operation,
+        int entityId,
+        int relatedEntityId,
+        string operationKey,
+        TRequest request) => new(
+            scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId,
+            scope.AccessRevision, domain, operation, entityId, relatedEntityId,
+            JsonSerializer.Serialize(request), operationKey);
+
+    public static AtomicCommandIdentity Identity(AtomicInspectionMutationCommand command) => new(
+        $"rental.inspection.{command.Domain.ToString().ToLowerInvariant()}." +
+        command.Operation.ToString().ToLowerInvariant(),
+        $"{command.PortfolioId}:{command.AccessContextId}:{command.Domain}:{command.Operation}:" +
+        $"{command.EntityId}:{command.RelatedEntityId}:{command.DeliveryIdempotencyKey}");
+}

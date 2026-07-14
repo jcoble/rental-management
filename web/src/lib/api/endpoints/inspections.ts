@@ -12,22 +12,44 @@ import { api, refreshToken } from '../client';
 import { CLIENT_API_BASE_URL } from '$lib/config';
 import { getAuthState, isTokenExpired } from '$lib/stores/auth.svelte';
 import { browser } from '$app/environment';
+import { idempotentMutation } from '../idempotency';
 
 export const inspections = {
 	list: (portfolioId: number) => api.get<Inspection[]>(`/inspections?portfolioId=${portfolioId}`),
 	get: (id: number) => api.get<InspectionDetail>(`/inspections/${id}`),
 	// Create now returns the full detail (items materialized as Pending when a templateId is given).
-	create: (data: Record<string, unknown>) => api.post<InspectionDetail>('/inspections', data),
-	update: (id: number, data: Record<string, unknown>) => api.patch<Inspection>(`/inspections/${id}`, data),
-	delete: (id: number) => api.delete(`/inspections/${id}`),
+	create: (data: Record<string, unknown>) =>
+		idempotentMutation(`inspections:create:${JSON.stringify(data)}`, (key) =>
+			api.post<InspectionDetail>('/inspections', data, { headers: { 'Idempotency-Key': key } })
+		),
+	update: (id: number, data: Record<string, unknown>) =>
+		idempotentMutation(`inspections:update:${id}:${JSON.stringify(data)}`, (key) =>
+			api.patch<Inspection>(`/inspections/${id}`, data, { headers: { 'Idempotency-Key': key } })
+		),
+	delete: (id: number) =>
+		idempotentMutation(`inspections:delete:${id}`, (key) =>
+			api.delete(`/inspections/${id}`, { headers: { 'Idempotency-Key': key } })
+		),
 
 	// Smart-checklist templates. Built-in templates have NEGATIVE ids — pass back to create as-is.
 	templates: () => api.get<InspectionTemplate[]>('/inspections/templates'),
 	getTemplate: (id: number) => api.get<InspectionTemplate>(`/inspections/templates/${id}`),
-	createTemplate: (data: InspectionTemplateInput) => api.post<InspectionTemplate>('/inspections/templates', data),
+	createTemplate: (data: InspectionTemplateInput) =>
+		idempotentMutation(`inspection-templates:create:${JSON.stringify(data)}`, (key) =>
+			api.post<InspectionTemplate>('/inspections/templates', data, {
+				headers: { 'Idempotency-Key': key },
+			})
+		),
 	updateTemplate: (id: number, data: InspectionTemplateInput) =>
-		api.patch<InspectionTemplate>(`/inspections/templates/${id}`, data),
-	deleteTemplate: (id: number) => api.delete<void>(`/inspections/templates/${id}`),
+		idempotentMutation(`inspection-templates:update:${id}:${JSON.stringify(data)}`, (key) =>
+			api.patch<InspectionTemplate>(`/inspections/templates/${id}`, data, {
+				headers: { 'Idempotency-Key': key },
+			})
+		),
+	deleteTemplate: (id: number) =>
+		idempotentMutation(`inspection-templates:delete:${id}`, (key) =>
+			api.delete<void>(`/inspections/templates/${id}`, { headers: { 'Idempotency-Key': key } })
+		),
 
 	// Add/edit/delete/reorder checklist questions on an editable scheduled inspection.
 	createItem: (inspectionId: number, data: InspectionItemInput) =>
