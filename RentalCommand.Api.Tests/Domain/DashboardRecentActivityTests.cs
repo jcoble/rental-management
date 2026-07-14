@@ -173,7 +173,7 @@ public class DashboardRecentActivityTests : IDisposable
         await _sut.GetDashboardAsync(_scope);
 
         var auditQueries = _executedSql
-            .Where(command => command.Contains("FROM \"AuditLogs\"", StringComparison.OrdinalIgnoreCase))
+            .Where(command => command.Contains("FROM \"AtomicAuditLogs\"", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         auditQueries.Should().ContainSingle(
@@ -213,7 +213,7 @@ public class DashboardRecentActivityTests : IDisposable
         };
         _db.AddRange(decoyProperty, decoyUnit, decoyWorkOrder);
         _db.SaveChanges();
-        _db.AuditLogs.Add(Audit(
+        _db.AtomicAuditLogs.Add(Audit(
             nameof(WorkOrder), decoyWorkOrder.Id, AuditLogOperation.Created, now.AddHours(1), 0));
 
         var assignment = _db.MembershipRoleAssignments
@@ -341,7 +341,7 @@ public class DashboardRecentActivityTests : IDisposable
 
         // Nine property-backed audit rows (<= the Take(10) cap), plus one workspace-global
         // Conversation row. The latter must fail closed because it has no authorized property path.
-        _db.AuditLogs.AddRange(
+        _db.AtomicAuditLogs.AddRange(
             Audit("Tenant", tenant1.Id, AuditLogOperation.Created, baseTime, 1),
             Audit("Tenant", tenant2.Id, AuditLogOperation.Updated, baseTime, 2),
             Audit("Tenant", tenant3.Id, AuditLogOperation.Created, baseTime, 3),
@@ -395,9 +395,13 @@ public class DashboardRecentActivityTests : IDisposable
         UpdatedAt = now,
     };
 
-    private static AuditLog Audit(string entityType, int entityId, AuditLogOperation op, DateTime baseTime, int minutesAgo)
+    private static AtomicAuditLog Audit(string entityType, int entityId, AuditLogOperation op, DateTime baseTime, int minutesAgo)
         => new()
         {
+            AttemptId = Guid.NewGuid(),
+            CommandType = "test.dashboard-activity.seed",
+            CommandIdempotencyKey = Guid.NewGuid().ToString("N"),
+            MutationOrdinal = 1,
             PortfolioId = PortfolioId,
             EntityType = entityType,
             EntityId = entityId,

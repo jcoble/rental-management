@@ -10,7 +10,7 @@
 	const PAGE = 30;
 	let take = $state(PAGE);
 
-	// Deep, paged history: a bounded AuditLog union over the unit + its children (newest first).
+	// Deep, paged history: a bounded AtomicAuditLog union over the unit + its children (newest first).
 	const timelineQuery = createQuery(() => ({
 		queryKey: ['unit-timeline', unitId, take],
 		enabled: unitId > 0,

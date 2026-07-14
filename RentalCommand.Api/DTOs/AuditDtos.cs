@@ -23,13 +23,13 @@ public sealed class AuditFieldChange
 }
 
 /// <summary>
-/// MVP wire shape for one <see cref="AuditLog"/> row in the unified audit viewer. The trail is
+/// MVP wire shape for one <see cref="AtomicAuditLog"/> row in the unified audit viewer. The trail is
 /// append-only, so this is a read-only projection. The raw old/new JSON and IP address are
 /// intentionally NOT exposed here — they belong to the deferred admin deep-view.
 /// </summary>
 public class AuditEntryResponse
 {
-    public int Id { get; set; }
+    public long Id { get; set; }
     public int PortfolioId { get; set; }
     public AuditLogOperation Operation { get; set; }
 
@@ -61,7 +61,7 @@ public class AuditEntryResponse
     public IReadOnlyList<AuditFieldChange> Changes { get; set; } = Array.Empty<AuditFieldChange>();
 
     public static AuditEntryResponse FromEntity(
-        AuditLog e,
+        AtomicAuditLog e,
         AuditDescriber describer,
         AuditDiffBuilder? diff = null,
         string? resolvedActorName = null,
@@ -81,14 +81,14 @@ public class AuditEntryResponse
         };
 
     /// <summary>
-    /// Resolves a human-readable actor label. Precedence: the row's own <see cref="AuditLog.ActorLabel"/>
+    /// Resolves a human-readable actor label. Precedence: the row's own <see cref="AtomicAuditLog.ActorLabel"/>
     /// (set for system/AI actors and HTTP requests that carried a name claim) → the user's display
     /// name/email resolved by the database projection in <paramref name="resolvedActorName"/> when
-    /// only a <see cref="AuditLog.UserId"/>
+    /// only a <see cref="AtomicAuditLog.UserId"/>
     /// is present → "system" for actor-less rows. The bare "User #{id}" is a last resort only when a
     /// user id has no resolvable account (e.g. a since-deleted user), never the normal case.
     /// </summary>
-    internal static string ResolveActor(AuditLog e, string? resolvedActorName = null)
+    internal static string ResolveActor(AtomicAuditLog e, string? resolvedActorName = null)
     {
         if (!string.IsNullOrWhiteSpace(e.ActorLabel))
         {
@@ -134,14 +134,14 @@ public class AuditEntryResponse
 }
 
 /// <summary>
-/// Admin-only forensic projection of one <see cref="AuditLog"/> row. Extends the landlord-facing
+/// Admin-only forensic projection of one <see cref="AtomicAuditLog"/> row. Extends the landlord-facing
 /// <see cref="AuditEntryResponse"/> with the fields it intentionally withholds — the actor's raw IP
 /// address and the unredacted old→new JSON — for compliance / forensic review. Surfaced only via the
 /// Admin-gated <c>GET /api/v1/admin/audit</c>; the data already lives on the row (no migration).
 /// </summary>
 public sealed class AdminAuditEntryResponse
 {
-    public int Id { get; set; }
+    public long Id { get; set; }
     public int PortfolioId { get; set; }
     public AuditLogOperation Operation { get; set; }
     public string OperationName { get; set; } = string.Empty;
@@ -168,7 +168,7 @@ public sealed class AdminAuditEntryResponse
     public string TestId => $"admin-audit-{Id}";
 
     public static AdminAuditEntryResponse FromEntity(
-        AuditLog e,
+        AtomicAuditLog e,
         AuditDescriber describer,
         string? resolvedActorName = null,
         int? unitId = null) => new()

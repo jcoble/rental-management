@@ -85,11 +85,11 @@ public sealed class FoundationBaselinePostgreSqlTests
     public void SandboxGraduation_AddsDeleteWithoutWeakeningAppendOnlyRows()
     {
         CreateSql.Should().Contain(
-            "GRANT SELECT, INSERT, DELETE ON TABLE \"AuditLogs\" TO rentalcommand_api;");
+            "GRANT SELECT, INSERT, DELETE ON TABLE \"AtomicAuditLogs\" TO rentalcommand_api;");
         CreateSql.Should().Contain(
             "GRANT SELECT, INSERT, DELETE ON TABLE \"TenantLedgerEntries\" TO rentalcommand_api;");
         CreateSql.Should().NotContain(
-            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE \"AuditLogs\" TO rentalcommand_api;");
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE \"AtomicAuditLogs\" TO rentalcommand_api;");
         CreateSql.Should().NotContain(
             "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE \"TenantLedgerEntries\" TO rentalcommand_api;");
     }

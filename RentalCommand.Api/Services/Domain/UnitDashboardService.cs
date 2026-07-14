@@ -507,7 +507,7 @@ public class UnitDashboardService : IUnitDashboardService
         skip = skip < 0 ? 0 : skip;
         take = take <= 0 ? RecentTimelineTake : Math.Min(take, 200);
 
-        // Keep child scopes as IQueryable subqueries so the paged AuditLogs query does the filtering in
+        // Keep child scopes as IQueryable subqueries so the paged AtomicAuditLogs query does the filtering in
         // SQL. Do not materialize the child ids first; a heavily used unit can have unbounded payments,
         // work orders, inspections, appointments, and expenses.
         var relationshipIds = _db.LeaseManagements.AsNoTracking()
@@ -542,7 +542,7 @@ public class UnitDashboardService : IUnitDashboardService
             .Select(e => e.Id);
 
         // ONE audit query with translated OR/IN subqueries, newest first, paged.
-        var rows = await _db.AuditLogs
+        var rows = await _db.AtomicAuditLogs
             .AsNoTracking()
             .Where(a => a.PortfolioId == portfolioId && (
                 (a.EntityType == "Unit" && a.EntityId == unitId) ||
@@ -562,9 +562,16 @@ public class UnitDashboardService : IUnitDashboardService
                 Audit = a,
                 ActorName = a.ActorLabel != null && a.ActorLabel != ""
                     ? a.ActorLabel
-                    : a.User != null && a.User.DisplayName != null && a.User.DisplayName != ""
-                        ? a.User.DisplayName
-                        : a.User != null ? a.User.Email : null,
+                    : a.UserId != null
+                        ? _db.Users
+                            .Where(user => user.Id == a.UserId.Value
+                                && user.WorkspaceAccessContexts.Any(context =>
+                                    context.PortfolioId == portfolioId))
+                            .Select(user => user.DisplayName != null && user.DisplayName != ""
+                                ? user.DisplayName
+                                : user.Email)
+                            .FirstOrDefault()
+                        : null,
             })
             .ToListAsync(ct);
 
@@ -759,7 +766,7 @@ public class UnitDashboardService : IUnitDashboardService
 
     private sealed class TimelineReadRow
     {
-        public required AuditLog Audit { get; init; }
+        public required AtomicAuditLog Audit { get; init; }
         public string? ActorName { get; init; }
     }
 }

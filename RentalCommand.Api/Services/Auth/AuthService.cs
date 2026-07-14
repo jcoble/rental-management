@@ -460,6 +460,7 @@ public class AuthService : IAuthService
         string currentPassword,
         string newPassword)
     {
+        _audit.EnsureAtomicCommand();
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null)
         {

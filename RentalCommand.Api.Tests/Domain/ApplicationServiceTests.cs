@@ -773,6 +773,8 @@ public class ApplicationServiceTests : IDisposable
     {
         public List<(int portfolioId, string entityType, int entityId, AuditLogOperation operation)> Calls { get; } = [];
 
+        public void EnsureAtomicCommand() { }
+
         public Task LogAsync(
             int portfolioId, string entityType, int entityId, AuditLogOperation operation,
             int? userId = null, string? actorLabel = null, string? oldValues = null,

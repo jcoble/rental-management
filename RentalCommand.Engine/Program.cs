@@ -48,14 +48,9 @@ RentalCommand.Data.Security.RuntimeDatabaseRoleProvisioner.ValidateRuntimeConnec
     RentalCommand.Data.Security.DatabaseRuntimeIdentity.EngineRole,
     allowDevelopmentDefault: builder.Environment.IsDevelopment());
 
-// Unified audit trail: the Engine has no HttpContext, so it attributes audit rows to "system".
-// The scoped interceptor is resolved from the same scope as the DbContext (the (sp, options)
-// overload) and auto-records IAuditable CRUD that workers perform.
+// Atomic commands attribute Engine mutations to the system actor inside the canonical audit scope.
 builder.Services.AddScoped<RentalCommand.Core.Interfaces.ICurrentActor,
     RentalCommand.Data.Auditing.SystemCurrentActor>();
-builder.Services.AddScoped<RentalCommand.Core.Interfaces.IAuditScope,
-    RentalCommand.Data.Auditing.AuditScope>();
-builder.Services.AddScoped<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>();
 
 // The Engine's direct restricted database identity is the sole cross-workspace authority. It never
 // receives or sets a mutable administrator/bypass flag.
@@ -109,9 +104,7 @@ builder.Services.AddAtomicCommandHandler<
 builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
     options.UseNpgsql(connectionString)
         .UseAtomicPersistenceKernel(sp)
-        .AddInterceptors(
-            sp.GetRequiredService<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>(),
-            sp.GetRequiredService<RentalCommand.Engine.Data.EngineRlsInterceptor>()));
+        .AddInterceptors(sp.GetRequiredService<RentalCommand.Engine.Data.EngineRlsInterceptor>()));
 
 // --- Master simulation clock (TSK-615) ---
 // Same ambient TimeProvider + IAppTimeZoneProvider registration as the API so both processes agree on

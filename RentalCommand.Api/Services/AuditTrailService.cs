@@ -1,38 +1,25 @@
-using RentalCommand.Core.Entities;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
-using RentalCommand.Core.Time;
-using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services;
 
 /// <summary>
-/// Persists append-only <see cref="AuditLog"/> rows for the legally-rich semantic events. Each call
-/// flushes via <c>SaveChangesAsync</c> so audit entries are durable even if the enclosing
-/// unit-of-work is later rolled back.
-///
-/// <para>Coordinates with the generic <c>AuditSaveChangesInterceptor</c> through <see cref="IAuditScope"/>
-/// so a change is recorded exactly once and the rich explicit row always wins — <b>regardless of call
-/// order</b>. When a service logs <i>after</i> the entity's save (the common case), the interceptor has
-/// already written a generic twin; this enriches that row in place with the full snapshot / change
-/// reason instead of being silently suppressed. When a service logs <i>before</i> the save, it inserts
-/// the rich row and the later generic twin defers.</para>
+/// Stages semantic detail on the sole atomic audit path. The atomic kernel materializes the row with
+/// the command receipt in the same transaction; this service deliberately performs no database save.
+/// Unconverted callers and their required follow-up are inventoried in
+/// <c>Docs/Reviews/2026-07-14-tsk-672-canonical-audit-cutover.md</c>.
 /// </summary>
 public sealed class AuditTrailService : IAuditTrailService
 {
-    private readonly RentalCommandDbContext _db;
-    private readonly IAuditScope _scope;
-    private readonly TimeProvider _timeProvider;
+    private readonly IAtomicAuditEventSink _sink;
 
-    public AuditTrailService(RentalCommandDbContext db, IAuditScope scope, TimeProvider timeProvider)
-    {
-        _db = db;
-        _scope = scope;
-        _timeProvider = timeProvider;
-    }
+    public AuditTrailService(IAtomicAuditEventSink sink) => _sink = sink;
+
+    public void EnsureAtomicCommand() => _sink.EnsureActive();
 
     /// <inheritdoc />
-    public async Task LogAsync(
+    public Task LogAsync(
         int portfolioId,
         string entityType,
         int entityId,
@@ -45,46 +32,18 @@ public sealed class AuditTrailService : IAuditTrailService
         string? ipAddress = null,
         CancellationToken ct = default)
     {
-        var resolution = _scope.ResolveExplicit(entityType, entityId, operation);
-
-        switch (resolution.Decision)
-        {
-            case AuditWrite.Skip:
-                // A prior explicit log already covered this key this request — avoid a duplicate.
-                return;
-
-            case AuditWrite.Enrich:
-                // The generic interceptor already wrote a twin for this change earlier in the request.
-                // Overwrite it in place with the rich payload. Explicit, non-null values win; anything
-                // the caller leaves null keeps the generic capture (its actor/IP, and the changed-property
-                // diff when only a ChangeReason is supplied).
-                var existing = resolution.ExistingRow!;
-                if (oldValues is not null) existing.OldValues = oldValues;
-                if (newValues is not null) existing.NewValues = newValues;
-                if (changeReason is not null) existing.ChangeReason = changeReason;
-                if (userId.HasValue) existing.UserId = userId;
-                if (actorLabel is not null) existing.ActorLabel = actorLabel;
-                if (ipAddress is not null) existing.IpAddress = ipAddress;
-                await _db.SaveChangesAsync(ct);
-                return;
-
-            default: // AuditWrite.Insert
-                _db.AuditLogs.Add(new AuditLog
-                {
-                    PortfolioId = portfolioId,
-                    EntityType = entityType,
-                    EntityId = entityId,
-                    Operation = operation,
-                    UserId = userId,
-                    ActorLabel = actorLabel,
-                    OldValues = oldValues,
-                    NewValues = newValues,
-                    ChangeReason = changeReason,
-                    IpAddress = ipAddress,
-                    Timestamp = _timeProvider.UtcNow(),
-                });
-                await _db.SaveChangesAsync(ct);
-                return;
-        }
+        ct.ThrowIfCancellationRequested();
+        _sink.Stage(new AtomicSemanticAudit(
+            portfolioId,
+            entityType,
+            entityId,
+            operation,
+            userId,
+            actorLabel,
+            oldValues,
+            newValues,
+            changeReason,
+            ipAddress));
+        return Task.CompletedTask;
     }
 }

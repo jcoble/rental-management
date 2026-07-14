@@ -88,6 +88,6 @@ export const units = {
 	confirmListingSignal: (id: number, signalId: number, accept: boolean) =>
 		api.post<ListingWorkspace>(`/units/${id}/listing-workspace/signals/${signalId}/confirm?accept=${accept}`),
 
-	/** The unit's deep, paged history (timeline tab) — a bounded AuditLog union over the unit + children. */
+	/** The unit's deep, paged history (timeline tab) — a bounded AtomicAuditLog union over the unit + children. */
 	timeline: (id: number, params?: ListParams) => api.get<AuditEntry[]>(`/units/${id}/timeline${buildListQuery(params)}`),
 };

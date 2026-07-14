@@ -181,7 +181,7 @@ public sealed class SandboxService : ISandboxService
         "LeaseManagements", "LegalDocumentArtifacts", "DocumentTemplates", "ScanDrafts",
         "ScanBatches", "Conversations", "Loans", "StoredFiles", "Units",
         "Properties", "Tenants", "Vendors", "OwnerEntities",
-        "Owners", "OAuthStates", "AtomicAuditLogs", "AuditLogs",
+        "Owners", "OAuthStates", "AtomicAuditLogs",
     ];
 
     /// <summary>
@@ -409,8 +409,6 @@ public sealed class SandboxService : ISandboxService
         await _db.OAuthStates.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.AtomicAuditLogs.IgnoreQueryFilters()
-            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
-        await _db.AuditLogs.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
     }
 

@@ -51,7 +51,7 @@ public sealed class PropertyDispositionPersistenceSqlTests
     {
         var sql = CreateSql();
 
-        sql.Should().NotContain("INSERT INTO \"AuditLogs\"");
+        sql.Should().NotContain("INSERT INTO \"AtomicAuditLogs\"");
         sql.Should().NotContain("INSERT INTO \"OutboxMessages\"");
         sql.Should().Contain("jsonb_agg", "the handler needs exact IDs for canonical semantic events");
     }

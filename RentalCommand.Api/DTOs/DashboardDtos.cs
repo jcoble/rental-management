@@ -82,7 +82,7 @@ public class DashboardExpiringLease
 
 public class DashboardActivity
 {
-    public int Id { get; set; }
+    public long Id { get; set; }
     /// <summary>Activity type as its string name (e.g. <c>PaymentRecorded</c>).</summary>
     public string Type { get; set; } = string.Empty;
     /// <summary>Primary key of the entity this row touched, so the web can deep-link to its detail page.</summary>

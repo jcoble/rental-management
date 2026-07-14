@@ -292,7 +292,7 @@ public class UnitController : ManagementControllerBase
     }
 
     /// <summary>
-    /// The unit's full history (deep timeline tab): a bounded <c>AuditLog</c> union over the unit and its
+    /// The unit's full history (deep timeline tab): a bounded <c>AtomicAuditLog</c> union over the unit and its
     /// children, newest first, paged via <c>?skip&amp;take</c>. Out-of-scope units return an empty list.
     /// </summary>
     [HttpGet("{id:int}/timeline")]

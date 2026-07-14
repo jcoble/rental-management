@@ -72,7 +72,7 @@ public sealed class AuditSearchTests : IAsyncLifetime
         await using var ctx = NewContext(_ownerConnString);
         await ctx.Database.EnsureCreatedAsync();
 
-        // One portfolio (AuditLog.PortfolioId is a required FK → Portfolio), captured by id.
+        // One portfolio (AtomicAuditLog.PortfolioId is a required FK → Portfolio), captured by id.
         var portfolio = new Portfolio
         {
             Name = "Test Portfolio",
@@ -202,21 +202,27 @@ public sealed class AuditSearchTests : IAsyncLifetime
         // Three audit rows whose EntityType / EntityId / Operation / ActorLabel / IpAddress we control,
         // so the search assertions target exactly the fields the audit page renders. No users needed
         // (each row carries its own ActorLabel, so no UserId FK to satisfy).
-        ctx.AuditLogs.AddRange(
-            new AuditLog
+        ctx.AtomicAuditLogs.AddRange(
+            new AtomicAuditLog
             {
+                AttemptId = Guid.NewGuid(), CommandType = "test.audit-search.seed",
+                CommandIdempotencyKey = Guid.NewGuid().ToString("N"), MutationOrdinal = 1,
                 PortfolioId = _portfolioId, EntityType = "Expense", EntityId = 76,
                 Operation = AuditLogOperation.Created, ActorLabel = "Jane Landlord",
                 IpAddress = "203.0.113.5", Timestamp = DateTime.UtcNow.AddMinutes(-3),
             },
-            new AuditLog
+            new AtomicAuditLog
             {
+                AttemptId = Guid.NewGuid(), CommandType = "test.audit-search.seed",
+                CommandIdempotencyKey = Guid.NewGuid().ToString("N"), MutationOrdinal = 1,
                 PortfolioId = _portfolioId, EntityType = "WorkOrder", EntityId = 11,
                 Operation = AuditLogOperation.Updated, ActorLabel = "Bob Staff",
                 IpAddress = "198.51.100.9", Timestamp = DateTime.UtcNow.AddMinutes(-2),
             },
-            new AuditLog
+            new AtomicAuditLog
             {
+                AttemptId = Guid.NewGuid(), CommandType = "test.audit-search.seed",
+                CommandIdempotencyKey = Guid.NewGuid().ToString("N"), MutationOrdinal = 1,
                 PortfolioId = _portfolioId, EntityType = nameof(RentalApplication), EntityId = 7,
                 Operation = AuditLogOperation.Created, ActorLabel = "Jane Landlord",
                 IpAddress = "203.0.113.5", Timestamp = DateTime.UtcNow.AddMinutes(-1),
@@ -286,7 +292,7 @@ public sealed class AuditSearchTests : IAsyncLifetime
         var sql = sut.BuildPageProjectionQuery(_scope, null, null, null, query)
             .ToQueryString();
 
-        sql.Should().Contain("FROM \"AuditLogs\"");
+        sql.Should().Contain("FROM \"AtomicAuditLogs\"");
         sql.Should().Contain("\"AspNetUsers\"");
         sql.Should().Contain("\"WorkspaceAccessContexts\"");
         sql.Should().Contain("\"AuthSessions\"");
@@ -306,7 +312,7 @@ public sealed class AuditSearchTests : IAsyncLifetime
         page.Should().HaveCount(2);
         commands.ReaderCommands.Should().ContainSingle(
             "the audit page and all actor/Unit enrichment must execute as one SQL reader command");
-        commands.ReaderCommands[0].Should().Contain("FROM \"AuditLogs\"");
+        commands.ReaderCommands[0].Should().Contain("FROM \"AtomicAuditLogs\"");
     }
 
     // ───────────────────────────────── helpers ─────────────────────────────────

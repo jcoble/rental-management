@@ -3,8 +3,8 @@ using RentalCommand.Core.Enums;
 namespace RentalCommand.Core.Entities;
 
 /// <summary>
-/// Audit row owned exclusively by the opt-in atomic persistence kernel. The existing application
-/// audit trail is intentionally separate until every write path has been converted.
+/// Sole append-only audit record for Rental Command. Atomic command metadata ties each mutation to
+/// the retry-safe command attempt and idempotency receipt that committed it.
 /// </summary>
 public sealed class AtomicAuditLog
 {

@@ -163,7 +163,6 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
         Set<LoginContextSelectionChallenge>();
     public DbSet<AccessEnvelopeProjectionRow> AccessEnvelopeProjectionRows =>
         Set<AccessEnvelopeProjectionRow>();
-    public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<QueuedJob> QueuedJobs => Set<QueuedJob>();
     public DbSet<StoredFile> StoredFiles => Set<StoredFile>();
@@ -251,28 +250,6 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
         modelBuilder.Entity<ApplicationUser>(entity =>
         {
             entity.Property(e => e.DisplayName).HasMaxLength(200);
-        });
-
-        modelBuilder.Entity<AuditLog>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.ActorLabel).HasMaxLength(120);
-            entity.Property(e => e.EntityType).IsRequired().HasMaxLength(120);
-            entity.Property(e => e.ChangeReason).HasMaxLength(1000);
-            entity.Property(e => e.IpAddress).HasMaxLength(64);
-            // Append-only JSON payloads (Postgres jsonb).
-            entity.Property(e => e.OldValues).HasColumnType("jsonb");
-            entity.Property(e => e.NewValues).HasColumnType("jsonb");
-            entity.Property(e => e.Operation).HasConversion<int>();
-            entity.HasIndex(e => e.PortfolioId);
-            entity.HasIndex(e => new { e.EntityType, e.EntityId });
-            entity.HasIndex(e => e.Timestamp);
-            // Composite index for the paged viewer query (scope by portfolio, newest-first).
-            entity.HasIndex(e => new { e.PortfolioId, e.Timestamp });
-            entity.HasOne(e => e.User)
-                .WithMany(u => u.AuditLogs)
-                .HasForeignKey(e => e.UserId)
-                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<AtomicCommandReceipt>(entity =>
@@ -2271,7 +2248,7 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
         // aggregates. This is the single, declarative source of truth the audit asked for; no per-site
         // service change and no denormalized DeletedAt column on the leaf tables is required.
         //
-        // Identity / global / infra tables (AspNet*, AuditLog, OutboxMessage, EngineWorkerHeartbeat,
+        // Identity / global / infra tables (AspNet*, AtomicAuditLog, OutboxMessage, EngineWorkerHeartbeat,
         // ProviderInboxEvent) are intentionally NOT filtered here — they are not soft-deletable and
         // several legitimately outlive any single business row.
         // ----------------------------------------------------------------------------------------

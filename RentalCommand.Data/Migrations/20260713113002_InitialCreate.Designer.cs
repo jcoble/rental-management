@@ -1152,67 +1152,6 @@ namespace RentalCommand.Data.Migrations
                     b.ToTable("AtomicCommandReceipts");
                 });
 
-            modelBuilder.Entity("RentalCommand.Core.Entities.AuditLog", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("ActorLabel")
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)");
-
-                    b.Property<string>("ChangeReason")
-                        .HasMaxLength(1000)
-                        .HasColumnType("character varying(1000)");
-
-                    b.Property<int>("EntityId")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("EntityType")
-                        .IsRequired()
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)");
-
-                    b.Property<string>("IpAddress")
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<string>("NewValues")
-                        .HasColumnType("jsonb");
-
-                    b.Property<string>("OldValues")
-                        .HasColumnType("jsonb");
-
-                    b.Property<int>("Operation")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("PortfolioId")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("Timestamp")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int?>("UserId")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("PortfolioId");
-
-                    b.HasIndex("Timestamp");
-
-                    b.HasIndex("UserId");
-
-                    b.HasIndex("EntityType", "EntityId");
-
-                    b.HasIndex("PortfolioId", "Timestamp");
-
-                    b.ToTable("AuditLogs");
-                });
-
             modelBuilder.Entity("RentalCommand.Core.Entities.AuthSession", b =>
                 {
                     b.Property<Guid>("Id")
@@ -10288,16 +10227,6 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Unit");
                 });
 
-            modelBuilder.Entity("RentalCommand.Core.Entities.AuditLog", b =>
-                {
-                    b.HasOne("RentalCommand.Core.Entities.ApplicationUser", "User")
-                        .WithMany("AuditLogs")
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.Navigation("User");
-                });
-
             modelBuilder.Entity("RentalCommand.Core.Entities.AuthSession", b =>
                 {
                     b.HasOne("RentalCommand.Core.Entities.ApplicationUser", "User")
@@ -12989,8 +12918,6 @@ namespace RentalCommand.Data.Migrations
 
             modelBuilder.Entity("RentalCommand.Core.Entities.ApplicationUser", b =>
                 {
-                    b.Navigation("AuditLogs");
-
                     b.Navigation("AuthSessions");
 
                     b.Navigation("LoginContextSelectionChallenges");

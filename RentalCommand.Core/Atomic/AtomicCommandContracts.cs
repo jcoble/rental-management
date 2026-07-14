@@ -93,6 +93,17 @@ public interface IAtomicInfrastructureWriteGate
     IDisposable BeginExternalListingSignalAdmission();
 }
 
+/// <summary>
+/// Stages a semantic audit event inside the currently admitted atomic command. Implementations must
+/// reject calls made outside that command transaction; audit rows may never be committed separately
+/// from their business mutation.
+/// </summary>
+public interface IAtomicAuditEventSink : IAtomicTransactionSafeDependency
+{
+    void EnsureActive();
+    void Stage(AtomicSemanticAudit audit);
+}
+
 /// <summary>Capabilities owned by the current physical attempt; it deliberately exposes no ORM.</summary>
 public interface IAtomicWriteAttempt
 {

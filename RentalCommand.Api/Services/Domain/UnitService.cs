@@ -459,6 +459,7 @@ public class UnitService : IUnitService
 
     public async Task<UnitResponse?> CreateAsync(int portfolioId, CreateUnitRequest request, CancellationToken ct = default)
     {
+        _audit.EnsureAtomicCommand();
         // Verify the target property exists within the caller's portfolio before attaching the unit.
         var propertyInScope = await _db.Properties
             .AnyAsync(p => p.Id == request.PropertyId && p.PortfolioId == portfolioId, ct);
@@ -514,6 +515,7 @@ public class UnitService : IUnitService
 
     public async Task<UnitResponse?> UpdateAsync(int portfolioId, int id, UpdateUnitRequest request, CancellationToken ct = default)
     {
+        _audit.EnsureAtomicCommand();
         var entity = await _db.Units
             .FirstOrDefaultAsync(u => u.Id == id && u.Property != null && u.Property.PortfolioId == portfolioId, ct);
         if (entity == null)
@@ -610,6 +612,7 @@ public class UnitService : IUnitService
 
     public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
     {
+        _audit.EnsureAtomicCommand();
         var entity = await _db.Units
             .FirstOrDefaultAsync(u => u.Id == id && u.Property != null && u.Property.PortfolioId == portfolioId, ct);
         if (entity == null)

@@ -326,35 +326,6 @@ namespace RentalCommand.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
-                name: "AuditLogs",
-                columns: table => new
-                {
-                    Id = table.Column<int>(type: "integer", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
-                    UserId = table.Column<int>(type: "integer", nullable: true),
-                    ActorLabel = table.Column<string>(type: "character varying(120)", maxLength: 120, nullable: true),
-                    EntityType = table.Column<string>(type: "character varying(120)", maxLength: 120, nullable: false),
-                    EntityId = table.Column<int>(type: "integer", nullable: false),
-                    Operation = table.Column<int>(type: "integer", nullable: false),
-                    OldValues = table.Column<string>(type: "jsonb", nullable: true),
-                    NewValues = table.Column<string>(type: "jsonb", nullable: true),
-                    ChangeReason = table.Column<string>(type: "character varying(1000)", maxLength: 1000, nullable: true),
-                    Timestamp = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    IpAddress = table.Column<string>(type: "character varying(64)", maxLength: 64, nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_AuditLogs", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_AuditLogs_AspNetUsers_UserId",
-                        column: x => x.UserId,
-                        principalTable: "AspNetUsers",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.SetNull);
-                });
-
-            migrationBuilder.CreateTable(
                 name: "LoginContextSelectionChallenges",
                 columns: table => new
                 {
@@ -5491,31 +5462,6 @@ namespace RentalCommand.Data.Migrations
                 unique: true);
 
             migrationBuilder.CreateIndex(
-                name: "IX_AuditLogs_EntityType_EntityId",
-                table: "AuditLogs",
-                columns: new[] { "EntityType", "EntityId" });
-
-            migrationBuilder.CreateIndex(
-                name: "IX_AuditLogs_PortfolioId",
-                table: "AuditLogs",
-                column: "PortfolioId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_AuditLogs_PortfolioId_Timestamp",
-                table: "AuditLogs",
-                columns: new[] { "PortfolioId", "Timestamp" });
-
-            migrationBuilder.CreateIndex(
-                name: "IX_AuditLogs_Timestamp",
-                table: "AuditLogs",
-                column: "Timestamp");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_AuditLogs_UserId",
-                table: "AuditLogs",
-                column: "UserId");
-
-            migrationBuilder.CreateIndex(
                 name: "IX_AuthSessionRefreshCredentials_RefreshTokenFamilyId_ExpiresA~",
                 table: "AuthSessionRefreshCredentials",
                 columns: new[] { "RefreshTokenFamilyId", "ExpiresAtUtc" });
@@ -8304,9 +8250,6 @@ namespace RentalCommand.Data.Migrations
 
             migrationBuilder.DropTable(
                 name: "AtomicCommandReceipts");
-
-            migrationBuilder.DropTable(
-                name: "AuditLogs");
 
             migrationBuilder.DropTable(
                 name: "AuthSessionRefreshCredentials");

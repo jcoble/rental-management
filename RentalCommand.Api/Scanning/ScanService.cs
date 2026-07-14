@@ -715,6 +715,7 @@ public sealed class ScanService : IScanService
         string? reason,
         CancellationToken ct = default)
     {
+        _audit.EnsureAtomicCommand();
         return await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
         {
             // The session, access revision, target capability, and property scope are re-read in
