@@ -256,7 +256,7 @@ public sealed class AtomicUnitImportPersistence
             parameters.Add(new NpgsqlParameter("createdAt", NpgsqlDbType.TimestampTz) { Value = effectiveAtUtc });
 
         var result = await _db.Database.SingleTopLevelResultAsync<ImportResultRow>(
-            write ? ImportSql : PreviewSql, parameters, ct);
+            write ? ImportSql : PreviewSql, parameters.ToArray(), ct);
         return new AtomicUnitImportBatchResult(
             result.Authorized,
             JsonSerializer.Deserialize<AtomicUnitImportRowResult[]>(result.ResultsJson) ?? [],

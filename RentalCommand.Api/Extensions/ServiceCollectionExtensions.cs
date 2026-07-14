@@ -171,6 +171,8 @@ public static class ServiceCollectionExtensions
             RentalCommand.Api.Services.Import.CsvImportService>();
         services.AddScoped<RentalCommand.Core.Atomic.IUnitCsvImportPreviewQuery,
             RentalCommand.Data.Atomic.AtomicUnitImportPersistence>();
+        services.AddScoped<RentalCommand.Core.Atomic.ICoreCsvImportPreviewQuery,
+            RentalCommand.Data.Atomic.AtomicCoreCsvImportPersistence>();
 
         // --- mobile push registration ---
         services.AddScoped<IDeviceService, DeviceService>();
