@@ -65,7 +65,7 @@ public sealed class TechnicianController : AuthenticatedPortfolioControllerBase
         [FromBody] RecordTechnicianWorkEntryRequest request, CancellationToken ct)
     {
         if (!TryEnvelope(out var envelope)) return Forbid();
-        if (!ValidKey(idempotencyKey, out var key)) return BadRequest();
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var key)) return BadRequest();
         var digest = Digest(key);
         var command = new RecordTechnicianWorkEntryCommand(envelope.PortfolioId, envelope.UserId,
             envelope.SessionId, envelope.AccessContextId, envelope.AccessRevision, workOrderId,
@@ -87,7 +87,7 @@ public sealed class TechnicianController : AuthenticatedPortfolioControllerBase
         [FromBody] TechnicianConversationMessageRequest request, CancellationToken ct)
     {
         if (!TryEnvelope(out var envelope)) return Forbid();
-        if (!ValidKey(idempotencyKey, out var key)) return BadRequest();
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var key)) return BadRequest();
         var digest = Digest(key);
         var command = new SendTechnicianAssignmentMessageCommand(envelope.PortfolioId, envelope.UserId,
             envelope.SessionId, envelope.AccessContextId, envelope.AccessRevision, workOrderId,
@@ -107,7 +107,7 @@ public sealed class TechnicianController : AuthenticatedPortfolioControllerBase
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
         if (!TryEnvelope(out var envelope)) return Forbid();
-        if (!ValidKey(idempotencyKey, out var key)) return BadRequest();
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var key)) return BadRequest();
         var digest = Digest(key);
         var command = new MarkTechnicianAssignmentConversationReadCommand(envelope.PortfolioId,
             envelope.UserId, envelope.SessionId, envelope.AccessContextId, envelope.AccessRevision,
@@ -132,12 +132,6 @@ public sealed class TechnicianController : AuthenticatedPortfolioControllerBase
 
     private bool TryEnvelope(out RentalCommand.Core.Authorization.ActiveAccessContext envelope) =>
         TryGetActiveAccessContext(out envelope);
-
-    private static bool ValidKey(string? raw, out string key)
-    {
-        key = raw?.Trim() ?? string.Empty;
-        return key.Length is > 0 and <= 128;
-    }
 
     private static string Digest(string key) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key))).ToLowerInvariant();
