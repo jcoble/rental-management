@@ -43,6 +43,7 @@ class _ApplicationDetailScreenState
   String? _completeExternalOperationKey;
   String? _screeningDecisionOperationKey;
   String? _updateScreeningAgencyOperationKey;
+  String? _adverseActionOperationKey;
 
   int get _id => widget.applicationId;
 
@@ -449,11 +450,16 @@ class _ApplicationDetailScreenState
           .read(applicationsRepositoryProvider)
           .adverseAction(
             _id,
+            operationKey: _adverseActionOperationKey ??=
+                ApplicationsRepository.newOperationKey(),
             reason: result.reason.isEmpty ? null : result.reason,
             sendToApplicant: result.sendToApplicant,
           );
       if (!mounted) return;
-      setState(() => _adverseAction = notice);
+      setState(() {
+        _adverseAction = notice;
+        _adverseActionOperationKey = null;
+      });
       _snack(
         notice.sentAtUtc != null
             ? 'Adverse-action notice generated and sent.'

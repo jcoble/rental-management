@@ -1,4 +1,5 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -6,29 +7,29 @@ namespace RentalCommand.Api.Services.Domain;
 public interface IScreeningService
 {
     Task<ScreeningWorkspaceResponse?> GetWorkspaceAsync(
-        int portfolioId, int applicationId, CancellationToken ct = default);
+        WorkspaceReadScope scope, int applicationId, CancellationToken ct = default);
 
     Task<ApplicantScreeningResponse?> StartIntegratedAsync(
-        int portfolioId, int applicationId, int userId,
+        WorkspaceReadScope scope, int applicationId,
         StartIntegratedScreeningRequest request, CancellationToken ct = default);
 
     Task<ApplicantScreeningResponse?> TrackExternalAsync(
-        int portfolioId, int applicationId, int userId,
+        WorkspaceReadScope scope, int applicationId,
         TrackExternalScreeningRequest request, CancellationToken ct = default);
 
     Task<ApplicantScreeningResponse?> UpdateExternalAsync(
-        int portfolioId, int applicationId, int screeningId,
+        WorkspaceReadScope scope, int applicationId, int screeningId,
         UpdateExternalScreeningRequest request, CancellationToken ct = default);
 
     Task<ApplicantScreeningResponse?> RecordDecisionAsync(
-        int portfolioId, int applicationId, int screeningId, int userId,
+        WorkspaceReadScope scope, int applicationId, int screeningId,
         RecordScreeningDecisionRequest request, CancellationToken ct = default);
 
     Task<ApplicantScreeningResponse?> ApplyProviderDeliveryAsync(
         ScreeningProviderStatusDelivery delivery, CancellationToken ct = default);
 
     Task<AdverseActionNoticeResponse?> GenerateAdverseActionAsync(
-        int portfolioId, int applicationId, int userId,
+        WorkspaceReadScope scope, int applicationId,
         GenerateAdverseActionRequest request, CancellationToken ct = default);
 }
 
