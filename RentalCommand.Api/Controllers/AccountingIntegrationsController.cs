@@ -133,14 +133,24 @@ public class AccountingIntegrationsController : ManagementControllerBase
     [HttpPost("{provider}/disconnect")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<IActionResult> Disconnect(string provider, CancellationToken ct)
+    public async Task<IActionResult> Disconnect(
+        string provider,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
         if (!TryParseProvider(provider, out var parsed))
         {
             return BadRequest(new { error = $"Unknown accounting provider '{provider}'." });
         }
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+        {
+            return BadRequest(new
+            {
+                error = "Idempotency-Key is required and must be at most 128 characters.",
+            });
+        }
 
-        await _service.DisconnectAsync(GetPortfolioId(), parsed, ct);
+        await _service.DisconnectAsync(GetWorkspaceReadScope(), parsed, operationKey, ct);
         return NoContent();
     }
 
@@ -151,14 +161,23 @@ public class AccountingIntegrationsController : ManagementControllerBase
     public async Task<IActionResult> Direction(
         string provider,
         [FromBody] SetAccountingDirectionRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
         if (!TryParseProvider(provider, out var parsed))
         {
             return BadRequest(new { error = $"Unknown accounting provider '{provider}'." });
         }
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+        {
+            return BadRequest(new
+            {
+                error = "Idempotency-Key is required and must be at most 128 characters.",
+            });
+        }
 
-        await _service.SetDirectionAsync(GetPortfolioId(), parsed, request.PullEnabled, request.PushEnabled, ct);
+        await _service.SetDirectionAsync(
+            GetWorkspaceReadScope(), parsed, request.PullEnabled, request.PushEnabled, operationKey, ct);
         return NoContent();
     }
 

@@ -76,6 +76,9 @@ export interface AccountingReviewItem {
 export interface ProviderView {
 	status: AccountingConnectionStatus;
 	connectOperationId: string;
+	disconnectOperationId: string;
+	pullEnableOperationId: string;
+	pullDisableOperationId: string;
 	unconfirmedMappings: AccountingMapping[];
 	confirmedMappings: AccountingMapping[];
 	unconfirmedMappingsHasMore: boolean;
@@ -105,10 +108,16 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const providers = await Promise.all(
 		statusResult.data.map(async (status): Promise<ProviderView> => {
 			const isConnected = status.status === 'Connected' || status.status === 'NeedsReconnect';
+			const operationIds = {
+				connectOperationId: randomUUID(),
+				disconnectOperationId: randomUUID(),
+				pullEnableOperationId: randomUUID(),
+				pullDisableOperationId: randomUUID()
+			};
 			if (!isConnected) {
 				return {
 					status,
-					connectOperationId: randomUUID(),
+					...operationIds,
 					unconfirmedMappings: [],
 					confirmedMappings: [],
 					unconfirmedMappingsHasMore: false,
@@ -143,7 +152,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			const reviewQueue = reviewResult.data ?? [];
 			return {
 				status,
-				connectOperationId: randomUUID(),
+				...operationIds,
 				unconfirmedMappings: unconfirmed.slice(0, MAPPING_SECTION_SIZE),
 				confirmedMappings: confirmed.slice(0, MAPPING_SECTION_SIZE),
 				unconfirmedMappingsHasMore: unconfirmed.length > MAPPING_SECTION_SIZE,
@@ -191,12 +200,19 @@ export const actions: Actions = {
 		if (!locals.accessToken) {
 			return fail(401, { error: 'Your session has expired. Please sign in again.' });
 		}
-		const provider = (await request.formData()).get('provider')?.toString();
+		const form = await request.formData();
+		const provider = form.get('provider')?.toString();
+		const operationKey = form.get('operationKey')?.toString().trim();
 		if (!provider) {
 			return fail(400, { error: 'Missing provider.' });
 		}
+		if (!operationKey || operationKey.length > 128) {
+			return fail(400, { error: 'Missing or invalid operation key.' });
+		}
 
-		const result = await serverPost(`${BASE}/${provider}/disconnect`, locals.accessToken);
+		const result = await serverPost(`${BASE}/${provider}/disconnect`, locals.accessToken, undefined, {
+			headers: { 'Idempotency-Key': operationKey }
+		});
 		if (result.error) {
 			return fail(result.status || 400, { error: result.error });
 		}
@@ -209,16 +225,22 @@ export const actions: Actions = {
 		}
 		const form = await request.formData();
 		const provider = form.get('provider')?.toString();
+		const operationKey = form.get('operationKey')?.toString().trim();
 		if (!provider) {
 			return fail(400, { error: 'Missing provider.' });
+		}
+		if (!operationKey || operationKey.length > 128) {
+			return fail(400, { error: 'Missing or invalid operation key.' });
 		}
 		const pullEnabled = form.get('pullEnabled') === 'true';
 		const pushEnabled = form.get('pushEnabled') === 'true';
 
-		const result = await serverPost(`${BASE}/${provider}/direction`, locals.accessToken, {
-			pullEnabled,
-			pushEnabled
-		});
+		const result = await serverPost(
+			`${BASE}/${provider}/direction`,
+			locals.accessToken,
+			{ pullEnabled, pushEnabled },
+			{ headers: { 'Idempotency-Key': operationKey } }
+		);
 		if (result.error) {
 			return fail(result.status || 400, { error: result.error });
 		}

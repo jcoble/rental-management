@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import 'accounting_models.dart';
 
 /// Repository for the accounting endpoints.
@@ -67,6 +68,45 @@ class AccountingRepository {
         options: Options(responseType: ResponseType.bytes),
       );
       return Uint8List.fromList(response.data ?? const []);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Disconnects one provider. The retained operation key makes an ambiguous
+  /// transport failure safe to retry without replaying the lifecycle command.
+  Future<void> disconnectIntegration(String provider) async {
+    try {
+      await IdempotentMutation.run(
+        'accounting:disconnect:$provider',
+        (operationKey) => _dio.post<void>(
+          '/integrations/accounting/$provider/disconnect',
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        ),
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Updates both accounting directions as one atomic command.
+  Future<void> setIntegrationDirection(
+    String provider, {
+    required bool pullEnabled,
+    required bool pushEnabled,
+  }) async {
+    try {
+      await IdempotentMutation.run(
+        'accounting:direction:$provider:$pullEnabled:$pushEnabled',
+        (operationKey) => _dio.post<void>(
+          '/integrations/accounting/$provider/direction',
+          data: {
+            'pullEnabled': pullEnabled,
+            'pushEnabled': pushEnabled,
+          },
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        ),
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
