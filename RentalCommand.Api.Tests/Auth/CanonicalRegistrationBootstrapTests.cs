@@ -144,6 +144,49 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
         loggedIn.Tokens!.AccessToken.Should().Be("canonical-access");
     }
 
+    [Fact]
+    public async Task IdentitySeed_FirstCleanStartup_CreatesConfiguredWorkspaceOnce()
+    {
+        await _ctx.Db.Database.ExecuteSqlRawAsync(
+            "TRUNCATE TABLE \"Portfolios\", \"AspNetUsers\" RESTART IDENTITY CASCADE;");
+        var settings = new SeedSettings
+        {
+            Enabled = true,
+            AdminEmail = "admin@seed.test",
+            AdminPassword = "Admin123!",
+            AdminDisplayName = "Seed Administrator",
+            PortfolioName = "Configured Portfolio",
+            ManagementCompanyName = "Configured Management Company",
+        };
+        var seeder = new IdentitySeeder(
+            _users,
+            Options.Create(settings),
+            new CanonicalAccountBootstrapService(_users, _ctx.Db, TimeProvider.System),
+            NullLogger<IdentitySeeder>.Instance);
+
+        await ExecuteAsApiDatabaseIdentityAsync(async () =>
+        {
+            await seeder.SeedAsync();
+            return true;
+        });
+        await ExecuteAsApiDatabaseIdentityAsync(async () =>
+        {
+            await seeder.SeedAsync();
+            return true;
+        });
+
+        (await _ctx.Db.Users.AsNoTracking().CountAsync()).Should().Be(1);
+        var workspace = await _ctx.Db.Portfolios.AsNoTracking()
+            .Select(portfolio => new
+            {
+                portfolio.Name,
+                portfolio.ManagementCompanyName,
+            })
+            .SingleAsync();
+        workspace.Name.Should().Be(settings.PortfolioName);
+        workspace.ManagementCompanyName.Should().Be(settings.ManagementCompanyName);
+    }
+
     private async Task<T> ExecuteAsApiDatabaseIdentityAsync<T>(Func<Task<T>> action)
     {
         await _ctx.Db.Database.OpenConnectionAsync();

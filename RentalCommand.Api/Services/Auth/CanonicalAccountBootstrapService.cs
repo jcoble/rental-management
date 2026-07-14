@@ -15,6 +15,10 @@ public sealed record CanonicalAccountBootstrapResult(
     public bool Succeeded => User is not null;
 }
 
+public sealed record CanonicalWorkspaceBootstrapOptions(
+    string PortfolioName,
+    string ManagementCompanyName);
+
 public interface ICanonicalAccountBootstrapService
 {
     Task<CanonicalAccountBootstrapResult> CreateAsync(
@@ -22,6 +26,7 @@ public interface ICanonicalAccountBootstrapService
         string displayName,
         string? password,
         bool emailConfirmed,
+        CanonicalWorkspaceBootstrapOptions? workspace = null,
         CancellationToken ct = default);
 }
 
@@ -50,6 +55,7 @@ public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstra
         string displayName,
         string? password,
         bool emailConfirmed,
+        CanonicalWorkspaceBootstrapOptions? workspace = null,
         CancellationToken ct = default)
     {
         var normalizedEmail = _users.NormalizeEmail(email);
@@ -83,12 +89,18 @@ public sealed class CanonicalAccountBootstrapService : ICanonicalAccountBootstra
                 createResult.Errors.Select(error => error.Description).ToArray());
         }
 
-        var portfolioName = string.IsNullOrWhiteSpace(user.DisplayName)
+        var defaultPortfolioName = string.IsNullOrWhiteSpace(user.DisplayName)
             ? "My Portfolio"
             : $"{user.DisplayName}'s Portfolio";
-        var managementCompanyName = string.IsNullOrWhiteSpace(user.DisplayName)
+        var defaultManagementCompanyName = string.IsNullOrWhiteSpace(user.DisplayName)
             ? "My Company"
             : user.DisplayName;
+        var portfolioName = string.IsNullOrWhiteSpace(workspace?.PortfolioName)
+            ? defaultPortfolioName
+            : workspace.PortfolioName.Trim();
+        var managementCompanyName = string.IsNullOrWhiteSpace(workspace?.ManagementCompanyName)
+            ? defaultManagementCompanyName
+            : workspace.ManagementCompanyName.Trim();
         var ownerName = string.IsNullOrWhiteSpace(user.DisplayName)
             ? (user.Email?.Split('@')[0] ?? "Me (primary owner)")
             : user.DisplayName;

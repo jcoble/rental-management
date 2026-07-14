@@ -3,8 +3,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
-using RentalCommand.Core.Time;
-using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Auth;
 
@@ -16,26 +14,20 @@ namespace RentalCommand.Api.Services.Auth;
 public class IdentitySeeder
 {
     private readonly UserManager<ApplicationUser> _userManager;
-    private readonly RentalCommandDbContext _dbContext;
     private readonly SeedSettings _settings;
     private readonly ICanonicalAccountBootstrapService _accountBootstrap;
     private readonly ILogger<IdentitySeeder> _logger;
-    private readonly TimeProvider _timeProvider;
 
     public IdentitySeeder(
         UserManager<ApplicationUser> userManager,
-        RentalCommandDbContext dbContext,
         IOptions<SeedSettings> settings,
         ICanonicalAccountBootstrapService accountBootstrap,
-        ILogger<IdentitySeeder> logger,
-        TimeProvider timeProvider)
+        ILogger<IdentitySeeder> logger)
     {
         _userManager = userManager;
-        _dbContext = dbContext;
         _settings = settings.Value;
         _accountBootstrap = accountBootstrap;
         _logger = logger;
-        _timeProvider = timeProvider;
     }
 
     public async Task SeedAsync(CancellationToken ct = default)
@@ -58,7 +50,10 @@ public class IdentitySeeder
             _settings.AdminDisplayName,
             _settings.AdminPassword,
             emailConfirmed: true,
-            ct);
+            workspace: new CanonicalWorkspaceBootstrapOptions(
+                _settings.PortfolioName,
+                _settings.ManagementCompanyName),
+            ct: ct);
         if (!bootstrap.Succeeded || bootstrap.User is not { } seededUser
             || bootstrap.PortfolioId is not int portfolioId)
         {
@@ -69,11 +64,6 @@ public class IdentitySeeder
             return;
         }
 
-        var portfolio = await _dbContext.Portfolios.SingleAsync(row => row.Id == portfolioId, ct);
-        portfolio.Name = _settings.PortfolioName;
-        portfolio.ManagementCompanyName = _settings.ManagementCompanyName;
-        portfolio.UpdatedAt = _timeProvider.UtcNow();
-        await _dbContext.SaveChangesAsync(ct);
         _logger.LogInformation(
             "Seeded canonical administrator {Email} (id {UserId}) in workspace {PortfolioId}.",
             _settings.AdminEmail,
