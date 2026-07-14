@@ -222,8 +222,8 @@ public sealed class AtomicNotificationMutationHandler
         }
         await attempt.FlushBusinessAsync(ct);
         StageDataUpdate(attempt, command, nameof(TeamRoutingRule), rule.Id, now);
-        var response = await TeamRoutingResponseQuery(persistence, command.PortfolioId)
-            .SingleAsync(candidate => candidate.Id == rule.Id, ct);
+        var response = await TeamRoutingResponseQuery(persistence, command.PortfolioId, rule.Id)
+            .SingleAsync(ct);
         return Applied(rule.Id, JsonSerializer.Serialize(response));
     }
 
@@ -846,23 +846,63 @@ public sealed class AtomicNotificationMutationHandler
 
     private static IQueryable<TeamRoutingRuleResponse> TeamRoutingResponseQuery(
         IAtomicPersistenceSession persistence,
-        int portfolioId) =>
-        from rule in persistence.Query<TeamRoutingRule>().AsNoTracking()
-        where rule.PortfolioId == portfolioId
-        let recipientCount = rule.Recipients.Count()
-        let recipientNames = string.Join(", ", rule.Recipients.OrderBy(recipient => recipient.User!.DisplayName)
-            .ThenBy(recipient => recipient.UserId).Select(recipient => recipient.User!.DisplayName))
-        let explanations = string.Join(" ", rule.Recipients.OrderBy(recipient => recipient.User!.DisplayName)
-            .ThenBy(recipient => recipient.UserId)
-            .Select(recipient => recipient.User!.DisplayName + " receives this because " + recipient.Reason + "."))
-        select new TeamRoutingRuleResponse(rule.Id, rule.Topic, rule.PropertyId,
-            rule.PropertyId == null ? "All in-scope properties" : rule.Property!.Name,
-            rule.UseWorkspaceAdministratorFallback, recipientCount,
+        int portfolioId,
+        int ruleId) =>
+        from row in
+            (from rule in persistence.Query<TeamRoutingRule>().AsNoTracking()
+             join property in persistence.Query<Property>().AsNoTracking()
+                 on rule.PropertyId equals (int?)property.Id into properties
+             from property in properties.DefaultIfEmpty()
+             join recipient in persistence.Query<TeamRoutingRuleRecipient>().AsNoTracking()
+                 on new { RuleId = rule.Id, rule.PortfolioId }
+                 equals new { RuleId = recipient.TeamRoutingRuleId, recipient.PortfolioId } into recipients
+             from recipient in recipients.DefaultIfEmpty()
+             join user in persistence.Query<ApplicationUser>().AsNoTracking()
+                 on recipient.UserId equals user.Id into users
+             from user in users.DefaultIfEmpty()
+             where rule.PortfolioId == portfolioId && rule.Id == ruleId
+             select new
+             {
+                 rule.Id,
+                 rule.Topic,
+                 rule.PropertyId,
+                 PropertyName = property.Name,
+                 rule.UseWorkspaceAdministratorFallback,
+                 rule.UpdatedAtUtc,
+                 RecipientId = (int?)recipient.Id,
+                 RecipientUserId = (int?)recipient.UserId,
+                 RecipientName = user.DisplayName,
+                 RecipientReason = recipient.Reason,
+             })
+        group row by new
+        {
+            row.Id,
+            row.Topic,
+            row.PropertyId,
+            row.PropertyName,
+            row.UseWorkspaceAdministratorFallback,
+            row.UpdatedAtUtc,
+        }
+        into rule
+        let recipientCount = rule.Count(recipient => recipient.RecipientId != null)
+        let recipientNames = string.Join(", ", rule
+            .Where(recipient => recipient.RecipientId != null)
+            .OrderBy(recipient => recipient.RecipientName)
+            .ThenBy(recipient => recipient.RecipientUserId)
+            .Select(recipient => recipient.RecipientName!))
+        let explanations = string.Join(" ", rule
+            .Where(recipient => recipient.RecipientId != null)
+            .OrderBy(recipient => recipient.RecipientName)
+            .ThenBy(recipient => recipient.RecipientUserId)
+            .Select(recipient => recipient.RecipientName + " receives this because " + recipient.RecipientReason + "."))
+        select new TeamRoutingRuleResponse(rule.Key.Id, rule.Key.Topic, rule.Key.PropertyId,
+            rule.Key.PropertyId == null ? "All in-scope properties" : rule.Key.PropertyName!,
+            rule.Key.UseWorkspaceAdministratorFallback, recipientCount,
             recipientCount == 0 ? "No named recipients" : recipientNames,
-            recipientCount == 0 && rule.UseWorkspaceAdministratorFallback
+            recipientCount == 0 && rule.Key.UseWorkspaceAdministratorFallback
                 ? "No named recipient is assigned; active Workspace Administrators receive this topic."
                 : explanations,
-            rule.UpdatedAtUtc);
+            rule.Key.UpdatedAtUtc);
 
     private static IQueryable<TenantNoticePolicyResponse> TenantNoticePolicyResponseQuery(
         IAtomicPersistenceSession persistence,
