@@ -2,10 +2,13 @@ using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -21,14 +24,19 @@ public class TenantServiceTests : IDisposable
 
     private readonly List<string> _commands = [];
     private readonly SqliteTestContext _ctx;
+    private readonly ServiceProvider _services;
     private readonly TenantService _sut;
+    private readonly WorkspaceReadScope _scope;
 
     public TenantServiceTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
         SeedCanonicalLeaseReadModel();
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(TenantServiceTests));
+        _services = AtomicDomainTestKernel.CreateForCoreCrud(_ctx.ConnectionString);
         _sut = new TenantService(
-            _ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
+            _ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System,
+            _services.GetRequiredService<IAtomicUnitOfWork>());
     }
 
     private void SeedCanonicalLeaseReadModel()
@@ -108,6 +116,7 @@ public class TenantServiceTests : IDisposable
 
     public void Dispose()
     {
+        _services.Dispose();
         _ctx.Dispose();
     }
 
@@ -280,7 +289,8 @@ public class TenantServiceTests : IDisposable
     {
         var tenant = SeedTenantWithRelationship(occupying: true);
 
-        var act = async () => await _sut.DeleteAsync(PortfolioId, tenant.Id);
+        var act = async () => await _sut.DeleteAuthorizedAsync(
+            _scope, tenant.Id, Guid.NewGuid().ToString("N"));
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.Message.Should().Contain("current resident");
@@ -293,7 +303,8 @@ public class TenantServiceTests : IDisposable
     {
         var tenant = SeedTenantWithRelationship(occupying: false);
 
-        var act = async () => await _sut.DeleteAsync(PortfolioId, tenant.Id);
+        var act = async () => await _sut.DeleteAuthorizedAsync(
+            _scope, tenant.Id, Guid.NewGuid().ToString("N"));
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.StatusCode.Should().Be(409);
@@ -307,7 +318,8 @@ public class TenantServiceTests : IDisposable
     {
         var tenant = SeedTenant("Unlinked", "Tenant", activeRelationshipCount: 0);
 
-        var deleted = await _sut.DeleteAsync(PortfolioId, tenant.Id);
+        var deleted = await _sut.DeleteAuthorizedAsync(
+            _scope, tenant.Id, Guid.NewGuid().ToString("N"));
 
         deleted.Should().BeTrue();
         (await _sut.GetAsync(PortfolioId, tenant.Id)).Should().BeNull();

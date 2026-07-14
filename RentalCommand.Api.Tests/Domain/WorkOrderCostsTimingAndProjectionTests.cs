@@ -1,11 +1,13 @@
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -26,13 +28,14 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
 
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
+    private readonly ServiceProvider _services;
     private readonly WorkOrderService _workOrders;
     private readonly PropertyService _properties;
     private readonly WorkspaceReadScope _scope;
 
     public WorkOrderCostsTimingAndProjectionTests()
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
+        _conn = new SqliteConnection($"Data Source=work-order-costs-{Guid.NewGuid():N};Mode=Memory;Cache=Shared");
         _conn.Open();
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
@@ -55,6 +58,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         _db.SaveChanges();
 
         _scope = SeedAdministratorScope();
+        _services = AtomicDomainTestKernel.CreateForWorkOrders(_conn.ConnectionString);
 
         _workOrders = new WorkOrderService(
             _db,
@@ -62,7 +66,8 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
             new NoopMessagePublisher(),
             Mock.Of<IFileStorage>(),
             NullLogger<WorkOrderService>.Instance,
-            TimeProvider.System);
+            TimeProvider.System,
+            _services.GetRequiredService<IAtomicUnitOfWork>());
         _properties = new PropertyService(_db, new NoopDataUpdate(), TimeProvider.System);
     }
 
@@ -130,6 +135,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
 
     public void Dispose()
     {
+        _services.Dispose();
         _db.Dispose();
         _conn.Dispose();
     }
@@ -138,7 +144,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
     public async Task UpdateAsync_RoundTripsAllFiveCostsAndTimingFields()
     {
         var property = SeedProperty("Maple Court");
-        var created = await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
+        var created = await CreateAsync(new CreateWorkOrderRequest
         {
             PropertyId = property.Id,
             Title = "Leaky faucet",
@@ -151,7 +157,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         var scheduled = new DateTimeOffset(2026, 1, 10, 0, 0, 0, TimeSpan.Zero);
         var completed = new DateTime(2026, 1, 12, 0, 0, 0, DateTimeKind.Utc);
 
-        var updated = await _workOrders.UpdateAsync(PortfolioId, created!.Id, new UpdateWorkOrderRequest
+        var updated = await UpdateAsync(created!.Id, new UpdateWorkOrderRequest
         {
             RequestedAt = requested,
             ScheduledFor = scheduled,
@@ -175,7 +181,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
     {
         // Direct edit on a Completed order must work — there is deliberately no reopen workflow.
         var property = SeedProperty("Birch Lane");
-        var created = await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
+        var created = await CreateAsync(new CreateWorkOrderRequest
         {
             PropertyId = property.Id,
             Title = "Replace water heater",
@@ -183,7 +189,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
             Status = WorkOrderStatus.Completed,
         });
 
-        var updated = await _workOrders.UpdateAsync(PortfolioId, created!.Id, new UpdateWorkOrderRequest
+        var updated = await UpdateAsync(created!.Id, new UpdateWorkOrderRequest
         {
             ActualCost = 980.25m,
             CompletedAt = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc),
@@ -201,7 +207,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
     public async Task UpdateAsync_RejectsCompletedBeforeScheduled_WhenBothTimingFieldsAreSubmitted()
     {
         var property = SeedProperty("Sycamore Place");
-        var created = await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
+        var created = await CreateAsync(new CreateWorkOrderRequest
         {
             PropertyId = property.Id,
             Title = "Repair vanity leak",
@@ -209,7 +215,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
             Status = WorkOrderStatus.InProgress,
         });
 
-        var act = () => _workOrders.UpdateAsync(PortfolioId, created!.Id, new UpdateWorkOrderRequest
+        var act = () => UpdateAsync(created!.Id, new UpdateWorkOrderRequest
         {
             ScheduledFor = new DateTimeOffset(2026, 6, 24, 0, 0, 0, TimeSpan.Zero),
             CompletedAt = new DateTime(2026, 6, 23, 0, 0, 0, DateTimeKind.Utc),
@@ -223,7 +229,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
     public async Task UpdateAsync_RejectsCompletedBeforeExistingScheduled_WhenCompletionIsSubmitted()
     {
         var property = SeedProperty("Spruce Court");
-        var created = await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
+        var created = await CreateAsync(new CreateWorkOrderRequest
         {
             PropertyId = property.Id,
             Title = "Repair tub drain",
@@ -232,7 +238,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
             ScheduledFor = new DateTimeOffset(2026, 6, 24, 0, 0, 0, TimeSpan.Zero),
         });
 
-        var act = () => _workOrders.UpdateAsync(PortfolioId, created!.Id, new UpdateWorkOrderRequest
+        var act = () => UpdateAsync(created!.Id, new UpdateWorkOrderRequest
         {
             CompletedAt = new DateTime(2026, 6, 23, 0, 0, 0, DateTimeKind.Utc),
         });
@@ -250,7 +256,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         // Regression for BUG-1 (future-scheduled WO previously 400'd with a date the user never entered).
         var property = SeedProperty("Hawthorn Way");
         var futureVisit = new DateTimeOffset(2099, 1, 1, 0, 0, 0, TimeSpan.Zero);
-        var created = await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
+        var created = await CreateAsync(new CreateWorkOrderRequest
         {
             PropertyId = property.Id,
             Title = "Fix porch light",
@@ -260,7 +266,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         });
 
         var before = DateTime.UtcNow;
-        var updated = await _workOrders.UpdateAsync(PortfolioId, created!.Id, new UpdateWorkOrderRequest
+        var updated = await UpdateAsync(created!.Id, new UpdateWorkOrderRequest
         {
             Status = WorkOrderStatus.Completed,
         });
@@ -280,7 +286,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
     public async Task UpdateAsync_NullCostsAndTiming_LeaveExistingValuesUnchanged()
     {
         var property = SeedProperty("Cedar Ave");
-        var created = await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
+        var created = await CreateAsync(new CreateWorkOrderRequest
         {
             PropertyId = property.Id,
             Title = "Paint hallway",
@@ -291,7 +297,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         });
 
         // Only touch the title; every cost/timing field is null → unchanged.
-        await _workOrders.UpdateAsync(PortfolioId, created!.Id, new UpdateWorkOrderRequest
+        await UpdateAsync(created!.Id, new UpdateWorkOrderRequest
         {
             Title = "Paint upstairs hallway",
         });
@@ -310,7 +316,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         var tenant = SeedTenant("Maria", "Tenant");
         SeedActiveLease(property, tenant);
 
-        var created = await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
+        var created = await CreateAsync(new CreateWorkOrderRequest
         {
             PropertyId = property.Id,
             VendorId = vendor.Id,
@@ -337,7 +343,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         var vendor = SeedVendor("Rapid HVAC");
 
         // (a) Vendor assigned but NO dispatch ever sent → false (the BUG-2 case).
-        var assignedOnly = await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
+        var assignedOnly = await CreateAsync(new CreateWorkOrderRequest
         {
             PropertyId = property.Id,
             VendorId = vendor.Id,
@@ -347,7 +353,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         });
 
         // (b) Vendor assigned AND an OPEN (Dispatched) dispatch exists → true.
-        var dispatched = await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
+        var dispatched = await CreateAsync(new CreateWorkOrderRequest
         {
             PropertyId = property.Id,
             VendorId = vendor.Id,
@@ -358,7 +364,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         SeedDispatch(dispatched!.Id, vendor.Id, VendorDispatchStatus.Dispatched);
 
         // (c) A CLOSED (Completed) dispatch is not "open" → false.
-        var closed = await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
+        var closed = await CreateAsync(new CreateWorkOrderRequest
         {
             PropertyId = property.Id,
             VendorId = vendor.Id,
@@ -380,7 +386,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
     public async Task ListAsync_ProjectsPropertyName()
     {
         var property = SeedProperty("Pine Hollow");
-        await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
+        await CreateAsync(new CreateWorkOrderRequest
         {
             PropertyId = property.Id,
             Title = "Gutter cleaning",
@@ -433,6 +439,12 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         _db.SaveChanges();
         return property;
     }
+
+    private Task<WorkOrderResponse?> CreateAsync(CreateWorkOrderRequest request) =>
+        _workOrders.CreateAuthorizedAsync(_scope, request, Guid.NewGuid().ToString("N"));
+
+    private Task<WorkOrderResponse?> UpdateAsync(int id, UpdateWorkOrderRequest request) =>
+        _workOrders.UpdateAuthorizedAsync(_scope, id, request, Guid.NewGuid().ToString("N"));
 
     private Unit SeedUnit(int propertyId, string number)
     {

@@ -3,11 +3,13 @@ using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
 using RentalCommand.Core;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -33,12 +35,13 @@ public class ApplicationServiceTests : IDisposable
     private readonly RentalCommandDbContext _db;
     private readonly Mock<IFileStorage> _files = new();
     private readonly RecordingAuditService _audit = new();
+    private readonly ServiceProvider _services;
     private readonly ApplicationService _sut;
     private readonly WorkspaceReadScope _scope;
 
     public ApplicationServiceTests()
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
+        _conn = new SqliteConnection($"Data Source=application-{Guid.NewGuid():N};Mode=Memory;Cache=Shared");
         _conn.Open();
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
@@ -72,15 +75,17 @@ public class ApplicationServiceTests : IDisposable
         });
         _db.SaveChanges();
         _scope = _db.SeedAdministratorScope(PortfolioId, nameof(ApplicationServiceTests));
+        _services = AtomicDomainTestKernel.CreateForApplications(_conn.ConnectionString);
 
         _sut = new ApplicationService(
             _db, _files.Object, Mock.Of<IDataUpdateService>(), _audit,
             TimeProvider.System,
-            Mock.Of<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
+            _services.GetRequiredService<IAtomicUnitOfWork>());
     }
 
     public void Dispose()
     {
+        _services.Dispose();
         _db.Dispose();
         _conn.Dispose();
     }
@@ -315,6 +320,7 @@ public class ApplicationServiceTests : IDisposable
         result!.Status.Should().Be("Approved");
         result.TenantId.Should().BeGreaterThan(0);
 
+        _db.ChangeTracker.Clear();
         var tenant = await _db.Tenants.SingleAsync();
         tenant.Id.Should().Be(result.TenantId);
         tenant.PortfolioId.Should().Be(PortfolioId);
@@ -330,8 +336,9 @@ public class ApplicationServiceTests : IDisposable
         reloaded.ApprovedTenantId.Should().Be(tenant.Id);
 
         // The PII-touching approval is audited (a Tenant was created).
-        _audit.Calls.Should().Contain(c => c.entityType == "Tenant" && c.entityId == tenant.Id
-            && c.operation == AuditLogOperation.Created);
+        (await _db.AtomicAuditLogs.AsNoTracking().AnyAsync(c =>
+            c.EntityType == "Tenant" && c.EntityId == tenant.Id
+            && c.Operation == AuditLogOperation.Created)).Should().BeTrue();
     }
 
     [Fact]
@@ -438,8 +445,8 @@ public class ApplicationServiceTests : IDisposable
         _db.RentalApplications.Add(app);
         await _db.SaveChangesAsync();
 
-        var result = await _sut.UpdateAsync(
-            PortfolioId,
+        var result = await _sut.UpdateAuthorizedAsync(
+            _scope,
             app.Id,
             new UpdateApplicationRequest
             {
@@ -454,7 +461,8 @@ public class ApplicationServiceTests : IDisposable
                 ClearDesiredMoveInDate = true,
                 Notes = "Corrected by landlord",
             },
-            userId: 7);
+            userId: 7,
+            operationKey: Guid.NewGuid().ToString("N"));
 
         result.Should().NotBeNull();
         result!.FirstName.Should().Be("JESSE");
@@ -468,11 +476,13 @@ public class ApplicationServiceTests : IDisposable
         result.DesiredMoveInDate.Should().BeNull();
         result.Notes.Should().Be("Corrected by landlord");
 
+        _db.ChangeTracker.Clear();
         var reloaded = await _db.RentalApplications.SingleAsync(a => a.Id == app.Id);
         reloaded.Status.Should().Be(ApplicationStatus.Submitted);
         reloaded.UpdatedAt.Should().BeAfter(app.CreatedAt);
-        _audit.Calls.Should().Contain(c => c.entityType == "RentalApplication" && c.entityId == app.Id
-            && c.operation == AuditLogOperation.Updated);
+        (await _db.AtomicAuditLogs.AsNoTracking().AnyAsync(c =>
+            c.EntityType == "RentalApplication" && c.EntityId == app.Id
+            && c.Operation == AuditLogOperation.Updated)).Should().BeTrue();
     }
 
     [Fact]
@@ -491,11 +501,12 @@ public class ApplicationServiceTests : IDisposable
         _db.RentalApplications.Add(app);
         await _db.SaveChangesAsync();
 
-        var result = await _sut.UpdateAsync(
-            PortfolioId,
+        var result = await _sut.UpdateAuthorizedAsync(
+            _scope,
             app.Id,
             new UpdateApplicationRequest { LastName = "Corrected" },
-            userId: 7);
+            userId: 7,
+            operationKey: Guid.NewGuid().ToString("N"));
 
         result.Should().NotBeNull();
         result!.Status.Should().Be(ApplicationStatus.UnderReview.ToString());
@@ -530,11 +541,12 @@ public class ApplicationServiceTests : IDisposable
         _db.RentalApplications.Add(app);
         await _db.SaveChangesAsync();
 
-        var act = async () => await _sut.UpdateAsync(
-            PortfolioId,
+        var act = async () => await _sut.UpdateAuthorizedAsync(
+            _scope,
             app.Id,
             new UpdateApplicationRequest { PropertyId = foreignProperty.Id },
-            userId: 7);
+            userId: 7,
+            operationKey: Guid.NewGuid().ToString("N"));
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.Message.Should().Contain("Selected property was not found");
@@ -558,11 +570,12 @@ public class ApplicationServiceTests : IDisposable
         _db.RentalApplications.Add(app);
         await _db.SaveChangesAsync();
 
-        var act = async () => await _sut.UpdateAsync(
-            PortfolioId,
+        var act = async () => await _sut.UpdateAuthorizedAsync(
+            _scope,
             app.Id,
             new UpdateApplicationRequest { FirstName = "Changed" },
-            userId: 7);
+            userId: 7,
+            operationKey: Guid.NewGuid().ToString("N"));
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.Message.Should().Contain("Only submitted or under-review applications");
@@ -727,14 +740,16 @@ public class ApplicationServiceTests : IDisposable
         var deleted = await _sut.DeleteAuthorizedAsync(_scope, app.Id, 42, Guid.NewGuid().ToString("N"));
 
         deleted.Should().BeTrue();
+        _db.ChangeTracker.Clear();
         (await _sut.GetAsync(PortfolioId, app.Id)).Should().BeNull();
         var stored = await _db.RentalApplications
             .IgnoreQueryFilters()
             .SingleAsync(a => a.Id == app.Id);
         stored.DeletedAt.Should().NotBeNull();
         stored.UpdatedAt.Should().Be(stored.DeletedAt);
-        _audit.Calls.Should().Contain(c => c.entityType == "RentalApplication" && c.entityId == app.Id
-            && c.operation == AuditLogOperation.Deleted);
+        (await _db.AtomicAuditLogs.AsNoTracking().AnyAsync(c =>
+            c.EntityType == "RentalApplication" && c.EntityId == app.Id
+            && c.Operation == AuditLogOperation.Deleted)).Should().BeTrue();
     }
 
     private void SeedApplication(string firstName, string lastName, ApplicationStatus status)

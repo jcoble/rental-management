@@ -1,11 +1,14 @@
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -25,12 +28,14 @@ public class WorkOrderStatusTimelineTests : IDisposable
 
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
+    private readonly ServiceProvider _services;
     private readonly WorkOrderService _service;
     private readonly PortalService _portal;
+    private readonly WorkspaceReadScope _scope;
 
     public WorkOrderStatusTimelineTests()
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
+        _conn = new SqliteConnection($"Data Source=work-order-status-{Guid.NewGuid():N};Mode=Memory;Cache=Shared");
         _conn.Open();
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
@@ -50,17 +55,9 @@ public class WorkOrderStatusTimelineTests : IDisposable
             CreatedAt = now,
             UpdatedAt = now,
         });
-        _db.Users.Add(new ApplicationUser
-        {
-            Id = 1,
-            UserName = "work-order-tests@example.test",
-            NormalizedUserName = "WORK-ORDER-TESTS@EXAMPLE.TEST",
-            Email = "work-order-tests@example.test",
-            NormalizedEmail = "WORK-ORDER-TESTS@EXAMPLE.TEST",
-            DisplayName = "Work Order Test Actor",
-            CreatedAt = now,
-        });
         _db.SaveChanges();
+        _scope = _db.SeedAdministratorScope(PortfolioId, nameof(WorkOrderStatusTimelineTests));
+        _services = AtomicDomainTestKernel.CreateForWorkOrders(_conn.ConnectionString);
 
         _service = new WorkOrderService(
             _db,
@@ -68,12 +65,14 @@ public class WorkOrderStatusTimelineTests : IDisposable
             new NoopMessagePublisher(),
             Mock.Of<IFileStorage>(),
             NullLogger<WorkOrderService>.Instance,
-            TimeProvider.System);
+            TimeProvider.System,
+            _services.GetRequiredService<IAtomicUnitOfWork>());
         _portal = new PortalService(_db, new NoopLeaseQaService(), TimeProvider.System);
     }
 
     public void Dispose()
     {
+        _services.Dispose();
         _db.Dispose();
         _conn.Dispose();
     }
@@ -83,17 +82,14 @@ public class WorkOrderStatusTimelineTests : IDisposable
     {
         var property = SeedProperty();
 
-        var created = await _service.CreateAsync(
-            PortfolioId,
+        var created = await CreateAsync(
             new CreateWorkOrderRequest
             {
                 PropertyId = property.Id,
                 Title = "Leaky faucet",
                 Description = "Kitchen sink drips",
                 Status = WorkOrderStatus.New,
-            },
-            changedByUserId: 42,
-            changedByLabel: "Staff");
+            });
 
         created.Should().NotBeNull();
 
@@ -104,7 +100,7 @@ public class WorkOrderStatusTimelineTests : IDisposable
         events.Should().ContainSingle();
         events[0].FromStatus.Should().BeNull();
         events[0].ToStatus.Should().Be(WorkOrderStatus.New);
-        events[0].ChangedByUserId.Should().Be(42);
+        events[0].ChangedByUserId.Should().Be(_scope.UserId);
         events[0].ChangedByLabel.Should().Be("Staff");
     }
 
@@ -112,23 +108,18 @@ public class WorkOrderStatusTimelineTests : IDisposable
     public async Task UpdateAsync_AppendsFromToEvent_WhenStatusChanges()
     {
         var property = SeedProperty();
-        var created = await _service.CreateAsync(
-            PortfolioId,
+        var created = await CreateAsync(
             new CreateWorkOrderRequest
             {
                 PropertyId = property.Id,
                 Title = "Leaky faucet",
                 Description = "Kitchen sink drips",
                 Status = WorkOrderStatus.New,
-            },
-            changedByLabel: "Staff");
+            });
 
-        await _service.UpdateAsync(
-            PortfolioId,
+        await UpdateAsync(
             created!.Id,
-            new UpdateWorkOrderRequest { Status = WorkOrderStatus.InProgress, StatusNote = "Plumber on site" },
-            changedByUserId: 7,
-            changedByLabel: "Staff");
+            new UpdateWorkOrderRequest { Status = WorkOrderStatus.InProgress, StatusNote = "Plumber on site" });
 
         var events = await _db.WorkOrderStatusEvents.AsNoTracking()
             .Where(e => e.WorkOrderId == created.Id)
@@ -140,36 +131,31 @@ public class WorkOrderStatusTimelineTests : IDisposable
         change.FromStatus.Should().Be(WorkOrderStatus.New);
         change.ToStatus.Should().Be(WorkOrderStatus.InProgress);
         change.Note.Should().Be("Plumber on site");
-        change.ChangedByUserId.Should().Be(7);
+        change.ChangedByUserId.Should().Be(_scope.UserId);
     }
 
     [Fact]
     public async Task UpdateAsync_StampsCompletedAt_WhenStatusChangesToCompleted()
     {
         var property = SeedProperty();
-        var created = await _service.CreateAsync(
-            PortfolioId,
+        var created = await CreateAsync(
             new CreateWorkOrderRequest
             {
                 PropertyId = property.Id,
                 Title = "Sticky lock",
                 Description = "Front door lock sticks",
                 Status = WorkOrderStatus.InProgress,
-            },
-            changedByLabel: "Staff");
+            });
 
         var beforeUpdate = DateTime.UtcNow;
 
-        var updated = await _service.UpdateAsync(
-            PortfolioId,
+        var updated = await UpdateAsync(
             created!.Id,
             new UpdateWorkOrderRequest
             {
                 Status = WorkOrderStatus.Completed,
                 StatusNote = "Lock lubricated and verified with tenant.",
-            },
-            changedByUserId: 7,
-            changedByLabel: "Staff");
+            });
 
         var afterUpdate = DateTime.UtcNow;
 
@@ -188,8 +174,7 @@ public class WorkOrderStatusTimelineTests : IDisposable
     public async Task UpdateAsync_DoesNotAppendEvent_WhenStatusUnchanged()
     {
         var property = SeedProperty();
-        var created = await _service.CreateAsync(
-            PortfolioId,
+        var created = await CreateAsync(
             new CreateWorkOrderRequest
             {
                 PropertyId = property.Id,
@@ -198,8 +183,7 @@ public class WorkOrderStatusTimelineTests : IDisposable
                 Status = WorkOrderStatus.New,
             });
 
-        await _service.UpdateAsync(
-            PortfolioId,
+        await UpdateAsync(
             created!.Id,
             new UpdateWorkOrderRequest { Status = WorkOrderStatus.New });
 
@@ -211,8 +195,7 @@ public class WorkOrderStatusTimelineTests : IDisposable
     public async Task UpdateAsync_AppendsSameStatusEvent_WhenScheduleChanges()
     {
         var property = SeedProperty();
-        var created = await _service.CreateAsync(
-            PortfolioId,
+        var created = await CreateAsync(
             new CreateWorkOrderRequest
             {
                 PropertyId = property.Id,
@@ -222,12 +205,9 @@ public class WorkOrderStatusTimelineTests : IDisposable
             });
 
         var scheduledFor = new DateTimeOffset(2026, 7, 15, 9, 0, 0, TimeSpan.Zero);
-        await _service.UpdateAsync(
-            PortfolioId,
+        await UpdateAsync(
             created!.Id,
-            new UpdateWorkOrderRequest { ScheduledFor = scheduledFor },
-            changedByUserId: 7,
-            changedByLabel: "Staff");
+            new UpdateWorkOrderRequest { ScheduledFor = scheduledFor });
 
         var events = await _db.WorkOrderStatusEvents.AsNoTracking()
             .Where(e => e.WorkOrderId == created.Id)
@@ -239,15 +219,14 @@ public class WorkOrderStatusTimelineTests : IDisposable
         edit.FromStatus.Should().Be(WorkOrderStatus.Scheduled);
         edit.ToStatus.Should().Be(WorkOrderStatus.Scheduled);
         edit.Note.Should().Be("Schedule updated.");
-        edit.ChangedByUserId.Should().Be(7);
+        edit.ChangedByUserId.Should().Be(_scope.UserId);
     }
 
     [Fact]
     public async Task UpdateAsync_AppendsSameStatusEvent_WhenDetailsChange()
     {
         var property = SeedProperty();
-        var created = await _service.CreateAsync(
-            PortfolioId,
+        var created = await CreateAsync(
             new CreateWorkOrderRequest
             {
                 PropertyId = property.Id,
@@ -256,11 +235,9 @@ public class WorkOrderStatusTimelineTests : IDisposable
                 Status = WorkOrderStatus.New,
             });
 
-        await _service.UpdateAsync(
-            PortfolioId,
+        await UpdateAsync(
             created!.Id,
-            new UpdateWorkOrderRequest { Title = "Leaky kitchen faucet" },
-            changedByLabel: "Staff");
+            new UpdateWorkOrderRequest { Title = "Leaky kitchen faucet" });
 
         var events = await _db.WorkOrderStatusEvents.AsNoTracking()
             .Where(e => e.WorkOrderId == created.Id)
@@ -278,8 +255,7 @@ public class WorkOrderStatusTimelineTests : IDisposable
     public async Task UpdateAsync_RejectsTenant_WhenUnitChangesOutsideTenantLease()
     {
         var (property, occupiedUnit, otherUnit, tenant) = SeedPropertyWithTenantLease();
-        var created = await _service.CreateAsync(
-            PortfolioId,
+        var created = await CreateAsync(
             new CreateWorkOrderRequest
             {
                 PropertyId = property.Id,
@@ -290,36 +266,34 @@ public class WorkOrderStatusTimelineTests : IDisposable
                 Status = WorkOrderStatus.New,
             });
 
-        var act = async () => await _service.UpdateAsync(
-            PortfolioId,
+        var result = await UpdateAsync(
             created!.Id,
             new UpdateWorkOrderRequest { UnitId = otherUnit.Id });
 
-        var ex = await act.Should().ThrowAsync<DomainValidationException>();
-        ex.Which.Message.Should().Contain("tenant");
+        result.Should().BeNull("the atomic reference validation hides an incompatible tenant/unit combination");
+        (await _db.WorkOrders.AsNoTracking().SingleAsync(item => item.Id == created.Id)).UnitId
+            .Should().Be(occupiedUnit.Id);
     }
 
     [Fact]
     public async Task GetAsync_ReturnsTimelineOrderedOldestToNewest()
     {
         var property = SeedProperty();
-        var created = await _service.CreateAsync(
-            PortfolioId,
+        var created = await CreateAsync(
             new CreateWorkOrderRequest
             {
                 PropertyId = property.Id,
                 Title = "Leaky faucet",
                 Description = "Kitchen sink drips",
                 Status = WorkOrderStatus.New,
-            },
-            changedByLabel: "Staff");
+            });
 
-        await _service.UpdateAsync(PortfolioId, created!.Id,
-            new UpdateWorkOrderRequest { Status = WorkOrderStatus.Scheduled }, changedByLabel: "Staff");
-        await _service.UpdateAsync(PortfolioId, created.Id,
-            new UpdateWorkOrderRequest { Status = WorkOrderStatus.InProgress }, changedByLabel: "Staff");
-        await _service.UpdateAsync(PortfolioId, created.Id,
-            new UpdateWorkOrderRequest { Status = WorkOrderStatus.Completed }, changedByLabel: "Staff");
+        await UpdateAsync(created!.Id,
+            new UpdateWorkOrderRequest { Status = WorkOrderStatus.Scheduled });
+        await UpdateAsync(created.Id,
+            new UpdateWorkOrderRequest { Status = WorkOrderStatus.InProgress });
+        await UpdateAsync(created.Id,
+            new UpdateWorkOrderRequest { Status = WorkOrderStatus.Completed });
 
         var detail = await _service.GetAsync(PortfolioId, created.Id);
 
@@ -338,8 +312,7 @@ public class WorkOrderStatusTimelineTests : IDisposable
     public async Task PortalGetWorkOrderDetail_ReturnsTimeline_ForOwningTenant()
     {
         var (property, tenant) = SeedPropertyAndTenant();
-        var created = await _service.CreateAsync(
-            PortfolioId,
+        var created = await CreateAsync(
             new CreateWorkOrderRequest
             {
                 PropertyId = property.Id,
@@ -347,11 +320,10 @@ public class WorkOrderStatusTimelineTests : IDisposable
                 Title = "No hot water",
                 Description = "Water heater out",
                 Status = WorkOrderStatus.New,
-            },
-            changedByLabel: "Tenant");
+            });
 
-        await _service.UpdateAsync(PortfolioId, created!.Id,
-            new UpdateWorkOrderRequest { Status = WorkOrderStatus.InProgress }, changedByLabel: "Staff");
+        await UpdateAsync(created!.Id,
+            new UpdateWorkOrderRequest { Status = WorkOrderStatus.InProgress });
 
         var detail = await _portal.GetWorkOrderDetailAsync(PortfolioId, tenant.Id, created.Id);
 
@@ -365,8 +337,7 @@ public class WorkOrderStatusTimelineTests : IDisposable
     public async Task PortalGetWorkOrderDetail_ReturnsNull_ForAnotherTenantsWorkOrder()
     {
         var (property, tenant) = SeedPropertyAndTenant();
-        var created = await _service.CreateAsync(
-            PortfolioId,
+        var created = await CreateAsync(
             new CreateWorkOrderRequest
             {
                 PropertyId = property.Id,
@@ -374,14 +345,19 @@ public class WorkOrderStatusTimelineTests : IDisposable
                 Title = "No hot water",
                 Description = "Water heater out",
                 Status = WorkOrderStatus.New,
-            },
-            changedByLabel: "Tenant");
+            });
 
         var foreignTenantId = tenant.Id + 1000;
         var detail = await _portal.GetWorkOrderDetailAsync(PortfolioId, foreignTenantId, created!.Id);
 
         detail.Should().BeNull("a tenant may only read their own work order's timeline");
     }
+
+    private Task<WorkOrderResponse?> CreateAsync(CreateWorkOrderRequest request) =>
+        _service.CreateAuthorizedAsync(_scope, request, Guid.NewGuid().ToString("N"));
+
+    private Task<WorkOrderResponse?> UpdateAsync(int id, UpdateWorkOrderRequest request) =>
+        _service.UpdateAuthorizedAsync(_scope, id, request, Guid.NewGuid().ToString("N"));
 
     private Property SeedProperty()
     {
