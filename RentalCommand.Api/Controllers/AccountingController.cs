@@ -252,14 +252,27 @@ public class AccountingController : ManagementControllerBase
     [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.DataExport)]
     [ProducesResponseType(typeof(object), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(object), StatusCodes.Status400BadRequest)]
-    public async Task<IActionResult> EmailOwnerStatement(int ownerId, [FromQuery] int? year, CancellationToken ct)
+    public async Task<IActionResult> EmailOwnerStatement(
+        int ownerId,
+        [FromQuery] int? year,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
         var reportYear = year ?? _timeProvider.UtcNow().Year;
-        var result = await _ownerStatementEmail.SendOwnerStatementAsync(
-            GetWorkspaceReadScope(), ownerId, reportYear, ct);
-        if (!result.Sent)
-            return BadRequest(new { error = result.Reason });
-        return Ok(new { queued = true });
+        try
+        {
+            var result = await _ownerStatementEmail.SendOwnerStatementAsync(
+                GetWorkspaceReadScope(), ownerId, reportYear, operationKey, ct);
+            if (!result.Sent)
+                return BadRequest(new { error = result.Reason });
+            return Ok(new { queued = true });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
+        }
     }
 
     // ── CSV helpers ─────────────────────────────────────────────────────────────────────────────

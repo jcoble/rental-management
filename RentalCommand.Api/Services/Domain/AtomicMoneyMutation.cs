@@ -54,6 +54,7 @@ public sealed class AtomicMoneyMutationHandler
             AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
         await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
         var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        attempt.UseDatabaseWallClockForAudit(now);
         if (!await LiveAssignments(command, attempt.Persistence, now).AnyAsync(ct))
             throw Denied("Your workspace access changed. Refresh and try again.");
 
@@ -632,6 +633,17 @@ public sealed class AtomicMoneyMutationHandler
         AtomicMoneyMutationCommand command, IAtomicWriteAttempt attempt, DateTime now, CancellationToken ct)
     {
         var persistence = attempt.Persistence;
+        if (command.Operation == AtomicMoneyOperation.Create)
+        {
+            var create = Read<CreateOwnerDistributionRequest>(command);
+            await attempt.Locking.AcquireAsync(
+                AtomicLockResource.OwnerEntity, create.OwnerEntityId, ct);
+        }
+        else
+        {
+            await attempt.Locking.AcquireAsync(
+                AtomicLockResource.OwnerDistribution, command.EntityId, ct);
+        }
         var entity = command.Operation == AtomicMoneyOperation.Create ? null :
             await persistence.Query<OwnerDistribution>().SingleOrDefaultAsync(row =>
                 row.Id == command.EntityId && row.PortfolioId == command.PortfolioId && row.DeletedAt == null, ct);
@@ -640,8 +652,13 @@ public sealed class AtomicMoneyMutationHandler
             throw Denied("Owner distributions require workspace payout authority.");
         if (command.Operation == AtomicMoneyOperation.Delete)
         {
-            entity!.DeletedAt = now; entity.UpdatedAt = now;
-            await attempt.FlushBusinessAsync(ct); return Applied(entity.Id);
+            entity!.DeletedAt = now;
+            entity.UpdatedAt = now;
+            attempt.BindSemanticAudit(entity, Audit(command, nameof(OwnerDistribution),
+                AuditLogOperation.Deleted, $"Owner distribution {entity.Id} deleted"));
+            await attempt.FlushBusinessAsync(ct);
+            StageDataUpdate(attempt, command, nameof(OwnerDistribution), entity.Id, now, deleted: true);
+            return Applied(entity.Id);
         }
         if (command.Operation == AtomicMoneyOperation.Create)
         {
@@ -655,12 +672,15 @@ public sealed class AtomicMoneyMutationHandler
                 Method = request.Method, Memo = request.Memo, CreatedAt = now, UpdatedAt = now,
             };
             persistence.Add(entity);
+            attempt.BindSemanticAudit(entity, Audit(command, nameof(OwnerDistribution),
+                AuditLogOperation.Created, "Owner distribution recorded", entityId: 0));
         }
         else
         {
             var request = Read<UpdateOwnerDistributionRequest>(command);
             var current = entity!;
             var ownerId = request.OwnerEntityId ?? current.OwnerEntityId;
+            await attempt.Locking.AcquireAsync(AtomicLockResource.OwnerEntity, ownerId, ct);
             var propertyId = request.ClearProperty == true ? null : request.PropertyId ?? current.PropertyId;
             if (!await DistributionReferencesExistAsync(
                     command.PortfolioId, ownerId, propertyId, persistence, ct)) return Missing();
@@ -670,8 +690,14 @@ public sealed class AtomicMoneyMutationHandler
             if (request.Method.HasValue) current.Method = request.Method.Value;
             if (request.Memo is not null) current.Memo = request.Memo;
             current.UpdatedAt = now;
+            attempt.BindSemanticAudit(current, Audit(command, nameof(OwnerDistribution),
+                AuditLogOperation.Updated, $"Owner distribution {current.Id} updated"));
         }
-        await attempt.FlushBusinessAsync(ct); return Applied(entity!.Id);
+        await attempt.FlushBusinessAsync(ct);
+        var snapshot = await SnapshotOwnerDistributionAsync(
+            entity!.Id, command.PortfolioId, persistence, ct);
+        StageDataUpdate(attempt, command, nameof(OwnerDistribution), entity.Id, now, snapshot);
+        return Applied(entity.Id, snapshot);
     }
 
     private static async Task<string> SnapshotExpenseAsync(
@@ -710,6 +736,35 @@ public sealed class AtomicMoneyMutationHandler
         var response = await MoneyResponseProjection.RecurringExpenses(
                 persistence.Query<RecurringExpense>().AsNoTracking().Where(expense =>
                     expense.Id == entityId && expense.PortfolioId == portfolioId))
+            .SingleAsync(ct);
+        return JsonSerializer.Serialize(response);
+    }
+
+    private static async Task<string> SnapshotOwnerDistributionAsync(
+        int entityId,
+        int portfolioId,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        var response = await persistence.Query<OwnerDistribution>()
+            .AsNoTracking()
+            .Where(distribution =>
+                distribution.Id == entityId && distribution.PortfolioId == portfolioId)
+            .Select(distribution => new OwnerDistributionResponse
+            {
+                Id = distribution.Id,
+                PortfolioId = distribution.PortfolioId,
+                OwnerEntityId = distribution.OwnerEntityId,
+                OwnerName = distribution.OwnerEntity!.Name,
+                PropertyId = distribution.PropertyId,
+                PropertyName = distribution.Property == null ? null : distribution.Property.Name,
+                Date = distribution.Date,
+                Amount = distribution.Amount,
+                Method = distribution.Method,
+                Memo = distribution.Memo,
+                CreatedAt = distribution.CreatedAt,
+                UpdatedAt = distribution.UpdatedAt,
+            })
             .SingleAsync(ct);
         return JsonSerializer.Serialize(response);
     }

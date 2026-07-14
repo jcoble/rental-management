@@ -4,7 +4,6 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
-using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
@@ -14,21 +13,16 @@ namespace RentalCommand.Api.Services.Domain;
 /// <inheritdoc cref="IOwnerDistributionService"/>
 public class OwnerDistributionService : IOwnerDistributionService
 {
-    private const string EntityType = "OwnerDistribution";
-
     private readonly RentalCommandDbContext _db;
-    private readonly IDataUpdateService _dataUpdate;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork? _atomic;
+    private readonly IAtomicUnitOfWork _atomic;
 
     public OwnerDistributionService(
         RentalCommandDbContext db,
-        IDataUpdateService dataUpdate,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork? atomic = null)
+        IAtomicUnitOfWork atomic)
     {
         _db = db;
-        _dataUpdate = dataUpdate;
         _timeProvider = timeProvider;
         _atomic = atomic;
     }
@@ -131,157 +125,38 @@ public class OwnerDistributionService : IOwnerDistributionService
     }
 
     public async Task<OwnerDistributionResponse?> CreateAsync(
-        int portfolioId, CreateOwnerDistributionRequest request, CancellationToken ct = default)
-    {
-        if (!await _db.EnsureOwnerEntityInPortfolioAsync(portfolioId, request.OwnerEntityId, ct))
-            return null;
-
-        if (request.PropertyId is { } propertyId &&
-            !await PropertyBelongsToOwnerAsync(portfolioId, propertyId, request.OwnerEntityId, ct))
-            return null;
-
-        var now = _timeProvider.UtcNow();
-        var entity = new OwnerDistribution
-        {
-            PortfolioId = portfolioId,
-            OwnerEntityId = request.OwnerEntityId,
-            PropertyId = request.PropertyId,
-            Date = request.Date.ToUtc(),
-            Amount = request.Amount,
-            Method = request.Method,
-            Memo = request.Memo,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        _db.OwnerDistributions.Add(entity);
-        await _db.SaveChangesAsync(ct);
-
-        var response = await GetAsync(portfolioId, entity.Id, ct) ?? ProjectResponse(entity, ownerName: "", propertyName: null);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
-    }
-
-    public async Task<OwnerDistributionResponse?> CreateAsync(
         WorkspaceReadScope scope, CreateOwnerDistributionRequest request, string idempotencyKey, CancellationToken ct = default)
     {
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyDisbursementsManage,
             AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Create, 0, idempotencyKey, request);
-        var outcome = await Atomic.ExecuteAsync(
+        var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
-        if (!outcome.Value.Found) return null;
-        var response = await GetAsync(scope.PortfolioId, outcome.Value.EntityId, ct);
-        if (response is not null)
-            await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, response.Id, response, ct);
-        return response;
-    }
-
-    public async Task<OwnerDistributionResponse?> UpdateAsync(
-        int portfolioId, int id, UpdateOwnerDistributionRequest request, CancellationToken ct = default)
-    {
-        var entity = await _db.OwnerDistributions
-            .FirstOrDefaultAsync(d => d.Id == id && d.PortfolioId == portfolioId, ct);
-        if (entity is null)
-            return null;
-
-        var ownerEntityId = request.OwnerEntityId ?? entity.OwnerEntityId;
-        var propertyId = entity.PropertyId;
-        if (request.ClearProperty == true)
-            propertyId = null;
-        if (request.PropertyId.HasValue)
-            propertyId = request.PropertyId.Value;
-
-        if (request.OwnerEntityId.HasValue &&
-            !await _db.EnsureOwnerEntityInPortfolioAsync(portfolioId, request.OwnerEntityId.Value, ct))
-            return null;
-
-        if (propertyId.HasValue &&
-            !await PropertyBelongsToOwnerAsync(portfolioId, propertyId.Value, ownerEntityId, ct))
-            return null;
-
-        entity.OwnerEntityId = ownerEntityId;
-        entity.PropertyId = propertyId;
-        if (request.Date.HasValue) entity.Date = request.Date.Value.ToUtc();
-        if (request.Amount.HasValue) entity.Amount = request.Amount.Value;
-        if (request.Method.HasValue) entity.Method = request.Method.Value;
-        if (request.Memo != null) entity.Memo = request.Memo;
-        entity.UpdatedAt = _timeProvider.UtcNow();
-
-        await _db.SaveChangesAsync(ct);
-
-        var response = await GetAsync(portfolioId, entity.Id, ct) ?? ProjectResponse(entity, ownerName: "", propertyName: null);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
+        return outcome.Value.Found ? ReadSnapshot(outcome.Value) : null;
     }
 
     public async Task<OwnerDistributionResponse?> UpdateAsync(
         WorkspaceReadScope scope, int id, UpdateOwnerDistributionRequest request, string idempotencyKey, CancellationToken ct = default)
     {
-        if (await GetAsync(scope, id, ct) is null)
-            return null;
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyDisbursementsManage,
             AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Update, id, idempotencyKey, request);
-        var outcome = await Atomic.ExecuteAsync(
+        var outcome = await _atomic.ExecuteAsync(
             AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
-        if (!outcome.Value.Found) return null;
-        var response = await GetAsync(scope.PortfolioId, id, ct);
-        if (response is not null)
-            await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, id, response, ct);
-        return response;
-    }
-
-    public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
-    {
-        var entity = await _db.OwnerDistributions
-            .FirstOrDefaultAsync(d => d.Id == id && d.PortfolioId == portfolioId, ct);
-        if (entity is null)
-            return false;
-
-        var now = _timeProvider.UtcNow();
-        entity.DeletedAt = now;
-        entity.UpdatedAt = now;
-        await _db.SaveChangesAsync(ct);
-
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
-        return true;
+        return outcome.Value.Found ? ReadSnapshot(outcome.Value) : null;
     }
 
     public async Task<bool> DeleteAsync(
         WorkspaceReadScope scope, int id, string idempotencyKey, CancellationToken ct = default)
     {
-        var visible = await GetAsync(scope, id, ct) is not null;
         var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyDisbursementsManage,
             AtomicMoneyDomain.OwnerDistribution, AtomicMoneyOperation.Delete, id, idempotencyKey, new object());
-        AtomicCommandOutcome<AtomicMoneyMutationResult> outcome;
-        try
-        {
-            outcome = await Atomic.ExecuteAsync(
-                AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
-        }
-        catch (UnauthorizedAccessException) when (!visible)
-        {
-            return false;
-        }
-        if (outcome.Value.Applied)
-            await _dataUpdate.BroadcastEntityDeleteAsync(scope.PortfolioId, EntityType, id, ct);
-        return visible || outcome.Disposition == AtomicCommandDisposition.Replayed
-            ? outcome.Value.Found
-            : false;
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        return outcome.Value.Found;
     }
 
-    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
-        "Scoped owner-distribution mutations require the atomic persistence kernel.");
-
-    private async Task DemandDisbursementAuthorityAsync(WorkspaceReadScope scope, CancellationToken ct)
-    {
-        var allowed = await _db.AuthorizedAllPropertyAssignments(
-                scope, CapabilityKeys.MoneyDisbursementsManage,
-                CapabilityAuthorizationTargetKind.Workspace, _timeProvider.UtcNow())
-            .AnyAsync(ct);
-        if (!allowed)
-            throw new UnauthorizedAccessException(
-                "Owner distributions require workspace payout authority.");
-    }
+    private static OwnerDistributionResponse ReadSnapshot(AtomicMoneyMutationResult result) =>
+        System.Text.Json.JsonSerializer.Deserialize<OwnerDistributionResponse>(result.ResponseJson!)
+        ?? throw new InvalidOperationException("Atomic owner-distribution receipt did not contain a response snapshot.");
 
     private IQueryable<OwnerDistribution> BuildListQuery(int portfolioId, OwnerDistributionListQuery query)
         => BuildListQuery(_db.OwnerDistributions.AsNoTracking(), portfolioId, query);
@@ -360,36 +235,6 @@ public class OwnerDistributionService : IOwnerDistributionService
             CreatedAt = d.CreatedAt,
             UpdatedAt = d.UpdatedAt,
         });
-    }
-
-    private static OwnerDistributionResponse ProjectResponse(
-        OwnerDistribution entity, string ownerName, string? propertyName)
-    {
-        return new OwnerDistributionResponse
-        {
-            Id = entity.Id,
-            PortfolioId = entity.PortfolioId,
-            OwnerEntityId = entity.OwnerEntityId,
-            OwnerName = ownerName,
-            PropertyId = entity.PropertyId,
-            PropertyName = propertyName,
-            Date = entity.Date,
-            Amount = entity.Amount,
-            Method = entity.Method,
-            Memo = entity.Memo,
-            CreatedAt = entity.CreatedAt,
-            UpdatedAt = entity.UpdatedAt,
-        };
-    }
-
-    private Task<bool> PropertyBelongsToOwnerAsync(
-        int portfolioId, int propertyId, int ownerEntityId, CancellationToken ct)
-    {
-        return _db.Properties.AnyAsync(p =>
-            p.Id == propertyId &&
-            p.PortfolioId == portfolioId &&
-            p.OwnerEntityId == ownerEntityId,
-            ct);
     }
 
     private static (DateTime Start, DateTime End) YearRange(int year)

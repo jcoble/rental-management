@@ -169,6 +169,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Api.Services.Domain.AtomicMoneyMutationResult,
     RentalCommand.Api.Services.Domain.AtomicMoneyMutationHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.QueueOwnerStatementEmailCommand,
+    RentalCommand.Api.Services.Domain.QueueOwnerStatementEmailResult,
+    RentalCommand.Api.Services.Domain.QueueOwnerStatementEmailHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Auth.ChangePasswordCommand,
     RentalCommand.Core.Auth.ChangePasswordResult,
     RentalCommand.Data.Auth.ChangePasswordHandler>();

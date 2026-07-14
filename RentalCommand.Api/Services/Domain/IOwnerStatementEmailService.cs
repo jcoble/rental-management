@@ -15,5 +15,6 @@ public interface IOwnerStatementEmailService : RentalCommand.Core.Atomic.IAtomic
         WorkspaceReadScope scope,
         int ownerId,
         int year,
+        string idempotencyKey,
         CancellationToken ct = default);
 }

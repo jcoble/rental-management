@@ -7,7 +7,8 @@ const endpointSources = [
 	'./endpoints/expenses.ts',
 	'./endpoints/recurring-expenses.ts',
 	'./endpoints/loans.ts',
-	'./endpoints/owner-distributions.ts'
+	'./endpoints/owner-distributions.ts',
+	'./endpoints/owners.ts'
 ].map((path) => [path, readFileSync(new URL(path, import.meta.url), 'utf8')] as const);
 
 describe('idempotentMutation', () => {
