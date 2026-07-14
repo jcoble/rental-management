@@ -50,21 +50,43 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
     );
   }
 
+  Future<void> _showAssignments(
+    TeamMember member, {
+    required bool canManageTeam,
+    required bool isCurrentUser,
+  }) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (_) => _AssignmentsSheet(
+        member: member,
+        canManageTeam: canManageTeam,
+        isCurrentUser: isCurrentUser,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(teamProvider);
     final auth = ref.watch(authControllerProvider);
     final currentUserId = auth is AuthStateAuthenticated ? auth.user.id : null;
+    final canManageTeam =
+        auth is AuthStateAuthenticated && auth.hasCapability('team.manage');
 
     return Scaffold(
       appBar: AppBar(title: const Text('Team')),
       floatingActionButton: MobileQuickActionFab(
         heroTag: 'team-fab',
-        primaryAction: MobileQuickAction(
-          label: 'Add team member',
-          icon: Icons.person_add_outlined,
-          onPressed: _showCreateSheet,
-        ),
+        primaryAction: canManageTeam
+            ? MobileQuickAction(
+                label: 'Add team member',
+                icon: Icons.person_add_outlined,
+                onPressed: _showCreateSheet,
+              )
+            : null,
         onChat: () => openMobileAssistant(context),
         onRecord: () => openMobileRecord(context),
         onScan: () => openMobileScan(context),
@@ -83,6 +105,13 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                     Text(
                       'Give each person a clear job and only the rentals or assigned work they need.',
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Owners and tenants are managed from their relationship records, not as Team roles.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
                     ),
@@ -146,6 +175,13 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
                         member: page.items[index],
                         isCurrentUser:
                             page.items[index].userId == currentUserId,
+                        canManageTeam: canManageTeam,
+                        onViewAssignments: () => _showAssignments(
+                          page.items[index],
+                          canManageTeam: canManageTeam,
+                          isCurrentUser:
+                              page.items[index].userId == currentUserId,
+                        ),
                       ),
                     ),
                   ),
@@ -174,10 +210,17 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
 }
 
 class _MemberCard extends ConsumerStatefulWidget {
-  const _MemberCard({required this.member, required this.isCurrentUser});
+  const _MemberCard({
+    required this.member,
+    required this.isCurrentUser,
+    required this.canManageTeam,
+    required this.onViewAssignments,
+  });
 
   final TeamMember member;
   final bool isCurrentUser;
+  final bool canManageTeam;
+  final VoidCallback onViewAssignments;
 
   @override
   ConsumerState<_MemberCard> createState() => _MemberCardState();
@@ -280,16 +323,28 @@ class _MemberCardState extends ConsumerState<_MemberCard> {
             const SizedBox(height: 10),
             Align(
               alignment: Alignment.centerRight,
-              child: TextButton(
-                onPressed: widget.isCurrentUser || _saving
-                    ? null
-                    : _changeStatus,
-                child: _saving
-                    ? const SizedBox.square(
-                        dimension: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Text(member.isActive ? 'Suspend access' : 'Reactivate'),
+              child: Wrap(
+                spacing: 8,
+                children: [
+                  TextButton(
+                    onPressed: widget.onViewAssignments,
+                    child: const Text('Assignments'),
+                  ),
+                  if (widget.canManageTeam)
+                    TextButton(
+                      onPressed: widget.isCurrentUser || _saving
+                          ? null
+                          : _changeStatus,
+                      child: _saving
+                          ? const SizedBox.square(
+                              dimension: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Text(
+                              member.isActive ? 'Suspend access' : 'Reactivate',
+                            ),
+                    ),
+                ],
               ),
             ),
           ],
@@ -322,6 +377,689 @@ class _StatusChip extends StatelessWidget {
     );
   }
 }
+
+class _AssignmentsSheet extends ConsumerStatefulWidget {
+  const _AssignmentsSheet({
+    required this.member,
+    required this.canManageTeam,
+    required this.isCurrentUser,
+  });
+
+  final TeamMember member;
+  final bool canManageTeam;
+  final bool isCurrentUser;
+
+  @override
+  ConsumerState<_AssignmentsSheet> createState() => _AssignmentsSheetState();
+}
+
+class _AssignmentsSheetState extends ConsumerState<_AssignmentsSheet> {
+  static const _pageSize = 50;
+  final List<TeamAssignment> _items = [];
+  bool _loading = true;
+  bool _loadingMore = false;
+  int _totalCount = 0;
+  late int _accessRevision;
+  int? _savingAssignmentId;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _accessRevision = widget.member.accessRevision;
+    Future.microtask(() => _load(reset: true));
+  }
+
+  bool get _hasMore => _items.length < _totalCount;
+
+  Future<void> _load({required bool reset}) async {
+    setState(() {
+      if (reset) {
+        _loading = true;
+        _error = null;
+      } else {
+        _loadingMore = true;
+      }
+    });
+    try {
+      final page = await ref
+          .read(teamRepositoryProvider)
+          .listAssignments(
+            widget.member.accessContextId,
+            skip: reset ? 0 : _items.length,
+            take: _pageSize,
+          );
+      if (!mounted) return;
+      setState(() {
+        if (reset) _items.clear();
+        _items.addAll(page.items);
+        _totalCount = page.totalCount;
+      });
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _loadingMore = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _editAssignment({TeamAssignment? replacement}) async {
+    final draft = await showModalBottomSheet<_AssignmentDraft>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (_) => _AssignmentEditorSheet(replacement: replacement),
+    );
+    if (draft == null || !mounted) return;
+
+    setState(() => _savingAssignmentId = replacement?.assignmentId ?? -1);
+    try {
+      final repository = ref.read(teamRepositoryProvider);
+      final result = replacement == null
+          ? await repository.addAssignment(
+              accessContextId: widget.member.accessContextId,
+              expectedAccessRevision: _accessRevision,
+              roleProfileKey: draft.roleProfileKey,
+              scopeKind: draft.scopeKind,
+              selectedPropertyIds: draft.propertyIds,
+            )
+          : await repository.replaceAssignmentProperties(
+              accessContextId: widget.member.accessContextId,
+              assignmentId: replacement.assignmentId,
+              expectedAccessRevision: _accessRevision,
+              propertyIds: draft.propertyIds,
+            );
+      _accessRevision = result.accessRevision;
+      await _load(reset: true);
+      await ref.read(teamProvider.notifier).refresh();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              replacement == null
+                  ? 'Assignment added.'
+                  : 'Property scope replaced.',
+            ),
+          ),
+        );
+      }
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _savingAssignmentId = null);
+    }
+  }
+
+  Future<void> _endAssignment(TeamAssignment assignment) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('End assignment?'),
+        content: Text(
+          'End the ${assignment.roleProfileName} assignment now? The member keeps any other active assignments.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('End assignment'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _savingAssignmentId = assignment.assignmentId);
+    try {
+      final result = await ref
+          .read(teamRepositoryProvider)
+          .endAssignment(
+            accessContextId: widget.member.accessContextId,
+            assignmentId: assignment.assignmentId,
+            expectedAccessRevision: _accessRevision,
+          );
+      _accessRevision = result.accessRevision;
+      await _load(reset: true);
+      await ref.read(teamProvider.notifier).refresh();
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Assignment ended.')));
+      }
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _savingAssignmentId = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+
+    return SizedBox(
+      height: MediaQuery.sizeOf(context).height * .9,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 8, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${widget.member.displayName} assignments',
+                        style: theme.textTheme.titleLarge,
+                      ),
+                      Text(
+                        'Property scope is broader access. Assigned-work scope shows only specifically assigned work orders.',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: colors.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Close',
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Card.filled(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(
+                  'One person can hold several separately scoped assignments. Owners and tenants are relationship-based experiences, not Team jobs.',
+                  style: theme.textTheme.bodySmall,
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _error != null
+                ? _ErrorBody(
+                    message: _error!,
+                    onRetry: () => _load(reset: true),
+                  )
+                : _items.isEmpty
+                ? const Center(child: Text('No assignments yet.'))
+                : ListView.separated(
+                    padding: const EdgeInsets.all(16),
+                    itemCount: _items.length + (_hasMore ? 1 : 0),
+                    separatorBuilder: (_, _) => const SizedBox(height: 8),
+                    itemBuilder: (context, index) {
+                      if (index == _items.length) {
+                        return OutlinedButton(
+                          onPressed: _loadingMore
+                              ? null
+                              : () => _load(reset: false),
+                          child: _loadingMore
+                              ? const SizedBox.square(
+                                  dimension: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : Text(
+                                  'Load more (${_items.length} of $_totalCount)',
+                                ),
+                        );
+                      }
+                      final assignment = _items[index];
+                      final saving =
+                          _savingAssignmentId == assignment.assignmentId;
+                      final canReplacePropertyScope =
+                          assignment.roleProfileKey == 'property-manager' ||
+                          assignment.roleProfileKey == 'leasing-agent';
+                      return Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(14),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          assignment.roleProfileName,
+                                          style: theme.textTheme.titleSmall,
+                                        ),
+                                        Text(
+                                          _assignmentScopeLabel(assignment),
+                                          style: theme.textTheme.bodySmall
+                                              ?.copyWith(
+                                                color: colors.onSurfaceVariant,
+                                              ),
+                                        ),
+                                        Text(
+                                          _assignmentDates(assignment),
+                                          style: theme.textTheme.labelSmall
+                                              ?.copyWith(
+                                                color: colors.onSurfaceVariant,
+                                              ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  _AssignmentStatusChip(
+                                    status: assignment.status,
+                                  ),
+                                ],
+                              ),
+                              if (widget.canManageTeam &&
+                                  assignment.isActive) ...[
+                                const SizedBox(height: 8),
+                                Wrap(
+                                  spacing: 8,
+                                  children: [
+                                    if (canReplacePropertyScope)
+                                      OutlinedButton(
+                                        onPressed: saving
+                                            ? null
+                                            : () => _editAssignment(
+                                                replacement: assignment,
+                                              ),
+                                        child: const Text(
+                                          'Replace property scope',
+                                        ),
+                                      ),
+                                    OutlinedButton(
+                                      onPressed: widget.isCurrentUser || saving
+                                          ? null
+                                          : () => _endAssignment(assignment),
+                                      child: saving
+                                          ? const SizedBox.square(
+                                              dimension: 16,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                              ),
+                                            )
+                                          : const Text('End assignment'),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          if (widget.canManageTeam && widget.member.isActive)
+            SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: _savingAssignmentId == null
+                        ? () => _editAssignment()
+                        : null,
+                    icon: const Icon(Icons.add),
+                    label: const Text('Add assignment'),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AssignmentDraft {
+  const _AssignmentDraft({
+    required this.roleProfileKey,
+    required this.scopeKind,
+    required this.propertyIds,
+  });
+
+  final String roleProfileKey;
+  final String scopeKind;
+  final List<int> propertyIds;
+}
+
+class _AssignmentEditorSheet extends ConsumerStatefulWidget {
+  const _AssignmentEditorSheet({this.replacement});
+
+  final TeamAssignment? replacement;
+
+  @override
+  ConsumerState<_AssignmentEditorSheet> createState() =>
+      _AssignmentEditorSheetState();
+}
+
+class _AssignmentEditorSheetState
+    extends ConsumerState<_AssignmentEditorSheet> {
+  int _step = 0;
+  String? _roleKey;
+  String _scopeKind = 'SelectedProperties';
+  final Set<int> _propertyIds = {};
+
+  bool get _replacing => widget.replacement != null;
+  bool get _scopeValid =>
+      _scopeKind != 'SelectedProperties' || _propertyIds.isNotEmpty;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_replacing) {
+      _roleKey = widget.replacement!.roleProfileKey;
+      _scopeKind = 'SelectedProperties';
+    }
+    Future.microtask(() => ref.read(propertiesProvider.notifier).load());
+  }
+
+  List<String> _scopesFor(String roleKey) {
+    if (roleKey == 'workspace-administrator') return const ['AllProperties'];
+    if (roleKey == 'maintenance-technician') {
+      return const ['AssignedWorkOrders'];
+    }
+    return const ['SelectedProperties', 'AllProperties'];
+  }
+
+  void _chooseRole(TeamRoleProfile role) {
+    setState(() {
+      _roleKey = role.key;
+      _scopeKind = role.defaultScopeKind;
+      _propertyIds.clear();
+    });
+  }
+
+  void _submit() {
+    if (_roleKey == null || !_scopeValid) return;
+    Navigator.pop(
+      context,
+      _AssignmentDraft(
+        roleProfileKey: _roleKey!,
+        scopeKind: _scopeKind,
+        propertyIds: _propertyIds.toList()..sort(),
+      ),
+    );
+  }
+
+  Widget _propertySelector(BuildContext context) {
+    final properties = ref.watch(propertiesProvider);
+    final colors = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          _replacing
+              ? 'Choose the complete replacement property list. Existing selected properties will be removed.'
+              : _scopeDescription(_scopeKind),
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant),
+        ),
+        if (_scopeKind == 'SelectedProperties') ...[
+          const SizedBox(height: 8),
+          properties.when(
+            loading: () => const CircularProgressIndicator(),
+            error: (error, _) => Text(
+              error is ApiException ? error.message : error.toString(),
+              style: TextStyle(color: colors.error),
+            ),
+            data: (items) => Column(
+              children: [
+                for (final property in items)
+                  CheckboxListTile(
+                    value: _propertyIds.contains(property.id),
+                    onChanged: (checked) => setState(() {
+                      if (checked ?? false) {
+                        _propertyIds.add(property.id);
+                      } else {
+                        _propertyIds.remove(property.id);
+                      }
+                    }),
+                    title: Text(property.name),
+                    controlAffinity: ListTileControlAffinity.leading,
+                    contentPadding: EdgeInsets.zero,
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final roles = ref.watch(teamRoleProfilesProvider);
+    final colors = Theme.of(context).colorScheme;
+
+    return SizedBox(
+      height: MediaQuery.sizeOf(context).height * .86,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 8, 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _replacing
+                        ? 'Replace property scope'
+                        : 'Add another assignment',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Close',
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: _replacing
+                ? ListView(
+                    padding: const EdgeInsets.all(20),
+                    children: [
+                      Text(
+                        widget.replacement!.roleProfileName,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      _propertySelector(context),
+                      const SizedBox(height: 16),
+                      FilledButton(
+                        onPressed: _scopeValid ? _submit : null,
+                        child: const Text('Replace properties'),
+                      ),
+                    ],
+                  )
+                : Stepper(
+                    currentStep: _step,
+                    onStepTapped: (step) => setState(() => _step = step),
+                    controlsBuilder: (context, details) {
+                      final canContinue = _step == 0
+                          ? _roleKey != null
+                          : _scopeValid;
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 16),
+                        child: Row(
+                          children: [
+                            FilledButton(
+                              onPressed: !canContinue
+                                  ? null
+                                  : _step == 1
+                                  ? _submit
+                                  : () => setState(() => _step++),
+                              child: Text(
+                                _step == 1 ? 'Add assignment' : 'Continue',
+                              ),
+                            ),
+                            if (_step > 0) ...[
+                              const SizedBox(width: 8),
+                              TextButton(
+                                onPressed: () => setState(() => _step--),
+                                child: const Text('Back'),
+                              ),
+                            ],
+                          ],
+                        ),
+                      );
+                    },
+                    steps: [
+                      Step(
+                        title: const Text('Job'),
+                        subtitle: const Text('What will they do?'),
+                        isActive: _step >= 0,
+                        state: _step > 0
+                            ? StepState.complete
+                            : StepState.indexed,
+                        content: roles.when(
+                          loading: () => const CircularProgressIndicator(),
+                          error: (error, _) => Text(
+                            error is ApiException
+                                ? error.message
+                                : error.toString(),
+                            style: TextStyle(color: colors.error),
+                          ),
+                          data: (items) => RadioGroup<String>(
+                            groupValue: _roleKey,
+                            onChanged: (key) {
+                              if (key == null) return;
+                              _chooseRole(
+                                items.firstWhere((role) => role.key == key),
+                              );
+                            },
+                            child: Column(
+                              children: [
+                                for (final role in items)
+                                  RadioListTile<String>(
+                                    value: role.key,
+                                    title: Text(role.displayName),
+                                    subtitle: Text(role.description),
+                                    contentPadding: EdgeInsets.zero,
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      Step(
+                        title: const Text('Access'),
+                        subtitle: const Text('Where can they work?'),
+                        isActive: _step >= 1,
+                        content: Column(
+                          children: [
+                            RadioGroup<String>(
+                              groupValue: _scopeKind,
+                              onChanged: (value) {
+                                if (value == null) return;
+                                setState(() {
+                                  _scopeKind = value;
+                                  _propertyIds.clear();
+                                });
+                              },
+                              child: Column(
+                                children: [
+                                  for (final scope in _scopesFor(
+                                    _roleKey ?? '',
+                                  ))
+                                    RadioListTile<String>(
+                                      value: scope,
+                                      title: Text(_scopeLabel(scope)),
+                                      subtitle: Text(_scopeDescription(scope)),
+                                      contentPadding: EdgeInsets.zero,
+                                    ),
+                                ],
+                              ),
+                            ),
+                            _propertySelector(context),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AssignmentStatusChip extends StatelessWidget {
+  const _AssignmentStatusChip({required this.status});
+
+  final String status;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final active = status.toLowerCase() == 'active';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: active ? colors.primaryContainer : colors.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        status,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: active ? colors.onPrimaryContainer : colors.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+}
+
+String _assignmentScopeLabel(
+  TeamAssignment assignment,
+) => switch (assignment.scopeKind) {
+  'AllProperties' => 'All properties',
+  'AssignedWorkOrders' => 'Only assigned work orders',
+  _ =>
+    '${assignment.selectedPropertyCount} selected ${assignment.selectedPropertyCount == 1 ? 'property' : 'properties'}',
+};
+
+String _assignmentDates(TeamAssignment assignment) {
+  final started = _shortDate(assignment.effectiveFromUtc);
+  final ended = assignment.effectiveToUtc == null
+      ? ''
+      : ' · ended ${_shortDate(assignment.effectiveToUtc!)}';
+  return 'Started $started$ended';
+}
+
+String _shortDate(DateTime value) =>
+    '${value.toLocal().month}/${value.toLocal().day}/${value.toLocal().year}';
 
 class _CreateTeamMemberSheet extends ConsumerStatefulWidget {
   const _CreateTeamMemberSheet();

@@ -85,6 +85,82 @@ class TeamMemberPage {
   );
 }
 
+class TeamAssignment {
+  const TeamAssignment({
+    required this.assignmentId,
+    required this.roleProfileKey,
+    required this.roleProfileName,
+    required this.status,
+    required this.scopeKind,
+    required this.selectedPropertyCount,
+    required this.effectiveFromUtc,
+    required this.effectiveToUtc,
+  });
+
+  final int assignmentId;
+  final String roleProfileKey;
+  final String roleProfileName;
+  final String status;
+  final String scopeKind;
+  final int selectedPropertyCount;
+  final DateTime effectiveFromUtc;
+  final DateTime? effectiveToUtc;
+
+  bool get isActive => status.toLowerCase() == 'active';
+
+  factory TeamAssignment.fromJson(Map<String, dynamic> json) => TeamAssignment(
+    assignmentId: (json['assignmentId'] as num).toInt(),
+    roleProfileKey: json['roleProfileKey'] as String? ?? '',
+    roleProfileName: json['roleProfileName'] as String? ?? '',
+    status: json['status'] as String? ?? '',
+    scopeKind: json['scopeKind'] as String? ?? '',
+    selectedPropertyCount:
+        (json['selectedPropertyCount'] as num?)?.toInt() ?? 0,
+    effectiveFromUtc:
+        DateTime.tryParse(json['effectiveFromUtc'] as String? ?? '') ??
+        DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+    effectiveToUtc: DateTime.tryParse(json['effectiveToUtc'] as String? ?? ''),
+  );
+}
+
+class TeamAssignmentPage {
+  const TeamAssignmentPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<TeamAssignment> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+
+  bool get hasMore => skip + items.length < totalCount;
+
+  factory TeamAssignmentPage.fromJson(Map<String, dynamic> json) =>
+      TeamAssignmentPage(
+        items: (json['items'] as List<dynamic>? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(TeamAssignment.fromJson)
+            .toList(growable: false),
+        totalCount: (json['totalCount'] as num?)?.toInt() ?? 0,
+        skip: (json['skip'] as num?)?.toInt() ?? 0,
+        take: (json['take'] as num?)?.toInt() ?? 50,
+      );
+}
+
+class TeamMutationResult {
+  const TeamMutationResult({required this.accessRevision});
+
+  final int accessRevision;
+
+  factory TeamMutationResult.fromJson(Map<String, dynamic> json) =>
+      TeamMutationResult(
+        accessRevision: (json['accessRevision'] as num).toInt(),
+      );
+}
+
 class TeamRoleProfile {
   const TeamRoleProfile({
     required this.key,
@@ -169,6 +245,29 @@ class TeamRepository {
     }
   }
 
+  Future<TeamAssignmentPage> listAssignments(
+    int accessContextId, {
+    int skip = 0,
+    int take = 50,
+  }) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/team/members/$accessContextId/assignments',
+        queryParameters: {'skip': skip, 'take': take, 'sort': '-effectiveFrom'},
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return TeamAssignmentPage.fromJson(data);
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
   Future<CreateTeamMemberResult> createMembership({
     required String email,
     required String displayName,
@@ -213,6 +312,85 @@ class TeamRepository {
           'action': member.isActive ? 'Suspend' : 'Reactivate',
         },
       );
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<TeamMutationResult> addAssignment({
+    required int accessContextId,
+    required int expectedAccessRevision,
+    required String roleProfileKey,
+    required String scopeKind,
+    required List<int> selectedPropertyIds,
+  }) async {
+    final sortedPropertyIds = [...selectedPropertyIds]..sort();
+    return _assignmentMutation(
+      path: '/team/members/$accessContextId/assignments',
+      method: 'POST',
+      data: {
+        'expectedAccessRevision': expectedAccessRevision,
+        'roleProfileKey': roleProfileKey,
+        'scopeKind': scopeKind,
+        'selectedPropertyIds': sortedPropertyIds,
+        'effectiveFromUtc': DateTime.now().toUtc().toIso8601String(),
+      },
+    );
+  }
+
+  Future<TeamMutationResult> endAssignment({
+    required int accessContextId,
+    required int assignmentId,
+    required int expectedAccessRevision,
+  }) => _assignmentMutation(
+    path: '/team/members/$accessContextId/assignments/$assignmentId/end',
+    method: 'PATCH',
+    data: {
+      'expectedAccessRevision': expectedAccessRevision,
+      'effectiveToUtc': DateTime.now().toUtc().toIso8601String(),
+    },
+  );
+
+  Future<TeamMutationResult> replaceAssignmentProperties({
+    required int accessContextId,
+    required int assignmentId,
+    required int expectedAccessRevision,
+    required List<int> propertyIds,
+  }) async {
+    final sortedPropertyIds = [...propertyIds]..sort();
+    return _assignmentMutation(
+      path:
+          '/team/members/$accessContextId/assignments/$assignmentId/properties',
+      method: 'PUT',
+      data: {
+        'expectedAccessRevision': expectedAccessRevision,
+        'propertyIds': sortedPropertyIds,
+      },
+    );
+  }
+
+  Future<TeamMutationResult> _assignmentMutation({
+    required String path,
+    required String method,
+    required Map<String, dynamic> data,
+  }) async {
+    try {
+      final response = await _dio.request<Map<String, dynamic>>(
+        path,
+        options: Options(
+          method: method,
+          headers: {'Idempotency-Key': _uuid.v4()},
+        ),
+        data: data,
+      );
+      final value = response.data?['value'] as Map<String, dynamic>?;
+      if (value == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return TeamMutationResult.fromJson(value);
     } on DioException catch (error) {
       throw ApiException.fromDioException(error);
     }

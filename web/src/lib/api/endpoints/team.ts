@@ -25,6 +25,24 @@ export interface TeamMemberPage {
 	take: number;
 }
 
+export interface TeamAssignmentSummary {
+	assignmentId: number;
+	roleProfileKey: string;
+	roleProfileName: string;
+	status: string;
+	scopeKind: AssignmentScopeKind;
+	selectedPropertyCount: number;
+	effectiveFromUtc: string;
+	effectiveToUtc: string | null;
+}
+
+export interface TeamAssignmentPage {
+	items: TeamAssignmentSummary[];
+	totalCount: number;
+	skip: number;
+	take: number;
+}
+
 export interface TeamRoleProfile {
 	key: string;
 	displayName: string;
@@ -56,6 +74,15 @@ export interface AtomicTeamResponse<T> {
 	replayed: boolean;
 }
 
+export interface WorkspaceTeamMutationResult {
+	accessContextId: number;
+	workspaceMembershipId: number;
+	assignmentId: number | null;
+	accessRevision: number;
+	contextStatus: string;
+	membershipStatus: string;
+}
+
 function operation<T>(path: string, method: 'POST' | 'PATCH' | 'PUT', body: unknown) {
 	return fetchApi<T>(path, {
 		method,
@@ -71,6 +98,14 @@ export const team = {
 		if (params.sort) query.set('sort', params.sort);
 		return api.get<TeamMemberPage>(`/team/members?${query}`);
 	},
+	assignments: (accessContextId: number, params: { skip?: number; take?: number } = {}) => {
+		const query = new URLSearchParams({
+			skip: String(params.skip ?? 0),
+			take: String(params.take ?? 250),
+			sort: '-effectiveFrom'
+		});
+		return api.get<TeamAssignmentPage>(`/team/members/${accessContextId}/assignments?${query}`);
+	},
 	roleProfiles: () => api.get<TeamRoleProfile[]>('/team/role-profiles'),
 	createMembership: (body: CreateWorkspaceMembershipRequest) =>
 		operation<AtomicTeamResponse<CreateWorkspaceMembershipResult>>(
@@ -83,9 +118,46 @@ export const team = {
 		expectedAccessRevision: number,
 		action: MembershipStatusAction
 	) =>
-		operation<AtomicTeamResponse<unknown>>(
+		operation<AtomicTeamResponse<WorkspaceTeamMutationResult>>(
 			`/team/members/${accessContextId}/status`,
 			'PATCH',
 			{ expectedAccessRevision, action }
+		),
+	addAssignment: (
+		accessContextId: number,
+		body: {
+			expectedAccessRevision: number;
+			roleProfileKey: string;
+			scopeKind: AssignmentScopeKind;
+			selectedPropertyIds: number[];
+			effectiveFromUtc: string;
+		}
+	) =>
+		operation<AtomicTeamResponse<WorkspaceTeamMutationResult>>(
+			`/team/members/${accessContextId}/assignments`,
+			'POST',
+			body
+		),
+	endAssignment: (
+		accessContextId: number,
+		assignmentId: number,
+		expectedAccessRevision: number,
+		effectiveToUtc: string
+	) =>
+		operation<AtomicTeamResponse<WorkspaceTeamMutationResult>>(
+			`/team/members/${accessContextId}/assignments/${assignmentId}/end`,
+			'PATCH',
+			{ expectedAccessRevision, effectiveToUtc }
+		),
+	replaceAssignmentProperties: (
+		accessContextId: number,
+		assignmentId: number,
+		expectedAccessRevision: number,
+		propertyIds: number[]
+	) =>
+		operation<AtomicTeamResponse<WorkspaceTeamMutationResult>>(
+			`/team/members/${accessContextId}/assignments/${assignmentId}/properties`,
+			'PUT',
+			{ expectedAccessRevision, propertyIds }
 		)
 };
