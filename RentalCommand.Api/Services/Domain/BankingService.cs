@@ -1058,28 +1058,24 @@ public class BankingService : IBankingService
                 Reason = "Withdrawal amount and date line up with an expense.",
             };
 
-        // Deposits and withdrawals are disjoint by construction, so a transaction can never
-        // have candidates in both relations. Rank each relation before UNION ALL: EF/Npgsql can
-        // translate each GroupBy + ordered First into a ROW_NUMBER partition, while grouping the
-        // union itself is not translatable. The database still selects exactly one winner per bank
-        // line in one statement; no candidate rows cross the materialization boundary.
-        var rankedReceiptCandidates = receiptCandidates
-            .GroupBy(c => c.TransactionId)
-            .Select(g => g
-                .OrderByDescending(c => c.Confidence)
-                .ThenBy(c => c.EntityType)
-                .ThenBy(c => c.EntityId)
-                .First());
-
-        var rankedExpenseCandidates = expenseCandidates
-            .GroupBy(c => c.TransactionId)
-            .Select(g => g
-                .OrderByDescending(c => c.Confidence)
-                .ThenBy(c => c.EntityType)
-                .ThenBy(c => c.EntityId)
-                .First());
-
-        return rankedReceiptCandidates.Concat(rankedExpenseCandidates);
+        // Keep the set operation ahead of the final projection. EF/Npgsql cannot translate an
+        // ordered GroupBy winner on top of this UNION ALL, nor can it union two already-ranked
+        // projections. Correlating the union to each bank line translates to JOIN LATERAL with
+        // ORDER BY / LIMIT 1, so PostgreSQL selects the deterministic winner without materializing
+        // candidates in the application or issuing per-row queries.
+        var candidates = receiptCandidates.Concat(expenseCandidates);
+        return
+            from transaction in _db.BankTransactions.AsNoTracking()
+            where
+                transaction.PortfolioId == portfolioId &&
+                (transactionIds == null || transactionIds.Contains(transaction.Id))
+            from candidate in candidates
+                .Where(candidate => candidate.TransactionId == transaction.Id)
+                .OrderByDescending(candidate => candidate.Confidence)
+                .ThenBy(candidate => candidate.EntityType)
+                .ThenBy(candidate => candidate.EntityId)
+                .Take(1)
+            select candidate;
     }
 
     /// <summary>
