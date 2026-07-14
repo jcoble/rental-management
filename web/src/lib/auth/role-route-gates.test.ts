@@ -7,6 +7,10 @@ const protectedLayout = readFileSync(
 	'utf8'
 );
 const appShell = readFileSync(new URL('../components/AppShell.svelte', import.meta.url), 'utf8');
+const leasingListPage = readFileSync(
+	new URL('../components/leasing/LeasingListPage.svelte', import.meta.url),
+	'utf8'
+);
 const experiencePolicy = readFileSync(new URL('./experience-policy.ts', import.meta.url), 'utf8');
 const propertiesList = readFileSync(
 	new URL('../../routes/(protected)/properties/+page.svelte', import.meta.url),
@@ -52,4 +56,21 @@ test('property mutation controls use active-experience capability gates', () => 
 		propertyDetail,
 		/PropertyDispositionsSection propertyId=\{id\} canManage=\{canManageRentals\}/
 	);
+});
+
+test('rental collections keep owners in Rentals and leasing inbox uses canonical conversation state', () => {
+	const rentalsStart = appShell.indexOf("id: 'rentals'");
+	const workStart = appShell.indexOf("id: 'work'", rentalsStart);
+	const rentalsGroup = appShell.slice(rentalsStart, workStart);
+	const settingsStart = appShell.indexOf("const settingsGroup: NavGroup");
+	const settingsEnd = appShell.indexOf('const navGlyphByHref', settingsStart);
+	const settings = appShell.slice(settingsStart, settingsEnd);
+
+	assert.match(rentalsGroup, /href: '\/owners', label: 'Owners'/);
+	assert.doesNotMatch(settings, /href: '\/owners'/);
+	assert.match(
+		leasingListPage,
+		/kind === 'inbox'\) return `\/messages\?\$\{new URLSearchParams\(\{ conversation: String\(item\.id\) \}\)\}`/
+	);
+	assert.doesNotMatch(leasingListPage, /kind === 'inbox'\) return `\/messages\/\$\{item\.id\}`/);
 });
