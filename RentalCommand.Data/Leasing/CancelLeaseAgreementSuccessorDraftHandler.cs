@@ -17,6 +17,10 @@ public sealed class CancelLeaseAgreementSuccessorDraftHandler
     {
         Validate(command);
         await attempt.Locking.AcquireAsync(
+            AtomicLockResource.AuthSession, command.AuthSessionId, ct);
+        await attempt.Locking.AcquireAsync(
+            AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
+        await attempt.Locking.AcquireAsync(
             AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
 
         var nowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
@@ -41,16 +45,17 @@ public sealed class CancelLeaseAgreementSuccessorDraftHandler
                 "The successor Agreement draft has already been canceled.");
         }
 
-        if (agreement.ChangeType is not (LeaseAgreementChangeType.Correction
+        var isOrdinarySuccessor = agreement.ChangeType is (LeaseAgreementChangeType.Correction
                 or LeaseAgreementChangeType.Restatement
                 or LeaseAgreementChangeType.Renewal
                 or LeaseAgreementChangeType.MonthToMonth)
-            || (agreement.ReplacesAgreementId == null && agreement.RenewsAgreementId == null))
+            && (agreement.ReplacesAgreementId != null || agreement.RenewsAgreementId != null);
+        if (!isOrdinarySuccessor && agreement.ReissuesAgreementId == null)
         {
             return Error(
                 CancelLeaseAgreementSuccessorDraftOutcome.NotSuccessorDraft,
                 command,
-                "Only a correction, restatement, renewal, or month-to-month successor draft can be canceled.");
+                "Only a successor or reissue Agreement draft can be canceled.");
         }
 
         if (agreement.IssuedAtUtc != null || agreement.IssuedArtifactId != null

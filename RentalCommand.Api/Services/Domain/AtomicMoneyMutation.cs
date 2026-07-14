@@ -57,6 +57,11 @@ public sealed class AtomicMoneyMutationHandler
         attempt.UseDatabaseWallClockForAudit(now);
         if (!await LiveAssignments(command, attempt.Persistence, now).AnyAsync(ct))
             throw Denied("Your workspace access changed. Refresh and try again.");
+        if (RequiresDestructiveDisbursementAuthority(command) &&
+            !await HasDestructiveDisbursementAuthorityAsync(command, attempt.Persistence, now, ct))
+        {
+            throw Denied("Destructive disbursement authority is required.");
+        }
 
         return command.Domain switch
         {
@@ -86,7 +91,11 @@ public sealed class AtomicMoneyMutationHandler
         CancellationToken ct)
     {
         if (command.Domain == AtomicMoneyDomain.OwnerDistribution)
-            return await HasWorkspaceAuthorityAsync(command, persistence, now, ct);
+        {
+            return await HasWorkspaceAuthorityAsync(command, persistence, now, ct) &&
+                (!RequiresDestructiveDisbursementAuthority(command) ||
+                 await HasDestructiveDisbursementAuthorityAsync(command, persistence, now, ct));
+        }
 
         if (command.Domain == AtomicMoneyDomain.Expense)
         {
@@ -861,6 +870,22 @@ public sealed class AtomicMoneyMutationHandler
             assignment.RoleProfile!.Capabilities.Any(capability =>
                 capability.CapabilityDefinition!.Key == command.RequiredCapability &&
                 capability.CapabilityDefinition.AuthorizationTargetKind == CapabilityAuthorizationTargetKind.Workspace), ct);
+
+    private static bool RequiresDestructiveDisbursementAuthority(AtomicMoneyMutationCommand command) =>
+        command.Domain == AtomicMoneyDomain.OwnerDistribution &&
+        command.Operation == AtomicMoneyOperation.Delete;
+
+    private static Task<bool> HasDestructiveDisbursementAuthorityAsync(
+        AtomicMoneyMutationCommand command,
+        IAtomicPersistenceSession persistence,
+        DateTime now,
+        CancellationToken ct) =>
+        LiveAssignments(command, persistence, now).AnyAsync(assignment =>
+            assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties &&
+            assignment.RoleProfile!.Capabilities.Any(capability =>
+                capability.CapabilityDefinition!.Key == CapabilityKeys.MoneyReconciliationDestructive &&
+                capability.CapabilityDefinition.AuthorizationTargetKind ==
+                    CapabilityAuthorizationTargetKind.Workspace), ct);
 
     private static async Task<bool> HasPropertyAuthorityAsync(
         AtomicMoneyMutationCommand command, IAtomicPersistenceSession persistence, DateTime now,

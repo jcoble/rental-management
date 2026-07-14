@@ -65,6 +65,9 @@ public interface IConversationService
     Task<ConversationDetail?> PostMessageAuthorizedAsync(
         WorkspaceReadScope scope, int id, string body, List<string> channels, string operationKey,
         CancellationToken ct = default);
+    Task<ConversationDetail?> PostMessageAuthorizedForCapabilityAsync(
+        WorkspaceReadScope scope, int id, string body, List<string> channels, string operationKey,
+        string requiredCapabilityKey, CancellationToken ct = default);
 
     // --- Tenant ---
 

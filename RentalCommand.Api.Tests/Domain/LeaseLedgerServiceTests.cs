@@ -50,6 +50,20 @@ public sealed class LeaseLedgerServiceTests
     }
 
     [Fact]
+    public void Voided_issued_agreement_recovery_has_a_dedicated_idempotent_controller_route()
+    {
+        var method = typeof(LeaseAgreementController).GetMethod(
+            nameof(LeaseAgreementController.ReplaceIssuedAgreementWithDraft))!;
+
+        method.GetCustomAttribute<HttpPostAttribute>()!.Template.Should()
+            .Be("{sourceAgreementId:int}/issued-replacement-draft");
+        method.GetParameters().Single(parameter => parameter.Name == "idempotencyKey")
+            .GetCustomAttribute<FromHeaderAttribute>()!.Name.Should().Be("Idempotency-Key");
+        typeof(LeaseAgreementController).Should().BeDerivedFrom<ManagementControllerBase>(
+            "recovery must retain canonical management authorization and property scope");
+    }
+
+    [Fact]
     public void Canonical_relationship_page_and_detail_have_stable_routes()
     {
         typeof(LeaseManagementController).GetMethod(nameof(LeaseManagementController.ListPage))!

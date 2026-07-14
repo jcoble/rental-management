@@ -464,6 +464,9 @@ class LeaseAgreementHistory {
     this.correctionReason,
     this.replacesAgreementId,
     this.renewsAgreementId,
+    this.reissuesAgreementId,
+    this.reissueReason,
+    this.hasLiveReissue = false,
     this.termEndOn,
     this.issuedArtifact,
     this.executedArtifact,
@@ -488,6 +491,9 @@ class LeaseAgreementHistory {
   final String? correctionReason;
   final int? replacesAgreementId;
   final int? renewsAgreementId;
+  final int? reissuesAgreementId;
+  final String? reissueReason;
+  final bool hasLiveReissue;
   final LegalArtifactSummary? issuedArtifact;
   final LegalArtifactSummary? executedArtifact;
   final DateTime? issuedAt;
@@ -521,6 +527,9 @@ class LeaseAgreementHistory {
       correctionReason: json['correctionReason'] as String?,
       replacesAgreementId: (json['replacesAgreementId'] as num?)?.toInt(),
       renewsAgreementId: (json['renewsAgreementId'] as num?)?.toInt(),
+      reissuesAgreementId: (json['reissuesAgreementId'] as num?)?.toInt(),
+      reissueReason: json['reissueReason'] as String?,
+      hasLiveReissue: json['hasLiveReissue'] as bool? ?? false,
       issuedArtifact: artifact('issuedArtifact'),
       executedArtifact: artifact('executedArtifact'),
       issuedAt: _optionalDate(json['issuedAtUtc']),

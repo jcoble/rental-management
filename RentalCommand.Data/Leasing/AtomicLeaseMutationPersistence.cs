@@ -148,6 +148,32 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
         return DeserializeIds(row.CreatedSignerIdsJson);
     }
 
+    public async Task<IReadOnlyList<int>> CopyIssuedAgreementReplacementDraftSignersAsync(
+        int portfolioId,
+        int leaseManagementId,
+        int sourceAgreementId,
+        int replacementAgreementId,
+        CancellationToken ct = default)
+    {
+        var parameters = new NpgsqlParameter[]
+        {
+            Integer("portfolioId", portfolioId),
+            Integer("leaseManagementId", leaseManagementId),
+            Integer("sourceAgreementId", sourceAgreementId),
+            Integer("replacementAgreementId", replacementAgreementId),
+        };
+        using var lease = _auditScope.BeginInternalRawDml(
+            "LeaseAgreementSigners", AtomicRawDmlOperation.Insert);
+        var row = await _db.Database.SingleTopLevelResultAsync<AgreementSignerCopyRow>(
+            CopyIssuedAgreementReplacementDraftSignersSql, parameters, ct);
+        if (!row.Eligible)
+        {
+            throw new InvalidOperationException(
+                "Voided source or replacement Agreement changed before signer copy completed.");
+        }
+        return DeserializeIds(row.CreatedSignerIdsJson);
+    }
+
     public async Task<AtomicAddendumCorrectionChildCopyResult> CopyAddendumCorrectionChildrenAsync(
         int portfolioId,
         int leaseManagementId,
@@ -807,6 +833,54 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
                 ("PortfolioId", "LeaseAgreementId", "LeaseManagementPartyId", "TenantId",
                  "SignerRole", "NameSnapshot", "EmailSnapshot", "SigningOrder", "IsRequired")
             SELECT source."PortfolioId", eligible.successor_id, source."LeaseManagementPartyId",
+                   source."TenantId", source."SignerRole", source."NameSnapshot",
+                   source."EmailSnapshot", source."SigningOrder", source."IsRequired"
+            FROM "LeaseAgreementSigners" AS source
+            CROSS JOIN eligible
+            WHERE source."PortfolioId" = @portfolioId
+              AND source."LeaseAgreementId" = @sourceAgreementId
+            ORDER BY source."SigningOrder"
+            RETURNING "Id"
+        )
+        SELECT EXISTS (SELECT 1 FROM eligible) AS "Eligible",
+               COALESCE((SELECT jsonb_agg("Id" ORDER BY "Id") FROM inserted), '[]'::jsonb)::text
+                   AS "CreatedSignerIdsJson"
+        """;
+
+    private const string CopyIssuedAgreementReplacementDraftSignersSql = """
+        WITH eligible AS MATERIALIZED (
+            SELECT replacement."Id" AS replacement_id
+            FROM "LeaseAgreements" AS source
+            INNER JOIN "LeaseAgreements" AS replacement
+                ON replacement."Id" = @replacementAgreementId
+               AND replacement."PortfolioId" = @portfolioId
+               AND replacement."LeaseManagementId" = @leaseManagementId
+               AND replacement."ReissuesAgreementId" = source."Id"
+               AND replacement."ChangeType" = source."ChangeType"
+               AND replacement."TransferredFromAgreementId" IS NOT DISTINCT FROM source."TransferredFromAgreementId"
+               AND replacement."ReplacesAgreementId" IS NOT DISTINCT FROM source."ReplacesAgreementId"
+               AND replacement."RenewsAgreementId" IS NOT DISTINCT FROM source."RenewsAgreementId"
+               AND replacement."IssuedAtUtc" IS NULL
+               AND replacement."IssuedArtifactId" IS NULL
+               AND replacement."FullyExecutedAtUtc" IS NULL
+               AND replacement."ExecutedArtifactId" IS NULL
+               AND replacement."VoidedAtUtc" IS NULL
+               AND replacement."DraftCanceledAtUtc" IS NULL
+            WHERE source."Id" = @sourceAgreementId
+              AND source."PortfolioId" = @portfolioId
+              AND source."LeaseManagementId" = @leaseManagementId
+              AND source."IssuedAtUtc" IS NOT NULL
+              AND source."IssuedArtifactId" IS NOT NULL
+              AND source."FullyExecutedAtUtc" IS NULL
+              AND source."ExecutedArtifactId" IS NULL
+              AND source."VoidedAtUtc" IS NOT NULL
+              AND source."DraftCanceledAtUtc" IS NULL
+        ),
+        inserted AS (
+            INSERT INTO "LeaseAgreementSigners"
+                ("PortfolioId", "LeaseAgreementId", "LeaseManagementPartyId", "TenantId",
+                 "SignerRole", "NameSnapshot", "EmailSnapshot", "SigningOrder", "IsRequired")
+            SELECT source."PortfolioId", eligible.replacement_id, source."LeaseManagementPartyId",
                    source."TenantId", source."SignerRole", source."NameSnapshot",
                    source."EmailSnapshot", source."SigningOrder", source."IsRequired"
             FROM "LeaseAgreementSigners" AS source

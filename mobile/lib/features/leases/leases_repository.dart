@@ -1393,6 +1393,26 @@ class LeaseManagementsRepository {
     }
   }
 
+  Future<LeaseSuccessorDraftResult> replaceIssuedAgreementWithDraft({
+    required int leaseManagementId,
+    required int sourceAgreementId,
+    String? voidNote,
+    required String reissueReason,
+    required String operationKey,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/lease-managements/$leaseManagementId/agreements/'
+        '$sourceAgreementId/issued-replacement-draft',
+        data: {'voidNote': voidNote, 'reissueReason': reissueReason},
+        options: Options(headers: {'Idempotency-Key': operationKey}),
+      );
+      return LeaseSuccessorDraftResult.fromJson(_required(response.data));
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
   Future<CancelLeaseSuccessorDraftResult> cancelSuccessorDraft({
     required int leaseManagementId,
     required int leaseAgreementId,

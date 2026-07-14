@@ -10,6 +10,7 @@ import 'addendum_action_sheets.dart';
 import 'agreement_draft_action_sheets.dart';
 import 'ending_disposition_sheet.dart';
 import 'household_management_sheet.dart';
+import 'issued_agreement_recovery_sheet.dart';
 import 'lease_ledger_view.dart';
 import 'leases_repository.dart';
 import 'return_possession_sheet.dart';
@@ -694,6 +695,7 @@ class _AgreementHistoryCard extends ConsumerWidget {
                     '${_date(agreement.termStartOn)} – '
                     '${agreement.termEndOn == null ? 'Month-to-month' : _date(agreement.termEndOn!)}'
                     '${agreement.correctionReason == null ? '' : '\nReason: ${agreement.correctionReason}'}'
+                    '${agreement.reissueReason == null ? '' : '\nReissue: ${agreement.reissueReason}'}'
                     '${agreement.draftCancellationReason == null ? '' : '\nCanceled: ${agreement.draftCancellationReason}'}',
                   ),
                   isThreeLine: true,
@@ -744,7 +746,8 @@ class _AgreementHistoryCard extends ConsumerWidget {
                         label: const Text('Issue for signature'),
                       ),
                       if (agreement.replacesAgreementId != null ||
-                          agreement.renewsAgreementId != null)
+                          agreement.renewsAgreementId != null ||
+                          agreement.reissuesAgreementId != null)
                         OutlinedButton.icon(
                           onPressed: () =>
                               _cancelDraft(context, ref, agreement),
@@ -752,6 +755,23 @@ class _AgreementHistoryCard extends ConsumerWidget {
                           label: const Text('Cancel draft'),
                         ),
                     ],
+                  ),
+                if (canPrepare &&
+                    agreement.issuedArtifact != null &&
+                    agreement.fullyExecutedAt == null &&
+                    !agreement.hasLiveReissue)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: FilledButton.tonalIcon(
+                      onPressed: () =>
+                          _recoverIssuedAgreement(context, ref, agreement),
+                      icon: const Icon(Icons.restore_outlined),
+                      label: Text(
+                        agreement.voidedAt == null
+                            ? 'Void and replace'
+                            : 'Create replacement',
+                      ),
+                    ),
                   ),
                 if (canPrepare && agreement.isGoverning)
                   Wrap(
@@ -823,6 +843,41 @@ class _AgreementHistoryCard extends ConsumerWidget {
         fileName: artifact.fileName,
         mimeType: artifact.contentType,
       );
+    } catch (error) {
+      if (context.mounted) _showError(context, error);
+    }
+  }
+
+  Future<void> _recoverIssuedAgreement(
+    BuildContext context,
+    WidgetRef ref,
+    LeaseAgreementHistory agreement,
+  ) async {
+    final input = await showIssuedAgreementRecoverySheet(
+      context,
+      source: agreement,
+    );
+    if (input == null || !context.mounted) return;
+    final repository = ref.read(leaseManagementsRepositoryProvider);
+    try {
+      final created = await _runWithStableRetry(
+        context,
+        actionLabel: 'replace issued agreement with a draft',
+        action: () => repository.replaceIssuedAgreementWithDraft(
+          leaseManagementId: leaseManagementId,
+          sourceAgreementId: agreement.id,
+          voidNote: input.voidNote,
+          reissueReason: input.reissueReason,
+          operationKey: input.operationKey,
+        ),
+      );
+      if (created == null || !context.mounted) return;
+      await _refresh(context, ref);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Replacement agreement draft created.')),
+        );
+      }
     } catch (error) {
       if (context.mounted) _showError(context, error);
     }

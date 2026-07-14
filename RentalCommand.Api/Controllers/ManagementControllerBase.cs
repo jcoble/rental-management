@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -36,6 +37,25 @@ public abstract class ManagementControllerBase : AuthenticatedPortfolioControlle
             active.AccessContextId, active.AccessRevision);
         return true;
     }
+
+    protected bool TryReadManagementScope(out WorkspaceReadScope scope)
+    {
+        scope = default;
+        if (!TryGetActiveAccessContext(out var active) ||
+            active.LastAuthorizedExperience != WorkspaceExperience.Management)
+        {
+            return false;
+        }
+
+        scope = new WorkspaceReadScope(
+            active.PortfolioId, active.UserId, active.SessionId,
+            active.AccessContextId, active.AccessRevision);
+        return true;
+    }
+
+    protected bool IsManagementExperience() =>
+        TryGetActiveAccessContext(out var active) &&
+        active.LastAuthorizedExperience == WorkspaceExperience.Management;
 
     protected bool TryReadAccessContext(out LeaseManagementReadContext access)
     {

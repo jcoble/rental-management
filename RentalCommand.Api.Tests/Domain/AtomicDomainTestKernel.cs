@@ -71,6 +71,16 @@ internal static class AtomicDomainTestKernel
         return services.BuildServiceProvider();
     }
 
+    internal static ServiceProvider CreateForMoneyPostgreSql(string connectionString)
+    {
+        var services = CorePostgreSql(connectionString);
+        services.AddAtomicCommandHandler<
+            AtomicMoneyMutationCommand,
+            AtomicMoneyMutationResult,
+            AtomicMoneyMutationHandler>();
+        return services.BuildServiceProvider();
+    }
+
     internal static ServiceProvider CreateForInspectionsPostgreSql(string connectionString)
     {
         var services = CorePostgreSql(connectionString);

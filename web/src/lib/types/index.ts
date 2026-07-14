@@ -487,6 +487,9 @@ export interface LeaseAgreementSummary {
 	correctionReason?: string | null;
 	replacesAgreementId?: number | null;
 	renewsAgreementId?: number | null;
+	reissuesAgreementId?: number | null;
+	reissueReason?: string | null;
+	hasLiveReissue: boolean;
 	termType: string;
 	termStartOn: string;
 	termEndOn?: string | null;

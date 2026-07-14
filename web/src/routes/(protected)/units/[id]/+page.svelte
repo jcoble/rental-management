@@ -351,7 +351,7 @@
 								<Tabs.Trigger value="listing">Listing</Tabs.Trigger>
 								<Tabs.Trigger value="applications">Applications</Tabs.Trigger>
 							</Tabs.List>
-							<Tabs.Content value="listing" class="mt-4"><ListingTab {dashboard} /></Tabs.Content>
+							<Tabs.Content value="listing" class="mt-4"><ListingTab unitId={dashboard.unit.id} /></Tabs.Content>
 							<Tabs.Content value="applications" class="mt-4"><ApplicationsTab {dashboard} /></Tabs.Content>
 						</Tabs.Root>
 					</Tabs.Content>

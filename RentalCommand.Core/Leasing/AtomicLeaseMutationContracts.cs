@@ -196,6 +196,13 @@ public interface IAtomicLeaseMutationPersistence
         int successorAgreementId,
         CancellationToken ct = default);
 
+    Task<IReadOnlyList<int>> CopyIssuedAgreementReplacementDraftSignersAsync(
+        int portfolioId,
+        int leaseManagementId,
+        int sourceAgreementId,
+        int replacementAgreementId,
+        CancellationToken ct = default);
+
     Task<AtomicAddendumCorrectionChildCopyResult> CopyAddendumCorrectionChildrenAsync(
         int portfolioId,
         int leaseManagementId,

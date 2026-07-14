@@ -263,6 +263,49 @@ public sealed class LeaseAgreementController : ManagementControllerBase
             command, SuccessorCodec, StatusCodes.Status201Created, ct);
     }
 
+    [HttpPost("{sourceAgreementId:int}/issued-replacement-draft")]
+    [ProducesResponseType(typeof(LeaseAgreementDraftMutationResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> ReplaceIssuedAgreementWithDraft(
+        int leaseManagementId,
+        int sourceAgreementId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] ReplaceIssuedAgreementWithDraftRequest request,
+        CancellationToken ct)
+    {
+        if (!TryPrepare(idempotencyKey, out var envelope, out var error)) return error!;
+        if (string.IsNullOrWhiteSpace(request.ReissueReason)
+            || request.ReissueReason.Trim().Length > 1000
+            || (request.VoidNote?.Trim().Length ?? 0) > 2000)
+        {
+            return BadRequest(new
+            {
+                error = "ReissueReason is required and cannot exceed 1,000 characters; VoidNote cannot exceed 2,000 characters.",
+            });
+        }
+
+        var command = new ReplaceIssuedAgreementWithDraftCommand(
+            envelope.PortfolioId,
+            leaseManagementId,
+            sourceAgreementId,
+            request.VoidNote,
+            request.ReissueReason,
+            envelope.UserId,
+            envelope.SessionId,
+            envelope.AccessContextId,
+            envelope.AccessRevision,
+            $"agreement-issued-replacement:{envelope.PortfolioId}:{leaseManagementId}:{sourceAgreementId}:{envelope.KeyDigest}");
+        return await Execute(
+            "lease-agreement.issued-replacement-draft.create",
+            $"{envelope.PortfolioId}:{leaseManagementId}:{sourceAgreementId}:{envelope.KeyDigest}",
+            command,
+            SuccessorCodec,
+            StatusCodes.Status201Created,
+            ct);
+    }
+
     [HttpPost("{leaseAgreementId:int}/cancel-draft")]
     [ProducesResponseType(typeof(CancelLeaseAgreementSuccessorDraftResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -444,7 +487,8 @@ public sealed class LeaseAgreementController : ManagementControllerBase
             {
                 LeaseAgreementDraftMutationOutcome.StaleDraftRevision
                     or LeaseAgreementDraftMutationOutcome.DraftNotEditable
-                    or LeaseAgreementDraftMutationOutcome.SourceAgreementNotCurrent =>
+                    or LeaseAgreementDraftMutationOutcome.SourceAgreementNotCurrent
+                    or LeaseAgreementDraftMutationOutcome.SourceAgreementNotRecoverable =>
                     Conflict(new { error = outcome.Value.Error }),
                 LeaseAgreementDraftMutationOutcome.InvalidTerms
                     or LeaseAgreementDraftMutationOutcome.InvalidSigners

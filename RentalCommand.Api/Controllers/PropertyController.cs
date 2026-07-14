@@ -25,7 +25,7 @@ public class PropertyController : ManagementControllerBase
     [ProducesResponseType(typeof(IReadOnlyList<PropertyResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<PropertyResponse>>> List([FromQuery] PropertyListQuery query, CancellationToken ct)
     {
-        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        if (!TryReadManagementScope(out var scope)) return Forbid();
         var items = await _service.ListAsync(scope, query, ct);
         return Ok(items);
     }
@@ -34,7 +34,7 @@ public class PropertyController : ManagementControllerBase
     [ProducesResponseType(typeof(PropertyListResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<PropertyListResponse>> ListPage([FromQuery] PropertyListQuery query, CancellationToken ct)
     {
-        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        if (!TryReadManagementScope(out var scope)) return Forbid();
         var result = await _service.ListPageAsync(scope, query, ct);
         return Ok(result);
     }
@@ -44,7 +44,7 @@ public class PropertyController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<PropertyResponse>> Get(int id, CancellationToken ct)
     {
-        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        if (!TryReadManagementScope(out var scope)) return Forbid();
         var item = await _service.GetAsync(scope, id, ct);
         return item == null ? NotFound(new { error = "Property not found" }) : Ok(item);
     }
@@ -57,7 +57,7 @@ public class PropertyController : ManagementControllerBase
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
-        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        if (!TryReadManagementScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
             return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
         var created = await _service.CreateAsync(scope, request, operationKey, ct);
@@ -75,7 +75,7 @@ public class PropertyController : ManagementControllerBase
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
-        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        if (!TryReadManagementScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
             return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
         var updated = await _service.UpdateAsync(scope, id, request, operationKey, ct);
@@ -90,7 +90,7 @@ public class PropertyController : ManagementControllerBase
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
-        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        if (!TryReadManagementScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
             return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
         var deleted = await _service.DeleteAsync(scope, id, operationKey, ct);

@@ -20,6 +20,10 @@ public sealed class EditLeaseAgreementDraftHandler
         LeaseAgreementDraftCommandSupport.ValidateAuthorizationShape(command);
         LeaseAgreementDraftCommandSupport.ValidateEditShape(command);
         await attempt.Locking.AcquireAsync(
+            AtomicLockResource.AuthSession, command.AuthSessionId, ct);
+        await attempt.Locking.AcquireAsync(
+            AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
+        await attempt.Locking.AcquireAsync(
             AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
 
         var nowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
@@ -157,6 +161,10 @@ public sealed class CreateLeaseAgreementSuccessorDraftHandler
     {
         LeaseAgreementDraftCommandSupport.ValidateAuthorizationShape(command);
         LeaseAgreementDraftCommandSupport.ValidateSuccessorShape(command);
+        await attempt.Locking.AcquireAsync(
+            AtomicLockResource.AuthSession, command.AuthSessionId, ct);
+        await attempt.Locking.AcquireAsync(
+            AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
         await attempt.Locking.AcquireAsync(
             AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
 
@@ -380,6 +388,207 @@ public sealed class CreateLeaseAgreementSuccessorDraftHandler
 
     public Task AuthorizeReplayAsync(
         CreateLeaseAgreementSuccessorDraftCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct) =>
+        LeaseAgreementDraftCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+}
+
+public sealed class ReplaceIssuedAgreementWithDraftHandler
+    : IAtomicCommandHandler<ReplaceIssuedAgreementWithDraftCommand, LeaseAgreementDraftMutationResult>,
+      IAtomicReplayAuthorizer<ReplaceIssuedAgreementWithDraftCommand>
+{
+    public async Task<LeaseAgreementDraftMutationResult> HandleAsync(
+        ReplaceIssuedAgreementWithDraftCommand command,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        LeaseAgreementDraftCommandSupport.ValidateAuthorizationShape(command);
+        LeaseAgreementDraftCommandSupport.ValidateIssuedReplacementShape(command);
+        await attempt.Locking.AcquireAsync(
+            AtomicLockResource.AuthSession, command.AuthSessionId, ct);
+        await attempt.Locking.AcquireAsync(
+            AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
+        await attempt.Locking.AcquireAsync(
+            AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
+
+        var nowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var target = await LeaseAgreementDraftCommandSupport.AuthorizedRelationships(
+                command, attempt.Persistence, nowUtc)
+            .SelectMany(relationship => relationship.Agreements)
+            .Select(agreement => new
+            {
+                Agreement = agreement,
+                ActivePossessionDependsOnAgreement = agreement.LeaseManagement!.PossessionGivenAtUtc != null
+                    && agreement.LeaseManagement.PossessionReturnedAtUtc == null
+                    && attempt.Persistence.Query<LeaseAgreementStatusProjection>().Any(status =>
+                        status.PortfolioId == command.PortfolioId
+                        && status.AgreementId == agreement.Id
+                        && status.LeaseManagementId == command.LeaseManagementId
+                        && status.IsGoverning),
+                ActiveAddendaDependOnAgreement = agreement.Addenda.Any(addendum =>
+                    addendum.FullyExecutedAtUtc != null && addendum.VoidedAtUtc == null
+                    && addendum.DraftCanceledAtUtc == null),
+                HasUnreversedPostedMoney = attempt.Persistence.Query<TenantLedgerEntry>().Any(entry =>
+                        entry.PortfolioId == command.PortfolioId && entry.LeaseAgreementId == agreement.Id
+                        && entry.ReversesEntryId == null && !entry.ReversalEntries.Any())
+                    || attempt.Persistence.Query<SecurityDepositEntry>().Any(entry =>
+                        entry.PortfolioId == command.PortfolioId && entry.LeaseAgreementId == agreement.Id
+                        && entry.ReversesEntryId == null && !entry.ReversalEntries.Any()),
+            })
+            .SingleOrDefaultAsync(candidate =>
+                candidate.Agreement.Id == command.SourceAgreementId
+                && candidate.Agreement.PortfolioId == command.PortfolioId, ct)
+            ?? throw LeaseAgreementDraftCommandSupport.Unauthorized();
+        var source = target.Agreement;
+
+        if (source.IssuedAtUtc == null || source.IssuedArtifactId == null
+            || source.FullyExecutedAtUtc != null || source.ExecutedArtifactId != null
+            || source.DraftCanceledAtUtc != null)
+        {
+            return LeaseAgreementDraftCommandSupport.Error(
+                LeaseAgreementDraftMutationOutcome.SourceAgreementNotRecoverable,
+                command,
+                0,
+                0,
+                0,
+                "The source must be an issued, never-executed Agreement with preserved issuance evidence.");
+        }
+
+        if (source.VoidedAtUtc == null && target.ActivePossessionDependsOnAgreement)
+        {
+            return LeaseAgreementDraftCommandSupport.Error(
+                LeaseAgreementDraftMutationOutcome.SourceAgreementNotRecoverable,
+                command, 0, 0, 0,
+                "Return possession or execute a governing replacement before voiding this Agreement.");
+        }
+        if (source.VoidedAtUtc == null && target.ActiveAddendaDependOnAgreement)
+        {
+            return LeaseAgreementDraftCommandSupport.Error(
+                LeaseAgreementDraftMutationOutcome.SourceAgreementNotRecoverable,
+                command, 0, 0, 0,
+                "Every executed Addendum attached to this Agreement must be voided or superseded first.");
+        }
+        if (source.VoidedAtUtc == null && target.HasUnreversedPostedMoney)
+        {
+            return LeaseAgreementDraftCommandSupport.Error(
+                LeaseAgreementDraftMutationOutcome.SourceAgreementNotRecoverable,
+                command, 0, 0, 0,
+                "Reverse every unresolved ledger/deposit effect before voiding this Agreement.");
+        }
+
+        var existingSuccessor = await attempt.Persistence.Query<LeaseAgreement>()
+            .AnyAsync(candidate =>
+                candidate.PortfolioId == command.PortfolioId
+                && candidate.LeaseManagementId == command.LeaseManagementId
+                && candidate.ReissuesAgreementId == source.Id
+                && candidate.DraftCanceledAtUtc == null
+                && (candidate.VoidedAtUtc == null || candidate.FullyExecutedAtUtc != null),
+                ct);
+        if (existingSuccessor)
+        {
+            return LeaseAgreementDraftCommandSupport.Error(
+                LeaseAgreementDraftMutationOutcome.SourceAgreementNotRecoverable,
+                command,
+                0,
+                0,
+                0,
+                "The issued Agreement already has a successor version.");
+        }
+
+        if (source.VoidedAtUtc == null)
+        {
+            source.VoidedAtUtc = nowUtc;
+            source.VoidReasonCode = "ISSUED_AGREEMENT_REPLACED";
+            source.VoidNote = command.VoidNote?.Trim();
+            source.UpdatedAtUtc = nowUtc;
+            attempt.BindSemanticAudit(source, LeaseAgreementDraftCommandSupport.Updated(
+                command, source.Id, "Voided issued Agreement while atomically creating its replacement draft."));
+            await LegalArtifactCommandSupport.VoidOpenPacketAsync(
+                command.PortfolioId, source.Id, null, command.ActorUserId, nowUtc, attempt, ct);
+        }
+
+        var nextVersion = await attempt.Persistence.Query<LeaseAgreement>()
+            .Where(candidate =>
+                candidate.PortfolioId == command.PortfolioId
+                && candidate.LeaseManagementId == command.LeaseManagementId)
+            .MaxAsync(candidate => candidate.VersionNumber, ct) + 1;
+
+        var replacement = new LeaseAgreement
+        {
+            PortfolioId = command.PortfolioId,
+            LeaseManagementId = command.LeaseManagementId,
+            VersionNumber = nextVersion,
+            AgreementNumber = $"AGR-{command.LeaseManagementId:D8}-V{nextVersion}",
+            ChangeType = source.ChangeType,
+            CorrectionReason = source.CorrectionReason,
+            TransferredFromAgreementId = source.TransferredFromAgreementId,
+            ReplacesAgreementId = source.ReplacesAgreementId,
+            RenewsAgreementId = source.RenewsAgreementId,
+            ReissuesAgreementId = source.Id,
+            ReissueReason = command.ReissueReason.Trim(),
+            TermType = source.TermType,
+            TermStartOn = source.TermStartOn,
+            TermEndOn = source.TermEndOn,
+            GoverningFromOn = source.GoverningFromOn,
+            BaseRentAmount = source.BaseRentAmount,
+            RentDueDay = source.RentDueDay,
+            SecurityDepositObligation = source.SecurityDepositObligation,
+            LateFeeAmount = source.LateFeeAmount,
+            GracePeriodDays = source.GracePeriodDays,
+            Currency = source.Currency,
+            TermsSchemaVersion = source.TermsSchemaVersion,
+            TermsPayload = source.TermsPayload,
+            DocumentSourceVersionId = source.DocumentSourceVersionId,
+            CreatedAtUtc = nowUtc,
+            CreatedByUserId = command.ActorUserId,
+            UpdatedAtUtc = nowUtc,
+            DraftRevision = 1,
+        };
+        attempt.Persistence.Add(replacement);
+        attempt.BindSemanticAudit(replacement, LeaseAgreementDraftCommandSupport.Created(
+            command,
+            $"Created reissue draft from voided issued Agreement {source.Id}; preserved source artifact {source.IssuedArtifactId} as immutable history."));
+        await attempt.FlushBusinessAsync(ct);
+
+        var signerIds = await attempt.Leasing.CopyIssuedAgreementReplacementDraftSignersAsync(
+            command.PortfolioId,
+            command.LeaseManagementId,
+            source.Id,
+            replacement.Id,
+            ct);
+        foreach (var signerId in signerIds)
+        {
+            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+                command.PortfolioId,
+                nameof(LeaseAgreementSigner),
+                signerId,
+                AuditLogOperation.Created,
+                UserId: command.ActorUserId,
+                ChangeReason: "Copied the immutable issued signer snapshot into a recovery Agreement draft."),
+                nowUtc);
+        }
+        LeaseAgreementDraftCommandSupport.StageOutbox(
+            attempt,
+            command,
+            nowUtc,
+            replacement.Id,
+            "issued-agreement-replaced-with-draft");
+
+        return new(
+            LeaseAgreementDraftMutationOutcome.Applied,
+            command.LeaseManagementId,
+            replacement.Id,
+            replacement.VersionNumber,
+            replacement.DraftRevision,
+            source.Id,
+            signerIds,
+            Array.Empty<int>(),
+            Array.Empty<int>(),
+            null);
+    }
+
+    public Task AuthorizeReplayAsync(
+        ReplaceIssuedAgreementWithDraftCommand command,
         IAtomicPersistenceSession persistence,
         CancellationToken ct) =>
         LeaseAgreementDraftCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
@@ -627,6 +836,19 @@ internal static class LeaseAgreementDraftCommandSupport
         }
     }
 
+    internal static void ValidateIssuedReplacementShape(
+        ReplaceIssuedAgreementWithDraftCommand command)
+    {
+        if (command.SourceAgreementId <= 0
+            || string.IsNullOrWhiteSpace(command.ReissueReason)
+            || command.ReissueReason.Trim().Length > 1000
+            || (command.VoidNote?.Trim().Length ?? 0) > 2000)
+        {
+            throw new ArgumentException(
+                "Source Agreement, bounded void evidence, and a reissue reason of at most 1,000 characters are required.");
+        }
+    }
+
     private static bool ValidTerms(LeaseAgreementTermType termType, DateOnly start, DateOnly? end,
         DateOnly governing, decimal rent, short dueDay, decimal deposit, decimal lateFee, short grace) =>
         Enum.IsDefined(termType) && start != default && governing >= start
@@ -708,7 +930,12 @@ internal static class LeaseAgreementDraftCommandSupport
         LeaseAgreementDraftMutationOutcome outcome, ILeaseAgreementDraftCommand command,
         int agreementId, int version, int revision, string error) => new(
         outcome, command.LeaseManagementId, agreementId, version, revision,
-        command is CreateLeaseAgreementSuccessorDraftCommand successor ? successor.SourceAgreementId : null,
+        command switch
+        {
+            CreateLeaseAgreementSuccessorDraftCommand successor => successor.SourceAgreementId,
+            ReplaceIssuedAgreementWithDraftCommand replacement => replacement.SourceAgreementId,
+            _ => null,
+        },
         Array.Empty<int>(), Array.Empty<int>(), Array.Empty<int>(), error);
 
     internal static UnauthorizedAccessException Unauthorized() => new(

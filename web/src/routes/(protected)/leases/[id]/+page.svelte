@@ -17,6 +17,7 @@
 	import AddendumCreateDialog from '$lib/components/leases/AddendumCreateDialog.svelte';
 	import AddendumDraftDialog from '$lib/components/leases/AddendumDraftDialog.svelte';
 	import AgreementDraftDialog from '$lib/components/leases/AgreementDraftDialog.svelte';
+	import AgreementIssuedRecoveryDialog from '$lib/components/leases/AgreementIssuedRecoveryDialog.svelte';
 	import AgreementSignatureProgress from '$lib/components/leases/AgreementSignatureProgress.svelte';
 	import AgreementSuccessorDialog from '$lib/components/leases/AgreementSuccessorDialog.svelte';
 	import EndingDispositionDialog from '$lib/components/leases/EndingDispositionDialog.svelte';
@@ -45,6 +46,7 @@
 	let editAgreementCanCancel = $state(false);
 	let signatureProgressAgreementId = $state<number | null>(null);
 	let successorSelection = $state<SuccessorSelection | null>(null);
+	let issuedRecoverySource = $state<LeaseAgreementSummary | null>(null);
 	let addendumSkip = $state(0);
 	let editAddendumId = $state<number | null>(null);
 	let createAddendumBase = $state<LeaseAgreementSummary | null>(null);
@@ -161,6 +163,15 @@
 		editAgreementId = result.leaseAgreementId;
 	}
 
+	async function handleIssuedRecoveryCreated(result: LeaseAgreementDraftMutationResponse) {
+		editAgreementSource = issuedRecoverySource;
+		editAgreementCanCancel = true;
+		issuedRecoverySource = null;
+		agreementSkip = 0;
+		await refreshLease();
+		editAgreementId = result.leaseAgreementId;
+	}
+
 	function openAgreementDraft(agreement: LeaseAgreementSummary) {
 		const sourceId = agreement.replacesAgreementId ?? agreement.renewsAgreementId;
 		editAgreementSource = sourceId
@@ -221,7 +232,7 @@
 			description={`${summary.propertyName}${summary.unitNumber ? ` · ${summary.unitNumber}` : ''} · ${summary.relationshipNumber}`}
 		>
 			{#snippet actions()}
-				<Button href={`/units/${summary.unitId}?tab=tenant-lease&view=agreements`} variant="outline" class="gap-2"
+				<Button href={activeExperience === 'Leasing' ? `/leasing/rentals/${summary.unitId}` : `/units/${summary.unitId}`} variant="outline" class="gap-2"
 					><Home class="h-4 w-4" /> Open rental</Button
 				>
 			{/snippet}
@@ -366,10 +377,11 @@
 										</div>
 										<p class="text-sm text-muted-foreground">{agreement.changeType} · {agreement.termStartOn} to {agreement.termEndOn ?? 'month-to-month'} · ${agreement.baseRentAmount.toLocaleString()}/month · {agreement.signerCount} signer{agreement.signerCount === 1 ? '' : 's'}</p>
 										{#if agreement.correctionReason}<p class="text-xs text-muted-foreground">Correction reason: {agreement.correctionReason}</p>{/if}
+										{#if agreement.reissueReason}<p class="text-xs text-muted-foreground">Reissue reason: {agreement.reissueReason}</p>{/if}
 										{#if agreement.draftCancellationReason}<p class="text-xs text-destructive">Draft canceled: {agreement.draftCancellationReason}</p>{/if}
 									</div>
 									<div class="flex flex-wrap gap-2">
-						{#if canPrepareAgreements && agreement.agreementStatus === 'Draft'}
+										{#if canPrepareAgreements && agreement.agreementStatus === 'Draft'}
 											<Button size="sm" class="gap-2" onclick={() => openAgreementDraft(agreement)}><FilePenLine class="h-4 w-4" /> Edit draft</Button>
 										{/if}
 										{#if agreement.hasSourceScan}
@@ -378,6 +390,11 @@
 										{#if issuedArtifact}
 											<Button size="sm" variant="outline" onclick={() => (signatureProgressAgreementId = signatureProgressAgreementId === agreement.leaseAgreementId ? null : agreement.leaseAgreementId)}>
 												{signatureProgressAgreementId === agreement.leaseAgreementId ? 'Hide signing progress' : 'View signing progress'}
+											</Button>
+										{/if}
+										{#if canPrepareAgreements && issuedArtifact && !agreement.fullyExecutedAtUtc && !agreement.hasLiveReissue}
+											<Button size="sm" variant={agreement.voidedAtUtc ? 'default' : 'destructive'} onclick={() => (issuedRecoverySource = agreement)}>
+												{agreement.voidedAtUtc ? 'Create replacement' : 'Void and replace'}
 											</Button>
 										{/if}
 									</div>
@@ -486,6 +503,9 @@
 	{/if}
 	{#if successorSelection}
 		<AgreementSuccessorDialog leaseManagementId={leaseManagementId} source={successorSelection.source} changeType={successorSelection.changeType} businessDate={summary.businessDate} onclose={() => (successorSelection = null)} oncreated={handleSuccessorCreated} />
+	{/if}
+	{#if issuedRecoverySource}
+		<AgreementIssuedRecoveryDialog leaseManagementId={leaseManagementId} source={issuedRecoverySource} onclose={() => (issuedRecoverySource = null)} oncreated={handleIssuedRecoveryCreated} />
 	{/if}
 	{#if createAddendumBase}
 		<AddendumCreateDialog leaseManagementId={leaseManagementId} propertyId={summary.propertyId} baseAgreement={createAddendumBase} onclose={() => (createAddendumBase = null)} oncreated={handleAddendumDraftCreated} />

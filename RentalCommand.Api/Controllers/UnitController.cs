@@ -47,7 +47,7 @@ public class UnitController : ManagementControllerBase
     public async Task<ActionResult<IReadOnlyList<UnitResponse>>> List(
         [FromQuery] UnitListQuery query, [FromQuery] int? propertyId, CancellationToken ct)
     {
-        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        if (!TryReadManagementScope(out var scope)) return Forbid();
         var items = await _service.ListAsync(scope, propertyId, query, ct);
         return Ok(items);
     }
@@ -62,7 +62,7 @@ public class UnitController : ManagementControllerBase
     public async Task<ActionResult<IReadOnlyList<UnitHealthResponse>>> ListWithHealth(
         [FromQuery] ListQuery query, [FromQuery] int? propertyId, CancellationToken ct)
     {
-        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        if (!TryReadManagementScope(out var scope)) return Forbid();
         var items = await _service.ListWithHealthAsync(scope, propertyId, query, ct);
         return Ok(items);
     }
@@ -72,7 +72,7 @@ public class UnitController : ManagementControllerBase
     public async Task<ActionResult<UnitHealthListResponse>> ListWithHealthPage(
         [FromQuery] UnitHealthListQuery query, CancellationToken ct)
     {
-        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        if (!TryReadManagementScope(out var scope)) return Forbid();
         var page = await _service.ListWithHealthPageAsync(scope, query, ct);
         return Ok(page);
     }
@@ -82,6 +82,7 @@ public class UnitController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<UnitResponse>> Get(int id, CancellationToken ct)
     {
+        if (!IsManagementExperience()) return Forbid();
         var portfolioId = GetPortfolioId();
         if (!await HasCapabilityAsync(
                 CapabilityKeys.RentalsRead,
@@ -101,6 +102,7 @@ public class UnitController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<UnitDashboardResponse>> Dashboard(int id, CancellationToken ct)
     {
+        if (!IsManagementExperience()) return Forbid();
         var portfolioId = GetPortfolioId();
         if (!await HasCapabilityAsync(
                 CapabilityKeys.RentalsRead,
@@ -302,6 +304,11 @@ public class UnitController : ManagementControllerBase
     private Task<bool> CanManageListingAsync(int unitId, CancellationToken ct)
     {
         var active = GetActiveAccessContext();
+        if (active.LastAuthorizedExperience is not (WorkspaceExperience.Management or WorkspaceExperience.Leasing))
+        {
+            return Task.FromResult(false);
+        }
+
         return _authorization.HasCapabilityAsync(
             active,
             CapabilityKeys.LeasingListingsManage,
@@ -329,6 +336,7 @@ public class UnitController : ManagementControllerBase
     public async Task<ActionResult<IReadOnlyList<AuditEntryResponse>>> Timeline(
         int id, [FromQuery] ListQuery query, CancellationToken ct)
     {
+        if (!IsManagementExperience()) return Forbid();
         var portfolioId = GetPortfolioId();
         if (!await HasCapabilityAsync(
                 CapabilityKeys.RentalsRead,
@@ -346,6 +354,7 @@ public class UnitController : ManagementControllerBase
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
+        if (!IsManagementExperience()) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
             return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
         var scope = GetWorkspaceReadScope();
@@ -372,6 +381,7 @@ public class UnitController : ManagementControllerBase
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
+        if (!IsManagementExperience()) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
             return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
         var scope = GetWorkspaceReadScope();
@@ -395,6 +405,7 @@ public class UnitController : ManagementControllerBase
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
+        if (!IsManagementExperience()) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
             return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
         var scope = GetWorkspaceReadScope();

@@ -182,6 +182,7 @@ internal static class LeaseLegalArtifactModelConfiguration
             entity.Property(e => e.AgreementNumber).IsRequired().HasMaxLength(100);
             entity.Property(e => e.ChangeType).HasConversion<string>().HasMaxLength(30);
             entity.Property(e => e.CorrectionReason).HasMaxLength(1000);
+            entity.Property(e => e.ReissueReason).HasMaxLength(1000);
             entity.Property(e => e.TermType).HasConversion<string>().HasMaxLength(20);
             entity.Property(e => e.TermStartOn).HasColumnType("date");
             entity.Property(e => e.TermEndOn).HasColumnType("date");
@@ -205,6 +206,7 @@ internal static class LeaseLegalArtifactModelConfiguration
             entity.HasIndex(e => new { e.PortfolioId, e.AgreementNumber }).IsUnique();
             entity.HasIndex(e => new { e.PortfolioId, e.LeaseManagementId, e.VersionNumber })
                 .IsDescending(false, false, true);
+            entity.HasIndex(e => new { e.ReissuesAgreementId, e.LeaseManagementId, e.PortfolioId });
             entity.HasIndex(e => new { e.PortfolioId, e.GoverningFromOn, e.TermEndOn, e.Id })
                 .HasFilter("\"FullyExecutedAtUtc\" IS NOT NULL AND \"VoidedAtUtc\" IS NULL");
             entity.HasIndex(e => new { e.PortfolioId, e.TermEndOn, e.Id })
@@ -265,10 +267,14 @@ internal static class LeaseLegalArtifactModelConfiguration
                     "AND (\"DraftCanceledAtUtc\" IS NULL OR \"IssuedAtUtc\" IS NULL)");
                 table.HasCheckConstraint(
                     "CK_LeaseAgreement_Lineage",
-                    "(\"ChangeType\" = 'Initial' AND \"VersionNumber\" = 1 " +
+                    "(\"ChangeType\" = 'Initial' " +
+                    "AND ((\"VersionNumber\" = 1 AND \"ReissuesAgreementId\" IS NULL) " +
+                    "OR (\"VersionNumber\" > 1 AND \"ReissuesAgreementId\" IS NOT NULL)) " +
                     "AND \"ReplacesAgreementId\" IS NULL AND \"RenewsAgreementId\" IS NULL " +
                     "AND \"TransferredFromAgreementId\" IS NULL) OR " +
-                    "(\"ChangeType\" = 'Transfer' AND \"VersionNumber\" = 1 " +
+                    "(\"ChangeType\" = 'Transfer' " +
+                    "AND ((\"VersionNumber\" = 1 AND \"ReissuesAgreementId\" IS NULL) " +
+                    "OR (\"VersionNumber\" > 1 AND \"ReissuesAgreementId\" IS NOT NULL)) " +
                     "AND \"TransferredFromAgreementId\" IS NOT NULL " +
                     "AND \"ReplacesAgreementId\" IS NULL AND \"RenewsAgreementId\" IS NULL) OR " +
                     "(\"ChangeType\" IN ('Correction', 'Restatement') " +
@@ -277,6 +283,11 @@ internal static class LeaseLegalArtifactModelConfiguration
                     "(\"ChangeType\" IN ('Renewal', 'MonthToMonth') " +
                     "AND \"RenewsAgreementId\" IS NOT NULL AND \"ReplacesAgreementId\" IS NULL " +
                     "AND \"TransferredFromAgreementId\" IS NULL)");
+                table.HasCheckConstraint(
+                    "CK_LeaseAgreement_Reissue",
+                    "(\"ReissuesAgreementId\" IS NULL AND \"ReissueReason\" IS NULL) OR " +
+                    "(\"ReissuesAgreementId\" IS NOT NULL AND \"ReissuesAgreementId\" <> \"Id\" " +
+                    "AND \"ReissueReason\" IS NOT NULL AND length(btrim(\"ReissueReason\")) > 0)");
                 table.HasCheckConstraint(
                     "CK_LeaseAgreement_Money",
                     "\"BaseRentAmount\" >= 0 AND \"SecurityDepositObligation\" >= 0 " +
@@ -312,6 +323,11 @@ internal static class LeaseLegalArtifactModelConfiguration
             entity.HasOne(e => e.RenewsAgreement)
                 .WithMany(e => e.Renewals)
                 .HasForeignKey(e => new { e.RenewsAgreementId, e.LeaseManagementId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.LeaseManagementId, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.ReissuedFromAgreement)
+                .WithMany(e => e.ReissuedAgreements)
+                .HasForeignKey(e => new { e.ReissuesAgreementId, e.LeaseManagementId, e.PortfolioId })
                 .HasPrincipalKey(e => new { e.Id, e.LeaseManagementId, e.PortfolioId })
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(e => e.SupersededByAgreement)

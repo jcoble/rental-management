@@ -33,7 +33,9 @@ export interface LeasingRental {
 	listingHeadline?: string | null;
 	askingRent?: number | null;
 	availableOn?: string | null;
+	canViewApplications: boolean;
 	openApplicationCount: number;
+	canViewShowings: boolean;
 	nextShowingAtUtc?: string | null;
 }
 
@@ -62,6 +64,64 @@ export interface LeasingInboxItem {
 	unreadCount: number;
 }
 
+export interface LeasingRentalDetail extends LeasingRental {
+	listingDescription?: string | null;
+	securityDeposit?: number | null;
+	leaseTerms?: string | null;
+	petPolicy?: string | null;
+}
+
+export interface LeasingApplicationDetail {
+	id: number;
+	propertyId?: number | null;
+	unitId?: number | null;
+	applicantName: string;
+	email?: string | null;
+	phone?: string | null;
+	propertyName?: string | null;
+	unitNumber?: string | null;
+	status: string;
+	monthlyIncome?: number | null;
+	desiredMoveInDate?: string | null;
+	notes?: string | null;
+	consentGiven: boolean;
+	submittedAtUtc: string;
+}
+
+export interface LeasingAppointmentDetail extends LeasingCalendarItem {
+	prospectEmail?: string | null;
+	assignedTo?: string | null;
+	notes?: string | null;
+}
+
+export interface LeasingConversationMessage {
+	id: number;
+	senderRole: string;
+	body: string;
+	createdAt: string;
+}
+
+export interface LeasingConversationDetail {
+	id: number;
+	tenantName: string;
+	subject: string;
+	propertyName?: string | null;
+	messages: LeasingConversationMessage[];
+}
+
+export interface LeasingMoveInDetail {
+	id: number;
+	propertyId: number;
+	unitId: number;
+	relationshipNumber: string;
+	tenantName: string;
+	propertyName: string;
+	unitNumber: string;
+	plannedPossessionAtUtc?: string | null;
+	agreementFullyExecuted: boolean;
+	possessionGiven: boolean;
+}
+
 export interface LeasingPage<T> {
 	items: T[];
 	totalCount: number;
@@ -78,5 +138,15 @@ export const leasingWorkspace = {
 	calendarPage: (params?: ListParams) =>
 		api.get<LeasingPage<LeasingCalendarItem>>(`/leasing/calendar/page${buildListQuery(params)}`),
 	inboxPage: (params?: ListParams) =>
-		api.get<LeasingPage<LeasingInboxItem>>(`/leasing/inbox/page${buildListQuery(params)}`)
+		api.get<LeasingPage<LeasingInboxItem>>(`/leasing/inbox/page${buildListQuery(params)}`),
+	rental: (unitId: number) => api.get<LeasingRentalDetail>(`/leasing/rentals/${unitId}`),
+	application: (id: number) => api.get<LeasingApplicationDetail>(`/leasing/applications/${id}`),
+	appointment: (id: number) => api.get<LeasingAppointmentDetail>(`/leasing/appointments/${id}`),
+	conversation: (id: number) => api.get<LeasingConversationDetail>(`/leasing/conversations/${id}`),
+	reply: (id: number, body: string) => api.post<void>(`/leasing/conversations/${id}/messages`, {
+		operationKey: crypto.randomUUID(),
+		body,
+		channels: ['Portal']
+	}),
+	moveIn: (id: number) => api.get<LeasingMoveInDetail>(`/leasing/move-ins/${id}`)
 };

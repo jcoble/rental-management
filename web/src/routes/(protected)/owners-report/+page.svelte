@@ -9,6 +9,7 @@
 		type OwnerDistribution
 	} from '$lib/api/endpoints/owner-distributions';
 	import type { OwnerStatementSummary, OwnerStatementReport } from '$lib/types';
+	import { hasCapability } from '$lib/stores/auth.svelte';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import * as Card from '$lib/components/ui/card';
@@ -62,6 +63,10 @@
 		enabled: !!portfolioId && selectedOwnerId !== null
 	}));
 	const distributions = $derived((distributionQuery.data as OwnerDistribution[] | undefined) ?? []);
+	const canCreateDistribution = $derived(hasCapability('money.disbursements.manage'));
+	const canDeleteDistribution = $derived(
+		canCreateDistribution && hasCapability('money.reconciliation.destructive')
+	);
 
 	function money(value: number) {
 		return new Intl.NumberFormat('en-US', {
@@ -183,7 +188,7 @@
 
 	function handleDistributionSubmit(event: SubmitEvent) {
 		event.preventDefault();
-		if (selectedOwnerId === null) return;
+		if (!canCreateDistribution || selectedOwnerId === null) return;
 
 		const amount = parseAmount(distributionForm.amount);
 		if (!Number.isFinite(amount) || amount <= 0) {
@@ -360,13 +365,14 @@
 						</Card.Root>
 					</div>
 
-					<div class="mb-6 grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-						<Card.Root class="gap-0 py-0" data-testid="owner-distribution-form-card">
-							<Card.Header class="border-b border-border px-4 py-3">
-								<Card.Title class="text-base font-semibold">Record distribution</Card.Title>
-							</Card.Header>
-							<Card.Content class="p-4">
-								<form class="grid gap-3 sm:grid-cols-2" onsubmit={handleDistributionSubmit}>
+						<div class="mb-6 grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+							{#if canCreateDistribution}
+								<Card.Root class="gap-0 py-0" data-testid="owner-distribution-form-card">
+									<Card.Header class="border-b border-border px-4 py-3">
+										<Card.Title class="text-base font-semibold">Record distribution</Card.Title>
+									</Card.Header>
+									<Card.Content class="p-4">
+										<form class="grid gap-3 sm:grid-cols-2" onsubmit={handleDistributionSubmit}>
 									<div>
 										<label for="owner-distribution-date" class="mb-1 block text-xs font-medium text-muted-foreground">Date</label>
 										<Input
@@ -437,9 +443,10 @@
 											{createDistributionMutation.isPending ? 'Recording…' : 'Record distribution'}
 										</Button>
 									</div>
-								</form>
-							</Card.Content>
-						</Card.Root>
+										</form>
+									</Card.Content>
+								</Card.Root>
+							{/if}
 
 						<Card.Root class="gap-0 py-0" data-testid="owner-distribution-list-card">
 							<Card.Header class="border-b border-border px-4 py-3">
@@ -471,19 +478,21 @@
 														<td class="px-4 py-3 whitespace-nowrap">{methodLabel(distribution.method)}</td>
 														<td class="px-4 py-3">{distribution.propertyName ?? '—'}</td>
 														<td class="px-4 py-3 text-right font-mono tabular-nums">{money(distribution.amount)}</td>
-														<td class="px-4 py-3 text-right">
-															<Button
-																variant="ghost"
-																size="icon"
-																class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-																aria-label={`Delete distribution ${money(distribution.amount)}`}
-																title="Delete distribution"
-																disabled={deleteDistributionMutation.isPending}
-																onclick={() => deleteDistributionMutation.mutate(distribution.id)}
-																data-testid="owner-distribution-delete-{distribution.id}"
-															>
-																<Trash2 class="h-4 w-4" />
-															</Button>
+																<td class="px-4 py-3 text-right">
+																	{#if canDeleteDistribution}
+																		<Button
+																			variant="ghost"
+																			size="icon"
+																			class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+																			aria-label={`Delete distribution ${money(distribution.amount)}`}
+																			title="Delete distribution"
+																			disabled={deleteDistributionMutation.isPending}
+																			onclick={() => deleteDistributionMutation.mutate(distribution.id)}
+																			data-testid="owner-distribution-delete-{distribution.id}"
+																		>
+																			<Trash2 class="h-4 w-4" />
+																		</Button>
+																	{/if}
 														</td>
 													</tr>
 												{/each}

@@ -642,6 +642,21 @@ export const leaseManagements = {
       request,
       operationKey
     ),
+  replaceIssuedAgreementWithDraft: (
+    leaseManagementId: number,
+    sourceAgreementId: number,
+    request: {
+      voidNote: string | null;
+      reissueReason: string;
+    },
+    operationKey: string
+  ) =>
+    idempotentJson<LeaseAgreementDraftMutationResponse>(
+      `/lease-managements/${leaseManagementId}/agreements/${sourceAgreementId}/issued-replacement-draft`,
+      "POST",
+      request,
+      operationKey
+    ),
   cancelAgreementSuccessorDraft: (
     leaseManagementId: number,
     leaseAgreementId: number,
