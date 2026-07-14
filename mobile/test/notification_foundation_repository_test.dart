@@ -26,8 +26,8 @@ void main() {
       current.copyWith(enableEmail: true),
     );
 
-    expect(adapter.requests[0].path, '/notification-settings/my-alerts');
-    expect(adapter.requests[1].path, '/notification-settings/my-alerts');
+    expect(adapter.requests[0].path, '/my-alerts');
+    expect(adapter.requests[1].path, '/my-alerts');
     expect(adapter.requests[1].method, 'PUT');
     expect(adapter.requests[1].data, {
       'enableInApp': true,
@@ -72,11 +72,8 @@ void main() {
 
       expect(rules.single.scope, 'All properties');
       expect(recipients.single.reason, 'Named rent contact.');
-      expect(
-        adapter.requests[1].path,
-        '/notification-settings/team-routing/31/recipients',
-      );
-      expect(adapter.requests[2].path, '/notification-settings/team-routing');
+      expect(adapter.requests[1].path, '/team-routing/31/recipients');
+      expect(adapter.requests[2].path, '/team-routing');
       expect(adapter.requests[2].method, 'PUT');
       expect((adapter.requests[2].data as Map<String, dynamic>)['recipients'], [
         {'userId': 11, 'reason': 'Named rent contact.'},
@@ -84,37 +81,42 @@ void main() {
     },
   );
 
-  test('Morning Briefing schedule uses its canonical settings endpoint', () async {
-    final adapter = _RecordingAdapter((options) => {
-      'enabled': options.method == 'PUT' ? false : true,
-      'sendHourLocal': 7,
-      'includeEmpty': true,
-      'timeZone': 'America/New_York',
-    });
-    final repository = NotificationFoundationRepository(_dio(adapter));
+  test(
+    'Morning Briefing schedule uses its canonical settings endpoint',
+    () async {
+      final adapter = _RecordingAdapter(
+        (options) => {
+          'enabled': options.method == 'PUT' ? false : true,
+          'sendHourLocal': 7,
+          'includeEmpty': true,
+          'timeZone': 'America/New_York',
+        },
+      );
+      final repository = NotificationFoundationRepository(_dio(adapter));
 
-    final current = await repository.getMorningBriefingSettings();
-    final saved = await repository.updateMorningBriefingSettings(
-      MorningBriefingSettings(
-        enabled: false,
-        sendHourLocal: current.sendHourLocal,
-        includeEmpty: current.includeEmpty,
-        timeZone: current.timeZone,
-      ),
-    );
+      final current = await repository.getMorningBriefingSettings();
+      final saved = await repository.updateMorningBriefingSettings(
+        MorningBriefingSettings(
+          enabled: false,
+          sendHourLocal: current.sendHourLocal,
+          includeEmpty: current.includeEmpty,
+          timeZone: current.timeZone,
+        ),
+      );
 
-    expect(
-      adapter.requests.map((request) => request.path),
-      everyElement('/notification-settings/morning-briefing'),
-    );
-    expect(adapter.requests.last.method, 'PUT');
-    expect(adapter.requests.last.data, {
-      'enabled': false,
-      'sendHourLocal': 7,
-      'includeEmpty': true,
-    });
-    expect(saved.enabled, isFalse);
-  });
+      expect(
+        adapter.requests.map((request) => request.path),
+        everyElement('/team-routing/morning-briefing'),
+      );
+      expect(adapter.requests.last.method, 'PUT');
+      expect(adapter.requests.last.data, {
+        'enabled': false,
+        'sendHourLocal': 7,
+        'includeEmpty': true,
+      });
+      expect(saved.enabled, isFalse);
+    },
+  );
 
   test('Tenant delivery status requests a server-side page of 50', () async {
     final adapter = _RecordingAdapter(
@@ -146,10 +148,7 @@ void main() {
 
     final statuses = await repository.listTenantNoticeDeliveries(take: 50);
 
-    expect(
-      adapter.requests.single.path,
-      '/notification-settings/tenant-notices/deliveries',
-    );
+    expect(adapter.requests.single.path, '/tenant-notices/deliveries');
     expect(adapter.requests.single.queryParameters, {'take': 50});
     expect(statuses.single.status, 'Retrying');
     expect(statuses.single.nextAttemptAtUtc, isNotNull);
@@ -182,10 +181,7 @@ void main() {
       );
 
       final request = adapter.requests.single;
-      expect(
-        request.path,
-        '/notification-settings/tenant-notices/rent-reminder',
-      );
+      expect(request.path, '/tenant-notices/rent-reminder');
       expect(request.method, 'PUT');
       expect(request.data, isNot(contains('notifyTenants')));
       expect(request.data, isNot(contains('leaseEndAutoAction')));
@@ -254,6 +250,7 @@ const _policyJson = <String, dynamic>{
   'failureBehavior': 'RetryThenDraft',
   'workspaceNoticeTemplateVersionId': 51,
   'templateSystemKey': 'rent-reminder',
+  'templateProvenance': 'Rental Command supplied copy, workspace version 1',
   'templateVersion': 1,
   'templateSubject': 'Your rent is due soon',
   'templateBody': 'Hello {{tenant_name}}',

@@ -15,6 +15,7 @@ const tenantSource = readFileSync(
 	'src/routes/(protected)/settings/notifications/tenant-notices/+page.svelte',
 	'utf8',
 );
+const endpointSource = readFileSync('src/lib/api/endpoints/notifications.ts', 'utf8');
 
 test('notification settings is a three-area route-backed landing with no legacy mixed matrix', () => {
 	assert.match(settingsSource, /\/settings\/notifications\/my-alerts/);
@@ -36,6 +37,9 @@ test('My alerts is personal and exposes every canonical channel', () => {
 test('Team routing and Tenant notices use separate canonical persistence', () => {
 	assert.match(routingSource, /notifications\.teamRouting\.replace/);
 	assert.match(routingSource, /Fall back to Workspace Administrators/);
+	assert.match(routingSource, /namedRecipientSummary/);
+	assert.match(routingSource, /routingExplanation/);
+	assert.doesNotMatch(routingSource, /\.filter\(/);
 	assert.match(routingSource, /Morning Briefing schedule/);
 	assert.match(routingSource, /notifications\.morningBriefing\.update/);
 	assert.match(routingSource, /topic: 'MorningBriefing'/);
@@ -43,5 +47,17 @@ test('Team routing and Tenant notices use separate canonical persistence', () =>
 	assert.match(tenantSource, /\{ value: 'Draft'/);
 	assert.match(tenantSource, /\{ value: 'Auto'/);
 	assert.match(tenantSource, /notifications\.tenantNotices\.updatePolicy/);
-	assert.match(tenantSource, /Save new template version/);
+	assert.match(tenantSource, /Save and use new template version/);
+	assert.match(tenantSource, /templateProvenance/);
+	assert.match(tenantSource, /Restore and use current supplied default/);
+	assert.doesNotMatch(tenantSource, /seedTemplates/);
+	for (const status of ['Queued', 'Accepted', 'Retrying', 'Delivered', 'Failed'])
+		assert.match(tenantSource, new RegExp(status));
+});
+
+test('notification API clients do not preserve the broad legacy settings path', () => {
+	assert.match(endpointSource, /"\/my-alerts"/);
+	assert.match(endpointSource, /"\/team-routing"/);
+	assert.match(endpointSource, /"\/tenant-notices"/);
+	assert.doesNotMatch(endpointSource, /\/notification-settings\//);
 });

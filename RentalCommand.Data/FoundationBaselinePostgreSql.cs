@@ -1156,8 +1156,15 @@ internal static class FoundationBaselinePostgreSql
 
           INSERT INTO public."TeamRoutingRules"
             ("PortfolioId", "Topic", "UseWorkspaceAdministratorFallback", "CreatedAtUtc", "UpdatedAtUtc")
-          VALUES
-            (new_portfolio_id, 'MorningBriefing', TRUE, created_at_utc, created_at_utc);
+          SELECT new_portfolio_id, topic, TRUE, created_at_utc, created_at_utc
+          FROM unnest(ARRAY[
+            'RentAndMoney',
+            'ApplicationsAndLeasing',
+            'WorkOrders',
+            'OwnerStatementsAndDecisions',
+            'AccountAndSecurity',
+            'MorningBriefing'
+          ]) AS topic;
 
           INSERT INTO public."WorkspaceNoticeTemplateVersions"
             ("PortfolioId", "SystemKey", "Version", "BasedOnSystemTemplateVersionId", "IsCustomized",
