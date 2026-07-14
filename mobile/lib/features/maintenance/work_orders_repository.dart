@@ -581,7 +581,7 @@ class WorkOrderDetailNotifier extends Notifier<AsyncValue<WorkOrderDetail>> {
           !auth.capabilities.contains('work.manage')) {
         await _repo.updateAssignedWorkOrder(_id, {
           'status': status,
-          'expectedUpdatedAtUtc': state.valueOrNull?.workOrder.updatedAt
+          'expectedUpdatedAtUtc': state.value?.workOrder.updatedAt
               .toUtc()
               .toIso8601String(),
           if (note != null) 'technicianNote': note,
