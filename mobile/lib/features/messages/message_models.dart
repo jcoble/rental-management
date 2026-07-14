@@ -97,10 +97,69 @@ class Conversation {
       messageCount: (json['messageCount'] as num?)?.toInt() ?? 0,
       messages: rawMessages is List
           ? rawMessages
-              .whereType<Map<String, dynamic>>()
-              .map(ConversationMessage.fromJson)
-              .toList()
+                .whereType<Map<String, dynamic>>()
+                .map(ConversationMessage.fromJson)
+                .toList()
           : const [],
+    );
+  }
+}
+
+class ConversationListQuery {
+  const ConversationListQuery({
+    this.skip = 0,
+    this.take = 20,
+    this.search,
+    this.sort = '-lastMessageAt',
+    this.unreadOnly = false,
+  });
+
+  final int skip;
+  final int take;
+  final String? search;
+  final String sort;
+  final bool unreadOnly;
+
+  @override
+  bool operator ==(Object other) {
+    return other is ConversationListQuery &&
+        other.skip == skip &&
+        other.take == take &&
+        other.search == search &&
+        other.sort == sort &&
+        other.unreadOnly == unreadOnly;
+  }
+
+  @override
+  int get hashCode => Object.hash(skip, take, search, sort, unreadOnly);
+}
+
+class ConversationListPage {
+  const ConversationListPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<Conversation> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+
+  bool get hasPrevious => skip > 0;
+  bool get hasNext => skip + items.length < totalCount;
+
+  factory ConversationListPage.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'];
+    return ConversationListPage(
+      items: (rawItems is List ? rawItems : const [])
+          .whereType<Map<String, dynamic>>()
+          .map(Conversation.fromJson)
+          .toList(growable: false),
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? 0,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? 20,
     );
   }
 }

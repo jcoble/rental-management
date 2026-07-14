@@ -37,6 +37,15 @@ public class ConversationListResponse
     public int Take { get; set; }
 }
 
+/// <summary>
+/// Server-side conversation search, filtering, sorting, and paging. Search covers the tenant,
+/// subject, linked property, and latest-message preview without materializing the inbox.
+/// </summary>
+public class ConversationListQuery : ListQuery
+{
+    public bool? UnreadOnly { get; set; }
+}
+
 public sealed record ConversationUnreadCountResponse(int Count);
 
 /// <summary>A conversation summary plus its full ordered message history (ascending by time).</summary>

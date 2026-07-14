@@ -384,6 +384,28 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         return Ok(items);
     }
 
+    /// <summary>
+    /// Searchable, filterable tenant inbox page. The tenant boundary, filters, sort, count, and
+    /// requested window are all applied by the database query.
+    /// </summary>
+    [HttpGet("conversations/page")]
+    [ProducesResponseType(typeof(ConversationListResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<ActionResult<ConversationListResponse>> ConversationPage(
+        [FromQuery] ConversationListQuery query,
+        CancellationToken ct)
+    {
+        var tenantId = await GetTenantIdAsync(ct);
+        if (tenantId == null)
+        {
+            return Forbid();
+        }
+
+        var page = await _conversations.ListPageForTenantAsync(
+            GetPortfolioId(), tenantId.Value, query, ct);
+        return Ok(page);
+    }
+
     /// <summary>Fetch one of the tenant's conversations with its full history.</summary>
     [HttpGet("conversations/{id:int}")]
     [ProducesResponseType(typeof(ConversationDetail), StatusCodes.Status200OK)]

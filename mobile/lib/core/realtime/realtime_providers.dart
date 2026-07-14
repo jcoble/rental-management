@@ -112,6 +112,7 @@ Future<void> resetAccessScopedClient(WidgetRef ref) async {
   ref.invalidate(leaseAddendumHistoryProvider);
   ref.invalidate(leaseLedgerProvider);
   ref.invalidate(propertiesProvider);
+  ref.invalidate(propertiesPageProvider);
   ref.invalidate(availableForLeasePropertiesProvider);
   ref.invalidate(propertyDetailProvider);
   ref.invalidate(unitsProvider);
@@ -157,6 +158,7 @@ Future<void> resetAccessScopedClient(WidgetRef ref) async {
   ref.invalidate(appointmentDetailProvider);
   ref.invalidate(scanListFamilyProvider);
   ref.invalidate(conversationsProvider);
+  ref.invalidate(conversationsPageProvider);
   ref.invalidate(conversationProvider);
   ref.invalidate(unreadCountProvider);
   ref.invalidate(inboxProvider);
@@ -223,6 +225,7 @@ void _invalidateForEntity(Ref ref, String entityType) {
 
     case 'Property':
       _refreshIfAlive(ref, propertiesProvider);
+      ref.invalidate(propertiesPageProvider);
       ref.invalidate(gettingStartedSignalsProvider);
 
     case 'Unit':
@@ -271,6 +274,7 @@ void _invalidateForEntity(Ref ref, String entityType) {
     case 'PropertyDisposition':
       ref.invalidate(propertyDispositionsProvider);
       _refreshIfAlive(ref, propertiesProvider);
+      ref.invalidate(propertiesPageProvider);
       ref.invalidate(propertyDetailProvider);
       ref.invalidate(unitsProvider);
       ref.invalidate(propertyLeaseManagementsProvider);
@@ -299,6 +303,7 @@ void _invalidateForEntity(Ref ref, String entityType) {
       // Refresh the thread list (unread counts + ordering) and invalidate the
       // open-thread family so a message sent from web/portal appears live.
       _refreshIfAlive(ref, conversationsProvider);
+      ref.invalidate(conversationsPageProvider);
       ref.invalidate(conversationProvider);
 
     case 'Notification':

@@ -36,15 +36,33 @@ class MessagesRepository {
 
   /// GET /conversations → ConversationSummary[] (messages list empty).
   Future<List<Conversation>> listConversations() async {
+    return (await listConversationPage()).items;
+  }
+
+  Future<ConversationListPage> listConversationPage([
+    ConversationListQuery query = const ConversationListQuery(),
+  ]) async {
+    final parameters = <String, dynamic>{
+      'skip': query.skip,
+      'take': query.take,
+      'search': query.search,
+      'sort': query.sort,
+      if (query.unreadOnly) 'unreadOnly': true,
+    }..removeWhere((_, value) => value == null || value == '');
+
     try {
-      final response = await _dio.get<List<dynamic>>(
-        tenantMode ? '/portal/conversations' : '/conversations',
+      final response = await _dio.get<Map<String, dynamic>>(
+        tenantMode ? '/portal/conversations/page' : '/conversations/page',
+        queryParameters: parameters,
       );
-      final data = response.data ?? [];
-      return data
-          .whereType<Map<String, dynamic>>()
-          .map(Conversation.fromJson)
-          .toList();
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ConversationListPage.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -54,7 +72,11 @@ class MessagesRepository {
   /// ordering are applied by the API/EF query; the client never loads the full
   /// conversation list and truncates it in memory.
   Future<List<Conversation>> listRecentConversations({int take = 5}) async {
-    if (tenantMode) return listConversations();
+    if (tenantMode) {
+      return (await listConversationPage(
+        ConversationListQuery(take: take),
+      )).items;
+    }
     try {
       final response = await _dio.get<Map<String, dynamic>>(
         '/conversations/page',
@@ -207,6 +229,11 @@ final conversationsProvider =
       ConversationsNotifier.new,
     );
 
+final conversationsPageProvider = FutureProvider.autoDispose
+    .family<ConversationListPage, ConversationListQuery>((ref, query) {
+      return ref.watch(messagesRepositoryProvider).listConversationPage(query);
+    });
+
 // ── Single conversation (thread) ──────────────────────────────────────────────
 
 class ConversationNotifier extends Notifier<AsyncValue<Conversation>> {
@@ -229,6 +256,7 @@ class ConversationNotifier extends Notifier<AsyncValue<Conversation>> {
       state = AsyncValue.data(convo);
       // Opening the thread marks it read server-side; refresh the list so the
       // unread badge clears in the inbox.
+      ref.invalidate(conversationsPageProvider);
       ref.read(conversationsProvider.notifier).refresh();
     } on ApiException catch (e) {
       state = AsyncValue.error(e, StackTrace.current);
@@ -255,6 +283,7 @@ class ConversationNotifier extends Notifier<AsyncValue<Conversation>> {
       operationKey: operationKey,
     );
     state = AsyncValue.data(updated);
+    ref.invalidate(conversationsPageProvider);
     ref.read(conversationsProvider.notifier).refresh();
   }
 }

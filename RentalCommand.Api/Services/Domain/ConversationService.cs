@@ -55,7 +55,7 @@ public class ConversationService : IConversationService
 
     public async Task<IReadOnlyList<ConversationSummary>> ListAsync(int portfolioId, CancellationToken ct = default)
     {
-        var page = await ListPageAsync(portfolioId, new ListQuery(), ct);
+        var page = await ListPageAsync(portfolioId, new ConversationListQuery(), ct);
         return page.Items;
     }
 
@@ -63,21 +63,25 @@ public class ConversationService : IConversationService
         WorkspaceReadScope scope,
         CancellationToken ct = default)
     {
-        var page = await ListPageAuthorizedAsync(scope, new ListQuery(), ct);
+        var page = await ListPageAuthorizedAsync(scope, new ConversationListQuery(), ct);
         return page.Items;
     }
 
-    public async Task<ConversationListResponse> ListPageAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
+    public async Task<ConversationListResponse> ListPageAsync(
+        int portfolioId,
+        ConversationListQuery query,
+        CancellationToken ct = default)
     {
         var conversations = _db.Conversations
             .AsNoTracking()
             .Where(c => c.PortfolioId == portfolioId);
-        return await ListPageFromQueryAsync(conversations, query, ct);
+        return await ListPageFromQueryAsync(
+            conversations, query, tenantViewer: false, ct: ct);
     }
 
     public Task<ConversationListResponse> ListPageAuthorizedAsync(
         WorkspaceReadScope scope,
-        ListQuery query,
+        ConversationListQuery query,
         CancellationToken ct = default)
     {
         var conversations = _db.Conversations
@@ -87,17 +91,42 @@ public class ConversationService : IConversationService
                 scope,
                 ConversationReadCapabilities,
                 _timeProvider.UtcNow());
-        return ListPageFromQueryAsync(conversations, query, ct);
+        return ListPageFromQueryAsync(
+            conversations, query, tenantViewer: false, ct: ct);
     }
 
     private static async Task<ConversationListResponse> ListPageFromQueryAsync(
         IQueryable<Conversation> conversations,
-        ListQuery query,
+        ConversationListQuery query,
+        bool tenantViewer,
         CancellationToken ct)
     {
-        var summaries = ProjectSummaries(conversations, tenantViewer: false);
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            var term = query.Search.Trim();
+            conversations = conversations.Where(c =>
+                EF.Functions.ILike(c.Subject, $"%{term}%") ||
+                (c.LastMessagePreview != null &&
+                    EF.Functions.ILike(c.LastMessagePreview, $"%{term}%")) ||
+                (c.Tenant != null &&
+                    (EF.Functions.ILike(c.Tenant.FirstName, $"%{term}%") ||
+                     EF.Functions.ILike(c.Tenant.LastName, $"%{term}%") ||
+                     EF.Functions.ILike(c.Tenant.FirstName + " " + c.Tenant.LastName, $"%{term}%"))) ||
+                (c.Property != null && EF.Functions.ILike(c.Property.Name, $"%{term}%")));
+        }
 
-        summaries = query.SortField switch
+        if (query.UnreadOnly == true)
+        {
+            conversations = tenantViewer
+                ? conversations.Where(c => c.TenantUnreadCount > 0)
+                : conversations.Where(c => c.LandlordUnreadCount > 0);
+        }
+
+        var summaries = ProjectSummaries(conversations, tenantViewer);
+
+        var totalCount = await summaries.CountAsync(ct);
+
+        IOrderedQueryable<ConversationSummary> ordered = query.SortField switch
         {
             "tenantname" => query.SortDescending ? summaries.OrderByDescending(c => c.TenantName) : summaries.OrderBy(c => c.TenantName),
             "subject" => query.SortDescending ? summaries.OrderByDescending(c => c.Subject) : summaries.OrderBy(c => c.Subject),
@@ -107,9 +136,8 @@ public class ConversationService : IConversationService
             _ => summaries.OrderByDescending(c => c.LastMessageAt),
         };
 
-        var totalCount = await summaries.CountAsync(ct);
-
-        var items = await summaries
+        var items = await ordered
+            .ThenBy(c => c.Id)
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
@@ -510,13 +538,22 @@ public class ConversationService : IConversationService
     public async Task<IReadOnlyList<ConversationSummary>> ListForTenantAsync(
         int portfolioId, int tenantId, CancellationToken ct = default)
     {
-        return await ProjectSummaries(
-                _db.Conversations
-                    .AsNoTracking()
-                    .Where(c => c.PortfolioId == portfolioId && c.TenantId == tenantId),
-                tenantViewer: true)
-            .OrderByDescending(c => c.LastMessageAt)
-            .ToListAsync(ct);
+        var page = await ListPageForTenantAsync(
+            portfolioId, tenantId, new ConversationListQuery(), ct);
+        return page.Items;
+    }
+
+    public Task<ConversationListResponse> ListPageForTenantAsync(
+        int portfolioId,
+        int tenantId,
+        ConversationListQuery query,
+        CancellationToken ct = default)
+    {
+        var conversations = _db.Conversations
+            .AsNoTracking()
+            .Where(c => c.PortfolioId == portfolioId && c.TenantId == tenantId);
+        return ListPageFromQueryAsync(
+            conversations, query, tenantViewer: true, ct: ct);
     }
 
     public async Task<ConversationDetail?> GetForTenantAsync(

@@ -6,6 +6,7 @@ import '../../core/api/api_exception.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
 import '../../core/auth/mobile_access_policy.dart';
+import '../../core/widgets/mobile_grid_controls.dart';
 import '../../core/widgets/mobile_m3_list.dart';
 import '../home/mobile_domain_chrome.dart';
 import '../home/mobile_quick_action_fab.dart';
@@ -41,13 +42,71 @@ class PropertiesListScreen extends ConsumerStatefulWidget {
 }
 
 class _PropertiesListScreenState extends ConsumerState<PropertiesListScreen> {
+  static const _pageSize = 20;
+
+  final _searchCtrl = TextEditingController();
+  String? _search;
+  String? _typeFilter;
+  String? _statusFilter;
+  String _sort = 'name';
+  int _skip = 0;
+
+  PropertyListQuery get _query => PropertyListQuery(
+    skip: _skip,
+    take: _pageSize,
+    search: _search,
+    sort: _sort,
+    type: _typeFilter,
+    status: _statusFilter,
+  );
+
   @override
-  void initState() {
-    super.initState();
-    Future.microtask(() => ref.read(propertiesProvider.notifier).load());
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
   }
 
-  Future<void> _refresh() => ref.read(propertiesProvider.notifier).refresh();
+  void _submitSearch([String? value]) {
+    final next = (value ?? _searchCtrl.text).trim();
+    setState(() {
+      _search = next.isEmpty ? null : next;
+      _skip = 0;
+    });
+  }
+
+  void _clearSearch() {
+    _searchCtrl.clear();
+    _submitSearch('');
+  }
+
+  void _setSort(String? sort) {
+    if (sort == null || sort == _sort) return;
+    setState(() {
+      _sort = sort;
+      _skip = 0;
+    });
+  }
+
+  void _setTypeFilter(String? type) {
+    if (type == _typeFilter) return;
+    setState(() {
+      _typeFilter = type;
+      _skip = 0;
+    });
+  }
+
+  void _setStatusFilter(String? status) {
+    if (status == _statusFilter) return;
+    setState(() {
+      _statusFilter = status;
+      _skip = 0;
+    });
+  }
+
+  Future<void> _refresh() async {
+    ref.invalidate(propertiesPageProvider);
+    await ref.read(propertiesPageProvider(_query).future);
+  }
 
   void _openDetail(BuildContext context, Property property) {
     Navigator.of(context).push<void>(
@@ -60,13 +119,16 @@ class _PropertiesListScreenState extends ConsumerState<PropertiesListScreen> {
   void _showAddSheet(BuildContext context) {
     showAddPropertySheet(
       context,
-      onSaved: () => ref.read(propertiesProvider.notifier).refresh(),
+      onSaved: () {
+        ref.invalidate(propertiesPageProvider);
+        ref.read(propertiesProvider.notifier).refresh();
+      },
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final propertiesAsync = ref.watch(propertiesProvider);
+    final propertiesAsync = ref.watch(propertiesPageProvider(_query));
     final auth = ref.watch(authControllerProvider);
     final canManageRentals =
         auth is AuthStateAuthenticated &&
@@ -92,39 +154,143 @@ class _PropertiesListScreenState extends ConsumerState<PropertiesListScreen> {
         onRecord: () => openMobileRecord(context),
         onScan: () => openMobileScan(context),
       ),
-      body: RefreshIndicator(
-        onRefresh: _refresh,
-        child: propertiesAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => _ErrorBody(
-            message: e is ApiException ? e.message : e.toString(),
-            onRetry: _refresh,
-          ),
-          data: (list) {
-            if (list.isEmpty) {
-              return _EmptyBody(
-                onAdd: canManageRentals ? () => _showAddSheet(context) : null,
-              );
-            }
-            final bottomInset = MediaQuery.paddingOf(context).bottom;
-            return ListView.separated(
-              padding: EdgeInsets.fromLTRB(16, 16, 16, 160.0 + bottomInset),
-              itemCount: list.length,
-              separatorBuilder: (context, index) => const MobileM3ListDivider(),
-              itemBuilder: (context, index) {
-                final property = list[index];
-                return _PropertyCard(
-                  property: property,
-                  position: MobileM3ListItemPositionForIndex.forIndex(
-                    index,
-                    list.length,
+      body: Column(
+        children: [
+          MobileGridControlsBar(
+            keyPrefix: 'properties',
+            searchController: _searchCtrl,
+            searchLabel: 'Search properties',
+            onSearch: _submitSearch,
+            onClearSearch: _clearSearch,
+            sort: _sort,
+            defaultSort: 'name',
+            sortOptions: const [
+              MobileGridControlOption(value: 'name', label: 'Name A-Z'),
+              MobileGridControlOption(value: '-name', label: 'Name Z-A'),
+              MobileGridControlOption(value: 'city', label: 'City A-Z'),
+              MobileGridControlOption(
+                value: '-updatedAt',
+                label: 'Updated recently',
+              ),
+              MobileGridControlOption(value: '-unitCount', label: 'Most units'),
+            ],
+            onSortChanged: _setSort,
+            filters: [
+              MobileGridChoiceFilter(
+                id: 'property-type',
+                label: 'Property type',
+                value: _typeFilter,
+                allLabel: 'All types',
+                options: const [
+                  MobileGridControlOption(
+                    value: 'SingleFamily',
+                    label: 'Single-family',
                   ),
-                  onTap: () => _openDetail(context, property),
-                );
-              },
-            );
-          },
-        ),
+                  MobileGridControlOption(
+                    value: 'MultiFamily',
+                    label: 'Multi-family',
+                  ),
+                  MobileGridControlOption(value: 'Condo', label: 'Condo'),
+                  MobileGridControlOption(value: 'Townhome', label: 'Townhome'),
+                  MobileGridControlOption(
+                    value: 'Commercial',
+                    label: 'Commercial',
+                  ),
+                  MobileGridControlOption(
+                    value: 'MixedUse',
+                    label: 'Mixed use',
+                  ),
+                ],
+                onChanged: _setTypeFilter,
+              ),
+              MobileGridChoiceFilter(
+                id: 'property-status',
+                label: 'Status',
+                value: _statusFilter,
+                allLabel: 'All statuses',
+                options: const [
+                  MobileGridControlOption(value: 'Active', label: 'Active'),
+                  MobileGridControlOption(
+                    value: 'UnderMaintenance',
+                    label: 'Under maintenance',
+                  ),
+                  MobileGridControlOption(value: 'Inactive', label: 'Inactive'),
+                ],
+                onChanged: _setStatusFilter,
+              ),
+            ],
+          ),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _refresh,
+              child: propertiesAsync.when(
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (e, _) => _ErrorBody(
+                  message: e is ApiException ? e.message : e.toString(),
+                  onRetry: _refresh,
+                ),
+                data: (page) {
+                  if (page.items.isEmpty) {
+                    return _EmptyBody(
+                      hasCriteria:
+                          (_search ?? '').isNotEmpty ||
+                          _typeFilter != null ||
+                          _statusFilter != null,
+                      onAdd: canManageRentals
+                          ? () => _showAddSheet(context)
+                          : null,
+                    );
+                  }
+                  final bottomInset = MediaQuery.paddingOf(context).bottom;
+                  return ListView.separated(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: EdgeInsets.fromLTRB(
+                      16,
+                      12,
+                      16,
+                      160.0 + bottomInset,
+                    ),
+                    itemCount: page.items.length + 1,
+                    separatorBuilder: (context, index) {
+                      if (index == page.items.length - 1) {
+                        return const SizedBox(height: 14);
+                      }
+                      return const MobileM3ListDivider();
+                    },
+                    itemBuilder: (context, index) {
+                      if (index == page.items.length) {
+                        return MobileGridPagingBar(
+                          totalCount: page.totalCount,
+                          skip: page.skip,
+                          itemCount: page.items.length,
+                          previousTooltip: 'Previous properties page',
+                          nextTooltip: 'Next properties page',
+                          onPrevious: page.hasPrevious
+                              ? () => setState(() {
+                                  _skip = (_skip - _pageSize).clamp(0, _skip);
+                                })
+                              : null,
+                          onNext: page.hasNext
+                              ? () => setState(() => _skip += _pageSize)
+                              : null,
+                        );
+                      }
+                      final property = page.items[index];
+                      return _PropertyCard(
+                        property: property,
+                        position: MobileM3ListItemPositionForIndex.forIndex(
+                          index,
+                          page.items.length,
+                        ),
+                        onTap: () => _openDetail(context, property),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -262,9 +428,10 @@ class _MetaChip extends StatelessWidget {
 /// property is, plus a primary "Add your first property" button (not just a
 /// "tap +" hint), so the next step is obvious.
 class _EmptyBody extends StatelessWidget {
-  const _EmptyBody({required this.onAdd});
+  const _EmptyBody({required this.onAdd, required this.hasCriteria});
 
   final VoidCallback? onAdd;
+  final bool hasCriteria;
 
   @override
   Widget build(BuildContext context) {
@@ -283,7 +450,7 @@ class _EmptyBody extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              'No rentals yet',
+              hasCriteria ? 'No matching properties' : 'No rentals yet',
               style: theme.textTheme.titleMedium?.copyWith(
                 color: colorScheme.onSurface,
                 fontWeight: FontWeight.w700,
@@ -291,15 +458,17 @@ class _EmptyBody extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text(
-              'A property is one building or address. Add your first to get '
-              'started.',
+              hasCriteria
+                  ? 'Try changing your search, filters, or sort.'
+                  : 'A property is one building or address. Add your first to get '
+                        'started.',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: colorScheme.onSurfaceVariant,
               ),
             ),
             const SizedBox(height: 20),
-            if (onAdd != null)
+            if (onAdd != null && !hasCriteria)
               FilledButton.icon(
                 onPressed: onAdd,
                 icon: const Icon(Icons.add),

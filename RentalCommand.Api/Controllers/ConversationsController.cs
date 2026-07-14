@@ -32,7 +32,9 @@ public class ConversationsController : ManagementControllerBase
 
     [HttpGet("page")]
     [ProducesResponseType(typeof(ConversationListResponse), StatusCodes.Status200OK)]
-    public async Task<ActionResult<ConversationListResponse>> ListPage([FromQuery] ListQuery query, CancellationToken ct)
+    public async Task<ActionResult<ConversationListResponse>> ListPage(
+        [FromQuery] ConversationListQuery query,
+        CancellationToken ct)
     {
         var page = await _service.ListPageAuthorizedAsync(GetWorkspaceReadScope(), query, ct);
         return Ok(page);

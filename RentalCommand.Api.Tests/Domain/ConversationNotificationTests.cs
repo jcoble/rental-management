@@ -318,7 +318,7 @@ public class ConversationNotificationTests : IAsyncLifetime
         var sut = CreateSut();
 
         _commands.Clear();
-        var page = await sut.ListPageAsync(1, new ListQuery
+        var page = await sut.ListPageAsync(1, new ConversationListQuery
         {
             Sort = "subject",
             Skip = 1,
@@ -337,6 +337,69 @@ public class ConversationNotificationTests : IAsyncLifetime
             sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ListPageAsync_AppliesSearchAndUnreadFilterInTwoSqlQueries()
+    {
+        var tenant = SeedTenantWithStaffAndTenantUsers();
+        var now = DateTime.UtcNow;
+        SeedConversation(tenant.Id, "Routine update", now.AddMinutes(-2));
+        SeedConversation(
+            tenant.Id,
+            "Leaking sink follow-up",
+            now.AddMinutes(-1),
+            landlordUnreadCount: 2);
+
+        _commands.Clear();
+        var page = await CreateSut().ListPageAsync(1, new ConversationListQuery
+        {
+            Search = "sink",
+            UnreadOnly = true,
+            Take = 20,
+        });
+
+        page.TotalCount.Should().Be(1);
+        page.Items.Should().ContainSingle().Which.Subject.Should().Be("Leaking sink follow-up");
+        _commands.Should().HaveCount(2);
+        _commands.Should().OnlyContain(sql =>
+            sql.Contains("FROM \"Conversations\"", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(sql =>
+            sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LandlordUnreadCount", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ListPageForTenantAsync_AppliesTenantUnreadFilterAndWindowInSql()
+    {
+        var tenant = SeedTenantWithStaffAndTenantUsers();
+        var now = DateTime.UtcNow;
+        SeedConversation(tenant.Id, "Already read", now.AddMinutes(-2));
+        SeedConversation(
+            tenant.Id,
+            "Needs tenant reply",
+            now.AddMinutes(-1),
+            tenantUnreadCount: 3);
+
+        _commands.Clear();
+        var page = await CreateSut().ListPageForTenantAsync(
+            1,
+            tenant.Id,
+            new ConversationListQuery
+            {
+                UnreadOnly = true,
+                Skip = 0,
+                Take = 1,
+            });
+
+        page.TotalCount.Should().Be(1);
+        page.Items.Should().ContainSingle().Which.Subject.Should().Be("Needs tenant reply");
+        page.Items.Single().UnreadCount.Should().Be(3);
+        _commands.Should().HaveCount(2);
+        _commands.Should().Contain(sql =>
+            sql.Contains("TenantId", StringComparison.Ordinal) &&
+            sql.Contains("TenantUnreadCount", StringComparison.Ordinal) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -677,7 +740,8 @@ public class ConversationNotificationTests : IAsyncLifetime
         string subject,
         DateTime lastMessageAt,
         int portfolioId = 1,
-        int landlordUnreadCount = 0)
+        int landlordUnreadCount = 0,
+        int tenantUnreadCount = 0)
     {
         _ctx.Db.Conversations.Add(new Conversation
         {
@@ -689,6 +753,7 @@ public class ConversationNotificationTests : IAsyncLifetime
             LastMessageAt = lastMessageAt,
             LastMessagePreview = subject,
             LandlordUnreadCount = landlordUnreadCount,
+            TenantUnreadCount = tenantUnreadCount,
         });
         _ctx.Db.SaveChanges();
     }
