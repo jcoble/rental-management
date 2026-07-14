@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import '../../core/models/models.dart';
 import 'inspections_models.dart';
 
@@ -155,9 +156,13 @@ class InspectionsRepository {
   /// inspector? }. With a templateId the response items are Pending.
   Future<InspectionDetail> create(Map<String, dynamic> data) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/inspections',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'inspections:create:$data',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/inspections',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {

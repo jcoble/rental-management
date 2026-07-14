@@ -1,9 +1,11 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using NpgsqlTypes;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -71,6 +73,7 @@ public class InspectionService : IInspectionService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
+    private readonly IAtomicUnitOfWork? _atomic;
     private readonly IFileStorage _storage;
     private readonly IInspectionReportPdfGenerator _pdf;
     private readonly ILogger<InspectionService> _logger;
@@ -82,7 +85,8 @@ public class InspectionService : IInspectionService
         IFileStorage storage,
         IInspectionReportPdfGenerator pdf,
         ILogger<InspectionService> logger,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IAtomicUnitOfWork? atomic = null)
     {
         _db = db;
         _dataUpdate = dataUpdate;
@@ -90,7 +94,11 @@ public class InspectionService : IInspectionService
         _pdf = pdf;
         _logger = logger;
         _timeProvider = timeProvider;
+        _atomic = atomic;
     }
+
+    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
+        "Scoped inspection mutations require the atomic persistence kernel.");
 
     // Internal portfolio-id entry points exist only for the focused service tests via
     // InternalsVisibleTo. Production callers resolve IInspectionService, whose only surface requires
@@ -105,8 +113,6 @@ public class InspectionService : IInspectionService
     {
         var q = _db.Inspections
             .AsNoTracking()
-            .Include(i => i.Property)
-            .Include(i => i.Unit)
             .Where(i => i.PortfolioId == portfolioId);
 
         return await ListPageFromQueryAsync(q, propertyId, query, ct);
@@ -128,9 +134,7 @@ public class InspectionService : IInspectionService
         ListQuery query,
         CancellationToken ct = default)
         => ListPageFromQueryAsync(
-            AuthorizedInspections(scope, ReadCapabilities)
-                .Include(i => i.Property)
-                .Include(i => i.Unit),
+            AuthorizedInspections(scope, ReadCapabilities),
             propertyId,
             query,
             ct);
@@ -171,62 +175,91 @@ public class InspectionService : IInspectionService
         var items = await q
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
+            .Select(i => new InspectionResponse
+            {
+                Id = i.Id,
+                PortfolioId = i.PortfolioId,
+                PropertyId = i.PropertyId,
+                UnitId = i.UnitId,
+                LeaseManagementId = i.LeaseManagementId,
+                LeaseAgreementId = i.LeaseAgreementId,
+                Type = i.Type,
+                Status = i.Status,
+                ScheduledFor = i.ScheduledFor,
+                CompletedAt = i.CompletedAt,
+                Outcome = i.Outcome,
+                Notes = i.Notes,
+                TemplateId = i.TemplateId,
+                ReportStoredFileId = i.ReportStoredFileId,
+                Inspector = i.Inspector,
+                PropertyName = i.Property!.Name,
+                UnitNumber = i.Unit == null ? null : i.Unit.UnitNumber,
+                CreatedAt = i.CreatedAt,
+                UpdatedAt = i.UpdatedAt,
+            })
             .ToListAsync(ct);
 
         return new InspectionListResponse
         {
-            Items = items.Select(InspectionResponse.FromEntity).ToList(),
+            Items = items,
             TotalCount = totalCount,
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,
         };
     }
 
-    internal async Task<InspectionDetailResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
-    {
-        var entity = await _db.Inspections
-            .AsNoTracking()
-            .Include(i => i.Property)
-            .Include(i => i.Unit)
-            .FirstOrDefaultAsync(i => i.Id == id && i.PortfolioId == portfolioId, ct);
-        if (entity == null)
+    private static IQueryable<InspectionDetailResponse> InspectionDetailQuery(
+        IQueryable<Inspection> inspections) =>
+        inspections.Select(inspection => new InspectionDetailResponse
         {
-            return null;
-        }
+            Id = inspection.Id,
+            PortfolioId = inspection.PortfolioId,
+            PropertyId = inspection.PropertyId,
+            UnitId = inspection.UnitId,
+            LeaseManagementId = inspection.LeaseManagementId,
+            LeaseAgreementId = inspection.LeaseAgreementId,
+            Type = inspection.Type,
+            Status = inspection.Status,
+            ScheduledFor = inspection.ScheduledFor,
+            CompletedAt = inspection.CompletedAt,
+            Outcome = inspection.Outcome,
+            Notes = inspection.Notes,
+            TemplateId = inspection.TemplateId,
+            ReportStoredFileId = inspection.ReportStoredFileId,
+            Inspector = inspection.Inspector,
+            PropertyName = inspection.Property!.Name,
+            UnitNumber = inspection.Unit == null ? null : inspection.Unit.UnitNumber,
+            CreatedAt = inspection.CreatedAt,
+            UpdatedAt = inspection.UpdatedAt,
+            Items = inspection.Items
+                .OrderBy(item => item.SortOrder)
+                .ThenBy(item => item.Id)
+                .Select(item => new InspectionItemResponse
+                {
+                    Id = item.Id,
+                    InspectionId = item.InspectionId,
+                    Area = item.Area,
+                    Label = item.Label,
+                    Result = item.Result,
+                    Note = item.Note,
+                    PhotoStoredFileId = item.PhotoStoredFileId,
+                    SpawnedWorkOrderId = item.SpawnedWorkOrderId,
+                    SortOrder = item.SortOrder,
+                })
+                .ToList(),
+        });
 
-        var items = await _db.InspectionItems
-            .AsNoTracking()
-            .Where(it => it.InspectionId == id && it.PortfolioId == portfolioId)
-            .OrderBy(it => it.SortOrder)
-            .ThenBy(it => it.Id)
-            .ToListAsync(ct);
-
-        return InspectionDetailResponse.FromEntity(entity, items);
-    }
+    internal async Task<InspectionDetailResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
+        => await InspectionDetailQuery(_db.Inspections.AsNoTracking()
+                .Where(inspection => inspection.PortfolioId == portfolioId))
+            .SingleOrDefaultAsync(inspection => inspection.Id == id, ct);
 
     public async Task<InspectionDetailResponse?> GetAuthorizedAsync(
         WorkspaceReadScope scope,
         int id,
         CancellationToken ct = default)
-    {
-        var entity = await AuthorizedInspections(scope, ReadCapabilities)
-            .Include(i => i.Property)
-            .Include(i => i.Unit)
-            .FirstOrDefaultAsync(i => i.Id == id, ct);
-        if (entity == null)
-        {
-            return null;
-        }
-
-        var items = await _db.InspectionItems
-            .AsNoTracking()
-            .Where(item => item.InspectionId == id && item.PortfolioId == scope.PortfolioId)
-            .OrderBy(item => item.SortOrder)
-            .ThenBy(item => item.Id)
-            .ToListAsync(ct);
-
-        return InspectionDetailResponse.FromEntity(entity, items);
-    }
+        => await InspectionDetailQuery(AuthorizedInspections(scope, ReadCapabilities))
+            .SingleOrDefaultAsync(inspection => inspection.Id == id, ct);
 
     internal async Task<IReadOnlyList<InspectionTemplateResponse>> ListTemplatesAsync(int portfolioId, CancellationToken ct = default)
     {
@@ -237,13 +270,27 @@ public class InspectionService : IInspectionService
 
         var custom = await _db.InspectionTemplates
             .AsNoTracking()
-            .Include(t => t.Items.OrderBy(i => i.SortOrder).ThenBy(i => i.Id))
             .Where(t => t.PortfolioId == portfolioId)
             .OrderBy(t => t.Name)
             .ThenBy(t => t.Id)
+            .Select(t => new InspectionTemplateResponse
+            {
+                Id = t.Id,
+                PortfolioId = t.PortfolioId,
+                Name = t.Name,
+                InspectionType = t.InspectionType,
+                IsBuiltIn = t.IsBuiltIn,
+                Items = t.Items.OrderBy(item => item.SortOrder).ThenBy(item => item.Id)
+                    .Select(item => new InspectionTemplateItemResponse
+                    {
+                        Area = item.Area,
+                        Label = item.Label,
+                        SortOrder = item.SortOrder,
+                    }).ToList(),
+            })
             .ToListAsync(ct);
 
-        result.AddRange(custom.Select(InspectionTemplateResponse.FromEntity));
+        result.AddRange(custom);
         return result;
     }
 
@@ -262,8 +309,23 @@ public class InspectionService : IInspectionService
             return builtIn == null ? null : InspectionTemplateResponse.FromEntity(builtIn);
         }
 
-        var custom = await LoadCustomTemplateAsync(portfolioId, templateId, ct);
-        return custom == null ? null : InspectionTemplateResponse.FromEntity(custom);
+        return await _db.InspectionTemplates.AsNoTracking()
+            .Where(template => template.Id == templateId && template.PortfolioId == portfolioId)
+            .Select(template => new InspectionTemplateResponse
+            {
+                Id = template.Id,
+                PortfolioId = template.PortfolioId,
+                Name = template.Name,
+                InspectionType = template.InspectionType,
+                IsBuiltIn = template.IsBuiltIn,
+                Items = template.Items.OrderBy(item => item.SortOrder).ThenBy(item => item.Id)
+                    .Select(item => new InspectionTemplateItemResponse
+                    {
+                        Area = item.Area,
+                        Label = item.Label,
+                        SortOrder = item.SortOrder,
+                    }).ToList(),
+            }).SingleOrDefaultAsync(ct);
     }
 
     public async Task<InspectionTemplateResponse?> GetTemplateAuthorizedAsync(
@@ -308,19 +370,14 @@ public class InspectionService : IInspectionService
     public async Task<InspectionTemplateResponse?> CreateTemplateAuthorizedAsync(
         WorkspaceReadScope scope,
         CreateInspectionTemplateRequest request,
+        string operationKey,
         CancellationToken ct = default)
     {
-        var response = await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
-            await HasAllPropertiesAccessAsync(scope, WriteCapabilities, innerCt)
-                ? await CreateTemplateCoreAsync(scope.PortfolioId, request, broadcast: false, innerCt)
-                : null,
-            ct);
-        if (response is not null)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(
-                scope.PortfolioId, TemplateEntityType, response.Id, response, ct);
-        }
-        return response;
+        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Template,
+            AtomicInspectionMutationOperation.Create, 0, 0, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        return DeserializeSnapshot<InspectionTemplateResponse>(outcome.Value);
     }
 
     internal Task<InspectionTemplateResponse?> UpdateTemplateAsync(int portfolioId, int templateId, UpdateInspectionTemplateRequest request, CancellationToken ct = default)
@@ -372,19 +429,14 @@ public class InspectionService : IInspectionService
         WorkspaceReadScope scope,
         int templateId,
         UpdateInspectionTemplateRequest request,
+        string operationKey,
         CancellationToken ct = default)
     {
-        var response = await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
-            await HasAllPropertiesAccessAsync(scope, WriteCapabilities, innerCt)
-                ? await UpdateTemplateCoreAsync(scope.PortfolioId, templateId, request, broadcast: false, innerCt)
-                : null,
-            ct);
-        if (response is not null)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(
-                scope.PortfolioId, TemplateEntityType, response.Id, response, ct);
-        }
-        return response;
+        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Template,
+            AtomicInspectionMutationOperation.Update, templateId, 0, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        return DeserializeSnapshot<InspectionTemplateResponse>(outcome.Value);
     }
 
     internal Task<bool> DeleteTemplateAsync(int portfolioId, int templateId, CancellationToken ct = default)
@@ -418,18 +470,14 @@ public class InspectionService : IInspectionService
     public async Task<bool> DeleteTemplateAuthorizedAsync(
         WorkspaceReadScope scope,
         int templateId,
+        string operationKey,
         CancellationToken ct = default)
     {
-        var deleted = await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
-            await HasAllPropertiesAccessAsync(scope, WriteCapabilities, innerCt) &&
-            await DeleteTemplateCoreAsync(scope.PortfolioId, templateId, broadcast: false, innerCt),
-            ct);
-        if (deleted)
-        {
-            await _dataUpdate.BroadcastEntityDeleteAsync(
-                scope.PortfolioId, TemplateEntityType, templateId, ct);
-        }
-        return deleted;
+        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Template,
+            AtomicInspectionMutationOperation.Delete, templateId, 0, operationKey, new object());
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        return outcome.Value.Found;
     }
 
     internal Task<InspectionDetailResponse?> CreateAsync(int portfolioId, CreateInspectionRequest request, CancellationToken ct = default)
@@ -523,22 +571,14 @@ public class InspectionService : IInspectionService
     public async Task<InspectionDetailResponse?> CreateAuthorizedAsync(
         WorkspaceReadScope scope,
         CreateInspectionRequest request,
+        string operationKey,
         CancellationToken ct = default)
     {
-        var response = await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
-        {
-            var allowed = await AuthorizedProperties(scope, WriteCapabilities)
-                .AnyAsync(property => property.Id == request.PropertyId, innerCt);
-            return allowed
-                ? await CreateCoreAsync(scope.PortfolioId, request, broadcast: false, innerCt)
-                : null;
-        }, ct);
-        if (response is not null)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(
-                scope.PortfolioId, EntityType, response.Id, response, ct);
-        }
-        return response;
+        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Inspection,
+            AtomicInspectionMutationOperation.Create, 0, 0, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        return DeserializeSnapshot<InspectionDetailResponse>(outcome.Value);
     }
 
     internal Task<InspectionResponse?> UpdateAsync(int portfolioId, int id, UpdateInspectionRequest request, CancellationToken ct = default)
@@ -616,17 +656,14 @@ public class InspectionService : IInspectionService
         WorkspaceReadScope scope,
         int id,
         UpdateInspectionRequest request,
+        string operationKey,
         CancellationToken ct = default)
     {
-        var response = await ExecuteForAuthorizedInspectionAsync(
-            scope, id,
-            innerCt => UpdateCoreAsync(scope.PortfolioId, id, request, broadcast: false, innerCt), ct);
-        if (response is not null)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(
-                scope.PortfolioId, EntityType, response.Id, response, ct);
-        }
-        return response;
+        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Inspection,
+            AtomicInspectionMutationOperation.Update, id, 0, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        return DeserializeSnapshot<InspectionResponse>(outcome.Value);
     }
 
     internal Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
@@ -659,17 +696,21 @@ public class InspectionService : IInspectionService
     public async Task<bool> DeleteAuthorizedAsync(
         WorkspaceReadScope scope,
         int id,
+        string operationKey,
         CancellationToken ct = default)
     {
-        var deleted = await ExecuteForAuthorizedInspectionAsync(
-            scope, id,
-            innerCt => DeleteCoreAsync(scope.PortfolioId, id, broadcast: false, innerCt), ct);
-        if (deleted)
-        {
-            await _dataUpdate.BroadcastEntityDeleteAsync(scope.PortfolioId, EntityType, id, ct);
-        }
-        return deleted;
+        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Inspection,
+            AtomicInspectionMutationOperation.Delete, id, 0, operationKey, new object());
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        return outcome.Value.Found;
     }
+
+    private static TResponse? DeserializeSnapshot<TResponse>(AtomicInspectionMutationResult result)
+        where TResponse : class =>
+        result.Found && result.ResponseJson is not null
+            ? JsonSerializer.Deserialize<TResponse>(result.ResponseJson)
+            : null;
 
     internal async Task<InspectionItemResponse?> CreateItemAsync(int portfolioId, int inspectionId, CreateInspectionItemRequest request, CancellationToken ct = default)
     {

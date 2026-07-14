@@ -185,6 +185,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Api.Services.Domain.AtomicCoreCrudMutationResult,
     RentalCommand.Api.Services.Domain.AtomicCoreCrudMutationHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.AtomicInspectionMutationCommand,
+    RentalCommand.Api.Services.Domain.AtomicInspectionMutationResult,
+    RentalCommand.Api.Services.Domain.AtomicInspectionMutationHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Api.Services.Domain.AtomicPublicApplicationSubmissionCommand,
     RentalCommand.Api.Services.Domain.AtomicPublicApplicationSubmissionResult,
     RentalCommand.Api.Services.Domain.AtomicPublicApplicationSubmissionHandler>();

@@ -61,9 +61,13 @@ public class InspectionController : ManagementControllerBase
 
     [HttpPost("templates")]
     [ProducesResponseType(typeof(InspectionTemplateResponse), StatusCodes.Status201Created)]
-    public async Task<ActionResult<InspectionTemplateResponse>> CreateTemplate([FromBody] CreateInspectionTemplateRequest request, CancellationToken ct)
+    public async Task<ActionResult<InspectionTemplateResponse>> CreateTemplate(
+        [FromBody] CreateInspectionTemplateRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var created = await _service.CreateTemplateAuthorizedAsync(GetWorkspaceReadScope(), request, ct);
+        if (!TryOperationKey(idempotencyKey, out var operationKey, out var error)) return error!;
+        var created = await _service.CreateTemplateAuthorizedAsync(GetWorkspaceReadScope(), request, operationKey!, ct);
         if (created == null)
         {
             return NotFound(new { error = "Inspection checklist template not found" });
@@ -75,18 +79,28 @@ public class InspectionController : ManagementControllerBase
     [ProducesResponseType(typeof(InspectionTemplateResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<InspectionTemplateResponse>> UpdateTemplate(
-        int templateId, [FromBody] UpdateInspectionTemplateRequest request, CancellationToken ct)
+        int templateId,
+        [FromBody] UpdateInspectionTemplateRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var updated = await _service.UpdateTemplateAuthorizedAsync(GetWorkspaceReadScope(), templateId, request, ct);
+        if (!TryOperationKey(idempotencyKey, out var operationKey, out var error)) return error!;
+        var updated = await _service.UpdateTemplateAuthorizedAsync(
+            GetWorkspaceReadScope(), templateId, request, operationKey!, ct);
         return updated == null ? NotFound(new { error = "Inspection checklist template not found" }) : Ok(updated);
     }
 
     [HttpDelete("templates/{templateId:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> DeleteTemplate(int templateId, CancellationToken ct)
+    public async Task<IActionResult> DeleteTemplate(
+        int templateId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var deleted = await _service.DeleteTemplateAuthorizedAsync(GetWorkspaceReadScope(), templateId, ct);
+        if (!TryOperationKey(idempotencyKey, out var operationKey, out var error)) return error!;
+        var deleted = await _service.DeleteTemplateAuthorizedAsync(
+            GetWorkspaceReadScope(), templateId, operationKey!, ct);
         return deleted ? NoContent() : NotFound(new { error = "Inspection checklist template not found" });
     }
 
@@ -102,9 +116,13 @@ public class InspectionController : ManagementControllerBase
     [HttpPost]
     [ProducesResponseType(typeof(InspectionDetailResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<InspectionDetailResponse>> Create([FromBody] CreateInspectionRequest request, CancellationToken ct)
+    public async Task<ActionResult<InspectionDetailResponse>> Create(
+        [FromBody] CreateInspectionRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var created = await _service.CreateAuthorizedAsync(GetWorkspaceReadScope(), request, ct);
+        if (!TryOperationKey(idempotencyKey, out var operationKey, out var error)) return error!;
+        var created = await _service.CreateAuthorizedAsync(GetWorkspaceReadScope(), request, operationKey!, ct);
         return created == null
             ? NotFound(new { error = "Referenced property, unit, lease relationship, agreement, or template not found in this portfolio" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
@@ -113,9 +131,14 @@ public class InspectionController : ManagementControllerBase
     [HttpPatch("{id:int}")]
     [ProducesResponseType(typeof(InspectionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<InspectionResponse>> Update(int id, [FromBody] UpdateInspectionRequest request, CancellationToken ct)
+    public async Task<ActionResult<InspectionResponse>> Update(
+        int id,
+        [FromBody] UpdateInspectionRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var updated = await _service.UpdateAuthorizedAsync(GetWorkspaceReadScope(), id, request, ct);
+        if (!TryOperationKey(idempotencyKey, out var operationKey, out var error)) return error!;
+        var updated = await _service.UpdateAuthorizedAsync(GetWorkspaceReadScope(), id, request, operationKey!, ct);
         return updated == null ? NotFound(new { error = "Inspection not found" }) : Ok(updated);
     }
 
@@ -220,9 +243,26 @@ public class InspectionController : ManagementControllerBase
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        int id,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
+        if (!TryOperationKey(idempotencyKey, out var operationKey, out var error)) return error!;
+        var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, operationKey!, ct);
         return deleted ? NoContent() : NotFound(new { error = "Inspection not found" });
+    }
+
+    private bool TryOperationKey(string? value, out string? operationKey, out ActionResult? error)
+    {
+        operationKey = value?.Trim();
+        if (!string.IsNullOrWhiteSpace(operationKey) && operationKey.Length <= 128)
+        {
+            error = null;
+            return true;
+        }
+
+        error = BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        return false;
     }
 }
