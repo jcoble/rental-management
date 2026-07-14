@@ -47,15 +47,11 @@ class BankingRepository {
   }
 
   Future<void> match(BankTransaction transaction) async {
-    final suggestion = transaction.suggestedMatch;
-    if (suggestion == null) return;
+    if (transaction.suggestedMatch == null) return;
     try {
       await _dio.post<Map<String, dynamic>>(
-        '/banking/transactions/${transaction.id}/match',
-        data: {
-          'entityType': suggestion.entityType,
-          'entityId': suggestion.entityId,
-        },
+        '/banking/transactions/${transaction.id}/confirm-match',
+        data: const <String, dynamic>{},
       );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);

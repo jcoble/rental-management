@@ -144,7 +144,7 @@ class BankReviewItem {
   });
 
   final BankReviewTransaction transaction;
-  final BankMatchSuggestion suggestion;
+  final BankReviewSuggestion suggestion;
 
   factory BankReviewItem.fromJson(Map<String, dynamic> json) {
     final rawSuggestion = json['suggestion'];
@@ -152,9 +152,29 @@ class BankReviewItem {
       transaction: BankReviewTransaction.fromJson(
         (json['transaction'] as Map<String, dynamic>?) ?? const {},
       ),
-      suggestion: BankMatchSuggestion.fromJson(
+      suggestion: BankReviewSuggestion.fromJson(
         rawSuggestion is Map<String, dynamic> ? rawSuggestion : const {},
       ),
+    );
+  }
+}
+
+class BankReviewSuggestion {
+  const BankReviewSuggestion({
+    required this.confidence,
+    required this.label,
+    required this.reason,
+  });
+
+  final double confidence;
+  final String label;
+  final String reason;
+
+  factory BankReviewSuggestion.fromJson(Map<String, dynamic> json) {
+    return BankReviewSuggestion(
+      confidence: (json['confidence'] as num?)?.toDouble() ?? 0,
+      label: json['label'] as String? ?? '',
+      reason: json['reason'] as String? ?? '',
     );
   }
 }

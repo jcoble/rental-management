@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Banking;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
@@ -13,6 +14,7 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -439,24 +441,31 @@ public class BankingService : IBankingService
         };
     }
 
-    public async Task<BankTransactionResponse?> MatchAsync(
-        int portfolioId,
+    public async Task<OperationalBankTransactionResponse?> MatchAsync(
+        WorkspaceReadScope scope,
         int transactionId,
         MatchBankTransactionRequest request,
         CancellationToken ct = default)
     {
-        var transaction = await BaseTransactions(portfolioId).AsNoTracking()
+        var transaction = await SuggestibleUnmatchedTransactionsQuery(scope).AsNoTracking()
             .FirstOrDefaultAsync(t => t.Id == transactionId, ct);
         if (transaction == null) return null;
         ValidateMatchTarget(request.TenantAccountId, request.TenantLedgerEntryId, request.ExpenseId);
-        return await ReconcileAsync(
-            portfolioId,
+        if (!await IsOperationalTargetAuthorizedAsync(scope, request.TenantAccountId,
+                request.TenantLedgerEntryId, request.ExpenseId, ct))
+        {
+            return null;
+        }
+
+        var updated = await ReconcileAsync(
+            scope.PortfolioId,
             transaction,
             request.ExpenseId.HasValue ? BankReconciliationAction.MatchExpense : BankReconciliationAction.MatchReceipt,
             request.TenantAccountId,
             request.TenantLedgerEntryId,
             request.ExpenseId,
             ct);
+        return updated is null ? null : MapOperationalTransactionResponse(updated);
     }
 
     public async Task<BankTransactionResponse?> ClearMatchAsync(int portfolioId, int transactionId, CancellationToken ct = default)
@@ -468,7 +477,7 @@ public class BankingService : IBankingService
     }
 
     public async Task<BankReviewQueueResponse> GetReviewQueueAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         int skip = 0,
         int take = DefaultReviewQueueTake,
         CancellationToken ct = default)
@@ -480,7 +489,7 @@ public class BankingService : IBankingService
         // Unmatched (not yet confirmed, dismissed, or removed) AND the matcher currently has a
         // payment/expense candidate for it. These are the lines at risk of double-counting a
         // scanned receipt against the bank deposit/withdrawal.
-        var candidateQuery = SuggestibleUnmatchedTransactionsQuery(portfolioId);
+        var candidateQuery = SuggestibleUnmatchedTransactionsQuery(scope);
         var count = await candidateQuery.CountAsync(ct);
         var transactions = await candidateQuery
             .OrderByDescending(t => t.PostedAt)
@@ -489,13 +498,17 @@ public class BankingService : IBankingService
             .Take(take)
             .ToListAsync(ct);
 
-        var mapped = await MapTransactionsWithSuggestionsAsync(portfolioId, transactions, ct);
+        var suggestions = await LoadSqlRankedSuggestionsAsync(
+            scope.PortfolioId,
+            transactions.Select(transaction => transaction.Id).ToArray(),
+            scope,
+            ct);
 
-        var items = mapped
-            .Select(t => new BankReviewQueueItemResponse
+        var items = transactions
+            .Select(transaction => new BankReviewQueueItemResponse
             {
-                Transaction = t,
-                Suggestion = t.SuggestedMatch!,
+                Transaction = MapOperationalTransactionEntity(transaction),
+                Suggestion = MapOperationalSuggestion(suggestions[transaction.Id]),
             })
             .ToList();
 
@@ -508,13 +521,13 @@ public class BankingService : IBankingService
         };
     }
 
-    public async Task<BankTransactionResponse?> ConfirmMatchAsync(
-        int portfolioId,
+    public async Task<OperationalBankTransactionResponse?> ConfirmMatchAsync(
+        WorkspaceReadScope scope,
         int transactionId,
         ConfirmBankMatchRequest request,
         CancellationToken ct = default)
     {
-        var transaction = await BaseTransactions(portfolioId).AsNoTracking()
+        var transaction = await SuggestibleUnmatchedTransactionsQuery(scope).AsNoTracking()
             .FirstOrDefaultAsync(t => t.Id == transactionId, ct);
         if (transaction == null) return null;
         // An explicit canonical receipt identity or expense wins; otherwise use the current
@@ -527,9 +540,9 @@ public class BankingService : IBankingService
 
         if (tenantLedgerEntryId is null && expenseId is null)
         {
-            var suggestion = (await MapTransactionsWithSuggestionsAsync(portfolioId, [transaction], ct))
-                .Single().SuggestedMatch;
-            if (suggestion == null) return null;
+            var suggestion = (await LoadSqlRankedSuggestionsAsync(
+                scope.PortfolioId, [transaction.Id], scope, ct)).GetValueOrDefault(transaction.Id);
+            if (suggestion is null) return null;
             if (suggestion.EntityType.Equals("TenantLedgerEntry", StringComparison.OrdinalIgnoreCase))
             {
                 tenantAccountId = suggestion.TenantAccountId;
@@ -539,14 +552,21 @@ public class BankingService : IBankingService
                 expenseId = checked((int)suggestion.EntityId);
         }
 
-        return await ReconcileAsync(
-            portfolioId,
+        if (!await IsOperationalTargetAuthorizedAsync(
+                scope, tenantAccountId, tenantLedgerEntryId, expenseId, ct))
+        {
+            return null;
+        }
+
+        var updated = await ReconcileAsync(
+            scope.PortfolioId,
             transaction,
             tenantLedgerEntryId.HasValue ? BankReconciliationAction.MatchReceipt : BankReconciliationAction.MatchExpense,
             tenantAccountId,
             tenantLedgerEntryId,
             expenseId,
             ct);
+        return updated is null ? null : MapOperationalTransactionResponse(updated);
     }
 
     public async Task<BankTransactionResponse?> DismissMatchAsync(int portfolioId, int transactionId, CancellationToken ct = default)
@@ -614,6 +634,66 @@ public class BankingService : IBankingService
                     e.Amount >= -t.Amount - 0.01m && e.Amount <= -t.Amount + 0.01m &&
                     (e.PaidAt ?? e.IncurredAt) >= t.PostedAt.AddDays(-7) &&
                     (e.PaidAt ?? e.IncurredAt) <= t.PostedAt.AddDays(7))));
+    }
+
+    /// <summary>
+    /// Property-scoped operational queue. The authorization predicates remain correlated inside the
+    /// bank-line query, so count, ordering, and paging all execute against the caller's current
+    /// session/capability/property scope in PostgreSQL.
+    /// </summary>
+    private IQueryable<BankTransaction> SuggestibleUnmatchedTransactionsQuery(WorkspaceReadScope scope)
+    {
+        var now = _timeProvider.UtcNow();
+        var authorizedProperties = _db.Properties.AsNoTracking()
+            .WhereAuthorized(_db, scope, CapabilityKeys.MoneyReconciliationOperate, now);
+        var authorizedExpenses = _db.Expenses.AsNoTracking()
+            .WhereMoneyAuthorized(_db, scope, CapabilityKeys.MoneyReconciliationOperate, now);
+
+        return _db.BankTransactions.AsNoTracking()
+            .Where(transaction =>
+                transaction.PortfolioId == scope.PortfolioId &&
+                transaction.MatchStatus == "Unmatched")
+            .Where(transaction =>
+                (transaction.Amount > 0 && _db.TenantLedgerEntries.AsNoTracking().Any(entry =>
+                    entry.PortfolioId == scope.PortfolioId &&
+                    entry.EntryType == TenantLedgerEntryType.PaymentReceipt &&
+                    entry.Direction == TenantLedgerDirection.Credit &&
+                    entry.Amount >= transaction.Amount - 0.01m &&
+                    entry.Amount <= transaction.Amount + 0.01m &&
+                    entry.EffectiveOn >= DateOnly.FromDateTime(transaction.PostedAt.AddDays(-7)) &&
+                    entry.EffectiveOn <= DateOnly.FromDateTime(transaction.PostedAt.AddDays(7)) &&
+                    authorizedProperties.Any(property =>
+                        property.Id == entry.TenantAccount!.LeaseManagement!.PropertyId))) ||
+                (transaction.Amount < 0 && authorizedExpenses.Any(expense =>
+                    expense.Amount >= -transaction.Amount - 0.01m &&
+                    expense.Amount <= -transaction.Amount + 0.01m &&
+                    (expense.PaidAt ?? expense.IncurredAt) >= transaction.PostedAt.AddDays(-7) &&
+                    (expense.PaidAt ?? expense.IncurredAt) <= transaction.PostedAt.AddDays(7))));
+    }
+
+    private async Task<bool> IsOperationalTargetAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int? tenantAccountId,
+        long? tenantLedgerEntryId,
+        int? expenseId,
+        CancellationToken ct)
+    {
+        var now = _timeProvider.UtcNow();
+        if (tenantAccountId.HasValue && tenantLedgerEntryId.HasValue)
+        {
+            var authorizedProperties = _db.Properties.AsNoTracking()
+                .WhereAuthorized(_db, scope, CapabilityKeys.MoneyReconciliationOperate, now);
+            return await _db.TenantLedgerEntries.AsNoTracking().AnyAsync(entry =>
+                entry.PortfolioId == scope.PortfolioId &&
+                entry.Id == tenantLedgerEntryId.Value &&
+                entry.TenantAccountId == tenantAccountId.Value &&
+                authorizedProperties.Any(property =>
+                    property.Id == entry.TenantAccount!.LeaseManagement!.PropertyId), ct);
+        }
+
+        return expenseId.HasValue && await _db.Expenses.AsNoTracking()
+            .WhereMoneyAuthorized(_db, scope, CapabilityKeys.MoneyReconciliationOperate, now)
+            .AnyAsync(expense => expense.Id == expenseId.Value, ct);
     }
 
     private Task<PlaidRuntimeSettings> GetRuntimeSettingsAsync(int portfolioId, CancellationToken ct)
@@ -793,7 +873,7 @@ public class BankingService : IBankingService
 
         var suggestionsByTransactionId = unmatchedTransactionIds.Length == 0
             ? new Dictionary<int, BankMatchSuggestionResponse>()
-            : await LoadSqlRankedSuggestionsAsync(portfolioId, unmatchedTransactionIds, ct);
+            : await LoadSqlRankedSuggestionsAsync(portfolioId, unmatchedTransactionIds, null, ct);
 
         return transactions
             .Select(t => MapTransaction(t, suggestionsByTransactionId.GetValueOrDefault(t.Id)))
@@ -834,11 +914,27 @@ public class BankingService : IBankingService
     private async Task<Dictionary<int, BankMatchSuggestionResponse>> LoadSqlRankedSuggestionsAsync(
         int portfolioId,
         int[] transactionIds,
+        WorkspaceReadScope? scope,
         CancellationToken ct)
     {
+        var receiptEntries = _db.TenantLedgerEntries.AsNoTracking()
+            .Where(entry => entry.PortfolioId == portfolioId);
+        var expenses = _db.Expenses.AsNoTracking()
+            .Where(expense => expense.PortfolioId == portfolioId);
+        if (scope is { } scopedAccess)
+        {
+            var now = _timeProvider.UtcNow();
+            var authorizedProperties = _db.Properties.AsNoTracking()
+                .WhereAuthorized(_db, scopedAccess, CapabilityKeys.MoneyReconciliationOperate, now);
+            receiptEntries = receiptEntries.Where(entry => authorizedProperties.Any(property =>
+                property.Id == entry.TenantAccount!.LeaseManagement!.PropertyId));
+            expenses = expenses.WhereMoneyAuthorized(
+                _db, scopedAccess, CapabilityKeys.MoneyReconciliationOperate, now);
+        }
+
         var receiptCandidates =
             from t in _db.BankTransactions.AsNoTracking()
-            from entry in _db.TenantLedgerEntries.AsNoTracking()
+            from entry in receiptEntries
             join account in _db.TenantAccounts.AsNoTracking()
                 on new { entry.TenantAccountId, entry.PortfolioId }
                 equals new { TenantAccountId = account.Id, account.PortfolioId }
@@ -880,7 +976,7 @@ public class BankingService : IBankingService
 
         var expenseCandidates =
             from t in _db.BankTransactions.AsNoTracking()
-            from e in _db.Expenses.AsNoTracking()
+            from e in expenses
             let anchor = e.PaidAt ?? e.IncurredAt
             let bankText = ((t.MerchantName ?? "") + " " + t.Description).ToLower()
             let vendorName = e.Vendor != null ? e.Vendor.Name.ToLower() : ""
@@ -985,5 +1081,37 @@ public class BankingService : IBankingService
         MatchConfidence = t.MatchConfidence,
         Notes = t.Notes,
         SuggestedMatch = suggestion
+    };
+
+    private static OperationalBankTransactionResponse MapOperationalTransactionEntity(BankTransaction transaction) => new()
+    {
+        Id = transaction.Id,
+        PostedAt = transaction.PostedAt,
+        Description = transaction.Description,
+        MerchantName = transaction.MerchantName,
+        Amount = transaction.Amount,
+        IsoCurrencyCode = transaction.IsoCurrencyCode,
+        Category = transaction.Category,
+        MatchStatus = transaction.MatchStatus,
+    };
+
+    private static OperationalBankTransactionResponse MapOperationalTransactionResponse(BankTransactionResponse transaction) => new()
+    {
+        Id = transaction.Id,
+        PostedAt = transaction.PostedAt,
+        Description = transaction.Description,
+        MerchantName = transaction.MerchantName,
+        Amount = transaction.Amount,
+        IsoCurrencyCode = transaction.IsoCurrencyCode,
+        Category = transaction.Category,
+        MatchStatus = transaction.MatchStatus,
+    };
+
+    private static OperationalBankMatchSuggestionResponse MapOperationalSuggestion(
+        BankMatchSuggestionResponse suggestion) => new()
+    {
+        Confidence = suggestion.Confidence,
+        Label = suggestion.Label,
+        Reason = suggestion.Reason,
     };
 }

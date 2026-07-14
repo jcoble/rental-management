@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/auth/auth_controller.dart';
 import '../home/mobile_domain_chrome.dart';
 import 'banking_models.dart';
 import 'banking_repository.dart';
@@ -11,14 +12,31 @@ class BankingScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final summaryAsync = ref.watch(bankingSummaryProvider);
-    final reviewAsync = ref.watch(bankingReviewQueueProvider);
-    final transactionsAsync = ref.watch(bankingTransactionsProvider);
+    final authState = ref.watch(authControllerProvider);
+    final capabilities = authState is AuthStateAuthenticated
+        ? authState.capabilities
+        : const <String>{};
+    final canManageConnections = capabilities.contains(
+      'bank-connections.manage',
+    );
+    final canOperate = capabilities.contains('money.reconciliation.operate');
+    final canDestructivelyReconcile = capabilities.contains(
+      'money.reconciliation.destructive',
+    );
+    final summaryAsync = canManageConnections
+        ? ref.watch(bankingSummaryProvider)
+        : null;
+    final reviewAsync = canOperate
+        ? ref.watch(bankingReviewQueueProvider)
+        : null;
+    final transactionsAsync = canManageConnections
+        ? ref.watch(bankingTransactionsProvider)
+        : null;
 
     Future<void> refresh() async {
-      ref.invalidate(bankingSummaryProvider);
-      ref.invalidate(bankingReviewQueueProvider);
-      ref.invalidate(bankingTransactionsProvider);
+      if (canManageConnections) ref.invalidate(bankingSummaryProvider);
+      if (canOperate) ref.invalidate(bankingReviewQueueProvider);
+      if (canManageConnections) ref.invalidate(bankingTransactionsProvider);
     }
 
     return Scaffold(
@@ -29,14 +47,16 @@ class BankingScreen extends ConsumerWidget {
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
           children: [
-            summaryAsync.when(
-              loading: () =>
-                  const _LoadingCard(label: 'Loading banking summary...'),
-              error: (e, _) => _ErrorCard(message: _message(e)),
-              data: (summary) => _SummaryGrid(summary: summary),
-            ),
-            const SizedBox(height: 18),
-            reviewAsync.when(
+            if (canManageConnections) ...[
+              summaryAsync!.when(
+                loading: () =>
+                    const _LoadingCard(label: 'Loading banking summary...'),
+                error: (e, _) => _ErrorCard(message: _message(e)),
+                data: (summary) => _SummaryGrid(summary: summary),
+              ),
+              const SizedBox(height: 18),
+            ],
+            if (canOperate) reviewAsync!.when(
               loading: () => const _LoadingCard(
                 label: 'Checking for possible duplicates...',
               ),
@@ -76,39 +96,48 @@ class BankingScreen extends ConsumerWidget {
                     ),
                     const SizedBox(height: 8),
                     for (final item in queue.items) ...[
-                      _ReviewCard(item: item),
+                      _ReviewCard(
+                        item: item,
+                        canDismiss: canDestructivelyReconcile,
+                      ),
                       const SizedBox(height: 8),
                     ],
                   ],
                 );
               },
             ),
-            const SizedBox(height: 18),
-            Text(
-              'Recent bank lines',
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 8),
-            transactionsAsync.when(
-              loading: () =>
-                  const _LoadingCard(label: 'Loading transactions...'),
-              error: (e, _) => _ErrorCard(message: _message(e)),
-              data: (transactions) {
-                if (transactions.isEmpty) {
-                  return const _EmptyCard();
-                }
-                return Column(
-                  children: [
-                    for (final transaction in transactions) ...[
-                      _TransactionCard(transaction: transaction),
-                      const SizedBox(height: 8),
+            if (canManageConnections) ...[
+              const SizedBox(height: 18),
+              Text(
+                'Recent bank lines',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 8),
+              transactionsAsync!.when(
+                loading: () =>
+                    const _LoadingCard(label: 'Loading transactions...'),
+                error: (e, _) => _ErrorCard(message: _message(e)),
+                data: (transactions) {
+                  if (transactions.isEmpty) {
+                    return const _EmptyCard();
+                  }
+                  return Column(
+                    children: [
+                      for (final transaction in transactions) ...[
+                        _TransactionCard(
+                          transaction: transaction,
+                          canOperate: canOperate,
+                          canClear: canDestructivelyReconcile,
+                        ),
+                        const SizedBox(height: 8),
+                      ],
                     ],
-                  ],
-                );
-              },
-            ),
+                  );
+                },
+              ),
+            ],
           ],
         ),
       ),
@@ -181,9 +210,15 @@ class _MetricCard extends StatelessWidget {
 }
 
 class _TransactionCard extends ConsumerWidget {
-  const _TransactionCard({required this.transaction});
+  const _TransactionCard({
+    required this.transaction,
+    required this.canOperate,
+    required this.canClear,
+  });
 
   final BankTransaction transaction;
+  final bool canOperate;
+  final bool canClear;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -232,32 +267,35 @@ class _TransactionCard extends ConsumerWidget {
                 children: [
                   const _StatusPill(label: 'Matched'),
                   const SizedBox(width: 8),
-                  TextButton(
-                    onPressed: () async {
-                      try {
-                        await ref
-                            .read(bankingRepositoryProvider)
-                            .clearMatch(transaction);
-                        ref.invalidate(bankingSummaryProvider);
-                        ref.invalidate(bankingTransactionsProvider);
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Match cleared.')),
-                          );
+                  if (canClear)
+                    TextButton(
+                      onPressed: () async {
+                        try {
+                          await ref
+                              .read(bankingRepositoryProvider)
+                              .clearMatch(transaction);
+                          ref.invalidate(bankingSummaryProvider);
+                          ref.invalidate(bankingTransactionsProvider);
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Match cleared.')),
+                            );
+                          }
+                        } catch (e) {
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(BankingScreen._message(e)),
+                              ),
+                            );
+                          }
                         }
-                      } catch (e) {
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text(BankingScreen._message(e))),
-                          );
-                        }
-                      }
-                    },
-                    child: const Text('Clear'),
-                  ),
+                      },
+                      child: const Text('Clear'),
+                    ),
                 ],
               )
-            else if (suggestion != null) ...[
+            else if (suggestion != null && canOperate) ...[
               Text(
                 suggestion.reason,
                 style: theme.textTheme.bodySmall?.copyWith(
@@ -335,9 +373,10 @@ class _SectionHeader extends StatelessWidget {
 }
 
 class _ReviewCard extends ConsumerWidget {
-  const _ReviewCard({required this.item});
+  const _ReviewCard({required this.item, required this.canDismiss});
 
   final BankReviewItem item;
+  final bool canDismiss;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -456,18 +495,20 @@ class _ReviewCard extends ConsumerWidget {
                     child: const Text('Confirm'),
                   ),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => run(
-                      () => ref
-                          .read(bankingRepositoryProvider)
-                          .dismissMatch(transaction.id),
-                      'Kept as a separate bank line.',
+                if (canDismiss) ...[
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => run(
+                        () => ref
+                            .read(bankingRepositoryProvider)
+                            .dismissMatch(transaction.id),
+                        'Kept as a separate bank line.',
+                      ),
+                      child: const Text('Not a match'),
                     ),
-                    child: const Text('Not a match'),
                   ),
-                ),
+                ],
               ],
             ),
           ],

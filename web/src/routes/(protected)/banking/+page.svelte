@@ -1,5 +1,7 @@
 <script lang="ts">
+	import { page } from '$app/state';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { CAPABILITY } from '$lib/auth/experience-policy';
 	import { banking } from '$lib/api/endpoints/banking';
 	import type {
 		BankReviewQueueResponse,
@@ -30,6 +32,13 @@
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
+	const activeExperience = $derived(page.data.access?.selectedContext.activeExperience ?? null);
+	const activeCapabilities = $derived(new Set(
+		page.data.access?.navigation.find((entry) => entry.experience === activeExperience)?.capabilityKeys ?? []
+	));
+	const canManageConnections = $derived(activeCapabilities.has(CAPABILITY.bankConnectionsManage));
+	const canOperateReconciliation = $derived(activeCapabilities.has(CAPABILITY.moneyReconciliationOperate));
+	const canDestructivelyReconcile = $derived(activeCapabilities.has(CAPABILITY.moneyReconciliationDestructive));
 
 	// shadcn Select binds a string; bits-ui treats '' as "no selection", so 'all' stands in for the
 	// "no filter" choice and `statusFilter` maps it back to '' for the query.
@@ -77,7 +86,7 @@
 	const summaryQuery = createQuery(() => ({
 		queryKey: ['banking-summary', portfolioId],
 		queryFn: () => banking.summary(),
-		enabled: !!portfolioId
+		enabled: !!portfolioId && canManageConnections
 	}));
 
 	const transactionsQuery = createQuery(() => ({
@@ -87,19 +96,19 @@
 			skip: transactionSkip,
 			take: TRANSACTION_PAGE_SIZE
 		}),
-		enabled: !!portfolioId
+		enabled: !!portfolioId && canManageConnections
 	}));
 
 	const plaidSettingsQuery = createQuery(() => ({
 		queryKey: ['banking-plaid-settings', portfolioId],
 		queryFn: () => banking.plaidSettings(),
-		enabled: !!portfolioId
+		enabled: !!portfolioId && canManageConnections
 	}));
 
 	const reviewQueueQuery = createQuery(() => ({
 		queryKey: ['banking-review-queue', portfolioId, reviewSkip],
 		queryFn: () => banking.reviewQueue({ skip: reviewSkip, take: REVIEW_QUEUE_PAGE_SIZE }),
-		enabled: !!portfolioId
+		enabled: !!portfolioId && canOperateReconciliation
 	}));
 
 	const summary = $derived(summaryQuery.data as BankingSummary | undefined);
@@ -364,70 +373,77 @@
 				Banking
 			</h1>
 			<p class="mt-1 text-sm text-muted-foreground">
-				Read-only bank reconciliation. Import or sync deposits and withdrawals, then match them to rent payments and expenses.
+				{canManageConnections
+					? 'Connect bank accounts, import or sync bank lines, and review reconciliation.'
+					: 'Review suggested matches for the properties assigned to you.'}
 			</p>
 		</div>
-		<Button variant="outline" onclick={connectPlaid} disabled={linkTokenMutation.isPending || exchangeMutation.isPending || !plaidSettings?.configured}>
-			<Link2 class="mr-1.5 h-4 w-4" />
-			{linkTokenMutation.isPending || exchangeMutation.isPending ? 'Connecting...' : 'Connect Plaid'}
-		</Button>
+		{#if canManageConnections}
+			<Button variant="outline" onclick={connectPlaid} disabled={linkTokenMutation.isPending || exchangeMutation.isPending || !plaidSettings?.configured}>
+				<Link2 class="mr-1.5 h-4 w-4" />
+				{linkTokenMutation.isPending || exchangeMutation.isPending ? 'Connecting...' : 'Connect Plaid'}
+			</Button>
+		{/if}
 	</div>
 
-	<div class="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-		<Card.Root class="gap-0 py-0">
-			<Card.Content class="p-4">
-				<p class="text-xs text-muted-foreground">Bank connections</p>
-				<p class="font-mono text-2xl font-bold">{summary?.connectionCount ?? 0}</p>
-			</Card.Content>
-		</Card.Root>
-		<Card.Root class="gap-0 py-0">
-			<Card.Content class="p-4">
-				<p class="text-xs text-muted-foreground">Transactions</p>
-				<p class="font-mono text-2xl font-bold">{summary?.transactionCount ?? 0}</p>
-			</Card.Content>
-		</Card.Root>
-		<Card.Root class="gap-0 py-0">
-			<Card.Content class="p-4">
-				<p class="text-xs text-muted-foreground">Unmatched</p>
-				<p class="font-mono text-2xl font-bold text-[var(--warning)]">{summary?.unmatchedCount ?? 0}</p>
-			</Card.Content>
-		</Card.Root>
-		<Card.Root class="gap-0 py-0">
-			<Card.Content class="p-4">
-				<p class="text-xs text-muted-foreground">Suggestions</p>
-				<p class="font-mono text-2xl font-bold text-primary">{summary?.suggestedMatchCount ?? 0}</p>
-			</Card.Content>
-		</Card.Root>
-	</div>
+	{#if canManageConnections}
+		<div class="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+			<Card.Root class="gap-0 py-0">
+				<Card.Content class="p-4">
+					<p class="text-xs text-muted-foreground">Bank connections</p>
+					<p class="font-mono text-2xl font-bold">{summary?.connectionCount ?? 0}</p>
+				</Card.Content>
+			</Card.Root>
+			<Card.Root class="gap-0 py-0">
+				<Card.Content class="p-4">
+					<p class="text-xs text-muted-foreground">Transactions</p>
+					<p class="font-mono text-2xl font-bold">{summary?.transactionCount ?? 0}</p>
+				</Card.Content>
+			</Card.Root>
+			<Card.Root class="gap-0 py-0">
+				<Card.Content class="p-4">
+					<p class="text-xs text-muted-foreground">Unmatched</p>
+					<p class="font-mono text-2xl font-bold text-[var(--warning)]">{summary?.unmatchedCount ?? 0}</p>
+				</Card.Content>
+			</Card.Root>
+			<Card.Root class="gap-0 py-0">
+				<Card.Content class="p-4">
+					<p class="text-xs text-muted-foreground">Suggestions</p>
+					<p class="font-mono text-2xl font-bold text-primary">{summary?.suggestedMatchCount ?? 0}</p>
+				</Card.Content>
+			</Card.Root>
+		</div>
+	{/if}
 
-	<Card.Root class="mb-6 gap-0 py-0" data-testid="bank-review-queue">
-		<Card.Header class="border-b border-border px-4 py-3">
-			<div class="flex flex-wrap items-center justify-between gap-3">
-				<div>
-					<Card.Title class="flex items-center gap-2 text-base">
-						<Check class="h-4 w-4 text-primary" />
-						Review suggested matches
-						{#if reviewCount > 0}
-							<Badge variant="secondary" data-testid="bank-review-count">{reviewCount}</Badge>
-						{/if}
-					</Card.Title>
-					<Card.Description>
-						These bank deposits look like payments you already recorded — confirm so we don't count them twice.
-					</Card.Description>
+	{#if canOperateReconciliation}
+		<Card.Root class="mb-6 gap-0 py-0" data-testid="bank-review-queue">
+			<Card.Header class="border-b border-border px-4 py-3">
+				<div class="flex flex-wrap items-center justify-between gap-3">
+					<div>
+						<Card.Title class="flex items-center gap-2 text-base">
+							<Check class="h-4 w-4 text-primary" />
+							Review suggested matches
+							{#if reviewCount > 0}
+								<Badge variant="secondary" data-testid="bank-review-count">{reviewCount}</Badge>
+							{/if}
+						</Card.Title>
+						<Card.Description>
+							These bank deposits look like payments you already recorded — confirm so we don't count them twice.
+						</Card.Description>
+					</div>
 				</div>
-			</div>
-		</Card.Header>
-		<Card.Content class="p-0">
-			{#if reviewQueueQuery.isLoading}
-				<p class="py-12 text-center text-sm text-muted-foreground">Loading suggested matches...</p>
-			{:else if reviewQueueQuery.isError}
-				<p class="py-12 text-center text-sm text-destructive">Could not load suggested matches.</p>
-			{:else if reviewItems.length === 0}
-				<p class="py-12 text-center text-sm text-muted-foreground" data-testid="bank-review-empty">
-					Nothing to review.
-				</p>
-			{:else}
-				<ul class="divide-y divide-border">
+			</Card.Header>
+			<Card.Content class="p-0">
+				{#if reviewQueueQuery.isLoading}
+					<p class="py-12 text-center text-sm text-muted-foreground">Loading suggested matches...</p>
+				{:else if reviewQueueQuery.isError}
+					<p class="py-12 text-center text-sm text-destructive">Could not load suggested matches.</p>
+				{:else if reviewItems.length === 0}
+					<p class="py-12 text-center text-sm text-muted-foreground" data-testid="bank-review-empty">
+						Nothing to review.
+					</p>
+				{:else}
+					<ul class="divide-y divide-border">
 					{#each reviewItems as item (item.transaction.id)}
 						<li
 							class="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between"
@@ -452,7 +468,6 @@
 										<Badge variant="outline">{percent(item.suggestion.confidence)} match</Badge>
 									</div>
 									<p class="mt-1 font-medium">{item.suggestion.label}</p>
-									<p class="text-xs text-muted-foreground">{item.suggestion.entityType}</p>
 									<p class="mt-1 text-xs text-muted-foreground">{item.suggestion.reason}</p>
 								</div>
 							</div>
@@ -467,22 +482,24 @@
 									<Check class="mr-1.5 h-4 w-4" />
 									Confirm match
 								</Button>
-								<Button
-									size="sm"
-									variant="outline"
-									class="flex-1 lg:flex-none"
-									onclick={() => dismissMatchMutation.mutate(item.transaction.id)}
-									disabled={pendingReviewId === item.transaction.id}
-									data-testid="bank-review-dismiss-{item.transaction.id}"
-								>
-									<X class="mr-1.5 h-4 w-4" />
-									Not a match
-								</Button>
+								{#if canDestructivelyReconcile}
+									<Button
+										size="sm"
+										variant="outline"
+										class="flex-1 lg:flex-none"
+										onclick={() => dismissMatchMutation.mutate(item.transaction.id)}
+										disabled={pendingReviewId === item.transaction.id}
+										data-testid="bank-review-dismiss-{item.transaction.id}"
+									>
+										<X class="mr-1.5 h-4 w-4" />
+										Not a match
+									</Button>
+								{/if}
 							</div>
 						</li>
 					{/each}
-				</ul>
-				{#if reviewCount > REVIEW_QUEUE_PAGE_SIZE}
+					</ul>
+					{#if reviewCount > REVIEW_QUEUE_PAGE_SIZE}
 					<div class="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3">
 						<p class="text-sm text-muted-foreground" data-testid="bank-review-page-status">
 							Showing {reviewPageStart}-{reviewPageEnd} of {reviewCount}
@@ -506,12 +523,14 @@
 							</Button>
 						</div>
 					</div>
+					{/if}
 				{/if}
-			{/if}
-		</Card.Content>
-	</Card.Root>
+			</Card.Content>
+		</Card.Root>
+	{/if}
 
-	<div class="grid gap-6 xl:grid-cols-[1fr_420px]">
+	{#if canManageConnections}
+		<div class="grid gap-6 xl:grid-cols-[1fr_420px]">
 		<Card.Root class="gap-0 py-0">
 			<Card.Header class="border-b border-border px-4 py-3">
 				<div class="flex flex-wrap items-center justify-between gap-3">
@@ -563,9 +582,10 @@
 											{money(transaction.amount)}
 										</td>
 										<td class="min-w-64 px-4 py-3">
-											{#if transaction.matchStatus === 'Matched'}
-												<div class="flex flex-wrap items-center gap-2">
-													<span class="m3-tone-chip border m3-tone--success rounded-full px-2 py-1 text-xs font-medium">Matched</span>
+										{#if transaction.matchStatus === 'Matched'}
+											<div class="flex flex-wrap items-center gap-2">
+												<span class="m3-tone-chip border m3-tone--success rounded-full px-2 py-1 text-xs font-medium">Matched</span>
+												{#if canDestructivelyReconcile}
 													<Button
 														size="sm"
 														variant="outline"
@@ -574,10 +594,12 @@
 													>
 														Clear
 													</Button>
-												</div>
-											{:else if transaction.matchStatus === 'Removed'}
-												<div class="flex flex-wrap items-center gap-2">
-													<span class="rounded-full bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">Personal · Ignored</span>
+												{/if}
+											</div>
+										{:else if transaction.matchStatus === 'Removed'}
+											<div class="flex flex-wrap items-center gap-2">
+												<span class="rounded-full bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">Personal · Ignored</span>
+												{#if canDestructivelyReconcile}
 													<Button
 														size="sm"
 														variant="outline"
@@ -588,37 +610,43 @@
 														<RotateCcw class="mr-1.5 h-3.5 w-3.5" />
 														Un-ignore
 													</Button>
-												</div>
+												{/if}
+											</div>
 											{:else if transaction.suggestedMatch}
 												<div class="space-y-2">
 													<p class="text-xs text-muted-foreground">{transaction.suggestedMatch.reason}</p>
 													<div class="flex flex-wrap items-center gap-2">
-														<Button
-															size="sm"
-															onclick={() => matchMutation.mutate({
-																id: transaction.id,
-																request: matchRequest(transaction.suggestedMatch!)
-															})}
-															disabled={matchMutation.isPending}
-														>
-															Match {transaction.suggestedMatch.label}
-														</Button>
-														<Button
-															size="sm"
-															variant="ghost"
-															class="text-muted-foreground"
-															onclick={() => ignoreMutation.mutate(transaction.id)}
-															disabled={pendingIgnoreId === transaction.id}
-															data-testid="bank-transaction-ignore-{transaction.id}"
-														>
-															<Ban class="mr-1.5 h-3.5 w-3.5" />
-															{pendingIgnoreId === transaction.id ? 'Ignoring…' : 'Ignore'}
-														</Button>
+														{#if canOperateReconciliation}
+															<Button
+																size="sm"
+																onclick={() => matchMutation.mutate({
+																	id: transaction.id,
+																	request: matchRequest(transaction.suggestedMatch!)
+																})}
+																disabled={matchMutation.isPending}
+															>
+																Match {transaction.suggestedMatch.label}
+															</Button>
+														{/if}
+														{#if canDestructivelyReconcile}
+															<Button
+																size="sm"
+																variant="ghost"
+																class="text-muted-foreground"
+																onclick={() => ignoreMutation.mutate(transaction.id)}
+																disabled={pendingIgnoreId === transaction.id}
+																data-testid="bank-transaction-ignore-{transaction.id}"
+															>
+																<Ban class="mr-1.5 h-3.5 w-3.5" />
+																{pendingIgnoreId === transaction.id ? 'Ignoring…' : 'Ignore'}
+															</Button>
+														{/if}
 													</div>
 												</div>
 											{:else}
 												<div class="flex flex-wrap items-center gap-2">
 													<span class="text-xs text-muted-foreground">No suggestion yet</span>
+												{#if canDestructivelyReconcile}
 													<Button
 														size="sm"
 														variant="ghost"
@@ -630,6 +658,7 @@
 														<Ban class="mr-1.5 h-3.5 w-3.5" />
 														{pendingIgnoreId === transaction.id ? 'Ignoring…' : 'Ignore'}
 													</Button>
+												{/if}
 												</div>
 											{/if}
 										</td>
@@ -750,5 +779,6 @@
 				</Card.Content>
 			</Card.Root>
 		</div>
-	</div>
+		</div>
+	{/if}
 </div>
