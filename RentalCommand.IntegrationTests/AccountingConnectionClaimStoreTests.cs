@@ -788,13 +788,14 @@ public sealed class AccountingConnectionClaimStoreTests : IAsyncLifetime
         var tokenService = new AccountingTokenService(
             _dataProtection, providerResolver, settingsResolver, claims,
             TimeProvider.System, NullLogger<AccountingTokenService>.Instance);
+        var atomic = CreateAtomicUnitOfWork();
         var import = new AccountingImportService(
             _dataProtection, providerResolver, settingsResolver, tokenService, claims,
-            CreateAtomicUnitOfWork(),
+            atomic,
             TimeProvider.System, NullLogger<AccountingImportService>.Instance);
         return new AccountingConnectionService(
             db, _dataProtection, providerResolver, settingsResolver, import,
-            TimeProvider.System, null!,
+            TimeProvider.System, atomic,
             NullLogger<AccountingConnectionService>.Instance);
     }
 

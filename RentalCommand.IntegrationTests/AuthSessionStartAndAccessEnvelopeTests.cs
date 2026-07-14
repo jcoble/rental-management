@@ -70,11 +70,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         _connectionString = _postgres.GetConnectionString();
         await using (var db = NewPlainContext())
         {
-            await db.Database.EnsureCreatedAsync();
-            await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateEffectiveNowUtc);
-            await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateBusinessDate);
-            await db.Database.ExecuteSqlRawAsync(RelationshipAccessProjectionSql.Create);
-            await db.Database.ExecuteSqlRawAsync(AccessEnvelopeViewSql.Create);
+            await db.Database.MigrateAsync();
             await SeedAsync(db);
         }
 

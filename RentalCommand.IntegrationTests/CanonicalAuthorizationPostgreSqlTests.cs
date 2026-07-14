@@ -58,12 +58,7 @@ public sealed class CanonicalAuthorizationPostgreSqlTests : IAsyncLifetime
 
         _connectionString = _postgres.GetConnectionString();
         await using var db = NewOwnerContext();
-        await db.Database.EnsureCreatedAsync();
-        await db.Database.ExecuteSqlRawAsync("CREATE EXTENSION IF NOT EXISTS pg_trgm;");
-        foreach (var statement in FoundationBaselinePostgreSql.CreateStatements)
-        {
-            await db.Database.ExecuteSqlRawAsync(statement);
-        }
+        await db.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync()
