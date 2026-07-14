@@ -7,7 +7,7 @@ using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Data.Atomic;
 
-public sealed class AtomicPaymentCsvImportPersistence
+internal sealed class AtomicPaymentCsvImportPersistence
     : IAtomicPaymentCsvImportPersistence, IPaymentCsvImportPreviewQuery
 {
     private const string ValidationSql = """

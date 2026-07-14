@@ -8,7 +8,7 @@ using RentalCommand.Core.Authorization;
 namespace RentalCommand.Data.Atomic;
 
 /// <summary>PostgreSQL-owned Property and Tenant CSV preview/import batches.</summary>
-public sealed class AtomicCoreCsvImportPersistence
+internal sealed class AtomicCoreCsvImportPersistence
     : IAtomicCoreCsvImportPersistence, ICoreCsvImportPreviewQuery
 {
     private const string AuthorizationSql = """
