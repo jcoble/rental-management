@@ -456,32 +456,49 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         bool write,
         CancellationToken ct)
     {
+        var utcNow = DateTime.UtcNow;
         if (target == StoredDocumentTarget.WorkOrder)
         {
             var capabilities = write
                 ? new[] { CapabilityKeys.WorkManage, CapabilityKeys.AssignedWorkUpdate }
                 : new[] { CapabilityKeys.WorkRead, CapabilityKeys.AssignedWorkRead };
             return _db.WorkOrders.AsNoTracking()
-                .WhereAuthorized(_db, scope, capabilities, DateTime.UtcNow)
+                .WhereAuthorized(_db, scope, capabilities, utcNow)
                 .AnyAsync(workOrder => workOrder.Id == entityId, ct);
         }
 
-        var capability = target switch
+        IReadOnlyCollection<string>? capabilities = target switch
         {
             StoredDocumentTarget.Property or StoredDocumentTarget.Unit or StoredDocumentTarget.Tenant =>
-                write ? CapabilityKeys.RentalsManage : CapabilityKeys.RentalsRead,
-            StoredDocumentTarget.LeaseAgreement => CapabilityKeys.LeasingAgreementsPrepare,
+                write ? [CapabilityKeys.RentalsManage] : [CapabilityKeys.RentalsRead],
+            StoredDocumentTarget.LeaseAgreement or StoredDocumentTarget.LegalDocumentArtifact =>
+                write
+                    ? [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingAgreementsPrepare]
+                    : [CapabilityKeys.RentalsRead, CapabilityKeys.LeasingTermsRead],
+            StoredDocumentTarget.TenantAccount or StoredDocumentTarget.TenantLedgerEntry =>
+                write
+                    ? [CapabilityKeys.MoneyChargesManage, CapabilityKeys.MoneyPaymentsManage]
+                    : [CapabilityKeys.MoneyBalancesRead],
             StoredDocumentTarget.Expense =>
-                write ? CapabilityKeys.MoneyExpensesManage : CapabilityKeys.MoneyBalancesRead,
+                write ? [CapabilityKeys.MoneyExpensesManage] : [CapabilityKeys.MoneyBalancesRead],
             StoredDocumentTarget.WorkOrder or StoredDocumentTarget.Appointment or StoredDocumentTarget.Inspection =>
-                write ? CapabilityKeys.WorkManage : CapabilityKeys.WorkRead,
-            StoredDocumentTarget.Vendor => write ? CapabilityKeys.WorkManage : CapabilityKeys.WorkRead,
+                write ? [CapabilityKeys.WorkManage] : [CapabilityKeys.WorkRead],
+            StoredDocumentTarget.Vendor =>
+                write ? [CapabilityKeys.WorkManage] : [CapabilityKeys.WorkRead],
+            StoredDocumentTarget.SecurityDepositAccount =>
+                write
+                    ? [CapabilityKeys.MoneyDepositsManage]
+                    : [CapabilityKeys.MoneyBalancesRead, CapabilityKeys.LeasingDepositsRead],
+            StoredDocumentTarget.OwnerEntity =>
+                write ? [CapabilityKeys.RentalsManage] : [CapabilityKeys.MoneyOwnerReportsRead],
             _ => null,
         };
-        if (capability is null) return Task.FromResult(false);
+        if (capabilities is null) return Task.FromResult(false);
 
         var properties = _db.Properties.AsNoTracking()
-            .WhereAuthorized(_db, scope, capability, DateTime.UtcNow);
+            .WhereAuthorized(_db, scope, capabilities, utcNow);
+        var leaseManagements = _db.LeaseManagements.AsNoTracking()
+            .WhereAuthorized(_db, scope, capabilities, utcNow);
         return target switch
         {
             StoredDocumentTarget.Property => properties.AnyAsync(property => property.Id == entityId, ct),
@@ -491,8 +508,29 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
                 party.TenantId == entityId &&
                 properties.Any(property => property.Id == party.LeaseManagement!.PropertyId), ct),
             StoredDocumentTarget.LeaseAgreement => _db.LeaseAgreements.AsNoTracking().AnyAsync(agreement =>
-                agreement.Id == entityId &&
-                properties.Any(property => property.Id == agreement.LeaseManagement!.PropertyId), ct),
+                agreement.Id == entityId && agreement.PortfolioId == scope.PortfolioId &&
+                leaseManagements.Any(management => management.Id == agreement.LeaseManagementId), ct),
+            StoredDocumentTarget.LegalDocumentArtifact => _db.LegalDocumentArtifacts.AsNoTracking()
+                .AnyAsync(artifact =>
+                    artifact.Id == entityId && artifact.PortfolioId == scope.PortfolioId &&
+                    (_db.LeaseAgreements.AsNoTracking().Any(agreement =>
+                         agreement.PortfolioId == artifact.PortfolioId &&
+                         (agreement.IssuedArtifactId == artifact.Id ||
+                          agreement.ExecutedArtifactId == artifact.Id) &&
+                         leaseManagements.Any(management => management.Id == agreement.LeaseManagementId)) ||
+                     _db.LeaseAddenda.AsNoTracking().Any(addendum =>
+                         addendum.PortfolioId == artifact.PortfolioId &&
+                         (addendum.IssuedArtifactId == artifact.Id ||
+                          addendum.ExecutedArtifactId == artifact.Id) &&
+                         leaseManagements.Any(management => management.Id == addendum.LeaseManagementId))), ct),
+            StoredDocumentTarget.TenantAccount => _db.TenantAccounts.AsNoTracking().AnyAsync(account =>
+                account.Id == entityId && account.PortfolioId == scope.PortfolioId &&
+                leaseManagements.Any(management => management.Id == account.LeaseManagementId), ct),
+            StoredDocumentTarget.TenantLedgerEntry => _db.TenantLedgerEntries.AsNoTracking().AnyAsync(entry =>
+                entry.Id == entityId && entry.PortfolioId == scope.PortfolioId &&
+                _db.TenantAccounts.AsNoTracking().Any(account =>
+                    account.Id == entry.TenantAccountId && account.PortfolioId == entry.PortfolioId &&
+                    leaseManagements.Any(management => management.Id == account.LeaseManagementId)), ct),
             StoredDocumentTarget.Expense => _db.Expenses.AsNoTracking().AnyAsync(expense =>
                 expense.Id == entityId && properties.Any(property => property.Id == expense.PropertyId), ct),
             StoredDocumentTarget.WorkOrder => _db.WorkOrders.AsNoTracking().AnyAsync(workOrder =>
@@ -503,8 +541,21 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
                 inspection.Id == entityId && properties.Any(property => property.Id == inspection.PropertyId), ct),
             StoredDocumentTarget.Vendor => _db.Vendors.AsNoTracking().AnyAsync(vendor =>
                 vendor.Id == entityId && vendor.PortfolioId == scope.PortfolioId &&
-                _db.AuthorizedWorkspaceAssignments(
-                    scope, new[] { capability }, CapabilityAuthorizationTargetKind.Property, DateTime.UtcNow).Any(), ct),
+                (vendor.WorkOrders.Any(workOrder =>
+                     workOrder.PortfolioId == vendor.PortfolioId &&
+                     properties.Any(property => property.Id == workOrder.PropertyId)) ||
+                 vendor.Expenses.Any(expense =>
+                     expense.PortfolioId == vendor.PortfolioId && expense.PropertyId != null &&
+                     properties.Any(property => property.Id == expense.PropertyId))), ct),
+            StoredDocumentTarget.SecurityDepositAccount => _db.SecurityDepositAccounts.AsNoTracking()
+                .AnyAsync(deposit =>
+                    deposit.Id == entityId && deposit.PortfolioId == scope.PortfolioId &&
+                    _db.TenantAccounts.AsNoTracking().Any(account =>
+                        account.Id == deposit.TenantAccountId && account.PortfolioId == deposit.PortfolioId &&
+                        leaseManagements.Any(management => management.Id == account.LeaseManagementId)), ct),
+            StoredDocumentTarget.OwnerEntity => _db.OwnerEntities.AsNoTracking().AnyAsync(owner =>
+                owner.Id == entityId && owner.PortfolioId == scope.PortfolioId &&
+                properties.Any(property => property.OwnerEntityId == owner.Id), ct),
             _ => Task.FromResult(false),
         };
     }
