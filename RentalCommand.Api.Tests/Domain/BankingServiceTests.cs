@@ -1586,7 +1586,7 @@ public class BankingServiceTests : IAsyncLifetime
         var unit = new Unit
         {
             Property = property,
-            UnitNumber = "4B",
+            UnitNumber = leaseNumber,
             MarketRent = amount,
             CreatedAt = paidAt,
             UpdatedAt = paidAt,
