@@ -70,6 +70,16 @@ internal static class AtomicDomainTestKernel
         return services.BuildServiceProvider();
     }
 
+    internal static ServiceProvider CreateForInspectionsPostgreSql(string connectionString)
+    {
+        var services = CorePostgreSql(connectionString);
+        services.AddAtomicCommandHandler<
+            AtomicInspectionMutationCommand,
+            AtomicInspectionMutationResult,
+            AtomicInspectionMutationHandler>();
+        return services.BuildServiceProvider();
+    }
+
     internal static ServiceProvider CreateForAccountBootstrapPostgreSql(NpgsqlConnection connection)
     {
         var services = CorePostgreSql(connection);
