@@ -173,6 +173,8 @@ public static class ServiceCollectionExtensions
             RentalCommand.Data.Atomic.AtomicUnitImportPersistence>();
         services.AddScoped<RentalCommand.Core.Atomic.ICoreCsvImportPreviewQuery,
             RentalCommand.Data.Atomic.AtomicCoreCsvImportPersistence>();
+        services.AddScoped<RentalCommand.Core.Atomic.IPaymentCsvImportPreviewQuery,
+            RentalCommand.Data.Atomic.AtomicPaymentCsvImportPersistence>();
 
         // --- mobile push registration ---
         services.AddScoped<IDeviceService, DeviceService>();

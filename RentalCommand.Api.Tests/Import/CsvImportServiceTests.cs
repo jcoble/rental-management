@@ -10,7 +10,6 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
-using RentalCommand.Core.Payments;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Import;
@@ -47,7 +46,7 @@ public class CsvImportServiceTests : IDisposable
         _ctx.Db.SaveChanges();
         _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(CsvImportServiceTests));
         _sut = new CsvImportService(
-            _ctx.Db,
+            _atomic,
             _atomic,
             _atomic,
             _atomic);
@@ -235,15 +234,15 @@ public class CsvImportServiceTests : IDisposable
 
         result.CreatedRows.Should().Be(1);
         result.Rows.Should().ContainSingle().Which.CreatedId.Should().Be(9_000_000_001L);
-        _atomic.Commands.Should().ContainSingle();
-        var command = _atomic.Commands.Single();
-        command.TenantAccountId.Should().Be(700);
-        command.Amount.Should().Be(1200m);
-        command.EffectiveOn.Should().Be(new DateOnly(2025, 1, 5));
-        command.ExternalReference.Should().Be("bank-1");
-        command.RequiredCapability.Should().Be("money.payments.manage");
-        command.BusinessKey.Should().StartWith("csv-receipt:");
-        command.DeliveryIdempotencyKey.Should().Contain("operation-digest:2");
+        _atomic.PaymentCommands.Should().ContainSingle();
+        var command = _atomic.PaymentCommands.Single();
+        using var paymentRows = JsonDocument.Parse(command.RowsJson);
+        var imported = paymentRows.RootElement[0];
+        imported.GetProperty("RelationshipNumber").GetString().Should().Be("REL-100");
+        imported.GetProperty("Amount").GetDecimal().Should().Be(1200m);
+        imported.GetProperty("PaidOn").GetString().Should().Be("2025-01-05");
+        imported.GetProperty("ExternalReference").GetString().Should().Be("bank-1");
+        imported.GetProperty("DeliveryKey").GetString().Should().Contain("operation-digest:2");
         (await _ctx.Db.TenantLedgerEntries.CountAsync()).Should().Be(0,
             "the fake atomic unit returns the canonical receipt id without persisting a ledger row");
     }
@@ -394,9 +393,10 @@ public class CsvImportServiceTests : IDisposable
     }
 
     private sealed class CapturingAtomicUnitOfWork
-        : IAtomicUnitOfWork, IUnitCsvImportPreviewQuery, ICoreCsvImportPreviewQuery
+        : IAtomicUnitOfWork, IUnitCsvImportPreviewQuery, ICoreCsvImportPreviewQuery,
+          IPaymentCsvImportPreviewQuery
     {
-        public List<RecordTenantReceiptCommand> Commands { get; } = [];
+        public List<AtomicPaymentCsvImportCommand> PaymentCommands { get; } = [];
         public List<AtomicCoreCsvImportCommand> CoreCommands { get; } = [];
         private readonly HashSet<string> _coreKeys = new(StringComparer.Ordinal);
 
@@ -411,6 +411,12 @@ public class CsvImportServiceTests : IDisposable
             string rowsJson,
             CancellationToken ct = default) =>
             Task.FromResult(CoreResult(domain, rowsJson, created: false));
+
+        public Task<AtomicPaymentCsvImportBatchResult> PreviewAsync(
+            WorkspaceReadScope scope,
+            string rowsJson,
+            CancellationToken ct = default) =>
+            Task.FromResult(PaymentResult(rowsJson, created: false));
 
         public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
             AtomicCommandIdentity identity,
@@ -443,16 +449,42 @@ public class CsvImportServiceTests : IDisposable
                     new AtomicCommandOutcome<AtomicCoreCsvImportResult>(
                         result, AtomicCommandDisposition.Executed, Guid.NewGuid()));
             }
-            if (command is not RecordTenantReceiptCommand receipt
-                || typeof(TResult) != typeof(RecordTenantReceiptResult))
-                throw new InvalidOperationException("Unexpected atomic command in CSV import test.");
-            Commands.Add(receipt);
-            var result = new RecordTenantReceiptResult(
-                true, receipt.TenantAccountId, 9_000_000_001L, 9_000_000_002L,
-                receipt.Amount, receipt.Amount, 1);
-            return Task.FromResult((AtomicCommandOutcome<TResult>)(object)
-                new AtomicCommandOutcome<RecordTenantReceiptResult>(
-                    result, AtomicCommandDisposition.Executed, Guid.NewGuid()));
+            if (command is AtomicPaymentCsvImportCommand payment
+                && typeof(TResult) == typeof(AtomicPaymentCsvImportResult))
+            {
+                PaymentCommands.Add(payment);
+                var batch = PaymentResult(payment.RowsJson, created: true);
+                var result = new AtomicPaymentCsvImportResult(
+                    batch.Rows.ToArray(), batch.TotalRows, batch.ValidRows,
+                    batch.CreatedCount, batch.DuplicateRows);
+                return Task.FromResult((AtomicCommandOutcome<TResult>)(object)
+                    new AtomicCommandOutcome<AtomicPaymentCsvImportResult>(
+                        result, AtomicCommandDisposition.Executed, Guid.NewGuid()));
+            }
+            throw new InvalidOperationException("Unexpected atomic command in CSV import test.");
+        }
+
+        private static AtomicPaymentCsvImportBatchResult PaymentResult(
+            string rowsJson,
+            bool created)
+        {
+            using var document = JsonDocument.Parse(rowsJson);
+            var results = document.RootElement.EnumerateArray().Select((row, index) =>
+            {
+                var errors = row.GetProperty("Errors").EnumerateArray()
+                    .Select(error => error.GetString() ?? string.Empty).ToArray();
+                return new AtomicPaymentCsvImportRowResult(
+                    row.GetProperty("RowNumber").GetInt32(),
+                    errors.Length == 0,
+                    false,
+                    created && errors.Length == 0 ? 9_000_000_001L + index : null,
+                    errors.Length == 0 ? 700 : null,
+                    errors);
+            }).ToArray();
+            var createdRows = results.Where(row => row.CreatedId.HasValue).ToArray();
+            return new AtomicPaymentCsvImportBatchResult(
+                true, results, createdRows, results.Length,
+                results.Count(row => row.Valid), createdRows.Length, 0);
         }
 
         private static AtomicUnitImportBatchResult UnitResult(

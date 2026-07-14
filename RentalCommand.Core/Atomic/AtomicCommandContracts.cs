@@ -126,6 +126,7 @@ public interface IAtomicWriteAttempt
     IAtomicUnitImportPersistence UnitImports { get; }
     IAtomicCoreCsvImportPersistence CoreCsvImports { get; }
     IAtomicNotificationPersistence Notifications { get; }
+    IAtomicPaymentCsvImportPersistence PaymentCsvImports { get; }
 
     /// <summary>Flushes tracked business rows while the owner transaction remains open.</summary>
     Task<AtomicBusinessFlush> FlushBusinessAsync(CancellationToken ct = default);
@@ -290,6 +291,40 @@ public interface ICoreCsvImportPreviewQuery
     Task<AtomicCoreCsvImportBatchResult> PreviewAsync(
         WorkspaceReadScope scope,
         AtomicCoreCsvImportDomain domain,
+        string rowsJson,
+        CancellationToken ct = default);
+}
+
+public sealed record AtomicPaymentCsvImportRowResult(
+    int RowNumber,
+    bool Valid,
+    bool IsDuplicate,
+    long? CreatedId,
+    int? TenantAccountId,
+    string[] Errors) : IAtomicResultData;
+
+public sealed record AtomicPaymentCsvImportBatchResult(
+    bool Authorized,
+    IReadOnlyList<AtomicPaymentCsvImportRowResult> Rows,
+    IReadOnlyList<AtomicPaymentCsvImportRowResult> CreatedRows,
+    int TotalRows,
+    int ValidRows,
+    int CreatedCount,
+    int DuplicateRows) : IAtomicResultData;
+
+public interface IAtomicPaymentCsvImportPersistence
+{
+    Task<AtomicPaymentCsvImportBatchResult> ImportAsync(
+        WorkspaceReadScope scope,
+        string rowsJson,
+        DateTime createdAtUtc,
+        CancellationToken ct = default);
+}
+
+public interface IPaymentCsvImportPreviewQuery
+{
+    Task<AtomicPaymentCsvImportBatchResult> PreviewAsync(
+        WorkspaceReadScope scope,
         string rowsJson,
         CancellationToken ct = default);
 }
