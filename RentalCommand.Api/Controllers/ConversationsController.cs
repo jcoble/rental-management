@@ -46,7 +46,7 @@ public class ConversationsController : ManagementControllerBase
         return Ok(new ConversationUnreadCountResponse(count));
     }
 
-    /// <summary>Fetch a conversation with its full message history; resets the landlord's unread count.</summary>
+    /// <summary>Fetch a conversation with its full message history.</summary>
     [HttpGet("{id:int}")]
     [ProducesResponseType(typeof(ConversationDetail), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -54,6 +54,20 @@ public class ConversationsController : ManagementControllerBase
     {
         var item = await _service.GetAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
         return item == null ? NotFound(new { error = "Conversation not found" }) : Ok(item);
+    }
+
+    [HttpPost("{id:int}/read")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> MarkRead(
+        int id,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var found = await _service.MarkReadAuthorizedAsync(GetWorkspaceReadScope(), id, operationKey, ct);
+        return found ? NoContent() : NotFound(new { error = "Conversation not found" });
     }
 
     /// <summary>

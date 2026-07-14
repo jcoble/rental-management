@@ -5,6 +5,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -17,6 +18,11 @@ public enum AtomicNotificationMutationDomain
     SeedTemplates,
     TemplateVersion,
     RestoreTemplate,
+    MorningBriefingSettings,
+    DeviceRegister,
+    DeviceUnregister,
+    LandlordConversationRead,
+    TenantConversationRead,
     MarkRead,
     MarkAllRead,
     Broadcast,
@@ -41,6 +47,10 @@ public sealed record AtomicNotificationMutationResult(
     int AffectedCount,
     string? ResponseJson = null) : IAtomicResultData;
 
+public sealed record AtomicDeviceMutationRequest(string Token, string? Platform) : IAtomicCommandData;
+
+public sealed record AtomicConversationReadRequest(int TenantId) : IAtomicCommandData;
+
 public sealed class AtomicNotificationMutationHandler
     : IAtomicCommandHandler<AtomicNotificationMutationCommand, AtomicNotificationMutationResult>,
       IAtomicReplayAuthorizer<AtomicNotificationMutationCommand>
@@ -54,6 +64,9 @@ public sealed class AtomicNotificationMutationHandler
         await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
         await attempt.Locking.AcquireAsync(AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
         await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
+        if (command.Domain is AtomicNotificationMutationDomain.LandlordConversationRead
+            or AtomicNotificationMutationDomain.TenantConversationRead)
+            await attempt.Locking.AcquireAsync(AtomicLockResource.Conversation, command.EntityId, ct);
         var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
         attempt.UseDatabaseWallClockForAudit(now);
         await AuthorizeAsync(command, attempt.Persistence, now, ct);
@@ -72,6 +85,16 @@ public sealed class AtomicNotificationMutationHandler
                 await CreateTemplateVersionAsync(command, attempt, now, restore: false, ct),
             AtomicNotificationMutationDomain.RestoreTemplate =>
                 await CreateTemplateVersionAsync(command, attempt, now, restore: true, ct),
+            AtomicNotificationMutationDomain.MorningBriefingSettings =>
+                await UpdateMorningBriefingSettingsAsync(command, attempt, now, ct),
+            AtomicNotificationMutationDomain.DeviceRegister =>
+                await RegisterDeviceAsync(command, attempt, now, ct),
+            AtomicNotificationMutationDomain.DeviceUnregister =>
+                await UnregisterDeviceAsync(command, attempt, now, ct),
+            AtomicNotificationMutationDomain.LandlordConversationRead =>
+                await MarkConversationReadAsync(command, attempt, now, tenantViewer: false, ct),
+            AtomicNotificationMutationDomain.TenantConversationRead =>
+                await MarkConversationReadAsync(command, attempt, now, tenantViewer: true, ct),
             AtomicNotificationMutationDomain.MarkRead =>
                 await MarkReadAsync(command, attempt, now, ct),
             AtomicNotificationMutationDomain.MarkAllRead =>
@@ -436,6 +459,110 @@ public sealed class AtomicNotificationMutationHandler
         return new(true, false, notification.Id, 0);
     }
 
+    private static async Task<AtomicNotificationMutationResult> UpdateMorningBriefingSettingsAsync(
+        AtomicNotificationMutationCommand command,
+        IAtomicWriteAttempt attempt,
+        DateTime now,
+        CancellationToken ct)
+    {
+        var request = Read<UpdateMorningBriefingSettingsRequest>(command);
+        if (request.SendHourLocal is < 0 or > 23)
+            throw new InvalidOperationException("Morning Briefing send hour must be between 0 and 23.");
+
+        var settings = await attempt.Persistence.Query<AutomationSettings>()
+            .SingleAsync(candidate => candidate.PortfolioId == command.PortfolioId, ct);
+        settings.EnableMorningBriefing = request.Enabled;
+        settings.MorningBriefingSendHourLocal = request.SendHourLocal;
+        settings.MorningBriefingIncludeEmpty = request.IncludeEmpty;
+        settings.UpdatedAtUtc = now;
+        attempt.BindSemanticAudit(settings, Audit(command, nameof(AutomationSettings), AuditLogOperation.Updated,
+            "Morning Briefing schedule updated", settings.Id));
+        await attempt.FlushBusinessAsync(ct);
+        StageDataUpdate(attempt, command, nameof(AutomationSettings), settings.Id, now);
+        var response = await MorningBriefingSettingsQuery(attempt.Persistence, command.PortfolioId).SingleAsync(ct);
+        return Applied(settings.Id, JsonSerializer.Serialize(response));
+    }
+
+    private static async Task<AtomicNotificationMutationResult> RegisterDeviceAsync(
+        AtomicNotificationMutationCommand command,
+        IAtomicWriteAttempt attempt,
+        DateTime now,
+        CancellationToken ct)
+    {
+        var request = Read<AtomicDeviceMutationRequest>(command);
+        var token = request.Token.Trim();
+        var platform = request.Platform?.Trim().ToLowerInvariant() ?? string.Empty;
+        if (token.Length is 0 or > 500 || platform is not ("ios" or "android" or "web"))
+            throw new InvalidOperationException("A valid device token and platform are required.");
+
+        var row = await attempt.Persistence.Query<DeviceToken>().SingleOrDefaultAsync(candidate =>
+            candidate.PortfolioId == command.PortfolioId && candidate.Token == token, ct);
+        var operation = row is null ? AuditLogOperation.Created : AuditLogOperation.Updated;
+        if (row is null)
+        {
+            row = new DeviceToken
+            {
+                PortfolioId = command.PortfolioId,
+                Token = token,
+                CreatedAt = now,
+            };
+            attempt.Persistence.Add(row);
+        }
+        row.UserId = command.ActorUserId;
+        row.Platform = platform;
+        row.LastSeenAt = now;
+        attempt.BindSemanticAudit(row, Audit(command, nameof(DeviceToken), operation,
+            "Push notification device registered", operation == AuditLogOperation.Created ? 0 : row.Id));
+        await attempt.FlushBusinessAsync(ct);
+        return Applied(row.Id);
+    }
+
+    private static async Task<AtomicNotificationMutationResult> UnregisterDeviceAsync(
+        AtomicNotificationMutationCommand command,
+        IAtomicWriteAttempt attempt,
+        DateTime now,
+        CancellationToken ct)
+    {
+        var request = Read<AtomicDeviceMutationRequest>(command);
+        var token = request.Token.Trim();
+        if (token.Length is 0 or > 500)
+            throw new InvalidOperationException("A valid device token is required.");
+        var row = await attempt.Persistence.Query<DeviceToken>().SingleOrDefaultAsync(candidate =>
+            candidate.PortfolioId == command.PortfolioId && candidate.UserId == command.ActorUserId
+            && candidate.Token == token, ct);
+        if (row is null) return Missing();
+        attempt.Persistence.Remove(row);
+        attempt.BindSemanticAudit(row, Audit(command, nameof(DeviceToken), AuditLogOperation.Deleted,
+            "Push notification device unregistered", row.Id));
+        await attempt.FlushBusinessAsync(ct);
+        return new(true, true, row.Id, 1);
+    }
+
+    private static async Task<AtomicNotificationMutationResult> MarkConversationReadAsync(
+        AtomicNotificationMutationCommand command,
+        IAtomicWriteAttempt attempt,
+        DateTime now,
+        bool tenantViewer,
+        CancellationToken ct)
+    {
+        var request = Read<AtomicConversationReadRequest>(command);
+        var conversations = tenantViewer
+            ? TenantConversationQuery(command, attempt.Persistence, request.TenantId)
+            : LandlordConversationQuery(command, attempt.Persistence, now);
+        var conversation = await conversations.SingleOrDefaultAsync(candidate => candidate.Id == command.EntityId, ct);
+        if (conversation is null) return Missing();
+
+        var unread = tenantViewer ? conversation.TenantUnreadCount : conversation.LandlordUnreadCount;
+        if (unread == 0) return new(true, false, conversation.Id, 0);
+        if (tenantViewer) conversation.TenantUnreadCount = 0;
+        else conversation.LandlordUnreadCount = 0;
+        attempt.BindSemanticAudit(conversation, Audit(command, nameof(Conversation), AuditLogOperation.Updated,
+            tenantViewer ? "Tenant conversation marked read" : "Team conversation marked read", conversation.Id));
+        await attempt.FlushBusinessAsync(ct);
+        StageDataUpdate(attempt, command, nameof(Conversation), conversation.Id, now);
+        return new(true, true, conversation.Id, unread);
+    }
+
     private static async Task<AtomicNotificationMutationResult> MarkAllReadAsync(
         AtomicNotificationMutationCommand command,
         IAtomicWriteAttempt attempt,
@@ -493,13 +620,29 @@ public sealed class AtomicNotificationMutationHandler
         var requiredCapability = command.Domain switch
         {
             AtomicNotificationMutationDomain.MyAlerts or AtomicNotificationMutationDomain.MarkRead
-                or AtomicNotificationMutationDomain.MarkAllRead => null,
+                or AtomicNotificationMutationDomain.MarkAllRead
+                or AtomicNotificationMutationDomain.DeviceRegister
+                or AtomicNotificationMutationDomain.DeviceUnregister
+                or AtomicNotificationMutationDomain.LandlordConversationRead
+                or AtomicNotificationMutationDomain.TenantConversationRead => null,
             AtomicNotificationMutationDomain.Broadcast => CapabilityKeys.TeamManage,
             _ => CapabilityKeys.NotificationsManage,
         };
         if (requiredCapability is not null && !await WorkspaceCapabilityAuthorized(
                 command, persistence, now, requiredCapability).AnyAsync(ct))
             throw new UnauthorizedAccessException("The current Team role cannot manage this notification setting.");
+
+        if (command.Domain == AtomicNotificationMutationDomain.LandlordConversationRead
+            && !await LandlordConversationQuery(command, persistence, now)
+                .AnyAsync(conversation => conversation.Id == command.EntityId, ct))
+            throw new UnauthorizedAccessException("The current Team role cannot read this conversation.");
+        if (command.Domain == AtomicNotificationMutationDomain.TenantConversationRead)
+        {
+            var request = Read<AtomicConversationReadRequest>(command);
+            if (!await TenantConversationQuery(command, persistence, request.TenantId)
+                    .AnyAsync(conversation => conversation.Id == command.EntityId, ct))
+                throw new UnauthorizedAccessException("This conversation is outside the current tenant relationship.");
+        }
     }
 
     private static IQueryable<WorkspaceAccessContext> IdentityAuthorized(
@@ -607,6 +750,71 @@ public sealed class AtomicNotificationMutationHandler
             && membership.SuspendedAtUtc == null && membership.RevokedAtUtc == null
             && membership.EffectiveFromUtc <= now
             && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > now), ct);
+
+    private static IQueryable<Conversation> LandlordConversationQuery(
+        AtomicNotificationMutationCommand command,
+        IAtomicPersistenceSession persistence,
+        DateTime now)
+    {
+        var assignments = persistence.Query<MembershipRoleAssignment>().AsNoTracking().Where(assignment =>
+            assignment.PortfolioId == command.PortfolioId
+            && assignment.WorkspaceMembership!.AccessContextId == command.AccessContextId
+            && assignment.WorkspaceMembership.PortfolioId == command.PortfolioId
+            && assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active
+            && assignment.WorkspaceMembership.SuspendedAtUtc == null
+            && assignment.WorkspaceMembership.RevokedAtUtc == null
+            && assignment.WorkspaceMembership.EffectiveFromUtc <= now
+            && (assignment.WorkspaceMembership.EffectiveToUtc == null
+                || assignment.WorkspaceMembership.EffectiveToUtc > now)
+            && assignment.Status == MembershipRoleAssignmentStatus.Active
+            && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
+            && assignment.EffectiveFromUtc <= now
+            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now)
+            && assignment.RoleProfile!.Capabilities.Any(grant =>
+                grant.CapabilityDefinition!.Key == CapabilityKeys.RentalsRead
+                && grant.CapabilityDefinition.AuthorizationTargetKind == CapabilityAuthorizationTargetKind.Property));
+
+        return persistence.Query<Conversation>().Where(conversation =>
+            conversation.PortfolioId == command.PortfolioId
+            && ((conversation.PropertyId == null
+                    && assignments.Any(assignment =>
+                        assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties))
+                || (conversation.PropertyId != null
+                    && assignments.Any(assignment =>
+                        assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
+                        || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
+                            && assignment.SelectedProperties.Any(selected =>
+                                selected.PortfolioId == command.PortfolioId
+                                && selected.PropertyId == conversation.PropertyId))))));
+    }
+
+    private static IQueryable<Conversation> TenantConversationQuery(
+        AtomicNotificationMutationCommand command,
+        IAtomicPersistenceSession persistence,
+        int tenantId) =>
+        persistence.Query<Conversation>().Where(conversation =>
+            conversation.Id == command.EntityId
+            && conversation.PortfolioId == command.PortfolioId
+            && conversation.TenantId == tenantId
+            && persistence.Query<EffectiveTenantAccessProjection>().AsNoTracking().Any(access =>
+                access.PortfolioId == command.PortfolioId
+                && access.UserId == command.ActorUserId
+                && access.AccessContextId == command.AccessContextId
+                && access.AccessRevision == command.ExpectedAccessRevision
+                && access.TenantId == tenantId));
+
+    private static IQueryable<MorningBriefingSettingsResponse> MorningBriefingSettingsQuery(
+        IAtomicPersistenceSession persistence,
+        int portfolioId) =>
+        from settings in persistence.Query<AutomationSettings>().AsNoTracking()
+        join portfolio in persistence.Query<Portfolio>().AsNoTracking()
+            on settings.PortfolioId equals portfolio.Id
+        where settings.PortfolioId == portfolioId && portfolio.DeletedAt == null
+        select new MorningBriefingSettingsResponse(
+            settings.EnableMorningBriefing,
+            settings.MorningBriefingSendHourLocal,
+            settings.MorningBriefingIncludeEmpty,
+            portfolio.TimeZone == "" ? "America/New_York" : portfolio.TimeZone);
 
     private static IQueryable<MyAlertsResponse> MyAlertsQuery(
         IAtomicPersistenceSession persistence,
@@ -795,7 +1003,10 @@ public sealed class AtomicNotificationMutationHandler
             || command.ExpectedAccessRevision <= 0 || string.IsNullOrWhiteSpace(command.RequestJson)
             || string.IsNullOrWhiteSpace(command.DeliveryIdempotencyKey)
             || command.DeliveryIdempotencyKey.Length > 128
-            || (command.Domain == AtomicNotificationMutationDomain.MarkRead && command.EntityId <= 0))
+            || ((command.Domain is AtomicNotificationMutationDomain.MarkRead
+                    or AtomicNotificationMutationDomain.LandlordConversationRead
+                    or AtomicNotificationMutationDomain.TenantConversationRead)
+                && command.EntityId <= 0))
             throw new ArgumentException(
                 "Portfolio, actor, access revision, payload, and delivery identifiers are required.");
     }

@@ -1,64 +1,51 @@
-using Microsoft.EntityFrameworkCore;
-using RentalCommand.Core.Entities;
-using RentalCommand.Core.Time;
-using RentalCommand.Data;
+using System.Security.Cryptography;
+using System.Text;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
 /// <inheritdoc cref="IDeviceService"/>
 public class DeviceService : IDeviceService
 {
-    private readonly RentalCommandDbContext _db;
-    private readonly TimeProvider _timeProvider;
+    private readonly IAtomicUnitOfWork _atomic;
 
-    public DeviceService(RentalCommandDbContext db, TimeProvider timeProvider)
+    public DeviceService(IAtomicUnitOfWork atomic)
     {
-        _db = db;
-        _timeProvider = timeProvider;
+        _atomic = atomic;
     }
 
     /// <inheritdoc/>
-    public async Task RegisterAsync(int portfolioId, int userId, string token, string platform, CancellationToken ct = default)
+    public async Task RegisterAsync(
+        WorkspaceReadScope scope,
+        string token,
+        string platform,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        var existing = await _db.DeviceTokens
-            .FirstOrDefaultAsync(d => d.Token == token, ct);
-
-        var now = _timeProvider.UtcNow();
-
-        if (existing is not null)
-        {
-            existing.UserId = userId;
-            existing.PortfolioId = portfolioId;
-            existing.Platform = platform;
-            existing.LastSeenAt = now;
-        }
-        else
-        {
-            _db.DeviceTokens.Add(new DeviceToken
-            {
-                PortfolioId = portfolioId,
-                UserId      = userId,
-                Token       = token,
-                Platform    = platform,
-                CreatedAt   = now,
-                LastSeenAt  = now,
-            });
-        }
-
-        await _db.SaveChangesAsync(ct);
+        var command = AtomicNotificationMutation.Command(scope,
+            AtomicNotificationMutationDomain.DeviceRegister, 0, TokenHash(token), operationKey,
+            new AtomicDeviceMutationRequest(token, platform));
+        await _atomic.ExecuteAsync(
+            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
     }
 
     /// <inheritdoc/>
-    public async Task<bool> UnregisterAsync(int userId, string token, CancellationToken ct = default)
+    public async Task<bool> UnregisterAsync(
+        WorkspaceReadScope scope,
+        string token,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        var row = await _db.DeviceTokens
-            .FirstOrDefaultAsync(d => d.Token == token && d.UserId == userId, ct);
-
-        if (row is null)
-            return false;
-
-        _db.DeviceTokens.Remove(row);
-        await _db.SaveChangesAsync(ct);
-        return true;
+        var command = AtomicNotificationMutation.Command(scope,
+            AtomicNotificationMutationDomain.DeviceUnregister, 0, TokenHash(token), operationKey,
+            new AtomicDeviceMutationRequest(token, null));
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        return outcome.Value.Found;
     }
+
+    private static string TokenHash(string token) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token.Trim())))
+            .ToLowerInvariant()[..24];
 }

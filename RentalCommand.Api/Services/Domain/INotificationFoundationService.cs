@@ -10,7 +10,8 @@ public interface INotificationFoundationService
         string operationKey, CancellationToken ct);
     Task<MorningBriefingSettingsResponse> GetMorningBriefingSettingsAsync(int portfolioId, CancellationToken ct);
     Task<MorningBriefingSettingsResponse> UpdateMorningBriefingSettingsAsync(
-        int portfolioId, UpdateMorningBriefingSettingsRequest request, CancellationToken ct);
+        WorkspaceReadScope scope, UpdateMorningBriefingSettingsRequest request,
+        string operationKey, CancellationToken ct);
     Task<IReadOnlyList<TeamRoutingRuleResponse>> ListTeamRoutingRulesAsync(int portfolioId, CancellationToken ct);
     Task<TeamRoutingRuleResponse> ReplaceTeamRoutingRuleAsync(WorkspaceReadScope scope,
         UpsertTeamRoutingRuleRequest request, string operationKey, CancellationToken ct);

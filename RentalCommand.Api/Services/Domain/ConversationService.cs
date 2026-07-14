@@ -142,60 +142,39 @@ public class ConversationService : IConversationService
             .SumAsync(c => (int?)c.LandlordUnreadCount, ct) ?? 0;
 
     public async Task<ConversationDetail?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
-    {
-        var conversations = _db.Conversations
-            .Where(c => c.Id == id && c.PortfolioId == portfolioId);
-        return await GetFromQueryAsync(conversations, portfolioId, id, ct);
-    }
+        => await LoadDetailAsync(portfolioId, id, tenantId: null, tenantViewer: false, ct);
 
     public async Task<ConversationDetail?> GetAuthorizedAsync(
         WorkspaceReadScope scope,
         int id,
         CancellationToken ct = default)
     {
-        var conversations = _db.Conversations
+        var found = await _db.Conversations
+            .AsNoTracking()
             .Where(c => c.Id == id)
             .WhereAuthorized(
                 _db,
                 scope,
                 ConversationReadCapabilities,
-                _timeProvider.UtcNow());
-
-        // Mark-read is a write even though it is triggered by GET. Keep the current session,
-        // revision, capability, target scope, and mutation in the same translated SQL statement.
-        var updated = await conversations
-            .Where(conversation => conversation.LandlordUnreadCount != 0)
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(conversation => conversation.LandlordUnreadCount, 0), ct);
-        if (updated == 0 && !await conversations.AsNoTracking().AnyAsync(ct))
-        {
-            return null;
-        }
-
-        return await LoadDetailAsync(scope.PortfolioId, id, tenantId: null, tenantViewer: false, ct);
+                _timeProvider.UtcNow())
+            .AnyAsync(ct);
+        return found
+            ? await LoadDetailAsync(scope.PortfolioId, id, tenantId: null, tenantViewer: false, ct)
+            : null;
     }
 
-    private async Task<ConversationDetail?> GetFromQueryAsync(
-        IQueryable<Conversation> conversations,
-        int portfolioId,
+    public async Task<bool> MarkReadAuthorizedAsync(
+        WorkspaceReadScope scope,
         int id,
-        CancellationToken ct)
+        string operationKey,
+        CancellationToken ct = default)
     {
-        var entity = await conversations.FirstOrDefaultAsync(ct);
-
-        if (entity == null)
-        {
-            return null;
-        }
-
-        // Mark read for the landlord.
-        if (entity.LandlordUnreadCount != 0)
-        {
-            entity.LandlordUnreadCount = 0;
-            await _db.SaveChangesAsync(ct);
-        }
-
-        return await LoadDetailAsync(portfolioId, id, tenantId: null, tenantViewer: false, ct);
+        var command = AtomicNotificationMutation.Command(scope,
+            AtomicNotificationMutationDomain.LandlordConversationRead, id, string.Empty,
+            operationKey, new AtomicConversationReadRequest(0));
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        return outcome.Value.Found;
     }
 
     private async Task<ConversationDetail?> LoadDetailAsync(
@@ -542,25 +521,21 @@ public class ConversationService : IConversationService
 
     public async Task<ConversationDetail?> GetForTenantAsync(
         int portfolioId, int tenantId, int id, CancellationToken ct = default)
+        => await LoadDetailAsync(portfolioId, id, tenantId, tenantViewer: true, ct);
+
+    public async Task<bool> MarkReadForTenantAsync(
+        WorkspaceReadScope scope,
+        int tenantId,
+        int id,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        var entity = await _db.Conversations
-            .Include(c => c.Tenant)
-            .Include(c => c.Property)
-            .Include(c => c.Messages)
-            .FirstOrDefaultAsync(c => c.Id == id && c.PortfolioId == portfolioId && c.TenantId == tenantId, ct);
-
-        if (entity == null)
-        {
-            return null;
-        }
-
-        if (entity.TenantUnreadCount != 0)
-        {
-            entity.TenantUnreadCount = 0;
-            await _db.SaveChangesAsync(ct);
-        }
-
-        return await LoadDetailAsync(portfolioId, id, tenantId, tenantViewer: true, ct);
+        var command = AtomicNotificationMutation.Command(scope,
+            AtomicNotificationMutationDomain.TenantConversationRead, id, string.Empty,
+            operationKey, new AtomicConversationReadRequest(tenantId));
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        return outcome.Value.Found;
     }
 
     public async Task<ConversationDetail?> TenantStartAsync(

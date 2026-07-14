@@ -108,6 +108,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Api.Services.Domain.AtomicNoticeDeliveryCommand,
     RentalCommand.Api.Services.Domain.AtomicNoticeDeliveryResult,
     RentalCommand.Api.Services.Domain.AtomicNoticeDeliveryHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Engine.Services.EnqueueMorningBriefingsCommand,
+    RentalCommand.Engine.Services.EnqueueMorningBriefingsResult,
+    RentalCommand.Engine.Services.EnqueueMorningBriefingsHandler>();
 
 builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
     options.UseNpgsql(connectionString)

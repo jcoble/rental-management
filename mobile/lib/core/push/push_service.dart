@@ -10,6 +10,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/dio_client.dart';
+import '../api/idempotent_mutation.dart';
 import '../auth/auth_controller.dart';
 import '../router/app_router.dart';
 import 'notification_routing.dart';
@@ -235,10 +236,14 @@ class PushService {
 
   Future<void> _postToken(String token) async {
     final platform = Platform.isIOS ? 'ios' : 'android';
-    await _dio.post<void>('/devices', data: {
-      'token': token,
-      'platform': platform,
-    });
+    await IdempotentMutation.run(
+      'devices:register:$token:$platform',
+      (operationKey) => _dio.post<void>(
+        '/devices',
+        data: {'token': token, 'platform': platform},
+        options: Options(headers: {'Idempotency-Key': operationKey}),
+      ),
+    );
   }
 
   /// Best-effort token removal on logout. Never throws; failure must not block
@@ -248,7 +253,13 @@ class PushService {
     final token = _currentToken;
     if (!_firebaseReady || token == null || token.isEmpty) return;
     try {
-      await _dio.delete<void>('/devices/$token');
+      await IdempotentMutation.run(
+        'devices:unregister:$token',
+        (operationKey) => _dio.delete<void>(
+          '/devices/${Uri.encodeComponent(token)}',
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        ),
+      );
     } catch (e) {
       if (kDebugMode) debugPrint('[Push] device unregister failed: $e');
     }

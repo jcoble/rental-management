@@ -436,13 +436,20 @@ class NotificationFoundationRepository {
 
   Future<MorningBriefingSettings> updateMorningBriefingSettings(
     MorningBriefingSettings settings,
-  ) => _request(
-    () => _dio.put<Map<String, dynamic>>(
-      '/notification-settings/morning-briefing',
-      data: settings.toUpdateJson(),
-    ),
-    (data) => MorningBriefingSettings.fromJson(_map(data)),
-  );
+  ) {
+    final request = settings.toUpdateJson();
+    return IdempotentMutation.run(
+      'notification-settings:morning-briefing:$request',
+      (operationKey) => _request(
+        () => _dio.put<Map<String, dynamic>>(
+          '/notification-settings/morning-briefing',
+          data: request,
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        ),
+        (data) => MorningBriefingSettings.fromJson(_map(data)),
+      ),
+    );
+  }
 
   Future<List<TeamRoutingRule>> listTeamRouting() => _request(
     () => _dio.get<List<dynamic>>('/notification-settings/team-routing'),
