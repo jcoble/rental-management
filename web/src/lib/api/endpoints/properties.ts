@@ -2,7 +2,6 @@ import type { Property, Unit } from '$lib/types';
 import { api } from '../client';
 import { idempotentMutation } from '../idempotency';
 import { buildListQuery, type ListParams } from '../list-params';
-import { idempotentMutation } from '../idempotency';
 
 export interface PropertyListParams extends ListParams {
 	type?: string;
