@@ -59,16 +59,27 @@ public class AccountingIntegrationsController : ManagementControllerBase
     [ProducesResponseType(typeof(StartAccountingConnectResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
-    public async Task<ActionResult<StartAccountingConnectResponse>> Connect(string provider, CancellationToken ct)
+    public async Task<ActionResult<StartAccountingConnectResponse>> Connect(
+        string provider,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
         if (!TryParseProvider(provider, out var parsed))
         {
             return BadRequest(new { error = $"Unknown accounting provider '{provider}'." });
         }
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+        {
+            return BadRequest(new
+            {
+                error = "Idempotency-Key is required and must be at most 128 characters.",
+            });
+        }
 
         try
         {
-            var authorizeUrl = await _service.StartConnectAsync(GetPortfolioId(), parsed, BuildCallbackUrl(), ct);
+            var authorizeUrl = await _service.StartConnectAsync(
+                GetWorkspaceReadScope(), parsed, BuildCallbackUrl(), operationKey, ct);
             return Ok(new StartAccountingConnectResponse { AuthorizeUrl = authorizeUrl });
         }
         catch (AccountingNotConfiguredException ex)

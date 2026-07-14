@@ -582,14 +582,21 @@ class TenantPortalRepository {
   }
 
   Future<AutopayStatus> autopayCancel(int tenantAccountId) async {
-    try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/portal/tenant-accounts/$tenantAccountId/autopay/cancel',
-      );
-      return AutopayStatus.fromJson(response.data ?? const {});
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    return IdempotentMutation.run(
+      'portal:autopay:cancel:$tenantAccountId',
+      (operationKey) async {
+        try {
+          final response = await _dio.post<Map<String, dynamic>>(
+            '/portal/tenant-accounts/$tenantAccountId/autopay/cancel',
+            data: const <String, dynamic>{},
+            options: Options(headers: {'Idempotency-Key': operationKey}),
+          );
+          return AutopayStatus.fromJson(response.data ?? const {});
+        } on DioException catch (e) {
+          throw ApiException.fromDioException(e);
+        }
+      },
+    );
   }
 
   Future<void> uploadWorkOrderPhoto({

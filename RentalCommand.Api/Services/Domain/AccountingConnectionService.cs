@@ -50,8 +50,6 @@ public sealed class AccountingNotConfiguredException : Exception
 /// </summary>
 public class AccountingConnectionService
 {
-    private static readonly TimeSpan StateTtl = TimeSpan.FromMinutes(10);
-
     private readonly RentalCommandDbContext _db;
     private readonly IDataProtector _protector;
     private readonly AccountingProviderResolver _providerResolver;
@@ -92,7 +90,11 @@ public class AccountingConnectionService
     /// The effective value is stored on the state row so the callback exchange reuses it.
     /// </param>
     public async Task<string> StartConnectAsync(
-        int portfolioId, AccountingProvider provider, string defaultRedirectUri, CancellationToken ct)
+        WorkspaceReadScope scope,
+        AccountingProvider provider,
+        string defaultRedirectUri,
+        string operationKey,
+        CancellationToken ct)
     {
         var settings = _settingsResolver.Resolve(provider);
         if (!settings.Configured)
@@ -106,37 +108,24 @@ public class AccountingConnectionService
             ? defaultRedirectUri
             : settings.RedirectUri!;
 
-        // Clear any stale Pending rows for this provider — harmless, keeps state tidy.
-        // Connected rows are never touched here.
-        await _db.AccountingConnections
-            .Where(c => c.PortfolioId == portfolioId
-                && c.Provider == provider
-                && c.Status == AccountingConnectionStatus.Pending)
-            .ExecuteDeleteAsync(ct);
-
-        var stateToken = GenerateBase64UrlToken(32);
-
         // PKCE: QuickBooks (provider #1) does not use it, so no code_verifier is staged here and
         // BuildAuthorizeUrl receives a null challenge. The CodeVerifier column + the codeChallenge
         // parameter exist so a PKCE provider (e.g. Xero) drops in later by staging a verifier — see
         // the Phase-2/5 note. We do not branch on the provider name to decide this.
-        var stateRow = new OAuthState
-        {
-            PortfolioId = portfolioId,
-            Provider = provider,
-            StateToken = stateToken,
-            RedirectUri = redirectUri,
-            CodeVerifier = null,
-            // Ephemeral OAuth state: the 10-min TTL and its expiry checks stay on the REAL clock (never
-            // the simulation clock) so a time-travelling dev session can't wedge a live OAuth handshake.
-            ExpiresAt = DateTime.UtcNow.Add(StateTtl),
-            CreatedAt = DateTime.UtcNow,
-        };
-        _db.OAuthStates.Add(stateRow);
-        await _db.SaveChangesAsync(ct);
+        var command = AtomicAccountingConnect.Command(
+            scope, provider, redirectUri, operationKey);
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicAccountingConnect.Identity(command),
+            command,
+            AtomicAccountingConnect.Codec,
+            ct);
 
         var prov = _providerResolver.Resolve(provider);
-        return prov.BuildAuthorizeUrl(settings, redirectUri, stateToken, codeChallenge: null);
+        return prov.BuildAuthorizeUrl(
+            settings,
+            outcome.Value.RedirectUri,
+            outcome.Value.StateToken,
+            codeChallenge: null);
     }
 
     /// <summary>
@@ -645,14 +634,4 @@ public class AccountingConnectionService
         }
     }
 
-    /// <summary>Cryptographically-random base64url token for OAuth state (and PKCE verifiers later).</summary>
-    private static string GenerateBase64UrlToken(int byteLength)
-    {
-        Span<byte> bytes = stackalloc byte[byteLength];
-        RandomNumberGenerator.Fill(bytes);
-        return Convert.ToBase64String(bytes)
-            .TrimEnd('=')
-            .Replace('+', '-')
-            .Replace('/', '_');
-    }
 }

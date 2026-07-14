@@ -82,5 +82,10 @@ public interface IPortalService
     /// Cancels the active enrollment on the tenant's canonical account. The account ownership gate
     /// and enrollment lookup execute as one translated statement.
     /// </summary>
-    Task<AutopayStatusResponse?> CancelAutopayAsync(int portfolioId, int tenantId, int tenantAccountId, CancellationToken ct = default);
+    Task<AutopayStatusResponse?> CancelAutopayAsync(
+        ActiveAccessContext access,
+        int tenantId,
+        int tenantAccountId,
+        string operationKey,
+        CancellationToken ct = default);
 }

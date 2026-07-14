@@ -225,6 +225,14 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Api.Services.Domain.AtomicWorkspaceCoreMutationResult,
     RentalCommand.Api.Services.Domain.AtomicWorkspaceCoreMutationHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.PrepareAccountingConnectCommand,
+    RentalCommand.Api.Services.Domain.PrepareAccountingConnectResult,
+    RentalCommand.Api.Services.Domain.PrepareAccountingConnectHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.CancelTenantAutopayCommand,
+    RentalCommand.Api.Services.Domain.CancelTenantAutopayResult,
+    RentalCommand.Api.Services.Domain.CancelTenantAutopayHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Api.Services.Domain.AtomicInspectionMutationCommand,
     RentalCommand.Api.Services.Domain.AtomicInspectionMutationResult,
     RentalCommand.Api.Services.Domain.AtomicInspectionMutationHandler>();

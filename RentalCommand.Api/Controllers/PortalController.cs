@@ -276,16 +276,29 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(typeof(AutopayStatusResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> CancelAutopay(int tenantAccountId, CancellationToken ct)
+    public async Task<IActionResult> CancelAutopay(
+        int tenantAccountId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
+        var operationKey = idempotencyKey?.Trim() ?? string.Empty;
+        if (operationKey.Length is <= 0 or > 128)
+        {
+            return BadRequest(new
+            {
+                error = "Idempotency-Key is required and must be at most 128 characters.",
+            });
+        }
         var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
         }
 
-        var portfolioId = GetPortfolioId();
-        var status = await _service.CancelAutopayAsync(portfolioId, tenantId.Value, tenantAccountId, ct);
+        var active = GetActiveAccessContext();
+        var portfolioId = active.PortfolioId;
+        var status = await _service.CancelAutopayAsync(
+            active, tenantId.Value, tenantAccountId, operationKey, ct);
         if (status == null)
         {
             return NotFound(new { error = "Tenant account not found" });

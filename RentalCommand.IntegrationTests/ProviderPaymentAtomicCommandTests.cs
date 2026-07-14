@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Payments;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -62,6 +63,10 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
             ReconcileClaimedProviderPaymentEventCommand,
             ReconcileClaimedProviderPaymentEventResult,
             ReconcileClaimedProviderPaymentEventHandler>();
+        services.AddAtomicCommandHandler<
+            CancelTenantAutopayCommand,
+            CancelTenantAutopayResult,
+            CancelTenantAutopayHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider));
@@ -171,7 +176,8 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         SkipIfNoDocker();
         var scenario = await SeedScenarioAsync("portal");
         await using var db = NewContext();
-        var service = new PortalService(db, new NoopLeaseQaService(), TimeProvider.System);
+        var service = new PortalService(
+            db, new NoopLeaseQaService(), TimeProvider.System, Atomic);
 
         var active = await service.GetAutopayStatusAsync(
             scenario.PortfolioId, scenario.TenantId, scenario.AccountId);
@@ -180,9 +186,21 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         active.Active.Should().BeTrue();
 
         var canceled = await service.CancelAutopayAsync(
-            scenario.PortfolioId, scenario.TenantId, scenario.AccountId);
+            new ActiveAccessContext(
+                scenario.AuthSessionId,
+                scenario.UserId,
+                scenario.AccessContextId,
+                scenario.PortfolioId,
+                scenario.AccessRevision,
+                WorkspaceExperience.Tenant,
+                null,
+                WorkspaceExperience.Tenant),
+            scenario.TenantId,
+            scenario.AccountId,
+            "portal-autopay-cancel-test");
         canceled.Should().NotBeNull();
         canceled!.Active.Should().BeFalse();
+        db.ChangeTracker.Clear();
         var enrollment = await db.TenantAutopayEnrollments.SingleAsync(row =>
             row.Id == scenario.EnrollmentId);
         enrollment.CanceledAtUtc.Should().NotBeNull();
@@ -413,6 +431,18 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         };
         db.Add(accessContext);
         await db.SaveChangesAsync();
+        var authSession = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = user.Id,
+            ActiveAccessContextId = accessContext.Id,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        db.Add(authSession);
+        await db.SaveChangesAsync();
         var property = new Property
         {
             PortfolioId = portfolio.Id, Name = $"Property {suffix}", AddressLine1 = "1 Pay Way",
@@ -508,7 +538,8 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
         db.AddRange(access, enrollment, charge);
         await db.SaveChangesAsync();
         return new Scenario(
-            portfolio.Id, account.Id, party.Id, enrollment.Id, charge.Id, user.Id, tenant.Id);
+            portfolio.Id, account.Id, party.Id, enrollment.Id, charge.Id, user.Id, tenant.Id,
+            authSession.Id, accessContext.Id, accessContext.AccessRevision);
     }
 
     private static TenantPaymentAttempt Attempt(
@@ -577,5 +608,5 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
 
     private sealed record Scenario(
         int PortfolioId, int AccountId, int PartyId, int EnrollmentId, long ChargeId,
-        int UserId, int TenantId);
+        int UserId, int TenantId, Guid AuthSessionId, int AccessContextId, long AccessRevision);
 }
