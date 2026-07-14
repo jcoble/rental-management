@@ -121,14 +121,12 @@ public class CsvImportServiceTests : IDisposable
     }
 
     // -------------------------------------------------------------------------
-    // Unit: resolves the owning property by name (case-insensitive, in-portfolio)
+    // Unit: parses rows and maps database-owned resolution/persistence receipts
     // -------------------------------------------------------------------------
 
     [Fact]
-    public async Task UnitImport_ResolvesPropertyByName_AndCreatesUnit()
+    public async Task UnitCommit_SerializesPropertyName_AndMapsAtomicReceipt()
     {
-        var property = SeedProperty("Maple Court");
-
         const string csv =
             "propertyName,unitNumber,bedrooms,bathrooms,marketRent\n" +
             "maple court,101,2,1.5,\"$1,200\"\n";   // name differs only in case; quoted currency rent
@@ -140,40 +138,43 @@ public class CsvImportServiceTests : IDisposable
         result.ValidRows.Should().Be(1);
         result.CreatedRows.Should().Be(1);
         result.Rows[0].Valid.Should().BeTrue();
-        result.Rows[0].CreatedId.Should().NotBeNull();
+        result.Rows[0].CreatedId.Should().Be(50_000);
 
-        var unit = await _ctx.Db.Units.SingleAsync();
-        unit.PropertyId.Should().Be(property.Id);
-        unit.UnitNumber.Should().Be("101");
-        unit.Bedrooms.Should().Be(2m);
-        unit.Bathrooms.Should().Be(1.5m);
-        unit.MarketRent.Should().Be(1200m);
+        _atomic.UnitCommands.Should().ContainSingle();
+        var row = _atomic.UnitCommands.Single().Rows.Should().ContainSingle().Subject;
+        row.PropertyId.Should().BeNull();
+        row.PropertyName.Should().Be("maple court");
+        row.UnitNumber.Should().Be("101");
+        row.Bedrooms.Should().Be(2m);
+        row.Bathrooms.Should().Be(1.5m);
+        row.MarketRent.Should().Be(1200m);
+        (await _ctx.Db.Units.CountAsync()).Should().Be(0,
+            "this service-level test maps the atomic receipt; PostgreSQL owns persistence");
     }
 
     [Fact]
-    public async Task UnitImport_UnknownPropertyName_IsAClearPerRowError()
+    public async Task UnitPreview_MapsUnknownPropertyResolutionError()
     {
-        SeedProperty("Maple Court");
+        _atomic.ReturnUnitPreviewError("Property was not found in this portfolio.");
 
         const string csv =
             "propertyName,unitNumber,bedrooms,bathrooms,marketRent\n" +
             "Nonexistent Place,101,2,1,1000\n";
 
-        var result = await _sut.ImportAsync(
-            _scope, "Unit", Csv(csv), dryRun: false, commandContext: LiveCommandContext);
+        var result = await _sut.ImportAsync(_scope, "Unit", Csv(csv), dryRun: true);
 
         result.ValidRows.Should().Be(0);
         result.CreatedRows.Should().Be(0);
         result.Rows[0].Valid.Should().BeFalse();
-        result.Rows[0].Errors.Should().ContainMatch("*No property named*");
+        result.Rows[0].Errors.Should().ContainMatch("*not found*");
         (await _ctx.Db.Units.CountAsync()).Should().Be(0);
     }
 
     [Fact]
-    public async Task UnitImport_AmbiguousPropertyName_IsAClearPerRowError()
+    public async Task UnitPreview_MapsAmbiguousPropertyResolutionError()
     {
-        SeedProperty("Maple Court");
-        SeedProperty("Maple Court"); // duplicate name → ambiguous
+        _atomic.ReturnUnitPreviewError(
+            "Property name matches more than one property; use propertyId.");
 
         const string csv =
             "propertyName,unitNumber,bedrooms,bathrooms,marketRent\n" +
@@ -182,7 +183,7 @@ public class CsvImportServiceTests : IDisposable
         var result = await _sut.ImportAsync(_scope, "Unit", Csv(csv), dryRun: true);
 
         result.Rows[0].Valid.Should().BeFalse();
-        result.Rows[0].Errors.Should().ContainMatch("*ambiguous*");
+        result.Rows[0].Errors.Should().ContainMatch("*more than one property*");
     }
 
     // -------------------------------------------------------------------------
@@ -248,7 +249,7 @@ public class CsvImportServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task ExpenseImport_CreatesMortgageInterestExpense_AndSkipsDuplicateReimport()
+    public async Task ExpenseImport_MapsAtomicDuplicateReceiptAcrossReimport()
     {
         SeedProperty("Maple Court");
 
@@ -278,7 +279,7 @@ public class CsvImportServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task LoanImport_CreatesLoan_AndSkipsDuplicateReimport()
+    public async Task LoanImport_MapsAtomicDuplicateReceiptAcrossReimport()
     {
         SeedProperty("Maple Court");
 
@@ -398,12 +399,27 @@ public class CsvImportServiceTests : IDisposable
     {
         public List<AtomicPaymentCsvImportCommand> PaymentCommands { get; } = [];
         public List<AtomicCoreCsvImportCommand> CoreCommands { get; } = [];
+        public List<AtomicUnitCsvImportCommand> UnitCommands { get; } = [];
         private readonly HashSet<string> _coreKeys = new(StringComparer.Ordinal);
+        private AtomicUnitImportBatchResult? _nextUnitPreview;
+
+        public void ReturnUnitPreviewError(string error)
+        {
+            var row = new AtomicUnitImportRowResult(
+                2, false, false, null, null, "101", 2m, 1m, 1000m, [error]);
+            _nextUnitPreview = new AtomicUnitImportBatchResult(
+                true, [row], [], 1, 0, 0, 0);
+        }
 
         public Task<AtomicUnitImportBatchResult> PreviewAsync(
             WorkspaceReadScope scope,
             IReadOnlyList<AtomicUnitImportRow> rows,
-            CancellationToken ct = default) => Task.FromResult(UnitResult(rows, created: false));
+            CancellationToken ct = default)
+        {
+            var result = _nextUnitPreview ?? UnitResult(rows, created: false);
+            _nextUnitPreview = null;
+            return Task.FromResult(result);
+        }
 
         public Task<AtomicCoreCsvImportBatchResult> PreviewAsync(
             WorkspaceReadScope scope,
@@ -429,6 +445,7 @@ public class CsvImportServiceTests : IDisposable
             if (command is AtomicUnitCsvImportCommand unit
                 && typeof(TResult) == typeof(AtomicUnitCsvImportResult))
             {
+                UnitCommands.Add(unit);
                 var batch = UnitResult(unit.Rows, created: true);
                 var result = new AtomicUnitCsvImportResult(
                     batch.Rows.ToArray(), batch.TotalRows, batch.ValidRows,
@@ -548,7 +565,8 @@ public class CsvImportServiceTests : IDisposable
             var createdRows = results.Where(row => row.CreatedId.HasValue).ToArray();
             return new AtomicCoreCsvImportBatchResult(
                 true, results, createdRows, results.Length,
-                results.Count(row => row.Valid), createdRows.Length, 0);
+                results.Count(row => row.Valid), createdRows.Length,
+                results.Count(row => row.IsDuplicate));
         }
     }
 
