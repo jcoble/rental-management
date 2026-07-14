@@ -238,6 +238,10 @@ public sealed class StartAuthSessionHandler
             throw new UnauthorizedAccessException("The selected workspace access revision changed.");
         }
         var exactSessionExists = await persistence.Query<AuthSession>()
+            // Pre-auth replay has no portfolio GUC yet. The effective-context projection above
+            // already proves the live workspace boundary; bypass only the AuthSession model's
+            // soft-delete join so this exact global auth row remains visible with blank RLS scope.
+            .IgnoreQueryFilters()
             .AsNoTracking()
             .AnyAsync(session =>
                 session.Id == command.AuthSessionId &&
