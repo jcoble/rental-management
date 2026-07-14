@@ -54,6 +54,21 @@ public static class AtomicPersistenceKernelExtensions
         services.AddScoped<WorkOrderResponsibilityAccessRevisionGuard>();
         services.AddScoped<MembershipAssignmentScopeValidator>();
         services.AddScoped<ILegalDocumentSourceVersionResolver, LegalDocumentSourceVersionResolver>();
+        services.AddScoped<AtomicUnitImportPersistence>();
+        services.AddScoped<IAtomicUnitImportPersistence>(provider =>
+            provider.GetRequiredService<AtomicUnitImportPersistence>());
+        services.AddScoped<IUnitCsvImportPreviewQuery>(provider =>
+            provider.GetRequiredService<AtomicUnitImportPersistence>());
+        services.AddScoped<AtomicCoreCsvImportPersistence>();
+        services.AddScoped<IAtomicCoreCsvImportPersistence>(provider =>
+            provider.GetRequiredService<AtomicCoreCsvImportPersistence>());
+        services.AddScoped<ICoreCsvImportPreviewQuery>(provider =>
+            provider.GetRequiredService<AtomicCoreCsvImportPersistence>());
+        services.AddScoped<AtomicPaymentCsvImportPersistence>();
+        services.AddScoped<IAtomicPaymentCsvImportPersistence>(provider =>
+            provider.GetRequiredService<AtomicPaymentCsvImportPersistence>());
+        services.AddScoped<IPaymentCsvImportPreviewQuery>(provider =>
+            provider.GetRequiredService<AtomicPaymentCsvImportPersistence>());
         services.TryAddSingleton<IAtomicUnitOfWork, AtomicUnitOfWork>();
         return services;
     }
