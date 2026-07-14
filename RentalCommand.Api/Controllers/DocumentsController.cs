@@ -456,6 +456,16 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         bool write,
         CancellationToken ct)
     {
+        if (target == StoredDocumentTarget.WorkOrder)
+        {
+            var capabilities = write
+                ? new[] { CapabilityKeys.WorkManage, CapabilityKeys.AssignedWorkUpdate }
+                : new[] { CapabilityKeys.WorkRead, CapabilityKeys.AssignedWorkRead };
+            return _db.WorkOrders.AsNoTracking()
+                .WhereAuthorized(_db, scope, capabilities, DateTime.UtcNow)
+                .AnyAsync(workOrder => workOrder.Id == entityId, ct);
+        }
+
         var capability = target switch
         {
             StoredDocumentTarget.Property or StoredDocumentTarget.Unit or StoredDocumentTarget.Tenant =>

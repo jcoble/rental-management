@@ -148,7 +148,8 @@ export const ROUTE_ACCESS_RULES: readonly RouteAccessRule[] = [
 		prefix: '/scan',
 		anyCapabilities: [
 			CAPABILITY.rentalsManage,
-			CAPABILITY.leasingAgreementsPrepare
+			CAPABILITY.leasingAgreementsPrepare,
+			CAPABILITY.assignedWorkUpdate
 		]
 	}
 ];

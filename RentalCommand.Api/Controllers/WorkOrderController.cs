@@ -70,8 +70,8 @@ public class WorkOrderController : ManagementControllerBase
         CancellationToken ct = default)
     {
         var portfolioId = GetPortfolioId();
-        if (!await HasCapabilityAsync(
-                CapabilityKeys.WorkRead,
+        if (!await HasAnyCapabilityAsync(
+                [CapabilityKeys.WorkRead, CapabilityKeys.AssignedWorkRead],
                 new WorkOrderCapabilityAuthorizationTarget(portfolioId, id),
                 ct))
         {

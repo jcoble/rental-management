@@ -16,7 +16,8 @@ public static class ScanDraftAuthorizationQuery
 {
     private static readonly string[] ExpenseCapabilities = [CapabilityKeys.MoneyExpensesManage];
     private static readonly string[] PaymentCapabilities = [CapabilityKeys.MoneyPaymentsManage];
-    private static readonly string[] WorkOrderCapabilities = [CapabilityKeys.WorkManage];
+    private static readonly string[] WorkOrderCapabilities =
+        [CapabilityKeys.WorkManage, CapabilityKeys.AssignedWorkUpdate];
     private static readonly string[] AgreementCapabilities =
         [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingAgreementsPrepare];
     private static readonly string[] ApplicationCapabilities = [CapabilityKeys.LeasingApplicationsManage];
@@ -66,7 +67,11 @@ public static class ScanDraftAuthorizationQuery
         DateTime utcNow,
         CancellationToken ct = default)
     {
-        var capabilities = CapabilitiesForTarget(targetEntityType);
+        // Assigned-work capture is never context-free: a technician must first choose one current
+        // responsibility. Managers retain the existing global classification workflow.
+        var capabilities = targetEntityType?.Trim() == "WorkOrder"
+            ? new[] { CapabilityKeys.WorkManage }
+            : CapabilitiesForTarget(targetEntityType);
         return EffectiveAssignments(db, scope, capabilities, utcNow).AnyAsync(ct);
     }
 
@@ -114,6 +119,8 @@ public static class ScanDraftAuthorizationQuery
         var types = targetTypes.Distinct(StringComparer.Ordinal).ToArray();
         var authorizedProperties = db.Properties.AsNoTracking()
             .WhereAuthorized(db, scope, capabilities, utcNow);
+        var authorizedWorkOrders = db.WorkOrders.AsNoTracking()
+            .WhereAuthorized(db, scope, capabilities, utcNow);
         var assignments = EffectiveAssignments(db, scope, capabilities, utcNow);
         var allPropertiesAssignments = assignments.Where(assignment =>
             assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties);
@@ -129,11 +136,16 @@ public static class ScanDraftAuthorizationQuery
                     || draft.CaptureWorkOrderId != null || draft.CaptureApplicationId != null
                     || draft.CaptureRentalListingId != null)
                  && (draft.CapturePropertyId == null || authorizedProperties.Any(property =>
-                        property.Id == draft.CapturePropertyId && property.PortfolioId == draft.PortfolioId))
+                        property.Id == draft.CapturePropertyId && property.PortfolioId == draft.PortfolioId) ||
+                     draft.CaptureWorkOrderId != null && authorizedWorkOrders.Any(workOrder =>
+                        workOrder.Id == draft.CaptureWorkOrderId &&
+                        workOrder.PropertyId == draft.CapturePropertyId))
                  && (draft.CaptureUnitId == null || db.Units.AsNoTracking().Any(unit =>
                         unit.Id == draft.CaptureUnitId && unit.PortfolioId == draft.PortfolioId
-                        && authorizedProperties.Any(property =>
-                            property.Id == unit.PropertyId && property.PortfolioId == unit.PortfolioId)))
+                        && (authorizedProperties.Any(property =>
+                            property.Id == unit.PropertyId && property.PortfolioId == unit.PortfolioId) ||
+                            draft.CaptureWorkOrderId != null && authorizedWorkOrders.Any(workOrder =>
+                                workOrder.Id == draft.CaptureWorkOrderId && workOrder.UnitId == unit.Id))))
                  && (draft.CaptureLeaseManagementId == null || db.LeaseManagements.AsNoTracking().Any(management =>
                         management.Id == draft.CaptureLeaseManagementId && management.PortfolioId == draft.PortfolioId
                         && authorizedProperties.Any(property =>
@@ -154,10 +166,9 @@ public static class ScanDraftAuthorizationQuery
                         && authorizedProperties.Any(property =>
                             property.Id == entry.TenantAccount.LeaseManagement.PropertyId
                             && property.PortfolioId == entry.PortfolioId)))
-                 && (draft.CaptureWorkOrderId == null || db.WorkOrders.AsNoTracking().Any(workOrder =>
+                 && (draft.CaptureWorkOrderId == null || authorizedWorkOrders.Any(workOrder =>
                         workOrder.Id == draft.CaptureWorkOrderId && workOrder.PortfolioId == draft.PortfolioId
-                        && authorizedProperties.Any(property =>
-                            property.Id == workOrder.PropertyId && property.PortfolioId == workOrder.PortfolioId)))
+                        && (draft.CapturePropertyId == null || workOrder.PropertyId == draft.CapturePropertyId)))
                  && (draft.CaptureApplicationId == null || db.RentalApplications.AsNoTracking().Any(application =>
                         application.Id == draft.CaptureApplicationId && application.PortfolioId == draft.PortfolioId
                         && application.PropertyId != null && authorizedProperties.Any(property =>

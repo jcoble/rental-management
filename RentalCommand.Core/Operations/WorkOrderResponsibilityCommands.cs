@@ -34,3 +34,51 @@ public sealed record AssignWorkOrderResponsibilityResult(
     WorkOrderResponsibilityKind Kind,
     DateTime EffectiveFromUtc,
     IReadOnlyDictionary<int, long> AccessRevisions);
+
+public sealed record CloseWorkOrderResponsibilityCommand(
+    int PortfolioId,
+    int ActorUserId,
+    Guid ActorAuthSessionId,
+    int ActorAccessContextId,
+    long ActorAccessRevision,
+    int WorkOrderId,
+    Guid ResponsibilityId,
+    WorkspaceAccessRevisionExpectation[] AccessRevisionExpectations,
+    string Reason,
+    string DeliveryIdempotencyKey) : IWorkspaceAccessRevisionSetMutationCommand;
+
+public sealed record CloseWorkOrderResponsibilityResult(
+    Guid ResponsibilityId,
+    int WorkOrderId,
+    DateTime EffectiveToUtc,
+    IReadOnlyDictionary<int, long> AccessRevisions);
+
+/// <summary>
+/// The deliberately narrow mutation available to a currently assigned technician. Location,
+/// tenant, vendor, cost, title, category, priority, and management fields are intentionally absent.
+/// </summary>
+public sealed record UpdateAssignedWorkOrderCommand(
+    int PortfolioId,
+    int ActorUserId,
+    Guid ActorAuthSessionId,
+    int ActorAccessContextId,
+    long ActorAccessRevision,
+    int WorkOrderId,
+    DateTime ExpectedUpdatedAtUtc,
+    WorkOrderStatus? Status,
+    string? TechnicianNote,
+    DateTime? ScheduledForUtc,
+    DateTime? ScheduledWindowEndUtc,
+    DateTime? CompletedAtUtc,
+    string DeliveryIdempotencyKey) : IAtomicCommandData;
+
+public enum UpdateAssignedWorkOrderOutcome { Applied, Stale }
+
+public sealed record UpdateAssignedWorkOrderResult(
+    UpdateAssignedWorkOrderOutcome Outcome,
+    int WorkOrderId,
+    WorkOrderStatus Status,
+    DateTime? ScheduledForUtc,
+    DateTime? ScheduledWindowEndUtc,
+    DateTime? CompletedAtUtc,
+    DateTime UpdatedAtUtc);

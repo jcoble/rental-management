@@ -289,18 +289,41 @@ public sealed class FinalizeScanUploadHandler
                 && session.ExpiresAtUtc > securityNowUtc)
             && assignment.RoleProfile!.Capabilities.Any(profileCapability =>
                 capabilityKeys.Contains(profileCapability.CapabilityDefinition!.Key)
-                && profileCapability.CapabilityDefinition.AuthorizationTargetKind
-                    == CapabilityAuthorizationTargetKind.Property));
+                && (profileCapability.CapabilityDefinition.AuthorizationTargetKind
+                        == CapabilityAuthorizationTargetKind.Property
+                    || profileCapability.CapabilityDefinition.Key == CapabilityKeys.AssignedWorkUpdate
+                    && profileCapability.CapabilityDefinition.AuthorizationTargetKind
+                        == CapabilityAuthorizationTargetKind.WorkOrder)));
+
+        var authorizedWorkOrders = persistence.Query<WorkOrder>().Where(workOrder =>
+            workOrder.PortfolioId == command.PortfolioId && assignments.Any(assignment =>
+                (assignment.RoleProfile!.Capabilities.Any(item =>
+                     item.CapabilityDefinition!.Key == CapabilityKeys.WorkManage) &&
+                 (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
+                  assignment.SelectedProperties.Any(selected => selected.PortfolioId == command.PortfolioId &&
+                                                               selected.PropertyId == workOrder.PropertyId))) ||
+                (assignment.RoleProfile.Capabilities.Any(item =>
+                     item.CapabilityDefinition!.Key == CapabilityKeys.AssignedWorkUpdate) &&
+                 assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AssignedWorkOrders &&
+                 persistence.Query<WorkOrderResponsibility>().Any(responsibility =>
+                     responsibility.WorkOrderId == workOrder.Id &&
+                     responsibility.PortfolioId == command.PortfolioId &&
+                     responsibility.WorkspaceMembershipId == assignment.WorkspaceMembershipId &&
+                     responsibility.MembershipRoleAssignmentId == assignment.Id &&
+                     responsibility.EffectiveFromUtc <= securityNowUtc &&
+                     (responsibility.EffectiveToUtc == null || responsibility.EffectiveToUtc > securityNowUtc)))));
 
         var properties = persistence.Query<Property>();
         var authorizedProperties = properties.Where(property =>
             property.PortfolioId == command.PortfolioId && property.DeletedAt == null
-            && assignments.Any(assignment =>
+            && (assignments.Any(assignment =>
                 assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
                 || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
                     && assignment.SelectedProperties.Any(selected =>
                         selected.PortfolioId == command.PortfolioId
-                        && selected.PropertyId == property.Id))));
+                        && selected.PropertyId == property.Id)))
+                || context.WorkOrderId != null && authorizedWorkOrders.Any(workOrder =>
+                    workOrder.Id == context.WorkOrderId && workOrder.PropertyId == property.Id)));
         var units = persistence.Query<Unit>();
         var relationships = persistence.Query<LeaseManagement>();
         var agreements = persistence.Query<LeaseAgreement>();
@@ -317,6 +340,9 @@ public sealed class FinalizeScanUploadHandler
             .Where(portfolio => portfolio.Id == command.PortfolioId)
             .Select(_ =>
                 assignments.Any()
+                && (context.WorkOrderId != null || assignments.Any(assignment =>
+                    assignment.RoleProfile!.Capabilities.Any(item =>
+                        item.CapabilityDefinition!.Key == CapabilityKeys.WorkManage)))
                 && (context.PropertyId == null || authorizedProperties.Any(property =>
                     property.Id == context.PropertyId.Value))
                 && (context.UnitId == null || units.Any(unit =>
@@ -373,10 +399,9 @@ public sealed class FinalizeScanUploadHandler
                         || entry.TenantAccount!.LeaseManagement!.PropertyId == context.PropertyId.Value)
                     && (context.UnitId == null
                         || entry.TenantAccount!.LeaseManagement!.UnitId == context.UnitId.Value)))
-                && (context.WorkOrderId == null || workOrders.Any(workOrder =>
+                && (context.WorkOrderId == null || authorizedWorkOrders.Any(workOrder =>
                     workOrder.Id == context.WorkOrderId.Value
                     && workOrder.PortfolioId == command.PortfolioId
-                    && authorizedProperties.Any(property => property.Id == workOrder.PropertyId)
                     && (context.PropertyId == null || workOrder.PropertyId == context.PropertyId.Value)
                     && (context.UnitId == null || workOrder.UnitId == context.UnitId.Value)
                     && (context.LeaseManagementId == null

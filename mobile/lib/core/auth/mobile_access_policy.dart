@@ -62,6 +62,7 @@ const scanCapabilityKeys = <String>[
   'money.expenses.manage',
   'leasing.applications.manage',
   'leasing.agreements.prepare',
+  'maintenance.assigned-work.update',
 ];
 
 const notificationManagementCapability = 'notifications.manage';

@@ -419,7 +419,7 @@ class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
                   registerWithHost: false,
                   onChat: () => openMobileAssistant(context),
                   onRecord: () => openMobileRecord(context),
-                  onScan: () => openMobileScan(context),
+                  onScan: () => openAuthorizedMobileScan(context, ref),
                 ),
               ),
           ],
