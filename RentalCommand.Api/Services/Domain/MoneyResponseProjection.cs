@@ -148,4 +148,25 @@ internal static class MoneyResponseProjection
             UpdatedAt = loan.UpdatedAt,
         });
 
+    public static IQueryable<RecurringExpenseResponse> RecurringExpenses(
+        IQueryable<RecurringExpense> recurringExpenses) =>
+        recurringExpenses.Select(expense => new RecurringExpenseResponse
+        {
+            Id = expense.Id,
+            PortfolioId = expense.PortfolioId,
+            PropertyId = expense.PropertyId,
+            PropertyName = expense.Property == null ? null : expense.Property.Name,
+            UnitId = expense.UnitId,
+            Category = expense.Category,
+            Description = expense.Description,
+            Amount = expense.Amount,
+            Frequency = expense.Frequency,
+            StartDate = expense.StartDate,
+            NextRunDate = expense.NextRunDate,
+            Active = expense.Active,
+            Notes = expense.Notes,
+            CreatedAt = expense.CreatedAt,
+            UpdatedAt = expense.UpdatedAt,
+        });
+
 }
