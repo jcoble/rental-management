@@ -190,14 +190,14 @@ public sealed class UpdateAssignedWorkOrderHandler
         var result = await query
             .Where(item => item.Id == command.WorkOrderId && item.PortfolioId == command.PortfolioId)
             .Where(item =>
-                persistence.Query<AuthSession>().AsNoTracking().Any(session =>
+                persistence.Query<AuthSession>().Any(session =>
                     session.Id == command.ActorAuthSessionId &&
                     session.UserId == command.ActorUserId &&
                     session.ActiveAccessContextId == command.ActorAccessContextId &&
                     session.Status == AuthSessionStatus.Active &&
                     session.RevokedAtUtc == null &&
                     session.ExpiresAtUtc > now) &&
-                persistence.Query<WorkspaceAccessContext>().AsNoTracking().Any(context =>
+                persistence.Query<WorkspaceAccessContext>().Any(context =>
                     context.Id == command.ActorAccessContextId &&
                     context.UserId == command.ActorUserId &&
                     context.PortfolioId == item.PortfolioId &&
@@ -218,7 +218,7 @@ public sealed class UpdateAssignedWorkOrderHandler
                             capability.CapabilityDefinition!.Key == CapabilityKeys.AssignedWorkUpdate &&
                             capability.CapabilityDefinition.AuthorizationTargetKind ==
                                 CapabilityAuthorizationTargetKind.WorkOrder) &&
-                        persistence.Query<WorkOrderResponsibility>().AsNoTracking().Any(responsibility =>
+                        persistence.Query<WorkOrderResponsibility>().Any(responsibility =>
                             responsibility.WorkOrderId == item.Id &&
                             responsibility.PortfolioId == item.PortfolioId &&
                             responsibility.WorkspaceMembershipId == context.Membership.Id &&
