@@ -1083,15 +1083,16 @@ internal static class FoundationBaselinePostgreSql
              AND target_new_values IS NOT NULL
              AND target_new_values ->> 'AuditRootAccessContextId' = target_entity_id::text
              AND target_new_values ->> 'UserId' = target_user_id::text
-             AND public.rc_access_context_is_effective(
-               target_entity_id, target_user_id, CURRENT_TIMESTAMP)
              AND EXISTS (
                SELECT 1
                FROM public."AtomicCommandReceipts" receipt
                JOIN public."WorkspaceAccessContexts" access_context
-                 ON access_context."Id" = target_entity_id
+                ON access_context."Id" = target_entity_id
                 AND access_context."UserId" = target_user_id
                 AND access_context."PortfolioId" = target_portfolio_id
+                AND access_context."Status" = 'Active'
+                AND access_context."SuspendedAtUtc" IS NULL
+                AND access_context."RevokedAtUtc" IS NULL
                WHERE receipt."AttemptId" = target_attempt_id
                  AND receipt."CommandType" = target_command_type
                  AND receipt."IdempotencyKey" = target_command_idempotency_key
