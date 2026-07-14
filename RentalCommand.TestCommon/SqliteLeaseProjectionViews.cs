@@ -12,6 +12,11 @@ public static class SqliteLeaseProjectionViews
 {
     public static void InstallCanonicalLeaseProjectionViewsForSqlite(this DatabaseFacade database)
     {
+        if (!database.IsSqlite())
+        {
+            return;
+        }
+
         database.ExecuteSqlRaw("""
             DROP VIEW IF EXISTS "vw_morning_briefing_candidates";
             DROP VIEW IF EXISTS "vw_lease_management_lifecycle";
