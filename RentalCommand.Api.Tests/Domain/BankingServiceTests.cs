@@ -152,6 +152,135 @@ public class BankingServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task MatchAsync_ConcurrentSameOperation_ReplaysOneAuthorizedReconciliation()
+    {
+        var payment = SeedRentPayment(new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc));
+        var imported = await _sut.ImportAsync(1, new ImportBankTransactionsRequest
+        {
+            Provider = "Manual",
+            InstitutionName = "Replay Bank",
+            AccountName = "Operating checking",
+            Transactions =
+            [
+                new ImportBankTransactionItem
+                {
+                    ProviderTransactionId = "concurrent-reconciliation-replay",
+                    PostedAt = payment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+                    Description = "Rent deposit replay",
+                    Amount = payment.Amount,
+                },
+            ],
+        });
+        var transactionId = imported.Transactions.Single().Id;
+        AssignRoute(_ctx, transactionId, payment.TenantAccount!.LeaseManagement!.PropertyId);
+        var expectedUpdatedAt = TransactionUpdatedAt(_ctx, transactionId);
+
+        await using var firstDb = new RentalCommand.Data.RentalCommandDbContext(
+            new DbContextOptionsBuilder<RentalCommand.Data.RentalCommandDbContext>()
+                .UseNpgsql(_ctx.ConnectionString)
+                .Options);
+        await using var secondDb = new RentalCommand.Data.RentalCommandDbContext(
+            new DbContextOptionsBuilder<RentalCommand.Data.RentalCommandDbContext>()
+                .UseNpgsql(_ctx.ConnectionString)
+                .Options);
+        var firstService = CreateServiceFor(firstDb, _ctx.ConnectionString);
+        var secondService = CreateServiceFor(secondDb, _ctx.ConnectionString);
+        var request = new MatchBankTransactionRequest
+        {
+            OperationKey = "same-authorized-reconciliation",
+            ExpectedUpdatedAtUtc = expectedUpdatedAt,
+            TenantAccountId = payment.TenantAccountId,
+            TenantLedgerEntryId = payment.Id,
+        };
+
+        var outcomes = await Task.WhenAll(
+            firstService.MatchAsync(_scope, transactionId, request),
+            secondService.MatchAsync(_scope, transactionId, request));
+
+        outcomes.Should().OnlyContain(outcome => outcome is
+        {
+            MatchStatus: "Matched",
+            MatchedTenantLedgerEntryId: not null,
+        });
+        outcomes.Select(outcome => outcome!.MatchedTenantLedgerEntryId)
+            .Should().OnlyContain(id => id == payment.Id);
+        _ctx.Db.ChangeTracker.Clear();
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.transaction.reconcile" &&
+            receipt.IdempotencyKey.EndsWith(":same-authorized-reconciliation")))
+            .Should().Be(1);
+        (await _ctx.Db.AtomicAuditLogs.CountAsync(audit =>
+            audit.CommandType == "banking.transaction.reconcile" &&
+            audit.CommandIdempotencyKey.EndsWith(":same-authorized-reconciliation")))
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RouteTransactionAsync_RequiresWorkspaceAdministratorAuthority()
+    {
+        var payment = SeedRentPayment(new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc));
+        var propertyId = payment.TenantAccount!.LeaseManagement!.PropertyId;
+        var imported = await _sut.ImportAsync(1, new ImportBankTransactionsRequest
+        {
+            Provider = "Manual",
+            InstitutionName = "Routing Bank",
+            AccountName = "Operating checking",
+            Transactions =
+            [
+                new ImportBankTransactionItem
+                {
+                    ProviderTransactionId = "administrator-routing-boundary",
+                    PostedAt = payment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+                    Description = "Needs property route",
+                    Amount = payment.Amount,
+                },
+            ],
+        });
+        var transactionId = imported.Transactions.Single().Id;
+        var propertyManager = _ctx.Db.SeedPropertyManagerScope(
+            1, propertyId, "bank-routing-property-manager");
+        var expectedUpdatedAt = TransactionUpdatedAt(_ctx, transactionId);
+
+        var denied = async () => await _sut.RouteTransactionAsync(
+            propertyManager,
+            transactionId,
+            new RouteBankTransactionRequest
+            {
+                OperationKey = "property-manager-route-denied",
+                PropertyId = propertyId,
+                ExpectedUpdatedAtUtc = expectedUpdatedAt,
+            });
+        await denied.Should().ThrowAsync<UnauthorizedAccessException>();
+
+        _ctx.Db.ChangeTracker.Clear();
+        (await _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(transaction => transaction.Id == transactionId)
+            .Select(transaction => transaction.PropertyId)
+            .SingleAsync()).Should().BeNull();
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.transaction.route" &&
+            receipt.IdempotencyKey.EndsWith(":property-manager-route-denied")))
+            .Should().Be(0);
+
+        var routed = await _sut.RouteTransactionAsync(
+            _scope,
+            transactionId,
+            new RouteBankTransactionRequest
+            {
+                OperationKey = "administrator-route-applied",
+                PropertyId = propertyId,
+                ExpectedUpdatedAtUtc = expectedUpdatedAt,
+            });
+
+        routed.Should().NotBeNull();
+        routed!.PropertyId.Should().Be(propertyId);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.transaction.route" &&
+            receipt.IdempotencyKey.EndsWith(":administrator-route-applied")))
+            .Should().Be(1);
+    }
+
+    [Fact]
     public async Task ImportAsync_AuditsConnectionAndImportedTransactions()
     {
         await _sut.ImportAsync(1, new ImportBankTransactionsRequest
@@ -1307,6 +1436,12 @@ public class BankingServiceTests : IAsyncLifetime
     }
 
     private BankingService CreateServiceFor(MigratedPostgreSqlTestContext ctx, PlaidOptions? options = null)
+        => CreateServiceFor(ctx.Db, ctx.ConnectionString, options);
+
+    private BankingService CreateServiceFor(
+        RentalCommand.Data.RentalCommandDbContext db,
+        string connectionString,
+        PlaidOptions? options = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton(TimeProvider.System);
@@ -1321,13 +1456,13 @@ public class BankingServiceTests : IAsyncLifetime
         services.AddAtomicCommandHandler<ReconcileBankTransactionCommand, ReconcileBankTransactionResult, ReconcileBankTransactionHandler>();
         services.AddAtomicCommandHandler<RouteBankTransactionCommand, RouteBankTransactionResult, RouteBankTransactionHandler>();
         services.AddDbContext<RentalCommand.Data.RentalCommandDbContext>((provider, builder) =>
-            builder.UseNpgsql(ctx.ConnectionString).UseAtomicPersistenceKernel(provider));
+            builder.UseNpgsql(connectionString).UseAtomicPersistenceKernel(provider));
         var provider = services.BuildServiceProvider();
         var scope = provider.CreateScope();
         _atomicHosts.Add(scope);
         _atomicHosts.Add(provider);
         return new BankingService(
-            ctx.Db,
+            db,
             new EphemeralDataProtectionProvider(),
             _plaid.Object,
             scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>(),
