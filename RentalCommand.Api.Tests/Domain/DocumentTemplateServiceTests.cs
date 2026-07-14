@@ -43,14 +43,20 @@ public sealed class DocumentTemplateServiceTests : IDisposable
             RentalCommand.Core.Documents.DocumentTemplateMutationResult,
             CreateDocumentTemplateHandler>();
         services.AddAtomicCommandHandler<
+            RentalCommand.Core.Documents.FinalizeDocumentTemplateUploadCommand,
+            RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+            FinalizeDocumentTemplateUploadHandler>();
+        services.AddAtomicCommandHandler<
             RentalCommand.Core.Documents.AddDocumentTemplateFieldCommand,
             RentalCommand.Core.Documents.DocumentTemplateMutationResult,
             AddDocumentTemplateFieldHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseSqlite(_ctx.ConnectionString).UseAtomicPersistenceKernel(provider));
+        services.AddScoped<IPendingFileUploadStore, PendingFileUploadStore>();
         _services = services.BuildServiceProvider();
         _sut = new DocumentTemplateService(
-            _ctx.Db, _catalog, _files, TimeProvider.System,
+            _ctx.Db, _catalog, _files,
+            _services.GetRequiredService<IPendingFileUploadStore>(), TimeProvider.System,
             _services.GetRequiredService<IAtomicUnitOfWork>());
     }
 
@@ -217,7 +223,8 @@ public sealed class DocumentTemplateServiceTests : IDisposable
             "Dad's lease",
             "Use this for the main portfolio.",
             defaultForPortfolio: true,
-            propertyId: null);
+            propertyId: null,
+            idempotencyKey: "upload-dads-lease");
 
         result.Outcome.Should().Be(DocumentTemplateOperationOutcome.Success);
         result.Value!.Name.Should().Be("Dad's lease");
@@ -309,6 +316,15 @@ public sealed class DocumentTemplateServiceTests : IDisposable
             await content.CopyToAsync(ms, ct);
             _files[key] = ms.ToArray();
             return key;
+        }
+
+        public async Task UploadAtAsync(
+            Stream content, string storagePath, string fileName, string contentType,
+            CancellationToken ct = default)
+        {
+            using var ms = new MemoryStream();
+            await content.CopyToAsync(ms, ct);
+            _files[storagePath] = ms.ToArray();
         }
 
         public Task<Stream> DownloadAsync(string path, CancellationToken ct = default)

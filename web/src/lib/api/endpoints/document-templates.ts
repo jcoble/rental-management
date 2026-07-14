@@ -168,7 +168,8 @@ export const documentTemplates = {
 			description?: string;
 			defaultForPortfolio?: boolean;
 			propertyId?: number | null;
-		}
+		},
+		operationKey: string
 	) => {
 		const form = new FormData();
 		form.append('file', file);
@@ -176,6 +177,8 @@ export const documentTemplates = {
 		if (values.description) form.append('description', values.description);
 		if (values.defaultForPortfolio) form.append('defaultForPortfolio', 'true');
 		if (values.propertyId != null) form.append('propertyId', String(values.propertyId));
-		return api.upload<DocumentTemplate>('/document-templates/upload', form);
+		return api.upload<DocumentTemplate>('/document-templates/upload', form, {
+			headers: { 'Idempotency-Key': operationKey }
+		});
 	}
 };

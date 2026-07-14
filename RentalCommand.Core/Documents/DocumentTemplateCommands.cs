@@ -18,6 +18,24 @@ public sealed record CreateDocumentTemplateCommand(
     string? DraftHtml,
     string DeliveryIdempotencyKey) : IAtomicCommandData;
 
+public sealed record FinalizeDocumentTemplateUploadCommand(
+    int PortfolioId,
+    StaffOperationActor Actor,
+    Guid PendingUploadId,
+    string Purpose,
+    string OperationKeyHash,
+    string RequestFingerprint,
+    string StoragePath,
+    string FileName,
+    string ContentType,
+    long SizeBytes,
+    string Sha256,
+    string Name,
+    string? Description,
+    bool DefaultForPortfolio,
+    int? PropertyId,
+    string DeliveryIdempotencyKey) : IAtomicCommandData;
+
 public sealed record UpdateDocumentTemplateCommand(
     int PortfolioId,
     StaffOperationActor Actor,

@@ -74,11 +74,19 @@
 			if (!name) {
 				throw new Error('Template name is required.');
 			}
-			return documentTemplates.uploadLeasePdf(selectedFile, {
-				name,
-				description: templateDescription.trim() || undefined,
-				defaultForPortfolio,
-			});
+			return idempotentMutation(
+				`document-template:upload:${selectedFile.name}:${selectedFile.size}:${selectedFile.lastModified}:${name}:${templateDescription}:${defaultForPortfolio}`,
+				(operationKey) =>
+					documentTemplates.uploadLeasePdf(
+						selectedFile!,
+						{
+							name,
+							description: templateDescription.trim() || undefined,
+							defaultForPortfolio
+						},
+						operationKey
+					)
+			);
 		},
 		onSuccess: (template) => {
 			showSuccess(`${template.name} uploaded as a draft lease template.`);

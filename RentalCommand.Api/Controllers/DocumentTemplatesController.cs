@@ -129,8 +129,11 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
         [FromForm] string? description,
         [FromForm] bool defaultForPortfolio,
         [FromForm] int? propertyId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var key))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
         if (file is null || file.Length == 0)
         {
             return BadRequest(new { error = "A non-empty PDF file is required." });
@@ -174,11 +177,13 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
             description,
             defaultForPortfolio,
             propertyId,
+            key,
             ct);
 
         return result.Outcome switch
         {
             DocumentTemplateOperationOutcome.Success => CreatedAtAction(nameof(Get), new { id = result.Value!.Id }, result.Value),
+            DocumentTemplateOperationOutcome.NotFound => NotFound(new { error = result.Error }),
             DocumentTemplateOperationOutcome.Invalid => BadRequest(new { error = result.Error }),
             _ => StatusCode(StatusCodes.Status500InternalServerError),
         };
@@ -271,12 +276,6 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
         DocumentTemplateOperationOutcome.Invalid => BadRequest(new { error = result.Error }),
         _ => StatusCode(StatusCodes.Status500InternalServerError),
     };
-
-    private static bool TryValidateIdempotencyKey(string? value, out string normalized)
-    {
-        normalized = value?.Trim() ?? string.Empty;
-        return normalized.Length is > 0 and <= 128;
-    }
 
     private static ContentResult JsonError(int statusCode, string? error) => new()
     {

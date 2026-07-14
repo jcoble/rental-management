@@ -72,6 +72,99 @@ public sealed class CreateDocumentTemplateHandler
     }
 }
 
+public sealed class FinalizeDocumentTemplateUploadHandler
+    : IAtomicCommandHandler<FinalizeDocumentTemplateUploadCommand, DocumentTemplateMutationResult>,
+      IAtomicReplayAuthorizer<FinalizeDocumentTemplateUploadCommand>
+{
+    public async Task<DocumentTemplateMutationResult> HandleAsync(
+        FinalizeDocumentTemplateUploadCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+    {
+        DocumentTemplateCommandSupport.Validate(command);
+        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
+        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        if (!await DocumentTemplateCommandSupport.CanManageAsync(
+                command.PortfolioId, command.Actor, command.PropertyId, attempt.Persistence, now, ct))
+            return DocumentTemplateCommandSupport.NotFound(0, "Document template target not found");
+
+        var pending = (await attempt.PendingFileUploads.LockPreparedSetAsync(
+            command.PortfolioId,
+            command.Actor.UserId,
+            [new AtomicPendingFileUploadExpectation(
+                command.PendingUploadId, command.Purpose, command.OperationKeyHash,
+                command.RequestFingerprint, command.StoragePath, command.FileName,
+                command.ContentType, command.SizeBytes)],
+            ct)).Single();
+
+        var stored = new StoredFile
+        {
+            PortfolioId = command.PortfolioId,
+            EntityType = nameof(DocumentTemplate),
+            FileName = command.FileName,
+            FilePath = command.StoragePath,
+            ContentType = command.ContentType,
+            FileSize = command.SizeBytes,
+            UploadedAt = now,
+        };
+        var template = new DocumentTemplate
+        {
+            PortfolioId = command.PortfolioId,
+            Kind = DocumentTemplateKind.Lease,
+            RenderMode = DocumentTemplateRenderMode.Overlay,
+            Status = DocumentTemplateStatus.Draft,
+            Name = command.Name.Trim(),
+            Description = DocumentTemplateCommandSupport.Clean(command.Description),
+            OriginalStoredFile = stored,
+            DefaultForPortfolio = command.DefaultForPortfolio,
+            PropertyId = command.PropertyId,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+
+        attempt.UseDatabaseWallClockForAudit(now);
+        if (template.DefaultForPortfolio)
+            await DocumentTemplateCommandSupport.ClearOtherDefaultAsync(
+                attempt, command, template.Kind, template.PropertyId, null, now, ct);
+        attempt.Persistence.Add(stored);
+        attempt.Persistence.Add(template);
+        attempt.BindSemanticAudit(stored, new AtomicSemanticAudit(
+            command.PortfolioId, nameof(StoredFile), stored.Id, AuditLogOperation.Created,
+            command.Actor.UserId,
+            NewValues: JsonSerializer.Serialize(new
+            {
+                command.FileName, command.ContentType, command.SizeBytes, command.Sha256,
+            }),
+            ChangeReason: "Uploaded document template source PDF."));
+        attempt.BindSemanticAudit(template, DocumentTemplateCommandSupport.TemplateAudit(
+            command.PortfolioId, command.Actor.UserId, template, AuditLogOperation.Created,
+            "Created document template from uploaded PDF."));
+        await attempt.FlushBusinessAsync(ct);
+
+        stored.EntityId = template.Id;
+        pending.State = PendingFileUploadState.Finalized;
+        pending.StoredFileId = stored.Id;
+        pending.UpdatedAtUtc = now;
+        await attempt.FlushBusinessAsync(ct);
+
+        var snapshot = await DocumentTemplateCommandSupport.LoadTemplateSnapshotAsync(
+            attempt.Persistence, command.PortfolioId, template.Id, ct);
+        DocumentTemplateCommandSupport.StageUpdate(
+            attempt, command.PortfolioId, template.Id, command.DeliveryIdempotencyKey, now, "upload");
+        return new(DocumentTemplateMutationOutcome.Applied, template.Id, Template: snapshot);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        FinalizeDocumentTemplateUploadCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        DocumentTemplateCommandSupport.Validate(command);
+        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        if (!await DocumentTemplateCommandSupport.CanManageAsync(
+                command.PortfolioId, command.Actor, command.PropertyId, persistence, now, ct))
+            throw new UnauthorizedAccessException("The active assignment cannot upload this document template.");
+    }
+}
+
 public sealed class UpdateDocumentTemplateHandler
     : IAtomicCommandHandler<UpdateDocumentTemplateCommand, DocumentTemplateMutationResult>,
       IAtomicReplayAuthorizer<UpdateDocumentTemplateCommand>
@@ -363,12 +456,14 @@ internal static class DocumentTemplateCommandSupport
         var portfolioId = command switch
         {
             CreateDocumentTemplateCommand value => value.PortfolioId,
+            FinalizeDocumentTemplateUploadCommand value => value.PortfolioId,
             UpdateDocumentTemplateCommand value => value.PortfolioId,
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
         var actorUserId = command switch
         {
             CreateDocumentTemplateCommand value => value.Actor.UserId,
+            FinalizeDocumentTemplateUploadCommand value => value.Actor.UserId,
             UpdateDocumentTemplateCommand value => value.Actor.UserId,
             _ => throw new ArgumentOutOfRangeException(nameof(command)),
         };
@@ -490,6 +585,21 @@ internal static class DocumentTemplateCommandSupport
         if (command.DocumentTemplateId <= 0) throw new ArgumentOutOfRangeException(nameof(command.DocumentTemplateId));
         if (command.Name is not null && string.IsNullOrWhiteSpace(command.Name))
             throw new ArgumentException("Template name cannot be blank.", nameof(command.Name));
+    }
+
+    internal static void Validate(FinalizeDocumentTemplateUploadCommand command)
+    {
+        ValidateCommon(command.PortfolioId, command.Actor, command.DeliveryIdempotencyKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.Purpose);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.OperationKeyHash);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.RequestFingerprint);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.StoragePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.FileName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.ContentType);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.Sha256);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.Name);
+        if (command.PendingUploadId == Guid.Empty || command.SizeBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(command));
     }
 
     internal static void Validate(AddDocumentTemplateFieldCommand command)

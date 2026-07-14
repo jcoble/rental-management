@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Scanning;
@@ -13,6 +14,7 @@ using RentalCommand.Core.Operations;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -24,6 +26,7 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
     private readonly RentalCommandDbContext _db;
     private readonly IDocumentTemplateFieldCatalog _catalog;
     private readonly IFileStorage _files;
+    private readonly IPendingFileUploadStore _pendingUploads;
     private readonly TimeProvider _timeProvider;
     private readonly IAtomicUnitOfWork _atomic;
 
@@ -31,12 +34,14 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         RentalCommandDbContext db,
         IDocumentTemplateFieldCatalog catalog,
         IFileStorage files,
+        IPendingFileUploadStore pendingUploads,
         TimeProvider timeProvider,
         IAtomicUnitOfWork atomic)
     {
         _db = db;
         _catalog = catalog;
         _files = files;
+        _pendingUploads = pendingUploads;
         _timeProvider = timeProvider;
         _atomic = atomic;
     }
@@ -196,6 +201,7 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         string? description,
         bool defaultForPortfolio,
         int? propertyId,
+        string idempotencyKey,
         CancellationToken ct = default)
     {
         var portfolioId = scope.PortfolioId;
@@ -206,76 +212,53 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         {
             return DocumentTemplateOperationResult<DocumentTemplateResponse>.Invalid("Template name is required.");
         }
-
-        var validation = await ValidateReferencesAsync(
-            scope, propertyId, originalFileId: null, compiledFileId: null, ct);
-        if (validation is not null)
-        {
-            return DocumentTemplateOperationResult<DocumentTemplateResponse>.Invalid(validation);
-        }
+        if (!await CanCreateTemplateAsync(scope, propertyId, ct))
+            return DocumentTemplateOperationResult<DocumentTemplateResponse>.NotFound(
+                "Document template target not found");
 
         var safeFileName = DiskFileStorage.SanitizeFileName(fileName);
-        var storageKey = await _files.UploadAsync(content, safeFileName, contentType, ct);
-        try
+        await using var buffer = new MemoryStream();
+        await content.CopyToAsync(buffer, ct);
+        var bytes = buffer.ToArray();
+        if (bytes.LongLength == 0 || bytes.LongLength != sizeBytes)
+            return DocumentTemplateOperationResult<DocumentTemplateResponse>.Invalid(
+                "Uploaded PDF size did not match the request.");
+
+        var sha256 = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        var normalizedDescription = NormalizeNullable(description);
+        var fingerprint = Digest(JsonSerializer.Serialize(new
         {
-            var now = _timeProvider.UtcNow();
-            await using var tx = await _db.Database.BeginTransactionAsync(ct);
-            if (!await CanCreateTemplateAsync(scope, propertyId, ct))
-            {
-                await tx.RollbackAsync(ct);
-                await _files.DeleteAsync(storageKey, ct);
-                return DocumentTemplateOperationResult<DocumentTemplateResponse>.NotFound(
-                    "Document template target not found");
-            }
-
-            var stored = new StoredFile
-            {
-                PortfolioId = portfolioId,
-                EntityType = "DocumentTemplate",
-                FileName = safeFileName,
-                FilePath = storageKey,
-                ContentType = contentType,
-                FileSize = sizeBytes,
-                UploadedAt = now,
-            };
-
-            var template = new DocumentTemplate
-            {
-                PortfolioId = portfolioId,
-                Kind = DocumentTemplateKind.Lease,
-                RenderMode = DocumentTemplateRenderMode.Overlay,
-                Status = DocumentTemplateStatus.Draft,
-                Name = normalizedName,
-                Description = NormalizeNullable(description),
-                OriginalStoredFile = stored,
-                DefaultForPortfolio = defaultForPortfolio,
-                PropertyId = propertyId,
-                CreatedAtUtc = now,
-                UpdatedAtUtc = now,
-            };
-
-            if (defaultForPortfolio)
-            {
-                await ClearOtherDefaultsAsync(
-                    portfolioId, DocumentTemplateKind.Lease, propertyId, exceptId: null, now, ct);
-            }
-
-            _db.StoredFiles.Add(stored);
-            _db.DocumentTemplates.Add(template);
-            await _db.SaveChangesAsync(ct);
-
-            stored.EntityId = template.Id;
-            await _db.SaveChangesAsync(ct);
-            await tx.CommitAsync(ct);
-
-            return DocumentTemplateOperationResult<DocumentTemplateResponse>.Success(
-                DocumentTemplateResponse.FromEntity(template, []));
-        }
-        catch
+            portfolioId,
+            scope.UserId,
+            safeFileName,
+            contentType,
+            sizeBytes = bytes.LongLength,
+            sha256,
+            name = normalizedName,
+            description = normalizedDescription,
+            defaultForPortfolio,
+            propertyId,
+        }));
+        const string purpose = "document-template-pdf";
+        var now = _timeProvider.UtcNow();
+        var admission = await _pendingUploads.PrepareAsync(
+            portfolioId, scope.UserId, purpose, idempotencyKey, fingerprint,
+            safeFileName, contentType, bytes.LongLength, now, ct);
+        if (admission.State == PendingFileUploadState.Prepared)
         {
-            try { await _files.DeleteAsync(storageKey, ct); } catch { /* best-effort orphan cleanup */ }
-            throw;
+            await using var upload = new MemoryStream(bytes, writable: false);
+            await _files.UploadAtAsync(upload, admission.StoragePath, safeFileName, contentType, ct);
         }
+
+        var digest = Digest(idempotencyKey);
+        var command = new FinalizeDocumentTemplateUploadCommand(
+            portfolioId, Actor(scope), admission.Id, purpose, digest, fingerprint,
+            admission.StoragePath, safeFileName, contentType, bytes.LongLength, sha256,
+            normalizedName, normalizedDescription, defaultForPortfolio, propertyId, digest);
+        var outcome = await _atomic.ExecuteAsync(
+            Identity("document-template.upload.finalize", portfolioId, digest),
+            command, MutationCodec, ct);
+        return MapTemplateResult(outcome.Value);
     }
 
     public async Task<DocumentTemplateOperationResult<DocumentTemplateResponse>> UpdateAsync(
@@ -422,49 +405,6 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
             new DocumentTemplatePreviewResult(previewBytes, fileName));
     }
 
-    private async Task<string?> ValidateReferencesAsync(
-        WorkspaceReadScope scope, int? propertyId, int? originalFileId, int? compiledFileId, CancellationToken ct)
-    {
-        var portfolioId = scope.PortfolioId;
-        if (propertyId.HasValue)
-        {
-            var propertyExists = await _db.Properties
-                .AsNoTracking()
-                .WhereAuthorized(_db, scope, CapabilityKeys.LeasingAgreementsPrepare, _timeProvider.UtcNow())
-                .AnyAsync(p => p.Id == propertyId.Value, ct);
-            if (!propertyExists)
-            {
-                return "Property not found in this portfolio.";
-            }
-        }
-
-        if ((originalFileId.HasValue || compiledFileId.HasValue) &&
-            !await _db.AuthorizedWorkspaceAssignments(
-                    scope,
-                    [CapabilityKeys.LeasingAgreementsPrepare],
-                    CapabilityAuthorizationTargetKind.Property,
-                    _timeProvider.UtcNow())
-                .AnyAsync(ct))
-        {
-            return "Existing document files can only be attached to a global template.";
-        }
-
-        if (originalFileId.HasValue && !await StoredFileExistsAsync(portfolioId, originalFileId.Value, ct))
-        {
-            return "Original document file not found in this portfolio.";
-        }
-
-        if (compiledFileId.HasValue && !await StoredFileExistsAsync(portfolioId, compiledFileId.Value, ct))
-        {
-            return "Compiled document file not found in this portfolio.";
-        }
-
-        return null;
-    }
-
-    private Task<bool> StoredFileExistsAsync(int portfolioId, int fileId, CancellationToken ct) =>
-        _db.StoredFiles.AsNoTracking().AnyAsync(f => f.Id == fileId && f.PortfolioId == portfolioId, ct);
-
     private async Task<byte[]> DownloadTemplateBytesAsync(string filePath, CancellationToken ct)
     {
         await using var source = await _files.DownloadAsync(filePath, ct);
@@ -582,30 +522,6 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         public string? TenantEmail { get; init; }
     }
 
-    private Task ClearOtherDefaultsAsync(
-        int portfolioId,
-        DocumentTemplateKind kind,
-        int? propertyId,
-        int? exceptId,
-        DateTime now,
-        CancellationToken ct)
-    {
-        var q = _db.DocumentTemplates
-            .Where(t => t.PortfolioId == portfolioId
-                && t.Kind == kind
-                && t.PropertyId == propertyId
-                && t.DefaultForPortfolio);
-
-        if (exceptId.HasValue)
-        {
-            q = q.Where(t => t.Id != exceptId.Value);
-        }
-
-        return q.ExecuteUpdateAsync(setters => setters
-            .SetProperty(t => t.DefaultForPortfolio, false)
-            .SetProperty(t => t.UpdatedAtUtc, now), ct);
-    }
-
     private static DocumentTemplateOperationResult<DocumentTemplateResponse> MapTemplateResult(
         DocumentTemplateMutationResult result) => result.Outcome switch
         {
@@ -702,24 +618,23 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
                 : allProperties.Any()));
     }
 
-    private async Task<bool> CanCreateTemplateAsync(
-        WorkspaceReadScope scope,
-        int? propertyId,
-        CancellationToken ct)
+    private Task<bool> CanCreateTemplateAsync(
+        WorkspaceReadScope scope, int? propertyId, CancellationToken ct)
     {
         if (propertyId.HasValue)
         {
-            return await _db.Properties
-                .AsNoTracking()
-                .WhereAuthorized(_db, scope, CapabilityKeys.LeasingAgreementsPrepare, _timeProvider.UtcNow())
+            return _db.Properties.AsNoTracking()
+                .WhereAuthorized(
+                    _db, scope, CapabilityKeys.LeasingAgreementsPrepare, _timeProvider.UtcNow())
                 .AnyAsync(property => property.Id == propertyId.Value, ct);
         }
 
-        return await _db.AuthorizedWorkspaceAssignments(
+        return _db.AuthorizedWorkspaceAssignments(
                 scope,
                 [CapabilityKeys.LeasingAgreementsPrepare],
                 CapabilityAuthorizationTargetKind.Property,
                 _timeProvider.UtcNow())
             .AnyAsync(ct);
     }
+
 }
