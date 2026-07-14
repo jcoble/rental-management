@@ -35,7 +35,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
     private static readonly AtomicJsonResultCodec<StartAuthSessionResult> StartCodec =
         new("start-auth-session-result.v1");
 
-    private readonly DateTime _now = new(2026, 7, 11, 20, 0, 0, DateTimeKind.Utc);
+    private readonly DateTime _now = CurrentTestTimeUtc();
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
     private ServiceProvider? _runtimeServices;
@@ -810,6 +810,14 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
 
     private static string Hash(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+
+    private static DateTime CurrentTestTimeUtc()
+    {
+        var now = DateTime.UtcNow;
+        return new DateTime(
+            now.Ticks - (now.Ticks % TimeSpan.TicksPerSecond),
+            DateTimeKind.Utc);
+    }
 
     private RentalCommandDbContext NewPlainContext() => new(
         new DbContextOptionsBuilder<RentalCommandDbContext>()
