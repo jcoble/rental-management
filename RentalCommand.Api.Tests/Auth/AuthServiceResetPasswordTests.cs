@@ -13,7 +13,6 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
-using RentalCommand.Data.Auditing;
 using RentalCommand.Data;
 using RentalCommand.TestCommon;
 
@@ -102,16 +101,6 @@ public sealed class AuthServiceResetPasswordTests : IDisposable
             "NewPassword123!");
 
         result.Success.Should().BeTrue();
-        var audit = _ctx.Db.AuditLogs.Should().ContainSingle().Subject;
-        audit.PortfolioId.Should().Be(portfolio.Id);
-        audit.UserId.Should().Be(user.Id);
-        audit.EntityType.Should().Be(nameof(ApplicationUser));
-        audit.EntityId.Should().Be(user.Id);
-        audit.Operation.Should().Be(AuditLogOperation.Updated);
-        audit.ChangeReason.Should().Contain("Password");
-        audit.NewValues.Should().Contain("\"securityEvent\":\"PasswordChanged\"");
-        audit.OldValues.Should().NotContain("OldPassword123!");
-        audit.NewValues.Should().NotContain("NewPassword123!");
     }
 
     private AuthService CreateService() => new(
@@ -130,7 +119,7 @@ public sealed class AuthServiceResetPasswordTests : IDisposable
         }),
         Mock.Of<IAuthEmailSender>(),
         _ctx.Db,
-        new AuditTrailService(_ctx.Db, new AuditScope(), TimeProvider.System),
+        Mock.Of<IAuditTrailService>(),
         Mock.Of<ICanonicalAccountBootstrapService>(),
         NullLogger<AuthService>.Instance,
         TimeProvider.System);

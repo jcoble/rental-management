@@ -697,11 +697,11 @@ public sealed class CanonicalLeaseReaderSqlTests
             sql.Should().NotContain("\"Leases\"");
         }
 
-        dashboardSql.Should().Contain("AuditLogs");
+        dashboardSql.Should().Contain("AtomicAuditLogs");
         dashboardSql.Should().Contain("AuthSessions");
         dashboardSql.Should().Contain("reports.read");
         dashboardSql.Should().Contain("AccountNumber");
-        auditSql.Should().Contain("AuditLogs");
+        auditSql.Should().Contain("AtomicAuditLogs");
         auditSql.Should().Contain("LIMIT");
     }
 

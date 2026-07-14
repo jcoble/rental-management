@@ -79,6 +79,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
 
     public async Task<ListingWorkspaceResponse?> GenerateAsync(int portfolioId, int unitId, int userId, CancellationToken ct = default)
     {
+        _audit.EnsureAtomicCommand();
         var seed = await SeedQuery(portfolioId, unitId).FirstOrDefaultAsync(ct);
         if (seed is null) return null;
 
@@ -125,6 +126,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
     public async Task<ListingWorkspaceResponse?> SaveAsync(int portfolioId, int unitId, SaveListingWorkspaceRequest request,
         int userId, CancellationToken ct = default)
     {
+        _audit.EnsureAtomicCommand();
         ListingWorkspaceResponse? response = null;
         var strategy = _db.Database.CreateExecutionStrategy();
         await strategy.ExecuteAsync(async () =>
@@ -160,6 +162,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         int portfolioId, int unitId, int photoId, int userId, string clientOperationId,
         string fileName, string contentType, byte[] bytes, CancellationToken ct = default)
     {
+        _audit.EnsureAtomicCommand();
         var operationId = CleanRequired(clientOperationId, "Client operation ID");
         if (operationId.Length > 160) throw new DomainValidationException("Client operation ID cannot exceed 160 characters.");
         var photoExists = await _db.ListingPhotos.AsNoTracking().AnyAsync(photo =>
@@ -329,6 +332,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         int portfolioId, int unitId, int userId, string reason,
         Func<int, DateTime, Task<bool>> mutation, CancellationToken ct)
     {
+        _audit.EnsureAtomicCommand();
         var listingFound = false;
         var strategy = _db.Database.CreateExecutionStrategy();
         await strategy.ExecuteAsync(async () =>
@@ -385,6 +389,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
     public async Task<ListingWorkspaceResponse?> PrepareConnectedAsync(
         int portfolioId, int unitId, int publicationId, int userId, CancellationToken ct = default)
     {
+        _audit.EnsureAtomicCommand();
         var snapshot = await LoadConnectedSnapshotAsync(portfolioId, unitId, publicationId, ct);
         if (snapshot is null) return null;
         var adapter = RequireAvailableAdapter(snapshot.ProviderKey);
@@ -419,6 +424,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         int portfolioId, int unitId, int publicationId, string clientOperationId, int userId,
         ConnectedListingOperation operation, CancellationToken ct)
     {
+        _audit.EnsureAtomicCommand();
         var operationId = CleanRequired(clientOperationId, "Client operation ID");
         if (operationId.Length > 160)
             throw new DomainValidationException("Client operation ID cannot exceed 160 characters.");
@@ -512,6 +518,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         string deliveryKey, string deliveryStatus, string? deliveryError, string? externalListingId,
         string? listingUrl, bool markPublishedVersion, string reason, CancellationToken ct)
     {
+        _audit.EnsureAtomicCommand();
         deliveryKey = CleanRequiredMax(deliveryKey, "Provider delivery key", 200);
         deliveryStatus = CleanRequiredMax(deliveryStatus, "Provider delivery status", 80);
         deliveryError = CleanOptionalMax(deliveryError, "Provider delivery error", 2000);
@@ -635,6 +642,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
     public async Task<ListingWorkspaceResponse?> ConfirmSignalAsync(int portfolioId, int unitId, int signalId, bool accept,
         int userId, CancellationToken ct = default)
     {
+        _audit.EnsureAtomicCommand();
         ListingWorkspaceResponse? response = null;
         await using var transaction = await _db.Database.BeginTransactionAsync(ct);
         var signal = await _db.ExternalListingSignals

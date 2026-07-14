@@ -7,7 +7,7 @@ namespace RentalCommand.Api.Controllers;
 
 /// <summary>
 /// Read-only access to the caller's portfolio audit trail (append-only
-/// <see cref="Core.Entities.AuditLog"/>). Scope comes from the server-validated workspace context; the
+/// <see cref="Core.Entities.AtomicAuditLog"/>). Scope comes from the server-validated workspace context; the
 /// list supports <c>?operation&amp;entityType&amp;entityId&amp;skip&amp;take&amp;search&amp;sort</c>
 /// and defaults to newest-first. There are no create/update/delete operations.
 /// </summary>

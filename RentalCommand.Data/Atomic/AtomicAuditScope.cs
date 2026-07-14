@@ -5,11 +5,16 @@ using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Data.Atomic;
 
-internal sealed class AtomicAuditScope : IAtomicExecutionState, IAtomicInfrastructureWriteGate
+internal sealed class AtomicAuditScope : IAtomicExecutionState, IAtomicInfrastructureWriteGate, IAtomicAuditEventSink
 {
     private readonly AtomicPersistenceMode _mode;
+    private readonly TimeProvider _timeProvider;
 
-    public AtomicAuditScope(AtomicPersistenceMode mode) => _mode = mode;
+    public AtomicAuditScope(AtomicPersistenceMode mode, TimeProvider timeProvider)
+    {
+        _mode = mode;
+        _timeProvider = timeProvider;
+    }
 
     private sealed class MutationSlot
     {
@@ -337,6 +342,11 @@ internal sealed class AtomicAuditScope : IAtomicExecutionState, IAtomicInfrastru
             _rows.Add(row);
         }
     }
+
+    void IAtomicAuditEventSink.EnsureActive() => RequireActive();
+
+    void IAtomicAuditEventSink.Stage(AtomicSemanticAudit audit) =>
+        StageSemanticEvent(audit, _timeProvider!.GetUtcNow().UtcDateTime);
 
     public IDisposable BeginSetBasedMutation(AtomicSetBasedTarget target, AtomicSemanticAudit audit)
     {

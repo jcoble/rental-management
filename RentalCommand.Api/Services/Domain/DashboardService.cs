@@ -381,7 +381,7 @@ public class DashboardService : IDashboardService
         var portfolioId = scope.PortfolioId;
         var authorizedProperties = AuthorizedProperties(scope, CapabilityKeys.ReportsRead);
 
-        return _db.AuditLogs
+        return _db.AtomicAuditLogs
             .AsNoTracking()
             .WhereAuthorizedForReports(
                 _db,
@@ -536,7 +536,7 @@ public class DashboardService : IDashboardService
 
     internal sealed class DashboardActivityReadRow
     {
-        public AuditLog Audit { get; set; } = null!;
+        public AtomicAuditLog Audit { get; set; } = null!;
         public string? ResolvedActorName { get; set; }
         public string? Label { get; set; }
         public int? UnitId { get; set; }

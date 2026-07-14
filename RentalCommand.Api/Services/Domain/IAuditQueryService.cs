@@ -5,7 +5,7 @@ using RentalCommand.Core.Enums;
 namespace RentalCommand.Api.Services.Domain;
 
 /// <summary>
-/// Read-only access to the portfolio's append-only <see cref="Core.Entities.AuditLog"/> trail.
+/// Read-only access to the portfolio's append-only <see cref="Core.Entities.AtomicAuditLog"/> trail.
 /// User-facing queries consume a server-validated workspace scope and apply current-session,
 /// access-revision, <c>reports.read</c>, and property scope in the translated SQL statement. The
 /// separate forensic operations are platform-operator-only and retain an explicit portfolio scope.

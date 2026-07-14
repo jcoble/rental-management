@@ -141,7 +141,7 @@ public sealed class LegalDocumentSourceVersionConcurrencyTests : IAsyncLifetime
         await using var loserTransaction = await loserDb.Database.BeginTransactionAsync();
         var transactionIdBefore = await CurrentTransactionIdAsync(loserDb);
 
-        var auditScope = new AtomicAuditScope(new AtomicPersistenceMode(false));
+        var auditScope = new AtomicAuditScope(new AtomicPersistenceMode(false), TimeProvider.System);
         using var attemptLease = auditScope.BeginAttempt(
             new AtomicCommandIdentity("test.resolve-legal-source", Guid.NewGuid().ToString("N")),
             Guid.NewGuid());

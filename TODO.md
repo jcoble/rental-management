@@ -33,28 +33,14 @@ These live on the header so they're one tap from anywhere; they can still also
 appear in their drawer group. Badges should live-update (SignalR) where we have
 counts (unread messages, upcoming appts).
 
-### 3. Reconcile Activity feed + Audit log (currently two broken halves)
-Investigation findings:
-- `/activity` page reads `ActivityLog` table. **NOTHING writes to it** → always
-  "No activity found." Dead viewer.
-- A real append-only `AuditLog` table DOES exist (`AuditTrailService.LogAsync`)
-  with actor / IP / operation / **old→new values** / timestamp / reason. It's
-  already populated for: Scan, Screening, Lease e-sign (sent/signed/declined),
-  Vendor dispatch, W-9 request, inbound SMS (rent-confirm, vendor-done),
-  Applications. But it has **NO UI / no controller** → invisible.
+### 3. Canonical atomic activity/audit trail
+Resolved by TSK-672: `AtomicAuditLogs` is the sole append-only store and the activity,
+record-history, and forensic readers all project from it. The old `ActivityLog` and
+`AuditLog` stores/writers are removed; there is no fallback or dual-write path.
 
-Plan:
-- **Pick one store.** Promote `AuditLog` as the source of truth; either retire
-  `ActivityLog` or make the `/activity` page read `AuditLog` (with a clean DTO).
-- **Transaction log (every entity):** write an audit/activity row on create /
-  edit / delete / status-change for Payments, Expenses, Leases, Tenants,
-  WorkOrders, Deposits, etc. — at least actor + what changed.
-- **Deep audit (important things):** ensure full old→new diffs on Leases
-  (create / edit / terminate), **signatures**, deposits/refunds, payment
-  reversals — the legally-sensitive trail.
-- **Viewer:** make `/activity` show the unified trail w/ working type + entity
-  filters; add a per-record "History" tab on detail pages (Lease, Payment, etc.)
-  filtered to that entity. Admin-only deep view (IP / raw old→new JSON).
+Remaining mutation conversions are explicitly fail-closed and inventoried in
+`Docs/Reviews/2026-07-14-tsk-672-canonical-audit-cutover.md`. Each must stage its semantic
+event inside the receipt-backed atomic command before the final enforcement gate is enabled.
 
 ### 4. Money pages: separation of concerns (Accounting / Deposits / Banking)
 Findings: three money pages with confusing overlap.

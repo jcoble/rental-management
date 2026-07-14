@@ -12,7 +12,6 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
-using RentalCommand.Data.Auditing;
 using Testcontainers.PostgreSql;
 using Xunit;
 
@@ -152,70 +151,6 @@ public sealed class AtomicUnitOfWorkTests : IAsyncLifetime
         evidence.Starts.Should().Be(1);
         evidence.Commits.Should().Be(1);
         evidence.Rollbacks.Should().Be(0);
-    }
-
-    [SkippableFact]
-    public async Task HybridHost_RoutesUnconvertedAndAtomicWritesToExactlyOneAuditPipelineEach()
-    {
-        SkipIfDockerUnavailable();
-        var services = new ServiceCollection();
-        services.AddSingleton(TimeProvider.System);
-        services.AddSingleton<HandlerProbe>();
-        services.AddScoped<ICurrentActor, TestActor>();
-        services.AddScoped<IAuditScope, AuditScope>();
-        services.AddScoped<AuditSaveChangesInterceptor>();
-        services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
-        services.AddAtomicCommandHandler<CreateExpenseCommand, ExpenseResult, CreateExpenseHandler>();
-        services.AddDbContext<RentalCommandDbContext>((provider, options) =>
-            options.UseNpgsql(_postgres!.GetConnectionString())
-                .UseAtomicPersistenceKernel(provider)
-                .AddInterceptors(provider.GetRequiredService<AuditSaveChangesInterceptor>()));
-
-        await using var hybrid = services.BuildServiceProvider(
-            new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
-        var legacyMarker = $"hybrid-legacy-{Guid.NewGuid():N}";
-        await using (var legacyScope = hybrid.CreateAsyncScope())
-        {
-            var db = legacyScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-            db.Expenses.Add(new Expense
-            {
-                PortfolioId = _portfolioId,
-                Category = ScheduleECategory.Repairs,
-                Description = legacyMarker,
-                Status = ExpenseStatus.Pending,
-                Amount = 10m,
-                IncurredAt = DateTime.UtcNow,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow,
-            });
-            await db.SaveChangesAsync();
-        }
-
-        var atomicMarker = $"hybrid-atomic-{Guid.NewGuid():N}";
-        await hybrid.GetRequiredService<IAtomicUnitOfWork>().ExecuteAsync(
-            Identity(nameof(HybridHost_RoutesUnconvertedAndAtomicWritesToExactlyOneAuditPipelineEach)),
-            new CreateExpenseCommand(_portfolioId, atomicMarker),
-            ExpenseCodec);
-
-        await using var verifyScope = hybrid.CreateAsyncScope();
-        var verify = verifyScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-        var legacyId = await verify.Expenses
-            .Where(expense => expense.Description == legacyMarker)
-            .Select(expense => expense.Id)
-            .SingleAsync();
-        var atomicId = await verify.Expenses
-            .Where(expense => expense.Description == atomicMarker)
-            .Select(expense => expense.Id)
-            .SingleAsync();
-
-        (await verify.AuditLogs.CountAsync(row => row.EntityType == nameof(Expense)
-            && row.EntityId == legacyId)).Should().Be(1);
-        (await verify.AtomicAuditLogs.CountAsync(row => row.EntityType == nameof(Expense)
-            && row.EntityId == legacyId)).Should().Be(0);
-        (await verify.AuditLogs.CountAsync(row => row.EntityType == nameof(Expense)
-            && row.EntityId == atomicId)).Should().Be(0);
-        (await verify.AtomicAuditLogs.CountAsync(row => row.EntityType == nameof(Expense)
-            && row.EntityId == atomicId)).Should().Be(1);
     }
 
     [SkippableFact]

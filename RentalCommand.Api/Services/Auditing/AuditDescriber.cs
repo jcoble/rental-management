@@ -4,7 +4,7 @@ using RentalCommand.Core.Enums;
 namespace RentalCommand.Api.Services.Auditing;
 
 /// <summary>
-/// Turns a raw <see cref="AuditLog"/> row into one plain-English sentence for a non-technical
+/// Turns a raw <see cref="AtomicAuditLog"/> row into one plain-English sentence for a non-technical
 /// landlord, e.g. "Recorded a payment", "Updated lease", "Deleted expense". Deterministic — no LLM.
 /// Soft-deletes already arrive as <see cref="AuditLogOperation.Deleted"/> from the interceptor, so a
 /// delete reads as "Deleted {entity}". Falls back to "{Operation} {EntityType} #{Id}" for anything
@@ -12,7 +12,7 @@ namespace RentalCommand.Api.Services.Auditing;
 /// </summary>
 public sealed class AuditDescriber
 {
-    public string Describe(AuditLog row)
+    public string Describe(AtomicAuditLog row)
     {
         var noun = EntityNoun(row.EntityType);
 

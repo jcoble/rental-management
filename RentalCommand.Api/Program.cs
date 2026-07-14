@@ -125,8 +125,6 @@ var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<
 JwtSecretGuard.Validate(jwtSettings.SecretKey, builder.Environment.IsDevelopment());
 
 // --- Database ---
-// The scoped AuditSaveChangesInterceptor is resolved from the same scope as the DbContext (the
-// (sp, options) overload), so it can read the per-request ICurrentActor / IAuditScope.
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
     ?? throw new InvalidOperationException("Missing connection string 'DefaultConnection'.");
 var migratorConnectionString = builder.Configuration.GetConnectionString("MigratorConnection");
@@ -517,8 +515,7 @@ builder.Services.AddSingleton<RentalCommand.Api.Data.RlsConnectionInterceptor>()
 builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
 {
     options.UseNpgsql(migrateOnly ? migratorConnectionString! : connectionString)
-        .UseAtomicPersistenceKernel(sp)
-        .AddInterceptors(sp.GetRequiredService<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>());
+        .UseAtomicPersistenceKernel(sp);
     if (!migrateOnly)
     {
         options.AddInterceptors(sp.GetRequiredService<RentalCommand.Api.Data.RlsConnectionInterceptor>());

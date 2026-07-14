@@ -44,6 +44,8 @@ public static class AtomicPersistenceKernelExtensions
             provider.GetRequiredService<AtomicAuditScope>());
         services.AddScoped<IAtomicInfrastructureWriteGate>(provider =>
             provider.GetRequiredService<AtomicAuditScope>());
+        services.AddScoped<IAtomicAuditEventSink>(provider =>
+            provider.GetRequiredService<AtomicAuditScope>());
         services.AddScoped<AtomicAuditSaveChangesInterceptor>();
         services.AddScoped<AtomicTransactionLifecycleInterceptor>();
         services.AddScoped<AtomicSetBasedCommandGuardInterceptor>();

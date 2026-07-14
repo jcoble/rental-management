@@ -43,7 +43,7 @@ public class UnitDashboardServiceTests : IAsyncLifetime
     public async Task GetTimelineAsync_ScopesCanonicalChildAuditRowsInSqlWithoutPreloadingIds()
     {
         var seeded = SeedUnitWithTimelineChildren();
-        _db.AuditLogs.AddRange(
+        _db.AtomicAuditLogs.AddRange(
             Audit(nameof(Unit), seeded.Unit.Id, 8),
             Audit(nameof(LeaseManagement), seeded.Relationship.Id, 7),
             Audit(nameof(LeaseAgreement), seeded.Agreement.Id, 6),
@@ -67,7 +67,7 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         _executedSql.Should().NotContain(command => IsChildIdPreload(command),
             "canonical child scopes must remain correlated subqueries inside the paged audit query");
 
-        var auditSql = _executedSql.Single(command => command.Contains("FROM \"AuditLogs\"", StringComparison.OrdinalIgnoreCase));
+        var auditSql = _executedSql.Single(command => command.Contains("FROM \"AtomicAuditLogs\"", StringComparison.OrdinalIgnoreCase));
         auditSql.Should().Contain("ORDER BY");
         auditSql.Should().Contain("LIMIT");
         auditSql.Should().Contain("LeaseManagements");
@@ -731,8 +731,12 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         UpdatedAt = incurredAt,
     };
 
-    private AuditLog Audit(string entityType, int entityId, int minutesAgo) => new()
+    private AtomicAuditLog Audit(string entityType, int entityId, int minutesAgo) => new()
     {
+        AttemptId = Guid.NewGuid(),
+        CommandType = "test.unit-dashboard.seed",
+        CommandIdempotencyKey = Guid.NewGuid().ToString("N"),
+        MutationOrdinal = 1,
         PortfolioId = PortfolioId,
         EntityType = entityType,
         EntityId = entityId,
@@ -766,7 +770,7 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         command.Contains("SELECT \"", StringComparison.OrdinalIgnoreCase)
         && command.Contains("\".\"Id\"", StringComparison.OrdinalIgnoreCase)
         && command.Contains($"FROM \"{table}\"", StringComparison.OrdinalIgnoreCase)
-        && !command.Contains("FROM \"AuditLogs\"", StringComparison.OrdinalIgnoreCase)
+        && !command.Contains("FROM \"AtomicAuditLogs\"", StringComparison.OrdinalIgnoreCase)
         && !command.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
         && !command.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase);
 

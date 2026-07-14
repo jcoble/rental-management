@@ -209,7 +209,7 @@ Status is a DB-side read model, not a mutable source field:
 6. executed, effective today, and not ended → Active
 7. executed and end date has passed → Expired
 
-The query reads durable columns and signature facts. It does not replay AuditLogs and does not depend on a background worker changing status at midnight.
+The query reads durable columns and signature facts. It does not replay AtomicAuditLogs and does not depend on a background worker changing status at midnight.
 
 ### Database invariants
 
@@ -279,7 +279,7 @@ Independent concerns are not forced into one status enum:
 
 The UI may show several badges simultaneously, for example `Occupied`, `Past due`, and `Notice given`.
 
-AuditLogs remains the append-only forensic record across the model:
+AtomicAuditLogs is the sole append-only forensic record across the model:
 
 - actor user ID or non-user actor
 - explicit actor type: User, ApiCredential, or SystemAutomation
@@ -852,7 +852,7 @@ Implementation uses one active isolated integration worktree at a time with chec
 3. LeaseAgreement and LeaseAddendum issued artifacts are immutable and versioned.
 4. Agreement status is derived DB-side from durable facts and dates.
 5. Tenant money belongs to one account under LeaseManagement; legal sources remain traceable.
-6. AuditLogs remains the forensic trail; typed ledger entries remain the financial source.
+6. AtomicAuditLogs is the sole forensic trail; typed ledger entries remain the financial source.
 7. Atomic writes are a hard repository-wide rule and first implementation gate.
 8. Workspace Administrator, Property Manager, Leasing Agent, and Maintenance Technician are seeded job presets; one member may hold multiple separately scoped assignments and the schema is not a closed single-role enum.
 9. Property Manager receives operational financial/reconciliation access within scope, while bank connections, credentials, payouts, integrations, and destructive authority remain Administrator-only by default.

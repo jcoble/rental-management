@@ -83,10 +83,10 @@ Package warnings recorded at baseline:
 
 - `RentalCommand.Core/Persistence/IAtomicUnitOfWork.cs`
 - `RentalCommand.Core/Interfaces/IAuditTrailService.cs`
-- `RentalCommand.Core/Interfaces/IAuditScope.cs`
+- `RentalCommand.Core/Atomic/AtomicCommandContracts.cs`
 - `RentalCommand.Core/Entities/AtomicCommandReceipt.cs`
-- `RentalCommand.Data/Auditing/AuditSaveChangesInterceptor.cs`
-- `RentalCommand.Data/Auditing/AuditScope.cs`
+- `RentalCommand.Data/Atomic/AtomicAuditSaveChangesInterceptor.cs`
+- `RentalCommand.Data/Atomic/AtomicAuditScope.cs`
 - `RentalCommand.Data/RentalCommandDbContext.cs`
 - `RentalCommand.Data/Persistence/AtomicUnitOfWork.cs`
 - API and Engine dependency registrations
@@ -98,7 +98,7 @@ Package warnings recorded at baseline:
 2. The unit of work checks/inserts a unique `AtomicCommandReceipt`, invokes the database mutation, flushes generated keys, materializes generic audit rows, flushes staged semantic audit/outbox/ledger rows, and commits once.
 3. The execution strategy surrounds the complete transaction. A retry receives a fresh scoped `DbContext`; it never reuses a tracker after a rolled-back flush.
 4. Nested code joins an existing command transaction but cannot commit, roll it back, or start a retry loop.
-5. `AuditSaveChangesInterceptor` captures/materializes rows but never recursively calls `SaveChanges`.
+5. `AtomicAuditSaveChangesInterceptor` captures/materializes rows but never recursively calls `SaveChanges`.
 6. `AuditTrailService` stages a rich semantic event. It does not independently make a business command durable.
 7. Generic and semantic audit use an entity reference plus command-local save/mutation ordinal so the rich event replaces/enriches the exact generic event without collapsing two legitimate updates to the same entity.
 8. An explicit audit-only command remains possible, but it still runs through the executor with its own command key.

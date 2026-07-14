@@ -46,7 +46,7 @@ Three runtime processes share one PostgreSQL database and one upload directory:
                        ▼                                              ▼
                  ┌───────────────────────  PostgreSQL  ───────────────────────┐
                  │  domain tables · Identity · ScanDrafts · OutboxMessage ·    │
-                 │  Conversations · AuditLog · advisory lock (single-Engine)   │
+                 │  Conversations · AtomicAuditLog · advisory lock (single-Engine) │
                  └───────────────────────────┬─────────────────────────────────┘
                                              │  shared upload dir
                                   ┌──────────▼───────────┐
@@ -103,7 +103,7 @@ nullable `DeletedAt` soft-delete with a global query filter.
   `Inspection`.
 - **Intake/safety**: `StoredFile` (polymorphic attachment, re-keyed to the created record on
   confirm), `ScanDraft` (the flagship — `Status` string state machine, `ExtractedFields` jsonb of
-  `{value, confidence}`, provenance `ModelId`/`TokensUsed`/`CostUsd`), `AuditLog` (append-only,
+  `{value, confidence}`, provenance `ModelId`/`TokensUsed`/`CostUsd`), `AtomicAuditLog` (append-only,
   old/new jsonb), `ActivityLog` (UI feed), `OutboxMessage` (sms/email payload + retry).
 - **Messaging**: `Conversation` (per-topic thread: `TenantId`, `Subject`, per-side
   `LandlordUnreadCount`/`TenantUnreadCount`, `LastMessageAt`/preview) + `ConversationMessage`
@@ -163,7 +163,7 @@ State machine: `Pending → Processing → Reviewing → Confirming → Confirme
    advisory lock).
 5. **Confirm** (`POST /scans/{id}/confirm`): the **entire confirm-and-create runs in one DB
    transaction** — conditional claim (`Reviewing→Confirming`), create the Expense/Payment, re-key
-   the `StoredFile`, flip to `Confirmed`, write an `AuditLog`. Any failure/cancellation **rolls back
+   the `StoredFile`, flip to `Confirmed`, write an `AtomicAuditLog`. Any failure/cancellation **rolls back
    all of it** (no orphaned record, draft restored to `Reviewing`). Rejects `$0`/blank amounts and
    confirms on non-`Reviewing` drafts. Document-kind routing: RentCheck → Payment, else → Expense.
 

@@ -87,7 +87,7 @@ public class AuditQueryService : IAuditQueryService
         // streamed row-by-row from Postgres (AsAsyncEnumerable) so an unbounded set is never
         // materialized in API memory; the caller (CSV writer) flushes each row as it arrives.
         var q = ApplyFilters(
-                _db.AuditLogs.AsNoTracking().Where(audit => audit.PortfolioId == portfolioId),
+                _db.AtomicAuditLogs.AsNoTracking().Where(audit => audit.PortfolioId == portfolioId),
                 operation,
                 entityType,
                 entityId,
@@ -120,7 +120,7 @@ public class AuditQueryService : IAuditQueryService
         int? entityId,
         ListQuery query)
     {
-        var authorized = _db.AuditLogs
+        var authorized = _db.AtomicAuditLogs
             .AsNoTracking()
             .WhereAuthorizedForReports(
                 _db,
@@ -145,7 +145,7 @@ public class AuditQueryService : IAuditQueryService
         int? entityId,
         ListQuery query)
     {
-        var portfolioRows = _db.AuditLogs
+        var portfolioRows = _db.AtomicAuditLogs
             .AsNoTracking()
             .Where(audit => audit.PortfolioId == portfolioId);
         return ProjectRows(
@@ -154,7 +154,7 @@ public class AuditQueryService : IAuditQueryService
     }
 
     private IQueryable<AuditReadRow> ProjectRows(
-        IQueryable<Core.Entities.AuditLog> query,
+        IQueryable<Core.Entities.AtomicAuditLog> query,
         int portfolioId) =>
         query.Select(audit => new AuditReadRow
         {
@@ -215,8 +215,8 @@ public class AuditQueryService : IAuditQueryService
     /// Filters, stably sorts, and pages an already-scoped source. The user-facing caller supplies its
     /// canonical authorization query; the forensic caller supplies its explicit portfolio predicate.
     /// </summary>
-    private IQueryable<Core.Entities.AuditLog> FilteredPage(
-        IQueryable<Core.Entities.AuditLog> source,
+    private IQueryable<Core.Entities.AtomicAuditLog> FilteredPage(
+        IQueryable<Core.Entities.AtomicAuditLog> source,
         AuditLogOperation? operation,
         string? entityType,
         int? entityId,
@@ -243,8 +243,8 @@ public class AuditQueryService : IAuditQueryService
     /// Shared by the paged viewer (<see cref="FilteredPage"/>) and the streamed export so the export's
     /// filtered set matches the page exactly.
     /// </summary>
-    private IQueryable<Core.Entities.AuditLog> ApplyFilters(
-        IQueryable<Core.Entities.AuditLog> source,
+    private IQueryable<Core.Entities.AtomicAuditLog> ApplyFilters(
+        IQueryable<Core.Entities.AtomicAuditLog> source,
         AuditLogOperation? operation,
         string? entityType,
         int? entityId,
@@ -288,7 +288,7 @@ public class AuditQueryService : IAuditQueryService
 
     /// <summary>
     /// Free-text search across <em>every field the audit page renders</em>: the action title / entity
-    /// noun (derived from <see cref="Core.Entities.AuditLog.EntityType"/>), the actor (label or
+    /// noun (derived from <see cref="Core.Entities.AtomicAuditLog.EntityType"/>), the actor (label or
     /// <c>User #id</c>), the entity id (so a bare <c>76</c> matches), the compound entity label
     /// (<c>Expense #76</c> / <c>expense 76</c>), the action verb (<c>Created</c>/<c>Updated</c>…), and
     /// the IP address. Runs entirely Postgres-side as one translated query.
@@ -303,7 +303,7 @@ public class AuditQueryService : IAuditQueryService
     /// term ("expense 76", "Expense #76") matches the entity noun on the trgm column AND the id.
     /// </para>
     /// </summary>
-    private static IQueryable<Core.Entities.AuditLog> ApplySearch(IQueryable<Core.Entities.AuditLog> q, string term)
+    private static IQueryable<Core.Entities.AtomicAuditLog> ApplySearch(IQueryable<Core.Entities.AtomicAuditLog> q, string term)
     {
         // Case-insensitive contains via Postgres ILIKE %term%, served by the
         // `gin (lower(col) gin_trgm_ops)` trigram indexes (AuditSearchTrgmIndexes) — index-driven,
@@ -386,7 +386,7 @@ public class AuditQueryService : IAuditQueryService
 
     internal sealed class AuditReadRow
     {
-        public Core.Entities.AuditLog Audit { get; set; } = null!;
+        public Core.Entities.AtomicAuditLog Audit { get; set; } = null!;
         public string? ResolvedActorName { get; set; }
         public int? UnitId { get; set; }
     }

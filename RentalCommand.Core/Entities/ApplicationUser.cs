@@ -12,7 +12,6 @@ public class ApplicationUser : IdentityUser<int>
     public DateTime CreatedAt { get; set; }
     public DateTime? LastLoginAt { get; set; }
 
-    public ICollection<AuditLog> AuditLogs { get; set; } = new List<AuditLog>();
     public ICollection<WorkspaceAccessContext> WorkspaceAccessContexts { get; set; } =
         new List<WorkspaceAccessContext>();
     public ICollection<OwnerUserAccess> OwnerUserAccesses { get; set; } = new List<OwnerUserAccess>();

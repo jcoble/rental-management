@@ -190,7 +190,7 @@ public sealed class RenewalReissueLifecyclePostgreSqlTests : IAsyncLifetime
     {
         await using var db = NewContext();
         await using var transaction = await db.Database.BeginTransactionAsync();
-        var auditScope = new AtomicAuditScope(new AtomicPersistenceMode(false));
+        var auditScope = new AtomicAuditScope(new AtomicPersistenceMode(false), TimeProvider.System);
         using var attempt = auditScope.BeginAttempt(
             new AtomicCommandIdentity("test.renewal-reissue-transition", Guid.NewGuid().ToString("N")),
             Guid.NewGuid());

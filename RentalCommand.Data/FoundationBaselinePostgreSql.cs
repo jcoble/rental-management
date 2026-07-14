@@ -80,7 +80,6 @@ internal static class FoundationBaselinePostgreSql
         "ApplicationFinancialEntries",
         "Appointments",
         "AtomicAuditLogs",
-        "AuditLogs",
         "BankConnections",
         "BankTransactions",
         "CapitalAssets",
@@ -324,7 +323,7 @@ internal static class FoundationBaselinePostgreSql
     // Evidence and financial-history rows may be appended but never rewritten by either runtime.
     private static readonly HashSet<string> AppendOnlyTables = new(StringComparer.Ordinal)
     {
-        "AtomicAuditLogs", "AuditLogs", "NoticeDeliveryEvidence", "RenderedNotices",
+        "AtomicAuditLogs", "NoticeDeliveryEvidence", "RenderedNotices",
         "SecurityDepositEntries", "SignatureAuditEvents", "TenantLedgerAllocations",
         "TenantLedgerEntries", "LegalDocumentSourceVersions", "WorkspaceNoticeTemplateVersions",
     };
@@ -359,7 +358,7 @@ internal static class FoundationBaselinePostgreSql
             "AccountingEntityMappings", "AccountingMappingPromotionJobs", "AccountingSyncMaps",
             "AdverseActionNotices", "ApplicantScreeningMilestones", "ApplicantScreenings",
             "ApplicationFinancialAccounts", "ApplicationFinancialEntries",
-            "Appointments", "AtomicAuditLogs", "AtomicCommandReceipts", "AuditLogs",
+            "Appointments", "AtomicAuditLogs", "AtomicCommandReceipts",
             "BankTransactions", "CapitalAssets", "ConversationMessages",
             "Conversations", "DocumentTemplateFields", "DocumentTemplates", "EvictionCaseEvents",
             "EvictionCaseRespondents", "EvictionCases", "ExpenseLineItems", "Expenses",
@@ -452,7 +451,7 @@ internal static class FoundationBaselinePostgreSql
 
     private static readonly HashSet<string> EngineAppendOnlyTables = new(StringComparer.Ordinal)
     {
-        "AtomicAuditLogs", "AuditLogs", "NoticeDeliveryEvidence", "Notifications",
+        "AtomicAuditLogs", "NoticeDeliveryEvidence", "Notifications",
         "RenderedNotices", "SecurityDepositEntries", "SignatureAuditEvents",
         "TenantLedgerAllocations", "TenantLedgerEntries", "WorkspaceNoticeTemplateVersions",
         "WorkOrderStatusEvents",
@@ -509,18 +508,18 @@ internal static class FoundationBaselinePostgreSql
     };
 
     private const string CreateAuditSearchInfrastructure = """
-        CREATE INDEX IF NOT EXISTS "IX_AuditLogs_EntityType_trgm"
-          ON "AuditLogs" USING gin (lower("EntityType") gin_trgm_ops);
-        CREATE INDEX IF NOT EXISTS "IX_AuditLogs_ActorLabel_trgm"
-          ON "AuditLogs" USING gin (lower("ActorLabel") gin_trgm_ops);
-        CREATE INDEX IF NOT EXISTS "IX_AuditLogs_IpAddress_trgm"
-          ON "AuditLogs" USING gin (lower("IpAddress") gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS "IX_AtomicAuditLogs_EntityType_trgm"
+          ON "AtomicAuditLogs" USING gin (lower("EntityType") gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS "IX_AtomicAuditLogs_ActorLabel_trgm"
+          ON "AtomicAuditLogs" USING gin (lower("ActorLabel") gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS "IX_AtomicAuditLogs_IpAddress_trgm"
+          ON "AtomicAuditLogs" USING gin (lower("IpAddress") gin_trgm_ops);
         """;
 
     private const string DropAuditSearchIndexes = """
-        DROP INDEX IF EXISTS "IX_AuditLogs_IpAddress_trgm";
-        DROP INDEX IF EXISTS "IX_AuditLogs_ActorLabel_trgm";
-        DROP INDEX IF EXISTS "IX_AuditLogs_EntityType_trgm";
+        DROP INDEX IF EXISTS "IX_AtomicAuditLogs_IpAddress_trgm";
+        DROP INDEX IF EXISTS "IX_AtomicAuditLogs_ActorLabel_trgm";
+        DROP INDEX IF EXISTS "IX_AtomicAuditLogs_EntityType_trgm";
         """;
 
     private static string BuildRolesAndGrantSql()

@@ -228,6 +228,7 @@ public sealed class ApplicationService : IApplicationService
     public async Task<ApplicationResponse> CreateFromScanAsync(
         int portfolioId, CreateApplicationRequest request, int userId, CancellationToken ct = default)
     {
+        _audit.EnsureAtomicCommand();
         // IDOR guard: honor a PropertyId/UnitId only when it actually lives in THIS portfolio; otherwise
         // drop it (the landlord simply filed the applicant without a specific property) rather than letting
         // a hallucinated/foreign id from the scan reference another portfolio's record. Same shape as the
@@ -535,6 +536,7 @@ public sealed class ApplicationService : IApplicationService
         CancellationToken ct,
         bool broadcast = true)
     {
+        _audit.EnsureAtomicCommand();
         var entity = await applications.FirstOrDefaultAsync(ct);
         if (entity == null)
             return null;
@@ -779,6 +781,7 @@ public sealed class ApplicationService : IApplicationService
         CancellationToken ct,
         bool broadcast = true)
     {
+        _audit.EnsureAtomicCommand();
         var entity = await applications.FirstOrDefaultAsync(ct);
         if (entity == null)
             return null;
@@ -911,6 +914,7 @@ public sealed class ApplicationService : IApplicationService
         CancellationToken ct,
         bool broadcast = true)
     {
+        _audit.EnsureAtomicCommand();
         var entity = await applications.FirstOrDefaultAsync(ct);
         if (entity == null)
             return null;
@@ -1051,6 +1055,7 @@ public sealed class ApplicationService : IApplicationService
         CancellationToken ct,
         bool broadcast = true)
     {
+        _audit.EnsureAtomicCommand();
         var entity = await applications.FirstOrDefaultAsync(ct);
         if (entity == null)
         {
