@@ -11,6 +11,7 @@ using RentalCommand.Api.Data;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Tests;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
@@ -22,33 +23,22 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Auth;
 
-public sealed class CanonicalRegistrationBootstrapTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
 {
-    private readonly SqliteTestContext _sqlite = new();
-    private readonly UserManager<ApplicationUser> _users;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private UserManager<ApplicationUser> _users = null!;
 
-    public CanonicalRegistrationBootstrapTests()
+    public CanonicalRegistrationBootstrapTests(MigratedPostgreSqlFixture fixture)
     {
-        // EnsureCreated deliberately does not create query-only projection views. This login
-        // contract only needs the tenant branch to be queryable; registration below exercises
-        // the management/owner branch.
-        _sqlite.Db.Database.ExecuteSqlRaw("""
-            CREATE VIEW "vw_effective_tenant_access" AS
-            SELECT
-                0 AS "AccessContextId",
-                0 AS "UserId",
-                0 AS "PortfolioId",
-                0 AS "AccessRevision",
-                0 AS "TenantUserAccessId",
-                0 AS "LeaseManagementPartyId",
-                0 AS "TenantId",
-                0 AS "LeaseManagementId",
-                NULL AS "TenantAccountId",
-                0 AS "PropertyId",
-                0 AS "UnitId"
-            WHERE 0;
-            """);
-        _users = CreateUserManager(_sqlite.Db);
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync();
+        _users = CreateUserManager(_ctx.Db);
     }
 
     [Fact]
@@ -59,7 +49,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IDisposable
                 It.IsAny<AtomicAuthSessionStartRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((AtomicAuthSessionStartRequest request, CancellationToken _) =>
             {
-                var context = _sqlite.Db.WorkspaceAccessContexts.AsNoTracking()
+                var context = _ctx.Db.WorkspaceAccessContexts.AsNoTracking()
                     .Single(row => row.Id == request.SelectedAccessContextId);
                 return new AtomicAuthSessionStartOutcome(
                     true, Guid.NewGuid(), request.UserId, context.Id, context.PortfolioId,
@@ -70,7 +60,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IDisposable
                 It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((int userId, int contextId, CancellationToken _) =>
             {
-                var graph = _sqlite.Db.WorkspaceAccessContexts.AsNoTracking()
+                var graph = _ctx.Db.WorkspaceAccessContexts.AsNoTracking()
                     .Where(context => context.Id == contextId && context.UserId == userId)
                     .Select(context => new
                     {
@@ -79,7 +69,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IDisposable
                         WorkspaceName = context.Portfolio!.Name,
                     })
                     .Single();
-                var assignment = _sqlite.Db.MembershipRoleAssignments.AsNoTracking()
+                var assignment = _ctx.Db.MembershipRoleAssignments.AsNoTracking()
                     .Where(row => row.WorkspaceMembershipId == graph.MembershipId)
                     .Select(row => new
                     {
@@ -122,7 +112,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IDisposable
         user.Should().NotBeNull();
         (await _users.ConfirmEmailAsync(user!, registered.EmailConfirmationToken!)).Succeeded
             .Should().BeTrue();
-        var context = await _sqlite.Db.WorkspaceAccessContexts
+        var context = await _ctx.Db.WorkspaceAccessContexts
             .Include(row => row.Membership!)
             .ThenInclude(membership => membership.RoleAssignments)
             .SingleAsync(row => row.UserId == user!.Id);
@@ -130,12 +120,12 @@ public sealed class CanonicalRegistrationBootstrapTests : IDisposable
             assignment.RoleProfileId == AccessCatalog.Roles.Single(role =>
                 role.Key == RoleProfileKeys.WorkspaceAdministrator).Id &&
             assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties);
-        var owner = await _sqlite.Db.OwnerEntities.SingleAsync(owner =>
+        var owner = await _ctx.Db.OwnerEntities.SingleAsync(owner =>
             owner.PortfolioId == context.PortfolioId && owner.IsPrimary);
-        (await _sqlite.Db.OwnerUserAccesses.SingleAsync(access =>
+        (await _ctx.Db.OwnerUserAccesses.SingleAsync(access =>
             access.AccessContextId == context.Id && access.ApplicationUserId == user.Id))
             .OwnerEntityId.Should().Be(owner.Id);
-        var suppliedTemplates = await _sqlite.Db.WorkspaceNoticeTemplateVersions
+        var suppliedTemplates = await _ctx.Db.WorkspaceNoticeTemplateVersions
             .Where(template => template.PortfolioId == context.PortfolioId)
             .ToListAsync();
         suppliedTemplates.Should().HaveCount(5);
@@ -163,7 +153,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IDisposable
             CreateSignInManager(_users),
             sessions,
             canonicalTokens,
-            new EffectiveAccessContextSelectionQuery(_sqlite.Db),
+            new EffectiveAccessContextSelectionQuery(_ctx.Db),
             envelopes,
             Options.Create(new AtomicAuthSessionCredentialOptions
             {
@@ -173,11 +163,11 @@ public sealed class CanonicalRegistrationBootstrapTests : IDisposable
                 SessionLifetimeDays = 30,
             }),
             Mock.Of<IAuthEmailSender>(),
-            _sqlite.Db,
+            _ctx.Db,
             Mock.Of<IAuditTrailService>(),
             new CanonicalAccountBootstrapService(
                 _users,
-                _sqlite.Db,
+                _ctx.Db,
                 TimeProvider.System),
             NullLogger<AuthService>.Instance,
             TimeProvider.System);
@@ -215,9 +205,9 @@ public sealed class CanonicalRegistrationBootstrapTests : IDisposable
         return manager;
     }
 
-    public void Dispose()
+    public async Task DisposeAsync()
     {
         _users.Dispose();
-        _sqlite.Dispose();
+        await _ctx.DisposeAsync();
     }
 }
