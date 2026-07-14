@@ -150,7 +150,7 @@ void main() {
     expect(shellSource, contains('MobileAccessDeniedScreen('));
   });
 
-  test('owner experience uses a dedicated data-free landing', () {
+  test('owner experience uses a dedicated relationship-scoped shell', () {
     final shellSource = File(
       'lib/features/home/home_shell.dart',
     ).readAsStringSync();
@@ -172,12 +172,23 @@ void main() {
       ),
       lessThan(shellSource.indexOf('final landlordTabs = tenantMode')),
     );
-    expect(ownerLandingSource, contains("title: const Text('Owner')"));
+    expect(ownerLandingSource, contains("'Overview',"));
+    expect(ownerLandingSource, contains("'Properties',"));
+    expect(ownerLandingSource, contains("'Statements',"));
+    expect(ownerLandingSource, contains("'Approvals',"));
+    expect(ownerLandingSource, contains("'Messages',"));
     expect(ownerLandingSource, contains('MobileAccountMenu()'));
     expect(ownerLandingSource, isNot(contains('_HomeTab')));
     expect(ownerLandingSource, isNot(contains("Text('Today')")));
-    expect(ownerLandingSource, isNot(contains('Repository')));
-    expect(ownerLandingSource, isNot(contains('ref.watch')));
+    expect(ownerLandingSource, contains('ownerPortalRepositoryProvider'));
+    expect(ownerLandingSource, isNot(contains('RentalsHubScreen')));
+    expect(ownerLandingSource, isNot(contains('MoneyHubScreen')));
+    expect(ownerLandingSource, isNot(contains('WorkHubScreen')));
+    expect(ownerLandingSource, isNot(contains('InboxHubScreen')));
+    expect(
+      File('lib/core/auth/mobile_access_policy.dart').readAsStringSync(),
+      contains('experience != WorkspaceExperience.owner'),
+    );
     expect(
       shellActionsSource,
       contains('auth.activeExperience == WorkspaceExperience.management'),

@@ -31,6 +31,15 @@ public class OwnerStatementService : IOwnerStatementService
             AuthorizedProperties(scope),
             ct);
 
+    public Task<OwnerStatementReport?> GetForOwnerPortalAsync(
+        OwnerPortalReadScope scope, int ownerId, int year, CancellationToken ct = default) =>
+        GetForOwnerCoreAsync(
+            scope.PortfolioId,
+            ownerId,
+            year,
+            AuthorizedOwnerPortalProperties(scope),
+            ct);
+
     private async Task<OwnerStatementReport?> GetForOwnerCoreAsync(
         int portfolioId,
         int ownerId,
@@ -144,6 +153,14 @@ public class OwnerStatementService : IOwnerStatementService
             scope.PortfolioId,
             year,
             AuthorizedProperties(scope),
+            ct);
+
+    public Task<IReadOnlyList<OwnerStatementSummary>> ListForOwnerPortalAsync(
+        OwnerPortalReadScope scope, int year, CancellationToken ct = default) =>
+        ListOwnersWithNetCoreAsync(
+            scope.PortfolioId,
+            year,
+            AuthorizedOwnerPortalProperties(scope),
             ct);
 
     private async Task<IReadOnlyList<OwnerStatementSummary>> ListOwnersWithNetCoreAsync(
@@ -279,6 +296,21 @@ public class OwnerStatementService : IOwnerStatementService
                 scope,
                 CapabilityKeys.MoneyOwnerReportsRead,
                 _timeProvider.UtcNow());
+
+    private IQueryable<Property> AuthorizedOwnerPortalProperties(OwnerPortalReadScope scope)
+    {
+        var ownerAccess = _db.EffectiveOwnerAccess.AsNoTracking().Where(access =>
+            access.AccessContextId == scope.AccessContextId &&
+            access.UserId == scope.UserId &&
+            access.PortfolioId == scope.PortfolioId &&
+            access.AccessRevision == scope.AccessRevision);
+        return _db.Properties.AsNoTracking().Where(property =>
+            property.PortfolioId == scope.PortfolioId &&
+            property.DeletedAt == null &&
+            ownerAccess.Any(access =>
+                access.PropertyId == property.Id &&
+                access.OwnerEntityId == property.OwnerEntityId));
+    }
 
     private static (DateTime Start, DateTime End) YearRange(int year)
     {

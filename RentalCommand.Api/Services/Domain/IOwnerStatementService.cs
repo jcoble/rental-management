@@ -12,8 +12,14 @@ public interface IOwnerStatementService
     Task<OwnerStatementReport?> GetForOwnerAsync(
         WorkspaceReadScope scope, int ownerId, int year, CancellationToken ct = default);
 
+    Task<OwnerStatementReport?> GetForOwnerPortalAsync(
+        OwnerPortalReadScope scope, int ownerId, int year, CancellationToken ct = default);
+
     Task<IReadOnlyList<OwnerStatementSummary>> ListOwnersWithNetAsync(
         WorkspaceReadScope scope, int year, CancellationToken ct = default);
+
+    Task<IReadOnlyList<OwnerStatementSummary>> ListForOwnerPortalAsync(
+        OwnerPortalReadScope scope, int year, CancellationToken ct = default);
 
     Task<decimal> GetTotalNetToOwnersAsync(
         WorkspaceReadScope scope, int year, CancellationToken ct = default);

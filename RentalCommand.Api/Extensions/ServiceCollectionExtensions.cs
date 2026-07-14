@@ -66,6 +66,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IYearEndPacketPdfGenerator, YearEndPacketPdfGenerator>();
         services.AddScoped<IOwnerDistributionService, OwnerDistributionService>();
         services.AddScoped<IOwnerStatementService, OwnerStatementService>();
+        services.AddScoped<IOwnerPortalService, OwnerPortalService>();
         services.AddScoped<IOwnerStatementEmailService, OwnerStatementEmailService>();
         // Reports Hub: read-only report queries over existing data (rent roll, ledger, aging, cash flow,
         // occupancy, deposits, 1099, owner distributions, work orders) + the catalog. No schema changes.

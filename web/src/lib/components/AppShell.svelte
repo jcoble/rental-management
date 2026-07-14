@@ -239,7 +239,10 @@
 			entry.experience === activeExperience)?.capabilityKeys ?? []
 	));
 	let portalUser = $derived(activeExperience === 'Tenant');
+	let ownerUser = $derived(activeExperience === 'Owner');
+	let relationshipUser = $derived(portalUser || ownerUser);
 	const userSecurityHref = $derived(portalUser ? '/portal/security' : '/settings/security');
+	const canOpenUserSecurity = $derived(!ownerUser);
 	const homeHref = $derived(currentAccess ? (safeLandingForAccess(currentAccess) ?? '/logout') : '/');
 	const canOpenGuidedSetup = $derived(
 		canAccessRoute('/onboarding', activeExperience, activeCapabilities)
@@ -269,6 +272,13 @@
 
 	const portalUtilityItems: NavItem[] = [
 		{ href: '/portal/security', label: 'Security', icon: Shield }
+	];
+	const ownerNavItems: NavItem[] = [
+		{ href: '/owner', label: 'Overview', icon: LayoutDashboard },
+		{ href: '/owner/properties', label: 'Properties', icon: Building },
+		{ href: '/owner/statements', label: 'Statements & documents', icon: FileText },
+		{ href: '/owner/approvals', label: 'Approvals', icon: ClipboardList },
+		{ href: '/owner/messages', label: 'Messages', icon: MessageSquare }
 	];
 	const commandCenterTitleItem: NavItem = { href: '/units/', label: 'Command Center', icon: Home };
 
@@ -303,6 +313,8 @@
 	let allItems = $derived.by(() =>
 		portalUser
 			? [...portalNavItems, ...portalUtilityItems]
+			: ownerUser
+				? ownerNavItems
 				: [
 						...visiblePinned,
 						...(canSeeCommandCenter ? [commandCenterTitleItem] : []),
@@ -315,6 +327,7 @@
 	function isActive(href: string): boolean {
 		const currentPath = page.url.pathname;
 		if (href === '/') return currentPath === '/';
+		if (href === '/owner') return currentPath === '/owner';
 		if (href === '/units') return currentPath === '/units';
 		return currentPath.startsWith(href);
 	}
@@ -469,7 +482,7 @@
 	// 401-bound request during the brief pre-hydration window. `enabled` is reactive (createQuery
 	// takes a thunk), so it flips on once page.data.user is present.
 	const isStaffSession = $derived(activeExperience !== 'Tenant' && activeCapabilities.size > 0);
-	const showStaffHeader = $derived(!portalUser);
+	const showStaffHeader = $derived(!relationshipUser);
 	const unreadMessagesQuery = createQuery(() => ({
 		queryKey: ['header-unread-messages'],
 		enabled: isStaffSession && !portalUser && canOpenHeaderMessages,
@@ -625,7 +638,7 @@
 		</div>
 
 		<!-- Portfolio Selector -->
-		{#if !portalUser || (currentAccess?.availableExperiences.length ?? 0) > 1}
+		{#if !relationshipUser || (currentAccess?.availableExperiences.length ?? 0) > 1}
 			<div class="border-b border-sidebar-border py-2">
 				<PortfolioSelector collapsed={sidebarCollapsed && !isMobile} />
 			</div>
@@ -653,6 +666,14 @@
 							<span class="truncate">{item.label}</span>
 						{/if}
 					</a>
+				{/each}
+			{:else if ownerUser}
+				{#each ownerNavItems as item}
+					{#if sidebarCollapsed && !isMobile}
+						{@render navLinkCollapsed(item)}
+					{:else}
+						{@render navLink(item)}
+					{/if}
 				{/each}
 			{:else if sidebarCollapsed && !isMobile}
 				<!-- Collapsed rail: pinned links plus icon-only group headers, matching EdiPlatform. -->
@@ -742,12 +763,14 @@
 								</a>
 							</DropdownMenuItem>
 						{/if}
-						<DropdownMenuItem data-testid="user-menu-security-collapsed">
-							<a href={userSecurityHref} class="flex w-full items-center gap-2">
-								<Shield class="h-4 w-4" />
-								Security
-							</a>
-						</DropdownMenuItem>
+						{#if canOpenUserSecurity}
+							<DropdownMenuItem data-testid="user-menu-security-collapsed">
+								<a href={userSecurityHref} class="flex w-full items-center gap-2">
+									<Shield class="h-4 w-4" />
+									Security
+								</a>
+							</DropdownMenuItem>
+						{/if}
 						<DropdownMenuSeparator />
 						<DropdownMenuItem
 							class="text-destructive focus:text-destructive"
@@ -801,12 +824,14 @@
 								</a>
 							</DropdownMenuItem>
 						{/if}
-						<DropdownMenuItem data-testid="user-menu-security">
-							<a href={userSecurityHref} class="flex w-full items-center gap-2">
-								<Shield class="h-4 w-4" />
-								Security
-							</a>
-						</DropdownMenuItem>
+						{#if canOpenUserSecurity}
+							<DropdownMenuItem data-testid="user-menu-security">
+								<a href={userSecurityHref} class="flex w-full items-center gap-2">
+									<Shield class="h-4 w-4" />
+									Security
+								</a>
+							</DropdownMenuItem>
+						{/if}
 						<DropdownMenuSeparator />
 						<DropdownMenuItem
 							class="text-destructive focus:text-destructive"
@@ -847,7 +872,7 @@
 				: 'ml-60'}"
 	>
 		<!-- Sandbox mode banner: slim, top of the shell, above the header. Hidden when Live. -->
-		{#if !portalUser}
+		{#if !relationshipUser}
 			<SandboxBanner variant="banner" />
 		{/if}
 
@@ -940,7 +965,9 @@
 				<ThemeModeToggle data-testid="header-theme-toggle" />
 
 				<!-- Notifications -->
-				<NotificationBell data-testid="notification-bell-header" placement="down" />
+				{#if !ownerUser}
+					<NotificationBell data-testid="notification-bell-header" placement="down" />
+				{/if}
 			</div>
 		</header>
 
