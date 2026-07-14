@@ -268,7 +268,11 @@ export const portal = {
 		api.post<CheckoutSession>(`/portal/tenant-accounts/${tenantAccountId}/autopay/enroll`, body),
 	/** Cancel autopay for a canonical tenant account. */
 	autopayCancel: (tenantAccountId: number) =>
-		api.post<AutopayStatus>(`/portal/tenant-accounts/${tenantAccountId}/autopay/cancel`),
+		idempotentMutation(`portal:autopay:cancel:${tenantAccountId}`, (key) =>
+			api.post<AutopayStatus>(`/portal/tenant-accounts/${tenantAccountId}/autopay/cancel`, {}, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
 
 	/**
 	 * Tenant-scoped messaging. The tenant's JWT scopes every call to their own

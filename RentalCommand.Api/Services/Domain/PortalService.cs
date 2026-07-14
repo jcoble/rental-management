@@ -879,18 +879,22 @@ public class PortalService : IPortalService
     }
 
     public async Task<AutopayStatusResponse?> CancelAutopayAsync(
-        int portfolioId, int tenantId, int tenantAccountId, CancellationToken ct = default)
+        ActiveAccessContext access,
+        int tenantId,
+        int tenantAccountId,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        var businessDate = DateOnly.FromDateTime(_timeProvider.UtcNow());
-        var target = await OwnedAutopayQuery(portfolioId, tenantId, tenantAccountId, businessDate)
-            .FirstOrDefaultAsync(ct);
-        if (target == null) return null;
-        if (target.Enrollment != null)
-        {
-            target.Enrollment.CanceledAtUtc = _timeProvider.UtcNow();
-            target.Enrollment.CancelReason = "Canceled by tenant";
-            await _db.SaveChangesAsync(ct);
-        }
+        var atomic = _atomic
+            ?? throw new InvalidOperationException("Atomic tenant autopay cancellation is not configured.");
+        var command = AtomicTenantAutopayCancellation.Command(
+            access, tenantId, tenantAccountId, operationKey);
+        var outcome = await atomic.ExecuteAsync(
+            AtomicTenantAutopayCancellation.Identity(command),
+            command,
+            AtomicTenantAutopayCancellation.Codec,
+            ct);
+        if (!outcome.Value.Found) return null;
 
         return new AutopayStatusResponse
         {

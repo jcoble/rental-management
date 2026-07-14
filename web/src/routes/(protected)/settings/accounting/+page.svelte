@@ -256,6 +256,7 @@
 								}}
 							>
 								<input type="hidden" name="provider" value={s.provider} />
+								<input type="hidden" name="operationKey" value={view.connectOperationId} />
 								<Button
 									type="submit"
 									disabled={connectingProvider === s.provider}
@@ -297,6 +298,7 @@
 											}}
 										>
 											<input type="hidden" name="provider" value={s.provider} />
+											<input type="hidden" name="operationKey" value={view.connectOperationId} />
 											<Button
 												type="submit"
 												size="sm"
