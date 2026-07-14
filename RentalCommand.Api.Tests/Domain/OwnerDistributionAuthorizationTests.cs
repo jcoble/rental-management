@@ -17,7 +17,9 @@ namespace RentalCommand.Api.Tests.Domain;
 [Collection(MigratedPostgreSqlCollection.Name)]
 public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
 {
-    private const int PortfolioId = 1;
+    private static int _nextPortfolioId = 900_000;
+
+    private readonly int _portfolioId = Interlocked.Increment(ref _nextPortfolioId);
 
     private readonly MigratedPostgreSqlFixture _fixture;
     private MigratedPostgreSqlTestContext _ctx = null!;
@@ -52,7 +54,7 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
         var assigned = SeedDistribution(owner.Id, assignedProperty.Id, 100m);
         var other = SeedDistribution(owner.Id, otherProperty.Id, 200m);
         var scope = _ctx.Db.SeedPropertyManagerScope(
-            PortfolioId, assignedProperty.Id, nameof(PropertyManagerReadsOnlyAssignedPropertyDistributions));
+            _portfolioId, assignedProperty.Id, nameof(PropertyManagerReadsOnlyAssignedPropertyDistributions));
 
         var page = await _service.ListPageAsync(scope, new OwnerDistributionListQuery());
         var assignedDetail = await _service.GetAsync(scope, assigned.Id);
@@ -71,7 +73,7 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
         var property = SeedProperty(owner.Id, "Managed Property");
         var distribution = SeedDistribution(owner.Id, property.Id, 100m);
         var scope = _ctx.Db.SeedPropertyManagerScope(
-            PortfolioId, property.Id, nameof(PropertyManagerDirectServiceAttemptsCannotMutateOwnerDistributions));
+            _portfolioId, property.Id, nameof(PropertyManagerDirectServiceAttemptsCannotMutateOwnerDistributions));
 
         var create = async () => await _service.CreateAsync(scope, new CreateOwnerDistributionRequest
         {
@@ -102,7 +104,7 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
         var property = SeedProperty(owner.Id, "Administrator Property");
         var distribution = SeedDistribution(owner.Id, property.Id, 100m);
         var scope = _ctx.Db.SeedAdministratorScope(
-            PortfolioId, nameof(AdministratorWithDisbursementAndDestructiveAuthorityCanDeleteDistribution));
+            _portfolioId, nameof(AdministratorWithDisbursementAndDestructiveAuthorityCanDeleteDistribution));
 
         var deleted = await _service.DeleteAsync(
             scope, distribution.Id, $"admin-delete-{Guid.NewGuid():N}");
@@ -160,7 +162,7 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
         var now = DateTime.UtcNow;
         _ctx.Db.Portfolios.Add(new Portfolio
         {
-            Id = PortfolioId,
+            Id = _portfolioId,
             Name = "Owner Distribution Authorization",
             ManagementCompanyName = "Test Co",
             TimeZone = "UTC",
@@ -175,7 +177,7 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
         var now = DateTime.UtcNow;
         var owner = new OwnerEntity
         {
-            PortfolioId = PortfolioId,
+            PortfolioId = _portfolioId,
             OwnerEntityType = OwnerEntityType.Person,
             Name = name,
             CreatedAt = now,
@@ -191,7 +193,7 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
         var now = DateTime.UtcNow;
         var property = new Property
         {
-            PortfolioId = PortfolioId,
+            PortfolioId = _portfolioId,
             OwnerEntityId = ownerEntityId,
             Name = name,
             AddressLine1 = "1 Main St",
@@ -211,7 +213,7 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
         var now = DateTime.UtcNow;
         var distribution = new OwnerDistribution
         {
-            PortfolioId = PortfolioId,
+            PortfolioId = _portfolioId,
             OwnerEntityId = ownerEntityId,
             PropertyId = propertyId,
             Date = now,
