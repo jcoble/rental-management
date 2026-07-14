@@ -21,12 +21,12 @@
 
 	const pageQuery = createQuery(() => ({
 		queryKey: ['leasing-workspace', kind, skip, submittedSearch],
-		queryFn: () => {
+		queryFn: async () => {
 			const params = { skip, take, search: submittedSearch || undefined };
-			if (kind === 'pipeline') return leasingWorkspace.pipelinePage(params);
-			if (kind === 'rentals') return leasingWorkspace.rentalsPage(params);
-			if (kind === 'calendar') return leasingWorkspace.calendarPage({ ...params, sort: 'scheduledStart' });
-			return leasingWorkspace.inboxPage({ ...params, sort: '-lastMessageAt' });
+			if (kind === 'pipeline') return await leasingWorkspace.pipelinePage(params);
+			if (kind === 'rentals') return await leasingWorkspace.rentalsPage(params);
+			if (kind === 'calendar') return await leasingWorkspace.calendarPage({ ...params, sort: 'scheduledStart' });
+			return await leasingWorkspace.inboxPage({ ...params, sort: '-lastMessageAt' });
 		}
 	}));
 	const result = $derived(pageQuery.data);

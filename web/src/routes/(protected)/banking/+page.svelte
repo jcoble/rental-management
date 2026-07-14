@@ -15,6 +15,7 @@
 		PlaidSettings,
 		Property
 	} from '$lib/types';
+	import type { WorkspaceExperience } from '$lib/types/user';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { formatDateOnly } from '$lib/utils/date';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
@@ -36,7 +37,9 @@
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const activeExperience = $derived(page.data.access?.selectedContext.activeExperience ?? null);
 	const activeCapabilities = $derived(new Set(
-		page.data.access?.navigation.find((entry) => entry.experience === activeExperience)?.capabilityKeys ?? []
+		page.data.access?.navigation.find((entry: { experience: WorkspaceExperience; capabilityKeys: string[] }) =>
+			entry.experience === activeExperience
+		)?.capabilityKeys ?? []
 	));
 	const canManageConnections = $derived(activeCapabilities.has(CAPABILITY.bankConnectionsManage));
 	const canOperateReconciliation = $derived(activeCapabilities.has(CAPABILITY.moneyReconciliationOperate));
