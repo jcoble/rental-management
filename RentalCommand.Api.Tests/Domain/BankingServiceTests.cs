@@ -10,6 +10,7 @@ using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
+using RentalCommand.Core;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -943,6 +944,32 @@ public class BankingServiceTests : IAsyncLifetime
             sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase),
             "transaction rows must be filtered and paged in SQL before mapping suggestions");
+        executedSql.Count(sql => sql.Contains("FROM \"BankTransactions\"", StringComparison.OrdinalIgnoreCase))
+            .Should().Be(2,
+                "the list must execute only its SQL count and one joined row query, never a follow-up suggestion query");
+        executedSql.Should().Contain(sql =>
+            sql.Contains("FROM \"BankTransactions\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("TenantLedgerEntries", StringComparison.OrdinalIgnoreCase),
+            "the current top suggestion must be joined/ranked inside the paged bank-line query");
+    }
+
+    [Fact]
+    public async Task Reconciliation_InvalidOperationShape_IsAValidationFailure()
+    {
+        var imported = await _sut.ImportAsync(1, BankImport(
+            "invalid-reconciliation-shape",
+            new DateTime(2026, 06, 15, 0, 0, 0, DateTimeKind.Utc),
+            "Invalid request",
+            -25m));
+        var transactionId = imported.Transactions.Single().Id;
+
+        var action = async () => await _sut.IgnoreTransactionAsync(
+            _scope,
+            transactionId,
+            new BankTransactionMutationRequest());
+
+        await action.Should().ThrowAsync<DomainValidationException>()
+            .WithMessage("*operationKey*");
     }
 
     [Fact]
