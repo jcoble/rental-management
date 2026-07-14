@@ -269,9 +269,9 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         replacement.FullyExecutedAtUtc.Should().NotBeNull();
         replacement.Signers.Should().ContainSingle();
         replacement.Signers[0].EmailSnapshot.Should().Be("issued-signer@example.test");
-        var predecessor = await assert.LeaseAgreements.AsNoTracking()
-            .SingleAsync(agreement => agreement.Id == predecessorId);
-        predecessor.SupersededByAgreementId.Should().Be(replacement.Id);
+		var persistedPredecessor = await assert.LeaseAgreements.AsNoTracking()
+			.SingleAsync(agreement => agreement.Id == predecessorId);
+		persistedPredecessor.SupersededByAgreementId.Should().Be(replacement.Id);
         (await assert.LeaseAgreementStatusProjections.CountAsync(status =>
             status.PortfolioId == _scenario.PortfolioId
             && status.LeaseManagementId == leaseManagementId
