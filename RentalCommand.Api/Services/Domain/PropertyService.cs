@@ -112,7 +112,10 @@ public class PropertyService : IPropertyService
                 EF.Functions.ILike(p.Name, $"%{term}%") ||
                 EF.Functions.ILike(p.AddressLine1, $"%{term}%") ||
                 EF.Functions.ILike(p.City, $"%{term}%") ||
-                EF.Functions.ILike(p.State, $"%{term}%"));
+                EF.Functions.ILike(p.State, $"%{term}%") ||
+                EF.Functions.ILike(p.PostalCode, $"%{term}%") ||
+                (p.OwnerEntity != null && EF.Functions.ILike(p.OwnerEntity.Name, $"%{term}%")) ||
+                (p.Owner != null && EF.Functions.ILike(p.Owner.Name, $"%{term}%")));
         }
 
         if (query.Type.HasValue)
@@ -137,7 +140,9 @@ public class PropertyService : IPropertyService
                 && !occupancy.IsOnManagementHold));
         }
 
-        q = query.SortField switch
+        var totalCount = await q.CountAsync(ct);
+
+        IOrderedQueryable<Property> ordered = query.SortField switch
         {
             "name" => query.SortDescending ? q.OrderByDescending(p => p.Name) : q.OrderBy(p => p.Name),
             "city" => query.SortDescending ? q.OrderByDescending(p => p.City) : q.OrderBy(p => p.City),
@@ -153,13 +158,12 @@ public class PropertyService : IPropertyService
             _ => query.SortDescending ? q.OrderByDescending(p => p.CreatedAt) : q.OrderBy(p => p.CreatedAt),
         };
 
-        var totalCount = await q.CountAsync(ct);
-
         // Unit / occupied counts are computed in SQL as correlated subqueries (p.Units.Count(...))
         // so the database does the aggregation — no Units collection is loaded into memory and
         // counted client-side, and there is no per-row follow-up query (N+1). EF translates each
         // count to a scalar subquery in the single list SELECT.
-        var rows = await q
+        var rows = await ordered
+            .ThenBy(p => p.Id)
             .Select(p => new ProjectedProperty(
                 p,
                 p.OwnerEntity != null ? p.OwnerEntity.Name : (p.Owner != null ? p.Owner.Name : null),

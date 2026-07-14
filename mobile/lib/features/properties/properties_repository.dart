@@ -20,10 +20,73 @@ class PropertyOwnerOption {
   }
 }
 
+class PropertyListQuery {
+  const PropertyListQuery({
+    this.skip = 0,
+    this.take = 20,
+    this.search,
+    this.sort = 'name',
+    this.type,
+    this.status,
+  });
+
+  final int skip;
+  final int take;
+  final String? search;
+  final String sort;
+  final String? type;
+  final String? status;
+
+  @override
+  bool operator ==(Object other) {
+    return other is PropertyListQuery &&
+        other.skip == skip &&
+        other.take == take &&
+        other.search == search &&
+        other.sort == sort &&
+        other.type == type &&
+        other.status == status;
+  }
+
+  @override
+  int get hashCode => Object.hash(skip, take, search, sort, type, status);
+}
+
+class PropertyListPage {
+  const PropertyListPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<Property> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+
+  bool get hasPrevious => skip > 0;
+  bool get hasNext => skip + items.length < totalCount;
+
+  factory PropertyListPage.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'];
+    return PropertyListPage(
+      items: (rawItems is List ? rawItems : const [])
+          .whereType<Map<String, dynamic>>()
+          .map(Property.fromJson)
+          .toList(growable: false),
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? 0,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? 20,
+    );
+  }
+}
+
 /// Repository for properties, units, and read-only rental relationships.
 ///
 /// Endpoints used:
-///   GET    /properties                       — list all properties (JWT-scoped)
+///   GET    /properties/page                  — searchable, filtered property page
+///   GET    /properties                       — bounded property selector list
 ///   GET    /properties/{id}                  — single property
 ///   POST   /properties                       — create property
 ///   PATCH  /properties/{id}                  — update property
@@ -39,6 +102,36 @@ class PropertiesRepository {
   final Dio _dio;
 
   // ── Properties ─────────────────────────────────────────────────────────────
+
+  Future<PropertyListPage> listPropertiesPage([
+    PropertyListQuery query = const PropertyListQuery(),
+  ]) async {
+    final parameters = <String, dynamic>{
+      'skip': query.skip,
+      'take': query.take,
+      'search': query.search,
+      'sort': query.sort,
+      'type': query.type,
+      'status': query.status,
+    }..removeWhere((_, value) => value == null || value == '');
+
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/properties/page',
+        queryParameters: parameters,
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return PropertyListPage.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
 
   Future<List<Property>> listProperties({
     bool availableForLease = false,
@@ -278,6 +371,11 @@ final propertiesProvider =
     NotifierProvider<PropertiesNotifier, AsyncValue<List<Property>>>(
       PropertiesNotifier.new,
     );
+
+final propertiesPageProvider = FutureProvider.autoDispose
+    .family<PropertyListPage, PropertyListQuery>((ref, query) {
+      return ref.watch(propertiesRepositoryProvider).listPropertiesPage(query);
+    });
 
 final availableForLeasePropertiesProvider =
     FutureProvider.autoDispose<List<Property>>((ref) {

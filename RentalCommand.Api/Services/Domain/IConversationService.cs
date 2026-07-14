@@ -16,12 +16,13 @@ public interface IConversationService
 
     /// <summary>List the portfolio's conversations, most-recently-active first. Unread = landlord's.</summary>
     Task<IReadOnlyList<ConversationSummary>> ListAsync(int portfolioId, CancellationToken ct = default);
-    Task<ConversationListResponse> ListPageAsync(int portfolioId, ListQuery query, CancellationToken ct = default);
+    Task<ConversationListResponse> ListPageAsync(
+        int portfolioId, ConversationListQuery query, CancellationToken ct = default);
     Task<int> GetUnreadCountAsync(int portfolioId, CancellationToken ct = default);
     Task<IReadOnlyList<ConversationSummary>> ListAuthorizedAsync(
         WorkspaceReadScope scope, CancellationToken ct = default);
     Task<ConversationListResponse> ListPageAuthorizedAsync(
-        WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default);
+        WorkspaceReadScope scope, ConversationListQuery query, CancellationToken ct = default);
     Task<int> GetUnreadCountAuthorizedAsync(
         WorkspaceReadScope scope, CancellationToken ct = default);
 
@@ -69,6 +70,9 @@ public interface IConversationService
 
     /// <summary>List the signed-in tenant's own conversations, most-recently-active first. Unread = tenant's.</summary>
     Task<IReadOnlyList<ConversationSummary>> ListForTenantAsync(int portfolioId, int tenantId, CancellationToken ct = default);
+    Task<ConversationListResponse> ListPageForTenantAsync(
+        int portfolioId, int tenantId, ConversationListQuery query,
+        CancellationToken ct = default);
 
     /// <summary>
     /// Fetch one of the tenant's own conversations with full history (ascending).

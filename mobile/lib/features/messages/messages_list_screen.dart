@@ -3,7 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/auth/auth_controller.dart';
+import '../../core/auth/auth_models.dart';
+import '../../core/auth/mobile_access_policy.dart';
 import '../../core/models/models.dart';
+import '../../core/widgets/mobile_grid_controls.dart';
 import '../../core/widgets/mobile_m3_list.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
 import '../home/mobile_domain_chrome.dart';
@@ -77,13 +80,62 @@ class MessagesListScreen extends ConsumerStatefulWidget {
 }
 
 class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
+  static const _pageSize = 20;
+
+  final _searchCtrl = TextEditingController();
+  String? _search;
+  String _sort = '-lastMessageAt';
+  bool _unreadOnly = false;
+  int _skip = 0;
+
+  ConversationListQuery get _query => ConversationListQuery(
+    skip: _skip,
+    take: _pageSize,
+    search: _search,
+    sort: _sort,
+    unreadOnly: _unreadOnly,
+  );
+
   @override
-  void initState() {
-    super.initState();
-    Future.microtask(() => ref.read(conversationsProvider.notifier).load());
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
   }
 
-  Future<void> _refresh() => ref.read(conversationsProvider.notifier).refresh();
+  void _submitSearch([String? value]) {
+    final next = (value ?? _searchCtrl.text).trim();
+    setState(() {
+      _search = next.isEmpty ? null : next;
+      _skip = 0;
+    });
+  }
+
+  void _clearSearch() {
+    _searchCtrl.clear();
+    _submitSearch('');
+  }
+
+  void _setSort(String? sort) {
+    if (sort == null || sort == _sort) return;
+    setState(() {
+      _sort = sort;
+      _skip = 0;
+    });
+  }
+
+  void _setUnreadFilter(String? value) {
+    final next = value == 'unread';
+    if (next == _unreadOnly) return;
+    setState(() {
+      _unreadOnly = next;
+      _skip = 0;
+    });
+  }
+
+  Future<void> _refresh() async {
+    ref.invalidate(conversationsPageProvider);
+    await ref.read(conversationsPageProvider(_query).future);
+  }
 
   void _openThread(BuildContext context, Conversation convo) {
     Widget detailBuilder(BuildContext _) {
@@ -119,7 +171,8 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
     );
     if (created == null || !context.mounted) return;
     // Refresh the inbox and open the freshly created thread.
-    await ref.read(conversationsProvider.notifier).refresh();
+    ref.invalidate(conversationsPageProvider);
+    await ref.read(conversationsPageProvider(_query).future);
     if (!context.mounted) return;
     Widget detailBuilder(BuildContext _) {
       return MessageDetailScreen(
@@ -145,10 +198,24 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final convosAsync = ref.watch(conversationsProvider);
+    final convosAsync = ref.watch(conversationsPageProvider(_query));
     final auth = ref.watch(authControllerProvider);
     final tenantMode =
         auth is AuthStateAuthenticated && auth.isTenantExperience;
+    final canStartConversation =
+        auth is AuthStateAuthenticated &&
+        (canUseMobileCapabilityAction(
+              experience: auth.activeExperience,
+              capabilities: auth.capabilities,
+              capability: 'rentals.manage',
+              experiences: const {WorkspaceExperience.management},
+            ) ||
+            canUseMobileCapabilityAction(
+              experience: auth.activeExperience,
+              capabilities: auth.capabilities,
+              capability: 'leasing.onboarding.manage',
+              experiences: const {WorkspaceExperience.management},
+            ));
     final routeIsCurrent = ModalRoute.isCurrentOf(context) ?? true;
 
     return Scaffold(
@@ -157,43 +224,119 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
           ? null
           : MobileQuickActionFab(
               heroTag: 'messages-fab',
-              primaryAction: MobileQuickAction(
-                label: 'New conversation',
-                icon: Icons.edit_outlined,
-                onPressed: () => _startNewConversation(context),
-              ),
+              primaryAction: canStartConversation
+                  ? MobileQuickAction(
+                      label: 'New conversation',
+                      icon: Icons.edit_outlined,
+                      onPressed: () => _startNewConversation(context),
+                    )
+                  : null,
               onChat: () => openMobileAssistant(context),
               onRecord: () => openMobileRecord(context),
               onScan: () => openMobileScan(context),
             ),
-      body: RefreshIndicator(
-        onRefresh: _refresh,
-        child: convosAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => _ErrorBody(
-            message: e is ApiException ? e.message : e.toString(),
-            onRetry: _refresh,
-          ),
-          data: (list) {
-            if (list.isEmpty) {
-              return const _EmptyBody();
-            }
-            return ListView.separated(
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 88),
-              itemCount: list.length,
-              separatorBuilder: (_, _) => const MobileM3ListDivider(),
-              itemBuilder: (ctx, i) => _ConversationTile(
-                conversation: list[i],
-                position: MobileM3ListItemPositionForIndex.forIndex(
-                  i,
-                  list.length,
-                ),
-                onTap: () => _openThread(context, list[i]),
+      body: Column(
+        children: [
+          MobileGridControlsBar(
+            keyPrefix: 'conversations',
+            searchController: _searchCtrl,
+            searchLabel: 'Search messages',
+            onSearch: _submitSearch,
+            onClearSearch: _clearSearch,
+            sort: _sort,
+            defaultSort: '-lastMessageAt',
+            sortOptions: const [
+              MobileGridControlOption(
+                value: '-lastMessageAt',
+                label: 'Newest activity',
               ),
-            );
-          },
-        ),
+              MobileGridControlOption(
+                value: 'lastMessageAt',
+                label: 'Oldest activity',
+              ),
+              MobileGridControlOption(value: 'tenantName', label: 'Tenant A-Z'),
+              MobileGridControlOption(value: 'subject', label: 'Subject A-Z'),
+              MobileGridControlOption(
+                value: '-unreadCount',
+                label: 'Most unread',
+              ),
+            ],
+            onSortChanged: _setSort,
+            filters: [
+              MobileGridChoiceFilter(
+                id: 'conversation-read-state',
+                label: 'Messages',
+                value: _unreadOnly ? 'unread' : null,
+                allLabel: 'All conversations',
+                options: const [
+                  MobileGridControlOption(
+                    value: 'unread',
+                    label: 'Unread only',
+                  ),
+                ],
+                onChanged: _setUnreadFilter,
+              ),
+            ],
+          ),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _refresh,
+              child: convosAsync.when(
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (e, _) => _ErrorBody(
+                  message: e is ApiException ? e.message : e.toString(),
+                  onRetry: _refresh,
+                ),
+                data: (page) {
+                  if (page.items.isEmpty) {
+                    return _EmptyBody(
+                      hasCriteria: (_search ?? '').isNotEmpty || _unreadOnly,
+                    );
+                  }
+                  return ListView.separated(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+                    itemCount: page.items.length + 1,
+                    separatorBuilder: (_, index) {
+                      if (index == page.items.length - 1) {
+                        return const SizedBox(height: 14);
+                      }
+                      return const MobileM3ListDivider();
+                    },
+                    itemBuilder: (ctx, index) {
+                      if (index == page.items.length) {
+                        return MobileGridPagingBar(
+                          totalCount: page.totalCount,
+                          skip: page.skip,
+                          itemCount: page.items.length,
+                          previousTooltip: 'Previous conversations page',
+                          nextTooltip: 'Next conversations page',
+                          onPrevious: page.hasPrevious
+                              ? () => setState(() {
+                                  _skip = (_skip - _pageSize).clamp(0, _skip);
+                                })
+                              : null,
+                          onNext: page.hasNext
+                              ? () => setState(() => _skip += _pageSize)
+                              : null,
+                        );
+                      }
+                      final conversation = page.items[index];
+                      return _ConversationTile(
+                        conversation: conversation,
+                        position: MobileM3ListItemPositionForIndex.forIndex(
+                          index,
+                          page.items.length,
+                        ),
+                        onTap: () => _openThread(context, conversation),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -332,7 +475,9 @@ class _UnreadBadge extends StatelessWidget {
 // ── Empty / Error ─────────────────────────────────────────────────────────────
 
 class _EmptyBody extends StatelessWidget {
-  const _EmptyBody();
+  const _EmptyBody({required this.hasCriteria});
+
+  final bool hasCriteria;
 
   @override
   Widget build(BuildContext context) {
@@ -353,14 +498,18 @@ class _EmptyBody extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 Text(
-                  'No conversations yet',
+                  hasCriteria
+                      ? 'No matching conversations'
+                      : 'No conversations yet',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                     color: colorScheme.onSurfaceVariant,
                   ),
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Tap the pencil to message a tenant.',
+                  hasCriteria
+                      ? 'Try changing your search or filters.'
+                      : 'Tap the pencil to message a tenant.',
                   style: TextStyle(color: colorScheme.onSurfaceVariant),
                 ),
               ],

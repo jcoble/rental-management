@@ -201,6 +201,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
       property: _property,
       onSaved: (property) {
         ref.invalidate(propertyDetailProvider(property.id));
+        ref.invalidate(propertiesPageProvider);
         ref.read(propertiesProvider.notifier).refresh();
       },
     );
@@ -244,6 +245,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
     try {
       await ref.read(propertiesRepositoryProvider).deleteProperty(property.id);
       ref.invalidate(propertyDetailProvider(property.id));
+      ref.invalidate(propertiesPageProvider);
       unawaited(ref.read(propertiesProvider.notifier).refresh());
       if (!mounted) return;
       navigator.pop();
@@ -457,6 +459,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
 
   Future<void> _refreshAfterDispositionChange() async {
     final propertyId = _property.id;
+    ref.invalidate(propertiesPageProvider);
     await Future.wait<void>([
       ref.read(propertyDispositionsProvider(propertyId).notifier).refresh(),
       ref.read(propertyCapitalAssetsProvider(propertyId).notifier).refresh(),

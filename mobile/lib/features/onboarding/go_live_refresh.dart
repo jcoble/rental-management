@@ -64,9 +64,11 @@ void refreshPortfolioDataAfterGoLive(WidgetRef ref) {
   ref.read(appointmentsProvider.notifier).refresh();
   ref.read(depositsProvider.notifier).refresh();
   ref.read(propertiesProvider.notifier).refresh();
+  ref.invalidate(propertiesPageProvider);
   ref.read(tenantsProvider.notifier).refresh();
   ref.read(workOrdersProvider.notifier).refresh();
   ref.read(conversationsProvider.notifier).refresh();
+  ref.invalidate(conversationsPageProvider);
   ref.read(unreadCountProvider.notifier).refresh();
   ref.read(inboxProvider.notifier).refresh();
   ref.read(accountingSummaryProvider.notifier).refresh();
