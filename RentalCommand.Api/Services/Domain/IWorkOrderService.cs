@@ -18,13 +18,13 @@ public interface IWorkOrderService
     Task<WorkOrderDetailResponse?> GetAuthorizedAsync(
         WorkspaceReadScope scope, int id, CancellationToken ct = default);
     Task<WorkOrderResponse?> CreateAuthorizedAsync(
-        WorkspaceReadScope scope, CreateWorkOrderRequest request, int? changedByUserId = null,
-        string? changedByLabel = null, CancellationToken ct = default);
+        WorkspaceReadScope scope, CreateWorkOrderRequest request, string idempotencyKey,
+        CancellationToken ct = default);
     Task<WorkOrderResponse?> UpdateAuthorizedAsync(
-        WorkspaceReadScope scope, int id, UpdateWorkOrderRequest request, int? changedByUserId = null,
-        string? changedByLabel = null, CancellationToken ct = default);
+        WorkspaceReadScope scope, int id, UpdateWorkOrderRequest request, string idempotencyKey,
+        CancellationToken ct = default);
     Task<bool> DeleteAuthorizedAsync(
-        WorkspaceReadScope scope, int id, CancellationToken ct = default);
+        WorkspaceReadScope scope, int id, string idempotencyKey, CancellationToken ct = default);
 
     Task<IReadOnlyList<WorkOrderResponse>> ListAsync(int portfolioId, int? propertyId, int? unitId, int? vendorId, ListQuery query, CancellationToken ct = default);
     Task<WorkOrderListResponse> ListPageAsync(int portfolioId, WorkOrderListQuery query, CancellationToken ct = default);
@@ -35,7 +35,4 @@ public interface IWorkOrderService
     /// </summary>
     Task<WorkOrderDetailResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
 
-    Task<WorkOrderResponse?> CreateAsync(int portfolioId, CreateWorkOrderRequest request, int? changedByUserId = null, string? changedByLabel = null, CancellationToken ct = default);
-    Task<WorkOrderResponse?> UpdateAsync(int portfolioId, int id, UpdateWorkOrderRequest request, int? changedByUserId = null, string? changedByLabel = null, CancellationToken ct = default);
-    Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default);
 }

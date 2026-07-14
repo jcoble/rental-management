@@ -1,10 +1,12 @@
 import 'dart:typed_data';
+import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import '../../core/models/models.dart';
 
 class PortalTenantAccount {
@@ -484,14 +486,19 @@ class TenantPortalRepository {
     String priority = 'Normal',
   }) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/portal/tenant/work-orders',
-        data: {
-          'title': title,
-          'description': description,
-          'category': category,
-          'priority': priority,
-        },
+      final body = {
+        'title': title,
+        'description': description,
+        'category': category,
+        'priority': priority,
+      };
+      final response = await IdempotentMutation.run(
+        'portal:work-order:create:${jsonEncode(body)}',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/portal/tenant/work-orders',
+          data: body,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final data = response.data;
       if (data == null) {

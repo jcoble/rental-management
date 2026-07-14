@@ -1,4 +1,5 @@
 import { api } from '../client';
+import { idempotentMutation } from '../idempotency';
 import type {
 	Appointment,
 	LeaseQuestionResponse,
@@ -239,7 +240,12 @@ export const portal = {
 	workOrders: () => api.get<WorkOrder[]>('/portal/work-orders'),
 	/** One of the tenant's own work orders plus its status timeline (404 if not theirs). */
 	workOrder: (id: number) => api.get<WorkOrderDetail>(`/portal/work-orders/${id}`),
-	createTenantWorkOrder: (data: Record<string, unknown>) => api.post<WorkOrder>('/portal/tenant/work-orders', data),
+	createTenantWorkOrder: (data: Record<string, unknown>) =>
+		idempotentMutation(`portal:work-order:create:${JSON.stringify(data)}`, (key) =>
+			api.post<WorkOrder>('/portal/tenant/work-orders', data, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
 
 	/**
 	 * Start a Stripe-hosted Checkout for one of the tenant's owed payments and

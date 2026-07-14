@@ -1,4 +1,5 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -54,7 +55,9 @@ public interface IPortalService
     /// </summary>
     Task<WorkOrderDetailResponse?> GetWorkOrderDetailAsync(int portfolioId, int tenantId, int workOrderId, CancellationToken ct = default);
 
-    Task<WorkOrderResponse?> CreateTenantWorkOrderAsync(int portfolioId, int tenantId, CreateTenantWorkOrderRequest request, CancellationToken ct = default);
+    Task<WorkOrderResponse?> CreateTenantWorkOrderAsync(
+        ActiveAccessContext access, CreateTenantWorkOrderRequest request,
+        string idempotencyKey, CancellationToken ct = default);
 
     /// <summary>
     /// Answers a tenant's question grounded in an agreement on their effective rental relationship.

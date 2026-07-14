@@ -12,7 +12,7 @@ namespace RentalCommand.Api.Controllers;
 /// The list supports <c>?propertyId&amp;vendorId&amp;skip&amp;take&amp;search&amp;sort</c>
 /// plus requested/scheduled/completed date windows.
 /// Create validates the referenced property/unit/tenant/lease relationship/vendor are in the portfolio. Work orders
-/// have no soft-delete column, so removal is a hard delete.
+/// are soft-deleted so their maintenance history remains available for audit and reporting.
 /// </summary>
 [ApiController]
 [Route("api/v1/work-orders")]
@@ -85,15 +85,20 @@ public class WorkOrderController : ManagementControllerBase
     [ProducesResponseType(typeof(WorkOrderResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<WorkOrderResponse>> Create([FromBody] CreateWorkOrderRequest request, CancellationToken ct)
+    public async Task<ActionResult<WorkOrderResponse>> Create(
+        [FromBody] CreateWorkOrderRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
         if (!IsScheduleWindowValid(request.ScheduledFor, request.ScheduledWindowEnd))
         {
             return BadRequest(new { error = "The arrival window end must be after its start." });
         }
 
         var created = await _service.CreateAuthorizedAsync(
-            GetWorkspaceReadScope(), request, GetUserId(), "Staff", ct);
+            GetWorkspaceReadScope(), request, operationKey, ct);
         return created == null
             ? NotFound(new { error = "Referenced property, unit, tenant, lease relationship, or vendor not found in this portfolio" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
@@ -103,15 +108,20 @@ public class WorkOrderController : ManagementControllerBase
     [ProducesResponseType(typeof(WorkOrderResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<WorkOrderResponse>> Update(int id, [FromBody] UpdateWorkOrderRequest request, CancellationToken ct)
+    public async Task<ActionResult<WorkOrderResponse>> Update(
+        int id, [FromBody] UpdateWorkOrderRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
         if (!IsScheduleWindowValid(request.ScheduledFor, request.ScheduledWindowEnd))
         {
             return BadRequest(new { error = "The arrival window end must be after its start." });
         }
 
         var updated = await _service.UpdateAuthorizedAsync(
-            GetWorkspaceReadScope(), id, request, GetUserId(), "Staff", ct);
+            GetWorkspaceReadScope(), id, request, operationKey, ct);
         return updated == null ? NotFound(new { error = "Work order not found" }) : Ok(updated);
     }
 
@@ -127,9 +137,12 @@ public class WorkOrderController : ManagementControllerBase
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        int id, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
-        var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, operationKey, ct);
         return deleted ? NoContent() : NotFound(new { error = "Work order not found" });
     }
 

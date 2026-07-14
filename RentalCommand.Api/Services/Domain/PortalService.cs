@@ -1,8 +1,13 @@
+using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
+using RentalCommand.Core.Operations;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -13,12 +18,17 @@ public class PortalService : IPortalService
     private readonly RentalCommandDbContext _db;
     private readonly ILeaseQaService _leaseQa;
     private readonly TimeProvider _timeProvider;
+    private readonly IAtomicUnitOfWork? _atomic;
+    private static readonly AtomicJsonResultCodec<OperationMutationResult> WorkOrderMutationCodec =
+        new("portal.work-order.mutation.v1");
 
-    public PortalService(RentalCommandDbContext db, ILeaseQaService leaseQa, TimeProvider timeProvider)
+    public PortalService(RentalCommandDbContext db, ILeaseQaService leaseQa, TimeProvider timeProvider,
+        IAtomicUnitOfWork? atomic = null)
     {
         _db = db;
         _leaseQa = leaseQa;
         _timeProvider = timeProvider;
+        _atomic = atomic;
     }
 
     public Task<int?> ResolveTenantIdAsync(
@@ -750,13 +760,41 @@ public class PortalService : IPortalService
 
     public async Task<IReadOnlyList<WorkOrderResponse>> GetWorkOrdersAsync(int portfolioId, int tenantId, CancellationToken ct = default)
     {
-        var workOrders = await _db.WorkOrders
+        return await _db.WorkOrders
             .AsNoTracking()
             .Where(w => w.PortfolioId == portfolioId && w.TenantId == tenantId)
             .OrderByDescending(w => w.RequestedAt)
+            .Select(w => new WorkOrderResponse
+            {
+                Id = w.Id,
+                PortfolioId = w.PortfolioId,
+                PropertyId = w.PropertyId,
+                UnitId = w.UnitId,
+                TenantId = w.TenantId,
+                LeaseManagementId = w.LeaseManagementId,
+                VendorId = w.VendorId,
+                RecurringMaintenanceTaskId = w.RecurringMaintenanceTaskId,
+                Title = w.Title,
+                Description = w.Description,
+                Category = w.Category,
+                Priority = w.Priority,
+                Status = w.Status,
+                RequestedAt = w.RequestedAt,
+                ScheduledFor = w.ScheduledFor,
+                ScheduledWindowEnd = w.ScheduledWindowEnd,
+                CompletedAt = w.CompletedAt,
+                EstimatedCost = w.EstimatedCost,
+                ActualCost = w.ActualCost,
+                CreatedBy = w.CreatedBy,
+                UpdatedAt = w.UpdatedAt,
+                PropertyName = w.Property == null ? null : w.Property.Name,
+                UnitNumber = w.Unit == null ? null : w.Unit.UnitNumber,
+                VendorName = w.Vendor == null ? null : w.Vendor.Name,
+                TenantName = w.Tenant == null
+                    ? null
+                    : (w.Tenant.FirstName + " " + w.Tenant.LastName).Trim(),
+            })
             .ToListAsync(ct);
-
-        return workOrders.Select(WorkOrderResponse.FromEntity).ToList();
     }
 
     public async Task<WorkOrderDetailResponse?> GetWorkOrderDetailAsync(
@@ -784,61 +822,24 @@ public class PortalService : IPortalService
     }
 
     public async Task<WorkOrderResponse?> CreateTenantWorkOrderAsync(
-        int portfolioId,
-        int tenantId,
+        ActiveAccessContext access,
         CreateTenantWorkOrderRequest request,
+        string idempotencyKey,
         CancellationToken ct = default)
     {
-        var relationship = await _db.LeaseManagementParties
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId && p.TenantId == tenantId
-                && p.LeaseManagement != null
-                && p.LeaseManagement.CanceledAtUtc == null
-                && p.LeaseManagement.PossessionReturnedAtUtc == null)
-            .OrderByDescending(p => p.EffectiveFrom)
-            .Select(p => new { p.LeaseManagementId, p.LeaseManagement!.PropertyId, p.LeaseManagement.UnitId })
-            .FirstOrDefaultAsync(ct);
-
-        if (relationship is null)
-        {
-            return null;
-        }
-
-        var now = _timeProvider.UtcNow();
-        var workOrder = new WorkOrder
-        {
-            PortfolioId = portfolioId,
-            PropertyId = relationship.PropertyId,
-            UnitId = relationship.UnitId,
-            TenantId = tenantId,
-            LeaseManagementId = relationship.LeaseManagementId,
-            Title = request.Title.Trim(),
-            Description = request.Description.Trim(),
-            Category = string.IsNullOrWhiteSpace(request.Category) ? "Resident Request" : request.Category.Trim(),
-            Priority = request.Priority,
-            Status = WorkOrderStatus.New,
-            RequestedAt = now,
-            CreatedBy = "Tenant",
-            UpdatedAt = now,
-        };
-
-        // Seed the timeline with the initial null → New event so the tenant's own request shows a
-        // status stream from the moment they submit it.
-        workOrder.StatusEvents.Add(new WorkOrderStatusEvent
-        {
-            PortfolioId = portfolioId,
-            FromStatus = null,
-            ToStatus = workOrder.Status,
-            Note = null,
-            ChangedByUserId = null,
-            ChangedByLabel = "Tenant",
-            CreatedAtUtc = now,
-        });
-
-        _db.WorkOrders.Add(workOrder);
-        await _db.SaveChangesAsync(ct);
-
-        return WorkOrderResponse.FromEntity(workOrder);
+        var command = new CreateTenantWorkOrderCommand(
+            access.PortfolioId, access.UserId, access.SessionId, access.AccessContextId,
+            access.AccessRevision, request.Title, request.Description, request.Category,
+            request.Priority, idempotencyKey);
+        var digest = Convert.ToHexString(SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(idempotencyKey)));
+        var outcome = await (_atomic ?? throw new InvalidOperationException(
+                "Atomic tenant work-order mutations are not configured."))
+            .ExecuteAsync(new AtomicCommandIdentity("portal.work-order.create", digest),
+                command, WorkOrderMutationCodec, ct);
+        return outcome.Value.Outcome == OperationMutationOutcome.NotFound || outcome.Value.ResponseJson is null
+            ? null
+            : JsonSerializer.Deserialize<WorkOrderResponse>(outcome.Value.ResponseJson);
     }
 
     public async Task<LeaseQuestionResponse?> AskLeaseAsync(

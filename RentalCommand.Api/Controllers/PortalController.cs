@@ -336,15 +336,14 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult<WorkOrderResponse>> CreateTenantWorkOrder(
         [FromBody] CreateTenantWorkOrderRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
-        var tenantId = await GetTenantIdAsync(ct);
-        if (tenantId == null)
-        {
-            return Forbid();
-        }
-
-        var created = await _service.CreateTenantWorkOrderAsync(GetPortfolioId(), tenantId.Value, request, ct);
+        var operationKey = idempotencyKey?.Trim() ?? string.Empty;
+        if (operationKey.Length is <= 0 or > 128)
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var created = await _service.CreateTenantWorkOrderAsync(
+            GetActiveAccessContext(), request, operationKey, ct);
         return created == null
             ? BadRequest(new { error = "No lease was found for this tenant." })
             : Created($"/api/v1/portal/work-orders/{created.Id}", created);

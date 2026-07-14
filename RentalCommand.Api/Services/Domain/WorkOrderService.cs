@@ -1,12 +1,15 @@
-using System.Text;
+using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Operations;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
@@ -16,38 +19,14 @@ namespace RentalCommand.Api.Services.Domain;
 /// <inheritdoc cref="IWorkOrderService"/>
 public class WorkOrderService : IWorkOrderService
 {
+    private static readonly AtomicJsonResultCodec<OperationMutationResult> MutationCodec =
+        new("work-order.mutation.v1");
     private const string EntityType = "WorkOrder";
 
-    // Work-order statuses a user can actually move a ticket INTO. These are exactly the values the web
-    // and mobile detail screens expose as transition targets (web's STATUS_TRANSITIONS map and mobile's
-    // _allStatuses list). Moves AMONG these six are left fully open on purpose: the mobile UI offers
-    // every other core status as a target from any non-current status — including reopening a Completed
-    // or Cancelled ticket (web also exposes Cancelled→New) — so a stricter per-edge graph would reject
-    // a path the shipping apps legitimately drive. What this set DOES reject via the generic PATCH is a
-    // jump to a status no flow ever assigns (OnHold / Archived) — those are read-only/reporting states,
-    // never user-set — and any undefined enum value the wire smuggles past JsonStringEnumConverter as a
-    // raw integer. A same→same PATCH is always allowed (so re-sending a current OnHold/Archived, or a
-    // PATCH that only touches costs/dates, never trips this).
-    private static readonly IReadOnlySet<WorkOrderStatus> UserAssignableStatuses = new HashSet<WorkOrderStatus>
-    {
-        WorkOrderStatus.New,
-        WorkOrderStatus.Scheduled,
-        WorkOrderStatus.InProgress,
-        WorkOrderStatus.WaitingParts,
-        WorkOrderStatus.Completed,
-        WorkOrderStatus.Cancelled,
-    };
-
-    // A CompletedAt further than this past "now" is treated as a typo/garbage entry rather than a real
-    // completion time. Generous enough to never reject a legitimately back- or forward-dated entry.
-    private static readonly TimeSpan MaxCompletedAtFutureSkew = TimeSpan.FromDays(1);
-
     private readonly RentalCommandDbContext _db;
-    private readonly IDataUpdateService _dataUpdate;
-    private readonly IMessagePublisher _publisher;
     private readonly IFileStorage _files;
-    private readonly ILogger<WorkOrderService> _logger;
     private readonly TimeProvider _timeProvider;
+    private readonly IAtomicUnitOfWork? _atomic;
 
     public WorkOrderService(
         RentalCommandDbContext db,
@@ -55,14 +34,13 @@ public class WorkOrderService : IWorkOrderService
         IMessagePublisher publisher,
         IFileStorage files,
         ILogger<WorkOrderService> logger,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IAtomicUnitOfWork? atomic = null)
     {
         _db = db;
-        _dataUpdate = dataUpdate;
-        _publisher = publisher;
         _files = files;
-        _logger = logger;
         _timeProvider = timeProvider;
+        _atomic = atomic;
     }
 
     public async Task<IReadOnlyList<WorkOrderResponse>> ListAsync(int portfolioId, int? propertyId, int? unitId, int? vendorId, ListQuery query, CancellationToken ct = default)
@@ -398,672 +376,71 @@ public class WorkOrderService : IWorkOrderService
     public async Task<WorkOrderResponse?> CreateAuthorizedAsync(
         WorkspaceReadScope scope,
         CreateWorkOrderRequest request,
-        int? changedByUserId = null,
-        string? changedByLabel = null,
+        string idempotencyKey,
         CancellationToken ct = default)
     {
-        var created = await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
-        {
-            var canCreateInProperty = await _db.Properties
-                .AsNoTracking()
-                .Where(property => property.Id == request.PropertyId)
-                .WhereAuthorized(
-                    _db,
-                    scope,
-                    new[] { CapabilityKeys.WorkManage },
-                    _timeProvider.UtcNow())
-                .AnyAsync(innerCt);
-            if (!canCreateInProperty)
-            {
-                return null;
-            }
-
-            return await CreateFromPortfolioAsync(
-                scope.PortfolioId,
-                request,
-                changedByUserId,
-                changedByLabel,
-                innerCt,
-                broadcast: false);
-        }, ct);
-
-        if (created is not null)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(
-                scope.PortfolioId, EntityType, created.Id, created, ct);
-        }
-
-        return created;
-    }
-
-    public Task<WorkOrderResponse?> CreateAsync(
-        int portfolioId,
-        CreateWorkOrderRequest request,
-        int? changedByUserId = null,
-        string? changedByLabel = null,
-        CancellationToken ct = default) =>
-        CreateFromPortfolioAsync(portfolioId, request, changedByUserId, changedByLabel, ct);
-
-    private async Task<WorkOrderResponse?> CreateFromPortfolioAsync(
-        int portfolioId,
-        CreateWorkOrderRequest request,
-        int? changedByUserId,
-        string? changedByLabel,
-        CancellationToken ct,
-        bool broadcast = true)
-    {
-        // Verify the referenced property (required) and optional unit/tenant/lease/vendor are in scope.
-        if (!await _db.EnsurePropertyInPortfolioAsync(portfolioId, request.PropertyId, ct))
-        {
-            return null;
-        }
-
-        if (request.UnitId.HasValue &&
-            !await _db.EnsureUnitInPortfolioAsync(portfolioId, request.UnitId.Value, request.PropertyId, ct))
-        {
-            return null;
-        }
-
-        if (request.TenantId.HasValue &&
-            !await _db.EnsureTenantInPortfolioAsync(portfolioId, request.TenantId.Value, ct))
-        {
-            return null;
-        }
-
-        if (request.TenantId.HasValue &&
-            !await TenantMatchesLocationAsync(
-                portfolioId, request.TenantId.Value, request.PropertyId, request.UnitId, ct))
-        {
-            throw new DomainValidationException(
-                "The selected tenant does not belong to the selected unit or property.");
-        }
-
-        if (request.LeaseManagementId.HasValue &&
-            !await _db.EnsureLeaseManagementInPortfolioAsync(portfolioId, request.LeaseManagementId.Value, ct))
-        {
-            return null;
-        }
-
-        if (request.LeaseManagementId.HasValue &&
-            !await LeaseManagementMatchesLocationAsync(
-                portfolioId, request.LeaseManagementId.Value, request.PropertyId, request.UnitId, ct))
-        {
-            throw new DomainValidationException(
-                "The selected lease does not belong to the selected unit or property.");
-        }
-
-        if (request.VendorId.HasValue &&
-            !await _db.EnsureVendorInPortfolioAsync(portfolioId, request.VendorId.Value, ct))
-        {
-            return null;
-        }
-
-        var now = _timeProvider.UtcNow();
-        var entity = new WorkOrder
-        {
-            PortfolioId = portfolioId,
-            PropertyId = request.PropertyId,
-            UnitId = request.UnitId,
-            TenantId = request.TenantId,
-            LeaseManagementId = request.LeaseManagementId,
-            VendorId = request.VendorId,
-            Title = request.Title,
-            Description = request.Description,
-            Category = request.Category,
-            Priority = request.Priority,
-            Status = request.Status,
-            RequestedAt = request.RequestedAt?.ToUtc() ?? now,
-            ScheduledFor = request.ScheduledFor.ToUtcDateTime(),
-            ScheduledWindowEnd = request.ScheduledWindowEnd.ToUtcDateTime(),
-            CompletedAt = request.CompletedAt.ToUtc(),
-            EstimatedCost = request.EstimatedCost,
-            ActualCost = request.ActualCost,
-            CreatedBy = request.CreatedBy,
-            ExtractedData = request.ExtractedData,
-            UpdatedAt = now,
-        };
-
-        _db.WorkOrders.Add(entity);
-
-        // Initial timeline entry: null → the created status. Same save as the work order so the
-        // stream can never diverge from the current status.
-        entity.StatusEvents.Add(new WorkOrderStatusEvent
-        {
-            PortfolioId = portfolioId,
-            FromStatus = null,
-            ToStatus = entity.Status,
-            Note = null,
-            ChangedByUserId = changedByUserId,
-            ChangedByLabel = changedByLabel,
-            CreatedAtUtc = now,
-        });
-
-        // When the work order is scheduled with an arrival window AND tied to a tenant, text the tenant
-        // the appointment window. Stage the SMS before saving so the work order, timeline, and outbox
-        // row commit atomically. Serialization/recipient lookup remains best-effort.
-        await NotifyTenantOfScheduleAsync(portfolioId, entity, request.ScheduledFor, request.ScheduledWindowEnd, ct);
-        await _db.SaveChangesAsync(ct);
-
-        var response = WorkOrderResponse.FromEntity(entity);
-        await HydrateDisplayNamesAsync(portfolioId, response, ct);
-        if (broadcast)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        }
-        return response;
-    }
-
-    /// <summary>
-    /// Enqueues a tenant-facing SMS describing the scheduled arrival window for a newly created work
-    /// order. No-ops unless the work order has a tenant, a <see cref="WorkOrder.ScheduledFor"/>, and a
-    /// <see cref="WorkOrder.ScheduledWindowEnd"/>, and that tenant has a phone number on file. The
-    /// <paramref name="localStart"/>/<paramref name="localEnd"/> are the original offset-bearing values
-    /// the client sent (the landlord's local time) so the SMS is rendered in that local time rather than
-    /// UTC. Wrapped so any failure (missing phone, outbox error) is logged and swallowed rather than
-    /// failing the create.
-    /// </summary>
-    private async Task NotifyTenantOfScheduleAsync(
-        int portfolioId, WorkOrder entity, DateTimeOffset? localStart, DateTimeOffset? localEnd, CancellationToken ct)
-    {
-        if (entity.TenantId is null || entity.ScheduledFor is null || entity.ScheduledWindowEnd is null
-            || localStart is null || localEnd is null)
-        {
-            return;
-        }
-
-        try
-        {
-            var tenant = await _db.Tenants
-                .AsNoTracking()
-                .Where(t => t.Id == entity.TenantId.Value && t.PortfolioId == portfolioId)
-                .Select(t => new { t.Phone })
-                .FirstOrDefaultAsync(ct);
-
-            var tenantPhone = SmsPhone.Normalize(tenant?.Phone);
-            if (string.IsNullOrWhiteSpace(tenantPhone))
-            {
-                return;
-            }
-
-            var message = BuildTenantScheduleSms(entity.Title, localStart.Value, localEnd.Value);
-            await _publisher.PublishAsync(
-                portfolioId,
-                "sms",
-                RentalCommand.Core.Outbox.OutboxIdempotency.Create(
-                    "work-order-schedule", portfolioId, entity.PropertyId, entity.UnitId, entity.TenantId,
-                    entity.Title, tenantPhone, entity.ScheduledFor, entity.ScheduledWindowEnd),
-                new
-            {
-                to = tenantPhone,
-                message,
-            }, ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Tenant schedule notification for work order #{WorkOrderId} failed (continuing).", entity.Id);
-        }
-    }
-
-    /// <summary>
-    /// Builds the tenant arrival-window SMS. The window is rendered in the landlord's local time — the
-    /// caller passes the original offset-bearing <see cref="DateTimeOffset"/> values the client sent, so
-    /// formatting their wall-clock component yields the local time the tenant should expect access. No
-    /// timezone label is emitted (a residential tenant can't reconcile "UTC"); a per-tenant/per-property
-    /// timezone preference can refine this later.
-    /// </summary>
-    private static string BuildTenantScheduleSms(string title, DateTimeOffset start, DateTimeOffset end)
-    {
-        var sb = new StringBuilder();
-        sb.Append($"Maintenance scheduled for {title}: ");
-        sb.Append(start.ToString("ddd MMM d, h:mm tt"));
-        sb.Append(" – ");
-        // Same-day window: show only the end time; otherwise show the full end date too.
-        sb.Append(end.Date == start.Date
-            ? end.ToString("h:mm tt")
-            : end.ToString("ddd MMM d, h:mm tt"));
-        sb.Append(". Please ensure access is available during this window.");
-        return sb.ToString();
-    }
-
-    /// <summary>
-    /// Fill the property / unit / vendor / tenant display names on a response after a write, in a
-    /// single SQL projection keyed by id (LEFT JOINs to the related rows — no full entities loaded).
-    /// Keeps the PATCH/POST result and the SignalR broadcast carrying the same labels the list/detail
-    /// reads project, so the grid never flashes a blank property name on a live update.
-    /// </summary>
-    private async Task HydrateDisplayNamesAsync(int portfolioId, WorkOrderResponse response, CancellationToken ct)
-    {
-        var names = await _db.WorkOrders
-            .AsNoTracking()
-            .Where(w => w.Id == response.Id && w.PortfolioId == portfolioId)
-            .Select(w => new
-            {
-                PropertyName = w.Property != null ? w.Property.Name : null,
-                UnitNumber = w.Unit != null ? w.Unit.UnitNumber : null,
-                VendorName = w.Vendor != null ? w.Vendor.Name : null,
-                TenantName = w.Tenant != null ? ((w.Tenant.FirstName + " " + w.Tenant.LastName)).Trim() : null,
-            })
-            .FirstOrDefaultAsync(ct);
-
-        if (names is null)
-        {
-            return;
-        }
-
-        response.PropertyName = names.PropertyName;
-        response.UnitNumber = names.UnitNumber;
-        response.VendorName = names.VendorName;
-        response.TenantName = names.TenantName;
-    }
-
-    public async Task<WorkOrderResponse?> UpdateAsync(int portfolioId, int id, UpdateWorkOrderRequest request, int? changedByUserId = null, string? changedByLabel = null, CancellationToken ct = default)
-    {
-        var q = _db.WorkOrders
-            .Where(w => w.Id == id && w.PortfolioId == portfolioId);
-
-        return await UpdateFromQueryAsync(
-            q,
-            portfolioId,
-            request,
-            changedByUserId,
-            changedByLabel,
-            ct);
+        var actor = Actor(scope);
+        var command = new CreateWorkOrderCommand(
+            scope.PortfolioId, actor, request.PropertyId, request.UnitId, request.TenantId,
+            request.LeaseManagementId, request.VendorId, request.Title, request.Description,
+            request.Category, request.Priority, request.Status, request.RequestedAt?.ToUtc(),
+            request.ScheduledFor, request.ScheduledWindowEnd,
+            request.ScheduledFor.ToUtcDateTime(), request.ScheduledWindowEnd.ToUtcDateTime(),
+            request.CompletedAt.ToUtc(), request.EstimatedCost, request.ActualCost,
+            request.CreatedBy, request.ExtractedData, idempotencyKey);
+        var outcome = await Atomic.ExecuteAsync(
+            Identity("work-order.create", idempotencyKey), command, MutationCodec, ct);
+        return Response(outcome.Value);
     }
 
     public async Task<WorkOrderResponse?> UpdateAuthorizedAsync(
         WorkspaceReadScope scope,
         int id,
         UpdateWorkOrderRequest request,
-        int? changedByUserId = null,
-        string? changedByLabel = null,
+        string idempotencyKey,
         CancellationToken ct = default)
     {
-        var response = await _db.ExecuteAuthorizedMutationAsync(innerCt =>
-        {
-            var q = _db.WorkOrders
-                .Where(workOrder => workOrder.Id == id)
-                .WhereAuthorized(
-                    _db,
-                    scope,
-                    new[] { CapabilityKeys.WorkManage },
-                    _timeProvider.UtcNow());
-
-            return UpdateFromQueryAsync(
-                q,
-                scope.PortfolioId,
-                request,
-                changedByUserId,
-                changedByLabel,
-                innerCt,
-                broadcast: false);
-        }, ct);
-
-        if (response is not null)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(
-                scope.PortfolioId, EntityType, response.Id, response, ct);
-        }
-
-        return response;
-    }
-
-    private async Task<WorkOrderResponse?> UpdateFromQueryAsync(
-        IQueryable<WorkOrder> q,
-        int portfolioId,
-        UpdateWorkOrderRequest request,
-        int? changedByUserId,
-        string? changedByLabel,
-        CancellationToken ct,
-        bool broadcast = true)
-    {
-        var entity = await q.FirstOrDefaultAsync(ct);
-        if (entity == null)
-        {
-            return null;
-        }
-
-        if (request.UnitId.HasValue &&
-            !await _db.EnsureUnitInPortfolioAsync(portfolioId, request.UnitId.Value, entity.PropertyId, ct))
-        {
-            return null;
-        }
-
-        if (request.TenantId.HasValue &&
-            !await _db.EnsureTenantInPortfolioAsync(portfolioId, request.TenantId.Value, ct))
-        {
-            return null;
-        }
-
-        var effectiveUnitId = request.ClearUnit ? null : request.UnitId ?? entity.UnitId;
-        var effectiveTenantId = request.ClearTenant ? null : request.TenantId ?? entity.TenantId;
-        var effectiveLeaseManagementId = request.ClearLeaseManagement ? null : request.LeaseManagementId ?? entity.LeaseManagementId;
-        if (request.TenantId.HasValue &&
-            !await TenantMatchesLocationAsync(
-                portfolioId, request.TenantId.Value, entity.PropertyId, effectiveUnitId, ct))
-        {
-            throw new DomainValidationException(
-                "The selected tenant does not belong to the selected unit or property.");
-        }
-
-        if ((request.UnitId.HasValue || request.ClearUnit || request.ClearTenant) &&
-            effectiveTenantId.HasValue &&
-            !await TenantMatchesLocationAsync(
-                portfolioId, effectiveTenantId.Value, entity.PropertyId, effectiveUnitId, ct))
-        {
-            throw new DomainValidationException(
-                "The selected tenant does not belong to the selected unit or property.");
-        }
-
-        if (request.LeaseManagementId.HasValue &&
-            !await _db.EnsureLeaseManagementInPortfolioAsync(portfolioId, request.LeaseManagementId.Value, ct))
-        {
-            return null;
-        }
-
-        if (request.LeaseManagementId.HasValue &&
-            !await LeaseManagementMatchesLocationAsync(
-                portfolioId, request.LeaseManagementId.Value, entity.PropertyId, effectiveUnitId, ct))
-        {
-            throw new DomainValidationException(
-                "The selected lease does not belong to the selected unit or property.");
-        }
-
-        if ((request.UnitId.HasValue || request.ClearUnit || request.ClearLeaseManagement) &&
-            effectiveLeaseManagementId.HasValue &&
-            !await LeaseManagementMatchesLocationAsync(
-                portfolioId, effectiveLeaseManagementId.Value, entity.PropertyId, effectiveUnitId, ct))
-        {
-            throw new DomainValidationException(
-                "The selected lease does not belong to the selected unit or property.");
-        }
-
-        if (request.VendorId.HasValue &&
-            !await _db.EnsureVendorInPortfolioAsync(portfolioId, request.VendorId.Value, ct))
-        {
-            return null;
-        }
-
-        var requestedScheduledFor = request.ScheduledFor.ToUtcDateTime();
-        var requestedScheduledWindowEnd = request.ScheduledWindowEnd.ToUtcDateTime();
-        var scheduleChanged =
-            (request.ScheduledFor.HasValue && requestedScheduledFor != entity.ScheduledFor) ||
-            (request.ScheduledWindowEnd.HasValue && requestedScheduledWindowEnd != entity.ScheduledWindowEnd);
-        var detailsChanged =
-            (request.ClearUnit && entity.UnitId.HasValue) ||
-            (request.ClearTenant && entity.TenantId.HasValue) ||
-            (request.ClearLeaseManagement && entity.LeaseManagementId.HasValue) ||
-            (request.UnitId.HasValue && request.UnitId != entity.UnitId) ||
-            (request.TenantId.HasValue && request.TenantId != entity.TenantId) ||
-            (request.LeaseManagementId.HasValue && request.LeaseManagementId != entity.LeaseManagementId) ||
-            (request.VendorId.HasValue && request.VendorId != entity.VendorId) ||
-            (request.Title != null && request.Title != entity.Title) ||
-            (request.Description != null && request.Description != entity.Description) ||
-            (request.Category != null && request.Category != entity.Category) ||
-            (request.Priority.HasValue && request.Priority.Value != entity.Priority) ||
-            (request.EstimatedCost.HasValue && request.EstimatedCost != entity.EstimatedCost) ||
-            (request.ActualCost.HasValue && request.ActualCost != entity.ActualCost);
-
-        if (request.ClearUnit) entity.UnitId = null;
-        else if (request.UnitId.HasValue) entity.UnitId = request.UnitId;
-        if (request.ClearTenant) entity.TenantId = null;
-        else if (request.TenantId.HasValue) entity.TenantId = request.TenantId;
-        if (request.ClearLeaseManagement) entity.LeaseManagementId = null;
-        else if (request.LeaseManagementId.HasValue) entity.LeaseManagementId = request.LeaseManagementId;
-        if (request.VendorId.HasValue) entity.VendorId = request.VendorId;
-        if (request.Title != null) entity.Title = request.Title;
-        if (request.Description != null) entity.Description = request.Description;
-        if (request.Category != null) entity.Category = request.Category;
-        if (request.Priority.HasValue) entity.Priority = request.Priority.Value;
-
-        // Capture the status transition (if any) so we can append a timeline entry in the same save.
-        var previousStatus = entity.Status;
-        var statusChanged = request.Status.HasValue && request.Status.Value != previousStatus;
-        if (statusChanged)
-        {
-            EnsureStatusAssignable(request.Status!.Value);
-        }
-        if (request.Status.HasValue) entity.Status = request.Status.Value;
-
-        var now = _timeProvider.UtcNow();
-
-        if (request.RequestedAt.HasValue) entity.RequestedAt = request.RequestedAt.Value.ToUtc();
-        if (request.ScheduledFor.HasValue) entity.ScheduledFor = requestedScheduledFor;
-        if (request.ScheduledWindowEnd.HasValue) entity.ScheduledWindowEnd = requestedScheduledWindowEnd;
-        if (request.CompletedAt.HasValue) entity.CompletedAt = request.CompletedAt.ToUtc();
-        var completedAtStampedFromStatus =
-            statusChanged &&
-            entity.Status == WorkOrderStatus.Completed &&
-            !request.CompletedAt.HasValue;
-        if (completedAtStampedFromStatus)
-        {
-            entity.CompletedAt = now;
-        }
-        if (request.EstimatedCost.HasValue) entity.EstimatedCost = request.EstimatedCost;
-        if (request.ActualCost.HasValue) entity.ActualCost = request.ActualCost;
-
-        // A CLIENT-SUPPLIED completion timestamp can't sit unreasonably far in the future, and an
-        // explicitly inverted pair (the client sends BOTH RequestedAt and CompletedAt with completed <
-        // requested in the same request) is rejected. We deliberately do NOT compare a lone CompletedAt
-        // PATCH against the stored RequestedAt: RequestedAt auto-defaults to creation time, so back-dating
-        // only the completion date on an existing/closed order (a supported edit — there is no reopen
-        // workflow) is legitimate and must not be blocked. ScheduledFor is different: a stored or submitted
-        // scheduled visit is user-authored timeline data, so a completion before that effective visit date
-        // is invalid. Every one of these guards is gated on a date the USER typed: the completion time
-        // AUTO-STAMPED by the status→Completed button (no client CompletedAt) is exempt, so a work order
-        // scheduled for later today/the future can still be one-click Completed early — the vendor came
-        // early — without the auto-stamped "now" tripping the before-scheduled guard. An out-of-order typed
-        // pair corrupts age/SLA reporting; the future bound catches typo'd far-future dates.
-        EnsureCompletedAtInRange(
-            request.RequestedAt.HasValue, entity.RequestedAt,
-            request.ScheduledFor.HasValue, entity.ScheduledFor,
-            request.CompletedAt.HasValue, entity.CompletedAt,
-            now);
-
-        entity.UpdatedAt = now;
-
-        if (statusChanged)
-        {
-            entity.StatusEvents.Add(new WorkOrderStatusEvent
-            {
-                PortfolioId = portfolioId,
-                FromStatus = previousStatus,
-                ToStatus = entity.Status,
-                Note = string.IsNullOrWhiteSpace(request.StatusNote) ? null : request.StatusNote.Trim(),
-                ChangedByUserId = changedByUserId,
-                ChangedByLabel = changedByLabel,
-                CreatedAtUtc = now,
-            });
-        }
-        else
-        {
-            var editNote = WorkOrderEditTimelineNote(scheduleChanged, detailsChanged);
-            if (editNote is not null)
-            {
-                entity.StatusEvents.Add(new WorkOrderStatusEvent
-                {
-                    PortfolioId = portfolioId,
-                    FromStatus = entity.Status,
-                    ToStatus = entity.Status,
-                    Note = editNote,
-                    ChangedByUserId = changedByUserId,
-                    ChangedByLabel = changedByLabel,
-                    CreatedAtUtc = now,
-                });
-            }
-        }
-
-        await _db.SaveChangesAsync(ct);
-
-        var response = WorkOrderResponse.FromEntity(entity);
-        await HydrateDisplayNamesAsync(portfolioId, response, ct);
-        if (broadcast)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        }
-        return response;
-    }
-
-    // Reject a status PATCH that targets a status no UI ever assigns (OnHold / Archived are reporting-only
-    // states) or an undefined enum value. Moves among the user-assignable statuses — including reopening a
-    // closed ticket — are intentionally left open to match the web + mobile detail screens. A same→same
-    // move never reaches here (the caller only validates an actual change). Throws a 400.
-    private static void EnsureStatusAssignable(WorkOrderStatus to)
-    {
-        if (!UserAssignableStatuses.Contains(to))
-        {
-            throw new DomainValidationException(
-                $"A work order cannot be moved to {to}.");
-        }
-    }
-
-    private static string? WorkOrderEditTimelineNote(bool scheduleChanged, bool detailsChanged)
-    {
-        return (scheduleChanged, detailsChanged) switch
-        {
-            (true, true) => "Schedule and details updated.",
-            (true, false) => "Schedule updated.",
-            (false, true) => "Details updated.",
-            _ => null,
-        };
-    }
-
-    private Task<bool> TenantMatchesLocationAsync(
-        int portfolioId,
-        int tenantId,
-        int propertyId,
-        int? unitId,
-        CancellationToken ct)
-    {
-        return _db.LeaseManagementParties.AsNoTracking().AnyAsync(party =>
-            party.PortfolioId == portfolioId &&
-            party.TenantId == tenantId &&
-            party.LeaseManagement != null &&
-            party.LeaseManagement.PropertyId == propertyId &&
-            (!unitId.HasValue || party.LeaseManagement.UnitId == unitId.Value) &&
-            party.LeaseManagement.CanceledAtUtc == null &&
-            party.LeaseManagement.PossessionReturnedAtUtc == null,
-            ct);
-    }
-
-    private Task<bool> LeaseManagementMatchesLocationAsync(
-        int portfolioId,
-        int leaseManagementId,
-        int propertyId,
-        int? unitId,
-        CancellationToken ct)
-    {
-        var relationships = _db.LeaseManagements
-            .AsNoTracking()
-            .Where(l => l.Id == leaseManagementId && l.PortfolioId == portfolioId && l.PropertyId == propertyId);
-
-        if (unitId.HasValue)
-        {
-            var selectedUnitId = unitId.Value;
-            relationships = relationships.Where(l => l.UnitId == selectedUnitId);
-        }
-
-        return relationships.AnyAsync(ct);
-    }
-
-    // Validates the (RequestedAt, ScheduledFor, CompletedAt) timing on an update. A supplied CompletedAt
-    // must not be far in the future. The "completed before requested" check only fires when the SAME
-    // request explicitly sets BOTH dates — an inverted pair the user actually typed — so back-dating a
-    // lone CompletedAt against an auto-defaulted RequestedAt (a supported edit on a completed order) is
-    // never blocked. The "completed before scheduled visit" check fires when the user typed EITHER the
-    // scheduled date or the completion date. Every comparison is gated on a user-typed value via the
-    // *Provided flags: the caller passes completedProvided=false for a completion time auto-stamped by a
-    // status→Completed transition, so that auto-stamp is exempt from these guards (a future-scheduled work
-    // order can still be one-click Completed). Throws a 400.
-    private static void EnsureCompletedAtInRange(
-        bool requestedProvided, DateTime effectiveRequestedAt,
-        bool scheduledProvided, DateTime? effectiveScheduledFor,
-        bool completedProvided, DateTime? effectiveCompletedAt,
-        DateTime nowUtc)
-    {
-        if (effectiveCompletedAt is not { } completed)
-        {
-            return;
-        }
-
-        if (completedProvided && completed > nowUtc + MaxCompletedAtFutureSkew)
-        {
-            throw new DomainValidationException(
-                "The completion date can't be in the future.");
-        }
-
-        if (requestedProvided && completedProvided && completed < effectiveRequestedAt)
-        {
-            throw new DomainValidationException(
-                "The completion date can't be before the work order was requested.");
-        }
-
-        if ((scheduledProvided || completedProvided) &&
-            effectiveScheduledFor is { } scheduled &&
-            completed < scheduled)
-        {
-            throw new DomainValidationException(
-                "The completion date can't be before the scheduled visit.");
-        }
-    }
-
-    public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
-    {
-        var q = _db.WorkOrders
-            .Where(w => w.Id == id && w.PortfolioId == portfolioId);
-
-        return await DeleteFromQueryAsync(q, portfolioId, id, ct);
+        var command = new UpdateWorkOrderCommand(
+            scope.PortfolioId, Actor(scope), id, request.UnitId, request.ClearUnit,
+            request.TenantId, request.ClearTenant, request.LeaseManagementId,
+            request.ClearLeaseManagement, request.VendorId, request.Title, request.Description,
+            request.Category, request.Priority, request.Status, request.StatusNote,
+            request.RequestedAt?.ToUtc(), request.ScheduledFor.ToUtcDateTime(),
+            request.ScheduledWindowEnd.ToUtcDateTime(), request.CompletedAt.ToUtc(),
+            request.EstimatedCost, request.ActualCost, idempotencyKey);
+        var outcome = await Atomic.ExecuteAsync(
+            Identity("work-order.update", idempotencyKey), command, MutationCodec, ct);
+        return Response(outcome.Value);
     }
 
     public async Task<bool> DeleteAuthorizedAsync(
         WorkspaceReadScope scope,
         int id,
+        string idempotencyKey,
         CancellationToken ct = default)
     {
-        var deleted = await _db.ExecuteAuthorizedMutationAsync(innerCt =>
-        {
-            var q = _db.WorkOrders
-                .Where(workOrder => workOrder.Id == id)
-                .WhereAuthorized(
-                    _db,
-                    scope,
-                    new[] { CapabilityKeys.WorkManage },
-                    _timeProvider.UtcNow());
-
-            return DeleteFromQueryAsync(q, scope.PortfolioId, id, innerCt, broadcast: false);
-        }, ct);
-
-        if (deleted)
-        {
-            await _dataUpdate.BroadcastEntityDeleteAsync(scope.PortfolioId, EntityType, id, ct);
-        }
-
-        return deleted;
+        var command = new DeleteWorkOrderCommand(
+            scope.PortfolioId, Actor(scope), id, idempotencyKey);
+        var outcome = await Atomic.ExecuteAsync(
+            Identity("work-order.delete", idempotencyKey), command, MutationCodec, ct);
+        return outcome.Value.Outcome == OperationMutationOutcome.Applied;
     }
 
-    private async Task<bool> DeleteFromQueryAsync(
-        IQueryable<WorkOrder> q,
-        int portfolioId,
-        int id,
-        CancellationToken ct,
-        bool broadcast = true)
+    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
+        "Atomic work-order mutations are not configured.");
+
+    private static StaffOperationActor Actor(WorkspaceReadScope scope) => new(
+        scope.UserId, scope.SessionId, scope.AccessContextId, scope.AccessRevision);
+
+    private static AtomicCommandIdentity Identity(string operation, string key)
     {
-        var entity = await q.FirstOrDefaultAsync(ct);
-        if (entity == null)
-        {
-            return false;
-        }
-
-        // Soft-delete: preserve the maintenance record (consistent with the other entities +
-        // keeps an audit trail). The global query filter hides it from all reads.
-        entity.DeletedAt = _timeProvider.UtcNow();
-        entity.UpdatedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
-
-        if (broadcast)
-        {
-            await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
-        }
-        return true;
+        var digest = Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(key)));
+        return new AtomicCommandIdentity(operation, digest);
     }
+
+    private static WorkOrderResponse? Response(OperationMutationResult result) =>
+        result.Outcome == OperationMutationOutcome.NotFound || result.ResponseJson is null
+            ? null
+            : JsonSerializer.Deserialize<WorkOrderResponse>(result.ResponseJson);
+
 }

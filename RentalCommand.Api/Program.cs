@@ -229,6 +229,22 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Operations.UpdateAssignedWorkOrderResult,
     RentalCommand.Data.Operations.UpdateAssignedWorkOrderHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.CreateWorkOrderCommand,
+    RentalCommand.Core.Operations.OperationMutationResult,
+    RentalCommand.Data.Operations.CreateWorkOrderHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.UpdateWorkOrderCommand,
+    RentalCommand.Core.Operations.OperationMutationResult,
+    RentalCommand.Data.Operations.UpdateWorkOrderHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.DeleteWorkOrderCommand,
+    RentalCommand.Core.Operations.OperationMutationResult,
+    RentalCommand.Data.Operations.DeleteWorkOrderHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.CreateTenantWorkOrderCommand,
+    RentalCommand.Core.Operations.OperationMutationResult,
+    RentalCommand.Data.Operations.CreateTenantWorkOrderHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Esign.IssueLeaseAgreementCommand,
     RentalCommand.Core.Esign.IssueLeaseAgreementResult,
     RentalCommand.Data.Esign.IssueLeaseAgreementHandler>();
