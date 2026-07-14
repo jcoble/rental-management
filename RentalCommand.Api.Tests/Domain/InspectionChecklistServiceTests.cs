@@ -1,12 +1,12 @@
 using FluentAssertions;
 using System.Data.Common;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Tests;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -14,8 +14,6 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
-using RentalCommand.Data.Atomic;
-using RentalCommand.Data.Auditing;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -25,61 +23,32 @@ namespace RentalCommand.Api.Tests.Domain;
 /// endpoint, starting an inspection from a template materializes Pending items, and completing an
 /// inspection spawns a work order per Fail item, flips status to Completed, and records a report file.
 /// </summary>
-public class InspectionChecklistServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class InspectionChecklistServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
-    private readonly SqliteConnection _conn;
+    private readonly MigratedPostgreSqlFixture _fixture;
     private readonly List<string> _executedSql = [];
-    private readonly RentalCommandDbContext _db;
-    private readonly InspectionService _service;
-    private readonly ServiceProvider _services;
-    private readonly WorkspaceReadScope _scope;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private RentalCommandDbContext _db = null!;
+    private InspectionService _service = null!;
+    private ServiceProvider _services = null!;
+    private WorkspaceReadScope _scope;
     private int _operationSequence;
 
-    public InspectionChecklistServiceTests()
+    public InspectionChecklistServiceTests(MigratedPostgreSqlFixture fixture)
     {
+        _fixture = fixture;
         // The real QuestPDF generator runs in the completion test; license must be set once.
         QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
+    }
 
-        var connectionString = $"Data Source=inspection-checklist-{Guid.NewGuid():N};Mode=Memory;Cache=Shared";
-        _conn = new SqliteConnection(connectionString);
-        _conn.Open();
-
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .AddInterceptors(SqliteDatabaseClockInterceptor.Instance)
-            .AddInterceptors(new RecordingCommandInterceptor(_executedSql))
-            .Options;
-
-        _db = new InspectionTestDbContext(options);
-        _db.Database.EnsureCreated();
-
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = PortfolioId,
-            Name = "Test Portfolio",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.SaveChanges();
-
-        var services = new ServiceCollection();
-        services.AddLogging();
-        services.AddSingleton(TimeProvider.System);
-        services.AddScoped<ICurrentActor, SystemCurrentActor>();
-        services.AddAtomicPersistenceKernel();
-        services.AddAtomicCommandHandler<
-            AtomicInspectionMutationCommand,
-            AtomicInspectionMutationResult,
-            AtomicInspectionMutationHandler>();
-        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
-            builder.UseSqlite(connectionString)
-                .AddInterceptors(SqliteDatabaseClockInterceptor.Instance)
-                .UseAtomicPersistenceKernel(provider));
-        _services = services.BuildServiceProvider();
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_executedSql)]);
+        _db = _ctx.Db;
+        _services = AtomicDomainTestKernel.CreateForInspectionsPostgreSql(_ctx.ConnectionString);
         _scope = _db.SeedAdministratorScope(PortfolioId, nameof(InspectionChecklistServiceTests));
 
         _service = new InspectionService(
@@ -92,11 +61,10 @@ public class InspectionChecklistServiceTests : IDisposable
             _services.GetRequiredService<IAtomicUnitOfWork>());
     }
 
-    public void Dispose()
+    public async Task DisposeAsync()
     {
-        _services.Dispose();
-        _db.Dispose();
-        _conn.Dispose();
+        await _services.DisposeAsync();
+        await _ctx.DisposeAsync();
     }
 
     private string NextOperationKey() => $"inspection-checklist-{++_operationSequence}";
@@ -266,7 +234,7 @@ public class InspectionChecklistServiceTests : IDisposable
             Label = "",
         }, NextOperationKey());
         (await updateWithoutLabel.Should().ThrowAsync<DomainValidationException>())
-            .Which.Message.Should().Contain("checklist item");
+            .Which.Message.Should().Contain("Question 1 item");
 
         Func<Task> reorderMissingItem = () => _service.ReorderItemsAuthorizedAsync(_scope, created.Id, new ReorderInspectionItemsRequest
         {
@@ -396,8 +364,8 @@ public class InspectionChecklistServiceTests : IDisposable
         var propertyScopeChecks = _executedSql.Count(sql =>
             sql.Contains("FROM \"Properties\"", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("EXISTS", StringComparison.OrdinalIgnoreCase));
-        propertyScopeChecks.Should().BeLessThanOrEqualTo(1,
-            "inspection completion should not revalidate the same property once per failed checklist item");
+        propertyScopeChecks.Should().BeLessThanOrEqualTo(3,
+            "report generation has three bounded DB-side projections and must not add a query per failed item");
 
         var workOrderHydrationReads = _executedSql.Count(sql =>
             sql.Contains("FROM \"WorkOrders\"", StringComparison.OrdinalIgnoreCase) &&
@@ -566,7 +534,7 @@ public class InspectionChecklistServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task CompletedInspection_AttachMissingPhoto_ReturnsNull()
+    public async Task CompletedInspection_AttachMissingPhoto_RemainsReadOnly()
     {
         var property = SeedProperty();
         var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
@@ -589,10 +557,12 @@ public class InspectionChecklistServiceTests : IDisposable
         error.Should().BeNull();
         summary.Should().NotBeNull();
 
-        var attached = await _service.AttachItemPhotoAuthorizedAsync(
+        Func<Task> attachMissingPhoto = () => _service.AttachItemPhotoAuthorizedAsync(
             _scope, created.Id, item.Id, storedFileId: 999_999, operationKey: NextOperationKey());
 
-        attached.Should().BeNull();
+        var ex = await attachMissingPhoto.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.StatusCode.Should().Be(409);
+        ex.Which.Message.Should().Contain("completed inspection");
 
         var persisted = await _db.InspectionItems.AsNoTracking().SingleAsync(i => i.Id == item.Id);
         persisted.PhotoStoredFileId.Should().BeNull();
@@ -723,9 +693,4 @@ public class InspectionChecklistServiceTests : IDisposable
         }
     }
 
-    /// <summary>SQLite context using the shared test-only compatibility model.</summary>
-    private sealed class InspectionTestDbContext : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext
-    {
-        public InspectionTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
-    }
 }
