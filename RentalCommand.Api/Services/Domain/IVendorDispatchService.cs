@@ -25,7 +25,12 @@ public interface IVendorDispatchService
         CancellationToken ct = default);
 
     /// <summary>Record a 1–5 star rating and refresh the vendor's cached aggregates. Null when out of scope.</summary>
-    Task<VendorRatingResponse?> RateAsync(WorkspaceReadScope scope, int vendorId, CreateVendorRatingRequest request, CancellationToken ct = default);
+    Task<VendorRatingResponse?> RateAsync(
+        WorkspaceReadScope scope,
+        int vendorId,
+        CreateVendorRatingRequest request,
+        string idempotencyKey,
+        CancellationToken ct = default);
 
     /// <summary>Vendor performance scorecard, or null when the vendor is not in the caller's portfolio.</summary>
     Task<VendorScorecardResponse?> GetScorecardAsync(WorkspaceReadScope scope, int vendorId, CancellationToken ct = default);

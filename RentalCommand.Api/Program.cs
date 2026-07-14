@@ -285,6 +285,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Operations.OperationMutationResult,
     RentalCommand.Data.Operations.DeleteEvictionCaseHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.CreateVendorRatingCommand,
+    RentalCommand.Core.Operations.VendorRatingMutationResult,
+    RentalCommand.Data.Operations.CreateVendorRatingHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Esign.IssueLeaseAgreementCommand,
     RentalCommand.Core.Esign.IssueLeaseAgreementResult,
     RentalCommand.Data.Esign.IssueLeaseAgreementHandler>();

@@ -46,6 +46,10 @@ public class VendorDispatchServiceTests : IDisposable
             CompleteVendorDispatchFromInboundCommand,
             CompleteVendorDispatchFromInboundResult,
             CompleteVendorDispatchFromInboundHandler>();
+        services.AddAtomicCommandHandler<
+            CreateVendorRatingCommand,
+            VendorRatingMutationResult,
+            CreateVendorRatingHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseSqlite(_ctx.ConnectionString).UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider();
@@ -437,9 +441,14 @@ public class VendorDispatchServiceTests : IDisposable
 
         var sut = CreateDispatchSut();
 
-        await sut.RateAsync(_scope, vendor.Id, new CreateVendorRatingRequest { Stars = 5, Comment = "Great" });
-        await sut.RateAsync(_scope, vendor.Id, new CreateVendorRatingRequest { Stars = 3 });
+        await sut.RateAsync(
+            _scope, vendor.Id, new CreateVendorRatingRequest { Stars = 5, Comment = "Great" },
+            Guid.NewGuid().ToString("N"));
+        await sut.RateAsync(
+            _scope, vendor.Id, new CreateVendorRatingRequest { Stars = 3 },
+            Guid.NewGuid().ToString("N"));
 
+        _ctx.Db.ChangeTracker.Clear();
         var card = await sut.GetScorecardAsync(_scope, vendor.Id);
         card.Should().NotBeNull();
         card!.RatingCount.Should().Be(2);
@@ -448,6 +457,28 @@ public class VendorDispatchServiceTests : IDisposable
         var vendorReloaded = await _ctx.Db.Vendors.FindAsync(vendor.Id);
         vendorReloaded!.RatingCount.Should().Be(2);
         vendorReloaded.AverageRating.Should().Be(4.00m);
+    }
+
+    [Fact]
+    public async Task RateAsync_SameOperationKey_ReplaysOneRatingAuditAndBroadcastIntent()
+    {
+        var (_, vendor) = SeedPropertyAndVendor(vendorPhone: "+16145550199");
+        await _ctx.Db.SaveChangesAsync();
+        var sut = CreateDispatchSut();
+        var key = Guid.NewGuid().ToString("N");
+        var request = new CreateVendorRatingRequest { Stars = 5, Comment = "Great" };
+
+        var first = await sut.RateAsync(_scope, vendor.Id, request, key);
+        var replay = await sut.RateAsync(_scope, vendor.Id, request, key);
+
+        replay.Should().BeEquivalentTo(first);
+        (await _ctx.Db.VendorRatings.CountAsync()).Should().Be(1);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync()).Should().Be(1);
+        (await _ctx.Db.AtomicAuditLogs.CountAsync(log =>
+            log.EntityType == nameof(VendorRating))).Should().Be(1);
+        (await _ctx.Db.AtomicAuditLogs.CountAsync(log =>
+            log.EntityType == nameof(Vendor))).Should().Be(1);
+        (await _ctx.Db.OutboxMessages.CountAsync()).Should().Be(2);
     }
 
     [Fact]

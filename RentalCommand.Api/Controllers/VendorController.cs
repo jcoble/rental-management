@@ -100,10 +100,16 @@ public class VendorController : ManagementControllerBase
     [HttpPost("{id:int}/ratings")]
     [ProducesResponseType(typeof(VendorRatingResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<VendorRatingResponse>> Rate(int id, [FromBody] CreateVendorRatingRequest request, CancellationToken ct)
+    public async Task<ActionResult<VendorRatingResponse>> Rate(
+        int id,
+        [FromBody] CreateVendorRatingRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
-        var created = await _dispatch.RateAsync(scope, id, request, ct);
+        if (string.IsNullOrWhiteSpace(idempotencyKey) || idempotencyKey.Length > 128)
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var created = await _dispatch.RateAsync(scope, id, request, idempotencyKey, ct);
         return created == null
             ? NotFound(new { error = "Vendor not found" })
             : CreatedAtAction(nameof(Scorecard), new { id }, created);

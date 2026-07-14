@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
@@ -157,13 +159,18 @@ class VendorsRepository {
   }) async {
     try {
       final trimmed = comment?.trim();
-      await _dio.post<Map<String, dynamic>>(
-        '/vendors/$vendorId/ratings',
-        data: {
-          'stars': stars,
-          if (trimmed != null && trimmed.isNotEmpty) 'comment': trimmed,
-          'workOrderId': ?workOrderId,
-        },
+      final data = <String, dynamic>{
+        'stars': stars,
+        if (trimmed != null && trimmed.isNotEmpty) 'comment': trimmed,
+        'workOrderId': ?workOrderId,
+      };
+      await IdempotentMutation.run(
+        'vendor:rate:$vendorId:${jsonEncode(data)}',
+        (operationKey) => _dio.post<Map<String, dynamic>>(
+          '/vendors/$vendorId/ratings',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        ),
       );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);

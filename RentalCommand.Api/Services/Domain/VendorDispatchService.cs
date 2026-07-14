@@ -1,4 +1,6 @@
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
@@ -17,7 +19,8 @@ namespace RentalCommand.Api.Services.Domain;
 /// <inheritdoc cref="IVendorDispatchService"/>
 public class VendorDispatchService : IVendorDispatchService
 {
-    private const string VendorEntityType = "Vendor";
+    private static readonly AtomicJsonResultCodec<VendorRatingMutationResult> RatingMutationCodec =
+        new("vendor-rating.create.v1");
     private const string WorkOrderEntityType = "WorkOrder";
     private const string DispatchEntityType = "VendorDispatch";
 
@@ -166,70 +169,36 @@ public class VendorDispatchService : IVendorDispatchService
         return DispatchResult.Ok(response);
     }
 
-    public Task<VendorRatingResponse?> RateAsync(
+    public async Task<VendorRatingResponse?> RateAsync(
         WorkspaceReadScope scope,
         int vendorId,
         CreateVendorRatingRequest request,
-        CancellationToken ct = default) =>
-        _db.ExecuteAuthorizedMutationAsync(async token =>
+        string idempotencyKey,
+        CancellationToken ct = default)
     {
-        var portfolioId = scope.PortfolioId;
-        var allProperties = _db.AuthorizedWorkspaceAssignments(
-            scope,
-            [CapabilityKeys.WorkManage],
-            CapabilityAuthorizationTargetKind.Property,
-            _timeProvider.UtcNow());
-        var authorizedWorkOrders = _db.WorkOrders
-            .AsNoTracking()
-            .WhereAuthorized(_db, scope, [CapabilityKeys.WorkManage], _timeProvider.UtcNow());
-        var vendor = await _db.Vendors
-            .Where(v => v.Id == vendorId && v.PortfolioId == portfolioId &&
-                        (request.WorkOrderId.HasValue
-                            ? authorizedWorkOrders.Any(workOrder => workOrder.Id == request.WorkOrderId.Value)
-                            : allProperties.Any()))
-            .FirstOrDefaultAsync(token);
-        if (vendor is null)
-        {
-            return null;
-        }
-
-        // Keep an out-of-scope work order from being linked into this portfolio's rating.
-        int? workOrderId = null;
-        if (request.WorkOrderId.HasValue)
-        {
-            var inScope = await authorizedWorkOrders
-                .AnyAsync(w => w.Id == request.WorkOrderId.Value, token);
-            if (inScope)
-            {
-                workOrderId = request.WorkOrderId.Value;
-            }
-            else
-            {
-                return null;
-            }
-        }
-
-        var now = _timeProvider.UtcNow();
-        var rating = new VendorRating
-        {
-            PortfolioId = portfolioId,
-            VendorId = vendorId,
-            WorkOrderId = workOrderId,
-            Stars = Math.Clamp(request.Stars, 1, 5),
-            Comment = string.IsNullOrWhiteSpace(request.Comment) ? null : request.Comment.Trim(),
-            CreatedAtUtc = now,
-        };
-        _db.VendorRatings.Add(rating);
-        await _db.SaveChangesAsync(token);
-
-        await RefreshRatingAggregatesAsync(vendor, token);
-        await _db.SaveChangesAsync(token);
-
-        await SafeAsync("rating broadcast", () => _dataUpdate.BroadcastEntityUpdateAsync(
-            portfolioId, VendorEntityType, vendor.Id, VendorResponse.FromEntity(vendor), token));
-
-        return VendorRatingResponse.FromEntity(rating);
-    }, ct);
+        ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
+        var command = new CreateVendorRatingCommand(
+            scope.PortfolioId,
+            new StaffOperationActor(
+                scope.UserId,
+                scope.SessionId,
+                scope.AccessContextId,
+                scope.AccessRevision),
+            vendorId,
+            request.WorkOrderId,
+            request.Stars,
+            request.Comment,
+            idempotencyKey);
+        var outcome = await _atomic.ExecuteAsync(
+            Identity("vendor-rating.create", idempotencyKey),
+            command,
+            RatingMutationCodec,
+            ct);
+        return outcome.Value.Outcome == OperationMutationOutcome.NotFound ||
+               outcome.Value.ResponseJson is null
+            ? null
+            : JsonSerializer.Deserialize<VendorRatingResponse>(outcome.Value.ResponseJson);
+    }
 
     public async Task<VendorScorecardResponse?> GetScorecardAsync(WorkspaceReadScope scope, int vendorId, CancellationToken ct = default)
     {
@@ -271,22 +240,10 @@ public class VendorDispatchService : IVendorDispatchService
         };
     }
 
-    /// <summary>
-    /// Recomputes the vendor's cached <c>AverageRating</c>/<c>RatingCount</c> from the rating rows.
-    /// The vendor must be tracked; the caller saves. Computing from source keeps the cache exact even
-    /// if a rating is ever edited/removed.
-    /// </summary>
-    private async Task RefreshRatingAggregatesAsync(Vendor vendor, CancellationToken ct)
+    private static AtomicCommandIdentity Identity(string operation, string key)
     {
-        var stats = await _db.VendorRatings
-            .Where(r => r.VendorId == vendor.Id && r.PortfolioId == vendor.PortfolioId)
-            .GroupBy(_ => 1)
-            .Select(g => new { Count = g.Count(), Avg = (decimal?)g.Average(r => (decimal)r.Stars) })
-            .FirstOrDefaultAsync(ct);
-
-        vendor.RatingCount = stats?.Count ?? 0;
-        vendor.AverageRating = stats?.Avg is { } avg ? Math.Round(avg, 2) : null;
-        vendor.UpdatedAt = _timeProvider.UtcNow();
+        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)));
+        return new AtomicCommandIdentity(operation, digest);
     }
 
     private static string BuildJobSms(WorkOrder workOrder, string? propertyName, string? propertyAddress, string? unitNumber, string? note)
