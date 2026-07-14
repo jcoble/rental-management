@@ -56,9 +56,15 @@ public class RecurringMaintenanceController : ManagementControllerBase
     [HttpPost]
     [ProducesResponseType(typeof(RecurringMaintenanceTaskResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<RecurringMaintenanceTaskResponse>> Create([FromBody] CreateRecurringMaintenanceTaskRequest request, CancellationToken ct)
+    public async Task<ActionResult<RecurringMaintenanceTaskResponse>> Create(
+        [FromBody] CreateRecurringMaintenanceTaskRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var created = await _service.CreateAuthorizedAsync(GetWorkspaceReadScope(), request, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var created = await _service.CreateAuthorizedAsync(
+            GetWorkspaceReadScope(), request, operationKey, ct);
         return created == null
             ? NotFound(new { error = "Referenced property, unit, or vendor not found in this portfolio" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
@@ -67,9 +73,16 @@ public class RecurringMaintenanceController : ManagementControllerBase
     [HttpPatch("{id:int}")]
     [ProducesResponseType(typeof(RecurringMaintenanceTaskResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<RecurringMaintenanceTaskResponse>> Update(int id, [FromBody] UpdateRecurringMaintenanceTaskRequest request, CancellationToken ct)
+    public async Task<ActionResult<RecurringMaintenanceTaskResponse>> Update(
+        int id,
+        [FromBody] UpdateRecurringMaintenanceTaskRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var updated = await _service.UpdateAuthorizedAsync(GetWorkspaceReadScope(), id, request, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var updated = await _service.UpdateAuthorizedAsync(
+            GetWorkspaceReadScope(), id, request, operationKey, ct);
         return updated == null
             ? NotFound(new { error = "Recurring maintenance task not found, or referenced unit/vendor not in this portfolio" })
             : Ok(updated);
@@ -78,19 +91,31 @@ public class RecurringMaintenanceController : ManagementControllerBase
     [HttpPatch("{id:int}/active")]
     [ProducesResponseType(typeof(RecurringMaintenanceTaskResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<RecurringMaintenanceTaskResponse>> ToggleActive(int id, [FromBody] ToggleRecurringMaintenanceTaskActiveRequest request, CancellationToken ct)
+    public async Task<ActionResult<RecurringMaintenanceTaskResponse>> ToggleActive(
+        int id,
+        [FromBody] ToggleRecurringMaintenanceTaskActiveRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
         var updated = await _service.SetActiveAuthorizedAsync(
-            GetWorkspaceReadScope(), id, request.IsActive, ct);
+            GetWorkspaceReadScope(), id, request.IsActive, operationKey, ct);
         return updated == null ? NotFound(new { error = "Recurring maintenance task not found" }) : Ok(updated);
     }
 
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        int id,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var deleted = await _service.DeleteAuthorizedAsync(
+            GetWorkspaceReadScope(), id, operationKey, ct);
         return deleted ? NoContent() : NotFound(new { error = "Recurring maintenance task not found" });
     }
 }

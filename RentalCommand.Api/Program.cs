@@ -189,6 +189,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Api.Services.Domain.AtomicInspectionMutationResult,
     RentalCommand.Api.Services.Domain.AtomicInspectionMutationHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.AtomicRecurringMaintenanceMutationCommand,
+    RentalCommand.Api.Services.Domain.AtomicRecurringMaintenanceMutationResult,
+    RentalCommand.Api.Services.Domain.AtomicRecurringMaintenanceMutationHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Api.Services.Domain.AtomicPublicApplicationSubmissionCommand,
     RentalCommand.Api.Services.Domain.AtomicPublicApplicationSubmissionResult,
     RentalCommand.Api.Services.Domain.AtomicPublicApplicationSubmissionHandler>();
