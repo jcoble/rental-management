@@ -89,29 +89,11 @@ class TenantDetailScreen extends ConsumerStatefulWidget {
 
 class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
   late Tenant _tenant;
-  bool _portalBusy = false;
 
   @override
   void initState() {
     super.initState();
     _tenant = widget.tenant;
-    // The list endpoint omits portalAccess, so a tenant pushed from the list
-    // arrives without it; pull the full record to populate the portal card.
-    // (Deep-link/loader entries already carry it, so this is skipped for them.)
-    if (widget.tenant.portalAccess == null) {
-      Future.microtask(_loadFullTenant);
-    }
-  }
-
-  Future<void> _loadFullTenant() async {
-    try {
-      final full = await ref
-          .read(tenantsRepositoryProvider)
-          .getTenant(_tenant.id);
-      if (mounted) setState(() => _tenant = full);
-    } on ApiException {
-      // Non-fatal: the rest of the screen still works from the list-loaded copy.
-    }
   }
 
   Future<void> _refresh() async {
@@ -232,53 +214,6 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
-  /// Staff toggle: turn this tenant's portal sign-in on or off.
-  Future<void> _togglePortalAccess(bool enabled) async {
-    setState(() => _portalBusy = true);
-    try {
-      final newState = await ref
-          .read(tenantsRepositoryProvider)
-          .setPortalAccess(_tenant.id, enabled: enabled);
-      if (!mounted) return;
-      setState(() => _tenant = _tenant.copyWith(portalAccess: newState));
-      _toast(
-        newState == 'active'
-            ? 'Portal access turned on.'
-            : 'Portal access turned off.',
-      );
-    } on ApiException catch (e) {
-      _toast(e.message);
-    } finally {
-      if (mounted) setState(() => _portalBusy = false);
-    }
-  }
-
-  /// Staff action: email the tenant their portal invite (provisioning the login
-  /// if needed). Re-pulls the tenant afterward since a 'none' tenant becomes
-  /// 'active' once provisioned.
-  Future<void> _sendPortalInvite() async {
-    setState(() => _portalBusy = true);
-    try {
-      final repo = ref.read(tenantsRepositoryProvider);
-      final result = await repo.sendPortalInvite(_tenant.id);
-      final full = await repo.getTenant(_tenant.id);
-      if (!mounted) return;
-      setState(() => _tenant = full);
-      final to = (result.email != null && result.email!.isNotEmpty)
-          ? result.email!
-          : '${_tenant.firstName} ${_tenant.lastName}'.trim();
-      _toast(
-        result.alreadyExisted
-            ? 'Portal invite resent to $to.'
-            : 'Portal invite sent to $to.',
-      );
-    } on ApiException catch (e) {
-      _toast(e.message);
-    } finally {
-      if (mounted) setState(() => _portalBusy = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -326,16 +261,6 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
               colorScheme: colorScheme,
             ),
             const SizedBox(height: 16),
-
-            // ── Resident portal access ─────────────────────────────────────
-            _PortalAccessCard(
-              portalAccess: _tenant.portalAccess,
-              email: _tenant.email,
-              busy: _portalBusy,
-              onToggle: _portalBusy ? null : _togglePortalAccess,
-              onSendInvite: _portalBusy ? null : _sendPortalInvite,
-            ),
-            const SizedBox(height: 24),
 
             // ── Leases ─────────────────────────────────────────────────────
             Text(
@@ -508,133 +433,6 @@ class _KeyValue extends StatelessWidget {
         ),
       ],
     );
-  }
-}
-
-// ── Resident portal access card ───────────────────────────────────────────────
-
-/// Staff-facing card on the tenant detail screen mirroring the web tenant page:
-/// shows the tenant's portal-login state and lets staff send/resend the invite
-/// and flip access on/off. [portalAccess] is null while the single-GET is in
-/// flight (a tenant opened from the list arrives without it).
-class _PortalAccessCard extends StatelessWidget {
-  const _PortalAccessCard({
-    required this.portalAccess,
-    required this.email,
-    required this.busy,
-    required this.onToggle,
-    required this.onSendInvite,
-  });
-
-  final String? portalAccess;
-  final String? email;
-  final bool busy;
-  final ValueChanged<bool>? onToggle;
-  final VoidCallback? onSendInvite;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    final hasEmail = email != null && email!.isNotEmpty;
-    final loading = portalAccess == null;
-    final active = portalAccess == 'active';
-    final hasLogin = active || portalAccess == 'disabled';
-
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.badge_outlined, size: 20, color: cs.primary),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Resident portal',
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-                if (busy)
-                  const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            if (loading)
-              Text(
-                'Checking portal access…',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: cs.onSurfaceVariant,
-                ),
-              )
-            else ...[
-              Text(
-                _statusText(
-                  hasEmail: hasEmail,
-                  hasLogin: hasLogin,
-                  active: active,
-                ),
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: cs.onSurfaceVariant,
-                ),
-              ),
-              if (hasLogin)
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Portal access'),
-                  subtitle: Text(
-                    active
-                        ? 'They can sign in to the resident portal.'
-                        : 'Sign-in is turned off.',
-                  ),
-                  value: active,
-                  onChanged: onToggle,
-                ),
-              const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: OutlinedButton.icon(
-                  onPressed: hasEmail ? onSendInvite : null,
-                  icon: const Icon(Icons.send_outlined, size: 18),
-                  label: Text(active ? 'Resend invite' : 'Send portal invite'),
-                ),
-              ),
-              if (!hasEmail)
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: Text(
-                    'Add an email to this tenant to give them portal access.',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: cs.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _statusText({
-    required bool hasEmail,
-    required bool hasLogin,
-    required bool active,
-  }) {
-    if (!hasLogin) {
-      return hasEmail
-          ? 'This tenant doesn’t have portal access yet. Send them an invite to set it up.'
-          : 'This tenant doesn’t have portal access yet.';
-    }
-    return active ? 'Portal access is on.' : 'Portal access is off.';
   }
 }
 

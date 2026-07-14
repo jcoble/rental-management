@@ -497,30 +497,9 @@ public class TenantService : ITenantService
             return null;
         }
 
-        // Identity provisioning owns its own transaction and therefore begins only after the
-        // authorization-bound tenant insert commits.
-        await TryProvisionPortalAccessAsync(entity.Id, scope.PortfolioId, ct);
         var response = await GetAsync(scope.PortfolioId, entity.Id, ct) ?? TenantResponse.FromEntity(entity);
         await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, entity.Id, response, ct);
         return response;
-    }
-
-    /// <summary>
-    /// Best-effort: ensure a freshly created tenant has a portal login. A failure is logged and
-    /// swallowed so it can never fail the tenant creation that already succeeded.
-    /// </summary>
-    private async Task TryProvisionPortalAccessAsync(int tenantId, int portfolioId, CancellationToken ct)
-    {
-        try
-        {
-            await _portalProvisioning.EnsurePortalAccountForTenantAsync(tenantId, portfolioId, ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Failed to provision portal access for new tenant {TenantId} in portfolio {PortfolioId}; tenant creation still succeeds.",
-                tenantId, portfolioId);
-        }
     }
 
     public async Task<TenantResponse?> UpdateAsync(int portfolioId, int id, UpdateTenantRequest request, CancellationToken ct = default)

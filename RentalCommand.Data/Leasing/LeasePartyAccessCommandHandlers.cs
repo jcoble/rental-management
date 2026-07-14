@@ -1,4 +1,7 @@
+using System.Net;
+using System.Security.Cryptography;
 using System.Text.Json;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -574,6 +577,13 @@ public sealed class GrantTenantUserAccessHandler
     : IAtomicCommandHandler<GrantTenantUserAccessCommand, LeasePartyMutationResult>,
       IAtomicReplayAuthorizer<GrantTenantUserAccessCommand>
 {
+    private readonly IPasswordHasher<ApplicationUser> _passwordHasher;
+
+    public GrantTenantUserAccessHandler(IPasswordHasher<ApplicationUser> passwordHasher)
+    {
+        _passwordHasher = passwordHasher;
+    }
+
     public async Task<LeasePartyMutationResult> HandleAsync(
         GrantTenantUserAccessCommand command,
         IAtomicWriteAttempt attempt,
@@ -585,71 +595,120 @@ public sealed class GrantTenantUserAccessHandler
         var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
         var nowUtc = times.WallClockUtc;
         var currentDate = times.BusinessDate;
-        var targetContextId = await attempt.Persistence.Query<WorkspaceAccessContext>()
-            .Where(context => context.UserId == command.ApplicationUserId
-                && context.PortfolioId == command.PortfolioId
-                && context.Status == WorkspaceAccessContextStatus.Active
-                && context.SuspendedAtUtc == null
-                && context.RevokedAtUtc == null)
-            .Select(context => context.Id)
-            .SingleOrDefaultAsync(ct);
-        if (targetContextId <= 0)
-        {
-            return LeasePartyAccessCommandSupport.Error(
-                LeasePartyMutationOutcome.InvalidParty, command,
-                "The user has no active access context in this workspace.", command.PartyId);
-        }
-        await attempt.Locking.AcquireAsync(
-            AtomicLockResource.WorkspaceAccessContext, targetContextId, ct);
-
         var target = await LeasePartyAccessCommandSupport.AuthorizedRelationships(command, attempt.Persistence, nowUtc)
             .Select(relationship => new GrantAccessTarget(
                 relationship,
                 relationship.Parties.FirstOrDefault(party => party.Id == command.PartyId
                     && party.EffectiveFrom <= currentDate
                     && (party.EffectiveThrough == null || party.EffectiveThrough >= currentDate)),
-                attempt.Persistence.Query<WorkspaceAccessContext>().FirstOrDefault(context =>
-                    context.Id == targetContextId
-                    && context.UserId == command.ApplicationUserId
-                    && context.PortfolioId == command.PortfolioId
-                    && context.Status == WorkspaceAccessContextStatus.Active
-                    && context.SuspendedAtUtc == null
-                    && context.RevokedAtUtc == null),
-                attempt.Persistence.Query<TenantUserAccess>().Any(access =>
-                    access.PortfolioId == command.PortfolioId
-                    && access.AccessContext!.UserId == command.ApplicationUserId
-                    && access.LeaseManagementPartyId == command.PartyId
-                    && access.RevokedAtUtc == null)))
+                relationship.Parties.Where(party => party.Id == command.PartyId)
+                    .Select(party => party.Tenant!.Email).FirstOrDefault(),
+                relationship.Parties.Where(party => party.Id == command.PartyId)
+                    .Select(party => (party.Tenant!.FirstName + " " + party.Tenant.LastName).Trim())
+                    .FirstOrDefault()))
             .SingleOrDefaultAsync(ct)
             ?? throw LeasePartyAccessCommandSupport.Unauthorized();
 
-        if (target.Party is null || target.TargetContext is null
+        var email = target.Email?.Trim();
+        if (target.Party is null || string.IsNullOrWhiteSpace(email)
+            || !email.Contains('@', StringComparison.Ordinal)
             || string.IsNullOrWhiteSpace(command.Reason) || command.Reason.Length > 500)
         {
             return LeasePartyAccessCommandSupport.Error(
-                LeasePartyMutationOutcome.InvalidParty, command, "The existing user and active party do not match.", command.PartyId);
+                LeasePartyMutationOutcome.InvalidParty, command,
+                "The active household member must have a valid email before login access can be granted.", command.PartyId);
         }
-        if (target.HasActiveGrant)
+
+        var normalizedEmail = email.ToUpperInvariant();
+        var user = await attempt.Persistence.Query<ApplicationUser>()
+            .SingleOrDefaultAsync(candidate => candidate.NormalizedEmail == normalizedEmail, ct);
+        string? temporaryPassword = null;
+        if (user is null)
+        {
+            temporaryPassword = CreateTemporaryPassword();
+            user = new ApplicationUser
+            {
+                UserName = email,
+                NormalizedUserName = normalizedEmail,
+                Email = email,
+                NormalizedEmail = normalizedEmail,
+                EmailConfirmed = true,
+                DisplayName = string.IsNullOrWhiteSpace(target.DisplayName) ? email : target.DisplayName,
+                SecurityStamp = Guid.NewGuid().ToString("N"),
+                ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+                CreatedAt = nowUtc,
+            };
+            user.PasswordHash = _passwordHasher.HashPassword(user, temporaryPassword);
+            attempt.Persistence.Add(user);
+            await attempt.FlushBusinessAsync(ct);
+        }
+
+        var targetContextId = await attempt.Persistence.Query<WorkspaceAccessContext>()
+            .Where(context => context.UserId == user.Id && context.PortfolioId == command.PortfolioId)
+            .Select(context => (int?)context.Id)
+            .SingleOrDefaultAsync(ct);
+        WorkspaceAccessContext context;
+        if (targetContextId is > 0)
+        {
+            await attempt.Locking.AcquireAsync(
+                AtomicLockResource.WorkspaceAccessContext, targetContextId.Value, ct);
+            context = await attempt.Persistence.Query<WorkspaceAccessContext>()
+                .SingleAsync(candidate => candidate.Id == targetContextId.Value, ct);
+            if (context.Status != WorkspaceAccessContextStatus.Active
+                || context.SuspendedAtUtc is not null || context.RevokedAtUtc is not null)
+            {
+                return LeasePartyAccessCommandSupport.Error(
+                    LeasePartyMutationOutcome.InvalidParty, command,
+                    "The household member's existing workspace access is not active.", command.PartyId);
+            }
+        }
+        else
+        {
+            context = new WorkspaceAccessContext
+            {
+                User = user,
+                UserId = user.Id,
+                PortfolioId = command.PortfolioId,
+                Status = WorkspaceAccessContextStatus.Active,
+                LastAuthorizedExperience = WorkspaceExperience.Tenant,
+                CreatedAtUtc = nowUtc,
+                UpdatedAtUtc = nowUtc,
+            };
+            attempt.Persistence.Add(context);
+        }
+
+        var hasActiveGrant = await attempt.Persistence.Query<TenantUserAccess>()
+            .AnyAsync(access => access.PortfolioId == command.PortfolioId
+                && access.ApplicationUserId == user.Id
+                && access.LeaseManagementPartyId == command.PartyId
+                && access.RevokedAtUtc == null, ct);
+        if (hasActiveGrant)
         {
             return LeasePartyAccessCommandSupport.Error(
                 LeasePartyMutationOutcome.AlreadyActive, command, "This user already has active access through the party.", command.PartyId);
         }
 
         var access = LeasePartyAccessCommandSupport.NewAccess(
-            command.PortfolioId,
-            target.TargetContext,
-            target.Party,
+            command.PortfolioId, context, target.Party,
             nowUtc,
             command.ActorUserId,
             command.Reason);
         attempt.Persistence.Add(access);
-        target.TargetContext.AdvanceRevision(target.TargetContext.AccessRevision);
-        target.TargetContext.UpdatedAtUtc = nowUtc;
+        if (targetContextId is > 0)
+        {
+            context.AdvanceRevision(context.AccessRevision);
+        }
+        context.UpdatedAtUtc = nowUtc;
         LeasePartyAccessCommandSupport.Touch(target.Relationship, nowUtc);
         LeasePartyAccessCommandSupport.BindCreated(attempt, access, command, "Granted tenant portal access.");
         LeasePartyAccessCommandSupport.BindRelationshipUpdate(
             attempt, target.Relationship, command, "Tenant portal access granted.");
         await attempt.FlushBusinessAsync(ct);
+        if (temporaryPassword is not null)
+        {
+            attempt.StageOutbox(BuildPortalInvitation(
+                command, user, temporaryPassword, access.Id, nowUtc));
+        }
         LeasePartyAccessCommandSupport.StageOutbox(attempt, command, nowUtc, access.Id, "tenant-access-granted");
 
         return new LeasePartyMutationResult(
@@ -668,11 +727,37 @@ public sealed class GrantTenantUserAccessHandler
         CancellationToken ct) =>
         LeasePartyAccessCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
 
+    private static string CreateTemporaryPassword() =>
+        $"Rc{Convert.ToHexString(RandomNumberGenerator.GetBytes(8))}a1";
+
+    private static OutboxMessage BuildPortalInvitation(
+        GrantTenantUserAccessCommand command,
+        ApplicationUser user,
+        string temporaryPassword,
+        int tenantUserAccessId,
+        DateTime nowUtc)
+    {
+        var loginUrl = $"{command.WebBaseUrl.TrimEnd('/')}/login";
+        var greeting = string.IsNullOrWhiteSpace(user.DisplayName) ? user.Email! : user.DisplayName;
+        var subject = "Your Rental Command resident login";
+        var body = $"Hi {greeting},\n\nYour resident login is ready.\n\nEmail: {user.Email}\nTemporary password: {temporaryPassword}\nSign in: {loginUrl}\n\nChange your password after signing in.\n";
+        var htmlBody = $"<p>Hi {WebUtility.HtmlEncode(greeting)},</p><p>Your resident login is ready.</p><p><strong>Email:</strong> {WebUtility.HtmlEncode(user.Email)}<br><strong>Temporary password:</strong> {WebUtility.HtmlEncode(temporaryPassword)}</p><p><a href=\"{WebUtility.HtmlEncode(loginUrl)}\">Sign in to Rental Command</a></p><p>Change your password after signing in.</p>";
+        return new OutboxMessage
+        {
+            PortfolioId = command.PortfolioId,
+            MessageType = "email",
+            Payload = JsonSerializer.Serialize(new { to = user.Email, subject, body, htmlBody }),
+            IdempotencyKey = $"tenant-access:{tenantUserAccessId}:portal-invitation-v1",
+            CreatedAtUtc = nowUtc,
+            NextAttemptAtUtc = nowUtc,
+        };
+    }
+
     private sealed record GrantAccessTarget(
         LeaseManagement Relationship,
         LeaseManagementParty? Party,
-        WorkspaceAccessContext? TargetContext,
-        bool HasActiveGrant);
+        string? Email,
+        string? DisplayName);
 }
 
 public sealed class RevokeTenantUserAccessHandler
