@@ -365,9 +365,20 @@ public sealed class ProviderPaymentAtomicCommandTests : IAsyncLifetime
                 row.IdempotencyKey == OutboxIdempotency.Create(
                     "provider-receipt", succeededAttemptId.ToString())))
                 .Should().Be(1);
-            (await verify.AuditLogs.CountAsync(row =>
-                row.EntityType == nameof(TenantAccount) && row.EntityId == scenario.AccountId))
-                .Should().Be(2, "each canonical terminal attempt produces one audit event");
+            var succeededAuditKey = $"{currentSucceeded.Id}:{currentSucceeded.ClaimToken:N}";
+            var failedAuditKey = $"{currentFailed.Id}:{currentFailed.ClaimToken:N}";
+            (await verify.AtomicAuditLogs.CountAsync(row =>
+                row.CommandType == "payments.provider-inbox.reconcile"
+                && (row.CommandIdempotencyKey == succeededAuditKey
+                    || row.CommandIdempotencyKey == failedAuditKey)
+                && row.PortfolioId == scenario.PortfolioId
+                && row.EntityType == nameof(TenantAccount)
+                && row.EntityId == scenario.AccountId
+                && row.Operation == AuditLogOperation.Updated
+                && row.ActorLabel == "provider:worker:worker-b"
+                && (row.ChangeReason == "Claimed provider event evt_fenced_success reconciled"
+                    || row.ChangeReason == "Claimed provider event evt_fenced_failure reconciled")))
+                .Should().Be(2, "each canonical terminal attempt produces one atomic audit event");
         }
     }
 
