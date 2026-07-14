@@ -247,6 +247,15 @@
 	const canOpenSettings = $derived(
 		canAccessRoute('/settings', activeExperience, activeCapabilities)
 	);
+	const canOpenHeaderScan = $derived(
+		canAccessRoute('/scan', activeExperience, activeCapabilities)
+	);
+	const canOpenHeaderMessages = $derived(
+		canAccessRoute('/messages', activeExperience, activeCapabilities)
+	);
+	const canOpenHeaderAppointments = $derived(
+		canAccessRoute('/appointments', activeExperience, activeCapabilities)
+	);
 
 	const portalNavItems: NavItem[] = [
 		{ href: '/portal', label: 'Dashboard', icon: Home },
@@ -461,18 +470,9 @@
 	// takes a thunk), so it flips on once page.data.user is present.
 	const isStaffSession = $derived(activeExperience !== 'Tenant' && activeCapabilities.size > 0);
 	const showStaffHeader = $derived(!portalUser);
-	const canReadMessages = $derived(
-		[CAPABILITY.rentalsRead, CAPABILITY.leasingOnboardingManage, CAPABILITY.assignedWorkConverse].some(
-			(key) => activeCapabilities.has(key)
-		)
-	);
-	const canReadAppointments = $derived(
-		[CAPABILITY.workRead, CAPABILITY.leasingShowingsManage].some((key) => activeCapabilities.has(key))
-	);
-
 	const unreadMessagesQuery = createQuery(() => ({
 		queryKey: ['header-unread-messages'],
-		enabled: isStaffSession && !portalUser && canReadMessages,
+		enabled: isStaffSession && !portalUser && canOpenHeaderMessages,
 		queryFn: () => messagesApi.unreadCount(),
 		staleTime: 30_000,
 		refetchInterval: 60_000
@@ -481,7 +481,7 @@
 
 	const upcomingApptsQuery = createQuery(() => ({
 		queryKey: ['header-upcoming-appointments', getCurrentPortfolioId()],
-		enabled: isStaffSession && !portalUser && canReadAppointments,
+		enabled: isStaffSession && !portalUser && canOpenHeaderAppointments,
 		queryFn: () => appointmentsApi.scheduleSummary(),
 		staleTime: 60_000,
 		refetchInterval: 120_000
@@ -881,42 +881,48 @@
 			<div class="ml-auto flex items-center gap-1">
 				{#if showStaffHeader}
 					<!-- Scan / Edit -->
-					{#if activeCapabilities.has('maintenance.assigned-work.update') && !activeCapabilities.has('work.manage')}
-						<Button href="/scan" variant="ghost" class="m3-state-layer relative size-9 p-0 text-muted-foreground" aria-label="Scan / Edit" data-testid="header-scan">
-							<ScanLine class="h-4 w-4" />
-						</Button>
-					{:else}<ScanLauncher
-						triggerLabel=""
-						ariaLabel="Scan / Edit"
-						tooltip="Scan / Edit"
-						testid="header-scan"
-						triggerVariant="ghost"
-						triggerClass="m3-state-layer relative size-9 p-0 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-					/>{/if}
+					{#if canOpenHeaderScan}
+						{#if activeCapabilities.has('maintenance.assigned-work.update') && !activeCapabilities.has('work.manage')}
+							<Button href="/scan" variant="ghost" class="m3-state-layer relative size-9 p-0 text-muted-foreground" aria-label="Scan / Edit" data-testid="header-scan">
+								<ScanLine class="h-4 w-4" />
+							</Button>
+						{:else}<ScanLauncher
+							triggerLabel=""
+							ariaLabel="Scan / Edit"
+							tooltip="Scan / Edit"
+							testid="header-scan"
+							triggerVariant="ghost"
+							triggerClass="m3-state-layer relative size-9 p-0 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+						/>{/if}
+					{/if}
 
 					<!-- Messages -->
-					<a
-						href="/messages"
-						class="m3-state-layer relative flex items-center justify-center rounded-[var(--m3-shape-full)] p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-						aria-label="Messages{unreadMessages > 0 ? ` (${unreadMessages} unread)` : ''}"
-						data-m3-tooltip="Messages"
-						data-testid="header-messages"
-					>
-						<MessageSquare class="h-5 w-5" />
-						{@render countBadge(unreadMessages)}
-					</a>
+					{#if canOpenHeaderMessages}
+						<a
+							href="/messages"
+							class="m3-state-layer relative flex items-center justify-center rounded-[var(--m3-shape-full)] p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+							aria-label="Messages{unreadMessages > 0 ? ` (${unreadMessages} unread)` : ''}"
+							data-m3-tooltip="Messages"
+							data-testid="header-messages"
+						>
+							<MessageSquare class="h-5 w-5" />
+							{@render countBadge(unreadMessages)}
+						</a>
+					{/if}
 
 					<!-- Appointments -->
-					<a
-						href="/appointments"
-						class="m3-state-layer relative flex items-center justify-center rounded-[var(--m3-shape-full)] p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-						aria-label="Appointments{upcomingAppts > 0 ? ` (${upcomingAppts} upcoming)` : ''}"
-						data-m3-tooltip="Upcoming appointments"
-						data-testid="header-appointments"
-					>
-						<Calendar class="h-5 w-5" />
-						{@render countBadge(upcomingAppts)}
-					</a>
+					{#if canOpenHeaderAppointments}
+						<a
+							href="/appointments"
+							class="m3-state-layer relative flex items-center justify-center rounded-[var(--m3-shape-full)] p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+							aria-label="Appointments{upcomingAppts > 0 ? ` (${upcomingAppts} upcoming)` : ''}"
+							data-m3-tooltip="Upcoming appointments"
+							data-testid="header-appointments"
+						>
+							<Calendar class="h-5 w-5" />
+							{@render countBadge(upcomingAppts)}
+						</a>
+					{/if}
 				{/if}
 
 				<!-- Help & Docs -->

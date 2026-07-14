@@ -70,6 +70,13 @@ const notificationManagementCapability = 'notifications.manage';
 bool hasAnyMobileCapability(Set<String> capabilities, Iterable<String> keys) =>
     keys.any(capabilities.contains);
 
+bool canUseMobileCapabilityAction({
+  required WorkspaceExperience experience,
+  required Set<String> capabilities,
+  required String capability,
+  required Set<WorkspaceExperience> experiences,
+}) => experiences.contains(experience) && capabilities.contains(capability);
+
 bool canUseGlobalScan(Set<String> capabilities) =>
     hasAnyMobileCapability(capabilities, scanCapabilityKeys);
 

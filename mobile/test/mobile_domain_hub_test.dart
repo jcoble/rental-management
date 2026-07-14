@@ -197,6 +197,7 @@ void main() {
     );
 
     expect(find.text('Command centers'), findsOneWidget);
+    expect(find.text('Units'), findsNWidgets(2));
 
     await tester.tap(find.text('Open unit'));
     await tester.pumpAndSettle();
@@ -205,12 +206,14 @@ void main() {
     expect(find.text('Unit 2'), findsOneWidget);
     expect(find.text('123 Main St'), findsOneWidget);
     expect(find.byTooltip('Back'), findsOneWidget);
+    expect(find.text('Units'), findsNothing);
 
     await tester.tap(find.byTooltip('Back'));
     await tester.pumpAndSettle();
 
     expect(find.text('Command centers'), findsOneWidget);
     expect(find.text('Open unit'), findsOneWidget);
+    expect(find.text('Units'), findsNWidgets(2));
   });
 
   testWidgets('embedded root app bars are hidden and hub header collapses', (

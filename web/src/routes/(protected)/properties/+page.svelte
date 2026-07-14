@@ -25,6 +25,9 @@
 	import { Input } from '$lib/components/ui/input';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import { page } from '$app/state';
+	import type { WorkspaceExperience } from '$lib/types/user';
+	import { getAuthState } from '$lib/stores/auth.svelte';
+	import { CAPABILITY } from '$lib/auth/experience-policy';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import {
 		formatPropertyStatus,
@@ -39,6 +42,16 @@
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
+	const authState = getAuthState();
+	const currentAccess = $derived(page.data.access ?? authState.accessEnvelope ?? null);
+	const activeExperience = $derived(authState.activeExperience ?? currentAccess?.selectedContext.activeExperience ?? null);
+	const activeCapabilities = $derived<Set<string>>(new Set<string>(
+		currentAccess?.navigation.find((entry: { experience: WorkspaceExperience; capabilityKeys: string[] }) =>
+			entry.experience === activeExperience)?.capabilityKeys ?? []
+	));
+	const canManageRentals = $derived(
+		activeExperience === 'Management' && activeCapabilities.has(CAPABILITY.rentalsManage)
+	);
 	const PAGE_SIZE = 20;
 
 	// Second coach hop for the "add a unit" checklist step. That step lands here (the property LIST)
@@ -110,6 +123,7 @@
 	const ownersQuery = createQuery(() => ({
 		queryKey: ['owners', portfolioId],
 		queryFn: () => owners.list(portfolioId, { take: 200 }),
+		enabled: canManageRentals,
 	}));
 
 	const list = $derived(propertiesQuery.data?.items ?? []);
@@ -184,6 +198,7 @@
 	}));
 
 	function openCreate() {
+		if (!canManageRentals) return;
 		editingId = null;
 		form = createEmptyPropertyDraft({ typeFilter, statusFilter });
 		formErrors = {};
@@ -193,6 +208,7 @@
 	}
 
 	function openEdit(p: Property) {
+		if (!canManageRentals) return;
 		editingId = p.id;
 		form = {
 			name: p.name,
@@ -256,6 +272,7 @@
 	}
 
 	function submitProperty() {
+		if (!canManageRentals) return;
 		const result = parseForm(propertySchema, form);
 		if (result.errors) {
 			formErrors = result.errors;
@@ -342,6 +359,7 @@
 {/snippet}
 
 {#snippet actionsCellSnippet(p: Property)}
+	{#if canManageRentals}
 	<div class="flex items-center justify-end gap-1" onclick={(e) => e.stopPropagation()} role="none">
 		<button
 			type="button"
@@ -362,6 +380,7 @@
 			<Trash2 class="h-3.5 w-3.5" />
 		</button>
 	</div>
+	{/if}
 {/snippet}
 
 <svelte:head>
@@ -391,7 +410,7 @@
 		emptyDescription={emptyStateCopy.description}
 		emptyIcon={Building}
 		emptyActionLabel={emptyStateCopy.actionLabel}
-		emptyOnAction={openCreate}
+		emptyOnAction={canManageRentals ? openCreate : undefined}
 		emptyTone="primary"
 		onRowClick={openProperty}
 		getRowKey={(p) => p.id}
@@ -431,16 +450,18 @@
 					</Select.Content>
 				</Select.Root>
 			</div>
-			<Button data-testid="property-create-button" data-coach="add-property" class="gap-2 shrink-0" onclick={openCreate}>
-				<Plus class="h-4 w-4" />
-				New Property
-			</Button>
+			{#if canManageRentals}
+				<Button data-testid="property-create-button" data-coach="add-property" class="gap-2 shrink-0" onclick={openCreate}>
+					<Plus class="h-4 w-4" />
+					New Property
+				</Button>
+			{/if}
 		{/snippet}
 	</DataGrid>
 	</div>
 </div>
 
-<Dialog.Root open={showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
+<Dialog.Root open={canManageRentals && showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
 	<Dialog.Content class="max-h-[85vh] max-w-2xl overflow-y-auto [background:var(--m3c-surface-container-highest)]">
 		<Dialog.Header>
 			<Dialog.Title>{editingId == null ? 'New Property' : 'Edit Property'}</Dialog.Title>
@@ -510,7 +531,7 @@
 </Dialog.Root>
 
 <ConfirmDialog
-	open={deleteTarget !== null}
+	open={canManageRentals && deleteTarget !== null}
 	title="Delete property"
 	message={deleteState?.message ?? ''}
 	busy={deletePropertyMutation.isPending}

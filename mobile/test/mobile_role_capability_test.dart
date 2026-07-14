@@ -162,6 +162,36 @@ void main() {
     expect(canUseAssistant({'reports.read'}), isTrue);
   });
 
+  test('mutation actions require both capability and matching experience', () {
+    expect(
+      canUseMobileCapabilityAction(
+        experience: WorkspaceExperience.management,
+        capabilities: const {'rentals.manage'},
+        capability: 'rentals.manage',
+        experiences: const {WorkspaceExperience.management},
+      ),
+      isTrue,
+    );
+    expect(
+      canUseMobileCapabilityAction(
+        experience: WorkspaceExperience.leasing,
+        capabilities: const {'rentals.manage'},
+        capability: 'rentals.manage',
+        experiences: const {WorkspaceExperience.management},
+      ),
+      isFalse,
+    );
+    expect(
+      canUseMobileCapabilityAction(
+        experience: WorkspaceExperience.management,
+        capabilities: const {'rentals.read'},
+        capability: 'rentals.manage',
+        experiences: const {WorkspaceExperience.management},
+      ),
+      isFalse,
+    );
+  });
+
   test('owner experience cannot inherit management routes', () {
     for (final path in [
       '/rentals',

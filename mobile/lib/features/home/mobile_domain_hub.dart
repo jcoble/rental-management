@@ -377,11 +377,12 @@ class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        _HubSegmentBar(
-                          destinations: widget.destinations,
-                          selectedIndex: _selectedIndex,
-                          onSelected: _selectIndex,
-                        ),
+                        if (!showingDetailHeader)
+                          _HubSegmentBar(
+                            destinations: widget.destinations,
+                            selectedIndex: _selectedIndex,
+                            onSelected: _selectIndex,
+                          ),
                         Expanded(
                           child: PopScope<void>(
                             canPop: false,

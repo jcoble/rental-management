@@ -5,6 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/models.dart';
 import '../../core/api/api_exception.dart';
+import '../../core/auth/auth_controller.dart';
+import '../../core/auth/auth_models.dart';
+import '../../core/auth/mobile_access_policy.dart';
 import '../activity/activity_history_screen.dart';
 import '../money/money_format.dart' as money;
 import '../scan/scan_capture.dart';
@@ -550,26 +553,45 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
       propertyDispositionsProvider(property.id),
     );
     final propertyIsUnit = isPropertyUnitType(property.type);
+    final auth = ref.watch(authControllerProvider);
+    final canManageRentals =
+        auth is AuthStateAuthenticated &&
+        canUseMobileCapabilityAction(
+          experience: auth.activeExperience,
+          capabilities: auth.capabilities,
+          capability: 'rentals.manage',
+          experiences: const {WorkspaceExperience.management},
+        );
+    final canManageMoneyExpenses =
+        auth is AuthStateAuthenticated &&
+        canUseMobileCapabilityAction(
+          experience: auth.activeExperience,
+          capabilities: auth.capabilities,
+          capability: 'money.expenses.manage',
+          experiences: const {WorkspaceExperience.management},
+        );
 
     return Scaffold(
       appBar: AppBar(
         title: Text(property.name, overflow: TextOverflow.ellipsis),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.edit_outlined),
-            tooltip: 'Edit property',
-            onPressed: () => _showEditPropertySheet(context),
-          ),
+          if (canManageRentals)
+            IconButton(
+              icon: const Icon(Icons.edit_outlined),
+              tooltip: 'Edit property',
+              onPressed: () => _showEditPropertySheet(context),
+            ),
           IconButton(
             icon: const Icon(Icons.history_outlined),
             tooltip: 'View property activity',
             onPressed: _showActivityHistory,
           ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline),
-            tooltip: 'Delete property',
-            onPressed: () => _confirmDeleteProperty(context),
-          ),
+          if (canManageRentals)
+            IconButton(
+              icon: const Icon(Icons.delete_outline),
+              tooltip: 'Delete property',
+              onPressed: () => _confirmDeleteProperty(context),
+            ),
         ],
       ),
       body: RefreshIndicator(
@@ -596,11 +618,12 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                     ),
                   ),
                 ),
-                TextButton.icon(
-                  onPressed: () => _showAddUnitSheet(context),
-                  icon: const Icon(Icons.add, size: 18),
-                  label: Text(propertyIsUnit ? 'Add another' : 'Add unit'),
-                ),
+                if (canManageRentals)
+                  TextButton.icon(
+                    onPressed: () => _showAddUnitSheet(context),
+                    icon: const Icon(Icons.add, size: 18),
+                    label: Text(propertyIsUnit ? 'Add another' : 'Add unit'),
+                  ),
               ],
             ),
             const SizedBox(height: 8),
@@ -634,7 +657,9 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                           unit: u,
                           activeLease: _activeLeaseForUnit(leases, u.id),
                           propertyIsUnit: propertyIsUnit,
-                          onEdit: () => _showEditUnitSheet(context, u),
+                          onEdit: canManageRentals
+                              ? () => _showEditUnitSheet(context, u)
+                              : null,
                         ),
                       )
                       .toList(),
@@ -655,16 +680,18 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                     ),
                   ),
                 ),
-                IconButton(
-                  tooltip: 'Scan mortgage statement',
-                  icon: const Icon(Icons.document_scanner_outlined),
-                  onPressed: () => _startLoanScan(context),
-                ),
-                IconButton(
-                  tooltip: 'Add loan',
-                  icon: const Icon(Icons.add),
-                  onPressed: () => _showAddLoanSheet(context),
-                ),
+                if (canManageMoneyExpenses) ...[
+                  IconButton(
+                    tooltip: 'Scan mortgage statement',
+                    icon: const Icon(Icons.document_scanner_outlined),
+                    onPressed: () => _startLoanScan(context),
+                  ),
+                  IconButton(
+                    tooltip: 'Add loan',
+                    icon: const Icon(Icons.add),
+                    onPressed: () => _showAddLoanSheet(context),
+                  ),
+                ],
               ],
             ),
             const SizedBox(height: 8),
@@ -691,8 +718,12 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                     ...loans.map(
                       (loan) => _LoanTile(
                         loan: loan,
-                        onEdit: () => _showEditLoanSheet(context, loan),
-                        onDelete: () => _confirmDeleteLoan(context, loan),
+                        onEdit: canManageMoneyExpenses
+                            ? () => _showEditLoanSheet(context, loan)
+                            : null,
+                        onDelete: canManageMoneyExpenses
+                            ? () => _confirmDeleteLoan(context, loan)
+                            : null,
                       ),
                     ),
                     if (page.loadMoreError != null)
@@ -756,11 +787,12 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                     ),
                   ),
                 ),
-                IconButton(
-                  tooltip: 'Add capital asset',
-                  icon: const Icon(Icons.add),
-                  onPressed: () => _showAddCapitalAssetSheet(context),
-                ),
+                if (canManageMoneyExpenses)
+                  IconButton(
+                    tooltip: 'Add capital asset',
+                    icon: const Icon(Icons.add),
+                    onPressed: () => _showAddCapitalAssetSheet(context),
+                  ),
               ],
             ),
             const SizedBox(height: 8),
@@ -787,10 +819,12 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                     ...assets.map(
                       (asset) => _CapitalAssetTile(
                         asset: asset,
-                        onEdit: () =>
-                            _showEditCapitalAssetSheet(context, asset),
-                        onDelete: () =>
-                            _confirmDeleteCapitalAsset(context, asset),
+                        onEdit: canManageMoneyExpenses
+                            ? () => _showEditCapitalAssetSheet(context, asset)
+                            : null,
+                        onDelete: canManageMoneyExpenses
+                            ? () => _confirmDeleteCapitalAsset(context, asset)
+                            : null,
                       ),
                     ),
                     if (page.loadMoreError != null)
@@ -854,11 +888,12 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                     ),
                   ),
                 ),
-                IconButton(
-                  tooltip: 'Record property sale',
-                  icon: const Icon(Icons.add),
-                  onPressed: () => _showAddDispositionSheet(context),
-                ),
+                if (canManageRentals)
+                  IconButton(
+                    tooltip: 'Record property sale',
+                    icon: const Icon(Icons.add),
+                    onPressed: () => _showAddDispositionSheet(context),
+                  ),
               ],
             ),
             const SizedBox(height: 8),
@@ -885,10 +920,18 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                     ...dispositions.map(
                       (disposition) => _DispositionTile(
                         disposition: disposition,
-                        onEdit: () =>
-                            _showEditDispositionSheet(context, disposition),
-                        onDelete: () =>
-                            _confirmDeleteDisposition(context, disposition),
+                        onEdit: canManageRentals
+                            ? () => _showEditDispositionSheet(
+                                context,
+                                disposition,
+                              )
+                            : null,
+                        onDelete: canManageRentals
+                            ? () => _confirmDeleteDisposition(
+                                context,
+                                disposition,
+                              )
+                            : null,
                       ),
                     ),
                     if (page.loadMoreError != null)
@@ -1125,7 +1168,7 @@ class _UnitTile extends StatelessWidget {
 
   final Unit unit;
   final bool propertyIsUnit;
-  final VoidCallback onEdit;
+  final VoidCallback? onEdit;
 
   /// The unit's active lease, when occupied — enables drill-through to it.
   final LeaseManagementSummary? activeLease;
@@ -1192,11 +1235,12 @@ class _UnitTile extends StatelessWidget {
                 ),
               ),
             ),
-            IconButton(
-              icon: const Icon(Icons.edit_outlined, size: 18),
-              onPressed: onEdit,
-              tooltip: 'Edit unit',
-            ),
+            if (onEdit != null)
+              IconButton(
+                icon: const Icon(Icons.edit_outlined, size: 18),
+                onPressed: onEdit,
+                tooltip: 'Edit unit',
+              ),
           ],
         ),
       ),
@@ -1278,8 +1322,8 @@ class _CapitalAssetTile extends StatelessWidget {
   });
 
   final CapitalAsset asset;
-  final VoidCallback onEdit;
-  final VoidCallback onDelete;
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -1324,21 +1368,25 @@ class _CapitalAssetTile extends StatelessWidget {
                   color: colorScheme.onSurfaceVariant,
                 ),
               ),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.edit_outlined, size: 18),
-                    onPressed: onEdit,
-                    tooltip: 'Edit capital asset',
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.delete_outline, size: 18),
-                    onPressed: onDelete,
-                    tooltip: 'Delete capital asset',
-                  ),
-                ],
-              ),
+              trailing: onEdit == null && onDelete == null
+                  ? null
+                  : Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (onEdit != null)
+                          IconButton(
+                            icon: const Icon(Icons.edit_outlined, size: 18),
+                            onPressed: onEdit,
+                            tooltip: 'Edit capital asset',
+                          ),
+                        if (onDelete != null)
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline, size: 18),
+                            onPressed: onDelete,
+                            tooltip: 'Delete capital asset',
+                          ),
+                      ],
+                    ),
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
@@ -1388,8 +1436,8 @@ class _DispositionTile extends StatelessWidget {
   });
 
   final PropertyDisposition disposition;
-  final VoidCallback onEdit;
-  final VoidCallback onDelete;
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -1434,21 +1482,25 @@ class _DispositionTile extends StatelessWidget {
                   color: colorScheme.onSurfaceVariant,
                 ),
               ),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.edit_outlined, size: 18),
-                    onPressed: onEdit,
-                    tooltip: 'Edit property sale',
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.delete_outline, size: 18),
-                    onPressed: onDelete,
-                    tooltip: 'Delete property sale',
-                  ),
-                ],
-              ),
+              trailing: onEdit == null && onDelete == null
+                  ? null
+                  : Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (onEdit != null)
+                          IconButton(
+                            icon: const Icon(Icons.edit_outlined, size: 18),
+                            onPressed: onEdit,
+                            tooltip: 'Edit property sale',
+                          ),
+                        if (onDelete != null)
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline, size: 18),
+                            onPressed: onDelete,
+                            tooltip: 'Delete property sale',
+                          ),
+                      ],
+                    ),
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
@@ -1519,8 +1571,8 @@ class _LoanTile extends ConsumerStatefulWidget {
   });
 
   final PropertyLoan loan;
-  final VoidCallback onEdit;
-  final VoidCallback onDelete;
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
 
   @override
   ConsumerState<_LoanTile> createState() => _LoanTileState();
@@ -1584,16 +1636,18 @@ class _LoanTileState extends ConsumerState<_LoanTile> {
                       ? 'Hide amortization schedule'
                       : 'View amortization schedule',
                 ),
-                IconButton(
-                  icon: const Icon(Icons.edit_outlined, size: 18),
-                  onPressed: widget.onEdit,
-                  tooltip: 'Edit loan',
-                ),
-                IconButton(
-                  icon: const Icon(Icons.delete_outline, size: 18),
-                  onPressed: widget.onDelete,
-                  tooltip: 'Delete loan',
-                ),
+                if (widget.onEdit != null)
+                  IconButton(
+                    icon: const Icon(Icons.edit_outlined, size: 18),
+                    onPressed: widget.onEdit,
+                    tooltip: 'Edit loan',
+                  ),
+                if (widget.onDelete != null)
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline, size: 18),
+                    onPressed: widget.onDelete,
+                    tooltip: 'Delete loan',
+                  ),
               ],
             ),
           ),

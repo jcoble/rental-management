@@ -15,7 +15,7 @@
 	import { Plus, Pencil, Trash2, AlertTriangle, ChevronDown, ChevronRight, ScanLine } from '@lucide/svelte';
 	import { scanHref } from '$lib/scan/scan-context';
 
-	let { propertyId }: { propertyId: number } = $props();
+	let { propertyId, canManage = false }: { propertyId: number; canManage?: boolean } = $props();
 
 	const queryClient = useQueryClient();
 	const PAGE_SIZE = 10;
@@ -104,6 +104,7 @@
 	] as const;
 
 	function openAdd() {
+		if (!canManage) return;
 		editingLoanId = null;
 		form = { ...emptyLoan };
 		formErrors = {};
@@ -113,6 +114,7 @@
 	}
 
 	function openEdit(l: Loan) {
+		if (!canManage) return;
 		editingLoanId = l.id;
 		form = {
 			lender: l.lender,
@@ -270,12 +272,14 @@
 			{#if expandedLoanId === loan.id}<ChevronDown class="h-4 w-4" />{:else}<ChevronRight class="h-4 w-4" />{/if}
 			<span class="hidden sm:inline">Schedule</span>
 		</Button>
-		<Button variant="ghost" size="sm" class="h-7 w-7 p-0" onclick={(e) => { e.stopPropagation(); openEdit(loan); }} aria-label="Edit loan">
-			<Pencil class="h-4 w-4" />
-		</Button>
-		<Button variant="ghost" size="sm" class="h-7 w-7 p-0 text-destructive" onclick={(e) => { e.stopPropagation(); deleteTarget = loan; }} aria-label="Delete loan">
-			<Trash2 class="h-4 w-4" />
-		</Button>
+		{#if canManage}
+			<Button variant="ghost" size="sm" class="h-7 w-7 p-0" onclick={(e) => { e.stopPropagation(); openEdit(loan); }} aria-label="Edit loan">
+				<Pencil class="h-4 w-4" />
+			</Button>
+			<Button variant="ghost" size="sm" class="h-7 w-7 p-0 text-destructive" onclick={(e) => { e.stopPropagation(); deleteTarget = loan; }} aria-label="Delete loan">
+				<Trash2 class="h-4 w-4" />
+			</Button>
+		{/if}
 	</div>
 {/snippet}
 
@@ -306,19 +310,21 @@
 				align="end"
 				testid="property-loans-date-range"
 			/>
-			<Button
-				variant="outline"
-				class="gap-2 shrink-0"
-				href={scanHref({ type: 'Loan', propertyId, returnTo: `/properties/${propertyId}` })}
-				data-testid="loan-scan-button"
-			>
-				<ScanLine class="h-4 w-4" />
-				Scan / import
-			</Button>
-			<Button class="gap-2 shrink-0" onclick={openAdd} data-testid="loan-add-button">
-				<Plus class="h-4 w-4" />
-				Add Loan
-			</Button>
+			{#if canManage}
+				<Button
+					variant="outline"
+					class="gap-2 shrink-0"
+					href={scanHref({ type: 'Loan', propertyId, returnTo: `/properties/${propertyId}` })}
+					data-testid="loan-scan-button"
+				>
+					<ScanLine class="h-4 w-4" />
+					Scan / import
+				</Button>
+				<Button class="gap-2 shrink-0" onclick={openAdd} data-testid="loan-add-button">
+					<Plus class="h-4 w-4" />
+					Add Loan
+				</Button>
+			{/if}
 		{/snippet}
 	</DataGrid>
 
@@ -372,7 +378,7 @@
 </div>
 
 <!-- Loan add/edit dialog -->
-<Dialog.Root open={showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
+<Dialog.Root open={canManage && showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
 	<Dialog.Content class="max-h-[85vh] max-w-2xl overflow-y-auto">
 		<Dialog.Header>
 			<Dialog.Title>{editingLoanId == null ? 'Add Loan' : 'Edit Loan'}</Dialog.Title>
@@ -436,7 +442,7 @@
 </Dialog.Root>
 
 <ConfirmDialog
-	open={deleteTarget !== null}
+	open={canManage && deleteTarget !== null}
 	title="Remove loan"
 	message={deleteTarget ? `Remove the loan from "${deleteTarget.lender}"? This removes its amortization history.` : ''}
 	busy={deleteMut.isPending}

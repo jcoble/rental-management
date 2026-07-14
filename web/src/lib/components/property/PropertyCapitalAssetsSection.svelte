@@ -19,7 +19,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
 
-	let { propertyId }: { propertyId: number } = $props();
+	let { propertyId, canManage = false }: { propertyId: number; canManage?: boolean } = $props();
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -91,6 +91,7 @@
 	let deleteTarget = $state<CapitalAsset | null>(null);
 
 	function openAdd() {
+		if (!canManage) return;
 		editingId = null;
 		form = { ...emptyForm };
 		formErrors = {};
@@ -98,6 +99,7 @@
 	}
 
 	function openEdit(asset: CapitalAsset) {
+		if (!canManage) return;
 		editingId = asset.id;
 		form = {
 			description: asset.description,
@@ -187,6 +189,7 @@
 </script>
 
 {#snippet actionsCell(asset: CapitalAsset)}
+	{#if canManage}
 	<div class="flex items-center justify-end gap-1">
 		<Button variant="ghost" size="sm" class="h-7 w-7 p-0" onclick={(e) => { e.stopPropagation(); openEdit(asset); }} aria-label="Edit capital asset">
 			<Pencil class="h-4 w-4" />
@@ -195,6 +198,7 @@
 			<Trash2 class="h-4 w-4" />
 		</Button>
 	</div>
+	{/if}
 {/snippet}
 
 <div class="mb-6" data-testid="property-detail-capital-assets">
@@ -205,7 +209,7 @@
 		loading={query.isLoading || query.isFetching}
 		emptyMessage="No capital assets yet."
 		getRowKey={(asset) => asset.id}
-		onRowClick={(asset) => openEdit(asset)}
+		onRowClick={canManage ? (asset) => openEdit(asset) : undefined}
 		pageSize={PAGE_SIZE}
 		page={assetPage}
 		totalCount={totalCount}
@@ -225,15 +229,17 @@
 				align="end"
 				testid="property-capital-assets-date-range"
 			/>
+			{#if canManage}
 			<Button class="gap-2 shrink-0" onclick={openAdd} data-testid="capital-asset-add-button">
 				<Plus class="h-4 w-4" />
 				Add Capital Asset
 			</Button>
+			{/if}
 		{/snippet}
 	</DataGrid>
 </div>
 
-<Dialog.Root open={showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
+<Dialog.Root open={canManage && showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
 	<Dialog.Content class="max-w-md">
 		<Dialog.Header>
 			<Dialog.Title>{editingId == null ? 'Add Capital Asset' : 'Edit Capital Asset'}</Dialog.Title>
@@ -261,7 +267,7 @@
 </Dialog.Root>
 
 <ConfirmDialog
-	open={deleteTarget !== null}
+	open={canManage && deleteTarget !== null}
 	title="Remove capital asset"
 	message={deleteTarget ? `Remove "${deleteTarget.description}"?` : ''}
 	busy={deleteMut.isPending}
