@@ -132,6 +132,26 @@ internal static class AccessEnvelopeViewSql
               WHERE ap."MembershipRoleAssignmentId" = a."Id" AND ap."PortfolioId" = a."PortfolioId"
             ) props ON TRUE
             GROUP BY ec."Id"
+        ), owner_experience_access AS (
+            SELECT DISTINCT ec."Id" AS "AccessContextId"
+            FROM effective_contexts ec
+            JOIN "OwnerUserAccesses" oa
+              ON oa."AccessContextId" = ec."Id" AND oa."ApplicationUserId" = ec."UserId"
+             AND oa."PortfolioId" = ec."PortfolioId" AND oa."RevokedAtUtc" IS NULL
+             AND oa."EffectiveFromUtc" <= CURRENT_TIMESTAMP
+             AND (oa."EffectiveToUtc" IS NULL OR oa."EffectiveToUtc" > CURRENT_TIMESTAMP)
+            JOIN "OwnerEntities" owner_entity
+              ON owner_entity."Id" = oa."OwnerEntityId"
+             AND owner_entity."PortfolioId" = oa."PortfolioId"
+             AND owner_entity."DeletedAt" IS NULL
+            WHERE NOT (owner_entity."IsPrimary" AND EXISTS (
+              SELECT 1
+              FROM effective_assignments administrator_assignment
+              JOIN "RoleProfiles" administrator_role
+                ON administrator_role."Id" = administrator_assignment."RoleProfileId"
+              WHERE administrator_assignment."WorkspaceMembershipId" = ec."MembershipId"
+                AND administrator_assignment."PortfolioId" = ec."PortfolioId"
+                AND administrator_role."Key" = 'workspace-administrator'))
         ), context_experiences AS (
             SELECT ec."Id" AS "AccessContextId", a."DefaultExperience" AS "Experience"
             FROM effective_contexts ec
@@ -141,11 +161,8 @@ internal static class AccessEnvelopeViewSql
             SELECT ec."Id", 'Owner'
             FROM effective_contexts ec
             WHERE EXISTS (
-              SELECT 1 FROM "OwnerUserAccesses" oa
-              WHERE oa."AccessContextId" = ec."Id" AND oa."ApplicationUserId" = ec."UserId"
-                AND oa."PortfolioId" = ec."PortfolioId" AND oa."RevokedAtUtc" IS NULL
-                AND oa."EffectiveFromUtc" <= CURRENT_TIMESTAMP
-                AND (oa."EffectiveToUtc" IS NULL OR oa."EffectiveToUtc" > CURRENT_TIMESTAMP))
+              SELECT 1 FROM owner_experience_access owner_access
+              WHERE owner_access."AccessContextId" = ec."Id")
             UNION
             SELECT ec."Id", 'Tenant'
             FROM effective_contexts ec

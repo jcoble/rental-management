@@ -30,6 +30,7 @@ void main() {
     'leasing.onboarding.manage',
     'leasing.terms.read',
     'leasing.deposits.read',
+    'notifications.tenant-notices.manage',
   };
 
   test(
@@ -91,12 +92,24 @@ void main() {
       isTrue,
     );
     expect(
+      _visibleIds(workHubDestinations, leasingCapabilities),
+      contains(MobileDestinationId.notices),
+    );
+    expect(
       canOpenMobilePath(
         experience: WorkspaceExperience.leasing,
         capabilities: leasingCapabilities,
         path: '/money',
       ),
       isFalse,
+    );
+    expect(
+      canOpenMobilePath(
+        experience: WorkspaceExperience.leasing,
+        capabilities: leasingCapabilities,
+        path: '/notifications',
+      ),
+      isTrue,
     );
     expect(
       canOpenMobilePath(

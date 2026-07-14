@@ -24,7 +24,8 @@ export const CAPABILITY = {
 	billingManage: 'billing.manage',
 	integrationsManage: 'integrations.manage',
 	bankConnectionsManage: 'bank-connections.manage',
-	notificationsManage: 'notifications.manage'
+	notificationsManage: 'notifications.manage',
+	tenantNoticesManage: 'notifications.tenant-notices.manage'
 } as const;
 
 export interface RouteAccessRule {
@@ -136,14 +137,13 @@ export const ROUTE_ACCESS_RULES: readonly RouteAccessRule[] = [
 	},
 	{
 		prefix: '/notices',
-		anyCapabilities: [CAPABILITY.rentalsManage, CAPABILITY.leasingOnboardingManage]
+		anyCapabilities: [CAPABILITY.tenantNoticesManage]
 	},
 	{
 		prefix: '/scan',
 		anyCapabilities: [
 			CAPABILITY.rentalsManage,
-			CAPABILITY.leasingAgreementsPrepare,
-			CAPABILITY.assignedWorkUpdate
+			CAPABILITY.leasingAgreementsPrepare
 		]
 	}
 ];

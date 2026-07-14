@@ -59,6 +59,9 @@ public sealed class LeaseLifecycleProjectionContractTests
         AccessEnvelopeViewSql.Definition.Should().Contain("portfolio.\"DeletedAt\" IS NULL");
         AccessEnvelopeViewSql.Definition.Should().NotContain("rc_business_date(c.\"PortfolioId\")");
         AccessEnvelopeViewSql.Definition.Should().NotContain("rc_business_date(ec.\"PortfolioId\")");
+        AccessEnvelopeViewSql.Definition.Should().Contain("owner_experience_access AS");
+        AccessEnvelopeViewSql.Definition.Should().Contain("owner_entity.\"IsPrimary\"");
+        AccessEnvelopeViewSql.Definition.Should().Contain("administrator_role.\"Key\" = 'workspace-administrator'");
     }
 
     [Fact]
