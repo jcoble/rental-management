@@ -158,7 +158,7 @@ public sealed class GoogleAuthService : IGoogleAuthService
                 string.IsNullOrWhiteSpace(displayName) ? email : displayName,
                 password: null,
                 emailConfirmed: true,
-                ct);
+                ct: ct);
             if (!bootstrap.Succeeded || bootstrap.User is null)
             {
                 _logger.LogWarning(
