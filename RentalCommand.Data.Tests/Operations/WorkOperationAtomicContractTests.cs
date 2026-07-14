@@ -12,6 +12,9 @@ public sealed class WorkOperationAtomicContractTests
     [InlineData(typeof(UpdateWorkOrderHandler), typeof(IAtomicReplayAuthorizer<UpdateWorkOrderCommand>))]
     [InlineData(typeof(DeleteWorkOrderHandler), typeof(IAtomicReplayAuthorizer<DeleteWorkOrderCommand>))]
     [InlineData(typeof(CreateTenantWorkOrderHandler), typeof(IAtomicReplayAuthorizer<CreateTenantWorkOrderCommand>))]
+    [InlineData(typeof(CreateAppointmentHandler), typeof(IAtomicReplayAuthorizer<CreateAppointmentCommand>))]
+    [InlineData(typeof(UpdateAppointmentHandler), typeof(IAtomicReplayAuthorizer<UpdateAppointmentCommand>))]
+    [InlineData(typeof(DeleteAppointmentHandler), typeof(IAtomicReplayAuthorizer<DeleteAppointmentCommand>))]
     public void Every_live_work_order_handler_reauthorizes_receipt_replay(
         Type handlerType, Type replayContract)
     {

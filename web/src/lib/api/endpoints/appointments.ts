@@ -1,5 +1,6 @@
 import type { Appointment } from '$lib/types';
 import { api } from '../client';
+import { idempotentMutation } from '../idempotency';
 import { buildListQuery, type ListParams } from '../list-params';
 
 export interface AppointmentListParams extends ListParams {
@@ -38,7 +39,21 @@ export const appointments = {
 	scheduleSummary: () =>
 		api.get<AppointmentScheduleSummary>('/appointments/schedule-summary'),
 	get: (id: number) => api.get<Appointment>(`/appointments/${id}`),
-	create: (data: Record<string, unknown>) => api.post<Appointment>('/appointments', data),
-	update: (id: number, data: Record<string, unknown>) => api.patch<Appointment>(`/appointments/${id}`, data),
-	delete: (id: number) => api.delete(`/appointments/${id}`),
+	create: (data: Record<string, unknown>) =>
+		idempotentMutation(`appointment:create:${JSON.stringify(data)}`, (key) =>
+			api.post<Appointment>('/appointments', data, { headers: { 'Idempotency-Key': key } })
+		),
+	update: (id: number, data: Record<string, unknown>) =>
+		idempotentMutation(`appointment:update:${id}:${JSON.stringify(data)}`, (key) =>
+			api.patch<Appointment>(`/appointments/${id}`, data, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
+	delete: (id: number, propertyId?: number) =>
+		idempotentMutation(`appointment:delete:${id}:${propertyId ?? 'none'}`, (key) =>
+			api.delete(
+				`/appointments/${id}${propertyId == null ? '' : `?expectedPropertyId=${propertyId}`}`,
+				{ headers: { 'Idempotency-Key': key } }
+			)
+		),
 };

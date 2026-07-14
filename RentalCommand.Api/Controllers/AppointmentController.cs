@@ -67,9 +67,14 @@ public class AppointmentController : ManagementControllerBase
     [HttpPost]
     [ProducesResponseType(typeof(AppointmentResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<AppointmentResponse>> Create([FromBody] CreateAppointmentRequest request, CancellationToken ct)
+    public async Task<ActionResult<AppointmentResponse>> Create(
+        [FromBody] CreateAppointmentRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var created = await _service.CreateAuthorizedAsync(GetWorkspaceReadScope(), request, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var created = await _service.CreateAuthorizedAsync(GetWorkspaceReadScope(), request, operationKey, ct);
         return created == null
             ? NotFound(new { error = "Referenced property, unit, lease relationship, application, or tenant not found in this portfolio" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
@@ -78,18 +83,29 @@ public class AppointmentController : ManagementControllerBase
     [HttpPatch("{id:int}")]
     [ProducesResponseType(typeof(AppointmentResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<AppointmentResponse>> Update(int id, [FromBody] UpdateAppointmentRequest request, CancellationToken ct)
+    public async Task<ActionResult<AppointmentResponse>> Update(
+        int id, [FromBody] UpdateAppointmentRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var updated = await _service.UpdateAuthorizedAsync(GetWorkspaceReadScope(), id, request, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var updated = await _service.UpdateAuthorizedAsync(
+            GetWorkspaceReadScope(), id, request, operationKey, ct);
         return updated == null ? NotFound(new { error = "Appointment not found" }) : Ok(updated);
     }
 
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        int id, [FromQuery] int? expectedPropertyId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
-        var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var deleted = await _service.DeleteAuthorizedAsync(
+            GetWorkspaceReadScope(), id, expectedPropertyId, operationKey, ct);
         return deleted ? NoContent() : NotFound(new { error = "Appointment not found" });
     }
 }

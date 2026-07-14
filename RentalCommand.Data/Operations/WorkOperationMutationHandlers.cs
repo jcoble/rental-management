@@ -396,7 +396,7 @@ internal static class StaffOperationAuthorization
                           selected.PropertyId == property.Id && selected.PortfolioId == portfolioId))))));
     }
 
-    private static IQueryable<MembershipRoleAssignment> ActiveAssignments(
+    internal static IQueryable<MembershipRoleAssignment> ActiveAssignments(
         int portfolioId, StaffOperationActor actor, string capability,
         IAtomicPersistenceSession persistence, DateTime now)
     {
@@ -432,6 +432,20 @@ internal static class StaffOperationAuthorization
         var properties = AuthorizedProperties(portfolioId, actor, capability, persistence, now);
         var query = persistence.Query<WorkOrder>().Where(item =>
             item.PortfolioId == portfolioId && properties.Any(property => property.Id == item.PropertyId));
+        return tracking ? query : query.AsNoTracking();
+    }
+
+    internal static IQueryable<Appointment> AuthorizedAppointments(
+        int portfolioId, StaffOperationActor actor, string capability,
+        IAtomicPersistenceSession persistence, DateTime now, bool tracking)
+    {
+        var properties = AuthorizedProperties(portfolioId, actor, capability, persistence, now);
+        var allProperties = ActiveAssignments(portfolioId, actor, capability, persistence, now)
+            .Where(assignment => assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties);
+        var query = persistence.Query<Appointment>().Where(item =>
+            item.PortfolioId == portfolioId &&
+            ((item.PropertyId == null && allProperties.Any()) ||
+             (item.PropertyId != null && properties.Any(property => property.Id == item.PropertyId))));
         return tracking ? query : query.AsNoTracking();
     }
 
