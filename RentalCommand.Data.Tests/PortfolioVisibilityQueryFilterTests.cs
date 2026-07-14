@@ -86,16 +86,28 @@ public sealed class PortfolioVisibilityQueryFilterTests
 
         typeof(IPortfolioScoped).IsAssignableFrom(typeof(DocumentTemplateField)).Should().BeTrue();
         var entity = db.Model.FindEntityType(typeof(DocumentTemplateField))!;
+        var expectedForeignKey = new[]
+        {
+            nameof(DocumentTemplateField.DocumentTemplateId),
+            nameof(DocumentTemplateField.PortfolioId),
+        };
+        var expectedPrincipalKey = new[]
+        {
+            nameof(DocumentTemplate.Id),
+            nameof(DocumentTemplate.PortfolioId),
+        };
+        var expectedIndex = new[]
+        {
+            nameof(DocumentTemplateField.PortfolioId),
+            nameof(DocumentTemplateField.DocumentTemplateId),
+            nameof(DocumentTemplateField.FieldKey),
+        };
         entity.FindProperty(nameof(DocumentTemplateField.PortfolioId))!.IsNullable.Should().BeFalse();
         entity.GetForeignKeys().Should().Contain(foreignKey =>
-            foreignKey.Properties.Select(property => property.Name).SequenceEqual(
-                [nameof(DocumentTemplateField.DocumentTemplateId), nameof(DocumentTemplateField.PortfolioId)]) &&
-            foreignKey.PrincipalKey.Properties.Select(property => property.Name).SequenceEqual(
-                [nameof(DocumentTemplate.Id), nameof(DocumentTemplate.PortfolioId)]));
+            foreignKey.Properties.Select(property => property.Name).SequenceEqual(expectedForeignKey) &&
+            foreignKey.PrincipalKey.Properties.Select(property => property.Name).SequenceEqual(expectedPrincipalKey));
         entity.GetIndexes().Should().Contain(index =>
-            index.Properties.Select(property => property.Name).SequenceEqual(
-                [nameof(DocumentTemplateField.PortfolioId), nameof(DocumentTemplateField.DocumentTemplateId),
-                    nameof(DocumentTemplateField.FieldKey)]));
+            index.Properties.Select(property => property.Name).SequenceEqual(expectedIndex));
         FoundationBaselinePostgreSql.DirectPortfolioTables.Should().Contain("DocumentTemplateFields");
         FoundationBaselinePostgreSql.ChildPortfolioTables
             .Select(policy => policy.Table).Should().NotContain("DocumentTemplateFields");

@@ -371,7 +371,7 @@ public class VendorDispatchServiceTests : IDisposable
         notifications.Should().OnlyContain(notification =>
             notification.RelatedEntityId == workOrder.Id);
         notifications.Should().NotContain(notification =>
-            notification.UserId is 101 or 102,
+            notification.UserId == 101 || notification.UserId == 102,
             "out-of-scope and capability-missing members are not recipients");
     }
 
