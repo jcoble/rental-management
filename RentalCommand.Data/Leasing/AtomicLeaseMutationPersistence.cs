@@ -1162,6 +1162,7 @@ internal sealed partial class AtomicLeaseMutationPersistence : IAtomicLeaseMutat
             UPDATE "LeaseAgreements" AS agreement
             SET "DraftCanceledAtUtc" = @changedAt,
                 "DraftCancellationReason" = @draftReason,
+                "DraftCanceledByUserId" = @actorUserId,
                 "UpdatedAtUtc" = @changedAt
             FROM decision
             WHERE decision.outcome = @canceled

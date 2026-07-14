@@ -181,6 +181,7 @@ internal static class LeaseLegalArtifactModelConfiguration
             entity.Property(e => e.VersionNumber).HasDefaultValue(1);
             entity.Property(e => e.AgreementNumber).IsRequired().HasMaxLength(100);
             entity.Property(e => e.ChangeType).HasConversion<string>().HasMaxLength(30);
+            entity.Property(e => e.CorrectionReason).HasMaxLength(1000);
             entity.Property(e => e.TermType).HasConversion<string>().HasMaxLength(20);
             entity.Property(e => e.TermStartOn).HasColumnType("date");
             entity.Property(e => e.TermEndOn).HasColumnType("date");
@@ -199,6 +200,7 @@ internal static class LeaseLegalArtifactModelConfiguration
             entity.Property(e => e.DraftRevision).HasDefaultValue(1).IsConcurrencyToken();
 
             entity.HasIndex(e => e.PublicId).IsUnique();
+            entity.HasIndex(e => e.DraftCanceledByUserId);
             entity.HasIndex(e => new { e.LeaseManagementId, e.VersionNumber }).IsUnique();
             entity.HasIndex(e => new { e.PortfolioId, e.AgreementNumber }).IsUnique();
             entity.HasIndex(e => new { e.PortfolioId, e.LeaseManagementId, e.VersionNumber })
@@ -219,6 +221,11 @@ internal static class LeaseLegalArtifactModelConfiguration
                 table.HasCheckConstraint(
                     "CK_LeaseAgreement_ChangeType",
                     "\"ChangeType\" IN ('Initial', 'Transfer', 'Correction', 'Renewal', 'MonthToMonth', 'Restatement')");
+                table.HasCheckConstraint(
+                    "CK_LeaseAgreement_CorrectionReason",
+                    "(\"ChangeType\" = 'Correction' AND \"CorrectionReason\" IS NOT NULL " +
+                    "AND length(btrim(\"CorrectionReason\")) > 0) OR " +
+                    "(\"ChangeType\" <> 'Correction' AND \"CorrectionReason\" IS NULL)");
                 table.HasCheckConstraint(
                     "CK_LeaseAgreement_Term",
                     "(\"TermType\" = 'FixedTerm' AND \"TermEndOn\" IS NOT NULL " +
@@ -248,7 +255,10 @@ internal static class LeaseLegalArtifactModelConfiguration
                     "AND (\"VoidedAtUtc\" IS NULL OR \"IssuedAtUtc\" IS NOT NULL)");
                 table.HasCheckConstraint(
                     "CK_LeaseAgreement_DraftCancellation",
-                    "(\"DraftCanceledAtUtc\" IS NULL) = (\"DraftCancellationReason\" IS NULL)");
+                    "(\"DraftCanceledAtUtc\" IS NULL AND \"DraftCancellationReason\" IS NULL " +
+                    "AND \"DraftCanceledByUserId\" IS NULL) OR " +
+                    "(\"DraftCanceledAtUtc\" IS NOT NULL AND \"DraftCancellationReason\" IS NOT NULL " +
+                    "AND \"DraftCanceledByUserId\" IS NOT NULL)");
                 table.HasCheckConstraint(
                     "CK_LeaseAgreement_TerminalFacts",
                     "NOT (\"VoidedAtUtc\" IS NOT NULL AND \"DraftCanceledAtUtc\" IS NOT NULL) " +
@@ -327,6 +337,10 @@ internal static class LeaseLegalArtifactModelConfiguration
             entity.HasOne(e => e.CreatedByUser)
                 .WithMany()
                 .HasForeignKey(e => e.CreatedByUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.DraftCanceledByUser)
+                .WithMany()
+                .HasForeignKey(e => e.DraftCanceledByUserId)
                 .OnDelete(DeleteBehavior.Restrict);
 
             // The clean-baseline migration supplies the DEFERRABLE self FKs, version trigger,

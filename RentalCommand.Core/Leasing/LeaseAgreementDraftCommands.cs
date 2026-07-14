@@ -60,6 +60,7 @@ public sealed record CreateLeaseAgreementSuccessorDraftCommand(
     DateOnly TermStartOn,
     DateOnly? TermEndOn,
     DateOnly GoverningFromOn,
+    string? CorrectionReason,
     IReadOnlyList<LeaseRenewalAddendumDecisionInput> AddendumDecisions,
     int ActorUserId,
     Guid AuthSessionId,
@@ -78,6 +79,34 @@ public enum LeaseAgreementDraftMutationOutcome
     InvalidSuccessorType,
     InvalidAddendumDecisions,
 }
+
+public sealed record CancelLeaseAgreementSuccessorDraftCommand(
+    int PortfolioId,
+    int LeaseManagementId,
+    int LeaseAgreementId,
+    string CancellationReason,
+    int ActorUserId,
+    Guid AuthSessionId,
+    int AccessContextId,
+    long ExpectedAccessRevision,
+    string DeliveryIdempotencyKey) : ILeaseAgreementDraftCommand;
+
+public enum CancelLeaseAgreementSuccessorDraftOutcome
+{
+    Canceled,
+    AlreadyCanceled,
+    NotSuccessorDraft,
+    IssuedOrExecuted,
+}
+
+public sealed record CancelLeaseAgreementSuccessorDraftResult(
+    CancelLeaseAgreementSuccessorDraftOutcome Outcome,
+    int LeaseManagementId,
+    int LeaseAgreementId,
+    DateTime? DraftCanceledAtUtc,
+    int? DraftCanceledByUserId,
+    string? DraftCancellationReason,
+    string? Error) : IAtomicResultData;
 
 public sealed record LeaseAgreementDraftMutationResult(
     LeaseAgreementDraftMutationOutcome Outcome,

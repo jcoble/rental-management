@@ -13,6 +13,8 @@ public class LeaseAgreement : IAuditable, IPortfolioScoped
     public int VersionNumber { get; set; } = 1;
     public string AgreementNumber { get; set; } = string.Empty;
     public LeaseAgreementChangeType ChangeType { get; set; }
+    /// <summary>Required durable explanation for a Correction version; null for every other change type.</summary>
+    public string? CorrectionReason { get; set; }
     /// <summary>The executed Agreement copied into this destination draft during a Unit transfer.</summary>
     public int? TransferredFromAgreementId { get; set; }
     public int? ReplacesAgreementId { get; set; }
@@ -42,6 +44,7 @@ public class LeaseAgreement : IAuditable, IPortfolioScoped
     public string? VoidNote { get; set; }
     public DateTime? DraftCanceledAtUtc { get; set; }
     public string? DraftCancellationReason { get; set; }
+    public int? DraftCanceledByUserId { get; set; }
     public DateTime CreatedAtUtc { get; set; }
     public int CreatedByUserId { get; set; }
     public DateTime UpdatedAtUtc { get; set; }
@@ -58,6 +61,7 @@ public class LeaseAgreement : IAuditable, IPortfolioScoped
     public LegalDocumentArtifact? IssuedArtifact { get; set; }
     public LegalDocumentArtifact? ExecutedArtifact { get; set; }
     public ApplicationUser? CreatedByUser { get; set; }
+    public ApplicationUser? DraftCanceledByUser { get; set; }
     public List<LeaseAgreement> CorrectionsAndRestatements { get; set; } = [];
     public List<LeaseAgreement> Renewals { get; set; } = [];
     public List<LeaseAgreement> SupersededAgreements { get; set; } = [];

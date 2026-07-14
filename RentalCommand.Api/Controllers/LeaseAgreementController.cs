@@ -22,6 +22,8 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         new("lease-agreement.draft.edit.v1");
     private static readonly AtomicJsonResultCodec<LeaseAgreementDraftMutationResult> SuccessorCodec =
         new("lease-agreement.successor-draft.create.v1");
+    private static readonly AtomicJsonResultCodec<CancelLeaseAgreementSuccessorDraftResult> CancelDraftCodec =
+        new("lease-agreement.successor-draft.cancel.v1");
     private static readonly AtomicJsonResultCodec<IssueLeaseAgreementResult> IssueCodec =
         new("lease-agreement.issue.v1");
     private static readonly AtomicJsonResultCodec<VoidLegalArtifactResult> VoidCodec =
@@ -236,13 +238,21 @@ public sealed class LeaseAgreementController : ManagementControllerBase
             _ => request.ChangeType,
         };
         request.ChangeType = routeChangeType;
-        if (request.ChangeType is null || request.AddendumDecisions.Any(item => item.Decision is null))
+        if (request.ChangeType is null || request.AddendumDecisions.Any(item => item.Decision is null)
+            || (request.ChangeType == RentalCommand.Core.Enums.LeaseAgreementChangeType.Correction
+                && (string.IsNullOrWhiteSpace(request.CorrectionReason)
+                    || request.CorrectionReason.Trim().Length > 1000))
+            || (request.ChangeType != RentalCommand.Core.Enums.LeaseAgreementChangeType.Correction
+                && !string.IsNullOrWhiteSpace(request.CorrectionReason)))
         {
-            return BadRequest(new { error = "ChangeType and every Addendum decision are required." });
+            return BadRequest(new
+            {
+                error = "ChangeType, every Addendum decision, and a CorrectionReason for corrections are required.",
+            });
         }
         var command = new CreateLeaseAgreementSuccessorDraftCommand(
             envelope.PortfolioId, leaseManagementId, sourceAgreementId, request.ChangeType.Value,
-            request.TermStartOn, request.TermEndOn, request.GoverningFromOn,
+            request.TermStartOn, request.TermEndOn, request.GoverningFromOn, request.CorrectionReason,
             request.AddendumDecisions.Select(item => new LeaseRenewalAddendumDecisionInput(
                 item.SourceAddendumSeriesPublicId, item.Decision!.Value)).ToArray(),
             envelope.UserId, envelope.SessionId,
@@ -251,6 +261,70 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         return await Execute("lease-agreement.successor-draft.create",
             $"{envelope.PortfolioId}:{leaseManagementId}:{sourceAgreementId}:{envelope.KeyDigest}",
             command, SuccessorCodec, StatusCodes.Status201Created, ct);
+    }
+
+    [HttpPost("{leaseAgreementId:int}/cancel-draft")]
+    [ProducesResponseType(typeof(CancelLeaseAgreementSuccessorDraftResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> CancelSuccessorDraft(
+        int leaseManagementId,
+        int leaseAgreementId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] CancelLeaseAgreementSuccessorDraftRequest request,
+        CancellationToken ct)
+    {
+        if (!TryPrepare(idempotencyKey, out var envelope, out var error)) return error!;
+        if (string.IsNullOrWhiteSpace(request.CancellationReason)
+            || request.CancellationReason.Trim().Length > 1000)
+        {
+            return BadRequest(new { error = "CancellationReason is required and cannot exceed 1000 characters." });
+        }
+
+        var command = new CancelLeaseAgreementSuccessorDraftCommand(
+            envelope.PortfolioId,
+            leaseManagementId,
+            leaseAgreementId,
+            request.CancellationReason,
+            envelope.UserId,
+            envelope.SessionId,
+            envelope.AccessContextId,
+            envelope.AccessRevision,
+            $"agreement-successor-cancel:{envelope.PortfolioId}:{leaseManagementId}:{leaseAgreementId}:{envelope.KeyDigest}");
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "lease-agreement.successor-draft.cancel",
+                    $"{envelope.PortfolioId}:{leaseManagementId}:{leaseAgreementId}:{envelope.KeyDigest}"),
+                command,
+                CancelDraftCodec,
+                ct);
+            return outcome.Value.Outcome switch
+            {
+                CancelLeaseAgreementSuccessorDraftOutcome.Canceled
+                    when outcome.Value.DraftCanceledAtUtc.HasValue
+                        && outcome.Value.DraftCanceledByUserId.HasValue
+                        && outcome.Value.DraftCancellationReason is not null => Ok(
+                        new CancelLeaseAgreementSuccessorDraftResponse(
+                            outcome.Value.LeaseManagementId,
+                            outcome.Value.LeaseAgreementId,
+                            outcome.Value.DraftCanceledAtUtc.Value,
+                            outcome.Value.DraftCanceledByUserId.Value,
+                            outcome.Value.DraftCancellationReason,
+                            outcome.Disposition == AtomicCommandDisposition.Replayed)),
+                CancelLeaseAgreementSuccessorDraftOutcome.AlreadyCanceled =>
+                    Conflict(new { error = outcome.Value.Error }),
+                CancelLeaseAgreementSuccessorDraftOutcome.NotSuccessorDraft
+                    or CancelLeaseAgreementSuccessorDraftOutcome.IssuedOrExecuted =>
+                    UnprocessableEntity(new { error = outcome.Value.Error }),
+                _ => StatusCode(StatusCodes.Status500InternalServerError),
+            };
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (ArgumentException exception) { return BadRequest(new { error = exception.Message }); }
     }
 
     [HttpPost("{leaseAgreementId:int}/issuance-preparations")]

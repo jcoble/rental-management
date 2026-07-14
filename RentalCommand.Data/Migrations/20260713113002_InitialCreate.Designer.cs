@@ -3182,6 +3182,10 @@ namespace RentalCommand.Data.Migrations
                         .HasMaxLength(30)
                         .HasColumnType("character varying(30)");
 
+                    b.Property<string>("CorrectionReason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
                     b.Property<DateTime>("CreatedAtUtc")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("timestamp with time zone")
@@ -3200,6 +3204,9 @@ namespace RentalCommand.Data.Migrations
 
                     b.Property<DateTime?>("DraftCanceledAtUtc")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("DraftCanceledByUserId")
+                        .HasColumnType("integer");
 
                     b.Property<string>("DraftCancellationReason")
                         .HasMaxLength(1000)
@@ -3316,6 +3323,8 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("CreatedByUserId");
 
+                    b.HasIndex("DraftCanceledByUserId");
+
                     b.HasIndex("PublicId")
                         .IsUnique();
 
@@ -3357,9 +3366,11 @@ namespace RentalCommand.Data.Migrations
                         {
                             t.HasCheckConstraint("CK_LeaseAgreement_ChangeType", "\"ChangeType\" IN ('Initial', 'Transfer', 'Correction', 'Renewal', 'MonthToMonth', 'Restatement')");
 
+                            t.HasCheckConstraint("CK_LeaseAgreement_CorrectionReason", "(\"ChangeType\" = 'Correction' AND \"CorrectionReason\" IS NOT NULL AND length(btrim(\"CorrectionReason\")) > 0) OR (\"ChangeType\" <> 'Correction' AND \"CorrectionReason\" IS NULL)");
+
                             t.HasCheckConstraint("CK_LeaseAgreement_Currency", "\"Currency\" ~ '^[A-Z]{3}$'");
 
-                            t.HasCheckConstraint("CK_LeaseAgreement_DraftCancellation", "(\"DraftCanceledAtUtc\" IS NULL) = (\"DraftCancellationReason\" IS NULL)");
+                            t.HasCheckConstraint("CK_LeaseAgreement_DraftCancellation", "(\"DraftCanceledAtUtc\" IS NULL AND \"DraftCancellationReason\" IS NULL AND \"DraftCanceledByUserId\" IS NULL) OR (\"DraftCanceledAtUtc\" IS NOT NULL AND \"DraftCancellationReason\" IS NOT NULL AND \"DraftCanceledByUserId\" IS NOT NULL)");
 
                             t.HasCheckConstraint("CK_LeaseAgreement_DraftRevision", "\"DraftRevision\" >= 1");
 
@@ -10847,6 +10858,11 @@ namespace RentalCommand.Data.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("RentalCommand.Core.Entities.ApplicationUser", "DraftCanceledByUser")
+                        .WithMany()
+                        .HasForeignKey("DraftCanceledByUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
                         .WithMany("LeaseAgreements")
                         .HasForeignKey("PortfolioId")
@@ -10904,6 +10920,8 @@ namespace RentalCommand.Data.Migrations
                         .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("CreatedByUser");
+
+                    b.Navigation("DraftCanceledByUser");
 
                     b.Navigation("DocumentSourceVersion");
 

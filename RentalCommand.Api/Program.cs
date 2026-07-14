@@ -451,6 +451,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Leasing.LeaseAgreementDraftMutationResult,
     RentalCommand.Data.Leasing.CreateLeaseAgreementSuccessorDraftHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.CancelLeaseAgreementSuccessorDraftCommand,
+    RentalCommand.Core.Leasing.CancelLeaseAgreementSuccessorDraftResult,
+    RentalCommand.Data.Leasing.CancelLeaseAgreementSuccessorDraftHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Leasing.CreateLeaseAddendumDraftCommand,
     RentalCommand.Core.Leasing.LeaseAddendumDraftMutationResult,
     RentalCommand.Data.Leasing.CreateLeaseAddendumDraftHandler>();
