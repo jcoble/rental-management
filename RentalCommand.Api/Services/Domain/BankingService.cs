@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Banking;
@@ -81,7 +82,7 @@ public class BankingService : IBankingService
             .Where(c => c.PortfolioId == portfolioId && c.LastSyncedAt != null)
             .MaxAsync(c => c.LastSyncedAt, ct);
 
-        var transactions = await BaseTransactions(portfolioId)
+        var transactions = await TransactionsWithSuggestionsQuery(portfolioId, BaseTransactions(portfolioId))
             .OrderByDescending(t => t.PostedAt)
             .ThenByDescending(t => t.Id)
             .Take(10)
@@ -92,8 +93,6 @@ public class BankingService : IBankingService
 
         var suggestedMatchCount = await CountSuggestibleUnmatchedAsync(portfolioId, ct);
 
-        var mappedTransactions = await MapTransactionsWithSuggestionsAsync(portfolioId, transactions, ct);
-
         return new BankingSummaryResponse
         {
             ConnectionCount = connectionCount,
@@ -102,7 +101,7 @@ public class BankingService : IBankingService
             SuggestedMatchCount = suggestedMatchCount,
             LastSyncedAt = lastSyncedAt,
             Connections = connections.Select(MapConnection).ToList(),
-            RecentTransactions = mappedTransactions
+            RecentTransactions = transactions.Select(MapTransaction).ToList()
         };
     }
 
@@ -327,9 +326,11 @@ public class BankingService : IBankingService
             var canonicalConnection = await _db.BankConnections.AsNoTracking()
                 .SingleAsync(row => row.PortfolioId == portfolioId && row.Id == connectionId, ct);
             var affected = outcome.Value.AffectedTransactionIds.Count == 0
-                ? new List<BankTransaction>()
-                : await BaseTransactions(portfolioId).AsNoTracking()
-                    .Where(row => outcome.Value.AffectedTransactionIds.Contains(row.Id))
+                ? new List<BankTransactionSqlRow>()
+                : await TransactionsWithSuggestionsQuery(
+                        portfolioId,
+                        BaseTransactions(portfolioId).AsNoTracking()
+                            .Where(row => outcome.Value.AffectedTransactionIds.Contains(row.Id)))
                     .OrderBy(row => row.Id)
                     .ToListAsync(ct);
             return new SyncBankConnectionResponse
@@ -337,7 +338,7 @@ public class BankingService : IBankingService
                 Connection = MapConnection(canonicalConnection),
                 ImportedCount = outcome.Value.ImportedCount,
                 SkippedCount = outcome.Value.SkippedCount,
-                Transactions = await MapTransactionsWithSuggestionsAsync(portfolioId, affected, ct),
+                Transactions = affected.Select(MapTransaction).ToList(),
             };
         }
 
@@ -360,7 +361,7 @@ public class BankingService : IBankingService
         }
 
         var totalCount = await query.CountAsync(ct);
-        var transactions = await query
+        var transactions = await TransactionsWithSuggestionsQuery(portfolioId, query)
             .OrderByDescending(t => t.PostedAt)
             .ThenByDescending(t => t.Id)
             .Skip(skip)
@@ -372,7 +373,7 @@ public class BankingService : IBankingService
             TotalCount = totalCount,
             Skip = skip,
             Take = take,
-            Items = await MapTransactionsWithSuggestionsAsync(portfolioId, transactions, ct),
+            Items = transactions.Select(MapTransaction).ToList(),
         };
     }
 
@@ -428,9 +429,11 @@ public class BankingService : IBankingService
         var connection = await _db.BankConnections.AsNoTracking()
             .SingleAsync(row => row.PortfolioId == portfolioId && row.Id == outcome.Value.ConnectionId, ct);
         var imported = outcome.Value.ImportedTransactionIds.Count == 0
-            ? new List<BankTransaction>()
-            : await BaseTransactions(portfolioId).AsNoTracking()
-                .Where(row => outcome.Value.ImportedTransactionIds.Contains(row.Id))
+            ? new List<BankTransactionSqlRow>()
+            : await TransactionsWithSuggestionsQuery(
+                    portfolioId,
+                    BaseTransactions(portfolioId).AsNoTracking()
+                        .Where(row => outcome.Value.ImportedTransactionIds.Contains(row.Id)))
                 .OrderBy(row => row.Id)
                 .ToListAsync(ct);
 
@@ -439,7 +442,7 @@ public class BankingService : IBankingService
             Connection = MapConnection(connection),
             ImportedCount = outcome.Value.ImportedCount,
             SkippedCount = outcome.Value.SkippedCount,
-            Transactions = await MapTransactionsWithSuggestionsAsync(portfolioId, imported, ct),
+            Transactions = imported.Select(MapTransaction).ToList(),
         };
     }
 
@@ -571,8 +574,8 @@ public class BankingService : IBankingService
 
         if (tenantLedgerEntryId is null && expenseId is null)
         {
-            var suggestion = (await LoadSqlRankedSuggestionsAsync(
-                scope.PortfolioId, [transaction.Id], scope, ct)).GetValueOrDefault(transaction.Id);
+            var suggestion = await LoadSqlRankedSuggestionAsync(
+                scope.PortfolioId, transaction.Id, scope, ct);
             if (suggestion is null) return null;
             if (suggestion.EntityType.Equals("TenantLedgerEntry", StringComparison.OrdinalIgnoreCase))
             {
@@ -865,29 +868,29 @@ public class BankingService : IBankingService
         if (outcome.Value.Outcome == ReconcileBankTransactionOutcome.AccessDenied)
             throw new UnauthorizedAccessException();
 
-        var canonical = await BaseTransactions(scope.PortfolioId).AsNoTracking()
-            .SingleOrDefaultAsync(row => row.Id == current.Id, ct);
-        return canonical is null
-            ? null
-            : (await MapTransactionsWithSuggestionsAsync(scope.PortfolioId, [canonical], ct)).Single();
+        var canonical = await TransactionsWithSuggestionsQuery(
+                scope.PortfolioId,
+                BaseTransactions(scope.PortfolioId).AsNoTracking().Where(row => row.Id == current.Id))
+            .SingleOrDefaultAsync(ct);
+        return canonical is null ? null : MapTransaction(canonical);
     }
 
     private static void ValidateOperation(string operationKey, DateTime expectedUpdatedAtUtc)
     {
         if (string.IsNullOrWhiteSpace(operationKey) || operationKey.Trim().Length > 128)
-            throw new InvalidOperationException("A stable operationKey of at most 128 characters is required.");
+            throw new DomainValidationException("A stable operationKey of at most 128 characters is required.");
         if (expectedUpdatedAtUtc == default)
-            throw new InvalidOperationException("expectedUpdatedAtUtc is required.");
+            throw new DomainValidationException("expectedUpdatedAtUtc is required.");
     }
 
     private async Task<BankTransactionResponse?> LoadFullTransactionAsync(
         int portfolioId, int transactionId, CancellationToken ct)
     {
-        var canonical = await BaseTransactions(portfolioId).AsNoTracking()
-            .SingleOrDefaultAsync(row => row.Id == transactionId, ct);
-        return canonical is null
-            ? null
-            : (await MapTransactionsWithSuggestionsAsync(portfolioId, [canonical], ct)).Single();
+        var canonical = await TransactionsWithSuggestionsQuery(
+                portfolioId,
+                BaseTransactions(portfolioId).AsNoTracking().Where(row => row.Id == transactionId))
+            .SingleOrDefaultAsync(ct);
+        return canonical is null ? null : MapTransaction(canonical);
     }
 
     private static string Digest(params object?[] values)
@@ -900,27 +903,6 @@ public class BankingService : IBankingService
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
     }
 
-    private async Task<IReadOnlyList<BankTransactionResponse>> MapTransactionsWithSuggestionsAsync(
-        int portfolioId,
-        IReadOnlyList<BankTransaction> transactions,
-        CancellationToken ct)
-    {
-        if (transactions.Count == 0) return [];
-
-        var unmatchedTransactionIds = transactions
-            .Where(t => t.MatchStatus == "Unmatched")
-            .Select(t => t.Id)
-            .ToArray();
-
-        var suggestionsByTransactionId = unmatchedTransactionIds.Length == 0
-            ? new Dictionary<int, BankMatchSuggestionResponse>()
-            : await LoadSqlRankedSuggestionsAsync(portfolioId, unmatchedTransactionIds, null, ct);
-
-        return transactions
-            .Select(t => MapTransaction(t, suggestionsByTransactionId.GetValueOrDefault(t.Id)))
-            .ToList();
-    }
-
     private static void ValidateMatchTarget(
         int? tenantAccountId,
         long? tenantLedgerEntryId,
@@ -929,7 +911,7 @@ public class BankingService : IBankingService
         ValidateOptionalMatchTarget(tenantAccountId, tenantLedgerEntryId, expenseId);
         if (tenantLedgerEntryId is null && expenseId is null)
         {
-            throw new InvalidOperationException(
+            throw new DomainValidationException(
                 "Provide a tenantAccountId with tenantLedgerEntryId, or provide an expenseId.");
         }
     }
@@ -942,27 +924,24 @@ public class BankingService : IBankingService
         var hasReceiptIdentity = tenantAccountId.HasValue || tenantLedgerEntryId.HasValue;
         if (hasReceiptIdentity && (!tenantAccountId.HasValue || !tenantLedgerEntryId.HasValue))
         {
-            throw new InvalidOperationException(
+            throw new DomainValidationException(
                 "tenantAccountId and tenantLedgerEntryId must be supplied together.");
         }
         if (hasReceiptIdentity && expenseId.HasValue)
         {
-            throw new InvalidOperationException(
+            throw new DomainValidationException(
                 "Provide either a tenant receipt identity or an expenseId, not both.");
         }
     }
 
-    private async Task<Dictionary<int, BankMatchSuggestionResponse>> LoadSqlRankedSuggestionsAsync(
+    private async Task<BankMatchSuggestionResponse?> LoadSqlRankedSuggestionAsync(
         int portfolioId,
-        int[] transactionIds,
+        int transactionId,
         WorkspaceReadScope? scope,
         CancellationToken ct)
     {
-        var rows = await RankedSuggestionsQuery(portfolioId, transactionIds, scope).ToListAsync(ct);
-
-        return rows.ToDictionary(
-            r => r.TransactionId,
-            r => new BankMatchSuggestionResponse
+        return await RankedSuggestionsQuery(portfolioId, [transactionId], scope)
+            .Select(r => new BankMatchSuggestionResponse
             {
                 EntityType = r.EntityType,
                 EntityId = r.EntityId,
@@ -970,7 +949,8 @@ public class BankingService : IBankingService
                 Confidence = r.Confidence > 0.99m ? 0.99m : r.Confidence,
                 Label = string.IsNullOrWhiteSpace(r.Label) ? r.EntityType.ToLowerInvariant() : r.Label,
                 Reason = r.Reason,
-            });
+            })
+            .SingleOrDefaultAsync(ct);
     }
 
     private IQueryable<BankSuggestionRankRow> RankedSuggestionsQuery(
@@ -1088,6 +1068,60 @@ public class BankingService : IBankingService
                 .First());
     }
 
+    /// <summary>
+    /// Projects each bank line together with its current top suggestion in one translated SQL
+    /// statement. Filtering, ordering, paging, ranking, and the left join all remain database-side;
+    /// the only client-side work after materialization is copying the already-shaped scalar columns
+    /// into the public response DTO.
+    /// </summary>
+    private IQueryable<BankTransactionSqlRow> TransactionsWithSuggestionsQuery(
+        int portfolioId,
+        IQueryable<BankTransaction> transactions)
+    {
+        var rankedSuggestions = RankedSuggestionsQuery(portfolioId, null, null);
+        return
+            from transaction in transactions.AsNoTracking()
+            join suggestion in rankedSuggestions
+                on transaction.Id equals suggestion.TransactionId into possibleSuggestions
+            from suggestion in possibleSuggestions.DefaultIfEmpty()
+            select new BankTransactionSqlRow
+            {
+                Id = transaction.Id,
+                PropertyId = transaction.PropertyId,
+                PropertyName = transaction.Property == null ? null : transaction.Property.Name,
+                BankConnectionId = transaction.BankConnectionId,
+                InstitutionName = transaction.BankConnection == null
+                    ? string.Empty
+                    : transaction.BankConnection.InstitutionName,
+                AccountName = transaction.BankConnection == null
+                    ? string.Empty
+                    : transaction.BankConnection.AccountName,
+                ProviderTransactionId = transaction.ProviderTransactionId,
+                PostedAt = transaction.PostedAt,
+                AuthorizedAt = transaction.AuthorizedAt,
+                Description = transaction.Description,
+                MerchantName = transaction.MerchantName,
+                Amount = transaction.Amount,
+                IsoCurrencyCode = transaction.IsoCurrencyCode,
+                Category = transaction.Category,
+                MatchedTenantAccountId = transaction.MatchedTenantAccountId,
+                MatchedTenantLedgerEntryId = transaction.MatchedTenantLedgerEntryId,
+                MatchedExpenseId = transaction.MatchedExpenseId,
+                MatchStatus = transaction.MatchStatus,
+                MatchConfidence = transaction.MatchConfidence,
+                Notes = transaction.Notes,
+                UpdatedAt = transaction.UpdatedAt,
+                SuggestionEntityType = suggestion == null ? null : suggestion.EntityType,
+                SuggestionEntityId = suggestion == null ? null : suggestion.EntityId,
+                SuggestionTenantAccountId = suggestion == null ? null : suggestion.TenantAccountId,
+                SuggestionConfidence = suggestion == null
+                    ? null
+                    : suggestion.Confidence > 0.99m ? 0.99m : suggestion.Confidence,
+                SuggestionLabel = suggestion == null ? null : suggestion.Label,
+                SuggestionReason = suggestion == null ? null : suggestion.Reason,
+            };
+    }
+
     private sealed class BankSuggestionRankRow
     {
         public int TransactionId { get; set; }
@@ -1097,6 +1131,37 @@ public class BankingService : IBankingService
         public decimal Confidence { get; set; }
         public string Label { get; set; } = string.Empty;
         public string Reason { get; set; } = string.Empty;
+    }
+
+    private sealed class BankTransactionSqlRow
+    {
+        public int Id { get; set; }
+        public int? PropertyId { get; set; }
+        public string? PropertyName { get; set; }
+        public int BankConnectionId { get; set; }
+        public string InstitutionName { get; set; } = string.Empty;
+        public string AccountName { get; set; } = string.Empty;
+        public string ProviderTransactionId { get; set; } = string.Empty;
+        public DateTime PostedAt { get; set; }
+        public DateTime? AuthorizedAt { get; set; }
+        public string Description { get; set; } = string.Empty;
+        public string? MerchantName { get; set; }
+        public decimal Amount { get; set; }
+        public string IsoCurrencyCode { get; set; } = "USD";
+        public string? Category { get; set; }
+        public int? MatchedTenantAccountId { get; set; }
+        public long? MatchedTenantLedgerEntryId { get; set; }
+        public int? MatchedExpenseId { get; set; }
+        public string MatchStatus { get; set; } = string.Empty;
+        public decimal? MatchConfidence { get; set; }
+        public string? Notes { get; set; }
+        public DateTime UpdatedAt { get; set; }
+        public string? SuggestionEntityType { get; set; }
+        public long? SuggestionEntityId { get; set; }
+        public int? SuggestionTenantAccountId { get; set; }
+        public decimal? SuggestionConfidence { get; set; }
+        public string? SuggestionLabel { get; set; }
+        public string? SuggestionReason { get; set; }
     }
 
     private sealed class BankReviewQueueSqlRow
@@ -1128,32 +1193,42 @@ public class BankingService : IBankingService
         LastSyncedAt = c.LastSyncedAt
     };
 
-    private static BankTransactionResponse MapTransaction(
-        BankTransaction t,
-        BankMatchSuggestionResponse? suggestion) => new()
+    private static BankTransactionResponse MapTransaction(BankTransactionSqlRow row) => new()
     {
-        Id = t.Id,
-        PropertyId = t.PropertyId,
-        PropertyName = t.Property?.Name,
-        BankConnectionId = t.BankConnectionId,
-        InstitutionName = t.BankConnection?.InstitutionName ?? "",
-        AccountName = t.BankConnection?.AccountName ?? "",
-        ProviderTransactionId = t.ProviderTransactionId,
-        PostedAt = t.PostedAt,
-        AuthorizedAt = t.AuthorizedAt,
-        Description = t.Description,
-        MerchantName = t.MerchantName,
-        Amount = t.Amount,
-        IsoCurrencyCode = t.IsoCurrencyCode,
-        Category = t.Category,
-        MatchedTenantAccountId = t.MatchedTenantAccountId,
-        MatchedTenantLedgerEntryId = t.MatchedTenantLedgerEntryId,
-        MatchedExpenseId = t.MatchedExpenseId,
-        MatchStatus = t.MatchStatus,
-        MatchConfidence = t.MatchConfidence,
-        Notes = t.Notes,
-        UpdatedAt = t.UpdatedAt,
-        SuggestedMatch = suggestion
+        Id = row.Id,
+        PropertyId = row.PropertyId,
+        PropertyName = row.PropertyName,
+        BankConnectionId = row.BankConnectionId,
+        InstitutionName = row.InstitutionName,
+        AccountName = row.AccountName,
+        ProviderTransactionId = row.ProviderTransactionId,
+        PostedAt = row.PostedAt,
+        AuthorizedAt = row.AuthorizedAt,
+        Description = row.Description,
+        MerchantName = row.MerchantName,
+        Amount = row.Amount,
+        IsoCurrencyCode = row.IsoCurrencyCode,
+        Category = row.Category,
+        MatchedTenantAccountId = row.MatchedTenantAccountId,
+        MatchedTenantLedgerEntryId = row.MatchedTenantLedgerEntryId,
+        MatchedExpenseId = row.MatchedExpenseId,
+        MatchStatus = row.MatchStatus,
+        MatchConfidence = row.MatchConfidence,
+        Notes = row.Notes,
+        UpdatedAt = row.UpdatedAt,
+        SuggestedMatch = row.SuggestionEntityType is null || row.SuggestionEntityId is null
+            ? null
+            : new BankMatchSuggestionResponse
+            {
+                EntityType = row.SuggestionEntityType,
+                EntityId = row.SuggestionEntityId.Value,
+                TenantAccountId = row.SuggestionTenantAccountId,
+                Confidence = row.SuggestionConfidence ?? 0m,
+                Label = string.IsNullOrWhiteSpace(row.SuggestionLabel)
+                    ? row.SuggestionEntityType.ToLowerInvariant()
+                    : row.SuggestionLabel,
+                Reason = row.SuggestionReason ?? string.Empty,
+            },
     };
 
     private static BankReviewQueueItemResponse MapOperationalQueueItem(BankReviewQueueSqlRow row) => new()
