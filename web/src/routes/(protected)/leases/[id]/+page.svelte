@@ -37,6 +37,8 @@
 	const leaseManagementId = $derived(Number(page.params.id));
 	let agreementSkip = $state(0);
 	let editAgreementId = $state<number | null>(null);
+	let editAgreementSource = $state<LeaseAgreementSummary | null>(null);
+	let editAgreementCanCancel = $state(false);
 	let signatureProgressAgreementId = $state<number | null>(null);
 	let successorSelection = $state<SuccessorSelection | null>(null);
 	let addendumSkip = $state(0);
@@ -122,14 +124,35 @@
 	}
 
 	async function handleSuccessorCreated(result: LeaseAgreementDraftMutationResponse) {
+		editAgreementSource = successorSelection?.source ?? null;
+		editAgreementCanCancel = true;
 		successorSelection = null;
 		agreementSkip = 0;
 		await refreshLease();
 		editAgreementId = result.leaseAgreementId;
 	}
 
+	function openAgreementDraft(agreement: LeaseAgreementSummary) {
+		const sourceId = agreement.replacesAgreementId ?? agreement.renewsAgreementId;
+		editAgreementSource = sourceId
+			? (agreementsQuery.data?.items.find((candidate) => candidate.leaseAgreementId === sourceId) ?? null)
+			: null;
+		editAgreementCanCancel = Boolean(sourceId);
+		editAgreementId = agreement.leaseAgreementId;
+	}
+
+	async function handleDraftCanceled() {
+		editAgreementId = null;
+		editAgreementSource = null;
+		editAgreementCanCancel = false;
+		agreementSkip = 0;
+		await refreshLease();
+	}
+
 	async function handleIssued(result: IssueLeaseAgreementResponse) {
 		editAgreementId = null;
+		editAgreementSource = null;
+		editAgreementCanCancel = false;
 		agreementSkip = 0;
 		await refreshLease();
 		signatureProgressAgreementId = result.leaseAgreementId;
@@ -265,10 +288,12 @@
 											{#if agreement.isGoverning}<span class="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">Governing</span>{/if}
 										</div>
 										<p class="text-sm text-muted-foreground">{agreement.changeType} · {agreement.termStartOn} to {agreement.termEndOn ?? 'month-to-month'} · ${agreement.baseRentAmount.toLocaleString()}/month · {agreement.signerCount} signer{agreement.signerCount === 1 ? '' : 's'}</p>
+										{#if agreement.correctionReason}<p class="text-xs text-muted-foreground">Correction reason: {agreement.correctionReason}</p>{/if}
+										{#if agreement.draftCancellationReason}<p class="text-xs text-destructive">Draft canceled: {agreement.draftCancellationReason}</p>{/if}
 									</div>
 									<div class="flex flex-wrap gap-2">
 										{#if agreement.agreementStatus === 'Draft'}
-											<Button size="sm" class="gap-2" onclick={() => (editAgreementId = agreement.leaseAgreementId)}><FilePenLine class="h-4 w-4" /> Edit draft</Button>
+											<Button size="sm" class="gap-2" onclick={() => openAgreementDraft(agreement)}><FilePenLine class="h-4 w-4" /> Edit draft</Button>
 										{/if}
 										{#if agreement.hasSourceScan}
 											<Button size="sm" variant="outline" class="gap-2" onclick={() => downloadSourceScan(agreement)}><ScanLine class="h-4 w-4" /> Source scan</Button>
@@ -380,10 +405,10 @@
 	</div>
 
 	{#if editAgreementId}
-		<AgreementDraftDialog leaseManagementId={leaseManagementId} leaseAgreementId={editAgreementId} onclose={() => (editAgreementId = null)} onissued={handleIssued} />
+		<AgreementDraftDialog leaseManagementId={leaseManagementId} leaseAgreementId={editAgreementId} source={editAgreementSource} canCancel={editAgreementCanCancel} onclose={() => { editAgreementId = null; editAgreementSource = null; editAgreementCanCancel = false; }} onissued={handleIssued} oncanceled={handleDraftCanceled} />
 	{/if}
 	{#if successorSelection}
-		<AgreementSuccessorDialog leaseManagementId={leaseManagementId} source={successorSelection.source} changeType={successorSelection.changeType} onclose={() => (successorSelection = null)} oncreated={handleSuccessorCreated} />
+		<AgreementSuccessorDialog leaseManagementId={leaseManagementId} source={successorSelection.source} changeType={successorSelection.changeType} businessDate={summary.businessDate} onclose={() => (successorSelection = null)} oncreated={handleSuccessorCreated} />
 	{/if}
 	{#if createAddendumBase}
 		<AddendumCreateDialog leaseManagementId={leaseManagementId} propertyId={summary.propertyId} baseAgreement={createAddendumBase} onclose={() => (createAddendumBase = null)} oncreated={handleAddendumDraftCreated} />

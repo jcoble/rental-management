@@ -20,21 +20,32 @@
 		leaseManagementId,
 		source,
 		changeType,
+		businessDate,
 		onclose,
 		oncreated
 	}: {
 		leaseManagementId: number;
 		source: LeaseAgreementSummary;
 		changeType: SuccessorType;
+		businessDate: string;
 		onclose: () => void;
 		oncreated: (result: LeaseAgreementDraftMutationResponse) => void;
 	} = $props();
 
 	const isReplacement = changeType === 'Correction' || changeType === 'Restatement';
 	const isRenewal = changeType === 'Renewal' || changeType === 'MonthToMonth';
+	function dayAfter(value: string) {
+		const date = new Date(`${value}T00:00:00Z`);
+		date.setUTCDate(date.getUTCDate() + 1);
+		return date.toISOString().slice(0, 10);
+	}
+	const initialReplacementGoverningDate = businessDate > source.governingFromOn
+		? businessDate
+		: dayAfter(source.governingFromOn);
 	let termStartOn = $state(isReplacement ? source.termStartOn : '');
 	let termEndOn = $state(isReplacement ? (source.termEndOn ?? '') : '');
-	let governingFromOn = $state('');
+	let governingFromOn = $state(isReplacement ? initialReplacementGoverningDate : '');
+	let correctionReason = $state('');
 	let validationError = $state('');
 	let selectedAddendumDecisions = $state<Record<string, LeaseRenewalAddendumDecisionType | undefined>>({});
 	let operation: { fingerprint: string; key: string } | null = null;
@@ -120,6 +131,14 @@
 
 	function buildRequest(): CreateLeaseAgreementSuccessorDraftRequest | null {
 		validationError = '';
+		if (changeType === 'Correction' && !correctionReason.trim()) {
+			validationError = 'Explain what is being corrected before creating the draft.';
+			return null;
+		}
+		if (correctionReason.trim().length > 1000) {
+			validationError = 'The correction reason cannot exceed 1,000 characters.';
+			return null;
+		}
 		if (!termStartOn || !governingFromOn) {
 			validationError = 'Term start and governing date are required.';
 			return null;
@@ -144,6 +163,7 @@
 		if (!addendumDecisions) return null;
 		return {
 			changeType,
+			correctionReason: changeType === 'Correction' ? correctionReason.trim() : null,
 			termStartOn: isReplacement ? source.termStartOn : termStartOn,
 			termEndOn:
 				changeType === 'MonthToMonth'
@@ -190,7 +210,7 @@
 		<Dialog.Header>
 			<Dialog.Title>{title}</Dialog.Title>
 			<Dialog.Description>
-				Creates a new editable Agreement version. The currently governing executed agreement remains unchanged until the successor is signed.
+				Creates a new editable Agreement version. The old agreement keeps governing until the replacement is fully signed and executed.
 			</Dialog.Description>
 		</Dialog.Header>
 
@@ -215,6 +235,20 @@
 						<Input type="date" bind:value={termEndOn} data-testid="agreement-successor-term-end" />
 					</label>
 				{/if}
+			{/if}
+
+			{#if changeType === 'Correction'}
+				<label class="space-y-1">
+					<span class="text-sm font-medium">Why is this correction needed?</span>
+					<textarea
+						class="m3-field-surface min-h-24 w-full resize-y px-3 py-2 text-sm"
+						bind:value={correctionReason}
+						maxlength="1000"
+						placeholder="Describe the error and what the replacement should correct"
+						data-testid="agreement-successor-correction-reason"
+					></textarea>
+					<span class="block text-xs text-muted-foreground">Required · saved with the agreement version history.</span>
+				</label>
 			{/if}
 
 			<label class="space-y-1">

@@ -60,6 +60,23 @@ describe('canonical lease lifecycle action hub', () => {
 		assert.match(detailPageSource, /editAgreementId = result\.leaseAgreementId/);
 	});
 
+	it('supports the correction successor UX and abandoned-draft cancellation', () => {
+		assert.match(endpointSource, /correctionReason: string \| null/);
+		assert.match(endpointSource, /cancelAgreementSuccessorDraft:/);
+		assert.match(endpointSource, /\/cancel-draft`/);
+		assert.match(successorDialogSource, /agreement-successor-correction-reason/);
+		assert.match(
+			successorDialogSource,
+			/old agreement keeps governing until the replacement is fully signed and executed/i
+		);
+		assert.match(draftDialogSource, /agreement-correction-comparison/);
+		assert.match(draftDialogSource, /agreement-correction-changed-field/);
+		assert.match(draftDialogSource, /agreement-correction-unchanged-fields/);
+		assert.match(draftDialogSource, /leaseManagements\.cancelAgreementSuccessorDraft/);
+		assert.match(draftDialogSource, /agreement-cancel-draft-reason/);
+		assert.match(detailPageSource, /source=\{editAgreementSource\}/);
+	});
+
 	it('pages agreement history on the server and keeps artifacts distinct', () => {
 		assert.match(detailPageSource, /skip: agreementSkip/);
 		assert.match(detailPageSource, /take: AGREEMENT_PAGE_SIZE/);

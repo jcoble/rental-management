@@ -116,6 +116,46 @@ void main() {
       isEmpty,
     );
   });
+
+  test(
+    'correction sends its required reason and cancel-draft is explicit',
+    () async {
+      final adapter = _RecordingAdapter();
+      final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+        ..httpClientAdapter = adapter;
+      final repo = LeaseManagementsRepository(dio);
+
+      await repo.createSuccessorDraft(
+        leaseManagementId: 44,
+        sourceAgreementId: 81,
+        changeType: 'Correction',
+        correctionReason: 'The monthly rent was transcribed incorrectly.',
+        termStartOn: DateTime(2026, 1, 1),
+        termEndOn: DateTime(2026, 12, 31),
+        governingFromOn: DateTime(2026, 7, 13),
+        addendumDecisions: const [],
+        operationKey: 'stable-correction-44-81',
+      );
+
+      expect(
+        (adapter.data! as Map<String, dynamic>)['correctionReason'],
+        'The monthly rent was transcribed incorrectly.',
+      );
+
+      await repo.cancelSuccessorDraft(
+        leaseManagementId: 44,
+        leaseAgreementId: 82,
+        cancellationReason: 'A newer draft replaced this attempt.',
+        operationKey: 'stable-cancel-44-82',
+      );
+
+      expect(adapter.path, '/lease-managements/44/agreements/82/cancel-draft');
+      expect(adapter.data, {
+        'cancellationReason': 'A newer draft replaced this attempt.',
+      });
+      expect(adapter.headers?['Idempotency-Key'], 'stable-cancel-44-82');
+    },
+  );
 }
 
 class _RecordingAdapter implements HttpClientAdapter {

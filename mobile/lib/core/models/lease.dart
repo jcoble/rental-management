@@ -433,12 +433,17 @@ class LeaseAgreementHistory {
     required this.baseRentAmount,
     required this.status,
     required this.isGoverning,
+    this.correctionReason,
+    this.replacesAgreementId,
+    this.renewsAgreementId,
     this.termEndOn,
     this.issuedArtifact,
     this.executedArtifact,
     this.issuedAt,
     this.fullyExecutedAt,
     this.voidedAt,
+    this.draftCanceledAt,
+    this.draftCancellationReason,
   });
 
   final int id;
@@ -452,11 +457,16 @@ class LeaseAgreementHistory {
   final double baseRentAmount;
   final String status;
   final bool isGoverning;
+  final String? correctionReason;
+  final int? replacesAgreementId;
+  final int? renewsAgreementId;
   final LegalArtifactSummary? issuedArtifact;
   final LegalArtifactSummary? executedArtifact;
   final DateTime? issuedAt;
   final DateTime? fullyExecutedAt;
   final DateTime? voidedAt;
+  final DateTime? draftCanceledAt;
+  final String? draftCancellationReason;
 
   bool get isDraft => status.toLowerCase() == 'draft';
 
@@ -480,11 +490,16 @@ class LeaseAgreementHistory {
       baseRentAmount: (json['baseRentAmount'] as num?)?.toDouble() ?? 0,
       status: json['agreementStatus'] as String? ?? '',
       isGoverning: json['isGoverning'] as bool? ?? false,
+      correctionReason: json['correctionReason'] as String?,
+      replacesAgreementId: (json['replacesAgreementId'] as num?)?.toInt(),
+      renewsAgreementId: (json['renewsAgreementId'] as num?)?.toInt(),
       issuedArtifact: artifact('issuedArtifact'),
       executedArtifact: artifact('executedArtifact'),
       issuedAt: _optionalDate(json['issuedAtUtc']),
       fullyExecutedAt: _optionalDate(json['fullyExecutedAtUtc']),
       voidedAt: _optionalDate(json['voidedAtUtc']),
+      draftCanceledAt: _optionalDate(json['draftCanceledAtUtc']),
+      draftCancellationReason: json['draftCancellationReason'] as String?,
     );
   }
 }
@@ -859,6 +874,7 @@ class LeaseAgreementDraftDetail {
     required this.draftRevision,
     required this.agreementNumber,
     required this.changeType,
+    this.correctionReason,
     required this.termType,
     required this.termStartOn,
     required this.governingFromOn,
@@ -886,6 +902,7 @@ class LeaseAgreementDraftDetail {
   final int draftRevision;
   final String agreementNumber;
   final String changeType;
+  final String? correctionReason;
   final String termType;
   final DateTime termStartOn;
   final DateTime? termEndOn;
@@ -922,6 +939,7 @@ class LeaseAgreementDraftDetail {
         draftRevision: (json['draftRevision'] as num?)?.toInt() ?? 0,
         agreementNumber: json['agreementNumber'] as String? ?? '',
         changeType: json['changeType'] as String? ?? '',
+        correctionReason: json['correctionReason'] as String?,
         termType: json['termType'] as String? ?? '',
         termStartOn: _date(json['termStartOn']),
         termEndOn: _optionalDate(json['termEndOn']),

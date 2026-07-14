@@ -309,6 +309,31 @@ class LeaseSuccessorDraftResult {
       );
 }
 
+class CancelLeaseSuccessorDraftResult {
+  const CancelLeaseSuccessorDraftResult({
+    required this.leaseManagementId,
+    required this.leaseAgreementId,
+    required this.draftCanceledAt,
+    required this.draftCancellationReason,
+  });
+
+  final int leaseManagementId;
+  final int leaseAgreementId;
+  final DateTime draftCanceledAt;
+  final String draftCancellationReason;
+
+  factory CancelLeaseSuccessorDraftResult.fromJson(Map<String, dynamic> json) =>
+      CancelLeaseSuccessorDraftResult(
+        leaseManagementId: (json['leaseManagementId'] as num?)?.toInt() ?? 0,
+        leaseAgreementId: (json['leaseAgreementId'] as num?)?.toInt() ?? 0,
+        draftCanceledAt:
+            DateTime.tryParse(json['draftCanceledAtUtc'] as String? ?? '') ??
+            DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+        draftCancellationReason:
+            json['draftCancellationReason'] as String? ?? '',
+      );
+}
+
 class LeaseRenewalAddendumDecisionInput {
   const LeaseRenewalAddendumDecisionInput({
     required this.sourceAddendumSeriesPublicId,
@@ -1196,6 +1221,7 @@ class LeaseManagementsRepository {
     required int leaseManagementId,
     required int sourceAgreementId,
     required String changeType,
+    String? correctionReason,
     required DateTime termStartOn,
     required DateTime governingFromOn,
     required List<LeaseRenewalAddendumDecisionInput> addendumDecisions,
@@ -1208,6 +1234,7 @@ class LeaseManagementsRepository {
         '$sourceAgreementId/successor-drafts',
         data: {
           'changeType': changeType,
+          'correctionReason': correctionReason,
           'termStartOn': _dateOnly(termStartOn),
           if (termEndOn != null) 'termEndOn': _dateOnly(termEndOn),
           'governingFromOn': _dateOnly(governingFromOn),
@@ -1218,6 +1245,25 @@ class LeaseManagementsRepository {
         options: Options(headers: {'Idempotency-Key': operationKey}),
       );
       return LeaseSuccessorDraftResult.fromJson(_required(response.data));
+    } on DioException catch (error) {
+      throw ApiException.fromDioException(error);
+    }
+  }
+
+  Future<CancelLeaseSuccessorDraftResult> cancelSuccessorDraft({
+    required int leaseManagementId,
+    required int leaseAgreementId,
+    required String cancellationReason,
+    required String operationKey,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/lease-managements/$leaseManagementId/agreements/'
+        '$leaseAgreementId/cancel-draft',
+        data: {'cancellationReason': cancellationReason},
+        options: Options(headers: {'Idempotency-Key': operationKey}),
+      );
+      return CancelLeaseSuccessorDraftResult.fromJson(_required(response.data));
     } on DioException catch (error) {
       throw ApiException.fromDioException(error);
     }
