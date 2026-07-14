@@ -186,7 +186,6 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
     public async Task<IReadOnlyList<TenantNoticePolicyResponse>> ListTenantNoticePoliciesAsync(
         int portfolioId, CancellationToken ct) =>
         await TenantNoticePolicyResponses(portfolioId)
-            .OrderBy(row => row.AutomationKey)
             .TagWith("TSK-668 tenant notice policies with bound immutable template versions")
             .ToListAsync(ct);
 
@@ -205,7 +204,7 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
     }
 
     public async Task<IReadOnlyList<WorkspaceNoticeTemplateResponse>> ListTemplatesAsync(int portfolioId, CancellationToken ct) =>
-        await TemplateResponses(portfolioId).OrderBy(row => row.SystemKey).ToListAsync(ct);
+        await TemplateResponses(portfolioId).ToListAsync(ct);
 
     public async Task SeedSuppliedTemplatesAsync(
         WorkspaceReadScope scope,
@@ -374,9 +373,10 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
             equals new { TemplateId = template.Id, template.PortfolioId }
         join basedOnSystem in _db.SystemNoticeTemplateVersions.AsNoTracking()
             on template.BasedOnSystemTemplateVersionId equals basedOnSystem.Id
+        where policy.PortfolioId == portfolioId
+        orderby policy.AutomationKey
         let templateUpdateAvailable = _db.SystemNoticeTemplateVersions.Any(candidate =>
             candidate.SystemKey == template.SystemKey && candidate.Version > basedOnSystem.Version)
-        where policy.PortfolioId == portfolioId
         select new TenantNoticePolicyResponse(
             policy.Id,
             policy.AutomationKey,
@@ -426,6 +426,7 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
     private IQueryable<WorkspaceNoticeTemplateResponse> TemplateResponses(int portfolioId) =>
         from workspace in LatestTemplateQuery(portfolioId)
         join system in _db.SystemNoticeTemplateVersions on workspace.BasedOnSystemTemplateVersionId equals system.Id
+        orderby workspace.SystemKey
         let updateAvailable = _db.SystemNoticeTemplateVersions.Any(candidate => candidate.SystemKey == workspace.SystemKey && candidate.Version > system.Version)
         select new WorkspaceNoticeTemplateResponse(workspace.Id, workspace.SystemKey, workspace.Version,
             workspace.BasedOnSystemTemplateVersionId, workspace.IsCustomized, workspace.Subject, workspace.Body,
