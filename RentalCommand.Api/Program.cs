@@ -357,6 +357,34 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Vendors.RequestVendorW9Result,
     RentalCommand.Data.Vendors.RequestVendorW9Handler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Screening.TrackExternalScreeningCommand,
+    RentalCommand.Core.Screening.ScreeningMutationResult,
+    RentalCommand.Data.Screening.TrackExternalScreeningHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Screening.PrepareIntegratedScreeningCommand,
+    RentalCommand.Core.Screening.PrepareIntegratedScreeningResult,
+    RentalCommand.Data.Screening.PrepareIntegratedScreeningHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Screening.FinalizeIntegratedScreeningCommand,
+    RentalCommand.Core.Screening.ScreeningMutationResult,
+    RentalCommand.Data.Screening.FinalizeIntegratedScreeningHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Screening.UpdateExternalScreeningCommand,
+    RentalCommand.Core.Screening.ScreeningMutationResult,
+    RentalCommand.Data.Screening.UpdateExternalScreeningHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Screening.RecordScreeningDecisionCommand,
+    RentalCommand.Core.Screening.ScreeningMutationResult,
+    RentalCommand.Data.Screening.RecordScreeningDecisionHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Screening.ApplyScreeningProviderDeliveryCommand,
+    RentalCommand.Core.Screening.ScreeningMutationResult,
+    RentalCommand.Data.Screening.ApplyScreeningProviderDeliveryHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Screening.PrepareAdverseActionNoticeCommand,
+    RentalCommand.Core.Screening.PrepareAdverseActionNoticeResult,
+    RentalCommand.Data.Screening.PrepareAdverseActionNoticeHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Screening.CreateAdverseActionNoticeCommand,
     RentalCommand.Core.Screening.CreateAdverseActionNoticeResult,
     RentalCommand.Data.Screening.CreateAdverseActionNoticeHandler>();

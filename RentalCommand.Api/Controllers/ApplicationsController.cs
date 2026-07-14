@@ -375,7 +375,7 @@ public class ApplicationsController : ManagementControllerBase
         if (!await CanManageScreeningAsync(id, ct)) return Forbid();
         try
         {
-            var result = await _screening.StartIntegratedAsync(GetPortfolioId(), id, GetUserId(), body, ct);
+            var result = await _screening.StartIntegratedAsync(GetWorkspaceReadScope(), id, body, ct);
             return result == null ? NotFound(new { error = "Application not found" }) : Ok(result);
         }
         catch (ConsentRequiredException ex)
@@ -390,6 +390,10 @@ public class ApplicationsController : ManagementControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
+        }
     }
 
     [HttpPost("{id:int}/screening/external")]
@@ -400,12 +404,16 @@ public class ApplicationsController : ManagementControllerBase
         if (!await CanManageScreeningAsync(id, ct)) return Forbid();
         try
         {
-            var result = await _screening.TrackExternalAsync(GetPortfolioId(), id, GetUserId(), body, ct);
+            var result = await _screening.TrackExternalAsync(GetWorkspaceReadScope(), id, body, ct);
             return result == null ? NotFound(new { error = "Application not found" }) : Ok(result);
         }
         catch (ArgumentException ex)
         {
             return BadRequest(new { error = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
         }
     }
 
@@ -417,12 +425,17 @@ public class ApplicationsController : ManagementControllerBase
         if (!await CanManageScreeningAsync(id, ct)) return Forbid();
         try
         {
-            var result = await _screening.UpdateExternalAsync(GetPortfolioId(), id, screeningId, body, ct);
+            var result = await _screening.UpdateExternalAsync(
+                GetWorkspaceReadScope(), id, screeningId, body, ct);
             return result == null ? NotFound(new { error = "External screening not found" }) : Ok(result);
         }
         catch (ArgumentException ex)
         {
             return BadRequest(new { error = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
         }
     }
 
@@ -435,12 +448,16 @@ public class ApplicationsController : ManagementControllerBase
         try
         {
             var result = await _screening.RecordDecisionAsync(
-                GetPortfolioId(), id, screeningId, GetUserId(), body, ct);
+                GetWorkspaceReadScope(), id, screeningId, body, ct);
             return result == null ? NotFound(new { error = "Screening not found" }) : Ok(result);
         }
         catch (ArgumentException ex)
         {
             return BadRequest(new { error = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
         }
     }
 
@@ -450,7 +467,7 @@ public class ApplicationsController : ManagementControllerBase
     public async Task<IActionResult> GetScreening(int id, CancellationToken ct)
     {
         if (!await CanManageScreeningAsync(id, ct)) return Forbid();
-        var results = await _screening.GetWorkspaceAsync(GetPortfolioId(), id, ct);
+        var results = await _screening.GetWorkspaceAsync(GetWorkspaceReadScope(), id, ct);
         return results == null ? NotFound(new { error = "Application not found" }) : Ok(results);
     }
 
@@ -468,12 +485,16 @@ public class ApplicationsController : ManagementControllerBase
         try
         {
             var result = await _screening.GenerateAdverseActionAsync(
-                GetPortfolioId(), id, GetUserId(), body, ct);
+                GetWorkspaceReadScope(), id, body, ct);
             return result == null ? NotFound(new { error = "Application not found" }) : Ok(result);
         }
         catch (ArgumentException ex)
         {
             return BadRequest(new { error = ex.Message });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
         }
     }
 

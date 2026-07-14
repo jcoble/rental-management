@@ -500,6 +500,7 @@ class ApplicationsRepository {
   /// Generates an FCRA adverse-action notice for a declined application.
   Future<AdverseActionNotice> adverseAction(
     int id, {
+    required String operationKey,
     String? reason,
     required bool sendToApplicant,
   }) async {
@@ -507,7 +508,7 @@ class ApplicationsRepository {
       final response = await _dio.post<Map<String, dynamic>>(
         '/applications/$id/adverse-action',
         data: {
-          'operationKey': newOperationKey(),
+          'operationKey': operationKey,
           if (reason != null && reason.isNotEmpty) 'reason': reason,
           'sendToApplicant': sendToApplicant,
         },
