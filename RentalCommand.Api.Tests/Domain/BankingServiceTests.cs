@@ -277,9 +277,9 @@ public class BankingServiceTests : IAsyncLifetime
                 new ImportBankTransactionItem
                 {
                     ProviderTransactionId = "administrator-routing-boundary",
-                    PostedAt = payment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+                    PostedAt = allowedPayment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
                     Description = "Needs property route",
-                    Amount = payment.Amount,
+                    Amount = allowedPayment.Amount,
                 },
             ],
         });
