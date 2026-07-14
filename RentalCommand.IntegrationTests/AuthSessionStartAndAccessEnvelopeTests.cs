@@ -141,10 +141,21 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         var challengeOperation = Guid.NewGuid();
         var challenge = Challenge();
 
-        var issued = await RuntimeAtomic.ExecuteAsync(
-            SessionRefreshCommandIdentity.ForContextSelectionChallenge(challengeOperation),
-            challenge,
-            ChallengeCodec);
+        AtomicCommandOutcome<LoginContextSelectionChallengeResult> issued;
+        try
+        {
+            issued = await RuntimeAtomic.ExecuteAsync(
+                SessionRefreshCommandIdentity.ForContextSelectionChallenge(challengeOperation),
+                challenge,
+                ChallengeCodec);
+        }
+        catch (Exception exception)
+        {
+            throw new InvalidOperationException(
+                "Runtime pre-auth challenge failed. Recent database commands:\n" +
+                _queryCapture!.DescribeRecentCommands(),
+                exception);
+        }
         var issuedReplay = await RuntimeAtomic.ExecuteAsync(
             SessionRefreshCommandIdentity.ForContextSelectionChallenge(challengeOperation),
             challenge,
@@ -864,7 +875,13 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
     {
         public List<string> ReaderCommands { get; } = [];
 
+        private List<string> ReaderCommandDetails { get; } = [];
+
         public void Reset() => ReaderCommands.Clear();
+
+        public string DescribeRecentCommands() => string.Join(
+            "\n\n",
+            ReaderCommandDetails.TakeLast(6));
 
         public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
             DbCommand command,
@@ -873,6 +890,12 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             CancellationToken cancellationToken = default)
         {
             ReaderCommands.Add(command.CommandText);
+            ReaderCommandDetails.Add(
+                command.CommandText + "\n" +
+                string.Join(
+                    "\n",
+                    command.Parameters.Cast<DbParameter>().Select(parameter =>
+                        $"{parameter.ParameterName}={parameter.Value}")));
             return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
         }
     }
