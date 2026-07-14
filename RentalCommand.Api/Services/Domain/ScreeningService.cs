@@ -327,7 +327,7 @@ public sealed class ScreeningService : IScreeningService
                     .WhereAuthorized(
                         _db,
                         scope,
-                        [CapabilityKeys.LeasingApplicationsManage],
+                        new[] { CapabilityKeys.LeasingApplicationsManage },
                         _timeProvider.UtcNow())
                     .Any(application => application.Id == applicationId))
             .Select(file => (long?)file.FileSize)
