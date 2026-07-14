@@ -7,6 +7,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
 

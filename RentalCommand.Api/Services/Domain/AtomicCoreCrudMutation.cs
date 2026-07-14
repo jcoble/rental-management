@@ -6,6 +6,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -701,6 +702,52 @@ public sealed class AtomicCoreCrudMutationHandler
         if (guard.Recurring) throw Conflict("This property has recurring expense history. Archive it instead of deleting the property.");
         if (guard.Loan) throw Conflict("This property has loan history. Archive it instead of deleting the property.");
         if (guard.Document) throw Conflict("This property has document history. Archive it instead of deleting the property.");
+    }
+
+    private static async Task EnsureUnitHasNoHistoryAsync(
+        int portfolioId,
+        int unitId,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        var guard = await persistence.Query<Unit>().IgnoreQueryFilters().AsNoTracking()
+            .Where(unit => unit.PortfolioId == portfolioId && unit.Id == unitId)
+            .Select(unit => new
+            {
+                IsOccupied = persistence.Query<UnitOccupancyProjection>().Any(occupancy =>
+                    occupancy.PortfolioId == portfolioId && occupancy.UnitId == unit.Id && occupancy.IsOccupied),
+                HasCurrent = persistence.Query<LeaseManagementLifecycleProjection>().Any(lifecycle =>
+                    lifecycle.PortfolioId == portfolioId && lifecycle.UnitId == unit.Id
+                    && lifecycle.Lifecycle != "Canceled" && lifecycle.Lifecycle != "Closed"
+                    && lifecycle.Lifecycle != "AccountingCloseout"),
+                HasLease = persistence.Query<LeaseManagement>().Any(row =>
+                    row.PortfolioId == portfolioId && row.UnitId == unit.Id),
+                HasWork = persistence.Query<WorkOrder>().IgnoreQueryFilters().Any(row =>
+                    row.PortfolioId == portfolioId && row.UnitId == unit.Id),
+                HasAppointment = persistence.Query<Appointment>().IgnoreQueryFilters().Any(row =>
+                    row.PortfolioId == portfolioId && row.UnitId == unit.Id),
+                HasInspection = persistence.Query<Inspection>().IgnoreQueryFilters().Any(row =>
+                    row.PortfolioId == portfolioId && row.UnitId == unit.Id),
+                HasExpense = persistence.Query<Expense>().IgnoreQueryFilters().Any(row =>
+                    row.PortfolioId == portfolioId && row.UnitId == unit.Id),
+                HasApplication = persistence.Query<RentalApplication>().IgnoreQueryFilters().Any(row =>
+                    row.PortfolioId == portfolioId && row.UnitId == unit.Id),
+                HasRecurringExpense = persistence.Query<RecurringExpense>().IgnoreQueryFilters().Any(row =>
+                    row.PortfolioId == portfolioId && row.UnitId == unit.Id),
+                HasDocument = persistence.Query<StoredFile>().IgnoreQueryFilters().Any(row =>
+                    row.PortfolioId == portfolioId && row.EntityType == nameof(Unit) && row.EntityId == unit.Id),
+            })
+            .SingleAsync(ct);
+        if (guard.IsOccupied) throw Conflict("This unit is occupied. Return possession before deleting the unit.");
+        if (guard.HasCurrent) throw Conflict("This unit has a planned or current rental relationship. Cancel or complete it before deleting the unit.");
+        if (guard.HasLease) throw Conflict("This unit has rental relationship, legal, or financial history and cannot be deleted.");
+        if (guard.HasWork) throw Conflict("This unit has work order history. Archive the work order history instead of deleting the unit.");
+        if (guard.HasAppointment) throw Conflict("This unit has appointment history. Archive the appointment history instead of deleting the unit.");
+        if (guard.HasInspection) throw Conflict("This unit has inspection history. Archive the inspection history instead of deleting the unit.");
+        if (guard.HasExpense) throw Conflict("This unit has expense history. Archive the expense history instead of deleting the unit.");
+        if (guard.HasApplication) throw Conflict("This unit has application history. Archive the applications instead of deleting the unit.");
+        if (guard.HasRecurringExpense) throw Conflict("This unit has recurring expense history. Archive the recurring expense history instead of deleting the unit.");
+        if (guard.HasDocument) throw Conflict("This unit has document history. Archive the documents instead of deleting the unit.");
     }
 
 
