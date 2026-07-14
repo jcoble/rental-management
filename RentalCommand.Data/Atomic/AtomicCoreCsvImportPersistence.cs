@@ -50,11 +50,27 @@ public sealed class AtomicCoreCsvImportPersistence
               AND assignment."RevokedAtUtc" IS NULL
               AND assignment."EffectiveFromUtc" <= @effectiveAt
               AND (assignment."EffectiveToUtc" IS NULL OR assignment."EffectiveToUtc" > @effectiveAt)
-              AND assignment."ScopeKind" = 'AllProperties'
               AND capability."AuthorizationTargetKind" = 'Property'
               AND capability."Key" = ANY(@capabilities)
+        ), authorized_properties AS (
+            SELECT DISTINCT property."Id"
+            FROM "Properties" property
+            JOIN active_assignments assignment ON TRUE
+            LEFT JOIN "MembershipRoleAssignmentProperties" selected
+              ON selected."MembershipRoleAssignmentId" = assignment."Id"
+             AND selected."PortfolioId" = @portfolioId
+             AND selected."PropertyId" = property."Id"
+            WHERE property."PortfolioId" = @portfolioId
+              AND property."DeletedAt" IS NULL
+              AND (assignment."ScopeKind" = 'AllProperties'
+                   OR (assignment."ScopeKind" = 'SelectedProperties'
+                       AND selected."PropertyId" IS NOT NULL))
         ), authorization AS (
-            SELECT EXISTS (SELECT 1 FROM active_assignments) AS "Authorized"
+            SELECT EXISTS (SELECT 1 FROM active_assignments)
+               AND (@allowSelectedProperties
+                    OR EXISTS (SELECT 1 FROM active_assignments assignment
+                               WHERE assignment."ScopeKind" = 'AllProperties'))
+               AS "Authorized"
         )
         """;
 
@@ -131,6 +147,7 @@ public sealed class AtomicCoreCsvImportPersistence
                 WHERE property."PortfolioId" = @portfolioId
                   AND property."DeletedAt" IS NULL
                   AND lower(property."Name") = lower(trim(input."PropertyName"))
+                  AND property."Id" IN (SELECT "Id" FROM authorized_properties)
             ) property_match ON TRUE
         ), classified AS (
             SELECT resolved.*,
@@ -180,6 +197,7 @@ public sealed class AtomicCoreCsvImportPersistence
                 WHERE property."PortfolioId" = @portfolioId
                   AND property."DeletedAt" IS NULL
                   AND lower(property."Name") = lower(trim(input."PropertyName"))
+                  AND property."Id" IN (SELECT "Id" FROM authorized_properties)
             ) property_match ON TRUE
         ), classified AS (
             SELECT resolved.*,
@@ -486,6 +504,10 @@ public sealed class AtomicCoreCsvImportPersistence
             new("accessRevision", NpgsqlDbType.Bigint) { Value = scope.AccessRevision },
             new("effectiveAt", NpgsqlDbType.TimestampTz) { Value = effectiveAtUtc },
             new("capabilities", NpgsqlDbType.Array | NpgsqlDbType.Text) { Value = capabilities },
+            new("allowSelectedProperties", NpgsqlDbType.Boolean)
+            {
+                Value = domain is AtomicCoreCsvImportDomain.Expense or AtomicCoreCsvImportDomain.Loan,
+            },
         };
         if (write)
             parameters.Add(new NpgsqlParameter("createdAt", NpgsqlDbType.TimestampTz) { Value = effectiveAtUtc });
