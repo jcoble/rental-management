@@ -340,9 +340,15 @@ public sealed class FinalizeScanUploadHandler
             .Where(portfolio => portfolio.Id == command.PortfolioId)
             .Select(_ =>
                 assignments.Any()
-                && (context.WorkOrderId != null || assignments.Any(assignment =>
-                    assignment.RoleProfile!.Capabilities.Any(item =>
-                        item.CapabilityDefinition!.Key == CapabilityKeys.WorkManage)))
+                // Assigned technicians must bind WorkOrder scans to a current responsibility.
+                // Other targets already select their own required capability above, so a leasing
+                // agent must not also need unrelated work-management authority to finish a lease
+                // or application scan.
+                && (command.TargetEntityType != "WorkOrder"
+                    || context.WorkOrderId != null
+                    || assignments.Any(assignment =>
+                        assignment.RoleProfile!.Capabilities.Any(item =>
+                            item.CapabilityDefinition!.Key == CapabilityKeys.WorkManage)))
                 && (context.PropertyId == null || authorizedProperties.Any(property =>
                     property.Id == context.PropertyId.Value))
                 && (context.UnitId == null || units.Any(unit =>
