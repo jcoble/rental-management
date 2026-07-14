@@ -69,7 +69,7 @@ public sealed class WorkOrderResponsibilityController : ManagementControllerBase
                 canManage ? responsibility.WorkspaceMembershipId : null,
                 canManage ? responsibility.MembershipRoleAssignmentId : null,
                 canManage ? responsibility.WorkspaceMembership!.AccessContextId : null,
-                responsibility.WorkspaceMembership.AccessContext!.User!.DisplayName,
+                responsibility.WorkspaceMembership!.AccessContext!.User!.DisplayName,
                 responsibility.MembershipRoleAssignment!.RoleProfile!.DisplayName,
                 responsibility.Kind,
                 responsibility.EffectiveFromUtc,
@@ -94,6 +94,12 @@ public sealed class WorkOrderResponsibilityController : ManagementControllerBase
         var term = search?.Trim();
         skip = Math.Max(0, skip);
         take = Math.Clamp(take, 1, 100);
+        var authorizedWorkOrders = _db.WorkOrders.AsNoTracking()
+            .WhereAuthorized(
+                _db,
+                scope,
+                new[] { CapabilityKeys.ResponsibilityAssignExistingMember },
+                now);
         var rows = await _db.MembershipRoleAssignments.AsNoTracking()
             .Where(assignment => assignment.PortfolioId == scope.PortfolioId &&
                 assignment.Status == RentalCommand.Core.Enums.MembershipRoleAssignmentStatus.Active &&
@@ -106,9 +112,7 @@ public sealed class WorkOrderResponsibilityController : ManagementControllerBase
                 assignment.WorkspaceMembership.SuspendedAtUtc == null &&
                 assignment.WorkspaceMembership.RevokedAtUtc == null &&
                 (term == null || EF.Functions.ILike(assignment.WorkspaceMembership.AccessContext!.User!.DisplayName, $"%{term}%")) &&
-                _db.WorkOrders.AsNoTracking()
-                    .WhereAuthorized(_db, scope, [CapabilityKeys.ResponsibilityAssignExistingMember], now)
-                    .Any(workOrder => workOrder.Id == workOrderId))
+                authorizedWorkOrders.Any(workOrder => workOrder.Id == workOrderId))
             .OrderBy(assignment => assignment.WorkspaceMembership!.AccessContext!.User!.DisplayName)
             .ThenBy(assignment => assignment.Id)
             .Skip(skip).Take(take)
@@ -210,11 +214,11 @@ public sealed class WorkOrderResponsibilityController : ManagementControllerBase
                 command, CloseCodec, ct);
             return Ok(new { outcome.Value, replayed = outcome.Disposition == AtomicCommandDisposition.Replayed });
         }
-        catch (UnauthorizedAccessException) { return Forbid(); }
         catch (StaleAccessRevisionException exception)
         {
             Response.Headers["X-Access-Envelope-Refresh"] = "required";
             return Conflict(new { error = exception.Message, exception.PresentedRevision, exception.CurrentRevision });
         }
+        catch (UnauthorizedAccessException) { return Forbid(); }
     }
 }
