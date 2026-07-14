@@ -457,13 +457,43 @@ public class ConversationService : IConversationService
             ct);
     }
 
-    public async Task<ConversationDetail?> PostMessageAuthorizedAsync(
+    public Task<ConversationDetail?> PostMessageAuthorizedAsync(
         WorkspaceReadScope scope,
         int id,
         string body,
         List<string> channels,
         string operationKey,
+        CancellationToken ct = default) =>
+        PostMessageAuthorizedCoreAsync(
+            scope, id, body, channels, operationKey, requiredCapabilityKey: null, ct: ct);
+
+    public Task<ConversationDetail?> PostMessageAuthorizedForCapabilityAsync(
+        WorkspaceReadScope scope,
+        int id,
+        string body,
+        List<string> channels,
+        string operationKey,
+        string requiredCapabilityKey,
         CancellationToken ct = default)
+    {
+        if (!ConversationWriteCapabilities.Contains(requiredCapabilityKey, StringComparer.Ordinal))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(requiredCapabilityKey), requiredCapabilityKey, "Unsupported conversation capability.");
+        }
+
+        return PostMessageAuthorizedCoreAsync(
+            scope, id, body, channels, operationKey, requiredCapabilityKey, ct);
+    }
+
+    private async Task<ConversationDetail?> PostMessageAuthorizedCoreAsync(
+        WorkspaceReadScope scope,
+        int id,
+        string body,
+        List<string> channels,
+        string operationKey,
+        string? requiredCapabilityKey,
+        CancellationToken ct)
     {
         return await ExecuteLandlordSendAsync(
             new AtomicCommandIdentity(
@@ -476,7 +506,8 @@ public class ConversationService : IConversationService
                     scope.SessionId,
                     scope.UserId,
                     scope.AccessContextId,
-                    scope.AccessRevision)),
+                    scope.AccessRevision,
+                    requiredCapabilityKey)),
             ct);
     }
 

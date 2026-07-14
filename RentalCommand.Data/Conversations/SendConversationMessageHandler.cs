@@ -29,6 +29,15 @@ public sealed class SendConversationMessageHandler
             throw new InvalidOperationException("Unsupported conversation sender role.");
         }
 
+        if (command.SenderRole == ConversationSenderRole.Landlord &&
+            command.ManagementAccess is { } managementAccess)
+        {
+            await attempt.Locking.AcquireAsync(
+                AtomicLockResource.AuthSession, managementAccess.SessionId, ct);
+            await attempt.Locking.AcquireAsync(
+                AtomicLockResource.WorkspaceAccessContext, managementAccess.AccessContextId, ct);
+        }
+
         var createsConversation = command.ConversationId is null;
         Conversation conversation;
         Tenant tenant;
@@ -345,6 +354,8 @@ public sealed class SendConversationMessageHandler
             assignment.RoleProfile.Capabilities.Any(profileCapability =>
                 profileCapability.CapabilityDefinition != null &&
                 ManagementCapabilities.Contains(profileCapability.CapabilityDefinition.Key) &&
+                (access.RequiredCapabilityKey == null ||
+                 profileCapability.CapabilityDefinition.Key == access.RequiredCapabilityKey) &&
                 profileCapability.CapabilityDefinition.AuthorizationTargetKind ==
                     CapabilityAuthorizationTargetKind.Property));
     }

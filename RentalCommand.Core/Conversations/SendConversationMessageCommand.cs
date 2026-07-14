@@ -28,7 +28,8 @@ public sealed record ConversationManagementAccess(
     Guid SessionId,
     int UserId,
     int AccessContextId,
-    long AccessRevision) : IAtomicCommandData;
+    long AccessRevision,
+    string? RequiredCapabilityKey = null) : IAtomicCommandData;
 
 public enum SendConversationMessageOutcome
 {

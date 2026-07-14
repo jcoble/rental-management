@@ -19,6 +19,9 @@ public class LeaseAgreement : IAuditable, IPortfolioScoped
     public int? TransferredFromAgreementId { get; set; }
     public int? ReplacesAgreementId { get; set; }
     public int? RenewsAgreementId { get; set; }
+    /// <summary>The voided issued Agreement whose document is being reissued by this version.</summary>
+    public int? ReissuesAgreementId { get; set; }
+    public string? ReissueReason { get; set; }
     public LeaseAgreementTermType TermType { get; set; }
     public DateOnly TermStartOn { get; set; }
     public DateOnly? TermEndOn { get; set; }
@@ -56,6 +59,7 @@ public class LeaseAgreement : IAuditable, IPortfolioScoped
     public LeaseAgreement? TransferredFromAgreement { get; set; }
     public List<LeaseAgreement> TransferSuccessors { get; set; } = [];
     public LeaseAgreement? RenewsAgreement { get; set; }
+    public LeaseAgreement? ReissuedFromAgreement { get; set; }
     public LeaseAgreement? SupersededByAgreement { get; set; }
     public LegalDocumentSourceVersion? DocumentSourceVersion { get; set; }
     public LegalDocumentArtifact? IssuedArtifact { get; set; }
@@ -64,6 +68,7 @@ public class LeaseAgreement : IAuditable, IPortfolioScoped
     public ApplicationUser? DraftCanceledByUser { get; set; }
     public List<LeaseAgreement> CorrectionsAndRestatements { get; set; } = [];
     public List<LeaseAgreement> Renewals { get; set; } = [];
+    public List<LeaseAgreement> ReissuedAgreements { get; set; } = [];
     public List<LeaseAgreement> SupersededAgreements { get; set; } = [];
     public List<LeaseAgreementSigner> Signers { get; set; } = [];
     public List<LeaseAddendum> Addenda { get; set; } = [];

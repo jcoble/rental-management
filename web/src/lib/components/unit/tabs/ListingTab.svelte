@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { units } from '$lib/api/endpoints/units';
-	import type { ListingPhoto, ListingPublication, ListingPublicationStatus, ListingWorkspace, SaveListingWorkspaceRequest, UnitDashboard } from '$lib/types';
+	import type { ListingPhoto, ListingPublication, ListingPublicationStatus, ListingWorkspace, SaveListingWorkspaceRequest } from '$lib/types';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -16,9 +16,8 @@
 		photosConfirmed: boolean;
 	};
 
-	let { dashboard }: { dashboard: UnitDashboard } = $props();
+	let { unitId }: { unitId: number } = $props();
 	const queryClient = useQueryClient();
-	const unitId = $derived(dashboard.unit.id);
 	let loadedVersion = $state<number | null>(null);
 	let form = $state<Form>(blankForm());
 

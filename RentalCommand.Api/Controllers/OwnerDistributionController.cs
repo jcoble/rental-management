@@ -1,6 +1,8 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -24,7 +26,8 @@ public class OwnerDistributionController : ManagementControllerBase
     public async Task<ActionResult<IReadOnlyList<OwnerDistributionResponse>>> List(
         [FromQuery] OwnerDistributionListQuery query, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetWorkspaceReadScope(), query, ct);
+        if (!TryReadManagementScope(out var scope)) return Forbid();
+        var items = await _service.ListAsync(scope, query, ct);
         return Ok(items);
     }
 
@@ -33,7 +36,8 @@ public class OwnerDistributionController : ManagementControllerBase
     public async Task<ActionResult<OwnerDistributionListResponse>> ListPage(
         [FromQuery] OwnerDistributionListQuery query, CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetWorkspaceReadScope(), query, ct);
+        if (!TryReadManagementScope(out var scope)) return Forbid();
+        var page = await _service.ListPageAsync(scope, query, ct);
         return Ok(page);
     }
 
@@ -42,11 +46,13 @@ public class OwnerDistributionController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<OwnerDistributionResponse>> Get(int id, CancellationToken ct)
     {
-        var item = await _service.GetAsync(GetWorkspaceReadScope(), id, ct);
+        if (!TryReadManagementScope(out var scope)) return Forbid();
+        var item = await _service.GetAsync(scope, id, ct);
         return item is null ? NotFound(new { error = "Owner distribution not found" }) : Ok(item);
     }
 
     [HttpPost]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.MoneyDisbursementsManage)]
     [ProducesResponseType(typeof(OwnerDistributionResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<OwnerDistributionResponse>> Create(
@@ -54,11 +60,12 @@ public class OwnerDistributionController : ManagementControllerBase
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
+        if (!TryReadManagementScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
             return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
         try
         {
-            var created = await _service.CreateAsync(GetWorkspaceReadScope(), request, operationKey, ct);
+            var created = await _service.CreateAsync(scope, request, operationKey, ct);
             return created is null
                 ? NotFound(new { error = "Referenced owner or property not found in this portfolio" })
                 : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
@@ -67,6 +74,7 @@ public class OwnerDistributionController : ManagementControllerBase
     }
 
     [HttpPatch("{id:int}")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.MoneyDisbursementsManage)]
     [ProducesResponseType(typeof(OwnerDistributionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<OwnerDistributionResponse>> Update(
@@ -74,27 +82,31 @@ public class OwnerDistributionController : ManagementControllerBase
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
+        if (!TryReadManagementScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
             return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
         try
         {
-            var updated = await _service.UpdateAsync(GetWorkspaceReadScope(), id, request, operationKey, ct);
+            var updated = await _service.UpdateAsync(scope, id, request, operationKey, ct);
             return updated is null ? NotFound(new { error = "Owner distribution not found" }) : Ok(updated);
         }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, new { error = ex.Message }); }
     }
 
     [HttpDelete("{id:int}")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.MoneyDisbursementsManage)]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.MoneyReconciliationDestructive)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(
         int id, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
+        if (!TryReadManagementScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
             return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
         try
         {
-            var deleted = await _service.DeleteAsync(GetWorkspaceReadScope(), id, operationKey, ct);
+            var deleted = await _service.DeleteAsync(scope, id, operationKey, ct);
             return deleted ? NoContent() : NotFound(new { error = "Owner distribution not found" });
         }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, new { error = ex.Message }); }

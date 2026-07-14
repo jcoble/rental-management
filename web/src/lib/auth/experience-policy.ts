@@ -130,8 +130,8 @@ export const ROUTE_ACCESS_RULES: readonly RouteAccessRule[] = [
 		anyCapabilities: [CAPABILITY.rentalsRead, CAPABILITY.workRead, CAPABILITY.leasingTermsRead]
 	},
 	{ prefix: '/owners', anyCapabilities: [CAPABILITY.moneyOwnerReportsRead] },
-	{ prefix: '/properties', anyCapabilities: [CAPABILITY.rentalsRead] },
-	{ prefix: '/units', anyCapabilities: [CAPABILITY.rentalsRead] },
+	{ prefix: '/properties', experiences: ['Management'], anyCapabilities: [CAPABILITY.rentalsRead] },
+	{ prefix: '/units', experiences: ['Management'], anyCapabilities: [CAPABILITY.rentalsRead] },
 	{
 		prefix: '/tenants',
 		anyCapabilities: [CAPABILITY.rentalsRead, CAPABILITY.leasingOnboardingManage]
@@ -144,18 +144,24 @@ export const ROUTE_ACCESS_RULES: readonly RouteAccessRule[] = [
 		prefix: '/lease-templates',
 		anyCapabilities: [CAPABILITY.rentalsManage, CAPABILITY.leasingAgreementsPrepare]
 	},
-	{ prefix: '/applications', anyCapabilities: [CAPABILITY.leasingApplicationsManage] },
+	{
+		prefix: '/applications',
+		experiences: ['Management'],
+		anyCapabilities: [CAPABILITY.leasingApplicationsManage]
+	},
 	{
 		prefix: '/maintenance',
 		anyCapabilities: [CAPABILITY.workRead]
 	},
 	{
 		prefix: '/appointments',
+		experiences: ['Management'],
 		anyCapabilities: [CAPABILITY.workRead, CAPABILITY.leasingShowingsManage]
 	},
 	{ prefix: '/vendors', anyCapabilities: [CAPABILITY.workManage] },
 	{
 		prefix: '/messages',
+		experiences: ['Management'],
 		anyCapabilities: [
 			CAPABILITY.rentalsRead,
 			CAPABILITY.leasingOnboardingManage

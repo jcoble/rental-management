@@ -193,6 +193,10 @@ public sealed class LeasingWorkspaceService : ILeasingWorkspaceService
     {
         var now = _time.GetUtcNow().UtcDateTime;
         var properties = AuthorizedProperties(scope, CapabilityKeys.LeasingListingsManage, now);
+        var applicationProperties = AuthorizedProperties(
+            scope, CapabilityKeys.LeasingApplicationsManage, now);
+        var showingProperties = AuthorizedProperties(
+            scope, CapabilityKeys.LeasingShowingsManage, now);
         var units = _db.Units.AsNoTracking().Where(unit =>
             unit.PortfolioId == scope.PortfolioId &&
             unit.DeletedAt == null &&
@@ -252,16 +256,22 @@ public sealed class LeasingWorkspaceService : ILeasingWorkspaceService
                     .ThenByDescending(listing => listing.Id)
                     .Select(listing => listing.AvailableOn)
                     .FirstOrDefault(),
+                CanViewApplications = applicationProperties.Any(property => property.Id == unit.PropertyId),
                 OpenApplicationCount = _db.RentalApplications.Count(application =>
                     application.PortfolioId == scope.PortfolioId &&
                     application.UnitId == unit.Id &&
+                    application.PropertyId == unit.PropertyId &&
+                    applicationProperties.Any(property => property.Id == application.PropertyId) &&
                     application.DeletedAt == null &&
                     (application.Status == ApplicationStatus.Submitted ||
                      application.Status == ApplicationStatus.UnderReview)),
+                CanViewShowings = showingProperties.Any(property => property.Id == unit.PropertyId),
                 NextShowingAtUtc = _db.Appointments
                     .Where(appointment =>
                         appointment.PortfolioId == scope.PortfolioId &&
                         appointment.UnitId == unit.Id &&
+                        appointment.PropertyId == unit.PropertyId &&
+                        showingProperties.Any(property => property.Id == appointment.PropertyId) &&
                         appointment.Type == AppointmentType.Showing &&
                         appointment.Status != AppointmentStatus.Cancelled &&
                         appointment.ScheduledStart >= now)
@@ -376,6 +386,192 @@ public sealed class LeasingWorkspaceService : ILeasingWorkspaceService
         };
     }
 
+    public Task<LeasingRentalDetailResponse?> GetRentalAsync(
+        WorkspaceReadScope scope, int unitId, CancellationToken ct = default)
+    {
+        var now = _time.GetUtcNow().UtcDateTime;
+        var properties = AuthorizedProperties(scope, CapabilityKeys.LeasingListingsManage, now);
+        var applicationProperties = AuthorizedProperties(
+            scope, CapabilityKeys.LeasingApplicationsManage, now);
+        var showingProperties = AuthorizedProperties(
+            scope, CapabilityKeys.LeasingShowingsManage, now);
+        return _db.Units.AsNoTracking()
+            .Where(unit => unit.Id == unitId && unit.PortfolioId == scope.PortfolioId &&
+                unit.DeletedAt == null && unit.Property!.DeletedAt == null &&
+                properties.Any(property => property.Id == unit.PropertyId))
+            .Select(unit => new LeasingRentalDetailResponse
+            {
+                PropertyId = unit.PropertyId,
+                UnitId = unit.Id,
+                PropertyName = unit.Property!.Name,
+                UnitNumber = unit.UnitNumber,
+                Address = unit.Property.AddressLine1 + ", " + unit.Property.City + ", " + unit.Property.State,
+                ListingId = unit.RentalListings.Where(listing => listing.DeletedAt == null)
+                    .OrderByDescending(listing => listing.UpdatedAt).ThenByDescending(listing => listing.Id)
+                    .Select(listing => (int?)listing.Id).FirstOrDefault(),
+                ListingStatus = unit.RentalListings.Where(listing => listing.DeletedAt == null)
+                    .OrderByDescending(listing => listing.UpdatedAt).ThenByDescending(listing => listing.Id)
+                    .Select(listing => (RentalListingStatus?)listing.Status).FirstOrDefault(),
+                ListingHeadline = unit.RentalListings.Where(listing => listing.DeletedAt == null)
+                    .OrderByDescending(listing => listing.UpdatedAt).ThenByDescending(listing => listing.Id)
+                    .Select(listing => listing.Headline).FirstOrDefault(),
+                ListingDescription = unit.RentalListings.Where(listing => listing.DeletedAt == null)
+                    .OrderByDescending(listing => listing.UpdatedAt).ThenByDescending(listing => listing.Id)
+                    .Select(listing => listing.Description).FirstOrDefault(),
+                AskingRent = unit.RentalListings.Where(listing => listing.DeletedAt == null)
+                    .OrderByDescending(listing => listing.UpdatedAt).ThenByDescending(listing => listing.Id)
+                    .Select(listing => (decimal?)listing.Rent).FirstOrDefault(),
+                SecurityDeposit = unit.RentalListings.Where(listing => listing.DeletedAt == null)
+                    .OrderByDescending(listing => listing.UpdatedAt).ThenByDescending(listing => listing.Id)
+                    .Select(listing => listing.SecurityDeposit).FirstOrDefault(),
+                AvailableOn = unit.RentalListings.Where(listing => listing.DeletedAt == null)
+                    .OrderByDescending(listing => listing.UpdatedAt).ThenByDescending(listing => listing.Id)
+                    .Select(listing => listing.AvailableOn).FirstOrDefault(),
+                LeaseTerms = unit.RentalListings.Where(listing => listing.DeletedAt == null)
+                    .OrderByDescending(listing => listing.UpdatedAt).ThenByDescending(listing => listing.Id)
+                    .Select(listing => listing.LeaseTerms).FirstOrDefault(),
+                PetPolicy = unit.RentalListings.Where(listing => listing.DeletedAt == null)
+                    .OrderByDescending(listing => listing.UpdatedAt).ThenByDescending(listing => listing.Id)
+                    .Select(listing => listing.PetPolicy).FirstOrDefault(),
+                CanViewApplications = applicationProperties.Any(property => property.Id == unit.PropertyId),
+                OpenApplicationCount = _db.RentalApplications.Count(application =>
+                    application.PortfolioId == scope.PortfolioId && application.UnitId == unit.Id &&
+                    application.PropertyId == unit.PropertyId &&
+                    applicationProperties.Any(property => property.Id == application.PropertyId) &&
+                    application.DeletedAt == null &&
+                    (application.Status == ApplicationStatus.Submitted || application.Status == ApplicationStatus.UnderReview)),
+                CanViewShowings = showingProperties.Any(property => property.Id == unit.PropertyId),
+                NextShowingAtUtc = _db.Appointments.Where(appointment =>
+                        appointment.PortfolioId == scope.PortfolioId && appointment.UnitId == unit.Id &&
+                        appointment.PropertyId == unit.PropertyId &&
+                        showingProperties.Any(property => property.Id == appointment.PropertyId) &&
+                        appointment.Type == AppointmentType.Showing && appointment.Status != AppointmentStatus.Cancelled &&
+                        appointment.ScheduledStart >= now)
+                    .OrderBy(appointment => appointment.ScheduledStart)
+                    .Select(appointment => (DateTime?)appointment.ScheduledStart).FirstOrDefault(),
+            })
+            .SingleOrDefaultAsync(ct);
+    }
+
+    public Task<LeasingApplicationDetailResponse?> GetApplicationAsync(
+        WorkspaceReadScope scope, int id, CancellationToken ct = default) =>
+        AuthorizedApplications(scope, _time.GetUtcNow().UtcDateTime)
+            .Where(application => application.Id == id && application.DeletedAt == null)
+            .Select(application => new LeasingApplicationDetailResponse
+            {
+                Id = application.Id,
+                PropertyId = application.PropertyId,
+                UnitId = application.UnitId,
+                ApplicantName = application.FirstName + " " + application.LastName,
+                Email = application.Email,
+                Phone = application.Phone,
+                PropertyName = application.Property == null ? null : application.Property.Name,
+                UnitNumber = application.Unit == null ? null : application.Unit.UnitNumber,
+                Status = application.Status,
+                MonthlyIncome = application.MonthlyIncome,
+                DesiredMoveInDate = application.DesiredMoveInDate,
+                Notes = application.Notes,
+                ConsentGiven = application.ConsentGiven,
+                SubmittedAtUtc = application.SubmittedAtUtc,
+            })
+            .SingleOrDefaultAsync(ct);
+
+    public Task<LeasingAppointmentDetailResponse?> GetAppointmentAsync(
+        WorkspaceReadScope scope, int id, CancellationToken ct = default)
+    {
+        var now = _time.GetUtcNow().UtcDateTime;
+        var properties = AuthorizedProperties(scope, CapabilityKeys.LeasingShowingsManage, now);
+        var allProperties = _db.AuthorizedAllPropertyAssignments(
+            scope, CapabilityKeys.LeasingShowingsManage, CapabilityAuthorizationTargetKind.Property, now);
+        return _db.Appointments.AsNoTracking()
+            .Where(item => item.Id == id && item.PortfolioId == scope.PortfolioId &&
+                item.Type == AppointmentType.Showing &&
+                ((item.PropertyId == null && allProperties.Any()) ||
+                 (item.PropertyId != null && properties.Any(property => property.Id == item.PropertyId))))
+            .Select(item => new LeasingAppointmentDetailResponse
+            {
+                Id = item.Id,
+                PropertyId = item.PropertyId,
+                UnitId = item.UnitId,
+                RentalApplicationId = item.RentalApplicationId,
+                Title = item.Title,
+                ProspectName = item.ProspectName,
+                ProspectEmail = item.ProspectEmail,
+                PropertyName = item.Property == null ? null : item.Property.Name,
+                UnitNumber = item.Unit == null ? null : item.Unit.UnitNumber,
+                Type = item.Type,
+                Status = item.Status,
+                ScheduledStart = item.ScheduledStart,
+                ScheduledEnd = item.ScheduledEnd,
+                AssignedTo = item.AssignedTo,
+                Notes = item.Notes,
+            })
+            .SingleOrDefaultAsync(ct);
+    }
+
+    public Task<LeasingConversationDetailResponse?> GetConversationAsync(
+        WorkspaceReadScope scope, int id, CancellationToken ct = default) =>
+        AuthorizedConversations(scope, _time.GetUtcNow().UtcDateTime)
+            .Where(conversation => conversation.Id == id)
+            .Select(conversation => new LeasingConversationDetailResponse
+            {
+                Id = conversation.Id,
+                TenantName = conversation.Tenant!.FirstName + " " + conversation.Tenant.LastName,
+                Subject = conversation.Subject,
+                PropertyName = conversation.Property == null ? null : conversation.Property.Name,
+                Messages = conversation.Messages.OrderBy(message => message.CreatedAt).ThenBy(message => message.Id)
+                    .Select(message => new LeasingConversationMessageResponse
+                    {
+                        Id = message.Id,
+                        SenderRole = message.SenderRole,
+                        Body = message.Body,
+                        CreatedAt = message.CreatedAt,
+                    }).ToList(),
+            })
+            .SingleOrDefaultAsync(ct);
+
+    public Task<bool> CanAccessConversationAsync(
+        WorkspaceReadScope scope, int id, CancellationToken ct = default) =>
+        AuthorizedConversations(scope, _time.GetUtcNow().UtcDateTime)
+            .AnyAsync(conversation => conversation.Id == id, ct);
+
+    public Task<LeasingMoveInDetailResponse?> GetMoveInAsync(
+        WorkspaceReadScope scope, int id, CancellationToken ct = default)
+    {
+        var properties = AuthorizedProperties(
+            scope, CapabilityKeys.LeasingOnboardingManage, _time.GetUtcNow().UtcDateTime);
+        return _db.LeaseManagements.AsNoTracking()
+            .Where(management => management.Id == id && management.PortfolioId == scope.PortfolioId &&
+                management.CanceledAtUtc == null &&
+                properties.Any(property => property.Id == management.PropertyId))
+            .Select(management => new LeasingMoveInDetailResponse
+            {
+                Id = management.Id,
+                PropertyId = management.PropertyId,
+                UnitId = management.UnitId,
+                RelationshipNumber = management.RelationshipNumber,
+                TenantName = management.Parties
+                    .Where(party => party.Role == LeaseManagementPartyRole.PrimaryTenant)
+                    .OrderByDescending(party => party.CreatedAtUtc)
+                    .Select(party => party.Tenant!.FirstName + " " + party.Tenant.LastName)
+                    .FirstOrDefault() ?? management.RelationshipNumber,
+                PropertyName = management.Property!.Name,
+                UnitNumber = management.Unit!.UnitNumber,
+                PlannedPossessionAtUtc = management.PlannedPossessionAtUtc,
+                AgreementFullyExecuted = _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
+                    lifecycle.PortfolioId == scope.PortfolioId &&
+                    lifecycle.LeaseManagementId == management.Id &&
+                    _db.LeaseAgreements.Any(agreement =>
+                        agreement.PortfolioId == lifecycle.PortfolioId &&
+                        agreement.LeaseManagementId == lifecycle.LeaseManagementId &&
+                        agreement.Id == (lifecycle.CurrentAgreementId ?? lifecycle.UpcomingAgreementId) &&
+                        agreement.FullyExecutedAtUtc != null &&
+                        agreement.VoidedAtUtc == null)),
+                PossessionGiven = management.PossessionGivenAtUtc != null,
+            })
+            .SingleOrDefaultAsync(ct);
+    }
+
     private IQueryable<RentalApplication> AuthorizedApplications(WorkspaceReadScope scope, DateTime now) =>
         _db.RentalApplications.AsNoTracking().WhereAuthorized(
             _db, scope, [CapabilityKeys.LeasingApplicationsManage], now);
@@ -387,6 +583,5 @@ public sealed class LeasingWorkspaceService : ILeasingWorkspaceService
 
     private IQueryable<Conversation> AuthorizedConversations(WorkspaceReadScope scope, DateTime now) =>
         _db.Conversations.AsNoTracking().WhereAuthorized(
-            _db, scope,
-            [CapabilityKeys.LeasingOnboardingManage, CapabilityKeys.LeasingApplicationsManage], now);
+            _db, scope, [CapabilityKeys.LeasingOnboardingManage], now);
 }

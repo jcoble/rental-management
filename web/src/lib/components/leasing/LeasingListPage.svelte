@@ -38,12 +38,12 @@
 	}
 
 	function itemHref(item: Record<string, unknown>): string {
-		if (kind === 'rentals') return `/units/${item.unitId}?tab=leasing&view=listing`;
-		if (kind === 'calendar') return `/appointments/${item.id}`;
-		if (kind === 'inbox') return `/messages?${new URLSearchParams({ conversation: String(item.id) })}`;
-		if (item.kind === 'Application') return `/applications/${item.recordId}`;
-		if (item.kind === 'Listing') return `/units/${item.unitId}?tab=leasing&view=listing`;
-		return `/units/${item.unitId}?tab=tenant-lease&view=agreements&leaseManagementId=${item.recordId}`;
+		if (kind === 'rentals') return `/leasing/rentals/${item.unitId}`;
+		if (kind === 'calendar') return `/leasing/appointments/${item.id}`;
+		if (kind === 'inbox') return `/leasing/conversations/${item.id}`;
+		if (item.kind === 'Application') return `/leasing/applications/${item.recordId}`;
+		if (item.kind === 'Listing') return `/leasing/rentals/${item.unitId}`;
+		return `/leasing/move-ins/${item.recordId}`;
 	}
 
 	function itemKey(item: unknown): string {
@@ -90,7 +90,13 @@
 							<p class="mt-3 text-xs text-muted-foreground">Next date: {date(item.nextActionAtUtc)}</p>
 						{:else if kind === 'rentals'}
 							<div class="flex items-start justify-between gap-4"><div><h2 class="font-semibold">{item.propertyName} · Unit {item.unitNumber}</h2><p class="text-sm text-muted-foreground">{item.address}</p><p class="mt-2 text-sm">{item.listingHeadline || 'No listing started'} · {money(item.askingRent)}</p></div><span class="rounded-full bg-secondary px-3 py-1 text-xs font-medium">{item.listingStatus || 'Not listed'}</span></div>
-							<p class="mt-3 text-xs text-muted-foreground">{item.openApplicationCount} open applications · Next showing {date(item.nextShowingAtUtc)}</p>
+							{#if item.canViewApplications || item.canViewShowings}
+								<p class="mt-3 text-xs text-muted-foreground">
+									{#if item.canViewApplications}<span>{item.openApplicationCount} open applications</span>{/if}
+									{#if item.canViewApplications && item.canViewShowings}<span aria-hidden="true"> · </span>{/if}
+									{#if item.canViewShowings}<span>Next showing {date(item.nextShowingAtUtc)}</span>{/if}
+								</p>
+							{/if}
 						{:else if kind === 'calendar'}
 							<div class="flex items-start justify-between gap-4"><div><h2 class="font-semibold">{item.title}</h2><p class="text-sm text-muted-foreground">{item.prospectName || 'Prospect'} · {[item.propertyName, item.unitNumber && `Unit ${item.unitNumber}`].filter(Boolean).join(' · ')}</p></div><span class="rounded-full bg-secondary px-3 py-1 text-xs font-medium">{item.status}</span></div><p class="mt-3 text-sm font-medium">{date(item.scheduledStart)}</p>
 						{:else}

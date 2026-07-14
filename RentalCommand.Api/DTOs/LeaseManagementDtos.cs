@@ -113,6 +113,9 @@ public sealed class LeaseAgreementHistoryResponse
     public string? CorrectionReason { get; init; }
     public int? ReplacesAgreementId { get; init; }
     public int? RenewsAgreementId { get; init; }
+    public int? ReissuesAgreementId { get; init; }
+    public string? ReissueReason { get; init; }
+    public bool HasLiveReissue { get; init; }
     public LeaseAgreementTermType TermType { get; init; }
     public DateOnly TermStartOn { get; init; }
     public DateOnly? TermEndOn { get; init; }

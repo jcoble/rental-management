@@ -108,9 +108,16 @@ internal static class LeaseLegalSchemaSql
           WHERE COALESCE("ReplacesAgreementId", "RenewsAgreementId") IS NOT NULL
             AND "DraftCanceledAtUtc" IS NULL
             AND ("VoidedAtUtc" IS NULL OR "FullyExecutedAtUtc" IS NOT NULL);
+
+        CREATE UNIQUE INDEX "IX_LeaseAgreements_LiveReissue"
+          ON "LeaseAgreements" ("LeaseManagementId", "ReissuesAgreementId")
+          WHERE "ReissuesAgreementId" IS NOT NULL
+            AND "DraftCanceledAtUtc" IS NULL
+            AND ("VoidedAtUtc" IS NULL OR "FullyExecutedAtUtc" IS NOT NULL);
         """;
 
     public const string DropExclusionsAndFunctionalIndexes = """
+        DROP INDEX IF EXISTS "IX_LeaseAgreements_LiveReissue";
         DROP INDEX IF EXISTS "IX_LeaseAgreements_DurableDirectSuccessor";
         DROP INDEX IF EXISTS "IX_LeaseAddendumSigners_LeaseAddendumId_EmailSnapshot_CI";
         DROP INDEX IF EXISTS "IX_LeaseAgreementSigners_LeaseAgreementId_EmailSnapshot_CI";
@@ -189,6 +196,10 @@ internal static class LeaseLegalSchemaSql
           true);
         SELECT rc_set_fk_deferrability(
           '"LeaseAgreements"'::regclass,
+          ARRAY['ReissuesAgreementId', 'LeaseManagementId', 'PortfolioId'],
+          true);
+        SELECT rc_set_fk_deferrability(
+          '"LeaseAgreements"'::regclass,
           ARRAY['SupersededByAgreementId', 'LeaseManagementId', 'PortfolioId'],
           true);
         SELECT rc_set_fk_deferrability(
@@ -256,6 +267,8 @@ internal static class LeaseLegalSchemaSql
           ARRAY['SupersededByAgreementId', 'LeaseManagementId', 'PortfolioId'], false);
         SELECT rc_set_fk_deferrability('"LeaseAgreements"'::regclass,
           ARRAY['RenewsAgreementId', 'LeaseManagementId', 'PortfolioId'], false);
+        SELECT rc_set_fk_deferrability('"LeaseAgreements"'::regclass,
+          ARRAY['ReissuesAgreementId', 'LeaseManagementId', 'PortfolioId'], false);
         SELECT rc_set_fk_deferrability('"LeaseAgreements"'::regclass,
           ARRAY['TransferredFromAgreementId', 'PortfolioId'], false);
         SELECT rc_set_fk_deferrability('"LeaseAgreements"'::regclass,
@@ -384,8 +397,9 @@ internal static class LeaseLegalSchemaSql
 
           IF OLD."IssuedAtUtc" IS NOT NULL AND ROW(
               NEW."PublicId", NEW."PortfolioId", NEW."LeaseManagementId", NEW."VersionNumber",
-              NEW."AgreementNumber", NEW."ChangeType", NEW."CorrectionReason", NEW."TransferredFromAgreementId",
-              NEW."ReplacesAgreementId", NEW."RenewsAgreementId", NEW."TermType",
+              NEW."AgreementNumber", NEW."ChangeType", NEW."CorrectionReason", NEW."ReissueReason",
+              NEW."TransferredFromAgreementId", NEW."ReplacesAgreementId", NEW."RenewsAgreementId",
+              NEW."ReissuesAgreementId", NEW."TermType",
               NEW."TermStartOn", NEW."TermEndOn", NEW."GoverningFromOn",
               NEW."BaseRentAmount", NEW."RentDueDay", NEW."SecurityDepositObligation",
               NEW."LateFeeAmount", NEW."GracePeriodDays", NEW."Currency",
@@ -395,8 +409,9 @@ internal static class LeaseLegalSchemaSql
               NEW."CreatedAtUtc", NEW."CreatedByUserId", NEW."DraftRevision")
             IS DISTINCT FROM ROW(
               OLD."PublicId", OLD."PortfolioId", OLD."LeaseManagementId", OLD."VersionNumber",
-              OLD."AgreementNumber", OLD."ChangeType", OLD."CorrectionReason", OLD."TransferredFromAgreementId",
-              OLD."ReplacesAgreementId", OLD."RenewsAgreementId", OLD."TermType",
+              OLD."AgreementNumber", OLD."ChangeType", OLD."CorrectionReason", OLD."ReissueReason",
+              OLD."TransferredFromAgreementId", OLD."ReplacesAgreementId", OLD."RenewsAgreementId",
+              OLD."ReissuesAgreementId", OLD."TermType",
               OLD."TermStartOn", OLD."TermEndOn", OLD."GoverningFromOn",
               OLD."BaseRentAmount", OLD."RentDueDay", OLD."SecurityDepositObligation",
               OLD."LateFeeAmount", OLD."GracePeriodDays", OLD."Currency",

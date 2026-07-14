@@ -96,6 +96,12 @@ public sealed class CreateLeaseAgreementSuccessorDraftRequest
     public List<LeaseRenewalAddendumDecisionRequest> AddendumDecisions { get; set; } = [];
 }
 
+public sealed class ReplaceIssuedAgreementWithDraftRequest
+{
+    public string? VoidNote { get; set; }
+    public string ReissueReason { get; set; } = string.Empty;
+}
+
 public sealed class CancelLeaseAgreementSuccessorDraftRequest
 {
     public string CancellationReason { get; set; } = string.Empty;
@@ -140,7 +146,7 @@ public sealed class LeaseAgreementEffectiveAddendumSeriesItemResponse
     public bool DecisionRequired { get; init; }
     public int FinancialEffectCount { get; init; }
     public IReadOnlyList<LeaseAgreementRenewalFinancialEffectSummaryResponse> FinancialEffects
-        { get; init; } = [];
+    { get; init; } = [];
 }
 
 /// <summary>

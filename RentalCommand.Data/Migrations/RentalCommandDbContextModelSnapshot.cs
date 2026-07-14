@@ -3279,6 +3279,13 @@ namespace RentalCommand.Data.Migrations
                     b.Property<int?>("RenewsAgreementId")
                         .HasColumnType("integer");
 
+                    b.Property<int?>("ReissuesAgreementId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ReissueReason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
                     b.Property<short>("RentDueDay")
                         .HasColumnType("smallint");
 
@@ -3375,6 +3382,8 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("ReplacesAgreementId", "LeaseManagementId", "PortfolioId");
 
+                    b.HasIndex("ReissuesAgreementId", "LeaseManagementId", "PortfolioId");
+
                     b.HasIndex("SupersededByAgreementId", "LeaseManagementId", "PortfolioId");
 
                     b.HasIndex("PortfolioId", "GoverningFromOn", "TermEndOn", "Id")
@@ -3401,7 +3410,9 @@ namespace RentalCommand.Data.Migrations
 
                             t.HasCheckConstraint("CK_LeaseAgreement_Issuance", "(\"IssuedAtUtc\" IS NULL) = (\"IssuedArtifactId\" IS NULL)");
 
-                            t.HasCheckConstraint("CK_LeaseAgreement_Lineage", "(\"ChangeType\" = 'Initial' AND \"VersionNumber\" = 1 AND \"ReplacesAgreementId\" IS NULL AND \"RenewsAgreementId\" IS NULL AND \"TransferredFromAgreementId\" IS NULL) OR (\"ChangeType\" = 'Transfer' AND \"VersionNumber\" = 1 AND \"TransferredFromAgreementId\" IS NOT NULL AND \"ReplacesAgreementId\" IS NULL AND \"RenewsAgreementId\" IS NULL) OR (\"ChangeType\" IN ('Correction', 'Restatement') AND \"ReplacesAgreementId\" IS NOT NULL AND \"RenewsAgreementId\" IS NULL AND \"TransferredFromAgreementId\" IS NULL) OR (\"ChangeType\" IN ('Renewal', 'MonthToMonth') AND \"RenewsAgreementId\" IS NOT NULL AND \"ReplacesAgreementId\" IS NULL AND \"TransferredFromAgreementId\" IS NULL)");
+                            t.HasCheckConstraint("CK_LeaseAgreement_Lineage", "(\"ChangeType\" = 'Initial' AND ((\"VersionNumber\" = 1 AND \"ReissuesAgreementId\" IS NULL) OR (\"VersionNumber\" > 1 AND \"ReissuesAgreementId\" IS NOT NULL)) AND \"ReplacesAgreementId\" IS NULL AND \"RenewsAgreementId\" IS NULL AND \"TransferredFromAgreementId\" IS NULL) OR (\"ChangeType\" = 'Transfer' AND ((\"VersionNumber\" = 1 AND \"ReissuesAgreementId\" IS NULL) OR (\"VersionNumber\" > 1 AND \"ReissuesAgreementId\" IS NOT NULL)) AND \"TransferredFromAgreementId\" IS NOT NULL AND \"ReplacesAgreementId\" IS NULL AND \"RenewsAgreementId\" IS NULL) OR (\"ChangeType\" IN ('Correction', 'Restatement') AND \"ReplacesAgreementId\" IS NOT NULL AND \"RenewsAgreementId\" IS NULL AND \"TransferredFromAgreementId\" IS NULL) OR (\"ChangeType\" IN ('Renewal', 'MonthToMonth') AND \"RenewsAgreementId\" IS NOT NULL AND \"ReplacesAgreementId\" IS NULL AND \"TransferredFromAgreementId\" IS NULL)");
+
+                            t.HasCheckConstraint("CK_LeaseAgreement_Reissue", "(\"ReissuesAgreementId\" IS NULL AND \"ReissueReason\" IS NULL) OR (\"ReissuesAgreementId\" IS NOT NULL AND \"ReissuesAgreementId\" <> \"Id\" AND \"ReissueReason\" IS NOT NULL AND length(btrim(\"ReissueReason\")) > 0)");
 
                             t.HasCheckConstraint("CK_LeaseAgreement_Money", "\"BaseRentAmount\" >= 0 AND \"SecurityDepositObligation\" >= 0 AND \"LateFeeAmount\" >= 0");
 
@@ -11068,6 +11079,12 @@ namespace RentalCommand.Data.Migrations
                         .HasPrincipalKey("Id", "LeaseManagementId", "PortfolioId")
                         .OnDelete(DeleteBehavior.Restrict);
 
+                    b.HasOne("RentalCommand.Core.Entities.LeaseAgreement", "ReissuedFromAgreement")
+                        .WithMany("ReissuedAgreements")
+                        .HasForeignKey("ReissuesAgreementId", "LeaseManagementId", "PortfolioId")
+                        .HasPrincipalKey("Id", "LeaseManagementId", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("RentalCommand.Core.Entities.LeaseAgreement", "SupersededByAgreement")
                         .WithMany("SupersededAgreements")
                         .HasForeignKey("SupersededByAgreementId", "LeaseManagementId", "PortfolioId")
@@ -11083,6 +11100,8 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("ExecutedArtifact");
 
                     b.Navigation("IssuedArtifact");
+
+                    b.Navigation("ReissuedFromAgreement");
 
                     b.Navigation("LeaseManagement");
 
@@ -13240,6 +13259,8 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("RenewalAddendumDecisions");
 
                     b.Navigation("Renewals");
+
+                    b.Navigation("ReissuedAgreements");
 
                     b.Navigation("Signers");
 

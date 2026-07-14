@@ -68,6 +68,18 @@ public sealed record CreateLeaseAgreementSuccessorDraftCommand(
     long ExpectedAccessRevision,
     string DeliveryIdempotencyKey) : ILeaseAgreementDraftCommand;
 
+public sealed record ReplaceIssuedAgreementWithDraftCommand(
+    int PortfolioId,
+    int LeaseManagementId,
+    int SourceAgreementId,
+    string? VoidNote,
+    string ReissueReason,
+    int ActorUserId,
+    Guid AuthSessionId,
+    int AccessContextId,
+    long ExpectedAccessRevision,
+    string DeliveryIdempotencyKey) : ILeaseAgreementDraftCommand;
+
 public enum LeaseAgreementDraftMutationOutcome
 {
     Applied,
@@ -78,6 +90,7 @@ public enum LeaseAgreementDraftMutationOutcome
     SourceAgreementNotCurrent,
     InvalidSuccessorType,
     InvalidAddendumDecisions,
+    SourceAgreementNotRecoverable,
 }
 
 public sealed record CancelLeaseAgreementSuccessorDraftCommand(

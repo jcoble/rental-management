@@ -1096,6 +1096,14 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
                 CorrectionReason = agreement.CorrectionReason,
                 ReplacesAgreementId = agreement.ReplacesAgreementId,
                 RenewsAgreementId = agreement.RenewsAgreementId,
+                ReissuesAgreementId = agreement.ReissuesAgreementId,
+                ReissueReason = agreement.ReissueReason,
+                HasLiveReissue = _db.LeaseAgreements.Any(candidate =>
+                    candidate.PortfolioId == agreement.PortfolioId
+                    && candidate.LeaseManagementId == agreement.LeaseManagementId
+                    && candidate.ReissuesAgreementId == agreement.Id
+                    && candidate.DraftCanceledAtUtc == null
+                    && (candidate.VoidedAtUtc == null || candidate.FullyExecutedAtUtc != null)),
                 TermType = agreement.TermType,
                 TermStartOn = agreement.TermStartOn,
                 TermEndOn = agreement.TermEndOn,
@@ -1489,27 +1497,27 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         CanonicalLedgerEntryReadRow entry,
         CanonicalLedgerHeaderReadRow header,
         string? type = null) => new()
-    {
-        Date = entry.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
-        Type = type ?? (entry.EntryType == TenantLedgerEntryType.PaymentReceipt ? "Payment"
+        {
+            Date = entry.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            Type = type ?? (entry.EntryType == TenantLedgerEntryType.PaymentReceipt ? "Payment"
             : entry.Direction == TenantLedgerDirection.Debit ? "Charge" : "Credit"),
-        Id = entry.Id,
-        Description = entry.Description,
-        Amount = entry.Direction == TenantLedgerDirection.Debit ? -entry.Amount : entry.Amount,
-        TenantAccountId = entry.TenantAccountId,
-        PropertyId = header.PropertyId,
-        PropertyName = header.PropertyName,
-        Counterparty = string.IsNullOrWhiteSpace(header.TenantName) ? "Tenant" : header.TenantName,
-        Category = entry.EntryType.ToString(),
-        Status = "Posted",
-        SourceHref = $"/tenant-accounts/{entry.TenantAccountId}/entries/{entry.Id}",
-        IsProrated = entry.EntryType == TenantLedgerEntryType.RentCharge
+            Id = entry.Id,
+            Description = entry.Description,
+            Amount = entry.Direction == TenantLedgerDirection.Debit ? -entry.Amount : entry.Amount,
+            TenantAccountId = entry.TenantAccountId,
+            PropertyId = header.PropertyId,
+            PropertyName = header.PropertyName,
+            Counterparty = string.IsNullOrWhiteSpace(header.TenantName) ? "Tenant" : header.TenantName,
+            Category = entry.EntryType.ToString(),
+            Status = "Posted",
+            SourceHref = $"/tenant-accounts/{entry.TenantAccountId}/entries/{entry.Id}",
+            IsProrated = entry.EntryType == TenantLedgerEntryType.RentCharge
             && entry.LeaseAgreementBaseRent.HasValue
             && entry.Amount != entry.LeaseAgreementBaseRent.Value,
-        Explanation = LedgerExplanation.ForTenantLedgerEntry(
+            Explanation = LedgerExplanation.ForTenantLedgerEntry(
             entry.EntryType, entry.Direction, entry.Amount, entry.EffectiveOn, entry.DueOn,
             entry.PaymentMethodSummary, entry.Description),
-    };
+        };
 
     internal sealed class CanonicalLedgerHeaderReadRow
     {

@@ -2436,9 +2436,11 @@ namespace RentalCommand.Data.Migrations
                     AgreementNumber = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: false),
                     ChangeType = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false),
                     CorrectionReason = table.Column<string>(type: "character varying(1000)", maxLength: 1000, nullable: true),
+                    ReissueReason = table.Column<string>(type: "character varying(1000)", maxLength: 1000, nullable: true),
                     TransferredFromAgreementId = table.Column<int>(type: "integer", nullable: true),
                     ReplacesAgreementId = table.Column<int>(type: "integer", nullable: true),
                     RenewsAgreementId = table.Column<int>(type: "integer", nullable: true),
+                    ReissuesAgreementId = table.Column<int>(type: "integer", nullable: true),
                     TermType = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: false),
                     TermStartOn = table.Column<DateOnly>(type: "date", nullable: false),
                     TermEndOn = table.Column<DateOnly>(type: "date", nullable: true),
@@ -2483,7 +2485,8 @@ namespace RentalCommand.Data.Migrations
                     table.CheckConstraint("CK_LeaseAgreement_Execution", "((\"FullyExecutedAtUtc\" IS NULL) = (\"ExecutedArtifactId\" IS NULL)) AND (\"FullyExecutedAtUtc\" IS NULL OR \"IssuedAtUtc\" IS NOT NULL)");
                     table.CheckConstraint("CK_LeaseAgreement_GoverningDate", "\"GoverningFromOn\" >= \"TermStartOn\" AND (\"TermEndOn\" IS NULL OR \"GoverningFromOn\" <= \"TermEndOn\")");
                     table.CheckConstraint("CK_LeaseAgreement_Issuance", "(\"IssuedAtUtc\" IS NULL) = (\"IssuedArtifactId\" IS NULL)");
-                    table.CheckConstraint("CK_LeaseAgreement_Lineage", "(\"ChangeType\" = 'Initial' AND \"VersionNumber\" = 1 AND \"ReplacesAgreementId\" IS NULL AND \"RenewsAgreementId\" IS NULL AND \"TransferredFromAgreementId\" IS NULL) OR (\"ChangeType\" = 'Transfer' AND \"VersionNumber\" = 1 AND \"TransferredFromAgreementId\" IS NOT NULL AND \"ReplacesAgreementId\" IS NULL AND \"RenewsAgreementId\" IS NULL) OR (\"ChangeType\" IN ('Correction', 'Restatement') AND \"ReplacesAgreementId\" IS NOT NULL AND \"RenewsAgreementId\" IS NULL AND \"TransferredFromAgreementId\" IS NULL) OR (\"ChangeType\" IN ('Renewal', 'MonthToMonth') AND \"RenewsAgreementId\" IS NOT NULL AND \"ReplacesAgreementId\" IS NULL AND \"TransferredFromAgreementId\" IS NULL)");
+                    table.CheckConstraint("CK_LeaseAgreement_Lineage", "(\"ChangeType\" = 'Initial' AND ((\"VersionNumber\" = 1 AND \"ReissuesAgreementId\" IS NULL) OR (\"VersionNumber\" > 1 AND \"ReissuesAgreementId\" IS NOT NULL)) AND \"ReplacesAgreementId\" IS NULL AND \"RenewsAgreementId\" IS NULL AND \"TransferredFromAgreementId\" IS NULL) OR (\"ChangeType\" = 'Transfer' AND ((\"VersionNumber\" = 1 AND \"ReissuesAgreementId\" IS NULL) OR (\"VersionNumber\" > 1 AND \"ReissuesAgreementId\" IS NOT NULL)) AND \"TransferredFromAgreementId\" IS NOT NULL AND \"ReplacesAgreementId\" IS NULL AND \"RenewsAgreementId\" IS NULL) OR (\"ChangeType\" IN ('Correction', 'Restatement') AND \"ReplacesAgreementId\" IS NOT NULL AND \"RenewsAgreementId\" IS NULL AND \"TransferredFromAgreementId\" IS NULL) OR (\"ChangeType\" IN ('Renewal', 'MonthToMonth') AND \"RenewsAgreementId\" IS NOT NULL AND \"ReplacesAgreementId\" IS NULL AND \"TransferredFromAgreementId\" IS NULL)");
+                    table.CheckConstraint("CK_LeaseAgreement_Reissue", "(\"ReissuesAgreementId\" IS NULL AND \"ReissueReason\" IS NULL) OR (\"ReissuesAgreementId\" IS NOT NULL AND \"ReissuesAgreementId\" <> \"Id\" AND \"ReissueReason\" IS NOT NULL AND length(btrim(\"ReissueReason\")) > 0)");
                     table.CheckConstraint("CK_LeaseAgreement_Money", "\"BaseRentAmount\" >= 0 AND \"SecurityDepositObligation\" >= 0 AND \"LateFeeAmount\" >= 0");
                     table.CheckConstraint("CK_LeaseAgreement_RentPolicy", "\"RentDueDay\" BETWEEN 1 AND 31 AND \"GracePeriodDays\" BETWEEN 0 AND 31");
                     table.CheckConstraint("CK_LeaseAgreement_SchemaVersions", "\"TermsSchemaVersion\" >= 1");
@@ -2513,6 +2516,12 @@ namespace RentalCommand.Data.Migrations
                     table.ForeignKey(
                         name: "FK_LeaseAgreements_LeaseAgreements_ReplacesAgreementId_LeaseMa~",
                         columns: x => new { x.ReplacesAgreementId, x.LeaseManagementId, x.PortfolioId },
+                        principalTable: "LeaseAgreements",
+                        principalColumns: new[] { "Id", "LeaseManagementId", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_LeaseAgreements_LeaseAgreements_ReissuesAgreementId_LeaseMa~",
+                        columns: x => new { x.ReissuesAgreementId, x.LeaseManagementId, x.PortfolioId },
                         principalTable: "LeaseAgreements",
                         principalColumns: new[] { "Id", "LeaseManagementId", "PortfolioId" },
                         onDelete: ReferentialAction.Restrict);
@@ -6337,6 +6346,11 @@ namespace RentalCommand.Data.Migrations
                 name: "IX_LeaseAgreements_ReplacesAgreementId_LeaseManagementId_Portf~",
                 table: "LeaseAgreements",
                 columns: new[] { "ReplacesAgreementId", "LeaseManagementId", "PortfolioId" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_LeaseAgreements_ReissuesAgreementId_LeaseManagementId_Portf~",
+                table: "LeaseAgreements",
+                columns: new[] { "ReissuesAgreementId", "LeaseManagementId", "PortfolioId" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_LeaseAgreements_SupersededByAgreementId_LeaseManagementId_P~",
