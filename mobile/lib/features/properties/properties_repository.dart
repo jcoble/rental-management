@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import '../../core/models/models.dart';
 
 class PropertyOwnerOption {
@@ -76,9 +77,13 @@ class PropertiesRepository {
   /// Create body: { name, type, addressLine1, city, state, postalCode, ownerId? }
   Future<Property> createProperty(Map<String, dynamic> data) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/properties',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'properties:create:$data',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/properties',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -96,9 +101,13 @@ class PropertiesRepository {
   /// Update body: same optional fields as create (partial PATCH)
   Future<Property> updateProperty(int id, Map<String, dynamic> data) async {
     try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/properties/$id',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'properties:update:$id:$data',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/properties/$id',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -115,7 +124,13 @@ class PropertiesRepository {
 
   Future<void> deleteProperty(int id) async {
     try {
-      await _dio.delete<dynamic>('/properties/$id');
+      await IdempotentMutation.run(
+        'properties:delete:$id',
+        (key) => _dio.delete<dynamic>(
+          '/properties/$id',
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

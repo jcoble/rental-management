@@ -4,6 +4,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import 'vendors_models.dart';
 
 /// Repository for vendors, their scorecards, ratings, and SMS dispatch.
@@ -71,9 +72,13 @@ class VendorsRepository {
 
   Future<Vendor> createVendor(Map<String, dynamic> data) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/vendors',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'vendors:create:$data',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/vendors',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -90,9 +95,13 @@ class VendorsRepository {
 
   Future<Vendor> updateVendor(int id, Map<String, dynamic> data) async {
     try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/vendors/$id',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'vendors:update:$id:$data',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/vendors/$id',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -109,7 +118,13 @@ class VendorsRepository {
 
   Future<void> deleteVendor(int id) async {
     try {
-      await _dio.delete<dynamic>('/vendors/$id');
+      await IdempotentMutation.run(
+        'vendors:delete:$id',
+        (key) => _dio.delete<dynamic>(
+          '/vendors/$id',
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

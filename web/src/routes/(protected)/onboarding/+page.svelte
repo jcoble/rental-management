@@ -432,18 +432,12 @@
 	}));
 	type DeleteOwnerVariables = {
 		id: number;
-		clearPropertyAssignments: boolean;
 	};
 	const deleteOwnerMutation = createMutation<void, Error, DeleteOwnerVariables>(() => ({
-		mutationFn: ({ id, clearPropertyAssignments }) =>
-			owners.delete(id, { clearPropertyAssignments }),
+		mutationFn: ({ id }) => owners.delete(id),
 		onSuccess: (_result, vars) => {
-			const { id, clearPropertyAssignments } = vars;
-			showSuccess(
-				clearPropertyAssignments
-					? 'Owner deleted. Assigned properties are now unassigned.'
-					: 'Owner deleted.'
-			);
+			const { id } = vars;
+			showSuccess('Owner deleted.');
 			ownerDeleteTarget = null;
 			if (createdOwner?.id === id) createdOwner = null;
 			if (selectedOwnerId === String(id)) selectOwnerRecord(NEW_ONBOARDING_OWNER_VALUE);
@@ -1886,16 +1880,19 @@
 	title="Delete owner"
 	message={ownerDeleteTarget
 		? ownerDeleteAssignedCount > 0
-			? `Delete "${ownerOptionLabel(ownerDeleteTarget)}"? This will set ${ownerDeleteAssignedCount} propert${ownerDeleteAssignedCount === 1 ? 'y' : 'ies'} to No owner assigned. You can assign another owner later, but owner reports and statements need an owner before they are final.`
+			? `"${ownerOptionLabel(ownerDeleteTarget)}" is assigned to ${ownerDeleteAssignedCount} propert${ownerDeleteAssignedCount === 1 ? 'y' : 'ies'}. Reassign or clear those properties before deleting this owner.`
 			: `Delete "${ownerOptionLabel(ownerDeleteTarget)}"? This owner is not assigned to any properties.`
 		: ''}
-	confirmLabel={ownerDeleteAssignedCount > 0 ? 'Clear owner & delete' : 'Delete owner'}
+	confirmLabel={ownerDeleteAssignedCount > 0 ? 'Close' : 'Delete owner'}
 	busy={deleteOwnerMutation.isPending}
 	testid="onboarding-owner-delete-confirm"
-	onconfirm={() => ownerDeleteTarget && deleteOwnerMutation.mutate({
-		id: ownerDeleteTarget.id,
-		clearPropertyAssignments: ownerDeleteAssignedCount > 0
-	})}
+	onconfirm={() => {
+		if (!ownerDeleteTarget || ownerDeleteAssignedCount > 0) {
+			ownerDeleteTarget = null;
+			return;
+		}
+		deleteOwnerMutation.mutate({ id: ownerDeleteTarget.id });
+	}}
 	oncancel={() => (ownerDeleteTarget = null)}
 />
 

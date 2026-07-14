@@ -50,10 +50,15 @@ public class OwnerEntityController : ManagementControllerBase
 
     [HttpPost]
     [ProducesResponseType(typeof(OwnerEntityResponse), StatusCodes.Status201Created)]
-    public async Task<ActionResult<OwnerEntityResponse>> Create([FromBody] CreateOwnerEntityRequest request, CancellationToken ct)
+    public async Task<ActionResult<OwnerEntityResponse>> Create(
+        [FromBody] CreateOwnerEntityRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
-        var created = await _service.CreateAsync(scope, request, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+        var created = await _service.CreateAsync(scope, request, operationKey, ct);
         if (created == null) return NotFound(new { error = "Owner entity not found" });
         return CreatedAtAction(nameof(Get), new { id = created.Id }, created);
     }
@@ -61,10 +66,16 @@ public class OwnerEntityController : ManagementControllerBase
     [HttpPatch("{id:int}")]
     [ProducesResponseType(typeof(OwnerEntityResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<OwnerEntityResponse>> Update(int id, [FromBody] UpdateOwnerEntityRequest request, CancellationToken ct)
+    public async Task<ActionResult<OwnerEntityResponse>> Update(
+        int id,
+        [FromBody] UpdateOwnerEntityRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
-        var updated = await _service.UpdateAsync(scope, id, request, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+        var updated = await _service.UpdateAsync(scope, id, request, operationKey, ct);
         return updated == null ? NotFound(new { error = "Owner entity not found" }) : Ok(updated);
     }
 
@@ -73,15 +84,13 @@ public class OwnerEntityController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(
         int id,
-        [FromQuery] bool clearPropertyAssignments = false,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey = null,
         CancellationToken ct = default)
     {
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
-        var deleted = await _service.DeleteAsync(
-            scope,
-            id,
-            new DeleteOwnerEntityOptions { ClearPropertyAssignments = clearPropertyAssignments },
-            ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+        var deleted = await _service.DeleteAsync(scope, id, operationKey, ct);
         return deleted ? NoContent() : NotFound(new { error = "Owner entity not found" });
     }
 }

@@ -52,10 +52,15 @@ public class PropertyController : ManagementControllerBase
     [HttpPost]
     [ProducesResponseType(typeof(PropertyResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<PropertyResponse>> Create([FromBody] CreatePropertyRequest request, CancellationToken ct)
+    public async Task<ActionResult<PropertyResponse>> Create(
+        [FromBody] CreatePropertyRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
-        var created = await _service.CreateAsync(scope, request, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+        var created = await _service.CreateAsync(scope, request, operationKey, ct);
         return created == null
             ? NotFound(new { error = "Referenced owner or owner entity not found in this portfolio" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
@@ -64,20 +69,31 @@ public class PropertyController : ManagementControllerBase
     [HttpPatch("{id:int}")]
     [ProducesResponseType(typeof(PropertyResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<PropertyResponse>> Update(int id, [FromBody] UpdatePropertyRequest request, CancellationToken ct)
+    public async Task<ActionResult<PropertyResponse>> Update(
+        int id,
+        [FromBody] UpdatePropertyRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
-        var updated = await _service.UpdateAsync(scope, id, request, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+        var updated = await _service.UpdateAsync(scope, id, request, operationKey, ct);
         return updated == null ? NotFound(new { error = "Property not found" }) : Ok(updated);
     }
 
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        int id,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
         if (!TryReadWorkspaceScope(out var scope)) return Forbid();
-        var deleted = await _service.DeleteAsync(scope, id, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+        var deleted = await _service.DeleteAsync(scope, id, operationKey, ct);
         return deleted ? NoContent() : NotFound(new { error = "Property not found" });
     }
 }

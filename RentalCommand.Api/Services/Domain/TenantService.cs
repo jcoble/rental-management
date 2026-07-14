@@ -1,8 +1,10 @@
 using System.Text;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -24,17 +26,68 @@ public class TenantService : ITenantService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
+    private readonly IAtomicUnitOfWork? _atomic;
     private readonly TimeProvider _timeProvider;
 
     public TenantService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IAtomicUnitOfWork? atomic = null)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _timeProvider = timeProvider;
+        _atomic = atomic;
+}
+    public async Task<TenantResponse?> CreateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        CreateTenantRequest request,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Tenant,
+            AtomicCoreCrudMutationOperation.Create, 0, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
+        return DeserializeSnapshot<TenantResponse>(outcome.Value);
     }
+
+    public async Task<TenantResponse?> UpdateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        UpdateTenantRequest request,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Tenant,
+            AtomicCoreCrudMutationOperation.Update, id, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
+        return DeserializeSnapshot<TenantResponse>(outcome.Value);
+    }
+
+    public async Task<bool> DeleteAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Tenant,
+            AtomicCoreCrudMutationOperation.Delete, id, operationKey, new object());
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
+        return outcome.Value.Found;
+    }
+
+    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
+        "Scoped tenant mutations require the atomic persistence kernel.");
+
+    private static TResponse? DeserializeSnapshot<TResponse>(AtomicCoreCrudMutationResult result)
+        where TResponse : class =>
+        result.Found && result.ResponseJson is not null
+            ? JsonSerializer.Deserialize<TResponse>(result.ResponseJson)
+            : null;
 
     public async Task<IReadOnlyList<TenantResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
     {
@@ -408,221 +461,4 @@ public class TenantService : ITenantService
         return response;
     }
 
-    public async Task<TenantResponse> CreateAsync(int portfolioId, CreateTenantRequest request, CancellationToken ct = default)
-    {
-        var now = _timeProvider.UtcNow();
-        var entity = new Tenant
-        {
-            PortfolioId = portfolioId,
-            FirstName = request.FirstName,
-            LastName = request.LastName,
-            Email = request.Email,
-            Phone = request.Phone,
-            EmergencyContact = request.EmergencyContact,
-            DateOfBirth = request.DateOfBirth.ToUtc(),
-            Notes = request.Notes,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        _db.Tenants.Add(entity);
-        await _db.SaveChangesAsync(ct);
-
-        var response = await GetAsync(portfolioId, entity.Id, ct) ?? TenantResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
-    }
-
-    public async Task<TenantResponse?> CreateAuthorizedAsync(
-        WorkspaceReadScope scope,
-        CreateTenantRequest request,
-        CancellationToken ct = default)
-    {
-        var entity = await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
-        {
-            var hasPortfolioWideAccess = await _db.AuthorizedAllPropertyAssignments(
-                    scope,
-                    [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage],
-                    CapabilityAuthorizationTargetKind.Property,
-                    _timeProvider.UtcNow())
-                .AnyAsync(innerCt);
-            if (!hasPortfolioWideAccess)
-            {
-                return null;
-            }
-
-            var now = _timeProvider.UtcNow();
-            var created = new Tenant
-            {
-                PortfolioId = scope.PortfolioId,
-                FirstName = request.FirstName,
-                LastName = request.LastName,
-                Email = request.Email,
-                Phone = request.Phone,
-                EmergencyContact = request.EmergencyContact,
-                DateOfBirth = request.DateOfBirth.ToUtc(),
-                Notes = request.Notes,
-                CreatedAt = now,
-                UpdatedAt = now,
-            };
-            _db.Tenants.Add(created);
-            await _db.SaveChangesAsync(innerCt);
-            return created;
-        }, ct);
-
-        if (entity is null)
-        {
-            return null;
-        }
-
-        var response = await GetAsync(scope.PortfolioId, entity.Id, ct) ?? TenantResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, entity.Id, response, ct);
-        return response;
-    }
-
-    public async Task<TenantResponse?> UpdateAsync(int portfolioId, int id, UpdateTenantRequest request, CancellationToken ct = default)
-    {
-        var tenants = _db.Tenants.Where(t => t.Id == id && t.PortfolioId == portfolioId);
-        return await UpdateFromQueryAsync(tenants, portfolioId, request, ct);
-    }
-
-    public async Task<TenantResponse?> UpdateAuthorizedAsync(
-        WorkspaceReadScope scope,
-        int id,
-        UpdateTenantRequest request,
-        CancellationToken ct = default)
-    {
-        var response = await _db.ExecuteAuthorizedMutationAsync(innerCt =>
-        {
-            var tenants = _db.Tenants
-                .Where(t => t.Id == id)
-                .WhereAuthorized(
-                    _db,
-                    scope,
-                    [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage],
-                    _timeProvider.UtcNow());
-            return UpdateFromQueryAsync(tenants, scope.PortfolioId, request, innerCt, broadcast: false);
-        }, ct);
-
-        if (response is not null)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(scope.PortfolioId, EntityType, response.Id, response, ct);
-        }
-
-        return response;
-    }
-
-    private async Task<TenantResponse?> UpdateFromQueryAsync(
-        IQueryable<Tenant> tenants,
-        int portfolioId,
-        UpdateTenantRequest request,
-        CancellationToken ct,
-        bool broadcast = true)
-    {
-        var entity = await tenants.FirstOrDefaultAsync(ct);
-        if (entity == null)
-        {
-            return null;
-        }
-
-        if (request.FirstName != null) entity.FirstName = request.FirstName;
-        if (request.LastName != null) entity.LastName = request.LastName;
-        if (request.Email != null) entity.Email = request.Email;
-        if (request.Phone != null) entity.Phone = request.Phone;
-        if (request.EmergencyContact != null) entity.EmergencyContact = request.EmergencyContact;
-        if (request.DateOfBirth.HasValue) entity.DateOfBirth = request.DateOfBirth.ToUtc();
-        if (request.Notes != null) entity.Notes = request.Notes;
-        entity.UpdatedAt = _timeProvider.UtcNow();
-
-        await _db.SaveChangesAsync(ct);
-
-        var response = await GetAsync(portfolioId, entity.Id, ct) ?? TenantResponse.FromEntity(entity);
-        if (broadcast)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        }
-        return response;
-    }
-
-    public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
-    {
-        var tenants = _db.Tenants.Where(t => t.Id == id && t.PortfolioId == portfolioId);
-        return await DeleteFromQueryAsync(tenants, portfolioId, id, ct);
-    }
-
-    public async Task<bool> DeleteAuthorizedAsync(
-        WorkspaceReadScope scope,
-        int id,
-        CancellationToken ct = default)
-    {
-        var deleted = await _db.ExecuteAuthorizedMutationAsync(innerCt =>
-        {
-            var tenants = _db.Tenants
-                .Where(t => t.Id == id)
-                .WhereAuthorized(
-                    _db,
-                    scope,
-                    [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage],
-                    _timeProvider.UtcNow());
-            return DeleteFromQueryAsync(tenants, scope.PortfolioId, id, innerCt, broadcast: false);
-        }, ct);
-
-        if (deleted)
-        {
-            await _dataUpdate.BroadcastEntityDeleteAsync(scope.PortfolioId, EntityType, id, ct);
-        }
-
-        return deleted;
-    }
-
-    private async Task<bool> DeleteFromQueryAsync(
-        IQueryable<Tenant> tenants,
-        int portfolioId,
-        int id,
-        CancellationToken ct,
-        bool broadcast = true)
-    {
-        var entity = await tenants.FirstOrDefaultAsync(ct);
-        if (entity == null)
-        {
-            return false;
-        }
-
-        var hasOccupyingLease = await _db.LeaseManagementParties.AnyAsync(party =>
-            party.PortfolioId == portfolioId
-            && party.TenantId == id
-            && party.Role != LeaseManagementPartyRole.Guarantor
-            && _db.UnitOccupancyProjections.Any(occupancy =>
-                occupancy.PortfolioId == portfolioId
-                && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
-            && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
-                lifecycle.PortfolioId == portfolioId
-                && lifecycle.LeaseManagementId == party.LeaseManagementId
-                && party.EffectiveFrom <= lifecycle.BusinessDate
-                && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)), ct);
-        if (hasOccupyingLease)
-        {
-            throw new DomainValidationException(
-                ActiveLeaseDeleteBlockedReason,
-                StatusCodes.Status409Conflict);
-        }
-
-        var hasLeaseHistory = await _db.LeaseManagementParties.AnyAsync(party =>
-            party.PortfolioId == portfolioId && party.TenantId == id, ct);
-        if (hasLeaseHistory)
-        {
-            throw new DomainValidationException(
-                LeaseHistoryDeleteBlockedReason,
-                StatusCodes.Status409Conflict);
-        }
-
-        entity.DeletedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
-
-        if (broadcast)
-        {
-            await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
-        }
-        return true;
-    }
 }
