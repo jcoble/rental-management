@@ -539,6 +539,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         public void BindSemanticAudit(object entityReference, AtomicSemanticAudit audit)
         {
             ArgumentNullException.ThrowIfNull(entityReference);
+            _db.ChangeTracker.DetectChanges();
             _auditScope.BindSemantic(entityReference, _db.Entry(entityReference), audit);
         }
 

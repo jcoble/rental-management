@@ -51,7 +51,9 @@ public sealed class DocumentTemplateServiceTests : IDisposable
             RentalCommand.Core.Documents.DocumentTemplateMutationResult,
             AddDocumentTemplateFieldHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
-            builder.UseSqlite(_ctx.ConnectionString).UseAtomicPersistenceKernel(provider));
+            builder.UseSqlite(_ctx.ConnectionString)
+                .AddInterceptors(SqliteDatabaseClockInterceptor.Instance)
+                .UseAtomicPersistenceKernel(provider));
         services.AddScoped<IPendingFileUploadStore, PendingFileUploadStore>();
         _services = services.BuildServiceProvider();
         _sut = new DocumentTemplateService(
