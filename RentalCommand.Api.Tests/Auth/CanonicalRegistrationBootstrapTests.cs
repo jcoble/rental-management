@@ -6,11 +6,14 @@ using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
+using Npgsql;
 using RentalCommand.Api.Data;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Tests.Domain;
 using RentalCommand.Api.Tests;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -29,6 +32,8 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
     private readonly MigratedPostgreSqlFixture _fixture;
     private MigratedPostgreSqlTestContext _ctx = null!;
     private UserManager<ApplicationUser> _users = null!;
+    private ServiceProvider _services = null!;
+    private IAtomicUnitOfWork _atomic = null!;
 
     public CanonicalRegistrationBootstrapTests(MigratedPostgreSqlFixture fixture)
     {
@@ -38,6 +43,9 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _ctx = await _fixture.CreateContextAsync();
+        _services = AtomicDomainTestKernel.CreateForAccountBootstrapPostgreSql(
+            (NpgsqlConnection)_ctx.Db.Database.GetDbConnection());
+        _atomic = _services.GetRequiredService<IAtomicUnitOfWork>();
         _users = CreateUserManager(_ctx.Db);
     }
 
@@ -170,7 +178,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
             Options.Create(settings),
             new CanonicalAccountBootstrapService(
                 _users,
-                Mock.Of<IAtomicUnitOfWork>(),
+                _atomic,
                 Options.Create(new AtomicAuthSessionCredentialOptions
                 {
                     SigningKey = Convert.ToBase64String(new byte[32]),
@@ -238,12 +246,12 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
             Mock.Of<IAuthEmailSender>(),
             new CanonicalAccountBootstrapService(
                 _users,
-                Mock.Of<IAtomicUnitOfWork>(),
+                _atomic,
                 Options.Create(new AtomicAuthSessionCredentialOptions
                 {
                     SigningKey = Convert.ToBase64String(new byte[32]),
                 })),
-            Mock.Of<RentalCommand.Core.Atomic.IAtomicUnitOfWork>(),
+            _atomic,
             NullLogger<AuthService>.Instance,
             TimeProvider.System);
     }
@@ -283,6 +291,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
     public async Task DisposeAsync()
     {
         _users.Dispose();
+        await _services.DisposeAsync();
         await _ctx.DisposeAsync();
     }
 }

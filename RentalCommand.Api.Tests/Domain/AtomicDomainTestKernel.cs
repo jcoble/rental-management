@@ -1,12 +1,16 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Operations;
+using RentalCommand.Core.Auth;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
+using RentalCommand.Data.Auth;
 using RentalCommand.Data.Operations;
 using RentalCommand.TestCommon;
 
@@ -66,6 +70,26 @@ internal static class AtomicDomainTestKernel
         return services.BuildServiceProvider();
     }
 
+    internal static ServiceProvider CreateForAccountBootstrapPostgreSql(NpgsqlConnection connection)
+    {
+        var services = CorePostgreSql(connection);
+        services.AddAtomicCommandHandler<
+            BootstrapAccountCommand,
+            BootstrapAccountResult,
+            BootstrapAccountHandler>();
+        return services.BuildServiceProvider();
+    }
+
+    internal static ServiceProvider CreateForPasswordResetSqlite(SqliteConnection connection)
+    {
+        var services = CoreSqlite(connection);
+        services.AddAtomicCommandHandler<
+            ResetAccountPasswordCommand,
+            ResetAccountPasswordResult,
+            ResetAccountPasswordHandler>();
+        return services.BuildServiceProvider();
+    }
+
     private static ServiceCollection Core(string connectionString)
     {
         var services = new ServiceCollection();
@@ -87,6 +111,31 @@ internal static class AtomicDomainTestKernel
         services.AddAtomicPersistenceKernel();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseNpgsql(connectionString)
+                .UseAtomicPersistenceKernel(provider));
+        return services;
+    }
+
+    private static ServiceCollection CorePostgreSql(NpgsqlConnection connection)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+            builder.UseNpgsql(connection)
+                .UseAtomicPersistenceKernel(provider));
+        return services;
+    }
+
+    private static ServiceCollection CoreSqlite(SqliteConnection connection)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+            builder.UseSqlite(connection)
+                .AddInterceptors(SqliteDatabaseClockInterceptor.Instance)
                 .UseAtomicPersistenceKernel(provider));
         return services;
     }
