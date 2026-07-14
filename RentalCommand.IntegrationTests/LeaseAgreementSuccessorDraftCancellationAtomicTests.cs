@@ -276,6 +276,9 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         executed.IssuedAtUtc = now;
         executed.ExecutedArtifactId = executedArtifactId;
         executed.FullyExecutedAtUtc = now;
+        db.LeaseAgreementSigners.AddRange(
+            RequiredTenantSigner(portfolio.Id, successorIds[1], "issued-signer@example.test"),
+            RequiredTenantSigner(portfolio.Id, successorIds[2], "executed-signer@example.test"));
 
         var accessContext = new WorkspaceAccessContext
         {
@@ -333,6 +336,20 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
             accessContext.Id,
             accessContext.AccessRevision);
     }
+
+    private static LeaseAgreementSigner RequiredTenantSigner(
+        int portfolioId,
+        int leaseAgreementId,
+        string email) => new()
+    {
+        PortfolioId = portfolioId,
+        LeaseAgreementId = leaseAgreementId,
+        SignerRole = LeaseLegalSignerRole.PrimaryTenant,
+        NameSnapshot = "Test Tenant",
+        EmailSnapshot = email,
+        SigningOrder = 1,
+        IsRequired = true,
+    };
 
     private LeaseAgreement NewSuccessor(
         int id,
