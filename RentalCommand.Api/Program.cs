@@ -160,10 +160,9 @@ if (!migrateOnly)
 
 builder.Services.AddHttpContextAccessor();
 
-// Converted commands opt into the atomic executor. Both interceptors are attached to the shared
-// context during this unmerged rewrite: the legacy audit interceptor stands down only while an
-// admitted atomic attempt is active, and the atomic interceptors are inert for unconverted paths.
-builder.Services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
+// Production persistence is fail-closed: auditable writes and raw DML must be admitted by the
+// atomic executor or by one exact infrastructure mutation lease.
+builder.Services.AddAtomicPersistenceKernel(allowUnconvertedWrites: false);
 builder.Services.AddAtomicCommandHandler<
     RentalCommand.Api.Services.Domain.AtomicMoneyMutationCommand,
     RentalCommand.Api.Services.Domain.AtomicMoneyMutationResult,
