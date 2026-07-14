@@ -4,13 +4,15 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Listings;
-using RentalCommand.TestCommon;
 using RentalCommand.Data.Documents;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -18,118 +20,89 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
 {
     private const int PortfolioId = 1;
     private readonly SqliteTestContext _context = new();
+    private readonly CapturingAtomicUnitOfWork _atomic = new();
     private readonly ListingWorkspaceService _service;
 
     public ListingWorkspaceServiceTests()
-        => _service = new ListingWorkspaceService(_context.Db, Mock.Of<IDataUpdateService>(),
-            Mock.Of<IAuditTrailService>(), new PermissiveInfrastructureWriteGate(), Mock.Of<IFileStorage>(),
+        => _service = new ListingWorkspaceService(
+            _context.Db,
+            new PermissiveInfrastructureWriteGate(),
+            Mock.Of<IFileStorage>(),
             Mock.Of<IPendingFileUploadStore>(),
             new ListingChannelAdapterResolver([new DisabledZillowListingChannelAdapter()]),
-            NullLogger<ListingWorkspaceService>.Instance, TimeProvider.System);
+            NullLogger<ListingWorkspaceService>.Instance,
+            TimeProvider.System,
+            _atomic);
 
     public void Dispose() => _context.Dispose();
 
     [Fact]
-    public async Task GenerateAsync_CreatesOneProviderNeutralListingWithBothZillowModes()
+    public async Task GenerateAsync_DelegatesOneAtomicCommandAndReturnsCurrentWorkspace()
     {
-        var unit = SeedUnit();
+        var listing = SeedListing();
+        var scope = Scope();
 
-        var result = await _service.GenerateAsync(PortfolioId, unit.Id, 42);
+        var result = await _service.GenerateAsync(scope, listing.UnitId, "generate-1");
 
         result.Should().NotBeNull();
-        result!.Headline.Should().Contain("2 bed");
-        result.PhotoManifest.Select(photo => photo.Position).Should().BeInAscendingOrder();
-        result.Publications.Should().ContainSingle(item => item.ProviderKey == "Zillow" && item.Mode == "Guided");
-        result.Publications.Should().ContainSingle(item => item.ProviderKey == "Zillow" && item.Mode == "Connected");
-        result.SignedLeaseImportUrl.Should().Contain($"unitId={unit.Id}");
-        _context.Db.RentalListings.Should().ContainSingle(item => item.UnitId == unit.Id);
+        _atomic.LastIdentity!.CommandType.Should().Be("listing-workspace.generate");
+        _atomic.LastIdentity.IdempotencyKey.Should().StartWith($"{PortfolioId}:{listing.UnitId}:");
+        _atomic.LastCommand.Should().BeEquivalentTo(new GenerateListingWorkspaceCommand(
+            scope.PortfolioId, listing.UnitId, scope.UserId, scope.SessionId,
+            scope.AccessContextId, scope.AccessRevision));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task GenerateAsync_RejectsMissingCallerOperationKey(string operationKey)
+    {
+        var listing = SeedListing();
+
+        var action = () => _service.GenerateAsync(Scope(), listing.UnitId, operationKey);
+
+        await action.Should().ThrowAsync<DomainValidationException>()
+            .WithMessage("*Client operation ID is required*");
+        _atomic.LastCommand.Should().BeNull();
     }
 
     [Fact]
-    public async Task SaveAsync_ContentChangeMarksPreviouslyPublishedGuidedVersionForRepublish()
+    public async Task ReorderPhotosAsync_DelegatesTheCompleteManifestToKernelOwnedPersistence()
     {
-        var unit = SeedUnit();
-        var generated = await _service.GenerateAsync(PortfolioId, unit.Id, 42);
-        await _service.SaveAsync(PortfolioId, unit.Id, new SaveListingWorkspaceRequest
-        {
-            ZillowGuided = new SaveGuidedPublicationRequest { MarkCurrentVersionPublished = true },
-        }, 42);
+        var listing = SeedListing();
+        var scope = Scope();
+        var requestedOrder = new[] { 31, 29, 30 };
 
-        var saved = await _service.SaveAsync(PortfolioId, unit.Id,
-            new SaveListingWorkspaceRequest { Headline = "Updated title" }, 42);
+        await _service.ReorderPhotosAsync(scope, listing.UnitId,
+            new ReorderListingPhotosRequest { PhotoIds = requestedOrder }, "reorder-1");
 
-        saved!.ContentVersion.Should().Be(generated!.ContentVersion + 1);
-        saved.Publications.Single(item => item.Mode == "Guided").NeedsRepublish.Should().BeTrue();
+        _atomic.LastCommand.Should().BeEquivalentTo(new ReorderListingPhotosCommand(
+            scope.PortfolioId, listing.UnitId, scope.UserId, scope.SessionId,
+            scope.AccessContextId, scope.AccessRevision, requestedOrder));
     }
 
     [Fact]
-    public async Task GenerateAsync_ExistingWorkspaceSyncsUnitDetailsWithoutReplacingCustomizedContent()
+    public async Task IngestSignalAsync_DeduplicatesProviderMessageKeyInTheDatabase()
     {
-        var unit = SeedUnit();
-        var generated = await _service.GenerateAsync(PortfolioId, unit.Id, 42);
-        var customized = await _service.SaveAsync(PortfolioId, unit.Id, new SaveListingWorkspaceRequest
-        {
-            Headline = "Sunny corner apartment",
-            Description = "User-written listing copy",
-            Rent = 1725m,
-            SecurityDeposit = 900m,
-            LeaseTerms = "Flexible 10- or 12-month lease",
-        }, 42);
-        unit.Bedrooms = 3;
-        unit.SquareFeet = 1100;
-        unit.MarketRent = 1900m;
-        await _context.Db.SaveChangesAsync();
-
-        var synchronized = await _service.GenerateAsync(PortfolioId, unit.Id, 42);
-
-        synchronized.Should().NotBeNull();
-        synchronized!.Headline.Should().Be("Sunny corner apartment");
-        synchronized.Description.Should().Be("User-written listing copy");
-        synchronized.Rent.Should().Be(1725m);
-        synchronized.SecurityDeposit.Should().Be(900m);
-        synchronized.LeaseTerms.Should().Be("Flexible 10- or 12-month lease");
-        synchronized.Bedrooms.Should().Be(3);
-        synchronized.SquareFeet.Should().Be(1100);
-        synchronized.ContentVersion.Should().Be(customized!.ContentVersion + 1);
-    }
-
-    [Fact]
-    public async Task UpdatePhotoAsync_ChangesMetadataAndAdvancesListingContentVersion()
-    {
-        var unit = SeedUnit();
-        var generated = await _service.GenerateAsync(PortfolioId, unit.Id, 42);
-        var photo = generated!.PhotoManifest.First();
-
-        var updated = await _service.UpdatePhotoAsync(PortfolioId, unit.Id, photo.Id,
-            new UpdateListingPhotoRequest { Category = "Front exterior", Caption = "Street-facing view" }, 42);
-
-        updated!.ContentVersion.Should().Be(generated.ContentVersion + 1);
-        updated.PhotoManifest.First(item => item.Id == photo.Id).Should().Match<ListingPhotoResponse>(item =>
-            item.Category == "Front exterior" && item.Caption == "Street-facing view");
-    }
-
-    [Fact]
-    public async Task IngestSignalAsync_DeduplicatesUntrustedProviderMessageKey()
-    {
-        var unit = SeedUnit();
-        var workspace = await _service.GenerateAsync(PortfolioId, unit.Id, 42);
-        var publicationId = workspace!.Publications.Single(item => item.Mode == "Guided").Id;
+        var listing = SeedListing();
+        var publicationId = listing.Publications.Single(item => item.Mode == ListingPublicationMode.Guided).Id;
         var request = new IngestExternalListingSignalRequest
         {
-            ProviderMessageKey = "message-1",
             SignalType = "StatusChanged",
             SuggestedExternalStatus = "Active",
         };
 
-        var first = await _service.IngestSignalAsync(PortfolioId, unit.Id, publicationId, request);
-        var replay = await _service.IngestSignalAsync(PortfolioId, unit.Id, publicationId, request);
+        var first = await _service.IngestSignalAsync(
+            PortfolioId, listing.UnitId, publicationId, "message-1", request);
+        var replay = await _service.IngestSignalAsync(
+            PortfolioId, listing.UnitId, publicationId, "message-1", request);
 
         replay!.Id.Should().Be(first!.Id);
         _context.Db.ExternalListingSignals.Should().ContainSingle();
     }
 
     [Fact]
-    public void WorkspaceReadShape_HasServerSideScopeOrderingAndSignalFilter()
+    public void WorkspaceReadShape_FiltersOrdersAndJoinsInOneServerSideQuery()
     {
         var query = _context.Db.RentalListings.AsNoTracking()
             .Where(listing => listing.PortfolioId == PortfolioId && listing.UnitId == 27)
@@ -162,35 +135,102 @@ public sealed class ListingWorkspaceServiceTests : IDisposable
         sql.Should().Contain("UnitId");
     }
 
-    [Fact]
-    public void PhotoReorderSqlContract_ValidatesAndWritesTheCompleteOrderSetInPostgres()
-    {
-        ListingWorkspaceService.PhotoOrderValidationSql.Should().Contain("unnest(@photoIds::integer[])");
-        ListingWorkspaceService.PhotoOrderValidationSql.Should().Contain("COUNT(DISTINCT requested.\"PhotoId\")");
-        ListingWorkspaceService.PhotoOrderValidationSql.Should().Contain("COUNT(photo.\"Id\")");
-        ListingWorkspaceService.PhotoOrderValidationSql.Should().Contain("BOOL_OR");
-        ListingWorkspaceService.PhotoOrderUpdateSql.Should().Contain("UPDATE \"ListingPhotos\"");
-        ListingWorkspaceService.PhotoOrderUpdateSql.Should().Contain("WITH ORDINALITY");
-        ListingWorkspaceService.PhotoOrderUpdateSql.Should().Contain("photo.\"PortfolioId\" = @portfolioId");
-    }
-
-    private Unit SeedUnit()
+    private RentalListing SeedListing()
     {
         var now = DateTime.UtcNow;
         var property = new Property
         {
-            PortfolioId = PortfolioId, Name = "Cedar Point", AddressLine1 = "100 Main St",
-            City = "Columbus", State = "OH", PostalCode = "43215", CreatedAt = now, UpdatedAt = now,
+            PortfolioId = PortfolioId,
+            Name = "Cedar Point",
+            AddressLine1 = "100 Main St",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
         };
         var unit = new Unit
         {
-            PortfolioId = PortfolioId, Property = property, UnitNumber = "2A", Bedrooms = 2,
-            Bathrooms = 1.5m, SquareFeet = 925, MarketRent = 1450m,
-            CreatedAt = now, UpdatedAt = now,
+            PortfolioId = PortfolioId,
+            Property = property,
+            UnitNumber = "2A",
+            Bedrooms = 2,
+            Bathrooms = 1.5m,
+            SquareFeet = 925,
+            MarketRent = 1450m,
+            CreatedAt = now,
+            UpdatedAt = now,
         };
         _context.Db.AddRange(property, unit);
         _context.Db.SaveChanges();
-        return unit;
+        var listing = new RentalListing
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            Unit = unit,
+            Headline = "Two bedroom apartment",
+            Description = "A complete listing description.",
+            Rent = 1450m,
+            ContentVersion = 1,
+            CreatedAt = now,
+            UpdatedAt = now,
+            Publications =
+            [
+                new ListingPublication
+                {
+                    PortfolioId = PortfolioId,
+                    ProviderKey = ListingProviderKeys.Zillow,
+                    Mode = ListingPublicationMode.Guided,
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                },
+                new ListingPublication
+                {
+                    PortfolioId = PortfolioId,
+                    ProviderKey = ListingProviderKeys.Zillow,
+                    Mode = ListingPublicationMode.Connected,
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                },
+            ],
+        };
+        _context.Db.Add(listing);
+        _context.Db.SaveChanges();
+        return listing;
+    }
+
+    private static WorkspaceReadScope Scope() =>
+        new(PortfolioId, 42, Guid.Parse("18e99783-e913-401d-8158-a7feb002667a"), 71, 4);
+
+    private sealed class CapturingAtomicUnitOfWork : IAtomicUnitOfWork
+    {
+        public AtomicCommandIdentity? LastIdentity { get; private set; }
+        public object? LastCommand { get; private set; }
+
+        public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            AtomicCommandIdentity identity,
+            TCommand command,
+            IAtomicResultCodec<TResult> resultCodec,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull
+        {
+            LastIdentity = identity.BindRequest(command);
+            LastCommand = command;
+            object result = typeof(TResult) == typeof(ListingWorkspaceMutationResult)
+                ? new ListingWorkspaceMutationResult(ListingWorkspaceMutationOutcome.Applied,
+                    PortfolioId, ResolveUnitId(command), 1)
+                : throw new NotSupportedException($"Unexpected result type {typeof(TResult).Name}.");
+            return Task.FromResult(new AtomicCommandOutcome<TResult>(
+                (TResult)result, AtomicCommandDisposition.Executed, Guid.NewGuid()));
+        }
+
+        private static int ResolveUnitId<TCommand>(TCommand command) => command switch
+        {
+            IListingWorkspaceAtomicCommand listing => listing.UnitId,
+            _ => throw new NotSupportedException($"Unexpected command type {typeof(TCommand).Name}."),
+        };
     }
 
     private sealed class PermissiveInfrastructureWriteGate : IAtomicInfrastructureWriteGate

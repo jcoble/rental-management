@@ -412,12 +412,16 @@ export const api = {
 			method: 'PATCH',
 			body: JSON.stringify(data)
 		}),
-	put: <T>(path: string, data: unknown) =>
-		fetchApi<T>(path, { method: 'PUT', body: JSON.stringify(data) }),
+	put: <T>(path: string, data: unknown, options: RequestInit = {}) =>
+		fetchApi<T>(path, {
+			...options,
+			method: 'PUT',
+			body: JSON.stringify(data)
+		}),
 	delete: <T = void>(path: string, options: RequestInit = {}) =>
 		fetchApi<T>(path, { ...options, method: 'DELETE' }),
-	upload: <T>(path: string, formData: FormData) =>
-		fetchApi<T>(path, { method: 'POST', body: formData })
+	upload: <T>(path: string, formData: FormData, options: RequestInit = {}) =>
+		fetchApi<T>(path, { ...options, method: 'POST', body: formData })
 };
 
 /**

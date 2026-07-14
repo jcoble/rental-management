@@ -78,13 +78,15 @@ public sealed record AdmitConnectedListingIntentCommand(
     : IListingWorkspaceAtomicCommand;
 
 public sealed record PersistConnectedListingResultCommand(
-    int PortfolioId, int UnitId, int ActorUserId, Guid AuthSessionId,
-    int AccessContextId, long AccessRevision, int PublicationId,
+    int PortfolioId, int PropertyId, int UnitId, int AdmittedActorUserId,
+    int PublicationId,
     int RentalListingId, int ExpectedContentVersion,
+    Guid AdmissionAttemptId, string AdmissionCommandType, string AdmissionIdempotencyKey,
+    string AdmissionResultContract,
     ListingPublicationStatus Status, string DeliveryKey, string DeliveryStatus,
     string? DeliveryError, string? ExternalListingId, string? ListingUrl,
     bool MarkPublishedVersion, string Reason)
-    : IListingWorkspaceAtomicCommand;
+    : IAtomicCommandData;
 
 public sealed record ConfirmExternalListingSignalCommand(
     int PortfolioId, int UnitId, int ActorUserId, Guid AuthSessionId,
@@ -107,7 +109,39 @@ public sealed record ListingWorkspaceMutationResult(
 public sealed record ConnectedListingIntentResult(
     ListingWorkspaceMutationOutcome Outcome,
     int PortfolioId,
+    int? PropertyId,
     int UnitId,
     int? RentalListingId,
     int? PublicationId,
     int? ContentVersion) : IAtomicResultData;
+
+public sealed record ConnectedListingPersistenceResult(
+    ListingWorkspaceMutationOutcome Outcome,
+    int PortfolioId,
+    int PropertyId,
+    int UnitId,
+    int RentalListingId,
+    int PublicationId,
+    Guid AdmissionAttemptId,
+    bool AppliedToCurrentPublication,
+    bool ReconciliationRequired,
+    ListingPublicationStatus ProviderStatus,
+    string DeliveryKey,
+    string DeliveryStatus,
+    string? DeliveryError,
+    string? ExternalListingId,
+    string? ListingUrl) : IAtomicResultData;
+
+public sealed record ApplyConnectedListingResultCommand(
+    int PortfolioId,
+    int PropertyId,
+    int UnitId,
+    int AdmittedActorUserId,
+    int ExpectedContentVersion,
+    Guid ProviderResultAttemptId,
+    string ProviderResultCommandType,
+    string ProviderResultIdempotencyKey,
+    string ProviderResultContract,
+    ConnectedListingPersistenceResult ProviderResult,
+    bool MarkPublishedVersion,
+    string Reason) : IAtomicCommandData;

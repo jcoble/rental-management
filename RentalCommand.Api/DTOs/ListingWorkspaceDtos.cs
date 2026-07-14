@@ -149,11 +149,6 @@ public sealed record ListingWorkspaceResponse(
             listing.UpdatedAt);
 }
 
-public sealed class ConnectedListingCommandRequest
-{
-    [Required, MaxLength(160)] public string ClientOperationId { get; set; } = string.Empty;
-}
-
 public sealed class SaveListingWorkspaceRequest
 {
     [MaxLength(40)] public string? Status { get; set; }
@@ -188,7 +183,6 @@ public sealed class SaveGuidedPublicationRequest
 
 public sealed class IngestExternalListingSignalRequest
 {
-    [Required, MaxLength(300)] public string ProviderMessageKey { get; set; } = string.Empty;
     [Required, MaxLength(80)] public string SignalType { get; set; } = string.Empty;
     [MaxLength(200)] public string? SuggestedExternalListingId { get; set; }
     [MaxLength(1000)] public string? SuggestedListingUrl { get; set; }

@@ -2,6 +2,11 @@ import type { AuditEntry, ListingWorkspace, SaveListingWorkspaceRequest, Unit, U
 import { api, downloadFile } from '../client';
 import { buildListQuery, type ListParams } from '../list-params';
 import { normalizeOptionalApiResult } from '../optional-result';
+import { idempotentMutation } from '../idempotency';
+
+const idempotencyHeaders = (key: string): RequestInit => ({
+	headers: { 'Idempotency-Key': key }
+});
 
 export interface UnitHealthListParams extends ListParams {
 	propertyId?: number;
@@ -48,45 +53,77 @@ export const units = {
 	listingWorkspace: async (id: number) =>
 		normalizeOptionalApiResult(await api.get<ListingWorkspace | null | undefined>(`/units/${id}/listing-workspace`)),
 
-	generateListingWorkspace: (id: number) => api.post<ListingWorkspace>(`/units/${id}/listing-workspace/generate`),
+	generateListingWorkspace: (id: number) =>
+		idempotentMutation(`listing:${id}:generate`, (key) =>
+			api.post<ListingWorkspace>(`/units/${id}/listing-workspace/generate`, undefined, idempotencyHeaders(key))
+		),
 
 	saveListingWorkspace: (id: number, data: SaveListingWorkspaceRequest) =>
-		api.put<ListingWorkspace>(`/units/${id}/listing-workspace`, data),
+		idempotentMutation(`listing:${id}:save:${JSON.stringify(data)}`, (key) =>
+			api.put<ListingWorkspace>(`/units/${id}/listing-workspace`, data, idempotencyHeaders(key))
+		),
 
 	attachListingPhoto: (id: number, photoId: number, file: File, clientOperationId: string) => {
 		const form = new FormData();
 		form.append('file', file);
-		form.append('clientOperationId', clientOperationId);
-		return api.upload<ListingWorkspace>(`/units/${id}/listing-workspace/photos/${photoId}/content`, form);
+		return api.upload<ListingWorkspace>(
+			`/units/${id}/listing-workspace/photos/${photoId}/content`,
+			form,
+			idempotencyHeaders(clientOperationId)
+		);
 	},
 
 	updateListingPhoto: (id: number, photoId: number, category: string, caption?: string | null) =>
-		api.patch<ListingWorkspace>(`/units/${id}/listing-workspace/photos/${photoId}`, { category, caption }),
+		idempotentMutation(`listing:${id}:photo:${photoId}:update:${category}:${caption ?? ''}`, (key) =>
+			api.patch<ListingWorkspace>(
+				`/units/${id}/listing-workspace/photos/${photoId}`,
+				{ category, caption },
+				idempotencyHeaders(key)
+			)
+		),
 
 	removeListingPhoto: (id: number, photoId: number) =>
-		api.delete<ListingWorkspace>(`/units/${id}/listing-workspace/photos/${photoId}/content`),
+		idempotentMutation(`listing:${id}:photo:${photoId}:remove`, (key) =>
+			api.delete<ListingWorkspace>(`/units/${id}/listing-workspace/photos/${photoId}/content`, idempotencyHeaders(key))
+		),
 
 	reorderListingPhotos: (id: number, photoIds: number[]) =>
-		api.put<ListingWorkspace>(`/units/${id}/listing-workspace/photos/order`, { photoIds }),
+		idempotentMutation(`listing:${id}:photos:reorder:${photoIds.join(',')}`, (key) =>
+			api.put<ListingWorkspace>(`/units/${id}/listing-workspace/photos/order`, { photoIds }, idempotencyHeaders(key))
+		),
 
 	downloadListingPhoto: (id: number, photoId: number) =>
 		downloadFile(`/units/${id}/listing-workspace/photos/${photoId}/content`),
 
 	prepareConnectedListing: (id: number, publicationId: number) =>
-		api.post<ListingWorkspace>(`/units/${id}/listing-workspace/publications/${publicationId}/connected/prepare`),
+		idempotentMutation(`listing:${id}:publication:${publicationId}:prepare`, (key) =>
+			api.post<ListingWorkspace>(
+				`/units/${id}/listing-workspace/publications/${publicationId}/connected/prepare`,
+				undefined,
+				idempotencyHeaders(key)
+			)
+		),
 
 	runConnectedListingCommand: (
 		id: number,
 		publicationId: number,
 		action: 'publish' | 'update' | 'unpublish',
 		clientOperationId: string
-	) => api.post<ListingWorkspace>(
-		`/units/${id}/listing-workspace/publications/${publicationId}/connected/${action}`,
-		{ clientOperationId }
-	),
+	) =>
+		api.post<ListingWorkspace>(
+			`/units/${id}/listing-workspace/publications/${publicationId}/connected/${action}`,
+			undefined,
+			idempotencyHeaders(clientOperationId)
+		),
 
 	confirmListingSignal: (id: number, signalId: number, accept: boolean) =>
-		api.post<ListingWorkspace>(`/units/${id}/listing-workspace/signals/${signalId}/confirm?accept=${accept}`),
+		idempotentMutation(`listing:${id}:signal:${signalId}:confirm:${accept}`, (key) =>
+			api.post<ListingWorkspace>(
+				`/units/${id}/listing-workspace/signals/${signalId}/confirm?accept=${accept}`,
+				undefined,
+				idempotencyHeaders(key)
+			)
+		),
 
 	/** The unit's deep, paged history (timeline tab) — a bounded AtomicAuditLog union over the unit + children. */
 	timeline: (id: number, params?: ListParams) => api.get<AuditEntry[]>(`/units/${id}/timeline${buildListQuery(params)}`),

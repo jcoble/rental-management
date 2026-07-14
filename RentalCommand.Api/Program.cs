@@ -550,8 +550,12 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Data.Listings.AdmitConnectedListingIntentHandler>();
 builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Listings.PersistConnectedListingResultCommand,
-    RentalCommand.Core.Listings.ListingWorkspaceMutationResult,
+    RentalCommand.Core.Listings.ConnectedListingPersistenceResult,
     RentalCommand.Data.Listings.PersistConnectedListingResultHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Listings.ApplyConnectedListingResultCommand,
+    RentalCommand.Core.Listings.ConnectedListingPersistenceResult,
+    RentalCommand.Data.Listings.ApplyConnectedListingResultHandler>();
 builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Listings.ConfirmExternalListingSignalCommand,
     RentalCommand.Core.Listings.ListingWorkspaceMutationResult,

@@ -315,13 +315,14 @@ public sealed class AdmitConnectedListingIntentHandler
                                 && publication.Id == command.PublicationId
                                 && publication.PortfolioId == command.PortfolioId
                                 && publication.Mode == ListingPublicationMode.Connected
-                            select new { listing.Id, listing.ContentVersion, PublicationId = publication.Id })
+                            select new { listing.Id, listing.PropertyId, listing.ContentVersion, PublicationId = publication.Id })
             .SingleOrDefaultAsync(ct);
         return target is null
             ? new ConnectedListingIntentResult(ListingWorkspaceMutationOutcome.NotFound,
-                command.PortfolioId, command.UnitId, null, null, null)
+                command.PortfolioId, null, command.UnitId, null, null, null)
             : new ConnectedListingIntentResult(ListingWorkspaceMutationOutcome.Applied,
-                command.PortfolioId, command.UnitId, target.Id, target.PublicationId, target.ContentVersion);
+                command.PortfolioId, target.PropertyId, command.UnitId,
+                target.Id, target.PublicationId, target.ContentVersion);
     }
 
     public Task AuthorizeReplayAsync(AdmitConnectedListingIntentCommand command,
@@ -330,63 +331,187 @@ public sealed class AdmitConnectedListingIntentHandler
 }
 
 public sealed class PersistConnectedListingResultHandler
-    : IAtomicCommandHandler<PersistConnectedListingResultCommand, ListingWorkspaceMutationResult>,
+    : IAtomicCommandHandler<PersistConnectedListingResultCommand, ConnectedListingPersistenceResult>,
       IAtomicReplayAuthorizer<PersistConnectedListingResultCommand>
 {
-    public async Task<ListingWorkspaceMutationResult> HandleAsync(
+    public async Task<ConnectedListingPersistenceResult> HandleAsync(
         PersistConnectedListingResultCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
     {
-        var now = await ListingWorkspaceCommandSupport.AuthorizeAndLockAsync(command, attempt, ct);
-        var target = await (from listing in ListingWorkspaceCommandSupport.AuthorizedListings(command, attempt.Persistence, now)
-                            join publication in attempt.Persistence.Query<ListingPublication>()
-                                on listing.Id equals publication.RentalListingId
-                            where listing.Id == command.RentalListingId
-                                && publication.Id == command.PublicationId
-                                && publication.PortfolioId == command.PortfolioId
-                                && publication.Mode == ListingPublicationMode.Connected
-                            select new { Listing = listing, Publication = publication })
-            .SingleOrDefaultAsync(ct);
-        if (target is null) return ListingWorkspaceCommandSupport.NotFound(command);
-        if (target.Listing.ContentVersion != command.ExpectedContentVersion)
-            throw new DomainValidationException("The listing changed while the provider request was running. Prepare it again.");
-
-        target.Publication.Status = command.Status;
-        target.Publication.LastDeliveryKey = command.DeliveryKey;
-        target.Publication.LastDeliveryStatus = command.DeliveryStatus;
-        target.Publication.LastDeliveryError = command.DeliveryError;
-        target.Publication.LastDeliveryAttemptAtUtc = now;
-        target.Publication.ExternalListingId = command.ExternalListingId ?? target.Publication.ExternalListingId;
-        target.Publication.ListingUrl = command.ListingUrl ?? target.Publication.ListingUrl;
-        target.Publication.UpdatedAt = now;
-        if (command.MarkPublishedVersion)
-        {
-            target.Publication.PublishedContentVersion = target.Listing.ContentVersion;
-            target.Listing.Status = RentalListingStatus.Published;
-        }
-        else if (command.Status == ListingPublicationStatus.Removed)
-        {
-            var anotherPublished = await attempt.Persistence.Query<ListingPublication>().AsNoTracking().AnyAsync(item =>
-                item.RentalListingId == target.Listing.Id && item.PortfolioId == command.PortfolioId
-                && item.Id != target.Publication.Id && item.Status == ListingPublicationStatus.Published, ct);
-            target.Listing.Status = anotherPublished
-                ? RentalListingStatus.Published
-                : RentalListingStatus.ReadyToPublish;
-        }
-        target.Listing.UpdatedAt = now;
-
-        attempt.UseDatabaseWallClockForAudit(now);
-        attempt.BindSemanticAudit(target.Publication, ListingWorkspaceCommandSupport.Audit(
-            command, nameof(ListingPublication), AuditLogOperation.Updated, command.Reason, target.Publication.Id));
-        attempt.BindSemanticAudit(target.Listing, ListingWorkspaceCommandSupport.Audit(
-            command, nameof(RentalListing), AuditLogOperation.Updated, command.Reason, target.Listing.Id));
-        await attempt.FlushBusinessAsync(ct);
-        ListingWorkspaceCommandSupport.StageUpdate(attempt, command, target.Listing.Id, now, "connected-result");
-        return ListingWorkspaceCommandSupport.Applied(command, target.Listing.Id);
+        await ValidateAdmissionAsync(command, attempt.Persistence, ct);
+        return new ConnectedListingPersistenceResult(
+            ListingWorkspaceMutationOutcome.Applied,
+            command.PortfolioId, command.PropertyId, command.UnitId, command.RentalListingId,
+            command.PublicationId, command.AdmissionAttemptId,
+            AppliedToCurrentPublication: false, ReconciliationRequired: true,
+            command.Status, command.DeliveryKey,
+            command.DeliveryStatus, command.DeliveryError, command.ExternalListingId, command.ListingUrl);
     }
 
     public Task AuthorizeReplayAsync(PersistConnectedListingResultCommand command,
         IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        ListingWorkspaceCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+        ValidateAdmissionAsync(command, persistence, ct);
+
+    internal static async Task ValidateAdmissionAsync(
+        PersistConnectedListingResultCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        var expectedResult = JsonSerializer.Serialize(new ConnectedListingIntentResult(
+            ListingWorkspaceMutationOutcome.Applied, command.PortfolioId, command.PropertyId,
+            command.UnitId, command.RentalListingId, command.PublicationId,
+            command.ExpectedContentVersion));
+        var admitted = await persistence.Query<AtomicCommandReceipt>().AsNoTracking().AnyAsync(receipt =>
+            receipt.AttemptId == command.AdmissionAttemptId
+            && receipt.CommandType == command.AdmissionCommandType
+            && receipt.IdempotencyKey == command.AdmissionIdempotencyKey
+            && receipt.Status == AtomicCommandReceiptStatus.Completed
+            && receipt.ResultContract == command.AdmissionResultContract
+            && receipt.ResultJson == expectedResult, ct);
+        if (!admitted)
+            throw new AtomicReceiptInvariantException(
+                $"Connected listing result has no matching admitted intent {command.AdmissionAttemptId}.");
+    }
+}
+
+public sealed class ApplyConnectedListingResultHandler
+    : IAtomicCommandHandler<ApplyConnectedListingResultCommand, ConnectedListingPersistenceResult>,
+      IAtomicReplayAuthorizer<ApplyConnectedListingResultCommand>
+{
+    public async Task<ConnectedListingPersistenceResult> HandleAsync(
+        ApplyConnectedListingResultCommand command, IAtomicWriteAttempt attempt, CancellationToken ct)
+    {
+        await ValidateProviderResultAsync(command, attempt.Persistence, ct);
+        await attempt.Locking.AcquireAsync(AtomicLockResource.Unit, command.UnitId, ct);
+        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var provider = command.ProviderResult;
+        var target = await (from listing in attempt.Persistence.Query<RentalListing>()
+                            join publication in attempt.Persistence.Query<ListingPublication>()
+                                on listing.Id equals publication.RentalListingId
+                            where listing.Id == provider.RentalListingId
+                                && listing.PortfolioId == command.PortfolioId
+                                && listing.PropertyId == command.PropertyId
+                                && listing.UnitId == command.UnitId
+                                && publication.Id == provider.PublicationId
+                                && publication.PortfolioId == command.PortfolioId
+                                && publication.Mode == ListingPublicationMode.Connected
+                            select new { Listing = listing, Publication = publication })
+            .SingleOrDefaultAsync(ct);
+
+        var compatible = target?.Listing.ContentVersion == command.ExpectedContentVersion;
+        if (compatible)
+        {
+            target!.Publication.Status = provider.ProviderStatus;
+            target.Publication.LastDeliveryKey = provider.DeliveryKey;
+            target.Publication.LastDeliveryStatus = provider.DeliveryStatus;
+            target.Publication.LastDeliveryError = provider.DeliveryError;
+            target.Publication.LastDeliveryAttemptAtUtc = now;
+            target.Publication.ExternalListingId = provider.ExternalListingId ?? target.Publication.ExternalListingId;
+            target.Publication.ListingUrl = provider.ListingUrl ?? target.Publication.ListingUrl;
+            target.Publication.UpdatedAt = now;
+            if (command.MarkPublishedVersion)
+            {
+                target.Publication.PublishedContentVersion = target.Listing.ContentVersion;
+                target.Listing.Status = RentalListingStatus.Published;
+            }
+            else if (provider.ProviderStatus == ListingPublicationStatus.Removed)
+            {
+                var anotherPublished = await attempt.Persistence.Query<ListingPublication>().AsNoTracking().AnyAsync(item =>
+                    item.RentalListingId == target.Listing.Id && item.PortfolioId == command.PortfolioId
+                    && item.Id != target.Publication.Id && item.Status == ListingPublicationStatus.Published, ct);
+                target.Listing.Status = anotherPublished
+                    ? RentalListingStatus.Published
+                    : RentalListingStatus.ReadyToPublish;
+            }
+            target.Listing.UpdatedAt = now;
+            BindAudit(attempt, command, target.Publication, target.Listing, now, command.Reason);
+            await attempt.FlushBusinessAsync(ct);
+            StageUpdate(attempt, command, target.Listing.Id, now, "connected-result");
+        }
+        else if (target is not null)
+        {
+            target.Publication.Status = ListingPublicationStatus.ReconciliationRequired;
+            target.Publication.UpdatedAt = now;
+            attempt.UseDatabaseWallClockForAudit(now);
+            attempt.BindSemanticAudit(target.Publication, new AtomicSemanticAudit(
+                command.PortfolioId, nameof(ListingPublication), target.Publication.Id,
+                AuditLogOperation.Updated, command.AdmittedActorUserId,
+                ActorLabel: "system:listing-provider-reconciler",
+                ChangeReason: "Provider outcome requires reconciliation with newer listing content"));
+            await attempt.FlushBusinessAsync(ct);
+            StageUpdate(attempt, command, target.Listing.Id, now, "connected-reconciliation-required");
+        }
+
+        return provider with
+        {
+            Outcome = compatible ? ListingWorkspaceMutationOutcome.Applied : ListingWorkspaceMutationOutcome.NoChange,
+            AppliedToCurrentPublication = compatible,
+            ReconciliationRequired = !compatible,
+        };
+    }
+
+    public Task AuthorizeReplayAsync(ApplyConnectedListingResultCommand command,
+        IAtomicPersistenceSession persistence, CancellationToken ct) =>
+        ValidateProviderResultAsync(command, persistence, ct);
+
+    private static async Task ValidateProviderResultAsync(
+        ApplyConnectedListingResultCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        var expectedResult = JsonSerializer.Serialize(command.ProviderResult);
+        var recorded = await persistence.Query<AtomicCommandReceipt>().AsNoTracking().AnyAsync(receipt =>
+            receipt.AttemptId == command.ProviderResultAttemptId
+            && receipt.CommandType == command.ProviderResultCommandType
+            && receipt.IdempotencyKey == command.ProviderResultIdempotencyKey
+            && receipt.Status == AtomicCommandReceiptStatus.Completed
+            && receipt.ResultContract == command.ProviderResultContract
+            && receipt.ResultJson == expectedResult, ct);
+        if (!recorded)
+            throw new AtomicReceiptInvariantException(
+                $"Connected listing apply has no durable provider result {command.ProviderResultAttemptId}.");
+    }
+
+    private static void BindAudit(
+        IAtomicWriteAttempt attempt,
+        ApplyConnectedListingResultCommand command,
+        ListingPublication publication,
+        RentalListing listing,
+        DateTime now,
+        string reason)
+    {
+        attempt.UseDatabaseWallClockForAudit(now);
+        attempt.BindSemanticAudit(publication, new AtomicSemanticAudit(
+            command.PortfolioId, nameof(ListingPublication), publication.Id,
+            AuditLogOperation.Updated, command.AdmittedActorUserId,
+            ActorLabel: "system:listing-provider-reconciler", ChangeReason: reason));
+        attempt.BindSemanticAudit(listing, new AtomicSemanticAudit(
+            command.PortfolioId, nameof(RentalListing), listing.Id,
+            AuditLogOperation.Updated, command.AdmittedActorUserId,
+            ActorLabel: "system:listing-provider-reconciler", ChangeReason: reason));
+    }
+
+    private static void StageUpdate(
+        IAtomicWriteAttempt attempt,
+        ApplyConnectedListingResultCommand command,
+        int listingId,
+        DateTime now,
+        string operation)
+    {
+        attempt.StageOutbox(new OutboxMessage
+        {
+            PortfolioId = command.PortfolioId,
+            MessageType = "data-update",
+            Payload = JsonSerializer.Serialize(new
+            {
+                entityType = nameof(RentalListing),
+                entityId = listingId,
+                data = new { unitId = command.UnitId, operation },
+            }),
+            IdempotencyKey = $"listing-workspace:{operation}:{attempt.AttemptId:N}",
+            CreatedAtUtc = now,
+            NextAttemptAtUtc = now,
+        });
+    }
 }
 
 public sealed class ConfirmExternalListingSignalHandler

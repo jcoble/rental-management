@@ -23,6 +23,10 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         new("listing-workspace.mutation.result.v1");
     private static readonly AtomicJsonResultCodec<ConnectedListingIntentResult> ConnectedIntentCodec =
         new("listing-workspace.connected-intent.result.v1");
+    private static readonly AtomicJsonResultCodec<ConnectedListingPersistenceResult> ConnectedPersistenceCodec =
+        new("listing-workspace.connected-persistence.result.v1");
+    private static readonly AtomicJsonResultCodec<ConnectedListingPersistenceResult> ConnectedApplicationCodec =
+        new("listing-workspace.connected-application.result.v1");
     private readonly RentalCommandDbContext _db;
     private readonly IAtomicInfrastructureWriteGate _infrastructureWrites;
     private readonly IFileStorage _files;
@@ -202,19 +206,38 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         WorkspaceReadScope scope, int unitId, int publicationId, string clientOperationId,
         CancellationToken ct = default)
     {
+        var operationId = CleanRequiredMax(clientOperationId, "Client operation ID", 160);
         var snapshot = await LoadConnectedSnapshotAsync(scope.PortfolioId, unitId, publicationId, ct);
         if (snapshot is null) return null;
         var admitted = await AdmitConnectedIntentAsync(
-            scope, snapshot, clientOperationId, ConnectedListingIntentOperation.Prepare, ct);
-        if (!admitted) return null;
+            scope, snapshot, operationId, ConnectedListingIntentOperation.Prepare, ct);
+        if (admitted is null) return null;
         var adapter = RequireAvailableAdapter(snapshot.ProviderKey);
-        var prepared = await adapter.PrepareAsync(new PrepareListingPublicationCommand(snapshot.Package), ct);
+        ListingPreparedPackage prepared;
+        try
+        {
+            prepared = await adapter.PrepareAsync(
+                new PrepareListingPublicationCommand(snapshot.Package, operationId), ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            await PersistConnectedResultAsync(snapshot, admitted, ListingPublicationStatus.Failed,
+                operationId, "Failed", ex.Message, null, null, false,
+                "Connected listing preparation failed", CancellationToken.None);
+            throw;
+        }
         if (prepared.ContentVersion != snapshot.Package.ContentVersion)
+        {
+            await PersistConnectedResultAsync(snapshot, admitted, ListingPublicationStatus.Failed,
+                operationId, "Failed", "Provider prepared a different listing content version.",
+                null, null, false, "Connected listing preparation returned incompatible content",
+                CancellationToken.None);
             throw new DomainValidationException("The provider prepared a different listing content version.");
+        }
 
-        return await PersistConnectedResultAsync(scope, snapshot, ListingPublicationStatus.Ready,
+        return await PersistConnectedResultAsync(snapshot, admitted, ListingPublicationStatus.Ready,
             EncodePreparedPackageKey(prepared), "Prepared", null, null, null, false,
-            "Prepared Connected listing package", $"{clientOperationId}:prepared:{OperationHash(prepared.PackageKey)}", ct);
+            "Prepared Connected listing package", CancellationToken.None);
     }
 
     public Task<ListingWorkspaceResponse?> PublishConnectedAsync(
@@ -239,9 +262,7 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         WorkspaceReadScope scope, int unitId, int publicationId, string clientOperationId,
         ConnectedListingOperation operation, CancellationToken ct)
     {
-        var operationId = CleanRequired(clientOperationId, "Client operation ID");
-        if (operationId.Length > 160)
-            throw new DomainValidationException("Client operation ID cannot exceed 160 characters.");
+        var operationId = CleanRequiredMax(clientOperationId, "Client operation ID", 160);
 
         var snapshot = await LoadConnectedSnapshotAsync(scope.PortfolioId, unitId, publicationId, ct);
         if (snapshot is null) return null;
@@ -252,18 +273,20 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
             ConnectedListingOperation.Unpublish => ConnectedListingIntentOperation.Unpublish,
             _ => throw new ArgumentOutOfRangeException(nameof(operation)),
         };
-        if (!await AdmitConnectedIntentAsync(scope, snapshot, operationId, intentOperation, ct))
+        var admitted = await AdmitConnectedIntentAsync(scope, snapshot, operationId, intentOperation, ct);
+        if (admitted is null)
             return null;
         var adapter = RequireAvailableAdapter(snapshot.ProviderKey);
+        var preparedPackageKey = operation == ConnectedListingOperation.Publish
+            ? DecodePreparedPackageKey(snapshot.PreparedPackageKey, snapshot.Package.ContentVersion)
+            : null;
         ListingPublicationDelivery delivery;
         try
         {
             delivery = operation switch
             {
                 ConnectedListingOperation.Publish => await adapter.PublishAsync(
-                    new PublishListingCommand(snapshot.Package,
-                        DecodePreparedPackageKey(snapshot.PreparedPackageKey, snapshot.Package.ContentVersion),
-                        operationId), ct),
+                    new PublishListingCommand(snapshot.Package, preparedPackageKey!, operationId), ct),
                 ConnectedListingOperation.Update => await adapter.UpdateAsync(
                     new UpdateListingCommand(snapshot.Package, snapshot.ExternalListingId, operationId), ct),
                 ConnectedListingOperation.Unpublish => await adapter.UnpublishAsync(
@@ -271,12 +294,11 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
                 _ => throw new ArgumentOutOfRangeException(nameof(operation)),
             };
         }
-        catch (Exception ex) when (ex is not OperationCanceledException and not DomainValidationException)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            await PersistConnectedResultAsync(scope, snapshot, ListingPublicationStatus.Failed,
+            await PersistConnectedResultAsync(snapshot, admitted, ListingPublicationStatus.Failed,
                 operationId, "Failed", ex.Message, null, null, false,
-                $"Connected listing {operation.ToString().ToLowerInvariant()} failed",
-                $"{operationId}:failed:{OperationHash(ex.Message)}", ct);
+                $"Connected listing {operation.ToString().ToLowerInvariant()} failed", CancellationToken.None);
             throw;
         }
 
@@ -286,27 +308,34 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
             : operation == ConnectedListingOperation.Unpublish
                 ? ListingPublicationStatus.Removed
                 : ListingPublicationStatus.Published;
-        return await PersistConnectedResultAsync(scope, snapshot, status,
+        return await PersistConnectedResultAsync(snapshot, admitted, status,
             delivery.DeliveryKey, delivery.Status, delivery.Error, delivery.ExternalListingId,
             delivery.ListingUrl, succeeded && operation != ConnectedListingOperation.Unpublish,
-            $"Connected listing {operation.ToString().ToLowerInvariant()} completed",
-            $"{operationId}:result:{OperationHash(delivery.DeliveryKey)}", ct);
+            $"Connected listing {operation.ToString().ToLowerInvariant()} completed", CancellationToken.None);
     }
 
-    private async Task<bool> AdmitConnectedIntentAsync(
+    private async Task<ConnectedIntentAdmission?> AdmitConnectedIntentAsync(
         WorkspaceReadScope scope, ConnectedListingSnapshot snapshot, string clientOperationId,
         ConnectedListingIntentOperation operation, CancellationToken ct)
     {
+        var identity = ClientIdentity(
+            $"listing-workspace.connected.{operation.ToString().ToLowerInvariant()}.intent",
+            scope.PortfolioId, snapshot.Package.UnitId, clientOperationId);
         var outcome = await _atomic.ExecuteAsync(
-            Identity($"listing-workspace.connected.{operation.ToString().ToLowerInvariant()}.intent",
-                scope.PortfolioId, snapshot.Package.UnitId, clientOperationId),
+            identity,
             new AdmitConnectedListingIntentCommand(
                 scope.PortfolioId, snapshot.Package.UnitId, scope.UserId, scope.SessionId,
                 scope.AccessContextId, scope.AccessRevision, snapshot.Package.PublicationId,
                 snapshot.Package.RentalListingId, snapshot.Package.ContentVersion, operation),
             ConnectedIntentCodec,
             ct);
-        return outcome.Value.Outcome != ListingWorkspaceMutationOutcome.NotFound;
+        if (outcome.Value.Outcome == ListingWorkspaceMutationOutcome.NotFound) return null;
+        if (outcome.Value.PropertyId != snapshot.Package.PropertyId
+            || outcome.Value.RentalListingId != snapshot.Package.RentalListingId
+            || outcome.Value.PublicationId != snapshot.Package.PublicationId
+            || outcome.Value.ContentVersion != snapshot.Package.ContentVersion)
+            throw new AtomicReceiptInvariantException("Connected listing admission receipt does not match the provider snapshot.");
+        return new ConnectedIntentAdmission(outcome.AttemptId, identity, scope.UserId);
     }
 
     private IListingChannelAdapter RequireAvailableAdapter(string providerKey)
@@ -355,9 +384,9 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
     }
 
     private async Task<ListingWorkspaceResponse?> PersistConnectedResultAsync(
-        WorkspaceReadScope scope, ConnectedListingSnapshot snapshot, ListingPublicationStatus status,
+        ConnectedListingSnapshot snapshot, ConnectedIntentAdmission admission, ListingPublicationStatus status,
         string deliveryKey, string deliveryStatus, string? deliveryError, string? externalListingId,
-        string? listingUrl, bool markPublishedVersion, string reason, string clientOperationId,
+        string? listingUrl, bool markPublishedVersion, string reason,
         CancellationToken ct)
     {
         deliveryKey = CleanRequiredMax(deliveryKey, "Provider delivery key", 200);
@@ -365,26 +394,53 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         deliveryError = CleanOptionalMax(deliveryError, "Provider delivery error", 2000);
         externalListingId = CleanOptionalMax(externalListingId, "External listing ID", 200);
         listingUrl = CleanOptionalMax(listingUrl, "External listing URL", 1000);
-        var outcome = await _atomic.ExecuteAsync(
-            Identity("listing-workspace.connected.finalize", scope.PortfolioId,
-                snapshot.Package.UnitId, clientOperationId),
+        var providerOutcomeFingerprint = OperationHash(JsonSerializer.Serialize(new
+        {
+            admission.AttemptId,
+            status,
+            deliveryKey,
+            deliveryStatus,
+            deliveryError,
+            externalListingId,
+            listingUrl,
+            markPublishedVersion,
+        }));
+        var persistenceIdentity = InternalIdentity("listing-workspace.connected.persist-result",
+            $"{admission.AttemptId:N}:{providerOutcomeFingerprint}");
+        var persisted = await _atomic.ExecuteAsync(
+            persistenceIdentity,
             new PersistConnectedListingResultCommand(
-                scope.PortfolioId, snapshot.Package.UnitId, scope.UserId, scope.SessionId,
-                scope.AccessContextId, scope.AccessRevision, snapshot.Package.PublicationId,
-                snapshot.Package.RentalListingId, snapshot.Package.ContentVersion, status,
-                deliveryKey, deliveryStatus, deliveryError, externalListingId, listingUrl,
+                snapshot.Package.PortfolioId, snapshot.Package.PropertyId, snapshot.Package.UnitId,
+                admission.ActorUserId, snapshot.Package.PublicationId,
+                snapshot.Package.RentalListingId, snapshot.Package.ContentVersion,
+                admission.AttemptId, admission.Identity.CommandType, admission.Identity.IdempotencyKey,
+                ConnectedIntentCodec.ContractName,
+                status, deliveryKey, deliveryStatus, deliveryError, externalListingId, listingUrl,
                 markPublishedVersion, reason),
-            MutationCodec,
+            ConnectedPersistenceCodec,
             ct);
-        return outcome.Value.Outcome == ListingWorkspaceMutationOutcome.NotFound
-            ? null
-            : await GetAsync(scope.PortfolioId, snapshot.Package.UnitId, ct);
+        if (persisted.Value.AdmissionAttemptId != admission.AttemptId)
+            throw new AtomicReceiptInvariantException("Connected listing finalizer receipt belongs to another admission.");
+
+        var applied = await _atomic.ExecuteAsync(
+            InternalIdentity("listing-workspace.connected.apply-result",
+                $"{persisted.AttemptId:N}"),
+            new ApplyConnectedListingResultCommand(
+                snapshot.Package.PortfolioId, snapshot.Package.PropertyId, snapshot.Package.UnitId,
+                admission.ActorUserId, snapshot.Package.ContentVersion,
+                persisted.AttemptId, persistenceIdentity.CommandType, persistenceIdentity.IdempotencyKey,
+                ConnectedPersistenceCodec.ContractName, persisted.Value, markPublishedVersion, reason),
+            ConnectedApplicationCodec,
+            ct);
+        if (applied.Value.AdmissionAttemptId != admission.AttemptId)
+            throw new AtomicReceiptInvariantException("Connected listing application receipt belongs to another admission.");
+        return await GetAsync(snapshot.Package.PortfolioId, snapshot.Package.UnitId, ct);
     }
 
     public async Task<ExternalListingSignalResponse?> IngestSignalAsync(int portfolioId, int unitId, int publicationId,
-        IngestExternalListingSignalRequest request, CancellationToken ct = default)
+        string providerMessageKey, IngestExternalListingSignalRequest request, CancellationToken ct = default)
     {
-        var providerMessageKey = CleanRequired(request.ProviderMessageKey, "Provider message key");
+        providerMessageKey = CleanRequiredMax(providerMessageKey, "Provider message key", 160);
         var signalType = CleanRequired(request.SignalType, "Signal type");
         await using var transaction = await _db.Database.BeginTransactionAsync(ct);
         var publicationExists = await _db.ListingPublications.AsNoTracking().AnyAsync(publication =>
@@ -502,11 +558,18 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
     }
     private static AtomicCommandIdentity Identity(
         string commandType, int portfolioId, int unitId, string clientOperationId)
+        => ClientIdentity(commandType, portfolioId, unitId, clientOperationId);
+
+    private static AtomicCommandIdentity ClientIdentity(
+        string commandType, int portfolioId, int unitId, string clientOperationId)
     {
-        var operationId = CleanRequired(clientOperationId, "Client operation ID");
+        var operationId = CleanRequiredMax(clientOperationId, "Client operation ID", 160);
         return new AtomicCommandIdentity(commandType,
             $"{portfolioId}:{unitId}:{OperationHash(operationId)}");
     }
+
+    private static AtomicCommandIdentity InternalIdentity(string commandType, string stableKey) =>
+        new(commandType, stableKey);
 
     private static string OperationHash(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
@@ -519,5 +582,9 @@ public sealed class ListingWorkspaceService : IListingWorkspaceService
         string ProviderKey,
         string? PreparedPackageKey,
         string? ExternalListingId);
+    private sealed record ConnectedIntentAdmission(
+        Guid AttemptId,
+        AtomicCommandIdentity Identity,
+        int ActorUserId);
     private enum ConnectedListingOperation { Publish, Update, Unpublish }
 }
