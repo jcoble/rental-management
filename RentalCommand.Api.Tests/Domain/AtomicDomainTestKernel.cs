@@ -56,6 +56,16 @@ internal static class AtomicDomainTestKernel
         return services.BuildServiceProvider();
     }
 
+    internal static ServiceProvider CreateForRentalCrudPostgreSql(string connectionString)
+    {
+        var services = CorePostgreSql(connectionString);
+        services.AddAtomicCommandHandler<
+            AtomicRentalMutationCommand,
+            AtomicRentalMutationResult,
+            AtomicRentalMutationHandler>();
+        return services.BuildServiceProvider();
+    }
+
     private static ServiceCollection Core(string connectionString)
     {
         var services = new ServiceCollection();
@@ -65,6 +75,18 @@ internal static class AtomicDomainTestKernel
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
             builder.UseSqlite(connectionString)
                 .AddInterceptors(SqliteDatabaseClockInterceptor.Instance)
+                .UseAtomicPersistenceKernel(provider));
+        return services;
+    }
+
+    private static ServiceCollection CorePostgreSql(string connectionString)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+            builder.UseNpgsql(connectionString)
                 .UseAtomicPersistenceKernel(provider));
         return services;
     }
