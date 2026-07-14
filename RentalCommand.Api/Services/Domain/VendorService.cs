@@ -69,14 +69,14 @@ public class VendorService : IVendorService
 
         var totalCount = await q.CountAsync(ct);
 
-        var items = await q
+        var items = await ProjectResponses(q)
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
         return new VendorListResponse
         {
-            Items = items.Select(VendorResponse.FromEntity).ToList(),
+            Items = items,
             TotalCount = totalCount,
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,
@@ -85,11 +85,8 @@ public class VendorService : IVendorService
 
     public async Task<VendorResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default)
     {
-        var entity = await AuthorizedVendors(scope, CapabilityKeys.WorkRead)
-            .AsNoTracking()
+        return await ProjectResponses(AuthorizedVendors(scope, CapabilityKeys.WorkRead).AsNoTracking())
             .FirstOrDefaultAsync(v => v.Id == id, ct);
-
-        return entity == null ? null : VendorResponse.FromEntity(entity);
     }
 
     public async Task<VendorResponse?> CreateAsync(
@@ -182,6 +179,32 @@ public class VendorService : IVendorService
             _ => RequestW9Result.NotFound(),
         };
     }
+
+    private static IQueryable<VendorResponse> ProjectResponses(IQueryable<Vendor> vendors) =>
+        vendors.Select(entity => new VendorResponse
+        {
+            Id = entity.Id,
+            PortfolioId = entity.PortfolioId,
+            Name = entity.Name,
+            ServiceType = entity.ServiceType,
+            Email = entity.Email,
+            Phone = entity.Phone,
+            Website = entity.Website,
+            TaxId = entity.TaxId,
+            AddressLine1 = entity.AddressLine1,
+            City = entity.City,
+            State = entity.State,
+            PostalCode = entity.PostalCode,
+            Is1099Eligible = entity.Is1099Eligible,
+            W9OnFile = entity.W9OnFile,
+            Preferred = entity.Preferred,
+            Notes = entity.Notes,
+            AverageRating = entity.AverageRating,
+            RatingCount = entity.RatingCount,
+            JobsCompleted = entity.JobsCompleted,
+            CreatedAt = entity.CreatedAt,
+            UpdatedAt = entity.UpdatedAt,
+        });
 
     private IQueryable<Vendor> AuthorizedVendors(WorkspaceReadScope scope, string capabilityKey)
     {

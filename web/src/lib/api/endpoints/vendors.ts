@@ -1,5 +1,6 @@
 import type { Vendor, VendorRating, VendorScorecard } from '$lib/types';
 import { api } from '../client';
+import { idempotentMutation } from '../idempotency';
 import { buildListQuery, type ListParams } from '../list-params';
 import { idempotentMutation } from '../idempotency';
 
@@ -30,7 +31,11 @@ export const vendors = {
 		),
 	// Record a 1–5 star rating; optionally tied to the work order it followed.
 	rate: (id: number, data: { stars: number; comment?: string; workOrderId?: number }) =>
-		api.post<VendorRating>(`/vendors/${id}/ratings`, data),
+		idempotentMutation(`vendor:rate:${id}:${JSON.stringify(data)}`, (key) =>
+			api.post<VendorRating>(`/vendors/${id}/ratings`, data, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
 	// Performance scorecard: rating, jobs completed, average DONE response time.
 	scorecard: (id: number) => api.get<VendorScorecard>(`/vendors/${id}/scorecard`),
 	// Text the vendor a W-9 request. 200 { queued, sentTo }; 400 { error } if no phone.

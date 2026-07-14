@@ -19,6 +19,7 @@ public sealed class WorkOperationAtomicContractTests
     [InlineData(typeof(UpdateEvictionCaseHandler), typeof(IAtomicReplayAuthorizer<UpdateEvictionCaseCommand>))]
     [InlineData(typeof(AddEvictionCaseEventHandler), typeof(IAtomicReplayAuthorizer<AddEvictionCaseEventCommand>))]
     [InlineData(typeof(DeleteEvictionCaseHandler), typeof(IAtomicReplayAuthorizer<DeleteEvictionCaseCommand>))]
+    [InlineData(typeof(CreateVendorRatingHandler), typeof(IAtomicReplayAuthorizer<CreateVendorRatingCommand>))]
     public void Every_live_operation_handler_reauthorizes_receipt_replay(
         Type handlerType, Type replayContract)
     {
@@ -31,6 +32,16 @@ public sealed class WorkOperationAtomicContractTests
         var codec = new AtomicJsonResultCodec<OperationMutationResult>("work-order.mutation.v1");
         var expected = new OperationMutationResult(
             OperationMutationOutcome.Applied, 47, "{\"Id\":47,\"Title\":\"Original\"}");
+
+        codec.Deserialize(codec.Serialize(expected)).Should().BeEquivalentTo(expected);
+    }
+
+    [Fact]
+    public void Vendor_rating_receipt_codec_preserves_the_original_response_snapshot()
+    {
+        var codec = new AtomicJsonResultCodec<VendorRatingMutationResult>("vendor-rating.create.v1");
+        var expected = new VendorRatingMutationResult(
+            OperationMutationOutcome.Applied, 83, 12, "{\"Id\":83,\"Stars\":5}");
 
         codec.Deserialize(codec.Serialize(expected)).Should().BeEquivalentTo(expected);
     }
