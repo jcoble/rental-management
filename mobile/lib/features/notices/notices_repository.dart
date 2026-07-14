@@ -109,9 +109,14 @@ class NoticesRepository {
 
   Future<void> approve(int id, List<String> channels) async {
     try {
-      await _dio.post<Map<String, dynamic>>(
-        '/notices/$id/approve',
-        data: {'channels': channels},
+      final payload = {'channels': channels};
+      await IdempotentMutation.run(
+        'notice-drafts:approve:$id:$payload',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/notices/$id/approve',
+          data: payload,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);

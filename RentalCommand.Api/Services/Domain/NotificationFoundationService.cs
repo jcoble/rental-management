@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
@@ -250,212 +248,21 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
         return ReadSnapshot<TenantNoticePolicyResponse>(outcome.Value);
     }
 
-    public async Task<long> ApproveAndQueueAsync(int portfolioId, int? actorUserId, int draftId,
-        ApproveAndQueueNoticeRequest request, TenantNoticeWorkFence? workFence, CancellationToken ct)
+    public async Task<long> ApproveAndQueueAsync(
+        NoticeApprovalExecutionContext context,
+        int draftId,
+        ApproveAndQueueNoticeRequest request,
+        TenantNoticeWorkFence? workFence,
+        string operationKey,
+        CancellationToken ct)
     {
-        if (request.Channels.Count == 0) throw new InvalidOperationException("At least one delivery channel is required.");
-        var now = _clock.GetUtcNow().UtcDateTime;
-        await using var transaction = await _db.Database.BeginTransactionAsync(ct);
-        var draft = await _db.NoticeDrafts.SingleOrDefaultAsync(row => row.Id == draftId && row.PortfolioId == portfolioId && row.Status == "Draft", ct)
-            ?? throw new KeyNotFoundException("Draft does not exist or is no longer editable.");
-        var policy = draft.TenantNoticePolicyId is null ? null :
-            await _db.TenantNoticePolicies.SingleAsync(row => row.Id == draft.TenantNoticePolicyId && row.PortfolioId == portfolioId, ct);
-        if (policy?.Mode == TenantNoticeMode.Off) throw new InvalidOperationException("A disabled policy cannot generate or deliver a notice.");
-        if (policy is null) throw new InvalidOperationException("Draft has no tenant notice policy.");
-        var templateId = draft.WorkspaceNoticeTemplateVersionId ?? policy?.WorkspaceNoticeTemplateVersionId
-            ?? throw new InvalidOperationException("Draft has no immutable template version.");
-        var template = await _db.WorkspaceNoticeTemplateVersions.Include(row => row.BasedOnSystemTemplateVersion)
-            .SingleAsync(row => row.Id == templateId && row.PortfolioId == portfolioId, ct);
-        var policyJurisdiction = NormalizeJurisdiction(policy.ReviewedJurisdictionCode);
-        var templateJurisdiction = NormalizeJurisdiction(template.JurisdictionCode);
-        if (policy is { Mode: TenantNoticeMode.Auto, Classification: NoticeClassification.Legal } &&
-            (!policy.CanAutoSend || template.JurisdictionReviewedAtUtc is null
-                || policyJurisdiction is null || templateJurisdiction != policyJurisdiction))
-            throw new InvalidOperationException("Legal Auto delivery requires reviewed jurisdiction and template facts.");
-
-        var rendered = new RenderedNotice
-        {
-            PortfolioId = portfolioId,
-            NoticeDraftId = draft.Id,
-            WorkspaceNoticeTemplateVersionId = template.Id,
-            LeaseManagementId = draft.LeaseManagementId,
-            Subject = draft.Subject,
-            Body = draft.Body,
-            ContentSha256 = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(draft.Subject + "\n" + draft.Body))).ToLowerInvariant(),
-            TemplateProvenance = $"{template.SystemKey}:workspace-v{template.Version}:system-v{template.BasedOnSystemTemplateVersion!.Version}",
-            JurisdictionCode = template.JurisdictionCode,
-            RenderedAtUtc = now,
-            ApprovedByUserId = actorUserId,
-            ApprovedAtUtc = now,
-        };
-        _db.RenderedNotices.Add(rendered);
-        await _db.SaveChangesAsync(ct);
-        var today = DateOnly.FromDateTime(now);
-        var eligibleParties =
-            from party in _db.LeaseManagementParties.AsNoTracking()
-            join tenant in _db.Tenants.AsNoTracking() on new { party.TenantId, party.PortfolioId } equals new { TenantId = tenant.Id, tenant.PortfolioId }
-            join management in _db.LeaseManagements.AsNoTracking()
-                on new { LeaseManagementId = party.LeaseManagementId, party.PortfolioId }
-                equals new { LeaseManagementId = management.Id, management.PortfolioId }
-            where party.PortfolioId == portfolioId && party.LeaseManagementId == draft.LeaseManagementId
-                && tenant.DeletedAt == null && party.EffectiveFrom <= today
-                && (party.EffectiveThrough == null || party.EffectiveThrough >= today)
-                && ((party.Role == LeaseManagementPartyRole.PrimaryTenant && policy.IncludePrimaryTenant)
-                    || (party.Role == LeaseManagementPartyRole.CoTenant && policy.IncludeCoTenant)
-                    || (party.Role == LeaseManagementPartyRole.Guarantor && policy.IncludeEligibleGuarantor &&
-                        (policy.Classification != NoticeClassification.Legal || party.GuarantorLegalNoticeEligible))
-                    || (party.Role == LeaseManagementPartyRole.Occupant && policy.IncludeOccupant &&
-                        policy.Classification != NoticeClassification.Legal))
-            select new
-            {
-                TenantId = tenant.Id,
-                LeaseManagementPartyId = party.Id,
-                party.Role,
-                tenant.Email,
-                tenant.Phone,
-                management.PropertyId,
-                management.UnitId,
-            };
-
-        var portal = eligibleParties
-            .Where(_ => request.Channels.Contains(NoticeDeliveryChannel.TenantPortal) && policy.SendTenantPortal)
-            .Select(row => new DeliveryProjection(row.LeaseManagementPartyId, row.TenantId, row.Role,
-                NoticeDeliveryChannel.TenantPortal, row.TenantId.ToString(), row.PropertyId, row.UnitId));
-        var email = eligibleParties
-            .Where(row => request.Channels.Contains(NoticeDeliveryChannel.Email) && policy.SendEmail && row.Email != null && row.Email != "")
-            .Select(row => new DeliveryProjection(row.LeaseManagementPartyId, row.TenantId, row.Role,
-                NoticeDeliveryChannel.Email, row.Email!, row.PropertyId, row.UnitId));
-        var sms = eligibleParties
-            .Where(row => request.Channels.Contains(NoticeDeliveryChannel.Sms) && policy.SendSms && row.Phone != null && row.Phone != "")
-            .Select(row => new DeliveryProjection(row.LeaseManagementPartyId, row.TenantId, row.Role,
-                NoticeDeliveryChannel.Sms, row.Phone!, row.PropertyId, row.UnitId));
-        var push =
-            from party in eligibleParties
-            join access in _db.EffectiveTenantAccess.AsNoTracking()
-                on new { party.LeaseManagementPartyId, PortfolioId = portfolioId }
-                equals new { access.LeaseManagementPartyId, access.PortfolioId }
-            join device in _db.DeviceTokens.AsNoTracking() on access.UserId equals device.UserId
-            where request.Channels.Contains(NoticeDeliveryChannel.MobilePush) && policy.SendMobilePush
-                && device.PortfolioId == portfolioId
-            select new DeliveryProjection(party.LeaseManagementPartyId, party.TenantId, party.Role,
-                NoticeDeliveryChannel.MobilePush, device.Token, party.PropertyId, party.UnitId);
-        var destinations = await portal.Union(email).Union(sms).Union(push)
-            .OrderBy(row => row.TenantId).ThenBy(row => row.Channel).ThenBy(row => row.Destination)
-            .TagWith("TSK-668 exact effective tenant notice recipients and destinations")
-            .ToListAsync(ct);
-        if (destinations.Count == 0) throw new InvalidOperationException("No eligible recipient has a configured destination for the selected channels.");
-
-        foreach (var destination in destinations)
-        {
-            var destinationHash = Convert.ToHexString(
-                    SHA256.HashData(Encoding.UTF8.GetBytes(destination.Destination)))
-                .ToLowerInvariant()[..16];
-            var key = $"notice:{rendered.Id}:party:{destination.LeaseManagementPartyId}:{destination.Channel}:{destinationHash}";
-            var (messageType, payload) = destination.Channel switch
-            {
-                NoticeDeliveryChannel.Email => ("email", JsonSerializer.Serialize(new
-                {
-                    to = destination.Destination,
-                    rendered.Subject,
-                    body = rendered.Body,
-                    renderedNoticeId = rendered.Id,
-                })),
-                NoticeDeliveryChannel.Sms => ("sms", JsonSerializer.Serialize(new
-                {
-                    to = destination.Destination,
-                    message = rendered.Body,
-                    renderedNoticeId = rendered.Id,
-                })),
-                NoticeDeliveryChannel.MobilePush => ("push", JsonSerializer.Serialize(new
-                {
-                    deviceToken = destination.Destination,
-                    title = rendered.Subject,
-                    body = rendered.Body,
-                    actionUrl = "/notices",
-                    type = "TenantNotice",
-                    relatedEntityType = nameof(RenderedNotice),
-                    relatedEntityId = rendered.Id.ToString(),
-                })),
-                NoticeDeliveryChannel.TenantPortal => ("data-update", JsonSerializer.Serialize(new
-                {
-                    entityType = "TenantNotice",
-                    entityId = draft.Id,
-                    data = new
-                    {
-                        renderedNoticeId = rendered.Id,
-                        tenantId = destination.TenantId,
-                        leaseManagementId = rendered.LeaseManagementId,
-                    },
-                })),
-                _ => throw new InvalidOperationException($"Unsupported tenant notice channel {destination.Channel}."),
-            };
-
-            if (destination.Channel == NoticeDeliveryChannel.TenantPortal)
-            {
-                _db.PortalMessages.Add(new PortalMessage
-                {
-                    PortfolioId = portfolioId,
-                    RecipientTenantId = destination.TenantId,
-                    FromLandlord = true,
-                    Channels = "Portal",
-                    PropertyId = destination.PropertyId,
-                    UnitId = destination.UnitId,
-                    Subject = rendered.Subject,
-                    Body = rendered.Body,
-                    Status = PortalMessageStatus.Open,
-                    CreatedAt = now,
-                    UpdatedAt = now,
-                });
-            }
-
-            var outbox = new OutboxMessage
-            {
-                PortfolioId = portfolioId,
-                MessageType = messageType,
-                Payload = payload,
-                IdempotencyKey = key,
-                CreatedAtUtc = now,
-                NextAttemptAtUtc = now,
-            };
-            _db.NoticeDeliveryEvidence.Add(new NoticeDeliveryEvidence
-            {
-                PortfolioId = portfolioId,
-                RenderedNoticeId = rendered.Id,
-                RecipientLeaseManagementPartyId = destination.LeaseManagementPartyId,
-                RecipientRole = destination.RecipientRole,
-                Channel = destination.Channel,
-                Destination = destination.Destination,
-                OutboxMessage = outbox,
-                IdempotencyKey = key,
-                CreatedAtUtc = now,
-            });
-        }
-        draft.Status = "Approved";
-        draft.ApprovedAt = now;
-        draft.ApprovedChannels = string.Join(",", request.Channels.OrderBy(channel => channel));
-        draft.RenderedNoticeId = rendered.Id;
-        draft.UpdatedAt = now;
-        await _db.SaveChangesAsync(ct);
-        if (workFence is not null)
-        {
-            var completed = await _db.TenantNoticeWorkItems
-                .Where(row => row.Id == workFence.WorkItemId
-                    && row.PortfolioId == portfolioId
-                    && row.Status == TenantNoticeWorkStatus.Claimed
-                    && row.ClaimToken == workFence.ClaimToken)
-                .ExecuteUpdateAsync(setters => setters
-                    .SetProperty(row => row.Status, TenantNoticeWorkStatus.Completed)
-                    .SetProperty(row => row.ClaimOwner, (string?)null)
-                    .SetProperty(row => row.ClaimToken, (Guid?)null)
-                    .SetProperty(row => row.ClaimExpiresAtUtc, (DateTime?)null), ct);
-            if (completed != 1)
-            {
-                throw new DbUpdateConcurrencyException(
-                    $"Tenant notice work item {workFence.WorkItemId} is no longer owned by this claim.");
-            }
-        }
-        await transaction.CommitAsync(ct);
-        return rendered.Id;
+        if (request.Channels.Count == 0)
+            throw new InvalidOperationException("At least one delivery channel is required.");
+        var command = AtomicNoticeDelivery.Command(
+            context, draftId, request.Channels, workFence, operationKey);
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicNoticeDelivery.Identity(command), command, AtomicNoticeDelivery.Codec, ct);
+        return outcome.Value.RenderedNoticeId;
     }
 
     public async Task<IReadOnlyList<NoticeDeliveryStatusResponse>> ListDeliveryStatusesAsync(
@@ -501,17 +308,6 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
             .TagWith("TSK-668 recent durable tenant notice delivery status")
             .ToListAsync(ct);
     }
-
-    private sealed record DeliveryProjection(int LeaseManagementPartyId, int TenantId, LeaseManagementPartyRole PartyRole,
-        NoticeDeliveryChannel Channel, string Destination, int PropertyId, int UnitId)
-    {
-        public NoticeRecipientRole RecipientRole => Enum.Parse<NoticeRecipientRole>(PartyRole.ToString());
-    }
-
-    private static string? NormalizeJurisdiction(string? jurisdictionCode) =>
-        string.IsNullOrWhiteSpace(jurisdictionCode)
-            ? null
-            : jurisdictionCode.Trim().ToUpperInvariant();
 
     private IQueryable<MyAlertsResponse> MyAlertsQuery(int portfolioId, int userId) =>
         from user in _db.Users.AsNoTracking()

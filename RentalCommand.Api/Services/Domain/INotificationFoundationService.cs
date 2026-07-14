@@ -25,7 +25,26 @@ public interface INotificationFoundationService
         CreateWorkspaceNoticeTemplateVersionRequest request, string operationKey, CancellationToken ct);
     Task<TenantNoticePolicyResponse> RestoreDefaultAsync(WorkspaceReadScope scope, string systemKey,
         string operationKey, CancellationToken ct);
-    Task<long> ApproveAndQueueAsync(int portfolioId, int? actorUserId, int draftId,
-        ApproveAndQueueNoticeRequest request, TenantNoticeWorkFence? workFence, CancellationToken ct);
+    Task<long> ApproveAndQueueAsync(
+        NoticeApprovalExecutionContext context,
+        int draftId,
+        ApproveAndQueueNoticeRequest request,
+        TenantNoticeWorkFence? workFence,
+        string operationKey,
+        CancellationToken ct);
     Task<IReadOnlyList<NoticeDeliveryStatusResponse>> ListDeliveryStatusesAsync(int portfolioId, int take, CancellationToken ct);
+}
+
+public sealed record NoticeApprovalExecutionContext(
+    int PortfolioId,
+    int? ActorUserId,
+    Guid? AuthSessionId,
+    int? AccessContextId,
+    long? ExpectedAccessRevision)
+{
+    public static NoticeApprovalExecutionContext ForWorkspace(WorkspaceReadScope scope) =>
+        new(scope.PortfolioId, scope.UserId, scope.SessionId, scope.AccessContextId, scope.AccessRevision);
+
+    public static NoticeApprovalExecutionContext ForAutomation(int portfolioId) =>
+        new(portfolioId, null, null, null, null);
 }

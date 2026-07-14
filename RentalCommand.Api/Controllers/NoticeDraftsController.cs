@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -13,10 +14,14 @@ namespace RentalCommand.Api.Controllers;
 public class NoticeDraftsController : ManagementControllerBase
 {
     private readonly INoticeDraftService _service;
+    private readonly INotificationFoundationService _foundation;
 
-    public NoticeDraftsController(INoticeDraftService service)
+    public NoticeDraftsController(
+        INoticeDraftService service,
+        INotificationFoundationService foundation)
     {
         _service = service;
+        _foundation = foundation;
     }
 
     [HttpGet]
@@ -79,6 +84,39 @@ public class NoticeDraftsController : ManagementControllerBase
         return updated == null ? NotFound(new { error = "Draft notice not found or no longer editable" }) : Ok(updated);
     }
 
+    [HttpPost("{id:int}/approve")]
+    [ProducesResponseType(typeof(NoticeDraftResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<NoticeDraftResponse>> Approve(
+        int id,
+        [FromBody] ApproveNoticeDraftRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+        {
+            return BadRequest(new { error = "Idempotency-Key header is required (max 128 characters)." });
+        }
+        if (!TryMapChannels(request.Channels, out var channels))
+        {
+            return BadRequest(new { error = "Choose at least one valid delivery channel." });
+        }
+
+        var scope = GetWorkspaceReadScope();
+        await _foundation.ApproveAndQueueAsync(
+            NoticeApprovalExecutionContext.ForWorkspace(scope),
+            id,
+            new ApproveAndQueueNoticeRequest(channels),
+            null,
+            operationKey,
+            ct);
+        var approved = await _service.GetAsync(scope, id, ct);
+        return approved is null
+            ? NotFound(new { error = "Approved notice could not be read in the current scope" })
+            : Ok(approved);
+    }
+
     [HttpPost("{id:int}/dismiss")]
     [ProducesResponseType(typeof(NoticeDraftResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -95,5 +133,37 @@ public class NoticeDraftsController : ManagementControllerBase
 
         var updated = await _service.DismissAsync(GetWorkspaceReadScope(), id, operationKey, ct);
         return updated == null ? NotFound(new { error = "Draft notice not found or cannot be dismissed" }) : Ok(updated);
+    }
+
+    private static bool TryMapChannels(
+        IReadOnlyList<string> requested,
+        out IReadOnlyList<NoticeDeliveryChannel> channels)
+    {
+        var mapped = new List<NoticeDeliveryChannel>(requested.Count);
+        foreach (var raw in requested)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                channels = [];
+                return false;
+            }
+            var channel = raw.Trim().ToLowerInvariant() switch
+            {
+                "portal" or "tenantportal" or "tenant portal" => NoticeDeliveryChannel.TenantPortal,
+                "push" or "mobilepush" or "mobile push" => NoticeDeliveryChannel.MobilePush,
+                "email" => NoticeDeliveryChannel.Email,
+                "sms" or "text" => NoticeDeliveryChannel.Sms,
+                _ => (NoticeDeliveryChannel?)null,
+            };
+            if (channel is null)
+            {
+                channels = [];
+                return false;
+            }
+            mapped.Add(channel.Value);
+        }
+
+        channels = mapped.Distinct().OrderBy(channel => channel).ToArray();
+        return channels.Count > 0;
     }
 }

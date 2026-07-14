@@ -64,6 +64,10 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             AtomicNotificationMutationCommand,
             AtomicNotificationMutationResult,
             AtomicNotificationMutationHandler>();
+        services.AddAtomicCommandHandler<
+            AtomicNoticeDeliveryCommand,
+            AtomicNoticeDeliveryResult,
+            AtomicNoticeDeliveryHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_connectionString).UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider();
@@ -617,8 +621,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         {
             var foundation = new NotificationFoundationService(stale, TimeProvider.System, Atomic);
             var act = () => foundation.ApproveAndQueueAsync(
-                portfolioId,
-                null,
+                NoticeApprovalExecutionContext.ForAutomation(portfolioId),
                 draftId,
                 new RentalCommand.Api.DTOs.ApproveAndQueueNoticeRequest([
                     NoticeDeliveryChannel.TenantPortal,
@@ -626,6 +629,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
                     NoticeDeliveryChannel.Sms,
                 ]),
                 new RentalCommand.Api.DTOs.TenantNoticeWorkFence(workItemId, Guid.NewGuid()),
+                $"integration:tenant-notice-work:{workItemId}:stale",
                 CancellationToken.None);
             await act.Should().ThrowAsync<DbUpdateConcurrencyException>();
         }
@@ -645,8 +649,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         {
             var foundation = new NotificationFoundationService(command, TimeProvider.System, Atomic);
             await foundation.ApproveAndQueueAsync(
-                portfolioId,
-                null,
+                NoticeApprovalExecutionContext.ForAutomation(portfolioId),
                 draftId,
                 new RentalCommand.Api.DTOs.ApproveAndQueueNoticeRequest([
                     NoticeDeliveryChannel.TenantPortal,
@@ -654,6 +657,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
                     NoticeDeliveryChannel.Sms,
                 ]),
                 new RentalCommand.Api.DTOs.TenantNoticeWorkFence(workItemId, claimToken),
+                $"integration:tenant-notice-work:{workItemId}:approve",
                 CancellationToken.None);
         }
 
