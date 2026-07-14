@@ -106,7 +106,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
                 Email = "sole@example.test",
                 Password = "Password123!",
                 DisplayName = "Sole Landlord",
-            }));
+            }, "test-register"));
 
         registered.Success.Should().BeTrue();
         var user = await _users.FindByIdAsync(registered.UserId!.Value.ToString());
@@ -168,7 +168,13 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
         var seeder = new IdentitySeeder(
             _users,
             Options.Create(settings),
-            new CanonicalAccountBootstrapService(_users, _ctx.Db, TimeProvider.System),
+            new CanonicalAccountBootstrapService(
+                _users,
+                Mock.Of<IAtomicUnitOfWork>(),
+                Options.Create(new AtomicAuthSessionCredentialOptions
+                {
+                    SigningKey = Convert.ToBase64String(new byte[32]),
+                })),
             NullLogger<IdentitySeeder>.Instance);
 
         await ExecuteAsApiDatabaseIdentityAsync(async () =>
@@ -230,12 +236,13 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
                 SessionLifetimeDays = 30,
             }),
             Mock.Of<IAuthEmailSender>(),
-            _ctx.Db,
-            Mock.Of<IAuditTrailService>(),
             new CanonicalAccountBootstrapService(
                 _users,
-                _ctx.Db,
-                TimeProvider.System),
+                Mock.Of<IAtomicUnitOfWork>(),
+                Options.Create(new AtomicAuthSessionCredentialOptions
+                {
+                    SigningKey = Convert.ToBase64String(new byte[32]),
+                })),
             Mock.Of<RentalCommand.Core.Atomic.IAtomicUnitOfWork>(),
             NullLogger<AuthService>.Instance,
             TimeProvider.System);

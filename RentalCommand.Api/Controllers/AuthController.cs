@@ -124,9 +124,14 @@ public class AuthController : ControllerBase
 
     [HttpPost("register")]
     [AllowAnonymous]
-    public async Task<IActionResult> Register([FromBody] RegisterRequest request)
+    public async Task<IActionResult> Register(
+        [FromBody] RegisterRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var result = await _authService.RegisterAsync(request);
+        if (!TryNormalizeOperationKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "A valid Idempotency-Key is required." });
+        var result = await _authService.RegisterAsync(request, operationKey, ct);
         if (!result.Success)
         {
             if (result.ErrorType == AuthErrorType.BadRequest)
@@ -280,9 +285,14 @@ public class AuthController : ControllerBase
 
     [HttpPost("confirm-email")]
     [AllowAnonymous]
-    public async Task<IActionResult> ConfirmEmail([FromBody] ConfirmEmailRequest request)
+    public async Task<IActionResult> ConfirmEmail(
+        [FromBody] ConfirmEmailRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var result = await _authService.ConfirmEmailAsync(request.UserId, request.Token);
+        if (!TryNormalizeOperationKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "A valid Idempotency-Key is required." });
+        var result = await _authService.ConfirmEmailAsync(request.UserId, request.Token, operationKey, ct);
         if (!result.Success)
         {
             if (result.ErrorType == AuthErrorType.NotFound)
@@ -297,11 +307,16 @@ public class AuthController : ControllerBase
 
     [HttpPost("forgot-password")]
     [AllowAnonymous]
-    public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest request)
+    public async Task<IActionResult> ForgotPassword(
+        [FromBody] ForgotPasswordRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
+        if (!TryNormalizeOperationKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "A valid Idempotency-Key is required." });
         const string genericMessage = "If an account exists with that email, a password reset link has been sent.";
 
-        var token = await _authService.GeneratePasswordResetTokenAsync(request.Email);
+        var token = await _authService.GeneratePasswordResetTokenAsync(request.Email, operationKey, ct);
 
         // The reset token must never be returned in the response by default (account-takeover risk).
         // Only expose it for local dev convenience under an explicit opt-in, and warn when doing so.
@@ -322,9 +337,15 @@ public class AuthController : ControllerBase
 
     [HttpPost("reset-password")]
     [AllowAnonymous]
-    public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest request)
+    public async Task<IActionResult> ResetPassword(
+        [FromBody] ResetPasswordRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var result = await _authService.ResetPasswordAsync(request.UserId, request.Token, request.NewPassword);
+        if (!TryNormalizeOperationKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "A valid Idempotency-Key is required." });
+        var result = await _authService.ResetPasswordAsync(
+            request.UserId, request.Token, request.NewPassword, operationKey, ct);
         if (!result.Success)
         {
             return BadRequest(new { error = result.Error ?? "Password reset failed" });
@@ -335,9 +356,14 @@ public class AuthController : ControllerBase
 
     [HttpPost("resend-verification")]
     [AllowAnonymous]
-    public async Task<IActionResult> ResendVerification([FromBody] ResendVerificationRequest request)
+    public async Task<IActionResult> ResendVerification(
+        [FromBody] ResendVerificationRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var result = await _authService.ResendVerificationEmailAsync(request.Email);
+        if (!TryNormalizeOperationKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "A valid Idempotency-Key is required." });
+        var result = await _authService.ResendVerificationEmailAsync(request.Email, operationKey, ct);
 
         // Neutral response either way (no account enumeration). When the account is already
         // verified we can say so — that is not an enumeration signal a logged-out attacker can
@@ -473,4 +499,10 @@ public class AuthController : ControllerBase
 
     private string? GetUserAgent() =>
         Request.Headers.TryGetValue("User-Agent", out var ua) ? ua.ToString() : null;
+
+    private static bool TryNormalizeOperationKey(string? raw, out string operationKey)
+    {
+        operationKey = raw?.Trim() ?? string.Empty;
+        return operationKey.Length is > 0 and <= 200;
+    }
 }

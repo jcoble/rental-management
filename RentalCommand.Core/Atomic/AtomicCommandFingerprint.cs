@@ -53,6 +53,12 @@ public static class AtomicCommandFingerprint
         // not expose an unsalted offline password verifier.
         "CurrentPassword",
         "NewPassword",
+        // Identity password hashes and token payloads are prepared with randomized cryptographic
+        // material outside the transaction. Stable server-keyed intent hashes remain fingerprinted.
+        "PasswordHash",
+        "PreparedEmailPayload",
+        "ExpectedSecurityStamp",
+        "TokenWasValidated",
     };
 
     public static string Create(IAtomicCommandData command)

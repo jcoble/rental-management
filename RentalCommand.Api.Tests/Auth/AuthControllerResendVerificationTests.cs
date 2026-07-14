@@ -30,12 +30,16 @@ public class AuthControllerResendVerificationTests
         // Service signals "no such account" via a success result with no error (the no-enumeration no-op).
         var authService = new Mock<IAuthService>();
         authService
-            .Setup(s => s.ResendVerificationEmailAsync("ghost@nobody.test"))
+            .Setup(s => s.ResendVerificationEmailAsync(
+                "ghost@nobody.test", "test-key", It.IsAny<CancellationToken>()))
             .ReturnsAsync(AuthUserResult.Ok(null!));
 
         var controller = CreateController(authService.Object);
 
-        var result = await controller.ResendVerification(new ResendVerificationRequest { Email = "ghost@nobody.test" });
+        var result = await controller.ResendVerification(
+            new ResendVerificationRequest { Email = "ghost@nobody.test" },
+            "test-key",
+            CancellationToken.None);
 
         MessageOf(result).Should().Be(NeutralMessage);
     }
@@ -47,12 +51,16 @@ public class AuthControllerResendVerificationTests
         // byte-for-byte identical to the unknown-account case, otherwise it leaks existence.
         var authService = new Mock<IAuthService>();
         authService
-            .Setup(s => s.ResendVerificationEmailAsync("real@user.test"))
+            .Setup(s => s.ResendVerificationEmailAsync(
+                "real@user.test", "test-key", It.IsAny<CancellationToken>()))
             .ReturnsAsync(AuthUserResult.Ok(null!));
 
         var controller = CreateController(authService.Object);
 
-        var result = await controller.ResendVerification(new ResendVerificationRequest { Email = "real@user.test" });
+        var result = await controller.ResendVerification(
+            new ResendVerificationRequest { Email = "real@user.test" },
+            "test-key",
+            CancellationToken.None);
 
         MessageOf(result).Should().Be(NeutralMessage);
     }

@@ -2,6 +2,8 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Auth;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 
@@ -50,11 +52,14 @@ public interface IGoogleAuthService : RentalCommand.Core.Atomic.IAtomicRemoteDep
 /// </summary>
 public sealed class GoogleAuthService : IGoogleAuthService
 {
+    private static readonly AtomicJsonResultCodec<ConfirmAccountEmailResult> ConfirmEmailCodec =
+        new("auth-email-confirm-result:v1");
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly GoogleAuthOptions _options;
     private readonly ICanonicalAccountBootstrapService _accountBootstrap;
     private readonly IAuthService _authService;
+    private readonly IAtomicUnitOfWork _atomic;
     private readonly ILogger<GoogleAuthService> _logger;
 
     private const string TokenEndpoint = "https://oauth2.googleapis.com/token";
@@ -66,6 +71,7 @@ public sealed class GoogleAuthService : IGoogleAuthService
         IOptions<GoogleAuthOptions> options,
         ICanonicalAccountBootstrapService accountBootstrap,
         IAuthService authService,
+        IAtomicUnitOfWork atomic,
         ILogger<GoogleAuthService> logger)
     {
         _userManager = userManager;
@@ -73,6 +79,7 @@ public sealed class GoogleAuthService : IGoogleAuthService
         _options = options.Value;
         _accountBootstrap = accountBootstrap;
         _authService = authService;
+        _atomic = atomic;
         _logger = logger;
     }
 
@@ -150,6 +157,15 @@ public sealed class GoogleAuthService : IGoogleAuthService
         }
 
         var user = await _userManager.FindByEmailAsync(email);
+        claims.TryGetValue("sub", out var googleSubject);
+        if (string.IsNullOrWhiteSpace(googleSubject))
+        {
+            return GoogleAuthResult.Fail("Google id_token did not contain a subject claim.");
+        }
+        var subjectHash = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(
+                    System.Text.Encoding.UTF8.GetBytes(googleSubject)))
+            .ToLowerInvariant();
         if (user is null)
         {
             claims.TryGetValue("name", out var displayName);
@@ -158,6 +174,7 @@ public sealed class GoogleAuthService : IGoogleAuthService
                 string.IsNullOrWhiteSpace(displayName) ? email : displayName,
                 password: null,
                 emailConfirmed: true,
+                operationKey: $"google:{subjectHash}",
                 ct: ct);
             if (!bootstrap.Succeeded || bootstrap.User is null)
             {
@@ -176,16 +193,21 @@ public sealed class GoogleAuthService : IGoogleAuthService
         }
         else if (!user.EmailConfirmed)
         {
-            user.EmailConfirmed = true;
-            var update = await _userManager.UpdateAsync(user);
-            if (!update.Succeeded)
+            var confirmed = (await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity("auth.email.google-confirm", $"{user.Id}:{subjectHash}"),
+                new ConfirmGoogleAccountEmailCommand(
+                    user.Id,
+                    user.SecurityStamp ?? string.Empty,
+                    subjectHash),
+                ConfirmEmailCodec,
+                ct)).Value;
+            if (confirmed.Outcome is ConfirmAccountEmailOutcome.UserNotFound)
             {
                 _logger.LogWarning(
-                    "Could not confirm Google-verified account {Email}: {Errors}",
-                    email,
-                    string.Join("; ", update.Errors.Select(error => error.Description)));
+                    "Could not confirm Google-verified account {Email}: account disappeared.", email);
                 return GoogleAuthResult.Fail("Failed to verify the Rental Command account.");
             }
+            user.EmailConfirmed = true;
         }
 
         var auth = await _authService.LoginExternalAsync(user.Id, ct: ct);

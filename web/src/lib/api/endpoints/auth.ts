@@ -36,10 +36,13 @@ export const auth = {
 	 * with a neutral success (no account enumeration), so callers can fire-and-forget.
 	 */
 	resendVerification: (email: string) =>
-		fetchPublicApi<{ message: string }>('/auth/resend-verification', {
-			method: 'POST',
-			body: JSON.stringify({ email })
-		}),
+		idempotentMutation(`auth:resend-verification:${email}`, (operationKey) =>
+			fetchPublicApi<{ message: string }>('/auth/resend-verification', {
+				method: 'POST',
+				headers: { 'Idempotency-Key': operationKey },
+				body: JSON.stringify({ email })
+			})
+		),
 	/** Change the signed-in user's password (Bearer-authenticated). */
 	changePassword: async (currentPassword: string, newPassword: string) => {
 		const request = { currentPassword, newPassword };

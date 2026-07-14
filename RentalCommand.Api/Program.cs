@@ -173,6 +173,26 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Auth.ChangePasswordResult,
     RentalCommand.Data.Auth.ChangePasswordHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.BootstrapAccountCommand,
+    RentalCommand.Core.Auth.BootstrapAccountResult,
+    RentalCommand.Data.Auth.BootstrapAccountHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.ConfirmAccountEmailCommand,
+    RentalCommand.Core.Auth.ConfirmAccountEmailResult,
+    RentalCommand.Data.Auth.ConfirmAccountEmailHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.ResetAccountPasswordCommand,
+    RentalCommand.Core.Auth.ResetAccountPasswordResult,
+    RentalCommand.Data.Auth.ResetAccountPasswordHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.ConfirmGoogleAccountEmailCommand,
+    RentalCommand.Core.Auth.ConfirmAccountEmailResult,
+    RentalCommand.Data.Auth.ConfirmGoogleAccountEmailHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.AuthEmailOutboxCommand,
+    RentalCommand.Core.Auth.AuthEmailOutboxResult,
+    RentalCommand.Data.Auth.AuthEmailOutboxHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Scanning.RejectScanDraftCommand,
     RentalCommand.Core.Scanning.RejectScanDraftResult,
     RentalCommand.Data.Scanning.RejectScanDraftHandler>();

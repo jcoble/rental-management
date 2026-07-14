@@ -106,19 +106,26 @@ class AuthRepository {
     required String password,
     required String displayName,
   }) async {
-    try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/auth/register',
-        data: {
-          'email': email,
-          'password': password,
-          'displayName': displayName,
-        },
-      );
-      return RegisterResult.fromJson(response.data ?? const {});
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    final request = {
+      'email': email,
+      'password': password,
+      'displayName': displayName,
+    };
+    return IdempotentMutation.run(
+      'auth:register:${Object.hash(email, password, displayName)}',
+      (operationKey) async {
+        try {
+          final response = await _dio.post<Map<String, dynamic>>(
+            '/auth/register',
+            data: request,
+            options: Options(headers: {'Idempotency-Key': operationKey}),
+          );
+          return RegisterResult.fromJson(response.data ?? const {});
+        } on DioException catch (e) {
+          throw ApiException.fromDioException(e);
+        }
+      },
+    );
   }
 
   /// Signs in with a Google **id_token** obtained on-device via `google_sign_in`.
@@ -170,14 +177,17 @@ class AuthRepository {
   /// of whether the email exists (no account enumeration). Throws
   /// [ApiException] only on transport/server errors.
   Future<void> forgotPassword(String email) async {
-    try {
-      await _dio.post<Map<String, dynamic>>(
-        '/auth/forgot-password',
-        data: {'email': email},
-      );
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    await IdempotentMutation.run('auth:forgot-password:$email', (operationKey) async {
+      try {
+        await _dio.post<Map<String, dynamic>>(
+          '/auth/forgot-password',
+          data: {'email': email},
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        );
+      } on DioException catch (e) {
+        throw ApiException.fromDioException(e);
+      }
+    });
   }
 
   /// Re-sends the email-verification message via `POST /auth/resend-verification`.
@@ -186,14 +196,17 @@ class AuthRepository {
   /// of whether the email exists or is already verified (no account enumeration).
   /// Throws [ApiException] only on transport/server errors.
   Future<void> resendVerification(String email) async {
-    try {
-      await _dio.post<Map<String, dynamic>>(
-        '/auth/resend-verification',
-        data: {'email': email},
-      );
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    await IdempotentMutation.run('auth:resend-verification:$email', (operationKey) async {
+      try {
+        await _dio.post<Map<String, dynamic>>(
+          '/auth/resend-verification',
+          data: {'email': email},
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        );
+      } on DioException catch (e) {
+        throw ApiException.fromDioException(e);
+      }
+    });
   }
 
   /// Confirms an email address via `POST /auth/confirm-email` using the `userId`
@@ -202,14 +215,20 @@ class AuthRepository {
     required String userId,
     required String token,
   }) async {
-    try {
-      await _dio.post<Map<String, dynamic>>(
-        '/auth/confirm-email',
-        data: {'userId': userId, 'token': token},
-      );
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    await IdempotentMutation.run(
+      'auth:confirm-email:${Object.hash(userId, token)}',
+      (operationKey) async {
+        try {
+          await _dio.post<Map<String, dynamic>>(
+            '/auth/confirm-email',
+            data: {'userId': userId, 'token': token},
+            options: Options(headers: {'Idempotency-Key': operationKey}),
+          );
+        } on DioException catch (e) {
+          throw ApiException.fromDioException(e);
+        }
+      },
+    );
   }
 
   /// Completes a password reset via `POST /auth/reset-password` using the
@@ -220,14 +239,20 @@ class AuthRepository {
     required String token,
     required String newPassword,
   }) async {
-    try {
-      await _dio.post<Map<String, dynamic>>(
-        '/auth/reset-password',
-        data: {'userId': userId, 'token': token, 'newPassword': newPassword},
-      );
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    await IdempotentMutation.run(
+      'auth:reset-password:${Object.hash(userId, token, newPassword)}',
+      (operationKey) async {
+        try {
+          await _dio.post<Map<String, dynamic>>(
+            '/auth/reset-password',
+            data: {'userId': userId, 'token': token, 'newPassword': newPassword},
+            options: Options(headers: {'Idempotency-Key': operationKey}),
+          );
+        } on DioException catch (e) {
+          throw ApiException.fromDioException(e);
+        }
+      },
+    );
   }
 
   /// Changes the signed-in user's password via `POST /auth/change-password`

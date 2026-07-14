@@ -7,6 +7,7 @@
  */
 
 import { fail } from '@sveltejs/kit';
+import { createHash } from 'node:crypto';
 import type { Actions, PageServerLoad } from './$types';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
 
@@ -46,9 +47,12 @@ export const actions: Actions = {
 		}
 
 		try {
+			const operationKey = createHash('sha256')
+				.update(JSON.stringify({ userId, token }))
+				.digest('hex');
 			const response = await fetch(`${SERVER_API_BASE_URL}/auth/reset-password`, {
 				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
+				headers: { 'Content-Type': 'application/json', 'Idempotency-Key': operationKey },
 				body: JSON.stringify({ userId, token, newPassword })
 			});
 

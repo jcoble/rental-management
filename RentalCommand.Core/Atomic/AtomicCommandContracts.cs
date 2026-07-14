@@ -129,6 +129,7 @@ public interface IAtomicWriteAttempt
     IAtomicNoticeDraftPersistence NoticeDrafts { get; }
     IAtomicPaymentCsvImportPersistence PaymentCsvImports { get; }
     IAtomicInspectionPersistence Inspections { get; }
+    IAtomicAccountSecurityPersistence AccountSecurity { get; }
 
     /// <summary>Flushes tracked business rows while the owner transaction remains open.</summary>
     Task<AtomicBusinessFlush> FlushBusinessAsync(CancellationToken ct = default);
@@ -234,6 +235,23 @@ public sealed class AtomicGeneratedTenantNoticeDraft : IAtomicResultData
 }
 
 public sealed record AtomicListingPhotoOrderResult(bool IsValid, bool HasChanges);
+
+/// <summary>
+/// Narrow persistence boundary for the database-owned fresh-workspace bootstrap. The function
+/// creates the complete authority graph in one PostgreSQL statement after the Identity user has
+/// received its generated key inside the same receipt transaction.
+/// </summary>
+public interface IAtomicAccountSecurityPersistence
+{
+    Task<RentalCommand.Core.Auth.AtomicInitialWorkspaceBootstrap> BootstrapInitialWorkspaceAsync(
+        int userId,
+        string portfolioName,
+        string managementCompanyName,
+        string ownerName,
+        string ownerEmail,
+        DateTime createdAtUtc,
+        CancellationToken ct = default);
+}
 
 /// <summary>Kernel-owned set-based inspection mutations that cannot be expressed as tracked rows.</summary>
 public interface IAtomicInspectionPersistence

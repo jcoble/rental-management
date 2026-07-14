@@ -8,6 +8,7 @@
  */
 
 import { fail } from '@sveltejs/kit';
+import { createHash } from 'node:crypto';
 import type { Actions, PageServerLoad } from './$types';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
 import { env } from '$env/dynamic/public';
@@ -54,9 +55,12 @@ export const actions: Actions = {
 		}
 
 		try {
+			const operationKey = createHash('sha256')
+				.update(`register:${email.toUpperCase()}`)
+				.digest('hex');
 			const response = await fetch(`${SERVER_API_BASE_URL}/auth/register`, {
 				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
+				headers: { 'Content-Type': 'application/json', 'Idempotency-Key': operationKey },
 				body: JSON.stringify({ email, password, displayName })
 			});
 
