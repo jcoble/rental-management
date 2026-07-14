@@ -49,6 +49,7 @@ public static class AtomicPersistenceKernelExtensions
         services.AddScoped<AtomicSetBasedCommandGuardInterceptor>();
         services.AddScoped<WorkspaceAuthorityOwnershipInterceptor>();
         services.AddScoped<WorkspaceAccessRevisionGuard>();
+        services.AddScoped<WorkOrderResponsibilityAccessRevisionGuard>();
         services.AddScoped<MembershipAssignmentScopeValidator>();
         services.AddScoped<ILegalDocumentSourceVersionResolver, LegalDocumentSourceVersionResolver>();
         services.TryAddSingleton<IAtomicUnitOfWork, AtomicUnitOfWork>();

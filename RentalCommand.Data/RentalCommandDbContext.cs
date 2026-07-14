@@ -101,6 +101,7 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
     public DbSet<VendorDispatch> VendorDispatches => Set<VendorDispatch>();
     public DbSet<VendorRating> VendorRatings => Set<VendorRating>();
     public DbSet<WorkOrder> WorkOrders => Set<WorkOrder>();
+    public DbSet<WorkOrderResponsibility> WorkOrderResponsibilities => Set<WorkOrderResponsibility>();
     public DbSet<WorkOrderStatusEvent> WorkOrderStatusEvents => Set<WorkOrderStatusEvent>();
     public DbSet<RecurringMaintenanceTask> RecurringMaintenanceTasks => Set<RecurringMaintenanceTask>();
     public DbSet<Appointment> Appointments => Set<Appointment>();
@@ -203,6 +204,7 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
         base.OnModelCreating(modelBuilder);
         modelBuilder.HasPostgresExtension("pg_trgm");
         modelBuilder.ConfigureWorkspaceAccessKernel();
+        modelBuilder.ConfigureWorkOrderResponsibilities();
         AccessAuthorityDbFunctions.Configure(modelBuilder);
         modelBuilder.ConfigureLeaseRelationshipKernel();
         modelBuilder.ConfigureLeaseLegalArtifacts();
