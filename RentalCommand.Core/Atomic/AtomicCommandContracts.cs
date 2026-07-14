@@ -125,6 +125,7 @@ public interface IAtomicWriteAttempt
     IAtomicListingPersistence Listings { get; }
     IAtomicUnitImportPersistence UnitImports { get; }
     IAtomicCoreCsvImportPersistence CoreCsvImports { get; }
+    IAtomicNotificationPersistence Notifications { get; }
 
     /// <summary>Flushes tracked business rows while the owner transaction remains open.</summary>
     Task<AtomicBusinessFlush> FlushBusinessAsync(CancellationToken ct = default);
@@ -162,6 +163,21 @@ public interface IAtomicListingPersistence
         int portfolioId,
         int rentalListingId,
         int[] photoIds,
+        CancellationToken ct = default);
+}
+
+/// <summary>Database-owned bulk notification mutations used by receipt-backed commands.</summary>
+public interface IAtomicNotificationPersistence
+{
+    /// <summary>
+    /// Marks every currently visible unread notification for one caller as read in one SQL
+    /// statement. Tenant-message filtering and affected-row computation stay in PostgreSQL.
+    /// </summary>
+    Task<int> MarkAllReadAsync(
+        int portfolioId,
+        int userId,
+        bool includeStaffOnlyNotifications,
+        DateTime readAtUtc,
         CancellationToken ct = default);
 }
 

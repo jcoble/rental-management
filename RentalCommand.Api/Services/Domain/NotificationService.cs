@@ -1,7 +1,8 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Core.Entities;
-using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Notifications;
@@ -12,14 +13,14 @@ public class NotificationService : INotificationService
 {
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
-    private readonly IDataUpdateService _dataUpdate;
+    private readonly IAtomicUnitOfWork _atomic;
 
     public NotificationService(
-        RentalCommandDbContext db, TimeProvider timeProvider, IDataUpdateService dataUpdate)
+        RentalCommandDbContext db, TimeProvider timeProvider, IAtomicUnitOfWork atomic)
     {
         _db = db;
         _timeProvider = timeProvider;
-        _dataUpdate = dataUpdate;
+        _atomic = atomic;
     }
 
     public async Task<IReadOnlyList<NotificationResponse>> ListAsync(
@@ -46,13 +47,24 @@ public class NotificationService : INotificationService
             query = query.Where(n => !n.IsRead);
         }
 
-        var items = await query
+        return await query
             .OrderByDescending(n => n.CreatedAt)
             .Skip(normalizedSkip)
             .Take(normalizedTake)
+            .Select(notification => new NotificationResponse
+            {
+                Id = notification.Id,
+                Type = notification.Type,
+                Title = notification.Title,
+                Message = notification.Message,
+                Severity = notification.Severity,
+                ActionUrl = notification.ActionUrl,
+                RelatedEntityType = notification.RelatedEntityType,
+                RelatedEntityId = notification.RelatedEntityId,
+                IsRead = notification.IsRead,
+                CreatedAt = notification.CreatedAt,
+            })
             .ToListAsync(ct);
-
-        return items.Select(NotificationResponse.FromEntity).ToList();
     }
 
     public async Task<int> GetUnreadCountAsync(int portfolioId, int userId, CancellationToken ct = default)
@@ -68,97 +80,46 @@ public class NotificationService : INotificationService
         return await query.CountAsync(ct);
     }
 
-    public async Task<bool> MarkAsReadAsync(int portfolioId, int userId, int notificationId, CancellationToken ct = default)
+    public async Task<bool> MarkAsReadAsync(
+        WorkspaceReadScope scope,
+        int notificationId,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        var query = _db.Notifications
-            .Where(n =>
-                n.Id == notificationId &&
-                n.PortfolioId == portfolioId &&
-                (n.UserId == null || n.UserId == userId));
-        if (!await IsStaffUserAsync(portfolioId, userId, ct))
-        {
-            query = query.Where(n => n.Type != "TenantMessage");
-        }
-
-        var notification = await query.FirstOrDefaultAsync(ct);
-
-        if (notification is null)
-        {
-            return false;
-        }
-
-        if (!notification.IsRead)
-        {
-            notification.IsRead = true;
-            notification.ReadAt = _timeProvider.UtcNow();
-            await _db.SaveChangesAsync(ct);
-        }
-
-        return true;
+        var command = AtomicNotificationMutation.Command(scope,
+            AtomicNotificationMutationDomain.MarkRead, notificationId, string.Empty,
+            operationKey, new { });
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        return outcome.Value.Found;
     }
 
-    public async Task MarkAllAsReadAsync(int portfolioId, int userId, CancellationToken ct = default)
+    public async Task MarkAllAsReadAsync(
+        WorkspaceReadScope scope,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        var now = _timeProvider.UtcNow();
-        var query = _db.Notifications
-            .Where(n => n.PortfolioId == portfolioId && (n.UserId == null || n.UserId == userId) && !n.IsRead);
-        if (!await IsStaffUserAsync(portfolioId, userId, ct))
-        {
-            query = query.Where(n => n.Type != "TenantMessage");
-        }
-
-        await query
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(n => n.IsRead, true)
-                .SetProperty(n => n.ReadAt, now),
-                ct);
+        var command = AtomicNotificationMutation.Command(scope,
+            AtomicNotificationMutationDomain.MarkAllRead, 0, string.Empty,
+            operationKey, new { });
+        await _atomic.ExecuteAsync(
+            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
     }
 
     public async Task<NotificationResponse> CreateBroadcastAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         CreateBroadcastNotificationRequest request,
+        string operationKey,
         CancellationToken ct = default)
     {
-        var notification = new Notification
-        {
-            PortfolioId = portfolioId,
-            UserId = null,
-            Type = "System",
-            Title = request.Title.Trim(),
-            Message = request.Message.Trim(),
-            Severity = NormalizeSeverity(request.Severity),
-            ActionUrl = string.IsNullOrWhiteSpace(request.ActionUrl) ? null : request.ActionUrl.Trim(),
-            CreatedAt = _timeProvider.UtcNow(),
-        };
-
-        _db.Notifications.Add(notification);
-        await _db.SaveChangesAsync(ct);
-
-        // Push the new bell notification live to the portfolio group. Without this the notification
-        // store only refreshes on init/open/settings-save, so a broadcast created here (or, via the
-        // backplane, by Engine automation) would sit unseen until the next manual refresh.
-        var response = NotificationResponse.FromEntity(notification);
-        await _dataUpdate.BroadcastEntityUpdateAsync(
-            portfolioId, "Notification", notification.Id, response, ct);
-
-        return response;
-    }
-
-    private static string NormalizeSeverity(string? severity)
-    {
-        if (string.IsNullOrWhiteSpace(severity))
-        {
-            return "Info";
-        }
-
-        return severity.Trim().ToLowerInvariant() switch
-        {
-            "success" => "Success",
-            "warning" => "Warning",
-            "error" => "Error",
-            "critical" => "Critical",
-            _ => "Info",
-        };
+        var command = AtomicNotificationMutation.Command(scope,
+            AtomicNotificationMutationDomain.Broadcast, 0, string.Empty, operationKey, request);
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        return outcome.Value.ResponseJson is not null
+            ? JsonSerializer.Deserialize<NotificationResponse>(outcome.Value.ResponseJson)
+                ?? throw new InvalidOperationException("Atomic broadcast result snapshot is invalid.")
+            : throw new InvalidOperationException("Atomic broadcast result did not contain a response snapshot.");
     }
 
     private async Task<bool> IsStaffUserAsync(int portfolioId, int userId, CancellationToken ct)

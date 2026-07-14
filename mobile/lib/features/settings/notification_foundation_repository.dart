@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 
 class MyAlerts {
   const MyAlerts({
@@ -411,13 +412,20 @@ class NotificationFoundationRepository {
     (data) => MyAlerts.fromJson(_map(data)),
   );
 
-  Future<MyAlerts> updateMyAlerts(MyAlerts alerts) => _request(
-    () => _dio.put<Map<String, dynamic>>(
-      '/notification-settings/my-alerts',
-      data: alerts.toUpdateJson(),
-    ),
-    (data) => MyAlerts.fromJson(_map(data)),
-  );
+  Future<MyAlerts> updateMyAlerts(MyAlerts alerts) {
+    final request = alerts.toUpdateJson();
+    return IdempotentMutation.run(
+      'notification-settings:my-alerts:$request',
+      (operationKey) => _request(
+        () => _dio.put<Map<String, dynamic>>(
+          '/notification-settings/my-alerts',
+          data: request,
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        ),
+        (data) => MyAlerts.fromJson(_map(data)),
+      ),
+    );
+  }
 
   Future<MorningBriefingSettings> getMorningBriefingSettings() => _request(
     () => _dio.get<Map<String, dynamic>>(
@@ -462,18 +470,25 @@ class NotificationFoundationRepository {
     required int? propertyId,
     required bool useWorkspaceAdministratorFallback,
     required List<TeamRoutingRecipientUpdate> recipients,
-  }) => _request(
-    () => _dio.put<Map<String, dynamic>>(
-      '/notification-settings/team-routing',
-      data: {
-        'topic': topic,
-        'propertyId': propertyId,
-        'useWorkspaceAdministratorFallback': useWorkspaceAdministratorFallback,
-        'recipients': recipients.map((item) => item.toJson()).toList(),
-      },
-    ),
-    (data) => TeamRoutingRule.fromJson(_map(data)),
-  );
+  }) {
+    final request = {
+      'topic': topic,
+      'propertyId': propertyId,
+      'useWorkspaceAdministratorFallback': useWorkspaceAdministratorFallback,
+      'recipients': recipients.map((item) => item.toJson()).toList(),
+    };
+    return IdempotentMutation.run(
+      'notification-settings:team-routing:$request',
+      (operationKey) => _request(
+        () => _dio.put<Map<String, dynamic>>(
+          '/notification-settings/team-routing',
+          data: request,
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        ),
+        (data) => TeamRoutingRule.fromJson(_map(data)),
+      ),
+    );
+  }
 
   Future<List<TenantNoticePolicy>> listTenantNoticePolicies() => _request(
     () => _dio.get<List<dynamic>>('/notification-settings/tenant-notices'),
@@ -483,18 +498,27 @@ class NotificationFoundationRepository {
   Future<TenantNoticePolicy> updateTenantNoticePolicy(
     TenantNoticePolicy policy,
     Map<String, dynamic> request,
-  ) => _request(
-    () => _dio.put<Map<String, dynamic>>(
-      '/notification-settings/tenant-notices/${Uri.encodeComponent(policy.automationKey)}',
-      data: request,
+  ) => IdempotentMutation.run(
+    'notification-settings:tenant-notice:${policy.automationKey}:$request',
+    (operationKey) => _request(
+      () => _dio.put<Map<String, dynamic>>(
+        '/notification-settings/tenant-notices/${Uri.encodeComponent(policy.automationKey)}',
+        data: request,
+        options: Options(headers: {'Idempotency-Key': operationKey}),
+      ),
+      (data) => TenantNoticePolicy.fromJson(_map(data)),
     ),
-    (data) => TenantNoticePolicy.fromJson(_map(data)),
   );
 
-  Future<void> seedTenantNoticeTemplates() => _request(
-    () =>
-        _dio.post<void>('/notification-settings/tenant-notices/templates/seed'),
-    (_) {},
+  Future<void> seedTenantNoticeTemplates() => IdempotentMutation.run(
+    'notification-settings:tenant-notices:seed',
+    (operationKey) => _request(
+      () => _dio.post<void>(
+        '/notification-settings/tenant-notices/templates/seed',
+        options: Options(headers: {'Idempotency-Key': operationKey}),
+      ),
+      (_) {},
+    ),
   );
 
   Future<TenantNoticePolicy> createTenantNoticeTemplateVersion({
@@ -503,26 +527,37 @@ class NotificationFoundationRepository {
     required String body,
     required String? jurisdictionCode,
     required bool confirmJurisdictionReviewed,
-  }) => _request(
-    () => _dio.post<Map<String, dynamic>>(
-      '/notification-settings/tenant-notices/templates/${Uri.encodeComponent(systemKey)}/versions',
-      data: {
-        'subject': subject,
-        'body': body,
-        'jurisdictionCode': jurisdictionCode,
-        'confirmJurisdictionReviewed': confirmJurisdictionReviewed,
-      },
-    ),
-    (data) => TenantNoticePolicy.fromJson(_map(data)),
-  );
+  }) {
+    final request = {
+      'subject': subject,
+      'body': body,
+      'jurisdictionCode': jurisdictionCode,
+      'confirmJurisdictionReviewed': confirmJurisdictionReviewed,
+    };
+    return IdempotentMutation.run(
+      'notification-settings:tenant-notice-template:$systemKey:$request',
+      (operationKey) => _request(
+        () => _dio.post<Map<String, dynamic>>(
+          '/notification-settings/tenant-notices/templates/${Uri.encodeComponent(systemKey)}/versions',
+          data: request,
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        ),
+        (data) => TenantNoticePolicy.fromJson(_map(data)),
+      ),
+    );
+  }
 
   Future<TenantNoticePolicy> restoreTenantNoticeTemplate(
     String systemKey,
-  ) => _request(
-    () => _dio.post<Map<String, dynamic>>(
-      '/notification-settings/tenant-notices/templates/${Uri.encodeComponent(systemKey)}/restore-default',
+  ) => IdempotentMutation.run(
+    'notification-settings:tenant-notice-template:$systemKey:restore',
+    (operationKey) => _request(
+      () => _dio.post<Map<String, dynamic>>(
+        '/notification-settings/tenant-notices/templates/${Uri.encodeComponent(systemKey)}/restore-default',
+        options: Options(headers: {'Idempotency-Key': operationKey}),
+      ),
+      (data) => TenantNoticePolicy.fromJson(_map(data)),
     ),
-    (data) => TenantNoticePolicy.fromJson(_map(data)),
   );
 
   Future<List<NoticeDeliveryStatus>> listTenantNoticeDeliveries({

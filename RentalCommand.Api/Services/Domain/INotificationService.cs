@@ -1,4 +1,5 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -13,7 +14,9 @@ public interface INotificationService
         CancellationToken ct = default);
 
     Task<int> GetUnreadCountAsync(int portfolioId, int userId, CancellationToken ct = default);
-    Task<bool> MarkAsReadAsync(int portfolioId, int userId, int notificationId, CancellationToken ct = default);
-    Task MarkAllAsReadAsync(int portfolioId, int userId, CancellationToken ct = default);
-    Task<NotificationResponse> CreateBroadcastAsync(int portfolioId, CreateBroadcastNotificationRequest request, CancellationToken ct = default);
+    Task<bool> MarkAsReadAsync(WorkspaceReadScope scope, int notificationId, string operationKey,
+        CancellationToken ct = default);
+    Task MarkAllAsReadAsync(WorkspaceReadScope scope, string operationKey, CancellationToken ct = default);
+    Task<NotificationResponse> CreateBroadcastAsync(WorkspaceReadScope scope,
+        CreateBroadcastNotificationRequest request, string operationKey, CancellationToken ct = default);
 }

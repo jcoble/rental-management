@@ -1,9 +1,10 @@
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Core.Entities;
 
 /// <summary>Personal alert destinations for exactly one signed-in user.</summary>
-public sealed class UserAlertPreference
+public sealed class UserAlertPreference : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
@@ -19,7 +20,7 @@ public sealed class UserAlertPreference
 }
 
 /// <summary>Administrative rule for resolving internal recipients for one topic.</summary>
-public sealed class TeamRoutingRule
+public sealed class TeamRoutingRule : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
@@ -33,7 +34,7 @@ public sealed class TeamRoutingRule
     public ICollection<TeamRoutingRuleRecipient> Recipients { get; set; } = [];
 }
 
-public sealed class TeamRoutingRuleRecipient
+public sealed class TeamRoutingRuleRecipient : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int TeamRoutingRuleId { get; set; }
@@ -45,7 +46,7 @@ public sealed class TeamRoutingRuleRecipient
 }
 
 /// <summary>Independent policy for one tenant-facing automation. There is intentionally no master switch.</summary>
-public sealed class TenantNoticePolicy
+public sealed class TenantNoticePolicy : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
@@ -92,7 +93,7 @@ public sealed class SystemNoticeTemplateVersion
 }
 
 /// <summary>Append-only workspace template version; edits and restores always create a successor.</summary>
-public sealed class WorkspaceNoticeTemplateVersion
+public sealed class WorkspaceNoticeTemplateVersion : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
