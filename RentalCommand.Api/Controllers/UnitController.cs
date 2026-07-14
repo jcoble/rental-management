@@ -6,6 +6,7 @@ using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.Controllers;
 
