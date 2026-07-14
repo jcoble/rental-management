@@ -461,7 +461,14 @@ public class PropertyService : IPropertyService
 
         if (liveUnits.Count == 0)
         {
-            var created = NewCanonicalUnit(property, now);
+            // The authorized update query already owns the tracked Property aggregate. Build the
+            // new child from its persisted keys so adding the Unit cannot attach another Property
+            // instance with the same alternate key to the change tracker.
+            var created = NewCanonicalUnit(
+                property.PortfolioId,
+                property.Id,
+                property.Name,
+                now);
             _db.Units.Add(created);
             return created;
         }
@@ -488,12 +495,22 @@ public class PropertyService : IPropertyService
         return unit;
     }
 
-    private static Unit NewCanonicalUnit(Property property, DateTime now) => new()
+    private static Unit NewCanonicalUnit(Property property, DateTime now)
     {
-        Property = property,
-        PortfolioId = property.PortfolioId,
-        PropertyId = property.Id,
-        UnitNumber = CanonicalUnitNumber(property.Name),
+        var unit = NewCanonicalUnit(property.PortfolioId, property.Id, property.Name, now);
+        unit.Property = property;
+        return unit;
+    }
+
+    private static Unit NewCanonicalUnit(
+        int portfolioId,
+        int propertyId,
+        string propertyName,
+        DateTime now) => new()
+    {
+        PortfolioId = portfolioId,
+        PropertyId = propertyId,
+        UnitNumber = CanonicalUnitNumber(propertyName),
         CreatedAt = now,
         UpdatedAt = now,
     };
