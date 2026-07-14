@@ -21,6 +21,7 @@ public class BankingControllerAuthorizationTests
     [InlineData(nameof(BankingController.Match), CapabilityKeys.MoneyReconciliationOperate)]
     [InlineData(nameof(BankingController.ReviewQueue), CapabilityKeys.MoneyReconciliationOperate)]
     [InlineData(nameof(BankingController.ConfirmMatch), CapabilityKeys.MoneyReconciliationOperate)]
+    [InlineData(nameof(BankingController.Route), CapabilityKeys.MoneyReconciliationOperate)]
     [InlineData(nameof(BankingController.ClearMatch), CapabilityKeys.MoneyReconciliationDestructive)]
     [InlineData(nameof(BankingController.DismissMatch), CapabilityKeys.MoneyReconciliationDestructive)]
     [InlineData(nameof(BankingController.Ignore), CapabilityKeys.MoneyReconciliationDestructive)]

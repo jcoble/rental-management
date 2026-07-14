@@ -490,7 +490,6 @@ public class BankingService : IBankingService
             RouteBankTransactionOutcome.TransactionNotFound or RouteBankTransactionOutcome.PropertyNotFound => null,
             RouteBankTransactionOutcome.StaleVersion => throw new BankingConflictException(
                 "This bank transaction changed after it was loaded. Refresh and choose the property again."),
-            RouteBankTransactionOutcome.AccessDenied => throw new UnauthorizedAccessException(),
             _ => await LoadFullTransactionAsync(scope.PortfolioId, transactionId, ct),
         };
     }
@@ -865,9 +864,6 @@ public class BankingService : IBankingService
         if (outcome.Value.Outcome == ReconcileBankTransactionOutcome.StaleVersion)
             throw new BankingConflictException(
                 "This bank transaction changed after it was loaded. Refresh before reconciling it.");
-        if (outcome.Value.Outcome == ReconcileBankTransactionOutcome.AccessDenied)
-            throw new UnauthorizedAccessException();
-
         var canonical = await TransactionsWithSuggestionsQuery(
                 scope.PortfolioId,
                 BaseTransactions(scope.PortfolioId).AsNoTracking().Where(row => row.Id == current.Id))

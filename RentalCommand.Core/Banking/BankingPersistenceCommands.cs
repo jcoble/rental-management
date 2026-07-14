@@ -206,7 +206,6 @@ public enum ReconcileBankTransactionOutcome
     TransactionNotFound,
     TargetNotFound,
     RouteRequired,
-    AccessDenied,
     StaleVersion,
 }
 
@@ -232,7 +231,6 @@ public enum RouteBankTransactionOutcome
     AlreadyApplied,
     TransactionNotFound,
     PropertyNotFound,
-    AccessDenied,
     StaleVersion,
 }
 

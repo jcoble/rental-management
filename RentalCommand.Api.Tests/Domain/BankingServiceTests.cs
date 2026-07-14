@@ -153,6 +153,49 @@ public class BankingServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ClearMatchAsync_AccessDenialRollsBackReceiptAndMutation()
+    {
+        var payment = SeedRentPayment(new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc));
+        var propertyId = payment.TenantAccount!.LeaseManagement!.PropertyId;
+        var imported = await _sut.ImportAsync(1, BankImport(
+            "reconcile-denial-rollback",
+            payment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            "Emily Chen",
+            payment.Amount));
+        var transactionId = imported.Transactions.Single().Id;
+        AssignRoute(_ctx, transactionId, propertyId);
+        await _sut.MatchAsync(_scope, transactionId, new MatchBankTransactionRequest
+        {
+            OperationKey = "reconcile-denial-seed-match",
+            ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
+            TenantAccountId = payment.TenantAccountId,
+            TenantLedgerEntryId = payment.Id,
+        });
+        var propertyManager = _ctx.Db.SeedPropertyManagerScope(
+            1, propertyId, "bank-clear-property-manager");
+
+        var denied = async () => await _sut.ClearMatchAsync(
+            propertyManager,
+            transactionId,
+            new BankTransactionMutationRequest
+            {
+                OperationKey = "property-manager-clear-denied",
+                ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
+            });
+        await denied.Should().ThrowAsync<UnauthorizedAccessException>();
+
+        _ctx.Db.ChangeTracker.Clear();
+        var transaction = await _ctx.Db.BankTransactions.AsNoTracking()
+            .SingleAsync(row => row.Id == transactionId);
+        transaction.MatchStatus.Should().Be("Matched");
+        transaction.MatchedTenantLedgerEntryId.Should().Be(payment.Id);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.transaction.reconcile" &&
+            receipt.IdempotencyKey.EndsWith(":property-manager-clear-denied")))
+            .Should().Be(0);
+    }
+
+    [Fact]
     public async Task MatchAsync_ConcurrentSameOperation_ReplaysOneAuthorizedReconciliation()
     {
         var payment = SeedRentPayment(new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc));
@@ -215,10 +258,15 @@ public class BankingServiceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task RouteTransactionAsync_RequiresWorkspaceAdministratorAuthority()
+    public async Task RouteTransactionAsync_EnforcesTargetPropertyScopeAndDestructiveClearAuthority()
     {
-        var payment = SeedRentPayment(new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc));
-        var propertyId = payment.TenantAccount!.LeaseManagement!.PropertyId;
+        var postedAt = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
+        var allowedPayment = SeedRentPaymentInto(
+            _ctx, "Allowed", "Tenant", 1400m, postedAt, "L-route-allowed");
+        var deniedPayment = SeedRentPaymentInto(
+            _ctx, "Denied", "Tenant", 1500m, postedAt, "L-route-denied");
+        var allowedPropertyId = allowedPayment.TenantAccount!.LeaseManagement!.PropertyId;
+        var deniedPropertyId = deniedPayment.TenantAccount!.LeaseManagement!.PropertyId;
         var imported = await _sut.ImportAsync(1, new ImportBankTransactionsRequest
         {
             Provider = "Manual",
@@ -237,46 +285,101 @@ public class BankingServiceTests : IAsyncLifetime
         });
         var transactionId = imported.Transactions.Single().Id;
         var propertyManager = _ctx.Db.SeedPropertyManagerScope(
-            1, propertyId, "bank-routing-property-manager");
-        var expectedUpdatedAt = TransactionUpdatedAt(_ctx, transactionId);
+            1, allowedPropertyId, "bank-routing-property-manager");
 
-        var denied = async () => await _sut.RouteTransactionAsync(
+        var routed = await _sut.RouteTransactionAsync(
             propertyManager,
             transactionId,
             new RouteBankTransactionRequest
             {
-                OperationKey = "property-manager-route-denied",
-                PropertyId = propertyId,
-                ExpectedUpdatedAtUtc = expectedUpdatedAt,
+                OperationKey = "property-manager-route-applied",
+                PropertyId = allowedPropertyId,
+                ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
             });
-        await denied.Should().ThrowAsync<UnauthorizedAccessException>();
+        routed.Should().NotBeNull();
+        routed!.PropertyId.Should().Be(allowedPropertyId);
+
+        var crossScope = async () => await _sut.RouteTransactionAsync(
+            propertyManager,
+            transactionId,
+            new RouteBankTransactionRequest
+            {
+                OperationKey = "property-manager-cross-scope-route",
+                PropertyId = deniedPropertyId,
+                ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
+            });
+        await crossScope.Should().ThrowAsync<UnauthorizedAccessException>();
 
         _ctx.Db.ChangeTracker.Clear();
         (await _ctx.Db.BankTransactions.AsNoTracking()
             .Where(transaction => transaction.Id == transactionId)
             .Select(transaction => transaction.PropertyId)
-            .SingleAsync()).Should().BeNull();
+            .SingleAsync()).Should().Be(allowedPropertyId);
         (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
             receipt.CommandType == "banking.transaction.route" &&
-            receipt.IdempotencyKey.EndsWith(":property-manager-route-denied")))
+            receipt.IdempotencyKey.EndsWith(":property-manager-cross-scope-route")))
             .Should().Be(0);
 
-        var routed = await _sut.RouteTransactionAsync(
+        var cleared = await _sut.RouteTransactionAsync(
             _scope,
             transactionId,
             new RouteBankTransactionRequest
             {
-                OperationKey = "administrator-route-applied",
-                PropertyId = propertyId,
-                ExpectedUpdatedAtUtc = expectedUpdatedAt,
+                OperationKey = "administrator-route-cleared",
+                PropertyId = null,
+                ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
             });
+        cleared.Should().NotBeNull();
+        cleared!.PropertyId.Should().BeNull();
 
-        routed.Should().NotBeNull();
-        routed!.PropertyId.Should().Be(propertyId);
         (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
             receipt.CommandType == "banking.transaction.route" &&
-            receipt.IdempotencyKey.EndsWith(":administrator-route-applied")))
+            receipt.IdempotencyKey.EndsWith(":administrator-route-cleared")))
             .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RouteTransactionAsync_ReplayAuthorizationFailsClosedAfterScopeRevocation()
+    {
+        var payment = SeedRentPayment(new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc));
+        var propertyId = payment.TenantAccount!.LeaseManagement!.PropertyId;
+        var imported = await _sut.ImportAsync(1, BankImport(
+            "route-replay-revocation",
+            payment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            "Emily Chen",
+            payment.Amount));
+        var transactionId = imported.Transactions.Single().Id;
+        var propertyManager = _ctx.Db.SeedPropertyManagerScope(
+            1, propertyId, "bank-routing-replay-property-manager");
+        var request = new RouteBankTransactionRequest
+        {
+            OperationKey = "property-manager-route-replay",
+            PropertyId = propertyId,
+            ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
+        };
+
+        (await _sut.RouteTransactionAsync(propertyManager, transactionId, request))
+            .Should().NotBeNull();
+
+        var assignment = await _ctx.Db.MembershipRoleAssignments.SingleAsync(row =>
+            row.WorkspaceMembership!.AccessContextId == propertyManager.AccessContextId);
+        assignment.Status = MembershipRoleAssignmentStatus.Revoked;
+        assignment.RevokedAtUtc = DateTime.UtcNow;
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+
+        var replay = async () => await _sut.RouteTransactionAsync(
+            propertyManager, transactionId, request);
+        await replay.Should().ThrowAsync<UnauthorizedAccessException>();
+
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.transaction.route" &&
+            receipt.IdempotencyKey.EndsWith(":property-manager-route-replay")))
+            .Should().Be(1, "the committed receipt remains but cannot bypass current authority");
+        (await _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(transaction => transaction.Id == transactionId)
+            .Select(transaction => transaction.PropertyId)
+            .SingleAsync()).Should().Be(propertyId);
     }
 
     [Fact]
