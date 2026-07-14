@@ -10,8 +10,8 @@ import { fail } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
 
-export const load: PageServerLoad = async () => {
-	return {};
+export const load: PageServerLoad = async ({ url }) => {
+	return { email: url.searchParams.get('email')?.trim() ?? '' };
 };
 
 export const actions: Actions = {

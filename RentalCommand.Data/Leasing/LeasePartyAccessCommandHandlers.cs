@@ -1,5 +1,6 @@
 using System.Net;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -577,11 +578,11 @@ public sealed class GrantTenantUserAccessHandler
     : IAtomicCommandHandler<GrantTenantUserAccessCommand, LeasePartyMutationResult>,
       IAtomicReplayAuthorizer<GrantTenantUserAccessCommand>
 {
-    private readonly IPasswordHasher<ApplicationUser> _passwordHasher;
+    private readonly ILookupNormalizer _lookupNormalizer;
 
-    public GrantTenantUserAccessHandler(IPasswordHasher<ApplicationUser> passwordHasher)
+    public GrantTenantUserAccessHandler(ILookupNormalizer lookupNormalizer)
     {
-        _passwordHasher = passwordHasher;
+        _lookupNormalizer = lookupNormalizer;
     }
 
     public async Task<LeasePartyMutationResult> HandleAsync(
@@ -619,28 +620,43 @@ public sealed class GrantTenantUserAccessHandler
                 "The active household member must have a valid email before login access can be granted.", command.PartyId);
         }
 
-        var normalizedEmail = email.ToUpperInvariant();
+        var normalizedEmail = _lookupNormalizer.NormalizeEmail(email);
+        if (string.IsNullOrWhiteSpace(normalizedEmail))
+        {
+            return LeasePartyAccessCommandSupport.Error(
+                LeasePartyMutationOutcome.InvalidParty, command,
+                "The active household member must have a valid email before login access can be granted.", command.PartyId);
+        }
+
+        // A relationship lock cannot serialize grants for the same person across two different
+        // relationships. Use the Identity-normalized email as the global aggregate key before
+        // reading or creating the ApplicationUser so the unique Identity row, workspace context,
+        // relationship grant, audit, and invitation converge in one atomic attempt.
+        await attempt.Locking.AcquireAsync(
+            AtomicLockResource.TenantIdentityEmail,
+            TenantIdentityEmailLockKey(normalizedEmail),
+            ct);
+
         var user = await attempt.Persistence.Query<ApplicationUser>()
             .SingleOrDefaultAsync(candidate => candidate.NormalizedEmail == normalizedEmail, ct);
-        string? temporaryPassword = null;
+        var createdIdentity = false;
         if (user is null)
         {
-            temporaryPassword = CreateTemporaryPassword();
             user = new ApplicationUser
             {
                 UserName = email,
                 NormalizedUserName = normalizedEmail,
                 Email = email,
                 NormalizedEmail = normalizedEmail,
-                EmailConfirmed = true,
+                EmailConfirmed = false,
                 DisplayName = string.IsNullOrWhiteSpace(target.DisplayName) ? email : target.DisplayName,
                 SecurityStamp = Guid.NewGuid().ToString("N"),
                 ConcurrencyStamp = Guid.NewGuid().ToString("N"),
                 CreatedAt = nowUtc,
             };
-            user.PasswordHash = _passwordHasher.HashPassword(user, temporaryPassword);
             attempt.Persistence.Add(user);
             await attempt.FlushBusinessAsync(ct);
+            createdIdentity = true;
         }
 
         var targetContextId = await attempt.Persistence.Query<WorkspaceAccessContext>()
@@ -704,10 +720,10 @@ public sealed class GrantTenantUserAccessHandler
         LeasePartyAccessCommandSupport.BindRelationshipUpdate(
             attempt, target.Relationship, command, "Tenant portal access granted.");
         await attempt.FlushBusinessAsync(ct);
-        if (temporaryPassword is not null)
+        if (createdIdentity)
         {
             attempt.StageOutbox(BuildPortalInvitation(
-                command, user, temporaryPassword, access.Id, nowUtc));
+                command, user, access.Id, nowUtc));
         }
         LeasePartyAccessCommandSupport.StageOutbox(attempt, command, nowUtc, access.Id, "tenant-access-granted");
 
@@ -727,27 +743,29 @@ public sealed class GrantTenantUserAccessHandler
         CancellationToken ct) =>
         LeasePartyAccessCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
 
-    private static string CreateTemporaryPassword() =>
-        $"Rc{Convert.ToHexString(RandomNumberGenerator.GetBytes(8))}a1";
+    private static Guid TenantIdentityEmailLockKey(string normalizedEmail) =>
+        new(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedEmail)).AsSpan(0, 16));
 
     private static OutboxMessage BuildPortalInvitation(
         GrantTenantUserAccessCommand command,
         ApplicationUser user,
-        string temporaryPassword,
         int tenantUserAccessId,
         DateTime nowUtc)
     {
-        var loginUrl = $"{command.WebBaseUrl.TrimEnd('/')}/login";
+        // This durable invitation deliberately contains no password and no reset token. The
+        // resident requests the existing short-lived Identity reset link from the prefilled page;
+        // completing that flow sets the first password and confirms the email.
+        var setupUrl = $"{command.WebBaseUrl.TrimEnd('/')}/forgot-password?email={Uri.EscapeDataString(user.Email!)}";
         var greeting = string.IsNullOrWhiteSpace(user.DisplayName) ? user.Email! : user.DisplayName;
-        var subject = "Your Rental Command resident login";
-        var body = $"Hi {greeting},\n\nYour resident login is ready.\n\nEmail: {user.Email}\nTemporary password: {temporaryPassword}\nSign in: {loginUrl}\n\nChange your password after signing in.\n";
-        var htmlBody = $"<p>Hi {WebUtility.HtmlEncode(greeting)},</p><p>Your resident login is ready.</p><p><strong>Email:</strong> {WebUtility.HtmlEncode(user.Email)}<br><strong>Temporary password:</strong> {WebUtility.HtmlEncode(temporaryPassword)}</p><p><a href=\"{WebUtility.HtmlEncode(loginUrl)}\">Sign in to Rental Command</a></p><p>Change your password after signing in.</p>";
+        var subject = "Set up your Rental Command resident login";
+        var body = $"Hi {greeting},\n\nYou have been invited to access your rental in Rental Command.\n\nSet up your password: {setupUrl}\n\nThe page is prefilled with your email. Request the secure setup link, then use the short-lived link we send to choose your password.\n\nIf you were not expecting this invitation, you can ignore this email.\n";
+        var htmlBody = $"<p>Hi {WebUtility.HtmlEncode(greeting)},</p><p>You have been invited to access your rental in Rental Command.</p><p><a href=\"{WebUtility.HtmlEncode(setupUrl)}\">Set up your password</a></p><p>The page is prefilled with your email. Request the secure setup link, then use the short-lived link we send to choose your password.</p><p>If you were not expecting this invitation, you can ignore this email.</p>";
         return new OutboxMessage
         {
             PortfolioId = command.PortfolioId,
             MessageType = "email",
             Payload = JsonSerializer.Serialize(new { to = user.Email, subject, body, htmlBody }),
-            IdempotencyKey = $"tenant-access:{tenantUserAccessId}:portal-invitation-v1",
+            IdempotencyKey = $"tenant-access:{tenantUserAccessId}:portal-activation-v2",
             CreatedAtUtc = nowUtc,
             NextAttemptAtUtc = nowUtc,
         };

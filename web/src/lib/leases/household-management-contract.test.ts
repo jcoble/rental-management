@@ -6,6 +6,8 @@ const endpoints = readFileSync(new URL('../api/endpoints/lease-managements.ts', 
 const dialog = readFileSync(new URL('../components/leases/HouseholdManagementDialog.svelte', import.meta.url), 'utf8');
 const page = readFileSync(new URL('../../routes/(protected)/leases/[id]/+page.svelte', import.meta.url), 'utf8');
 const tenantEndpoints = readFileSync(new URL('../api/endpoints/tenants.ts', import.meta.url), 'utf8');
+const forgotPasswordPage = readFileSync(new URL('../../routes/forgot-password/+page.svelte', import.meta.url), 'utf8');
+const forgotPasswordAction = readFileSync(new URL('../../routes/forgot-password/+page.server.ts', import.meta.url), 'utf8');
 
 describe('relationship-scoped household management', () => {
 	it('uses only canonical idempotent party commands', () => {
@@ -30,5 +32,11 @@ describe('relationship-scoped household management', () => {
 		assert.match(page, /leasing\.onboarding\.manage/);
 		assert.match(page, /leasing\.agreements\.prepare/);
 		assert.match(page, /canManage=\{canManageHousehold\}/);
+	});
+
+	it('prefills the safe password-setup request without accepting a durable credential', () => {
+		assert.match(forgotPasswordAction, /url\.searchParams\.get\('email'\)/);
+		assert.match(forgotPasswordPage, /\$state\(data\.email \?\? ''\)/);
+		assert.match(forgotPasswordAction, /JSON\.stringify\(\{ email \}\)/);
 	});
 });
