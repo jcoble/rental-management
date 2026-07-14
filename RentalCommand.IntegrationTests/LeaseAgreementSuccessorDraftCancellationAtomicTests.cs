@@ -204,7 +204,6 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
         };
         var unit = new Unit
         {
-            Portfolio = portfolio,
             Property = property,
             UnitNumber = "1",
             CreatedAt = now,
