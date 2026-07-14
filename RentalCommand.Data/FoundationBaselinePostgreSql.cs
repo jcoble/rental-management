@@ -1004,8 +1004,7 @@ internal static class FoundationBaselinePostgreSql
           target_entity_id integer,
           target_operation integer,
           target_actor_label text,
-          target_change_reason text,
-          target_new_values jsonb)
+          target_change_reason text)
         RETURNS boolean
         LANGUAGE sql
         STABLE
@@ -1062,7 +1061,8 @@ internal static class FoundationBaselinePostgreSql
           target_entity_id integer,
           target_operation integer,
           target_actor_label text,
-          target_change_reason text)
+          target_change_reason text,
+          target_new_values jsonb)
         RETURNS boolean
         LANGUAGE sql
         STABLE

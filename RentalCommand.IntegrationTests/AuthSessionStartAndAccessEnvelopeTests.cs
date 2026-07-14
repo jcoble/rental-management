@@ -95,8 +95,8 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
     {
         var services = new ServiceCollection();
         services.AddSingleton(TimeProvider.System);
-        services.AddSingleton(_failureInterceptor);
-        services.AddSingleton(_queryCapture);
+        services.AddSingleton(_failureInterceptor!);
+        services.AddSingleton(_queryCapture!);
         services.AddScoped<ICurrentActor, AuthStartTestActor>();
         services.AddAtomicPersistenceKernel();
         services.AddAtomicCommandHandler<
