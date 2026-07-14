@@ -1500,7 +1500,8 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.HasIndex(e => new { e.PropertyId, e.PortfolioId });
             // Unique unit number within a property — filtered to live rows so a soft-deleted unit
             // (DeletedAt set) frees its number for reuse instead of permanently occupying the slot.
-            entity.HasIndex(e => new { e.PropertyId, e.UnitNumber }).IsUnique().HasFilter("\"DeletedAt\" IS NULL");
+            // The baseline migration owns the expression index on (PropertyId, lower(UnitNumber));
+            // EF does not model PostgreSQL expression indexes.
             entity.HasQueryFilter(e => e.DeletedAt == null);
             entity.HasOne(e => e.Property)
                 .WithMany(p => p.Units)

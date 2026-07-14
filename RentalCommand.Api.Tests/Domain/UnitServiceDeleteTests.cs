@@ -3,6 +3,7 @@ using Moq;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Tests;
 using RentalCommand.Core;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -18,6 +19,7 @@ public sealed class UnitServiceDeleteTests : IAsyncLifetime
     private readonly MigratedPostgreSqlFixture _fixture;
     private MigratedPostgreSqlTestContext _ctx = null!;
     private UnitService _sut = null!;
+    private WorkspaceReadScope _scope;
 
     public UnitServiceDeleteTests(MigratedPostgreSqlFixture fixture)
     {
@@ -27,7 +29,9 @@ public sealed class UnitServiceDeleteTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _ctx = await _fixture.CreateContextAsync();
-        _sut = new UnitService(_ctx.Db, Mock.Of<IDataUpdateService>(), Mock.Of<IAuditTrailService>(), TimeProvider.System);
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(UnitServiceDeleteTests));
+        _sut = new UnitService(_ctx.Db, Mock.Of<IDataUpdateService>(), Mock.Of<IAuditTrailService>(),
+            TimeProvider.System, Mock.Of<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
     }
 
     public async Task DisposeAsync() => await _ctx.DisposeAsync();
@@ -38,7 +42,7 @@ public sealed class UnitServiceDeleteTests : IAsyncLifetime
         var unit = SeedUnit();
         SeedLease(unit);
 
-        var act = async () => await _sut.DeleteAsync(PortfolioId, unit.Id);
+        var act = async () => await _sut.DeleteAsync(_scope, unit.Id, Guid.NewGuid().ToString("N"));
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.Message.Should().Contain("rental relationship");
@@ -61,7 +65,7 @@ public sealed class UnitServiceDeleteTests : IAsyncLifetime
         });
         _ctx.Db.SaveChanges();
 
-        var act = async () => await _sut.DeleteAsync(PortfolioId, unit.Id);
+        var act = async () => await _sut.DeleteAsync(_scope, unit.Id, Guid.NewGuid().ToString("N"));
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.Message.Should().Contain("work order").And.Contain("history");
@@ -84,7 +88,7 @@ public sealed class UnitServiceDeleteTests : IAsyncLifetime
         });
         _ctx.Db.SaveChanges();
 
-        var act = async () => await _sut.DeleteAsync(PortfolioId, unit.Id);
+        var act = async () => await _sut.DeleteAsync(_scope, unit.Id, Guid.NewGuid().ToString("N"));
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.Message.Should().Contain("application").And.Contain("history");
@@ -96,7 +100,7 @@ public sealed class UnitServiceDeleteTests : IAsyncLifetime
     {
         var unit = SeedUnit();
 
-        var deleted = await _sut.DeleteAsync(PortfolioId, unit.Id);
+        var deleted = await _sut.DeleteAsync(_scope, unit.Id, Guid.NewGuid().ToString("N"));
 
         deleted.Should().BeTrue();
         (await _sut.GetAsync(PortfolioId, unit.Id)).Should().BeNull();

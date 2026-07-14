@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
@@ -19,14 +20,14 @@ public class UnitService : IUnitService
 
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
-    private readonly IAtomicUnitOfWork? _atomic;
+    private readonly IAtomicUnitOfWork _atomic;
 
     public UnitService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
         IAuditTrailService audit,
         TimeProvider timeProvider,
-        IAtomicUnitOfWork? atomic = null)
+        IAtomicUnitOfWork atomic)
     {
         _db = db;
         _timeProvider = timeProvider;
@@ -470,8 +471,9 @@ public class UnitService : IUnitService
             AtomicRentalMutationOperation.Create, 0, operationKey, request);
         var outcome = await Atomic.ExecuteAsync(
             AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
-        return outcome.Value.Found
-            ? await GetAsync(scope.PortfolioId, outcome.Value.EntityId, ct)
+        return outcome.Value.Found && outcome.Value.ResponseJson is { Length: > 0 } json
+            ? JsonSerializer.Deserialize<UnitResponse>(json)
+              ?? throw new InvalidOperationException("The Unit receipt snapshot is invalid.")
             : null;
     }
 
@@ -502,25 +504,7 @@ public class UnitService : IUnitService
         return outcome.Value.Found;
     }
 
-    [Obsolete("Use the authenticated WorkspaceReadScope atomic mutation overload.")]
-    public Task<UnitResponse?> CreateAsync(
-        int portfolioId, CreateUnitRequest request, CancellationToken ct = default) =>
-        throw LegacyMutationRejected();
-
-    [Obsolete("Use the authenticated WorkspaceReadScope atomic mutation overload.")]
-    public Task<UnitResponse?> UpdateAsync(
-        int portfolioId, int id, UpdateUnitRequest request, CancellationToken ct = default) =>
-        throw LegacyMutationRejected();
-
-    [Obsolete("Use the authenticated WorkspaceReadScope atomic mutation overload.")]
-    public Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default) =>
-        throw LegacyMutationRejected();
-
-    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
-        "Scoped unit mutations require the atomic persistence kernel.");
-
-    private static InvalidOperationException LegacyMutationRejected() => new(
-        "Unit mutations require an authenticated workspace scope and the atomic persistence kernel.");
+    private IAtomicUnitOfWork Atomic => _atomic;
 
     /// <summary>One translated SQL statement containing every Unit delete decision.</summary>
     internal IQueryable<UnitDeletionGuard> BuildDeletionGuardQuery(int portfolioId, int unitId) =>

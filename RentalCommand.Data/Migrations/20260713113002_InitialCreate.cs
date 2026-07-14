@@ -6961,6 +6961,14 @@ namespace RentalCommand.Data.Migrations
                 table: "RentalApplications",
                 column: "PortfolioId");
 
+            migrationBuilder.Sql("""
+                CREATE UNIQUE INDEX "IX_RentalApplications_PortfolioId_Email_Open_CI"
+                ON "RentalApplications" ("PortfolioId", lower(trim("Email")))
+                WHERE "DeletedAt" IS NULL
+                  AND "Email" IS NOT NULL
+                  AND "Status" IN ('Submitted', 'UnderReview', 'Approved');
+                """);
+
             migrationBuilder.CreateIndex(
                 name: "IX_RentalApplications_PreparedLeaseManagementId_PortfolioId",
                 table: "RentalApplications",
@@ -7786,12 +7794,11 @@ namespace RentalCommand.Data.Migrations
                 table: "Units",
                 columns: new[] { "PropertyId", "PortfolioId" });
 
-            migrationBuilder.CreateIndex(
-                name: "IX_Units_PropertyId_UnitNumber",
-                table: "Units",
-                columns: new[] { "PropertyId", "UnitNumber" },
-                unique: true,
-                filter: "\"DeletedAt\" IS NULL");
+            migrationBuilder.Sql("""
+            CREATE UNIQUE INDEX "IX_Units_PropertyId_UnitNumber_CI"
+            ON "Units" ("PropertyId", lower(trim("UnitNumber")))
+                WHERE "DeletedAt" IS NULL;
+                """);
 
             migrationBuilder.CreateIndex(
                 name: "IX_UserAlertPreferences_PortfolioId_UserId",

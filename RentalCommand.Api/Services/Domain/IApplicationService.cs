@@ -20,18 +20,18 @@ public interface IApplicationService
 
     /// <summary>
     /// Creates a Submitted application in the token's portfolio. Returns <c>null</c> when the token is
-    /// invalid. The PropertyId/UnitId on the request are validated to be in that portfolio (ignored
-    /// if not). The caller supplies the request IP for the FCRA consent record.
+    /// invalid. Property/unit references must resolve to one consistent pair in that portfolio.
     /// </summary>
     Task<SubmitApplicationResult?> SubmitAsync(
-        string token, SubmitApplicationRequest request, string? ipAddress, CancellationToken ct = default);
+        string token, SubmitApplicationRequest request, string? ipAddress, string operationKey,
+        CancellationToken ct = default);
 
     // --- Authed (portfolio-scoped) ---
 
     /// <summary>
     /// Creates a Submitted application directly in the given portfolio from a landlord-scanned paper
     /// application (the scan-IN counterpart of <see cref="SubmitAsync"/>). PropertyId/UnitId on the request
-    /// are honored only when they actually live in this portfolio (IDOR guard); otherwise they are dropped.
+    /// must resolve to one consistent pair in this portfolio; invalid references are rejected.
     /// Returns the created application as an <see cref="ApplicationResponse"/>.
     /// </summary>
     Task<ApplicationResponse> CreateFromScanAsync(
@@ -81,9 +81,8 @@ public interface IApplicationService
     Task<ApplicationResponse?> DeclineAuthorizedAsync(
         WorkspaceReadScope scope, int id, int userId, string? reason, string operationKey, CancellationToken ct = default);
 
-    Task<ApplicationResponse?> WithdrawAsync(int portfolioId, int id, int userId, CancellationToken ct = default);
     Task<ApplicationResponse?> WithdrawAuthorizedAsync(
-        WorkspaceReadScope scope, int id, int userId, CancellationToken ct = default);
+        WorkspaceReadScope scope, int id, int userId, string operationKey, CancellationToken ct = default);
 
     Task<bool> DeleteAuthorizedAsync(
         WorkspaceReadScope scope, int id, int userId, string operationKey, CancellationToken ct = default);

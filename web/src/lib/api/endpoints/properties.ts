@@ -1,5 +1,6 @@
 import type { Property, Unit } from '$lib/types';
 import { api } from '../client';
+import { idempotentMutation } from '../idempotency';
 import { buildListQuery, type ListParams } from '../list-params';
 import { idempotentMutation } from '../idempotency';
 
@@ -40,7 +41,20 @@ export const properties = {
 			api.delete(`/properties/${id}`, { headers: { 'Idempotency-Key': key } })
 		),
 	listUnits: (propertyId: number) => api.get<Unit[]>(`/units${buildListQuery(undefined, { propertyId })}`),
-	createUnit: (propertyId: number, data: Record<string, unknown>) => api.post<Unit>('/units', { propertyId, ...data }),
-	updateUnit: (id: number, data: Record<string, unknown>) => api.patch<Unit>(`/units/${id}`, data),
-	deleteUnit: (id: number) => api.delete(`/units/${id}`),
+	createUnit: (propertyId: number, data: Record<string, unknown>) =>
+		idempotentMutation(`units:create:${propertyId}:${JSON.stringify(data)}`, (operationKey) =>
+			api.post<Unit>('/units', { propertyId, ...data }, {
+				headers: { 'Idempotency-Key': operationKey }
+			})
+		),
+	updateUnit: (id: number, data: Record<string, unknown>) =>
+		idempotentMutation(`units:update:${id}:${JSON.stringify(data)}`, (operationKey) =>
+			api.patch<Unit>(`/units/${id}`, data, {
+				headers: { 'Idempotency-Key': operationKey }
+			})
+		),
+	deleteUnit: (id: number) =>
+		idempotentMutation(`units:delete:${id}`, (operationKey) =>
+			api.delete(`/units/${id}`, { headers: { 'Idempotency-Key': operationKey } })
+		),
 };

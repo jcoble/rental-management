@@ -1,10 +1,10 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:uuid/uuid.dart';
 
 import '../api/api_exception.dart';
 import '../api/dio_client.dart';
+import '../api/idempotent_mutation.dart';
 import 'auth_interceptor.dart';
 import 'auth_models.dart';
 import 'token_store.dart';
@@ -237,16 +237,24 @@ class AuthRepository {
     required String currentPassword,
     required String newPassword,
   }) async {
-    final operationKey = const Uuid().v4();
-    try {
-      await _dio.post<Map<String, dynamic>>(
-        '/auth/change-password',
-        data: {'currentPassword': currentPassword, 'newPassword': newPassword},
-        options: Options(headers: {'Idempotency-Key': operationKey}),
-      );
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    final request = {
+      'currentPassword': currentPassword,
+      'newPassword': newPassword,
+    };
+    await IdempotentMutation.run(
+      'auth:change-password:${Object.hash(currentPassword, newPassword)}',
+      (operationKey) async {
+        try {
+          await _dio.post<Map<String, dynamic>>(
+            '/auth/change-password',
+            data: request,
+            options: Options(headers: {'Idempotency-Key': operationKey}),
+          );
+        } on DioException catch (e) {
+          throw ApiException.fromDioException(e);
+        }
+      },
+    );
   }
 
   /// Fetches the current authenticated user via `GET /auth/me`.

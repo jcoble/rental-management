@@ -76,15 +76,22 @@ public sealed class PublicApplicationsController : ControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<SubmitApplicationResult>> Submit(
-        string token, [FromBody] SubmitApplicationRequest request, CancellationToken ct)
+        string token,
+        [FromBody] SubmitApplicationRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
         // FCRA: consent is mandatory to submit. (DataAnnotations can't enforce "must be true" on a
         // bool, so check it explicitly.)
         if (!request.ConsentGiven)
             return BadRequest(new { error = "You must consent to a background/credit check to submit an application." });
 
+        var operationKey = idempotencyKey?.Trim();
+        if (string.IsNullOrWhiteSpace(operationKey) || operationKey.Length > 128)
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
-        var result = await _applications.SubmitAsync(token, request, ip, ct);
+        var result = await _applications.SubmitAsync(token, request, ip, operationKey, ct);
 
         return result is null
             ? NotFound(new { error = "This application link is invalid or no longer active." })

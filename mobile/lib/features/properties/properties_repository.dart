@@ -175,42 +175,53 @@ class PropertiesRepository {
 
   /// Create body: { unitNumber, bedrooms, bathrooms, marketRent, status? }
   Future<Unit> createUnit(int propertyId, Map<String, dynamic> data) async {
-    try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/units',
-        data: {...data, 'propertyId': propertyId},
-      );
-      final responseData = response.data;
-      if (responseData == null) {
-        throw const ApiException(
-          statusCode: 0,
-          message: 'Empty response from server.',
+    final payload = {...data, 'propertyId': propertyId};
+    return IdempotentMutation.run('units:create:$payload', (
+      operationKey,
+    ) async {
+      try {
+        final response = await _dio.post<Map<String, dynamic>>(
+          '/units',
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+          data: payload,
         );
+        final responseData = response.data;
+        if (responseData == null) {
+          throw const ApiException(
+            statusCode: 0,
+            message: 'Empty response from server.',
+          );
+        }
+        return Unit.fromJson(responseData);
+      } on DioException catch (e) {
+        throw ApiException.fromDioException(e);
       }
-      return Unit.fromJson(responseData);
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    });
   }
 
   /// Update body: same optional fields as create (partial PATCH)
   Future<Unit> updateUnit(int id, Map<String, dynamic> data) async {
-    try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/units/$id',
-        data: data,
-      );
-      final responseData = response.data;
-      if (responseData == null) {
-        throw const ApiException(
-          statusCode: 0,
-          message: 'Empty response from server.',
+    return IdempotentMutation.run('units:update:$id:$data', (
+      operationKey,
+    ) async {
+      try {
+        final response = await _dio.patch<Map<String, dynamic>>(
+          '/units/$id',
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+          data: data,
         );
+        final responseData = response.data;
+        if (responseData == null) {
+          throw const ApiException(
+            statusCode: 0,
+            message: 'Empty response from server.',
+          );
+        }
+        return Unit.fromJson(responseData);
+      } on DioException catch (e) {
+        throw ApiException.fromDioException(e);
       }
-      return Unit.fromJson(responseData);
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    });
   }
 
   // ── Tenant relationships (read-only) ───────────────────────────────────────

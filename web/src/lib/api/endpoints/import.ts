@@ -45,7 +45,7 @@ export interface ImportResult {
 	rows: ImportRowResult[];
 }
 
-const paymentImportOperationIds = new WeakMap<File, string>();
+const atomicImportOperationIds = new WeakMap<File, string>();
 
 /**
  * Upload a CSV for preview (dryRun=true) or commit (dryRun=false).
@@ -59,11 +59,11 @@ export function importCsv(
 	const fd = new FormData();
 	fd.append('file', file);
 	const headers: Record<string, string> = {};
-	if (!dryRun && entityType === 'payment') {
-		let operationId = paymentImportOperationIds.get(file);
+	if (!dryRun && (entityType === 'payment' || entityType === 'unit')) {
+		let operationId = atomicImportOperationIds.get(file);
 		if (!operationId) {
 			operationId = crypto.randomUUID();
-			paymentImportOperationIds.set(file, operationId);
+			atomicImportOperationIds.set(file, operationId);
 		}
 		headers['Idempotency-Key'] = operationId;
 	}

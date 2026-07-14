@@ -123,6 +123,7 @@ public interface IAtomicWriteAttempt
     IAtomicPendingFileUploadPersistence PendingFileUploads { get; }
     IAtomicLeaseMutationPersistence Leasing { get; }
     IAtomicListingPersistence Listings { get; }
+    IAtomicUnitImportPersistence UnitImports { get; }
 
     /// <summary>Flushes tracked business rows while the owner transaction remains open.</summary>
     Task<AtomicBusinessFlush> FlushBusinessAsync(CancellationToken ct = default);
@@ -164,6 +165,65 @@ public interface IAtomicListingPersistence
 }
 
 public sealed record AtomicListingPhotoOrderResult(bool IsValid, bool HasChanges);
+
+/// <summary>One parsed Unit CSV row admitted to the database-owned bulk import.</summary>
+public sealed record AtomicUnitImportRow(
+    int RowNumber,
+    int? PropertyId,
+    string? PropertyName,
+    string UnitNumber,
+    decimal Bedrooms,
+    decimal Bathrooms,
+    decimal MarketRent,
+    string[] Errors) : IAtomicCommandData;
+
+/// <summary>Database-owned validation and insert outcome for one Unit CSV row.</summary>
+public sealed record AtomicUnitImportRowResult(
+    int RowNumber,
+    bool Valid,
+    bool IsDuplicate,
+    int? CreatedId,
+    int? PropertyId,
+    string UnitNumber,
+    decimal Bedrooms,
+    decimal Bathrooms,
+    decimal MarketRent,
+    string[] Errors) : IAtomicResultData;
+
+public sealed record AtomicUnitImportBatchResult(
+    bool Authorized,
+    IReadOnlyList<AtomicUnitImportRowResult> Rows,
+    IReadOnlyList<AtomicUnitImportRowResult> CreatedRows,
+    int TotalRows,
+    int ValidRows,
+    int CreatedCount,
+    int DuplicateRows) : IAtomicResultData;
+
+/// <summary>
+/// Resolves property references, detects duplicates, inserts valid Units, and returns the entire
+/// batch result in one PostgreSQL statement. No caller may materialize reference tables or issue
+/// per-row database work.
+/// </summary>
+public interface IAtomicUnitImportPersistence
+{
+    Task<AtomicUnitImportBatchResult> ImportAsync(
+        WorkspaceReadScope scope,
+        IReadOnlyList<AtomicUnitImportRow> rows,
+        DateTime createdAtUtc,
+        CancellationToken ct = default);
+}
+
+/// <summary>
+/// Read-only Unit CSV preview. It uses the exact PostgreSQL validator as the atomic import but
+/// never opens an atomic command receipt and never inserts Units.
+/// </summary>
+public interface IUnitCsvImportPreviewQuery
+{
+    Task<AtomicUnitImportBatchResult> PreviewAsync(
+        WorkspaceReadScope scope,
+        IReadOnlyList<AtomicUnitImportRow> rows,
+        CancellationToken ct = default);
+}
 
 /// <summary>
 /// Row-locking persistence boundary for already-bounded scheduled-finance claims. Eligibility is
