@@ -37,6 +37,10 @@ internal static class AtomicDomainTestKernel
             AtomicRentalMutationCommand,
             AtomicRentalMutationResult,
             AtomicRentalMutationHandler>();
+        services.AddAtomicCommandHandler<
+            AtomicPublicApplicationSubmissionCommand,
+            AtomicPublicApplicationSubmissionResult,
+            AtomicPublicApplicationSubmissionHandler>();
         return services.BuildServiceProvider();
     }
 

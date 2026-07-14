@@ -7,7 +7,7 @@ public sealed record StaffOperationActor(
     int UserId,
     Guid AuthSessionId,
     int AccessContextId,
-    long AccessRevision);
+    long AccessRevision) : IAtomicCommandData;
 
 public sealed record CreateWorkOrderCommand(
     int PortfolioId,
