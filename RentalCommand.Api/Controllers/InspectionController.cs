@@ -147,9 +147,11 @@ public class InspectionController : ManagementControllerBase
     [ProducesResponseType(typeof(InspectionItemResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<InspectionItemResponse>> CreateItem(
-        int id, [FromBody] CreateInspectionItemRequest request, CancellationToken ct)
+        int id, [FromBody] CreateInspectionItemRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
-        var created = await _service.CreateItemAuthorizedAsync(GetWorkspaceReadScope(), id, request, ct);
+        if (!TryOperationKey(idempotencyKey, out var operationKey, out var error)) return error!;
+        var created = await _service.CreateItemAuthorizedAsync(GetWorkspaceReadScope(), id, request, operationKey!, ct);
         return created == null
             ? NotFound(new { error = "Inspection not found" })
             : CreatedAtAction(nameof(Get), new { id }, created);
@@ -160,9 +162,11 @@ public class InspectionController : ManagementControllerBase
     [ProducesResponseType(typeof(InspectionItemResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<InspectionItemResponse>> UpdateItem(
-        int id, int itemId, [FromBody] UpdateInspectionItemRequest request, CancellationToken ct)
+        int id, int itemId, [FromBody] UpdateInspectionItemRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
-        var updated = await _service.UpdateItemAuthorizedAsync(GetWorkspaceReadScope(), id, itemId, request, ct);
+        if (!TryOperationKey(idempotencyKey, out var operationKey, out var error)) return error!;
+        var updated = await _service.UpdateItemAuthorizedAsync(GetWorkspaceReadScope(), id, itemId, request, operationKey!, ct);
         return updated == null ? NotFound(new { error = "Inspection item not found" }) : Ok(updated);
     }
 
@@ -170,9 +174,11 @@ public class InspectionController : ManagementControllerBase
     [HttpDelete("{id:int}/items/{itemId:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> DeleteItem(int id, int itemId, CancellationToken ct)
+    public async Task<IActionResult> DeleteItem(
+        int id, int itemId, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
-        var deleted = await _service.DeleteItemAuthorizedAsync(GetWorkspaceReadScope(), id, itemId, ct);
+        if (!TryOperationKey(idempotencyKey, out var operationKey, out var error)) return error!;
+        var deleted = await _service.DeleteItemAuthorizedAsync(GetWorkspaceReadScope(), id, itemId, operationKey!, ct);
         return deleted ? NoContent() : NotFound(new { error = "Inspection item not found" });
     }
 
@@ -181,9 +187,11 @@ public class InspectionController : ManagementControllerBase
     [ProducesResponseType(typeof(IReadOnlyList<InspectionItemResponse>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<IReadOnlyList<InspectionItemResponse>>> ReorderItems(
-        int id, [FromBody] ReorderInspectionItemsRequest request, CancellationToken ct)
+        int id, [FromBody] ReorderInspectionItemsRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
-        var items = await _service.ReorderItemsAuthorizedAsync(GetWorkspaceReadScope(), id, request, ct);
+        if (!TryOperationKey(idempotencyKey, out var operationKey, out var error)) return error!;
+        var items = await _service.ReorderItemsAuthorizedAsync(GetWorkspaceReadScope(), id, request, operationKey!, ct);
         return items == null ? NotFound(new { error = "Inspection not found" }) : Ok(items);
     }
 
@@ -195,9 +203,12 @@ public class InspectionController : ManagementControllerBase
     [ProducesResponseType(typeof(InspectionItemResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<InspectionItemResponse>> AttachItemPhoto(
-        int id, int itemId, [FromBody] AttachInspectionItemPhotoRequest request, CancellationToken ct)
+        int id, int itemId, [FromBody] AttachInspectionItemPhotoRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
-        var updated = await _service.AttachItemPhotoAuthorizedAsync(GetWorkspaceReadScope(), id, itemId, request.StoredFileId, ct);
+        if (!TryOperationKey(idempotencyKey, out var operationKey, out var error)) return error!;
+        var updated = await _service.AttachItemPhotoAuthorizedAsync(
+            GetWorkspaceReadScope(), id, itemId, request.StoredFileId, operationKey!, ct);
         return updated == null
             ? NotFound(new { error = "Inspection item or photo file not found in this portfolio" })
             : Ok(updated);
@@ -211,9 +222,12 @@ public class InspectionController : ManagementControllerBase
     [ProducesResponseType(typeof(CompleteInspectionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
-    public async Task<ActionResult<CompleteInspectionResponse>> Complete(int id, CancellationToken ct)
+    public async Task<ActionResult<CompleteInspectionResponse>> Complete(
+        int id, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
-        var (result, error) = await _service.CompleteAuthorizedAsync(GetWorkspaceReadScope(), id, GetUserId(), ct);
+        if (!TryOperationKey(idempotencyKey, out var operationKey, out var operationError)) return operationError!;
+        var (result, error) = await _service.CompleteAuthorizedAsync(
+            GetWorkspaceReadScope(), id, GetUserId(), operationKey!, ct);
         if (result != null)
         {
             return Ok(result);

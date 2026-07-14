@@ -53,20 +53,46 @@ export const inspections = {
 
 	// Add/edit/delete/reorder checklist questions on an editable scheduled inspection.
 	createItem: (inspectionId: number, data: InspectionItemInput) =>
-		api.post<InspectionItem>(`/inspections/${inspectionId}/items`, data),
+		idempotentMutation(`inspections:${inspectionId}:items:create:${JSON.stringify(data)}`, (key) =>
+			api.post<InspectionItem>(`/inspections/${inspectionId}/items`, data, {
+				headers: { 'Idempotency-Key': key },
+			})
+		),
 	updateItem: (inspectionId: number, itemId: number, data: InspectionItemUpdate) =>
-		api.patch<InspectionItem>(`/inspections/${inspectionId}/items/${itemId}`, data),
+		idempotentMutation(
+			`inspections:${inspectionId}:items:${itemId}:update:${JSON.stringify(data)}`,
+			(key) => api.patch<InspectionItem>(`/inspections/${inspectionId}/items/${itemId}`, data, {
+				headers: { 'Idempotency-Key': key },
+			})
+		),
 	deleteItem: (inspectionId: number, itemId: number) =>
-		api.delete<void>(`/inspections/${inspectionId}/items/${itemId}`),
+		idempotentMutation(`inspections:${inspectionId}:items:${itemId}:delete`, (key) =>
+			api.delete<void>(`/inspections/${inspectionId}/items/${itemId}`, {
+				headers: { 'Idempotency-Key': key },
+			})
+		),
 	reorderItems: (inspectionId: number, itemIds: number[]) =>
-		api.patch<InspectionItem[]>(`/inspections/${inspectionId}/items/reorder`, { itemIds }),
+		idempotentMutation(`inspections:${inspectionId}:items:reorder:${itemIds.join(',')}`, (key) =>
+			api.patch<InspectionItem[]>(`/inspections/${inspectionId}/items/reorder`, { itemIds }, {
+				headers: { 'Idempotency-Key': key },
+			})
+		),
 
 	// Attach a previously-uploaded document (storedFileId) as the item's photo.
 	setItemPhoto: (inspectionId: number, itemId: number, storedFileId: number) =>
-		api.post<InspectionItem>(`/inspections/${inspectionId}/items/${itemId}/photo`, { storedFileId }),
+		idempotentMutation(`inspections:${inspectionId}:items:${itemId}:photo:${storedFileId}`, (key) =>
+			api.post<InspectionItem>(`/inspections/${inspectionId}/items/${itemId}/photo`, { storedFileId }, {
+				headers: { 'Idempotency-Key': key },
+			})
+		),
 
 	// Finalize the inspection → renders the PDF report and spawns work orders for failed items.
-	complete: (id: number) => api.post<InspectionCompleteResult>(`/inspections/${id}/complete`, {}),
+	complete: (id: number) =>
+		idempotentMutation(`inspections:${id}:complete`, (key) =>
+			api.post<InspectionCompleteResult>(`/inspections/${id}/complete`, {}, {
+				headers: { 'Idempotency-Key': key },
+			})
+		),
 };
 
 /**

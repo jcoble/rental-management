@@ -753,14 +753,19 @@ public class InspectionService : IInspectionService
         return InspectionItemResponse.FromEntity(item);
     }
 
-    public Task<InspectionItemResponse?> CreateItemAuthorizedAsync(
+    public async Task<InspectionItemResponse?> CreateItemAuthorizedAsync(
         WorkspaceReadScope scope,
         int inspectionId,
         CreateInspectionItemRequest request,
+        string operationKey,
         CancellationToken ct = default)
-        => ExecuteForAuthorizedInspectionAsync(
-            scope, inspectionId,
-            innerCt => CreateItemAsync(scope.PortfolioId, inspectionId, request, innerCt), ct);
+    {
+        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Item,
+            AtomicInspectionMutationOperation.Create, inspectionId, 0, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        return DeserializeSnapshot<InspectionItemResponse>(outcome.Value);
+    }
 
     internal async Task<InspectionItemResponse?> UpdateItemAsync(int portfolioId, int inspectionId, int itemId, UpdateInspectionItemRequest request, CancellationToken ct = default)
     {
@@ -794,15 +799,20 @@ public class InspectionService : IInspectionService
         return InspectionItemResponse.FromEntity(item);
     }
 
-    public Task<InspectionItemResponse?> UpdateItemAuthorizedAsync(
+    public async Task<InspectionItemResponse?> UpdateItemAuthorizedAsync(
         WorkspaceReadScope scope,
         int inspectionId,
         int itemId,
         UpdateInspectionItemRequest request,
+        string operationKey,
         CancellationToken ct = default)
-        => ExecuteForAuthorizedInspectionAsync(
-            scope, inspectionId,
-            innerCt => UpdateItemAsync(scope.PortfolioId, inspectionId, itemId, request, innerCt), ct);
+    {
+        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Item,
+            AtomicInspectionMutationOperation.Update, inspectionId, itemId, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        return DeserializeSnapshot<InspectionItemResponse>(outcome.Value);
+    }
 
     internal async Task<bool> DeleteItemAsync(int portfolioId, int inspectionId, int itemId, CancellationToken ct = default)
     {
@@ -827,10 +837,15 @@ public class InspectionService : IInspectionService
         WorkspaceReadScope scope,
         int inspectionId,
         int itemId,
+        string operationKey,
         CancellationToken ct = default)
-        => await ExecuteForAuthorizedInspectionAsync(
-            scope, inspectionId,
-            innerCt => DeleteItemAsync(scope.PortfolioId, inspectionId, itemId, innerCt), ct);
+    {
+        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Item,
+            AtomicInspectionMutationOperation.Delete, inspectionId, itemId, operationKey, new object());
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        return outcome.Value.Found;
+    }
 
     internal async Task<IReadOnlyList<InspectionItemResponse>?> ReorderItemsAsync(int portfolioId, int inspectionId, ReorderInspectionItemsRequest request, CancellationToken ct = default)
     {
@@ -873,14 +888,19 @@ public class InspectionService : IInspectionService
         return reordered.Select(InspectionItemResponse.FromEntity).ToList();
     }
 
-    public Task<IReadOnlyList<InspectionItemResponse>?> ReorderItemsAuthorizedAsync(
+    public async Task<IReadOnlyList<InspectionItemResponse>?> ReorderItemsAuthorizedAsync(
         WorkspaceReadScope scope,
         int inspectionId,
         ReorderInspectionItemsRequest request,
+        string operationKey,
         CancellationToken ct = default)
-        => ExecuteForAuthorizedInspectionAsync(
-            scope, inspectionId,
-            innerCt => ReorderItemsAsync(scope.PortfolioId, inspectionId, request, innerCt), ct);
+    {
+        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Item,
+            AtomicInspectionMutationOperation.Reorder, inspectionId, 0, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        return DeserializeSnapshot<IReadOnlyList<InspectionItemResponse>>(outcome.Value);
+    }
 
     internal async Task<InspectionItemResponse?> AttachItemPhotoAsync(int portfolioId, int inspectionId, int itemId, int storedFileId, CancellationToken ct = default)
     {
@@ -911,15 +931,21 @@ public class InspectionService : IInspectionService
         return InspectionItemResponse.FromEntity(item);
     }
 
-    public Task<InspectionItemResponse?> AttachItemPhotoAuthorizedAsync(
+    public async Task<InspectionItemResponse?> AttachItemPhotoAuthorizedAsync(
         WorkspaceReadScope scope,
         int inspectionId,
         int itemId,
         int storedFileId,
+        string operationKey,
         CancellationToken ct = default)
-        => ExecuteForAuthorizedInspectionAsync(
-            scope, inspectionId,
-            innerCt => AttachItemPhotoAsync(scope.PortfolioId, inspectionId, itemId, storedFileId, innerCt), ct);
+    {
+        var request = new AttachInspectionItemPhotoRequest { StoredFileId = storedFileId };
+        var command = AtomicInspectionMutation.Command(scope, AtomicInspectionMutationDomain.Item,
+            AtomicInspectionMutationOperation.AttachPhoto, inspectionId, itemId, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicInspectionMutation.Identity(command), command, AtomicInspectionMutation.Codec, ct);
+        return DeserializeSnapshot<InspectionItemResponse>(outcome.Value);
+    }
 
     internal Task<(CompleteInspectionResponse? Result, string? Error)> CompleteAsync(int portfolioId, int id, int userId, CancellationToken ct = default)
         => CompleteCoreAsync(portfolioId, id, userId, broadcast: true, ct);

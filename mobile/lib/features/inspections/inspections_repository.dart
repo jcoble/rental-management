@@ -185,9 +185,14 @@ class InspectionsRepository {
     String? note,
   }) async {
     try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/inspections/$inspectionId/items/$itemId',
-        data: {'result': ?result, 'note': ?note},
+      final payload = {'result': ?result, 'note': ?note};
+      final response = await IdempotentMutation.run(
+        'inspections:$inspectionId:items:$itemId:update:$payload',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/inspections/$inspectionId/items/$itemId',
+          data: payload,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final data = response.data;
       if (data == null) {
@@ -247,9 +252,13 @@ class InspectionsRepository {
     int storedFileId,
   ) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/inspections/$inspectionId/items/$itemId/photo',
-        data: {'storedFileId': storedFileId},
+      final response = await IdempotentMutation.run(
+        'inspections:$inspectionId:items:$itemId:photo:$storedFileId',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/inspections/$inspectionId/items/$itemId/photo',
+          data: {'storedFileId': storedFileId},
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final data = response.data;
       if (data == null) {
@@ -267,9 +276,13 @@ class InspectionsRepository {
   /// Completes the inspection (409 if already done).
   Future<CompleteInspectionResult> complete(int inspectionId) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/inspections/$inspectionId/complete',
-        data: {},
+      final response = await IdempotentMutation.run(
+        'inspections:$inspectionId:complete',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/inspections/$inspectionId/complete',
+          data: {},
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final data = response.data;
       if (data == null) {
