@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -349,7 +350,10 @@ class _UnitAreaTabsState extends State<_UnitAreaTabs>
   @override
   void initState() {
     super.initState();
-    final requested = widget.views.indexOf(widget.initialView);
+    final initialView = widget.initialView;
+    final requested = initialView == null
+        ? -1
+        : widget.views.indexOf(initialView);
     _controller = TabController(
       length: widget.views.length,
       initialIndex: requested < 0 ? 0 : requested,
@@ -386,7 +390,9 @@ class _UnitAreaTabsState extends State<_UnitAreaTabs>
   }
 
   void _applyRequestedView() {
-    final requested = widget.views.indexOf(widget.activeView.value);
+    final activeView = widget.activeView.value;
+    if (activeView == null) return;
+    final requested = widget.views.indexOf(activeView);
     if (requested >= 0 && requested != _controller.index) {
       _controller.animateTo(requested);
     }

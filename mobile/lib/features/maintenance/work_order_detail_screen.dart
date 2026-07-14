@@ -225,13 +225,14 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
       if (!mounted) return;
       final responsibilities = results[0];
       final candidates = results[1];
-      Map<String, dynamic>? current;
+      Map<String, dynamic>? currentMatch;
       for (final item in responsibilities) {
         if (item['kind'] == 'Primary' && item['effectiveToUtc'] == null) {
-          current = item;
+          currentMatch = item;
           break;
         }
       }
+      final current = currentMatch;
       int? selectedAssignmentId;
       var reason = 'Assigned by property manager';
       await showModalBottomSheet<void>(

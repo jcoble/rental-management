@@ -130,7 +130,7 @@ class InboxHubScreen extends ConsumerWidget {
   }
 }
 
-class MobileDomainHubScreen extends StatefulWidget {
+class MobileDomainHubScreen extends ConsumerStatefulWidget {
   const MobileDomainHubScreen({
     super.key,
     required this.title,
@@ -147,10 +147,11 @@ class MobileDomainHubScreen extends StatefulWidget {
   final ValueChanged<MobileDomainNavigator>? onControllerDisposed;
 
   @override
-  State<MobileDomainHubScreen> createState() => _MobileDomainHubScreenState();
+  ConsumerState<MobileDomainHubScreen> createState() =>
+      _MobileDomainHubScreenState();
 }
 
-class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
+class _MobileDomainHubScreenState extends ConsumerState<MobileDomainHubScreen> {
   final _contentNavigatorKey = GlobalKey<NavigatorState>();
   late final MobileDomainHeaderController _headerController;
   late final MobileQuickActionFabRegistry _quickActionFabRegistry;
