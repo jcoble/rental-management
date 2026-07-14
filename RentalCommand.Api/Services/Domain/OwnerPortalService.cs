@@ -62,9 +62,17 @@ public sealed class OwnerPortalService : IOwnerPortalService
                             (distribution.PropertyId == null || access.PropertyId == distribution.PropertyId)))
                     .Sum(distribution => (decimal?)distribution.Amount) ?? 0m,
                 PendingApprovalCount = ownerItems.Count(notification =>
-                    notification.Type == ApprovalNotificationType && !notification.IsRead),
+                    notification.Type == ApprovalNotificationType &&
+                    !_db.NotificationReadStates.Any(readState =>
+                        readState.PortfolioId == scope.PortfolioId &&
+                        readState.NotificationId == notification.Id &&
+                        readState.UserId == scope.UserId)),
                 UnreadMessageCount = ownerItems.Count(notification =>
-                    notification.Type == MessageNotificationType && !notification.IsRead),
+                    notification.Type == MessageNotificationType &&
+                    !_db.NotificationReadStates.Any(readState =>
+                        readState.PortfolioId == scope.PortfolioId &&
+                        readState.NotificationId == notification.Id &&
+                        readState.UserId == scope.UserId)),
             })
             .SingleOrDefaultAsync(ct);
     }
@@ -200,7 +208,10 @@ public sealed class OwnerPortalService : IOwnerPortalService
                 Title = notification.Title,
                 Message = notification.Message,
                 Severity = notification.Severity,
-                IsRead = notification.IsRead,
+                IsRead = _db.NotificationReadStates.Any(readState =>
+                    readState.PortfolioId == scope.PortfolioId &&
+                    readState.NotificationId == notification.Id &&
+                    readState.UserId == scope.UserId),
                 CreatedAt = notification.CreatedAt,
             })
             .ToListAsync(ct);

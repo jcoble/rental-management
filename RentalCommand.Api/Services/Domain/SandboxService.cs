@@ -162,7 +162,8 @@ public sealed class SandboxService : ISandboxService
         "TeamRoutingRuleRecipients", "TeamRoutingRules", "MembershipRoleAssignmentProperties",
         "OwnerDistributions", "OwnerUserAccesses", "VendorRatings", "VendorDispatches",
         "LeaseRenewalAddendumDecisions", "SignatureSigners", "SignatureRequests", "NoticeDrafts",
-        "TenantNoticeWorkItems", "RenderedNotices", "PortalMessages", "Notifications", "QueuedJobs",
+        "TenantNoticeWorkItems", "RenderedNotices", "PortalMessages", "NotificationReadStates",
+        "Notifications", "QueuedJobs",
         "PendingFileUploads", "PlaidTokenExchangeAttempts", "AccountingMappingPromotionJobs",
         "AccountingSyncMaps", "AccountingEntityMappings",
         "BankTransactions", "LoanPayments",
@@ -282,6 +283,8 @@ public sealed class SandboxService : ISandboxService
         await _db.RenderedNotices.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.PortalMessages.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.NotificationReadStates.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.Notifications.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);

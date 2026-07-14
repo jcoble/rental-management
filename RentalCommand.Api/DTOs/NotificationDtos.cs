@@ -26,7 +26,7 @@ public class NotificationResponse
         ActionUrl = notification.ActionUrl,
         RelatedEntityType = notification.RelatedEntityType,
         RelatedEntityId = notification.RelatedEntityId,
-        IsRead = notification.IsRead,
+        IsRead = false,
         CreatedAt = notification.CreatedAt,
     };
 }

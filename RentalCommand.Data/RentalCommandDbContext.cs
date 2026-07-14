@@ -114,6 +114,7 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
     public DbSet<Conversation> Conversations => Set<Conversation>();
     public DbSet<ConversationMessage> ConversationMessages => Set<ConversationMessage>();
     public DbSet<Notification> Notifications => Set<Notification>();
+    public DbSet<NotificationReadState> NotificationReadStates => Set<NotificationReadState>();
     public DbSet<AutomationSettings> AutomationSettings => Set<AutomationSettings>();
     public DbSet<MessagingProviderSettings> MessagingProviderSettings => Set<MessagingProviderSettings>();
     public DbSet<UserAlertPreference> UserAlertPreferences => Set<UserAlertPreference>();
@@ -544,6 +545,7 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
         modelBuilder.Entity<Notification>(entity =>
         {
             entity.HasKey(e => e.Id);
+            entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
             entity.Property(e => e.Type).IsRequired().HasMaxLength(80);
             entity.Property(e => e.Title).IsRequired().HasMaxLength(200);
             entity.Property(e => e.Message).IsRequired().HasMaxLength(1000);
@@ -552,11 +554,29 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.Property(e => e.RelatedEntityType).HasMaxLength(120);
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.UserId);
-            entity.HasIndex(e => e.IsRead);
             entity.HasIndex(e => e.CreatedAt);
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<NotificationReadState>(entity =>
+        {
+            entity.HasKey(e => new { e.PortfolioId, e.NotificationId, e.UserId });
+            entity.HasIndex(e => new { e.PortfolioId, e.UserId, e.NotificationId });
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.Notification)
+                .WithMany(e => e.ReadStates)
+                .HasForeignKey(e => new { e.NotificationId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
@@ -2281,6 +2301,7 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
         modelBuilder.Entity<DeviceToken>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<Inspection>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<Notification>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<NotificationReadState>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<AutomationSettings>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<MessagingProviderSettings>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<Owner>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);

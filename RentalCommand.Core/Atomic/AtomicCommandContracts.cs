@@ -223,6 +223,18 @@ public interface IAtomicListingPersistence
 public interface IAtomicNotificationPersistence
 {
     /// <summary>
+    /// Inserts one caller-specific read state if the notification is still visible. Existing read
+    /// state is preserved, making retries and concurrent attempts idempotent.
+    /// </summary>
+    Task<bool> MarkReadAsync(
+        int portfolioId,
+        int notificationId,
+        int userId,
+        bool includeStaffOnlyNotifications,
+        DateTime readAtUtc,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Marks every currently visible unread notification for one caller as read in one SQL
     /// statement. Tenant-message filtering and affected-row computation stay in PostgreSQL.
     /// </summary>

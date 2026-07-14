@@ -4672,9 +4672,6 @@ namespace RentalCommand.Data.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<bool>("IsRead")
-                        .HasColumnType("boolean");
-
                     b.Property<string>("Message")
                         .IsRequired()
                         .HasMaxLength(1000)
@@ -4682,9 +4679,6 @@ namespace RentalCommand.Data.Migrations
 
                     b.Property<int>("PortfolioId")
                         .HasColumnType("integer");
-
-                    b.Property<DateTime?>("ReadAt")
-                        .HasColumnType("timestamp with time zone");
 
                     b.Property<int?>("RelatedEntityId")
                         .HasColumnType("integer");
@@ -4713,15 +4707,40 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("CreatedAt");
+                    b.HasAlternateKey("Id", "PortfolioId");
 
-                    b.HasIndex("IsRead");
+                    b.HasIndex("CreatedAt");
 
                     b.HasIndex("PortfolioId");
 
                     b.HasIndex("UserId");
 
                     b.ToTable("Notifications");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.NotificationReadState", b =>
+                {
+                    b.Property<int>("PortfolioId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("NotificationId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("UserId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("ReadAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("PortfolioId", "NotificationId", "UserId");
+
+                    b.HasIndex("NotificationId", "PortfolioId");
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("PortfolioId", "UserId", "NotificationId");
+
+                    b.ToTable("NotificationReadStates");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.OAuthState", b =>
@@ -11578,6 +11597,34 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Portfolio");
                 });
 
+            modelBuilder.Entity("RentalCommand.Core.Entities.NotificationReadState", b =>
+                {
+                    b.HasOne("RentalCommand.Core.Entities.Notification", "Notification")
+                        .WithMany("ReadStates")
+                        .HasForeignKey("NotificationId", "PortfolioId")
+                        .HasPrincipalKey("Id", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
+                        .WithMany()
+                        .HasForeignKey("PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.ApplicationUser", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Notification");
+
+                    b.Navigation("Portfolio");
+
+                    b.Navigation("User");
+                });
+
             modelBuilder.Entity("RentalCommand.Core.Entities.OAuthState", b =>
                 {
                     b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
@@ -13325,6 +13372,11 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Vendors");
 
                     b.Navigation("WorkOrders");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.Notification", b =>
+                {
+                    b.Navigation("ReadStates");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.Property", b =>

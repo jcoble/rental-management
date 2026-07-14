@@ -8,6 +8,21 @@ namespace RentalCommand.Core.Tests.Entities;
 public sealed class NotificationFoundationTests
 {
     [Fact]
+    public void BroadcastReadState_IsStoredPerPortfolioNotificationAndUser()
+    {
+        var notificationProperties = typeof(Notification).GetProperties().Select(property => property.Name);
+        notificationProperties.Should().NotContain("IsRead");
+        notificationProperties.Should().NotContain("ReadAt");
+
+        var readStateProperties = typeof(NotificationReadState).GetProperties()
+            .Select(property => property.Name);
+        readStateProperties.Should().Contain(nameof(NotificationReadState.PortfolioId));
+        readStateProperties.Should().Contain(nameof(NotificationReadState.NotificationId));
+        readStateProperties.Should().Contain(nameof(NotificationReadState.UserId));
+        readStateProperties.Should().Contain(nameof(NotificationReadState.ReadAt));
+    }
+
+    [Fact]
     public void TenantNoticePolicy_DefaultsToDraft_AndHasNoMasterTenantSwitch()
     {
         var policy = new TenantNoticePolicy();
