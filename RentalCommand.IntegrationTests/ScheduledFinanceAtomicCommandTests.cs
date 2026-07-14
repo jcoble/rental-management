@@ -23,6 +23,8 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         new("scheduled-finance.recurring-expense.apply.v1");
     private static readonly AtomicJsonResultCodec<ApplyScheduledFinanceBatchResult> DebtCodec =
         new("scheduled-finance.debt-service.apply.v1");
+    private static readonly AtomicJsonResultCodec<ApplyScheduledFinanceBatchResult> MaintenanceCodec =
+        new("scheduled-automation.recurring-maintenance.apply.v1");
     private readonly DateTime _today = new(2026, 7, 11, 0, 0, 0, DateTimeKind.Utc);
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
@@ -62,6 +64,10 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
             ApplyClaimedRecurringExpenseBatchCommand,
             ApplyScheduledFinanceBatchResult,
             ApplyClaimedRecurringExpenseBatchHandler>();
+        services.AddAtomicCommandHandler<
+            ApplyClaimedRecurringMaintenanceBatchCommand,
+            ApplyScheduledFinanceBatchResult,
+            ApplyClaimedRecurringMaintenanceBatchHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(_postgres!.GetConnectionString())
                 .UseAtomicPersistenceKernel(provider)
@@ -331,6 +337,31 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         template.WorkerClaimToken.Should().Be(secondToken);
     }
 
+    [SkippableFact]
+    public async Task RecurringMaintenance_ReplayReturnsOneWorkOrderAndOneScheduleAdvance()
+    {
+        SkipIfNoDocker();
+        var taskId = await SeedRecurringMaintenanceAsync(_today.AddDays(-8));
+        var claim = await ClaimMaintenanceAsync();
+        var identity = new AtomicCommandIdentity(
+            "scheduled-automation.recurring-maintenance.apply", claim.ClaimToken.ToString("N"));
+        var command = new ApplyClaimedRecurringMaintenanceBatchCommand(
+            [claim.Id], claim.ClaimToken, _today, _today.AddMinutes(1), "America/New_York");
+
+        var first = await Atomic.ExecuteAsync(identity, command, MaintenanceCodec);
+        var replay = await Atomic.ExecuteAsync(identity, command, MaintenanceCodec);
+
+        replay.Value.Should().BeEquivalentTo(first.Value);
+        await using var verify = NewContext();
+        (await verify.WorkOrders.CountAsync(row => row.RecurringMaintenanceTaskId == taskId)).Should().Be(1);
+        var task = await verify.RecurringMaintenanceTasks.SingleAsync(row => row.Id == taskId);
+        task.NextDueDate.Should().BeAfter(_today);
+        task.WorkerClaimToken.Should().BeNull();
+        (await verify.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(1);
+    }
+
     private async Task<int> SeedRecurringExpenseAsync(DateTime nextRunDate)
     {
         await using var db = NewContext();
@@ -377,6 +408,29 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         return loan.Id;
     }
 
+    private async Task<int> SeedRecurringMaintenanceAsync(DateTime nextDueDate)
+    {
+        await using var db = NewContext();
+        var task = new RecurringMaintenanceTask
+        {
+            PortfolioId = _portfolioId,
+            PropertyId = _propertyId,
+            Title = "HVAC filter",
+            Description = "Replace HVAC filter",
+            Category = "HVAC",
+            RecurrenceInterval = RecurrenceInterval.Weekly,
+            NextDueDate = nextDueDate,
+            ScheduledTime = new TimeOnly(14, 30),
+            IsActive = true,
+            Priority = WorkOrderPriority.Normal,
+            CreatedAt = _today,
+            UpdatedAt = _today,
+        };
+        db.RecurringMaintenanceTasks.Add(task);
+        await db.SaveChangesAsync();
+        return task.Id;
+    }
+
     private async Task<ScheduledAutomationClaim> ClaimExpenseAsync()
     {
         await using var db = NewContext();
@@ -389,6 +443,13 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         await using var db = NewContext();
         return (await new ScheduledAutomationClaimStore(db).ClaimDebtServiceAsync(
             "debt-test", _today, TimeSpan.FromMinutes(5), 1)).Single();
+    }
+
+    private async Task<ScheduledAutomationClaim> ClaimMaintenanceAsync()
+    {
+        await using var db = NewContext();
+        return (await new ScheduledAutomationClaimStore(db).ClaimRecurringMaintenanceAsync(
+            "maintenance-test", _today, TimeSpan.FromMinutes(5), 1)).Single();
     }
 
     private ApplyClaimedRecurringExpenseBatchCommand ExpenseCommand(ScheduledAutomationClaim claim) =>

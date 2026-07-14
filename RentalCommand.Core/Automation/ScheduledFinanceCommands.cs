@@ -14,6 +14,13 @@ public sealed record ApplyClaimedRecurringExpenseBatchCommand(
     DateTime BusinessDateUtc,
     DateTime AppliedAtUtc) : IAtomicCommandData;
 
+public sealed record ApplyClaimedRecurringMaintenanceBatchCommand(
+    int[] RecurringMaintenanceTaskIds,
+    Guid ClaimToken,
+    DateTime BusinessDateUtc,
+    DateTime AppliedAtUtc,
+    string BusinessTimeZoneId) : IAtomicCommandData;
+
 public enum ScheduledFinanceApplyOutcome
 {
     Applied,
