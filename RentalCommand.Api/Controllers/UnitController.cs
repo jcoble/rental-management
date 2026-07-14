@@ -1,8 +1,11 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Scanning;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
 
@@ -128,7 +131,8 @@ public class UnitController : ManagementControllerBase
     public async Task<ActionResult<ListingWorkspaceResponse>> GenerateListingWorkspace(int id, CancellationToken ct)
     {
         if (!await CanManageListingAsync(id, ct)) return Forbid();
-        var listing = await _listings.GenerateAsync(GetPortfolioId(), id, GetUserId(), ct);
+        var listing = await _listings.GenerateAsync(
+            GetWorkspaceReadScope(), id, GetListingOperationId("generate"), ct);
         return listing == null ? NotFound(new { error = "Unit not found" }) : Ok(listing);
     }
 
@@ -139,7 +143,8 @@ public class UnitController : ManagementControllerBase
         int id, [FromBody] SaveListingWorkspaceRequest request, CancellationToken ct)
     {
         if (!await CanManageListingAsync(id, ct)) return Forbid();
-        var listing = await _listings.SaveAsync(GetPortfolioId(), id, request, GetUserId(), ct);
+        var listing = await _listings.SaveAsync(
+            GetWorkspaceReadScope(), id, request, GetListingOperationId("save"), ct);
         return listing == null ? NotFound(new { error = "Unit not found" }) : Ok(listing);
     }
 
@@ -169,7 +174,7 @@ public class UnitController : ManagementControllerBase
         if (!valid || !contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
             return BadRequest(new { error = valid ? "Listing photos must be image files." : error });
 
-        var workspace = await _listings.AttachPhotoAsync(GetPortfolioId(), id, photoId, GetUserId(),
+        var workspace = await _listings.AttachPhotoAsync(GetWorkspaceReadScope(), id, photoId,
             clientOperationId, fileName, contentType, bytes, ct);
         return workspace is null ? NotFound(new { error = "Listing photo was not found" }) : Ok(workspace);
     }
@@ -180,7 +185,8 @@ public class UnitController : ManagementControllerBase
         int id, int photoId, [FromBody] UpdateListingPhotoRequest request, CancellationToken ct)
     {
         if (!await CanManageListingAsync(id, ct)) return Forbid();
-        var workspace = await _listings.UpdatePhotoAsync(GetPortfolioId(), id, photoId, request, GetUserId(), ct);
+        var workspace = await _listings.UpdatePhotoAsync(
+            GetWorkspaceReadScope(), id, photoId, request, GetListingOperationId("photo-update"), ct);
         return workspace is null ? NotFound(new { error = "Listing photo was not found" }) : Ok(workspace);
     }
 
@@ -190,7 +196,8 @@ public class UnitController : ManagementControllerBase
         int id, int photoId, CancellationToken ct)
     {
         if (!await CanManageListingAsync(id, ct)) return Forbid();
-        var workspace = await _listings.RemovePhotoAsync(GetPortfolioId(), id, photoId, GetUserId(), ct);
+        var workspace = await _listings.RemovePhotoAsync(
+            GetWorkspaceReadScope(), id, photoId, GetListingOperationId("photo-remove"), ct);
         return workspace is null ? NotFound(new { error = "Listing photo was not found" }) : Ok(workspace);
     }
 
@@ -200,7 +207,8 @@ public class UnitController : ManagementControllerBase
         int id, [FromBody] ReorderListingPhotosRequest request, CancellationToken ct)
     {
         if (!await CanManageListingAsync(id, ct)) return Forbid();
-        var workspace = await _listings.ReorderPhotosAsync(GetPortfolioId(), id, request, GetUserId(), ct);
+        var workspace = await _listings.ReorderPhotosAsync(
+            GetWorkspaceReadScope(), id, request, GetListingOperationId("photo-reorder"), ct);
         return workspace is null ? NotFound(new { error = "Listing workspace was not found" }) : Ok(workspace);
     }
 
@@ -222,7 +230,7 @@ public class UnitController : ManagementControllerBase
     {
         if (!await CanManageListingAsync(id, ct)) return Forbid();
         var workspace = await _listings.PrepareConnectedAsync(
-            GetPortfolioId(), id, publicationId, GetUserId(), ct);
+            GetWorkspaceReadScope(), id, publicationId, GetListingOperationId("connected-prepare"), ct);
         return workspace is null ? NotFound(new { error = "Connected listing publication not found" }) : Ok(workspace);
     }
 
@@ -251,12 +259,12 @@ public class UnitController : ManagementControllerBase
         int unitId,
         int publicationId,
         ConnectedListingCommandRequest request,
-        Func<int, int, int, string, int, CancellationToken, Task<ListingWorkspaceResponse?>> command,
+        Func<WorkspaceReadScope, int, int, string, CancellationToken, Task<ListingWorkspaceResponse?>> command,
         CancellationToken ct)
     {
         if (!await CanManageListingAsync(unitId, ct)) return Forbid();
-        var workspace = await command(GetPortfolioId(), unitId, publicationId,
-            request.ClientOperationId, GetUserId(), ct);
+        var workspace = await command(GetWorkspaceReadScope(), unitId, publicationId,
+            request.ClientOperationId, ct);
         return workspace is null ? NotFound(new { error = "Connected listing publication not found" }) : Ok(workspace);
     }
 
@@ -276,7 +284,8 @@ public class UnitController : ManagementControllerBase
         int id, int signalId, [FromQuery] bool accept = true, CancellationToken ct = default)
     {
         if (!await CanManageListingAsync(id, ct)) return Forbid();
-        var workspace = await _listings.ConfirmSignalAsync(GetPortfolioId(), id, signalId, accept, GetUserId(), ct);
+        var workspace = await _listings.ConfirmSignalAsync(
+            GetWorkspaceReadScope(), id, signalId, accept, GetListingOperationId("signal-confirm"), ct);
         return workspace is null ? NotFound(new { error = "Listing signal not found" }) : Ok(workspace);
     }
 
@@ -289,6 +298,18 @@ public class UnitController : ManagementControllerBase
             new UnitCapabilityAuthorizationTarget(active.PortfolioId, unitId),
             _timeProvider.GetUtcNow().UtcDateTime,
             ct);
+    }
+
+    private string GetListingOperationId(string operation)
+    {
+        var supplied = Request.Headers["Idempotency-Key"].FirstOrDefault()?.Trim();
+        if (!string.IsNullOrEmpty(supplied))
+            return supplied.Length <= 160
+                ? supplied
+                : throw new DomainValidationException("Idempotency-Key cannot exceed 160 characters.");
+        var traceHash = Convert.ToHexString(SHA256.HashData(
+            Encoding.UTF8.GetBytes(HttpContext.TraceIdentifier))).ToLowerInvariant();
+        return $"{operation}:{traceHash}";
     }
 
     /// <summary>

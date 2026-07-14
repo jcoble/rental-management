@@ -516,6 +516,42 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Applications.RefundApplicationFeeCommand,
     RentalCommand.Core.Applications.ApplicationFinanceMutationResult,
     RentalCommand.Data.Applications.RefundApplicationFeeHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Listings.GenerateListingWorkspaceCommand,
+    RentalCommand.Core.Listings.ListingWorkspaceMutationResult,
+    RentalCommand.Data.Listings.GenerateListingWorkspaceHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Listings.SaveListingWorkspaceCommand,
+    RentalCommand.Core.Listings.ListingWorkspaceMutationResult,
+    RentalCommand.Data.Listings.SaveListingWorkspaceHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Listings.FinalizeListingPhotoUploadCommand,
+    RentalCommand.Core.Listings.ListingWorkspaceMutationResult,
+    RentalCommand.Data.Listings.FinalizeListingPhotoUploadHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Listings.UpdateListingPhotoCommand,
+    RentalCommand.Core.Listings.ListingWorkspaceMutationResult,
+    RentalCommand.Data.Listings.UpdateListingPhotoHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Listings.RemoveListingPhotoCommand,
+    RentalCommand.Core.Listings.ListingWorkspaceMutationResult,
+    RentalCommand.Data.Listings.RemoveListingPhotoHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Listings.ReorderListingPhotosCommand,
+    RentalCommand.Core.Listings.ListingWorkspaceMutationResult,
+    RentalCommand.Data.Listings.ReorderListingPhotosHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Listings.AdmitConnectedListingIntentCommand,
+    RentalCommand.Core.Listings.ConnectedListingIntentResult,
+    RentalCommand.Data.Listings.AdmitConnectedListingIntentHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Listings.PersistConnectedListingResultCommand,
+    RentalCommand.Core.Listings.ListingWorkspaceMutationResult,
+    RentalCommand.Data.Listings.PersistConnectedListingResultHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Listings.ConfirmExternalListingSignalCommand,
+    RentalCommand.Core.Listings.ListingWorkspaceMutationResult,
+    RentalCommand.Data.Listings.ConfirmExternalListingSignalHandler>();
 
 // Row-Level Security backstop: the interceptor supplies only compact canonical session coordinates.
 // PostgreSQL revalidates them against live session/access rows before admitting portfolio scope.

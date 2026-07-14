@@ -1,4 +1,5 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -6,28 +7,31 @@ public interface IListingWorkspaceService
 {
     Task<bool> UnitExistsInPortfolioAsync(int portfolioId, int unitId, CancellationToken ct = default);
     Task<ListingWorkspaceResponse?> GetAsync(int portfolioId, int unitId, CancellationToken ct = default);
-    Task<ListingWorkspaceResponse?> GenerateAsync(int portfolioId, int unitId, int userId, CancellationToken ct = default);
-    Task<ListingWorkspaceResponse?> SaveAsync(int portfolioId, int unitId, SaveListingWorkspaceRequest request, int userId, CancellationToken ct = default);
-    Task<ListingWorkspaceResponse?> AttachPhotoAsync(int portfolioId, int unitId, int photoId, int userId,
+    Task<ListingWorkspaceResponse?> GenerateAsync(WorkspaceReadScope scope, int unitId, string clientOperationId, CancellationToken ct = default);
+    Task<ListingWorkspaceResponse?> SaveAsync(WorkspaceReadScope scope, int unitId, SaveListingWorkspaceRequest request,
+        string clientOperationId, CancellationToken ct = default);
+    Task<ListingWorkspaceResponse?> AttachPhotoAsync(WorkspaceReadScope scope, int unitId, int photoId,
         string clientOperationId, string fileName, string contentType, byte[] bytes, CancellationToken ct = default);
-    Task<ListingWorkspaceResponse?> UpdatePhotoAsync(int portfolioId, int unitId, int photoId,
-        UpdateListingPhotoRequest request, int userId, CancellationToken ct = default);
-    Task<ListingWorkspaceResponse?> RemovePhotoAsync(int portfolioId, int unitId, int photoId, int userId,
+    Task<ListingWorkspaceResponse?> UpdatePhotoAsync(WorkspaceReadScope scope, int unitId, int photoId,
+        UpdateListingPhotoRequest request, string clientOperationId, CancellationToken ct = default);
+    Task<ListingWorkspaceResponse?> RemovePhotoAsync(WorkspaceReadScope scope, int unitId, int photoId,
+        string clientOperationId,
         CancellationToken ct = default);
-    Task<ListingWorkspaceResponse?> ReorderPhotosAsync(int portfolioId, int unitId,
-        ReorderListingPhotosRequest request, int userId, CancellationToken ct = default);
-    Task<ListingWorkspaceResponse?> PrepareConnectedAsync(int portfolioId, int unitId, int publicationId,
-        int userId, CancellationToken ct = default);
-    Task<ListingWorkspaceResponse?> PublishConnectedAsync(int portfolioId, int unitId, int publicationId,
-        string clientOperationId, int userId, CancellationToken ct = default);
-    Task<ListingWorkspaceResponse?> UpdateConnectedAsync(int portfolioId, int unitId, int publicationId,
-        string clientOperationId, int userId, CancellationToken ct = default);
-    Task<ListingWorkspaceResponse?> UnpublishConnectedAsync(int portfolioId, int unitId, int publicationId,
-        string clientOperationId, int userId, CancellationToken ct = default);
+    Task<ListingWorkspaceResponse?> ReorderPhotosAsync(WorkspaceReadScope scope, int unitId,
+        ReorderListingPhotosRequest request, string clientOperationId, CancellationToken ct = default);
+    Task<ListingWorkspaceResponse?> PrepareConnectedAsync(WorkspaceReadScope scope, int unitId, int publicationId,
+        string clientOperationId, CancellationToken ct = default);
+    Task<ListingWorkspaceResponse?> PublishConnectedAsync(WorkspaceReadScope scope, int unitId, int publicationId,
+        string clientOperationId, CancellationToken ct = default);
+    Task<ListingWorkspaceResponse?> UpdateConnectedAsync(WorkspaceReadScope scope, int unitId, int publicationId,
+        string clientOperationId, CancellationToken ct = default);
+    Task<ListingWorkspaceResponse?> UnpublishConnectedAsync(WorkspaceReadScope scope, int unitId, int publicationId,
+        string clientOperationId, CancellationToken ct = default);
     Task<ListingPhotoFileResult?> OpenPhotoAsync(int portfolioId, int unitId, int photoId, CancellationToken ct = default);
     Task<ExternalListingSignalResponse?> IngestSignalAsync(int portfolioId, int unitId, int publicationId,
         IngestExternalListingSignalRequest request, CancellationToken ct = default);
-    Task<ListingWorkspaceResponse?> ConfirmSignalAsync(int portfolioId, int unitId, int signalId, bool accept, int userId,
+    Task<ListingWorkspaceResponse?> ConfirmSignalAsync(WorkspaceReadScope scope, int unitId, int signalId, bool accept,
+        string clientOperationId,
         CancellationToken ct = default);
 }
 

@@ -361,6 +361,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         private readonly IAtomicTenantMoneyPersistence _tenantMoney;
         private readonly IAtomicPendingFileUploadPersistence _pendingFileUploads;
         private readonly IAtomicLeaseMutationPersistence _leasing;
+        private readonly IAtomicListingPersistence _listings;
         private readonly TimeProvider _timeProvider;
         private readonly List<OutboxMessage> _outbox = [];
         private bool _outboxMaterialized;
@@ -385,6 +386,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             _tenantMoney = new AtomicTenantMoneyPersistence(db, auditScope);
             _pendingFileUploads = new AtomicPendingFileUploadPersistence(db, auditScope);
             _leasing = new AtomicLeaseMutationPersistence(db, auditScope);
+            _listings = new AtomicListingPersistence(db, auditScope);
             _timeProvider = timeProvider;
         }
 
@@ -402,6 +404,7 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         public IAtomicTenantMoneyPersistence TenantMoney => _tenantMoney;
         public IAtomicPendingFileUploadPersistence PendingFileUploads => _pendingFileUploads;
         public IAtomicLeaseMutationPersistence Leasing => _leasing;
+        public IAtomicListingPersistence Listings => _listings;
         public Guid SessionId => _db.ContextId.InstanceId;
 
         public Task<DateTime> ReadDatabaseClockUtcAsync(CancellationToken ct = default) =>
