@@ -680,81 +680,6 @@ internal static class FoundationBaselinePostgreSql
     }
 
     private const string CreateWorkOrderResponsibilityInfrastructure = """
-        CREATE UNIQUE INDEX IF NOT EXISTS "AK_WorkOrders_Id_PropertyId_PortfolioId"
-          ON "WorkOrders" ("Id", "PropertyId", "PortfolioId");
-        CREATE UNIQUE INDEX IF NOT EXISTS "AK_MembershipRoleAssignments_Id_Membership_Portfolio"
-          ON "MembershipRoleAssignments" ("Id", "WorkspaceMembershipId", "PortfolioId");
-
-        CREATE TABLE "WorkOrderResponsibilities" (
-          "Id" uuid NOT NULL,
-          "PortfolioId" integer NOT NULL,
-          "PropertyId" integer NOT NULL,
-          "WorkOrderId" integer NOT NULL,
-          "WorkspaceMembershipId" integer NOT NULL,
-          "MembershipRoleAssignmentId" integer NOT NULL,
-          "Kind" character varying(24) NOT NULL,
-          "EffectiveFromUtc" timestamp with time zone NOT NULL,
-          "EffectiveToUtc" timestamp with time zone NULL,
-          "AssignedByUserId" integer NOT NULL,
-          "AssignedByAccessContextId" integer NOT NULL,
-          "AssignedReason" character varying(1000) NOT NULL,
-          "AssignedAtUtc" timestamp with time zone NOT NULL,
-          "EndedByUserId" integer NULL,
-          "EndedByAccessContextId" integer NULL,
-          "EndedReason" character varying(1000) NULL,
-          "EndedAtUtc" timestamp with time zone NULL,
-          CONSTRAINT "PK_WorkOrderResponsibilities" PRIMARY KEY ("Id"),
-          CONSTRAINT "CK_WorkOrderResponsibilities_EffectivePeriod"
-            CHECK ("EffectiveToUtc" IS NULL OR "EffectiveToUtc" > "EffectiveFromUtc"),
-          CONSTRAINT "CK_WorkOrderResponsibilities_Kind"
-            CHECK ("Kind" IN ('Primary', 'Supporting')),
-          CONSTRAINT "CK_WorkOrderResponsibilities_AssignedFacts"
-            CHECK ("AssignedAtUtc" = "EffectiveFromUtc" AND length(btrim("AssignedReason")) > 0),
-          CONSTRAINT "CK_WorkOrderResponsibilities_EndFacts"
-            CHECK (("EffectiveToUtc" IS NULL AND "EndedAtUtc" IS NULL AND "EndedByUserId" IS NULL AND
-                    "EndedByAccessContextId" IS NULL AND "EndedReason" IS NULL) OR
-                   ("EffectiveToUtc" IS NOT NULL AND "EndedAtUtc" = "EffectiveToUtc" AND
-                    "EndedByUserId" IS NOT NULL AND "EndedByAccessContextId" IS NOT NULL AND
-                    "EndedReason" IS NOT NULL AND length(btrim("EndedReason")) > 0)),
-          CONSTRAINT "FK_WorkOrderResponsibilities_WorkOrders"
-            FOREIGN KEY ("WorkOrderId", "PropertyId", "PortfolioId")
-            REFERENCES "WorkOrders" ("Id", "PropertyId", "PortfolioId") ON DELETE RESTRICT,
-          CONSTRAINT "FK_WorkOrderResponsibilities_WorkspaceMemberships"
-            FOREIGN KEY ("WorkspaceMembershipId", "PortfolioId")
-            REFERENCES "WorkspaceMemberships" ("Id", "PortfolioId") ON DELETE RESTRICT,
-          CONSTRAINT "FK_WorkOrderResponsibilities_MembershipRoleAssignments"
-            FOREIGN KEY ("MembershipRoleAssignmentId", "WorkspaceMembershipId", "PortfolioId")
-            REFERENCES "MembershipRoleAssignments" ("Id", "WorkspaceMembershipId", "PortfolioId") ON DELETE RESTRICT,
-          CONSTRAINT "FK_WorkOrderResponsibilities_AssignedByAccessContext"
-            FOREIGN KEY ("AssignedByAccessContextId", "AssignedByUserId", "PortfolioId")
-            REFERENCES "WorkspaceAccessContexts" ("Id", "UserId", "PortfolioId") ON DELETE RESTRICT,
-          CONSTRAINT "FK_WorkOrderResponsibilities_EndedByAccessContext"
-            FOREIGN KEY ("EndedByAccessContextId", "EndedByUserId", "PortfolioId")
-            REFERENCES "WorkspaceAccessContexts" ("Id", "UserId", "PortfolioId") ON DELETE RESTRICT,
-          CONSTRAINT "FK_WorkOrderResponsibilities_AssignedByUser"
-            FOREIGN KEY ("AssignedByUserId") REFERENCES "AspNetUsers" ("Id") ON DELETE RESTRICT,
-          CONSTRAINT "FK_WorkOrderResponsibilities_EndedByUser"
-            FOREIGN KEY ("EndedByUserId") REFERENCES "AspNetUsers" ("Id") ON DELETE RESTRICT
-        );
-
-        CREATE INDEX "IX_WorkOrderResponsibilities_AssignedByUserId"
-          ON "WorkOrderResponsibilities" ("AssignedByUserId");
-        CREATE INDEX "IX_WorkOrderResponsibilities_EndedByUserId"
-          ON "WorkOrderResponsibilities" ("EndedByUserId");
-        CREATE INDEX "IX_WorkOrderResponsibilities_AssignedContext"
-          ON "WorkOrderResponsibilities" ("AssignedByAccessContextId", "AssignedByUserId", "PortfolioId");
-        CREATE INDEX "IX_WorkOrderResponsibilities_EndedContext"
-          ON "WorkOrderResponsibilities" ("EndedByAccessContextId", "EndedByUserId", "PortfolioId");
-        CREATE INDEX "IX_WorkOrderResponsibilities_Assignment"
-          ON "WorkOrderResponsibilities" ("MembershipRoleAssignmentId", "WorkspaceMembershipId", "PortfolioId");
-        CREATE INDEX "IX_WorkOrderResponsibilities_MemberPeriod"
-          ON "WorkOrderResponsibilities" ("PortfolioId", "WorkspaceMembershipId", "EffectiveFromUtc", "EffectiveToUtc");
-        CREATE UNIQUE INDEX "UX_WorkOrderResponsibilities_CurrentPrimary"
-          ON "WorkOrderResponsibilities" ("PortfolioId", "WorkOrderId", "Kind")
-          WHERE "EffectiveToUtc" IS NULL AND "Kind" = 'Primary';
-        CREATE UNIQUE INDEX "UX_WorkOrderResponsibilities_CurrentMember"
-          ON "WorkOrderResponsibilities" ("PortfolioId", "WorkOrderId", "WorkspaceMembershipId")
-          WHERE "EffectiveToUtc" IS NULL;
         ALTER TABLE "WorkOrderResponsibilities"
           ADD CONSTRAINT "EX_WorkOrderResponsibilities_NoMemberOverlap"
           EXCLUDE USING gist (
@@ -803,9 +728,10 @@ internal static class FoundationBaselinePostgreSql
     private const string DropWorkOrderResponsibilityInfrastructure = """
         DROP TRIGGER IF EXISTS "TR_WorkOrderResponsibilities_AppendPreserved" ON "WorkOrderResponsibilities";
         DROP FUNCTION IF EXISTS rc_guard_work_order_responsibility_history();
-        DROP TABLE IF EXISTS "WorkOrderResponsibilities";
-        DROP INDEX IF EXISTS "AK_MembershipRoleAssignments_Id_Membership_Portfolio";
-        DROP INDEX IF EXISTS "AK_WorkOrders_Id_PropertyId_PortfolioId";
+        ALTER TABLE "WorkOrderResponsibilities"
+          DROP CONSTRAINT IF EXISTS "EX_WorkOrderResponsibilities_NoPrimaryOverlap";
+        ALTER TABLE "WorkOrderResponsibilities"
+          DROP CONSTRAINT IF EXISTS "EX_WorkOrderResponsibilities_NoMemberOverlap";
         """;
 
     /// <summary>

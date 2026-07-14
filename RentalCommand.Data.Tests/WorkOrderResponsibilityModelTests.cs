@@ -62,20 +62,34 @@ public sealed class WorkOrderResponsibilityModelTests
     [Fact]
     public void CleanBaseline_ProtectsPeriodsHistoryAndTenantIsolation()
     {
+        using var db = CreateDb();
+        var entity = db.GetService<IDesignTimeModel>().Model
+            .FindEntityType(typeof(WorkOrderResponsibility))!;
         var createSql = string.Join(Environment.NewLine, FoundationBaselinePostgreSql.CreateStatements);
+        var dropSql = string.Join(Environment.NewLine, FoundationBaselinePostgreSql.DropStatements);
 
         FoundationBaselinePostgreSql.DirectPortfolioTables
             .Should().Contain("WorkOrderResponsibilities");
+        entity.GetCheckConstraints().Should().Contain(constraint =>
+            constraint.Name == "CK_WorkOrderResponsibilities_EffectivePeriod" &&
+            constraint.Sql.Contains("\"EffectiveToUtc\" > \"EffectiveFromUtc\""));
+        entity.GetCheckConstraints().Should().Contain(constraint =>
+            constraint.Name == "CK_WorkOrderResponsibilities_Kind" &&
+            constraint.Sql.Contains("\"Kind\" IN ('Primary', 'Supporting')"));
+        entity.GetCheckConstraints().Should().Contain(constraint =>
+            constraint.Name == "CK_WorkOrderResponsibilities_AssignedFacts" &&
+            constraint.Sql.Contains("\"AssignedAtUtc\" = \"EffectiveFromUtc\"") &&
+            constraint.Sql.Contains("length(btrim(\"AssignedReason\")) > 0"));
+        entity.GetCheckConstraints().Should().Contain(constraint =>
+            constraint.Name == "CK_WorkOrderResponsibilities_EndFacts" &&
+            constraint.Sql.Contains("length(btrim(\"EndedReason\")) > 0"));
         createSql.Should().Contain("EX_WorkOrderResponsibilities_NoMemberOverlap");
         createSql.Should().Contain("EX_WorkOrderResponsibilities_NoPrimaryOverlap");
-        createSql.Should().Contain("CK_WorkOrderResponsibilities_Kind");
-        createSql.Should().Contain("\"Kind\" IN ('Primary', 'Supporting')");
-        createSql.Should().Contain("CK_WorkOrderResponsibilities_AssignedFacts");
-        createSql.Should().Contain("\"AssignedAtUtc\" = \"EffectiveFromUtc\"");
-        createSql.Should().Contain("length(btrim(\"AssignedReason\")) > 0");
-        createSql.Should().Contain("length(btrim(\"EndedReason\")) > 0");
         createSql.Should().Contain("TR_WorkOrderResponsibilities_AppendPreserved");
         createSql.Should().Contain("ALTER TABLE \"WorkOrderResponsibilities\" ENABLE ROW LEVEL SECURITY");
+        createSql.Should().NotContain("CREATE TABLE \"WorkOrderResponsibilities\"");
+        createSql.Should().NotContain("CK_WorkOrderResponsibilities_Kind");
+        dropSql.Should().NotContain("DROP TABLE IF EXISTS \"WorkOrderResponsibilities\"");
     }
 
     [Fact]
