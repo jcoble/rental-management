@@ -23,10 +23,13 @@ public class VoiceController : ManagementControllerBase
     public async Task<ActionResult<ScanDraftResponse>> CreateDraft(
         [FromForm] IFormFile? audio,
         [FromForm] string? transcript,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
         if ((audio is null || audio.Length == 0) && string.IsNullOrWhiteSpace(transcript))
             return BadRequest(new { error = "Provide an audio file or transcript." });
+        if (!ValidOperationKey(idempotencyKey))
+            return BadRequest(new { error = "A valid Idempotency-Key is required (maximum 200 characters)." });
 
         byte[] bytes = [];
         string? contentType = null;
@@ -40,7 +43,8 @@ public class VoiceController : ManagementControllerBase
 
         try
         {
-            var draft = await _voice.CreateDraftAsync(GetWorkspaceReadScope(), bytes, contentType, transcript, ct);
+            var draft = await _voice.CreateDraftAsync(
+                GetWorkspaceReadScope(), bytes, contentType, transcript, idempotencyKey!, ct);
             return CreatedAtAction(
                 "Get",
                 "Scan",
@@ -76,10 +80,13 @@ public class VoiceController : ManagementControllerBase
         int id,
         [FromForm] IFormFile? audio,
         [FromForm] string? transcript,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
         if ((audio is null || audio.Length == 0) && string.IsNullOrWhiteSpace(transcript))
             return BadRequest(new { error = "Provide an audio file or transcript." });
+        if (!ValidOperationKey(idempotencyKey))
+            return BadRequest(new { error = "A valid Idempotency-Key is required (maximum 200 characters)." });
 
         byte[] bytes = [];
         string? contentType = null;
@@ -93,7 +100,8 @@ public class VoiceController : ManagementControllerBase
 
         try
         {
-            var draft = await _voice.AnswerAsync(GetWorkspaceReadScope(), id, bytes, contentType, transcript, ct);
+            var draft = await _voice.AnswerAsync(
+                GetWorkspaceReadScope(), id, bytes, contentType, transcript, idempotencyKey!, ct);
             return Ok(ScanDraftResponse.FromEntity(draft).WithVoiceSlots());
         }
         catch (KeyNotFoundException)
@@ -117,4 +125,7 @@ public class VoiceController : ManagementControllerBase
             return Conflict(new { error = ex.Message });
         }
     }
+
+    private static bool ValidOperationKey(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && value.Trim().Length <= 200;
 }

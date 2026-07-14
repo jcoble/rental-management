@@ -1,10 +1,12 @@
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.Tests.Domain;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Voice;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
@@ -22,16 +24,23 @@ public class VoiceConversationTests : IDisposable
     private readonly Mock<IAudioTranscriptionService> _transcriber = new();
     private readonly Mock<IFileStorage> _storage = new();
     private readonly WorkspaceReadScope _scope;
+    private readonly ServiceProvider _services;
 
     public VoiceConversationTests()
     {
         _scope = _ctx.Db.SeedAdministratorScope(1, nameof(VoiceConversationTests));
+        _services = VoiceAtomicTestKernel.Create(_ctx.ConnectionString);
     }
 
-    public void Dispose() => _ctx.Dispose();
+    public void Dispose()
+    {
+        _services.Dispose();
+        _ctx.Dispose();
+    }
 
     private VoiceIntakeService CreateSut() => new(
         _ctx.Db,
+        _services.GetRequiredService<IAtomicUnitOfWork>(),
         _llm.Object,
         _transcriber.Object,
         _storage.Object,
@@ -85,6 +94,7 @@ public class VoiceConversationTests : IDisposable
             audioBytes: [],
             contentType: null,
             providedTranscript: "Log a plumbing expense for 123 Main.",
+            operationKey: "voice-conversation-create",
             ct: CancellationToken.None);
 
         var turn1 = ScanDraftResponse.FromEntity(draft).WithVoiceSlots();
@@ -99,6 +109,7 @@ public class VoiceConversationTests : IDisposable
             audioBytes: [],
             contentType: null,
             providedTranscript: "forty dollars",
+            operationKey: "voice-conversation-answer",
             ct: CancellationToken.None);
 
         var turn2 = ScanDraftResponse.FromEntity(answered).WithVoiceSlots();
@@ -129,6 +140,7 @@ public class VoiceConversationTests : IDisposable
             audioBytes: [],
             contentType: null,
             providedTranscript: "Tenant called about a leaky faucet.",
+            operationKey: "voice-unsupported-create",
             ct: CancellationToken.None);
 
         draft.TargetEntityType.Should().Be("Expense");
@@ -169,6 +181,7 @@ public class VoiceConversationTests : IDisposable
             audioBytes: [],
             contentType: null,
             providedTranscript: "Tenant called about a leaky faucet.",
+            operationKey: "voice-ambiguous-create",
             ct: CancellationToken.None);
 
         ScanDraftResponse.FromEntity(draft).WithVoiceSlots().Ambiguous.Should().BeTrue();
@@ -179,6 +192,7 @@ public class VoiceConversationTests : IDisposable
             audioBytes: [],
             contentType: null,
             providedTranscript: "The plumber invoice was forty dollars.",
+            operationKey: "voice-ambiguous-answer",
             ct: CancellationToken.None);
 
         var turn = ScanDraftResponse.FromEntity(answered).WithVoiceSlots();
@@ -199,6 +213,7 @@ public class VoiceConversationTests : IDisposable
             audioBytes: [],
             contentType: null,
             providedTranscript: "forty dollars",
+            operationKey: "voice-unknown-answer",
             ct: CancellationToken.None);
 
         await act.Should().ThrowAsync<KeyNotFoundException>();

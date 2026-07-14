@@ -201,6 +201,18 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Scanning.RejectScanDraftResult,
     RentalCommand.Data.Scanning.RejectScanDraftHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Scanning.RetryScanDraftCommand,
+    RentalCommand.Core.Scanning.ScanDraftMutationResult,
+    RentalCommand.Data.Scanning.RetryScanDraftHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Scanning.CreateVoiceScanDraftCommand,
+    RentalCommand.Core.Scanning.ScanDraftMutationResult,
+    RentalCommand.Data.Scanning.CreateVoiceScanDraftHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Scanning.AnswerVoiceScanDraftCommand,
+    RentalCommand.Core.Scanning.ScanDraftMutationResult,
+    RentalCommand.Data.Scanning.AnswerVoiceScanDraftHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Api.Services.Domain.AtomicRentalMutationCommand,
     RentalCommand.Api.Services.Domain.AtomicRentalMutationResult,
     RentalCommand.Api.Services.Domain.AtomicRentalMutationHandler>();

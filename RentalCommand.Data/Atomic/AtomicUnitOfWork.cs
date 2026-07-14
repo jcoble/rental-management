@@ -494,6 +494,15 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             CancellationToken ct = default) =>
             _scanConfirmation.IsAuthorizedForReviewAsync(scope, draftId, utcNow, ct);
 
+        public Task<bool> CanCreateScanDraftAsync(
+            WorkspaceReadScope scope,
+            string? targetEntityType,
+            int? propertyId,
+            DateTime utcNow,
+            CancellationToken ct = default) =>
+            _scanConfirmation.CanCreateAuthorizedAsync(
+                scope, targetEntityType, propertyId, utcNow, ct);
+
         public Task<DateOnly> ReadBusinessDateAsync(int portfolioId, CancellationToken ct = default)
         {
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(portfolioId);

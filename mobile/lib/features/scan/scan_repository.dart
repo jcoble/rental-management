@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import 'scan_models.dart';
 
 class TenantAccountOption {
@@ -175,32 +176,46 @@ class ScanRepository {
     Uint8List bytes,
     String filename,
     String contentType,
-  ) async {
-    try {
-      final formData = FormData.fromMap({
-        'audio': MultipartFile.fromBytes(
-          bytes,
-          filename: filename,
-          contentType: DioMediaType.parse(contentType),
-        ),
-      });
+  ) {
+    return IdempotentMutation.run(
+      'scan:voice:${_bytesFingerprint(bytes)}:$filename:$contentType',
+      (operationKey) async {
+        try {
+          final formData = FormData.fromMap({
+            'audio': MultipartFile.fromBytes(
+              bytes,
+              filename: filename,
+              contentType: DioMediaType.parse(contentType),
+            ),
+          });
 
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/voice/drafts',
-        data: formData,
-      );
+          final response = await _dio.post<Map<String, dynamic>>(
+            '/voice/drafts',
+            data: formData,
+            options: Options(headers: {'Idempotency-Key': operationKey}),
+          );
 
-      final data = response.data;
-      if (data == null) {
-        throw const ApiException(
-          statusCode: 0,
-          message: 'Empty response from server.',
-        );
-      }
-      return ScanDraft.fromJson(data);
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
+          final data = response.data;
+          if (data == null) {
+            throw const ApiException(
+              statusCode: 0,
+              message: 'Empty response from server.',
+            );
+          }
+          return ScanDraft.fromJson(data);
+        } on DioException catch (e) {
+          throw ApiException.fromDioException(e);
+        }
+      },
+    );
+  }
+
+  static int _bytesFingerprint(Uint8List bytes) {
+    var hash = 0;
+    for (final byte in bytes) {
+      hash = 0x1fffffff & (hash * 31 + byte);
     }
+    return Object.hash(bytes.length, hash);
   }
 
   /// Downloads the stored scan file as bytes.

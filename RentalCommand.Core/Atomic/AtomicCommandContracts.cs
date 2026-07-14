@@ -654,6 +654,13 @@ public sealed record AtomicScanDraftClaim(
 /// </summary>
 public interface IAtomicScanConfirmationPersistence
 {
+    Task<bool> CanCreateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        string? targetEntityType,
+        int? propertyId,
+        DateTime utcNow,
+        CancellationToken ct = default);
+
     Task<AtomicScanDraftClaim> TryClaimAsync(
         int portfolioId,
         int draftId,
@@ -726,6 +733,13 @@ public interface IAtomicPersistenceSession
     Task<bool> IsScanDraftAuthorizedForReviewAsync(
         WorkspaceReadScope scope,
         int draftId,
+        DateTime utcNow,
+        CancellationToken ct = default);
+
+    Task<bool> CanCreateScanDraftAsync(
+        WorkspaceReadScope scope,
+        string? targetEntityType,
+        int? propertyId,
         DateTime utcNow,
         CancellationToken ct = default);
 

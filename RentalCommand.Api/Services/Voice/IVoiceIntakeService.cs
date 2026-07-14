@@ -10,6 +10,7 @@ public interface IVoiceIntakeService
         byte[] audioBytes,
         string? contentType,
         string? providedTranscript,
+        string operationKey,
         CancellationToken ct = default);
 
     /// <summary>
@@ -26,5 +27,6 @@ public interface IVoiceIntakeService
         byte[] audioBytes,
         string? contentType,
         string? providedTranscript,
+        string operationKey,
         CancellationToken ct = default);
 }

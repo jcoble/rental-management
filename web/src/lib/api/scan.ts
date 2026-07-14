@@ -5,6 +5,8 @@ import type { ScanContext } from '$lib/scan/scan-context';
 
 const scanUploadOperationIds = new WeakMap<File, Map<string, string>>();
 const scanBatchUploadOperationIds = new WeakMap<File[], string>();
+const scanRetryOperationIds = new Map<number, string>();
+const voiceDraftOperationIds = new WeakMap<Blob, string>();
 
 function singleUploadOperationId(file: File, targetEntityType: string): string {
 	let byTarget = scanUploadOperationIds.get(file);
@@ -230,15 +232,29 @@ export const scan = {
 		return response;
 	},
 
-	retry: (id: number): Promise<unknown> => api.post(`/scans/${id}/retry`, {}),
+	retry: async (id: number): Promise<unknown> => {
+		const operationId = scanRetryOperationIds.get(id) ?? crypto.randomUUID();
+		scanRetryOperationIds.set(id, operationId);
+		const response = await api.post(`/scans/${id}/retry`, {}, {
+			headers: { 'Idempotency-Key': operationId }
+		});
+		scanRetryOperationIds.delete(id);
+		return response;
+	},
 
-	createVoiceDraft: (audio: Blob, mimeType?: string): Promise<ScanDraftResponse> => {
+	createVoiceDraft: async (audio: Blob, mimeType?: string): Promise<ScanDraftResponse> => {
+		const operationId = voiceDraftOperationIds.get(audio) ?? crypto.randomUUID();
+		voiceDraftOperationIds.set(audio, operationId);
 		const fd = new FormData();
 		// Name the part from the real recording format (Safari/iOS records mp4, not
 		// webm) so Whisper decodes the right container. The blob's own type carries
 		// the matching Content-Type for the multipart part.
 		fd.append('audio', audio, voiceUploadFileName(mimeType ?? audio.type));
-		return api.upload<ScanDraftResponse>('/voice/drafts', fd);
+		const response = await api.upload<ScanDraftResponse>('/voice/drafts', fd, {
+			headers: { 'Idempotency-Key': operationId }
+		});
+		voiceDraftOperationIds.delete(audio);
+		return response;
 	},
 
 	reject: (id: number, reason: string): Promise<unknown> => api.post(`/scans/${id}/reject`, { reason }),

@@ -1,9 +1,13 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Scanning;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
@@ -13,8 +17,11 @@ namespace RentalCommand.Api.Services.Voice;
 public sealed class VoiceIntakeService : IVoiceIntakeService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly AtomicJsonResultCodec<ScanDraftMutationResult> MutationCodec =
+        new("scan-draft.mutation.result.v1");
 
     private readonly RentalCommandDbContext _db;
+    private readonly IAtomicUnitOfWork _atomic;
     private readonly ILlmProvider _llm;
     private readonly IAudioTranscriptionService _transcriber;
     private readonly IFileStorage _storage;
@@ -33,6 +40,7 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
 
     public VoiceIntakeService(
         RentalCommandDbContext db,
+        IAtomicUnitOfWork atomic,
         ILlmProvider llm,
         IAudioTranscriptionService transcriber,
         IFileStorage storage,
@@ -40,6 +48,7 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
         TimeProvider timeProvider)
     {
         _db = db;
+        _atomic = atomic;
         _llm = llm;
         _transcriber = transcriber;
         _storage = storage;
@@ -52,8 +61,10 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
         byte[] audioBytes,
         string? contentType,
         string? providedTranscript,
+        string operationKey,
         CancellationToken ct = default)
     {
+        operationKey = NormalizeOperationKey(operationKey);
         var portfolioId = scope.PortfolioId;
         // Whisper picks its decoder from the upload's file extension, so name the
         // file from the real recording format (Safari/iOS sends audio/mp4, not webm).
@@ -80,62 +91,50 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
                 _db, scope, classification.TargetEntityType, capturePropertyId, utcNow, ct))
             throw new UnauthorizedAccessException();
 
-        var filePath = $"voice://{Guid.NewGuid():N}";
+        var operationDigest = Digest(operationKey);
+        var filePath = $"voice://{operationDigest}";
+        string? sourceFileName = null;
+        string? sourceContentType = null;
+        string? sourceContentSha256 = null;
         if (audioBytes.Length > 0)
         {
-            filePath = await _storage.UploadAsync(
+            sourceFileName = voiceFileName;
+            sourceContentType = contentType ?? "application/octet-stream";
+            sourceContentSha256 = Convert.ToHexString(SHA256.HashData(audioBytes)).ToLowerInvariant();
+            filePath = $"voice-{portfolioId}-{scope.UserId}-{operationDigest}{Path.GetExtension(voiceFileName)}";
+            await _storage.UploadAtAsync(
                 new MemoryStream(audioBytes),
-                $"voice-{_timeProvider.UtcNow():yyyyMMddHHmmss}{Path.GetExtension(voiceFileName)}",
-                contentType ?? "application/octet-stream",
+                filePath,
+                voiceFileName,
+                sourceContentType,
                 ct);
         }
 
-        return await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
-        {
-            if (!await ScanDraftAuthorizationQuery.CanCreateDraftAsync(
-                    _db, scope, classification.TargetEntityType, capturePropertyId,
-                    _timeProvider.GetUtcNow().UtcDateTime, innerCt))
-                throw new UnauthorizedAccessException();
-
-            StoredFile? sourceStoredFile = null;
-            if (audioBytes.Length > 0)
-            {
-                sourceStoredFile = new StoredFile
-                {
-                    PortfolioId = portfolioId,
-                    FileName = voiceFileName,
-                    FilePath = filePath,
-                    ContentType = contentType ?? "application/octet-stream",
-                    FileSize = audioBytes.Length,
-                    EntityType = "ScanDraft",
-                    EntityId = null,
-                    UploadedAt = _timeProvider.UtcNow(),
-                };
-                _db.StoredFiles.Add(sourceStoredFile);
-            }
-
-            var draft = new ScanDraft
-            {
-                PortfolioId = portfolioId,
-                FilePath = filePath,
-                SourceStoredFile = sourceStoredFile,
-                TargetEntityType = classification.TargetEntityType,
-                Status = "Reviewing",
-                ExtractedFields = classification.ExtractedFieldsJson,
-                ModelId = classification.ModelId,
-                TokensUsed = classification.TokensUsed,
-                CaptureAccessContextId = scope.AccessContextId,
-                CaptureAccessRevision = scope.AccessRevision,
-                CapturePropertyId = capturePropertyId,
-                CaptureExperience = WorkspaceExperience.Management,
-                CreatedAt = _timeProvider.UtcNow(),
-                ReviewedAt = _timeProvider.UtcNow(),
-            };
-
-            _db.ScanDrafts.Add(draft);
-            await _db.SaveChangesAsync(innerCt);
-            return draft;
-        }, ct);
+        var command = new CreateVoiceScanDraftCommand(
+            portfolioId,
+            scope.UserId,
+            scope.SessionId,
+            scope.AccessContextId,
+            scope.AccessRevision,
+            classification.TargetEntityType,
+            classification.ExtractedFieldsJson,
+            classification.ModelId,
+            classification.TokensUsed,
+            capturePropertyId,
+            filePath,
+            sourceFileName,
+            sourceContentType,
+            audioBytes.LongLength,
+            sourceContentSha256,
+            $"voice-create:{operationDigest}");
+        var outcome = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "voice-scan-draft.create",
+                $"{portfolioId}:{scope.UserId}:{operationDigest}"),
+            command,
+            MutationCodec,
+            ct);
+        return ToEntity(RequireApplied(outcome.Value));
     }
 
     public async Task<ScanDraft> AnswerAsync(
@@ -144,8 +143,10 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
         byte[] audioBytes,
         string? contentType,
         string? providedTranscript,
+        string operationKey,
         CancellationToken ct = default)
     {
+        operationKey = NormalizeOperationKey(operationKey);
         var portfolioId = scope.PortfolioId;
         var snapshot = await _db.ScanDrafts.AsNoTracking()
             .WhereAuthorizedForReview(_db, scope, _timeProvider.GetUtcNow().UtcDateTime)
@@ -168,32 +169,91 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
         var combined = string.IsNullOrWhiteSpace(prior) ? answer : $"{prior} {answer}".Trim();
 
         var classification = await ClassifyTranscriptAsync(scope, combined, ct);
-        return await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
+        var mergedFields = MergeFields(snapshot.ExtractedFields, classification.ExtractedFieldsJson);
+        var propertyId = ReadPositiveIntField(mergedFields, "property_id") ?? snapshot.CapturePropertyId;
+        var command = new AnswerVoiceScanDraftCommand(
+            portfolioId,
+            draftId,
+            scope.UserId,
+            scope.SessionId,
+            scope.AccessContextId,
+            scope.AccessRevision,
+            snapshot.ExtractedFields ?? string.Empty,
+            classification.TargetEntityType,
+            mergedFields,
+            classification.ModelId,
+            classification.TokensUsed,
+            propertyId,
+            operationKey);
+        var outcome = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "voice-scan-draft.answer",
+                $"{portfolioId}:{scope.UserId}:{draftId}:{Digest(operationKey)}"),
+            command,
+            MutationCodec,
+            ct);
+        return outcome.Value.Outcome switch
         {
-            var draft = await _db.ScanDrafts
-                .WhereAuthorizedForReview(_db, scope, _timeProvider.GetUtcNow().UtcDateTime)
-                .SingleOrDefaultAsync(candidate => candidate.Id == draftId, innerCt)
-                ?? throw new KeyNotFoundException($"Voice draft {draftId} not found.");
-
-            if (!string.Equals(draft.ExtractedFields, snapshot.ExtractedFields, StringComparison.Ordinal))
-                throw new InvalidOperationException("The voice draft changed while the answer was being processed.");
-
-            var mergedFields = MergeFields(draft.ExtractedFields, classification.ExtractedFieldsJson);
-            var propertyId = ReadPositiveIntField(mergedFields, "property_id") ?? draft.CapturePropertyId;
-            if (!await ScanDraftAuthorizationQuery.CanCreateDraftAsync(
-                    _db, scope, classification.TargetEntityType, propertyId,
-                    _timeProvider.GetUtcNow().UtcDateTime, innerCt))
-                throw new UnauthorizedAccessException();
-
-            draft.ExtractedFields = mergedFields;
-            draft.TargetEntityType = classification.TargetEntityType;
-            draft.CapturePropertyId = propertyId;
-            draft.ModelId = classification.ModelId;
-            draft.ReviewedAt = _timeProvider.UtcNow();
-            await _db.SaveChangesAsync(innerCt);
-            return draft;
-        }, ct);
+            ScanDraftMutationOutcome.Applied => ToEntity(RequireApplied(outcome.Value)),
+            ScanDraftMutationOutcome.NotFound =>
+                throw new KeyNotFoundException($"Voice draft {draftId} not found."),
+            ScanDraftMutationOutcome.Stale =>
+                throw new InvalidOperationException("The voice draft changed while the answer was being processed."),
+            _ => throw new InvalidOperationException("Only a reviewable voice draft can accept an answer."),
+        };
     }
+
+    private static string NormalizeOperationKey(string operationKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationKey);
+        var normalized = operationKey.Trim();
+        if (normalized.Length > 200)
+            throw new ArgumentOutOfRangeException(nameof(operationKey));
+        return normalized;
+    }
+
+    private static string Digest(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)))
+            .ToLowerInvariant();
+
+    private static ScanDraftReceiptSnapshot RequireApplied(ScanDraftMutationResult result) =>
+        result.Outcome == ScanDraftMutationOutcome.Applied && result.Snapshot is not null
+            ? result.Snapshot
+            : throw new InvalidOperationException("The voice draft mutation did not return a committed snapshot.");
+
+    private static ScanDraft ToEntity(ScanDraftReceiptSnapshot snapshot) => new()
+    {
+        Id = snapshot.Id,
+        PortfolioId = snapshot.PortfolioId,
+        FilePath = snapshot.FilePath,
+        SourceStoredFileId = snapshot.SourceStoredFileId,
+        SourceContentSha256 = snapshot.SourceContentSha256,
+        SourceLabel = snapshot.SourceLabel,
+        CaptureExperience = snapshot.CaptureExperience,
+        CaptureAccessContextId = snapshot.CaptureAccessContextId,
+        CaptureAccessRevision = snapshot.CaptureAccessRevision,
+        CapturePropertyId = snapshot.CapturePropertyId,
+        CaptureUnitId = snapshot.CaptureUnitId,
+        CaptureLeaseManagementId = snapshot.CaptureLeaseManagementId,
+        CaptureLeaseAgreementId = snapshot.CaptureLeaseAgreementId,
+        CaptureTenantAccountId = snapshot.CaptureTenantAccountId,
+        CaptureTenantLedgerEntryId = snapshot.CaptureTenantLedgerEntryId,
+        CaptureWorkOrderId = snapshot.CaptureWorkOrderId,
+        CaptureApplicationId = snapshot.CaptureApplicationId,
+        CaptureRentalListingId = snapshot.CaptureRentalListingId,
+        TargetEntityType = snapshot.TargetEntityType,
+        Status = snapshot.Status,
+        ExtractedFields = snapshot.ExtractedFields,
+        ModelId = snapshot.ModelId,
+        TokensUsed = snapshot.TokensUsed,
+        CostUsd = snapshot.CostUsd,
+        FailureReason = snapshot.FailureReason,
+        CreatedAt = snapshot.CreatedAt,
+        ReviewedAt = snapshot.ReviewedAt,
+        ReviewedBy = snapshot.ReviewedBy,
+        ConfirmedAt = snapshot.ConfirmedAt,
+        ConfirmedEntityId = snapshot.ConfirmedEntityId,
+    };
 
     /// <summary>
     /// Filename to hand the transcriber for a recorded note. Whisper selects its
