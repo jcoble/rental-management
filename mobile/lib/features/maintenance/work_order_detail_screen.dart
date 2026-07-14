@@ -52,10 +52,7 @@ String _fmtCost(double cost) {
   return '\$$buf.${parts[1]}';
 }
 
-/// All valid status transitions, in display order.
-///
-/// WorkOrderStatus values: New | Scheduled | InProgress | WaitingParts |
-/// Completed | Cancelled
+/// Manager-visible statuses, in display order.
 const _allStatuses = [
   'New',
   'Scheduled',
@@ -64,6 +61,38 @@ const _allStatuses = [
   'Completed',
   'Cancelled',
 ];
+
+const _assignedTechnicianStatusTargets = <String, List<String>>{
+  'New': ['Scheduled', 'InProgress', 'OnHold', 'Cancelled', 'Completed'],
+  'Scheduled': [
+    'InProgress',
+    'WaitingParts',
+    'OnHold',
+    'Cancelled',
+    'Completed',
+  ],
+  'InProgress': ['WaitingParts', 'OnHold', 'Completed'],
+  'WaitingParts': ['InProgress', 'OnHold', 'Completed'],
+  'OnHold': [
+    'Scheduled',
+    'InProgress',
+    'WaitingParts',
+    'Cancelled',
+    'Completed',
+  ],
+  'Completed': [],
+  'Cancelled': [],
+};
+
+List<String> _statusActionTargets(
+  String currentStatus, {
+  required bool restrictToAssignedTechnicianTransitions,
+}) {
+  if (restrictToAssignedTechnicianTransitions) {
+    return _assignedTechnicianStatusTargets[currentStatus] ?? const [];
+  }
+  return _allStatuses.where((status) => status != currentStatus).toList();
+}
 
 /// Human-readable labels for status values (delegates to the shared helper).
 String _statusLabel(String s) => workOrderStatusLabel(s);
@@ -562,6 +591,7 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
             detail: detail,
             colorScheme: colorScheme,
             theme: theme,
+            canManageWork: canManageWork,
             statusUpdating: _statusUpdating,
             uploadingPhoto: _uploadingPhoto,
             onTransition: _changeStatus,
@@ -584,6 +614,7 @@ class _DetailBody extends StatelessWidget {
     required this.detail,
     required this.colorScheme,
     required this.theme,
+    required this.canManageWork,
     required this.statusUpdating,
     required this.uploadingPhoto,
     required this.onTransition,
@@ -597,6 +628,7 @@ class _DetailBody extends StatelessWidget {
   final WorkOrderDetail detail;
   final ColorScheme colorScheme;
   final ThemeData theme;
+  final bool canManageWork;
   final bool statusUpdating;
   final bool uploadingPhoto;
   final void Function(String) onTransition;
@@ -609,9 +641,10 @@ class _DetailBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final workOrder = detail.workOrder;
-    final otherStatuses = _allStatuses
-        .where((s) => s != workOrder.status)
-        .toList();
+    final otherStatuses = _statusActionTargets(
+      workOrder.status,
+      restrictToAssignedTechnicianTransitions: !canManageWork,
+    );
     final isCompleted = workOrder.status.toLowerCase() == 'completed';
     final hasVendor = workOrder.vendorId != null;
 
@@ -656,19 +689,22 @@ class _DetailBody extends StatelessWidget {
               label: const Text('Open in Maps'),
             ),
             // Dispatch is hidden once the job is closed out.
-            if (!isCompleted && workOrder.status.toLowerCase() != 'cancelled')
+            if (canManageWork &&
+                !isCompleted &&
+                workOrder.status.toLowerCase() != 'cancelled')
               FilledButton.icon(
                 onPressed: onDispatchVendor,
                 icon: const Icon(Icons.sms_outlined),
                 label: const Text('Text a vendor'),
               ),
             // Call works regardless of status (e.g. follow-up on a completed job).
-            FilledButton.tonalIcon(
-              onPressed: onCallVendor,
-              icon: const Icon(Icons.call_outlined),
-              label: const Text('Call a vendor'),
-            ),
-            if (isCompleted && hasVendor)
+            if (canManageWork)
+              FilledButton.tonalIcon(
+                onPressed: onCallVendor,
+                icon: const Icon(Icons.call_outlined),
+                label: const Text('Call a vendor'),
+              ),
+            if (canManageWork && isCompleted && hasVendor)
               OutlinedButton.icon(
                 onPressed: onRateVendor,
                 icon: const Icon(Icons.star_outline_rounded),

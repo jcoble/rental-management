@@ -33,7 +33,7 @@ describe('work order vendor dispatch eligibility', () => {
 		);
 	});
 
-	it('matches the mobile work-order status action targets', () => {
+	it('keeps manager status choices broad without technician-only On hold', () => {
 		assert.deepEqual(workOrderStatusActionTargets('New'), [
 			'Scheduled',
 			'InProgress',
@@ -48,9 +48,31 @@ describe('work order vendor dispatch eligibility', () => {
 			'WaitingParts',
 			'Cancelled'
 		]);
-		const newTargets: readonly string[] = workOrderStatusActionTargets('New');
-		assert.equal(newTargets.includes('OnHold'), false);
-		assert.equal(newTargets.includes('Archived'), false);
+	});
+
+	it('matches the API transition graph for assigned technicians', () => {
+		assert.deepEqual(workOrderStatusActionTargets('New', true), [
+			'Scheduled',
+			'InProgress',
+			'OnHold',
+			'Cancelled',
+			'Completed'
+		]);
+		assert.deepEqual(workOrderStatusActionTargets('InProgress', true), [
+			'WaitingParts',
+			'OnHold',
+			'Completed'
+		]);
+		assert.deepEqual(workOrderStatusActionTargets('OnHold', true), [
+			'Scheduled',
+			'InProgress',
+			'WaitingParts',
+			'Cancelled',
+			'Completed'
+		]);
+		assert.deepEqual(workOrderStatusActionTargets('Completed', true), []);
+		assert.deepEqual(workOrderStatusActionTargets('Cancelled', true), []);
+		assert.deepEqual(workOrderStatusActionTargets('Archived', true), []);
 	});
 
 	it('shows the active dispatch hint only on a real dispatch, never on mere vendor assignment', () => {

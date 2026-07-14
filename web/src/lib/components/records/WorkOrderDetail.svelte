@@ -277,8 +277,8 @@
 		queryKey: ['vendors', portfolioId],
 		queryFn: () => vendors.list(portfolioId, { take: 200 }),
 		// Loaded for the dispatch picker AND whenever this work order already has a vendor, so the
-		// call/text/email contact links can resolve the assigned vendor's phone + email.
-		enabled: portfolioId > 0 && (showDispatch || (wo?.vendorId != null)),
+		// manager-only call/text/email contact links can resolve the assigned vendor's details.
+		enabled: portfolioId > 0 && (showDispatch || (canManageWork && wo?.vendorId != null)),
 	}));
 	const vendorList = $derived(vendorsQuery.data ?? []);
 	const selectedDispatchVendor = $derived(
@@ -291,7 +291,9 @@
 	// call / text / email contact actions matching the mobile trio. tel:/sms: hrefs strip everything but
 	// digits and a leading +, and the whole value is URL-encoded.
 	const assignedVendor = $derived(
-		wo?.vendorId != null ? (vendorList.find((v) => v.id === wo.vendorId) ?? null) : null
+		canManageWork && wo?.vendorId != null
+			? (vendorList.find((v) => v.id === wo.vendorId) ?? null)
+			: null
 	);
 	function telHref(scheme: 'tel' | 'sms', phone: string | null | undefined): string | null {
 		if (!phone) return null;
@@ -362,7 +364,7 @@
 	}
 
 	const availableTransitions = $derived(
-		wo ? workOrderStatusActionTargets(wo.status) : []
+		wo ? workOrderStatusActionTargets(wo.status, !canManageWork) : []
 	);
 
 	function formatCurrency(val: number | undefined | null): string {
@@ -565,8 +567,8 @@
 			</div>
 		{/if}
 
-		<!-- Vendor contact: call / text / email the assigned vendor, mirroring the mobile trio.
-		     Shown once a vendor is assigned; the dispatch ("text the job") button stays in the header. -->
+		<!-- Manager-only vendor contact actions. Technicians can update their assigned job but do not
+		     receive vendor-dispatch authority or direct vendor contact details. -->
 		{#if assignedVendor}
 			<div class="mb-6 flex flex-wrap items-center gap-2 rounded-md border border-border bg-card p-3" data-testid="work-order-vendor-contact">
 				<span class="mr-1 text-sm">
