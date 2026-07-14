@@ -1,5 +1,5 @@
 using Microsoft.EntityFrameworkCore;
-using RentalCommand.Core.Enums;
+using RentalCommand.Core.Atomic;
 
 namespace RentalCommand.Data.Notifications;
 
@@ -41,12 +41,27 @@ public sealed class ClaimedTenantNoticeWorkItem
 public sealed class TenantNoticeWorkClaimStore : ITenantNoticeWorkClaimStore
 {
     private readonly RentalCommandDbContext _db;
-    public TenantNoticeWorkClaimStore(RentalCommandDbContext db) => _db = db;
+    private readonly IAtomicInfrastructureWriteGate _writeGate;
+
+    public TenantNoticeWorkClaimStore(
+        RentalCommandDbContext db,
+        IAtomicInfrastructureWriteGate writeGate)
+    {
+        _db = db;
+        _writeGate = writeGate;
+    }
 
     public async Task<IReadOnlyList<ClaimedTenantNoticeWorkItem>> ClaimReadyAsync(
         string owner, Guid token, DateTime nowUtc, DateTime claimExpiresAtUtc, int batchSize, CancellationToken ct)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        if (token == Guid.Empty)
+        {
+            throw new ArgumentException("A non-empty tenant-notice claim token is required.", nameof(token));
+        }
+
         var boundedBatch = Math.Clamp(batchSize, 1, 100);
+        using var lease = _writeGate.BeginTenantNoticeWorkItemClaim();
         return await _db.Database.SqlQuery<ClaimedTenantNoticeWorkItem>($"""
             WITH candidates AS (
                 SELECT work."Id"
@@ -103,31 +118,60 @@ public sealed class TenantNoticeWorkClaimStore : ITenantNoticeWorkClaimStore
             """).ToListAsync(ct);
     }
 
-    public async Task<bool> CompleteAsync(long id, Guid token, CancellationToken ct) =>
-        await _db.TenantNoticeWorkItems
-            .Where(row => row.Id == id && row.Status == TenantNoticeWorkStatus.Claimed && row.ClaimToken == token)
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(row => row.Status, TenantNoticeWorkStatus.Completed)
-                .SetProperty(row => row.ClaimOwner, (string?)null)
-                .SetProperty(row => row.ClaimToken, (Guid?)null)
-                .SetProperty(row => row.ClaimExpiresAtUtc, (DateTime?)null), ct) == 1;
+    public async Task<bool> CompleteAsync(long id, Guid token, CancellationToken ct)
+    {
+        ValidateFence(id, token);
+        using var lease = _writeGate.BeginTenantNoticeWorkItemCompletion();
+        return await _db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE "TenantNoticeWorkItems"
+               SET "Status" = 'Completed',
+                   "ClaimOwner" = NULL,
+                   "ClaimToken" = NULL,
+                   "ClaimExpiresAtUtc" = NULL
+             WHERE "Id" = {id}
+               AND "Status" = 'Claimed'
+               AND "ClaimToken" = {token}
+            """, ct) == 1;
+    }
 
-    public async Task<bool> ReleaseAsync(long id, Guid token, DateTime retryAtUtc, CancellationToken ct) =>
-        await _db.TenantNoticeWorkItems
-            .Where(row => row.Id == id && row.Status == TenantNoticeWorkStatus.Claimed && row.ClaimToken == token)
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(row => row.Status, TenantNoticeWorkStatus.Pending)
-                .SetProperty(row => row.DueAtUtc, retryAtUtc)
-                .SetProperty(row => row.ClaimOwner, (string?)null)
-                .SetProperty(row => row.ClaimToken, (Guid?)null)
-                .SetProperty(row => row.ClaimExpiresAtUtc, (DateTime?)null), ct) == 1;
+    public async Task<bool> ReleaseAsync(long id, Guid token, DateTime retryAtUtc, CancellationToken ct)
+    {
+        ValidateFence(id, token);
+        using var lease = _writeGate.BeginTenantNoticeWorkItemRelease();
+        return await _db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE "TenantNoticeWorkItems"
+               SET "Status" = 'Pending',
+                   "DueAtUtc" = {retryAtUtc},
+                   "ClaimOwner" = NULL,
+                   "ClaimToken" = NULL,
+                   "ClaimExpiresAtUtc" = NULL
+             WHERE "Id" = {id}
+               AND "Status" = 'Claimed'
+               AND "ClaimToken" = {token}
+            """, ct) == 1;
+    }
 
-    public async Task<bool> BlockAsync(long id, Guid token, CancellationToken ct) =>
-        await _db.TenantNoticeWorkItems
-            .Where(row => row.Id == id && row.Status == TenantNoticeWorkStatus.Claimed && row.ClaimToken == token)
-            .ExecuteUpdateAsync(setters => setters
-                .SetProperty(row => row.Status, TenantNoticeWorkStatus.Blocked)
-                .SetProperty(row => row.ClaimOwner, (string?)null)
-                .SetProperty(row => row.ClaimToken, (Guid?)null)
-                .SetProperty(row => row.ClaimExpiresAtUtc, (DateTime?)null), ct) == 1;
+    public async Task<bool> BlockAsync(long id, Guid token, CancellationToken ct)
+    {
+        ValidateFence(id, token);
+        using var lease = _writeGate.BeginTenantNoticeWorkItemBlock();
+        return await _db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE "TenantNoticeWorkItems"
+               SET "Status" = 'Blocked',
+                   "ClaimOwner" = NULL,
+                   "ClaimToken" = NULL,
+                   "ClaimExpiresAtUtc" = NULL
+             WHERE "Id" = {id}
+               AND "Status" = 'Claimed'
+               AND "ClaimToken" = {token}
+            """, ct) == 1;
+    }
+
+    private static void ValidateFence(long id, Guid token)
+    {
+        if (id <= 0 || token == Guid.Empty)
+        {
+            throw new ArgumentException("A tenant-notice work item and non-empty claim token are required.");
+        }
+    }
 }

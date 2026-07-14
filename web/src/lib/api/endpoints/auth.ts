@@ -30,7 +30,13 @@ export const auth = {
 			{ accessContextId }
 		),
 	selectExperience: (experience: WorkspaceExperience) =>
-		api.post<AccessEnvelope>('/auth/experience/select', { experience }),
+		idempotentMutation(`auth:experience:${experience}`, (operationKey) =>
+			api.post<AccessEnvelope>(
+				'/auth/experience/select',
+				{ experience },
+				{ headers: { 'Idempotency-Key': operationKey } }
+			)
+		),
 	/**
 	 * Re-send the email-verification message. Anonymous endpoint — the API always responds
 	 * with a neutral success (no account enumeration), so callers can fire-and-forget.

@@ -125,6 +125,21 @@ public interface IAtomicInfrastructureWriteGate
     /// enters user-confirmed business state. It grants no update or delete permission.
     /// </summary>
     IDisposable BeginExternalListingSignalAdmission();
+
+    /// <summary>Admits one conflict-safe scheduler insertion into the tenant-notice work queue.</summary>
+    IDisposable BeginTenantNoticeCandidateGeneration();
+
+    /// <summary>Admits one token-fenced claim statement over the tenant-notice work queue.</summary>
+    IDisposable BeginTenantNoticeWorkItemClaim();
+
+    /// <summary>Admits one token-fenced completion statement over the tenant-notice work queue.</summary>
+    IDisposable BeginTenantNoticeWorkItemCompletion();
+
+    /// <summary>Admits one token-fenced release statement over the tenant-notice work queue.</summary>
+    IDisposable BeginTenantNoticeWorkItemRelease();
+
+    /// <summary>Admits one token-fenced block statement over the tenant-notice work queue.</summary>
+    IDisposable BeginTenantNoticeWorkItemBlock();
 }
 
 /// <summary>
@@ -163,6 +178,7 @@ public interface IAtomicWriteAttempt
     IAtomicPaymentCsvImportPersistence PaymentCsvImports { get; }
     IAtomicInspectionPersistence Inspections { get; }
     IAtomicAccountSecurityPersistence AccountSecurity { get; }
+    IAtomicWorkspaceExperiencePersistence WorkspaceExperiences { get; }
 
     /// <summary>Flushes tracked business rows while the owner transaction remains open.</summary>
     Task<AtomicBusinessFlush> FlushBusinessAsync(CancellationToken ct = default);
@@ -806,6 +822,15 @@ public interface IAtomicPersistenceSession
     /// <summary>Reads one paired real-clock/business-date sample in a single SQL statement.</summary>
     Task<AtomicCommandTimes> ReadCommandTimesAsync(int portfolioId, CancellationToken ct = default);
 
+    /// <summary>
+    /// Revalidates one caller-selected experience against the canonical session, access revision,
+    /// and database-owned access-envelope projection in one PostgreSQL query.
+    /// </summary>
+    Task<bool> IsWorkspaceExperienceAvailableAsync(
+        WorkspaceReadScope scope,
+        WorkspaceExperience experience,
+        CancellationToken ct = default);
+
     IQueryable<TEntity> Query<TEntity>() where TEntity : class;
     void Add<TEntity>(TEntity entity) where TEntity : class;
     void AddRange<TEntity>(IEnumerable<TEntity> entities) where TEntity : class;
@@ -819,6 +844,15 @@ public sealed record AtomicEffectiveLoginContext(
     int TotalEffectiveContexts);
 
 public sealed record AtomicCommandTimes(DateTime WallClockUtc, DateOnly BusinessDate);
+
+/// <summary>Database-owned mutation for the caller's current workspace display preference.</summary>
+public interface IAtomicWorkspaceExperiencePersistence
+{
+    Task<bool> SelectAsync(
+        WorkspaceReadScope scope,
+        WorkspaceExperience experience,
+        CancellationToken ct = default);
+}
 
 /// <summary>Exact, audited set-based mutations constructed by the persistence kernel.</summary>
 public interface IAtomicSetBasedPersistence

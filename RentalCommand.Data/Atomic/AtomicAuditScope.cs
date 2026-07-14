@@ -211,6 +211,21 @@ internal sealed class AtomicAuditScope : IAtomicExecutionState, IAtomicInfrastru
     IDisposable IAtomicInfrastructureWriteGate.BeginExternalListingSignalAdmission() =>
         BeginInfrastructureRawDml("ExternalListingSignals", AtomicRawDmlOperation.Insert);
 
+    IDisposable IAtomicInfrastructureWriteGate.BeginTenantNoticeCandidateGeneration() =>
+        BeginInfrastructureRawDml("TenantNoticeWorkItems", AtomicRawDmlOperation.Insert);
+
+    IDisposable IAtomicInfrastructureWriteGate.BeginTenantNoticeWorkItemClaim() =>
+        BeginInfrastructureRawDml("TenantNoticeWorkItems", AtomicRawDmlOperation.Update);
+
+    IDisposable IAtomicInfrastructureWriteGate.BeginTenantNoticeWorkItemCompletion() =>
+        BeginInfrastructureRawDml("TenantNoticeWorkItems", AtomicRawDmlOperation.Update);
+
+    IDisposable IAtomicInfrastructureWriteGate.BeginTenantNoticeWorkItemRelease() =>
+        BeginInfrastructureRawDml("TenantNoticeWorkItems", AtomicRawDmlOperation.Update);
+
+    IDisposable IAtomicInfrastructureWriteGate.BeginTenantNoticeWorkItemBlock() =>
+        BeginInfrastructureRawDml("TenantNoticeWorkItems", AtomicRawDmlOperation.Update);
+
     public void GuardRawDml(
         string tableName,
         AtomicRawDmlOperation operation)
