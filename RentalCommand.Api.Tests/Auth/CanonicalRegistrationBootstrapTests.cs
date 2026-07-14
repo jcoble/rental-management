@@ -100,12 +100,13 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
             .Returns(("canonical-access", DateTime.UtcNow.AddMinutes(15)));
         var auth = CreateService(sessions.Object, envelopes.Object, tokens.Object);
 
-        var registered = await auth.RegisterAsync(new RegisterRequest
-        {
-            Email = "sole@example.test",
-            Password = "Password123!",
-            DisplayName = "Sole Landlord",
-        });
+        var registered = await ExecuteAsApiDatabaseIdentityAsync(() =>
+            auth.RegisterAsync(new RegisterRequest
+            {
+                Email = "sole@example.test",
+                Password = "Password123!",
+                DisplayName = "Sole Landlord",
+            }));
 
         registered.Success.Should().BeTrue();
         var user = await _users.FindByIdAsync(registered.UserId!.Value.ToString());
@@ -141,6 +142,22 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
             assignment.RoleProfileKey == RoleProfileKeys.WorkspaceAdministrator &&
             assignment.Scope.Kind == MembershipRoleAssignmentScopeKind.AllProperties);
         loggedIn.Tokens!.AccessToken.Should().Be("canonical-access");
+    }
+
+    private async Task<T> ExecuteAsApiDatabaseIdentityAsync<T>(Func<Task<T>> action)
+    {
+        await _ctx.Db.Database.OpenConnectionAsync();
+        try
+        {
+            await _ctx.Db.Database.ExecuteSqlRawAsync(
+                "SET SESSION AUTHORIZATION rentalcommand_api;");
+            return await action();
+        }
+        finally
+        {
+            await _ctx.Db.Database.ExecuteSqlRawAsync("RESET SESSION AUTHORIZATION;");
+            await _ctx.Db.Database.CloseConnectionAsync();
+        }
     }
 
     private AuthService CreateService(
