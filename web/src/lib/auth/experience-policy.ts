@@ -13,6 +13,7 @@ export const CAPABILITY = {
 	moneyReconciliationOperate: 'money.reconciliation.operate',
 	moneyReconciliationDestructive: 'money.reconciliation.destructive',
 	leasingApplicationsManage: 'leasing.applications.manage',
+	leasingListingsManage: 'leasing.listings.manage',
 	leasingShowingsManage: 'leasing.showings.manage',
 	leasingAgreementsPrepare: 'leasing.agreements.prepare',
 	leasingOnboardingManage: 'leasing.onboarding.manage',
@@ -51,6 +52,20 @@ export const ROUTE_ACCESS_RULES: readonly RouteAccessRule[] = [
 	},
 	{ prefix: '/portal', experiences: ['Tenant'] },
 	{ prefix: '/owner', experiences: ['Owner'] },
+	{ prefix: '/leasing', experiences: ['Leasing'] },
+	// Leasing has purpose-built work queues. Keep canonical record detail routes available below,
+	// but do not expose the broad management list screens as an alternate shell.
+	{ prefix: '/properties', exact: true, experiences: ['Management'] },
+	{ prefix: '/units', exact: true, experiences: ['Management'] },
+	{ prefix: '/tenants', exact: true, experiences: ['Management'] },
+	{ prefix: '/leases', exact: true, experiences: ['Management'] },
+	{ prefix: '/applications', exact: true, experiences: ['Management'] },
+	{ prefix: '/appointments', exact: true, experiences: ['Management'] },
+	{
+		prefix: '/messages',
+		exact: true,
+		experiences: ['Management', 'Maintenance']
+	},
 	{ prefix: '/admin/users', anyCapabilities: [CAPABILITY.teamRead, CAPABILITY.teamManage] },
 	{ prefix: '/admin/audit', anyCapabilities: [CAPABILITY.reportsRead] },
 	{
@@ -159,7 +174,11 @@ export function routeAccessRule(pathname: string): RouteAccessRule | null {
 	return (
 		ROUTE_ACCESS_RULES.filter((rule) =>
 			rule.exact ? pathname === rule.prefix : pathname === rule.prefix || pathname.startsWith(`${rule.prefix}/`)
-		).sort((left, right) => right.prefix.length - left.prefix.length)[0] ?? null
+		).sort(
+			(left, right) =>
+				right.prefix.length - left.prefix.length ||
+				Number(right.exact ?? false) - Number(left.exact ?? false)
+		)[0] ?? null
 	);
 }
 
@@ -179,7 +198,7 @@ export function canAccessRoute(
 
 const LANDING_CANDIDATES: Record<WorkspaceExperience, readonly string[]> = {
 	Management: ['/', '/properties'],
-	Leasing: ['/applications', '/appointments', '/properties', '/units', '/leases', '/messages'],
+	Leasing: ['/leasing'],
 	Maintenance: ['/maintenance', '/messages'],
 	Owner: ['/owner'],
 	Tenant: ['/portal']

@@ -166,6 +166,20 @@ bool canOpenMobilePath({
   // access from overlapping capabilities.
   if (experience == WorkspaceExperience.owner) return false;
 
+  // Leasing also has a dedicated shell backed by `/leasing/*` projections.
+  // Keep only the canonical record details and global tools reached from that
+  // shell; broad management hubs are not a second navigation path.
+  if (experience == WorkspaceExperience.leasing) {
+    if (path.startsWith('/units/')) {
+      return hasAnyMobileCapability(capabilities, rentalReadCapabilityKeys);
+    }
+    if (path == '/notifications' || path.startsWith('/messages/')) {
+      return canOpenInboxHub(capabilities);
+    }
+    if (path.startsWith('/scan/')) return canUseGlobalScan(capabilities);
+    return false;
+  }
+
   if (path == '/rentals') {
     return canOpenRentalsHubForExperience(
       experience: experience,

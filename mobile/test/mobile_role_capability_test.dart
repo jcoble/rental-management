@@ -68,7 +68,7 @@ void main() {
     },
   );
 
-  test('leasing sees rental work but not management Money or Owner routes', () {
+  test('leasing uses its dedicated shell and canonical detail routes', () {
     expect(
       rentalHubDestinationsFor(
         experience: WorkspaceExperience.leasing,
@@ -89,11 +89,27 @@ void main() {
         capabilities: leasingCapabilities,
         path: '/rentals',
       ),
-      isTrue,
+      isFalse,
     );
     expect(
       _visibleIds(workHubDestinations, leasingCapabilities),
       contains(MobileDestinationId.notices),
+    );
+    expect(
+      canOpenMobilePath(
+        experience: WorkspaceExperience.leasing,
+        capabilities: leasingCapabilities,
+        path: '/units/42',
+      ),
+      isTrue,
+    );
+    expect(
+      canOpenMobilePath(
+        experience: WorkspaceExperience.leasing,
+        capabilities: leasingCapabilities,
+        path: '/work',
+      ),
+      isFalse,
     );
     expect(
       canOpenMobilePath(

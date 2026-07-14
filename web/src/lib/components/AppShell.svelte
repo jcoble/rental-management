@@ -212,7 +212,12 @@
 		'/settings': 'settings',
 		'/admin/users': 'shield',
 		'/owners': 'account_balance',
-		'/audit': 'history'
+		'/audit': 'history',
+		'/leasing': 'space_dashboard',
+		'/leasing/pipeline': 'assignment',
+		'/leasing/rentals': 'home',
+		'/leasing/calendar': 'event',
+		'/leasing/inbox': 'forum'
 	};
 	// Material Symbols glyph per staff nav group id (collapsible section headers).
 	const navGlyphByGroup: Record<string, string> = {
@@ -240,6 +245,7 @@
 	));
 	let portalUser = $derived(activeExperience === 'Tenant');
 	let ownerUser = $derived(activeExperience === 'Owner');
+	let leasingUser = $derived(activeExperience === 'Leasing');
 	let relationshipUser = $derived(portalUser || ownerUser);
 	const userSecurityHref = $derived(portalUser ? '/portal/security' : '/settings/security');
 	const canOpenUserSecurity = $derived(!ownerUser);
@@ -259,6 +265,8 @@
 	const canOpenHeaderAppointments = $derived(
 		canAccessRoute('/appointments', activeExperience, activeCapabilities)
 	);
+	const headerMessagesHref = $derived(leasingUser ? '/leasing/inbox' : '/messages');
+	const headerAppointmentsHref = $derived(leasingUser ? '/leasing/calendar' : '/appointments');
 
 	const portalNavItems: NavItem[] = [
 		{ href: '/portal', label: 'Dashboard', icon: Home },
@@ -279,6 +287,13 @@
 		{ href: '/owner/statements', label: 'Statements & documents', icon: FileText },
 		{ href: '/owner/approvals', label: 'Approvals', icon: ClipboardList },
 		{ href: '/owner/messages', label: 'Messages', icon: MessageSquare }
+	];
+	const leasingNavItems: NavItem[] = [
+		{ href: '/leasing', label: 'Today', icon: LayoutDashboard },
+		{ href: '/leasing/pipeline', label: 'Pipeline', icon: ClipboardList },
+		{ href: '/leasing/rentals', label: 'Rentals & listings', icon: Home },
+		{ href: '/leasing/calendar', label: 'Calendar', icon: Calendar },
+		{ href: '/leasing/inbox', label: 'Inbox', icon: MessageSquare }
 	];
 	const commandCenterTitleItem: NavItem = { href: '/units/', label: 'Command Center', icon: Home };
 
@@ -315,6 +330,8 @@
 			? [...portalNavItems, ...portalUtilityItems]
 			: ownerUser
 				? ownerNavItems
+				: leasingUser
+					? leasingNavItems
 				: [
 						...visiblePinned,
 						...(canSeeCommandCenter ? [commandCenterTitleItem] : []),
@@ -328,6 +345,7 @@
 		const currentPath = page.url.pathname;
 		if (href === '/') return currentPath === '/';
 		if (href === '/owner') return currentPath === '/owner';
+		if (href === '/leasing') return currentPath === '/leasing';
 		if (href === '/units') return currentPath === '/units';
 		return currentPath.startsWith(href);
 	}
@@ -675,6 +693,14 @@
 						{@render navLink(item)}
 					{/if}
 				{/each}
+			{:else if leasingUser}
+				{#each leasingNavItems as item}
+					{#if sidebarCollapsed && !isMobile}
+						{@render navLinkCollapsed(item)}
+					{:else}
+						{@render navLink(item)}
+					{/if}
+				{/each}
 			{:else if sidebarCollapsed && !isMobile}
 				<!-- Collapsed rail: pinned links plus icon-only group headers, matching EdiPlatform. -->
 				{#each visiblePinned as item}
@@ -924,7 +950,7 @@
 					<!-- Messages -->
 					{#if canOpenHeaderMessages}
 						<a
-							href="/messages"
+							href={headerMessagesHref}
 							class="m3-state-layer relative flex items-center justify-center rounded-[var(--m3-shape-full)] p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
 							aria-label="Messages{unreadMessages > 0 ? ` (${unreadMessages} unread)` : ''}"
 							data-m3-tooltip="Messages"
@@ -938,7 +964,7 @@
 					<!-- Appointments -->
 					{#if canOpenHeaderAppointments}
 						<a
-							href="/appointments"
+							href={headerAppointmentsHref}
 							class="m3-state-layer relative flex items-center justify-center rounded-[var(--m3-shape-full)] p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
 							aria-label="Appointments{upcomingAppts > 0 ? ` (${upcomingAppts} upcoming)` : ''}"
 							data-m3-tooltip="Upcoming appointments"

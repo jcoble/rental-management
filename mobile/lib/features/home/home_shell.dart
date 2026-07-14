@@ -29,6 +29,7 @@ import '../ai/ai_models.dart';
 import '../appointments/appointments_screen.dart';
 import '../appointments/tenant_appointments_screen.dart';
 import '../inspections/inspections_list_screen.dart';
+import '../leasing/leasing_landing_screen.dart';
 import '../leases/lease_detail_screen.dart';
 import '../leases/leases_list_screen.dart';
 import '../maintenance/work_order_unit_aware_loader.dart';
@@ -616,6 +617,13 @@ class _HomeShellState extends ConsumerState<HomeShell>
       return MobileShellNavigation(
         controller: _shellNavigator,
         child: const OwnerLandingScreen(),
+      );
+    }
+
+    if (authState.activeExperience == WorkspaceExperience.leasing) {
+      return MobileShellNavigation(
+        controller: _shellNavigator,
+        child: const LeasingLandingScreen(),
       );
     }
 
