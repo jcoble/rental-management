@@ -144,6 +144,35 @@ public sealed class FoundationBaselinePostgreSqlTests
     }
 
     [Fact]
+    public void PreAuthAudit_HasExactTransactionBoundAdmissionForSessionStartAndContextChallenge()
+    {
+        CreateSql.Should().Contain(
+            "OR rc_pre_auth_audit_allows(\n" +
+            "    \"PortfolioId\", \"AttemptId\", \"CommandType\", \"CommandIdempotencyKey\", \"MutationOrdinal\",");
+        CreateSql.Should().Contain("target_command_idempotency_key ~ '^operation:[0-9a-f]{32}$'");
+        CreateSql.Should().Contain("target_mutation_ordinal = 1");
+        CreateSql.Should().Contain("target_entity_type = 'WorkspaceAccessContext'");
+        CreateSql.Should().Contain("target_operation = 1");
+        CreateSql.Should().Contain("target_new_values ->> 'AuditRootAccessContextId' = target_entity_id::text");
+        CreateSql.Should().Contain("target_new_values ->> 'UserId' = target_user_id::text");
+        CreateSql.Should().Contain(
+            "public.rc_access_context_is_effective(\n" +
+            "       target_entity_id, target_user_id, CURRENT_TIMESTAMP)");
+        CreateSql.Should().Contain("target_command_type = 'auth-session:start'");
+        CreateSql.Should().Contain("target_actor_label = 'authentication:session'");
+        CreateSql.Should().Contain("target_change_reason = 'Authentication session started'");
+        CreateSql.Should().Contain("session.\"Id\"::text = target_new_values ->> 'AuthSessionId'");
+        CreateSql.Should().Contain("session.\"Status\" = 'Active'");
+        CreateSql.Should().Contain("session.\"ExpiresAtUtc\" > CURRENT_TIMESTAMP");
+        CreateSql.Should().Contain("session.xmin = pg_current_xact_id()::xid");
+        CreateSql.Should().Contain("target_command_type = 'auth-context-selection:issue'");
+        CreateSql.Should().Contain("target_actor_label = 'authentication:context-selection'");
+        CreateSql.Should().Contain("target_change_reason = 'Login context selection challenge issued'");
+        CreateSql.Should().Contain("challenge.\"Id\"::text = target_new_values ->> 'ChallengeId'");
+        CreateSql.Should().Contain("challenge.xmin = pg_current_xact_id()::xid");
+    }
+
+    [Fact]
     public void SandboxGraduation_ClassifiesEveryPortfolioScopedTableExactlyOnce()
     {
         var mappedPortfolioTables = FoundationBaselinePostgreSql.DirectPortfolioTables
@@ -275,7 +304,7 @@ public sealed class FoundationBaselinePostgreSqlTests
         FoundationBaselinePostgreSql.RlsAuthoritySelectTables.Should().BeEquivalentTo(
         [
             "AspNetUsers", "AtomicCommandReceipts", "AuthSessions", "CapabilityDefinitions", "LeaseManagementParties",
-            "LeaseManagements", "MembershipRoleAssignmentProperties", "MembershipRoleAssignments",
+            "LeaseManagements", "LoginContextSelectionChallenges", "MembershipRoleAssignmentProperties", "MembershipRoleAssignments",
             "OwnerEntities", "OwnerUserAccesses", "Portfolios", "Properties", "RoleProfileCapabilities",
             "RoleProfiles", "SimulationClocks", "SystemNoticeTemplateVersions", "TenantAccounts",
             "TenantUserAccesses", "Units", "WorkOrders", "WorkOrderResponsibilities",
@@ -296,6 +325,7 @@ public sealed class FoundationBaselinePostgreSqlTests
             "rc_api_scope_allows(integer)",
             "rc_api_resource_scope_allows(integer, integer, integer, integer, integer, integer, integer, boolean, boolean, boolean)",
             "rc_account_bootstrap_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text)",
+            "rc_pre_auth_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb)",
             "rc_sandbox_graduation_allows(integer)",
             "rc_access_context_is_effective(integer, integer, timestamp with time zone)",
             "rc_list_effective_access_contexts(integer, timestamp with time zone)",

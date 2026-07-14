@@ -5,6 +5,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Authorization;
@@ -28,6 +29,7 @@ namespace RentalCommand.IntegrationTests;
 /// </summary>
 public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
 {
+    private const string ApiPassword = "auth-start-api-test-password";
     private static readonly AtomicJsonResultCodec<LoginContextSelectionChallengeResult> ChallengeCodec =
         new("login-context-selection-challenge-result.v1");
     private static readonly AtomicJsonResultCodec<StartAuthSessionResult> StartCodec =
@@ -36,6 +38,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
     private readonly DateTime _now = new(2026, 7, 11, 20, 0, 0, DateTimeKind.Utc);
     private PostgreSqlContainer? _postgres;
     private ServiceProvider? _services;
+    private ServiceProvider? _runtimeServices;
     private AuthStartFailureInterceptor? _failureInterceptor;
     private QueryCaptureInterceptor? _queryCapture;
     private string _connectionString = string.Empty;
@@ -71,11 +74,25 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         await using (var db = NewPlainContext())
         {
             await db.Database.MigrateAsync();
+            await db.Database.ExecuteSqlRawAsync(
+                $"ALTER ROLE rentalcommand_api PASSWORD '{ApiPassword}';");
             await SeedAsync(db);
         }
 
         _failureInterceptor = new AuthStartFailureInterceptor();
         _queryCapture = new QueryCaptureInterceptor();
+        _services = BuildServices(_connectionString);
+        var runtimeConnection = new NpgsqlConnectionStringBuilder(_connectionString)
+        {
+            Username = "rentalcommand_api",
+            Password = ApiPassword,
+            Pooling = false,
+        };
+        _runtimeServices = BuildServices(runtimeConnection.ConnectionString);
+    }
+
+    private ServiceProvider BuildServices(string connectionString)
+    {
         var services = new ServiceCollection();
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton(_failureInterceptor);
@@ -91,12 +108,12 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             StartAuthSessionResult,
             StartAuthSessionHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
-            options.UseNpgsql(_connectionString)
+            options.UseNpgsql(connectionString)
                 .UseAtomicPersistenceKernel(provider)
                 .AddInterceptors(
                     provider.GetRequiredService<AuthStartFailureInterceptor>(),
                     provider.GetRequiredService<QueryCaptureInterceptor>()));
-        _services = services.BuildServiceProvider(
+        return services.BuildServiceProvider(
             new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
     }
 
@@ -106,11 +123,59 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         {
             await _services.DisposeAsync();
         }
+        if (_runtimeServices is not null)
+        {
+            await _runtimeServices.DisposeAsync();
+        }
 
         if (_postgres is not null)
         {
             await _postgres.DisposeAsync();
         }
+    }
+
+    [SkippableFact]
+    public async Task RuntimeApiRole_WithBlankScope_StartsAndReplaysPreAuthChallengeAndSession()
+    {
+        SkipIfNoDocker();
+        var challengeOperation = Guid.NewGuid();
+        var challenge = Challenge();
+
+        var issued = await RuntimeAtomic.ExecuteAsync(
+            SessionRefreshCommandIdentity.ForContextSelectionChallenge(challengeOperation),
+            challenge,
+            ChallengeCodec);
+        var issuedReplay = await RuntimeAtomic.ExecuteAsync(
+            SessionRefreshCommandIdentity.ForContextSelectionChallenge(challengeOperation),
+            challenge,
+            ChallengeCodec);
+
+        issued.Value.Issued.Should().BeTrue();
+        issued.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        issuedReplay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+
+        var startOperation = Guid.NewGuid();
+        var start = Start(challenge);
+        var started = await RuntimeAtomic.ExecuteAsync(
+            SessionRefreshCommandIdentity.ForStart(startOperation),
+            start,
+            StartCodec);
+        var startedReplay = await RuntimeAtomic.ExecuteAsync(
+            SessionRefreshCommandIdentity.ForStart(startOperation),
+            start,
+            StartCodec);
+
+        started.Value.Started.Should().BeTrue();
+        started.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        startedReplay.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+
+        await using var verify = NewPlainContext();
+        (await verify.AtomicAuditLogs.CountAsync(row =>
+            row.AttemptId == issued.AttemptId &&
+            row.ChangeReason == "Login context selection challenge issued")).Should().Be(1);
+        (await verify.AtomicAuditLogs.CountAsync(row =>
+            row.AttemptId == started.AttemptId &&
+            row.ChangeReason == "Authentication session started")).Should().Be(1);
     }
 
     [SkippableFact]
@@ -744,6 +809,10 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         _services ?? throw new InvalidOperationException("Auth start services are unavailable.");
 
     private IAtomicUnitOfWork Atomic => Services.GetRequiredService<IAtomicUnitOfWork>();
+
+    private IAtomicUnitOfWork RuntimeAtomic =>
+        (_runtimeServices ?? throw new InvalidOperationException("Runtime auth-start services are unavailable."))
+        .GetRequiredService<IAtomicUnitOfWork>();
 
     private void SkipIfNoDocker() =>
         Skip.IfNot(_dockerAvailable, "Docker is unavailable; auth start PostgreSQL proof skipped.");

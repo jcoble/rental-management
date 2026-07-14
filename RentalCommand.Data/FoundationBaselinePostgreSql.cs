@@ -264,6 +264,7 @@ internal static class FoundationBaselinePostgreSql
         "CapabilityDefinitions",
         "LeaseManagementParties",
         "LeaseManagements",
+        "LoginContextSelectionChallenges",
         "MembershipRoleAssignmentProperties",
         "MembershipRoleAssignments",
         "OwnerEntities",
@@ -315,6 +316,7 @@ internal static class FoundationBaselinePostgreSql
         "rc_api_scope_allows(integer)",
         "rc_api_resource_scope_allows(integer, integer, integer, integer, integer, integer, integer, boolean, boolean, boolean)",
         "rc_account_bootstrap_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text)",
+        "rc_pre_auth_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb)",
         "rc_sandbox_graduation_allows(integer)",
         "rc_access_context_is_effective(integer, integer, timestamp with time zone)",
         "rc_list_effective_access_contexts(integer, timestamp with time zone)",
@@ -1002,7 +1004,8 @@ internal static class FoundationBaselinePostgreSql
           target_entity_id integer,
           target_operation integer,
           target_actor_label text,
-          target_change_reason text)
+          target_change_reason text,
+          target_new_values jsonb)
         RETURNS boolean
         LANGUAGE sql
         STABLE
@@ -1046,6 +1049,91 @@ internal static class FoundationBaselinePostgreSql
           FROM PUBLIC;
         GRANT EXECUTE ON FUNCTION rc_account_bootstrap_audit_allows(
           integer, uuid, text, text, bigint, integer, text, integer, integer, text, text)
+          TO rentalcommand_api, rentalcommand_engine;
+
+        CREATE OR REPLACE FUNCTION rc_pre_auth_audit_allows(
+          target_portfolio_id integer,
+          target_attempt_id uuid,
+          target_command_type text,
+          target_command_idempotency_key text,
+          target_mutation_ordinal bigint,
+          target_user_id integer,
+          target_entity_type text,
+          target_entity_id integer,
+          target_operation integer,
+          target_actor_label text,
+          target_change_reason text)
+        RETURNS boolean
+        LANGUAGE sql
+        STABLE
+        SECURITY DEFINER
+        SET search_path = pg_catalog, public
+        AS $function$
+          SELECT session_user = 'rentalcommand_api'
+             AND target_portfolio_id IS NOT NULL
+             AND target_portfolio_id > 0
+             AND target_attempt_id IS NOT NULL
+             AND target_command_idempotency_key ~ '^operation:[0-9a-f]{32}$'
+             AND target_mutation_ordinal = 1
+             AND target_user_id IS NOT NULL
+             AND target_user_id > 0
+             AND target_entity_type = 'WorkspaceAccessContext'
+             AND target_entity_id > 0
+             AND target_operation = 1
+             AND target_new_values IS NOT NULL
+             AND target_new_values ->> 'AuditRootAccessContextId' = target_entity_id::text
+             AND target_new_values ->> 'UserId' = target_user_id::text
+             AND public.rc_access_context_is_effective(
+               target_entity_id, target_user_id, CURRENT_TIMESTAMP)
+             AND EXISTS (
+               SELECT 1
+               FROM public."AtomicCommandReceipts" receipt
+               JOIN public."WorkspaceAccessContexts" access_context
+                 ON access_context."Id" = target_entity_id
+                AND access_context."UserId" = target_user_id
+                AND access_context."PortfolioId" = target_portfolio_id
+               WHERE receipt."AttemptId" = target_attempt_id
+                 AND receipt."CommandType" = target_command_type
+                 AND receipt."IdempotencyKey" = target_command_idempotency_key
+                 AND receipt.xmin = pg_current_xact_id()::xid
+             )
+             AND (
+               (target_command_type = 'auth-session:start'
+                AND target_actor_label = 'authentication:session'
+                AND target_change_reason = 'Authentication session started'
+                AND EXISTS (
+                  SELECT 1
+                  FROM public."AuthSessions" session
+                  WHERE session."UserId" = target_user_id
+                    AND session."ActiveAccessContextId" = target_entity_id
+                    AND session."Id"::text = target_new_values ->> 'AuthSessionId'
+                    AND session."Status" = 'Active'
+                    AND session."RevokedAtUtc" IS NULL
+                    AND session."ExpiresAtUtc" > CURRENT_TIMESTAMP
+                    AND session.xmin = pg_current_xact_id()::xid
+                ))
+               OR
+               (target_command_type = 'auth-context-selection:issue'
+                AND target_actor_label = 'authentication:context-selection'
+                AND target_change_reason = 'Login context selection challenge issued'
+                AND EXISTS (
+                  SELECT 1
+                  FROM public."LoginContextSelectionChallenges" challenge
+                  WHERE challenge."UserId" = target_user_id
+                    AND challenge."Id"::text = target_new_values ->> 'ChallengeId'
+                    AND challenge."ConsumedAtUtc" IS NULL
+                    AND challenge.xmin = pg_current_xact_id()::xid
+                ))
+             );
+        $function$;
+
+        ALTER FUNCTION rc_pre_auth_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb)
+          OWNER TO rentalcommand_rls_authority;
+        REVOKE ALL ON FUNCTION rc_pre_auth_audit_allows(
+          integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb)
+          FROM PUBLIC;
+        GRANT EXECUTE ON FUNCTION rc_pre_auth_audit_allows(
+          integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb)
           TO rentalcommand_api, rentalcommand_engine;
 
         CREATE OR REPLACE FUNCTION rc_sandbox_graduation_allows(target_portfolio_id integer)
@@ -1395,6 +1483,8 @@ internal static class FoundationBaselinePostgreSql
         DROP FUNCTION IF EXISTS rc_list_effective_access_contexts(integer, timestamp with time zone);
         DROP FUNCTION IF EXISTS rc_access_context_is_effective(integer, integer, timestamp with time zone);
         DROP FUNCTION IF EXISTS rc_sandbox_graduation_allows(integer);
+        DROP FUNCTION IF EXISTS rc_pre_auth_audit_allows(
+          integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb);
         DROP FUNCTION IF EXISTS rc_account_bootstrap_audit_allows(
           integer, uuid, text, text, bigint, integer, text, integer, integer, text, text);
         DROP FUNCTION IF EXISTS rc_api_resource_scope_allows(
@@ -1606,11 +1696,17 @@ internal static class FoundationBaselinePostgreSql
         CREATE POLICY tenant_select ON "AtomicAuditLogs" FOR SELECT USING
           ({PortfolioPredicate} OR rc_account_bootstrap_audit_allows(
             "PortfolioId", "AttemptId", "CommandType", "CommandIdempotencyKey", "MutationOrdinal",
-            "UserId", "EntityType", "EntityId", "Operation", "ActorLabel", "ChangeReason"));
+            "UserId", "EntityType", "EntityId", "Operation", "ActorLabel", "ChangeReason")
+           OR rc_pre_auth_audit_allows(
+            "PortfolioId", "AttemptId", "CommandType", "CommandIdempotencyKey", "MutationOrdinal",
+            "UserId", "EntityType", "EntityId", "Operation", "ActorLabel", "ChangeReason", "NewValues"));
         CREATE POLICY tenant_insert ON "AtomicAuditLogs" FOR INSERT WITH CHECK
           ({PortfolioPredicate} OR rc_account_bootstrap_audit_allows(
             "PortfolioId", "AttemptId", "CommandType", "CommandIdempotencyKey", "MutationOrdinal",
-            "UserId", "EntityType", "EntityId", "Operation", "ActorLabel", "ChangeReason"));
+            "UserId", "EntityType", "EntityId", "Operation", "ActorLabel", "ChangeReason")
+           OR rc_pre_auth_audit_allows(
+            "PortfolioId", "AttemptId", "CommandType", "CommandIdempotencyKey", "MutationOrdinal",
+            "UserId", "EntityType", "EntityId", "Operation", "ActorLabel", "ChangeReason", "NewValues"));
         CREATE POLICY tenant_update ON "AtomicAuditLogs" FOR UPDATE USING ({PortfolioPredicate})
           WITH CHECK ({PortfolioPredicate});
         CREATE POLICY tenant_delete ON "AtomicAuditLogs" FOR DELETE USING
