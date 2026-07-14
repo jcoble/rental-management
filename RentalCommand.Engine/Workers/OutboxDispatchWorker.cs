@@ -208,13 +208,17 @@ public class OutboxDispatchWorker : EngineWorkerBase
                 var data = root.TryGetProperty("data", out var value)
                     ? value.Clone()
                     : JsonSerializer.SerializeToElement(new { });
-                await dataUpdate.BroadcastEntityUpdateAsync(
-                    claim.PortfolioId
-                    ?? throw new OutboxPermanentDeliveryException("Data-update outbox row has no portfolio."),
-                    entityType,
-                    entityId,
-                    data,
-                    ct);
+                var portfolioId = claim.PortfolioId
+                    ?? throw new OutboxPermanentDeliveryException("Data-update outbox row has no portfolio.");
+                if (string.Equals(Optional(root, "operation"), "delete", StringComparison.OrdinalIgnoreCase))
+                {
+                    await dataUpdate.BroadcastEntityDeleteAsync(portfolioId, entityType, entityId, ct);
+                }
+                else
+                {
+                    await dataUpdate.BroadcastEntityUpdateAsync(
+                        portfolioId, entityType, entityId, data, ct);
+                }
                 return new NotificationDeliveryReceipt("postgres-notify", $"outbox-{claim.Id}");
             }
 

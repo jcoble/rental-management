@@ -177,6 +177,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Scanning.RejectScanDraftResult,
     RentalCommand.Data.Scanning.RejectScanDraftHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.AtomicRentalMutationCommand,
+    RentalCommand.Api.Services.Domain.AtomicRentalMutationResult,
+    RentalCommand.Api.Services.Domain.AtomicRentalMutationHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Leasing.CreatePropertyDispositionCommand,
     RentalCommand.Core.Leasing.CreatePropertyDispositionResult,
     RentalCommand.Data.Leasing.CreatePropertyDispositionHandler>();

@@ -2,7 +2,7 @@ using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Core.Entities;
 
-public class Unit : IPortfolioScoped
+public class Unit : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
