@@ -1,0 +1,13 @@
+using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
+
+namespace RentalCommand.Api.Services.Domain;
+
+public interface ILeasingWorkspaceService
+{
+    Task<LeasingTodayResponse?> GetTodayAsync(WorkspaceReadScope scope, CancellationToken ct = default);
+    Task<LeasingPipelinePageResponse> ListPipelineAsync(WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default);
+    Task<LeasingRentalPageResponse> ListRentalsAsync(WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default);
+    Task<LeasingCalendarPageResponse> ListCalendarAsync(WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default);
+    Task<LeasingInboxPageResponse> ListInboxAsync(WorkspaceReadScope scope, ListQuery query, CancellationToken ct = default);
+}

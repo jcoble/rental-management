@@ -198,4 +198,37 @@ void main() {
       contains("managementMode && capabilities.contains('rentals.manage')"),
     );
   });
+
+  test('leasing experience uses a dedicated projection-backed shell', () {
+    final shellSource = File(
+      'lib/features/home/home_shell.dart',
+    ).readAsStringSync();
+    final leasingSource = File(
+      'lib/features/leasing/leasing_landing_screen.dart',
+    ).readAsStringSync();
+    final repositorySource = File(
+      'lib/features/leasing/leasing_workspace_repository.dart',
+    ).readAsStringSync();
+
+    expect(
+      shellSource,
+      contains('authState.activeExperience == WorkspaceExperience.leasing'),
+    );
+    expect(shellSource, contains('child: const LeasingLandingScreen()'));
+    for (final label in ['Today', 'Pipeline', 'Rentals', 'Calendar', 'Inbox']) {
+      expect(leasingSource, contains("label: '$label'"));
+    }
+    expect(leasingSource, contains('openAuthorizedMobileScan(context, ref)'));
+    expect(leasingSource, isNot(contains('MoneyHubScreen')));
+    expect(leasingSource, isNot(contains('OwnerLandingScreen')));
+    for (final route in [
+      '/leasing/today',
+      '/leasing/pipeline/page',
+      '/leasing/rentals/page',
+      '/leasing/calendar/page',
+      '/leasing/inbox/page',
+    ]) {
+      expect(repositorySource, contains("'$route'"));
+    }
+  });
 }

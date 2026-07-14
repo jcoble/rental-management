@@ -25,13 +25,17 @@ describe('experience route policy', () => {
 		assert.equal(canAccessRoute('/future-protected-route', 'Management', noCapabilities), false);
 	});
 
-	it('allows Leasing work routes and denies financial and Owner routes', () => {
+	it('keeps Leasing in its work area while allowing canonical record details', () => {
 		const capabilities = new Set([
 			CAPABILITY.rentalsRead,
 			CAPABILITY.leasingApplicationsManage,
 			CAPABILITY.leasingShowingsManage
 		]);
-		assert.equal(canAccessRoute('/applications', 'Leasing', capabilities), true);
+		assert.equal(canAccessRoute('/leasing', 'Leasing', capabilities), true);
+		assert.equal(canAccessRoute('/leasing/pipeline', 'Leasing', capabilities), true);
+		assert.equal(canAccessRoute('/applications', 'Leasing', capabilities), false);
+		assert.equal(canAccessRoute('/applications/42', 'Leasing', capabilities), true);
+		assert.equal(canAccessRoute('/properties', 'Leasing', capabilities), false);
 		assert.equal(canAccessRoute('/properties/12', 'Leasing', capabilities), true);
 		assert.equal(canAccessRoute('/notices', 'Leasing', capabilities), false);
 		capabilities.add(CAPABILITY.tenantNoticesManage);
