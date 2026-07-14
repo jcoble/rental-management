@@ -56,6 +56,7 @@ public sealed class RolePresetCapabilityTests
                 CapabilityKeys.LeasingOnboardingManage,
                 CapabilityKeys.LeasingTermsRead,
                 CapabilityKeys.LeasingDepositsRead,
+                CapabilityKeys.TenantNoticesManage,
             ]);
 
         var technician = Role(RoleProfileKeys.MaintenanceTechnician);

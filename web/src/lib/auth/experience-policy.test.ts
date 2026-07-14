@@ -33,6 +33,9 @@ describe('experience route policy', () => {
 		]);
 		assert.equal(canAccessRoute('/applications', 'Leasing', capabilities), true);
 		assert.equal(canAccessRoute('/properties/12', 'Leasing', capabilities), true);
+		assert.equal(canAccessRoute('/notices', 'Leasing', capabilities), false);
+		capabilities.add(CAPABILITY.tenantNoticesManage);
+		assert.equal(canAccessRoute('/notices', 'Leasing', capabilities), true);
 		assert.equal(canAccessRoute('/accounting', 'Leasing', capabilities), false);
 		assert.equal(canAccessRoute('/owner', 'Leasing', capabilities), false);
 	});
@@ -44,6 +47,7 @@ describe('experience route policy', () => {
 		]);
 		assert.equal(canAccessRoute('/maintenance/42', 'Maintenance', capabilities), true);
 		assert.equal(canAccessRoute('/messages', 'Maintenance', capabilities), true);
+		assert.equal(canAccessRoute('/scan', 'Maintenance', capabilities), false);
 		assert.equal(canAccessRoute('/units', 'Maintenance', capabilities), false);
 		assert.equal(canAccessRoute('/accounting', 'Maintenance', capabilities), false);
 	});

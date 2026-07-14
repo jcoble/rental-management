@@ -386,6 +386,69 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task PrimarySelfOwnerRelationship_DoesNotCreateOwnerWorkAreaForWorkspaceAdministrator()
+    {
+        SkipIfNoDocker();
+        var now = DateTime.UtcNow;
+        await using var db = NewPlainContext();
+        var context = await db.WorkspaceAccessContexts
+            .SingleAsync(item => item.Id == _firstContextId);
+        context.LastAuthorizedExperience = WorkspaceExperience.Owner;
+        var owner = new OwnerEntity
+        {
+            PortfolioId = context.PortfolioId,
+            OwnerEntityType = OwnerEntityType.Person,
+            Name = "Primary Self Owner",
+            IsPrimary = true,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        db.OwnerEntities.Add(owner);
+        await db.SaveChangesAsync();
+        db.OwnerUserAccesses.Add(new OwnerUserAccess
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = context.PortfolioId,
+            AccessContextId = context.Id,
+            ApplicationUserId = _userId,
+            OwnerEntityId = owner.Id,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            GrantedAtUtc = now,
+            GrantedByUserId = _userId,
+            Reason = "Primary self-owner relationship proof",
+        });
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+
+        var query = new AccessEnvelopeQuery(db);
+        var envelope = await query.GetAsync(_userId, _firstContextId);
+
+        envelope.Should().NotBeNull();
+        envelope!.DefaultExperience.Should().Be(WorkspaceExperience.Management);
+        envelope.SelectedContext.ActiveExperience.Should().Be(WorkspaceExperience.Management,
+            "the unavailable remembered Owner work area must fall back to the administrator default");
+        envelope.AvailableExperiences.Should().Equal(WorkspaceExperience.Management);
+        envelope.Navigation.Should().ContainSingle(item =>
+            item.Experience == WorkspaceExperience.Management && item.CapabilityKeys.Count > 0);
+        (await db.OwnerUserAccesses.SingleAsync(item =>
+            item.AccessContextId == _firstContextId && item.OwnerEntityId == owner.Id))
+            .RevokedAtUtc.Should().BeNull("experience suppression must not remove ownership access");
+
+        owner = await db.OwnerEntities.SingleAsync(item => item.Id == owner.Id);
+        owner.IsPrimary = false;
+        owner.UpdatedAt = now.AddMinutes(1);
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+
+        var expanded = await query.GetAsync(_userId, _firstContextId);
+        expanded!.AvailableExperiences.Should().Equal(
+            WorkspaceExperience.Management,
+            WorkspaceExperience.Owner);
+        expanded.SelectedContext.ActiveExperience.Should().Be(WorkspaceExperience.Owner,
+            "a separate non-primary owner relationship remains an explicit selectable work area");
+    }
+
+    [SkippableFact]
     public async Task AccessEnvelopeView_IsCreatedAsSecurityInvoker()
     {
         SkipIfNoDocker();

@@ -47,7 +47,7 @@ public sealed class NotificationFoundationTests
     }
 
     [Fact]
-    public void TenantNoticeDraftCapability_IsPropertyScoped_AndAvailableToPropertyManagers()
+    public void TenantNoticeDraftCapability_IsPropertyScoped_AndAvailableToRentalOperators()
     {
         var capability = AccessCatalog.Capabilities.Single(row =>
             row.Key == CapabilityKeys.TenantNoticesManage);
@@ -55,12 +55,17 @@ public sealed class NotificationFoundationTests
             row.Key == RoleProfileKeys.WorkspaceAdministrator);
         var propertyManager = AccessCatalog.Roles.Single(row =>
             row.Key == RoleProfileKeys.PropertyManager);
+        var leasingAgent = AccessCatalog.Roles.Single(row =>
+            row.Key == RoleProfileKeys.LeasingAgent);
 
         capability.AuthorizationTargetKind.Should().Be(CapabilityAuthorizationTargetKind.Property);
         AccessCatalog.CapabilityIdsByRole[administrator.Id].Should().Contain(capability.Id);
         AccessCatalog.CapabilityIdsByRole[propertyManager.Id].Should().Contain(capability.Id);
+        AccessCatalog.CapabilityIdsByRole[leasingAgent.Id].Should().Contain(capability.Id);
         AccessCatalog.CapabilityIdsByRole
-            .Where(pair => pair.Key != administrator.Id && pair.Key != propertyManager.Id)
+            .Where(pair => pair.Key != administrator.Id &&
+                           pair.Key != propertyManager.Id &&
+                           pair.Key != leasingAgent.Id)
             .Should().OnlyContain(pair => !pair.Value.Contains(capability.Id));
     }
 }

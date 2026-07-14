@@ -6670,6 +6670,11 @@ namespace RentalCommand.Data.Migrations
                         },
                         new
                         {
+                            RoleProfileId = 3,
+                            CapabilityDefinitionId = 38
+                        },
+                        new
+                        {
                             RoleProfileId = 4,
                             CapabilityDefinitionId = 21
                         },

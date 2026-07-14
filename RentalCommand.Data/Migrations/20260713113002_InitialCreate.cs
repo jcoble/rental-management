@@ -5151,6 +5151,7 @@ namespace RentalCommand.Data.Migrations
                     { 19, 3 },
                     { 20, 3 },
                     { 36, 3 },
+                    { 38, 3 },
                     { 21, 4 },
                     { 22, 4 },
                     { 23, 4 },

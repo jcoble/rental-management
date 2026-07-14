@@ -135,7 +135,7 @@ public static class AccessCatalog
         {
             [1] = Capabilities.Select(capability => capability.Id).ToArray(),
             [2] = Enumerable.Range(1, 13).Append(38).ToArray(),
-            [3] = Enumerable.Range(14, 7).Prepend(1).Append(36).ToArray(),
+            [3] = Enumerable.Range(14, 7).Prepend(1).Append(36).Append(38).ToArray(),
             [4] = Enumerable.Range(21, 4).ToArray(),
         };
 }
