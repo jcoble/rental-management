@@ -113,7 +113,8 @@ class _ApplicationDetailScreenState
     openUnitCommandCenter(
       context,
       unitId: application.unitId!,
-      initialTab: UnitCommandCenterTab.lease,
+      initialTab: UnitCommandCenterTab.tenantLease,
+      initialView: UnitCommandCenterView.agreements,
       leaseManagementId: result.leaseManagementId,
     );
   }
@@ -697,7 +698,8 @@ class _DetailBody extends StatelessWidget {
                             openUnitCommandCenter(
                               context,
                               unitId: app.unitId!,
-                              initialTab: UnitCommandCenterTab.tenants,
+                              initialTab: UnitCommandCenterTab.tenantLease,
+                              initialView: UnitCommandCenterView.residents,
                               application: app,
                               tenantId: createdTenantId,
                             );

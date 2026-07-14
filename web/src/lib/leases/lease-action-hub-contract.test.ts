@@ -2,29 +2,26 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
-const endpointSource = readFileSync(
-	new URL('../api/endpoints/lease-managements.ts', import.meta.url),
-	'utf8'
-);
+const endpointSource = readFileSync(new URL('../api/endpoints/lease-managements.ts', import.meta.url), 'utf8');
 const draftDialogSource = readFileSync(
 	new URL('../components/leases/AgreementDraftDialog.svelte', import.meta.url),
-	'utf8'
+	'utf8',
 );
 const successorDialogSource = readFileSync(
 	new URL('../components/leases/AgreementSuccessorDialog.svelte', import.meta.url),
-	'utf8'
+	'utf8',
 );
 const detailPageSource = readFileSync(
 	new URL('../../routes/(protected)/leases/[id]/+page.svelte', import.meta.url),
-	'utf8'
+	'utf8',
 );
 const possessionActionsSource = readFileSync(
 	new URL('../components/leases/PossessionActions.svelte', import.meta.url),
-	'utf8'
+	'utf8',
 );
 const endingDispositionSource = readFileSync(
 	new URL('../components/leases/EndingDispositionDialog.svelte', import.meta.url),
-	'utf8'
+	'utf8',
 );
 
 describe('canonical lease lifecycle action hub', () => {
@@ -71,7 +68,7 @@ describe('canonical lease lifecycle action hub', () => {
 		assert.match(successorDialogSource, /agreement-successor-correction-reason/);
 		assert.match(
 			successorDialogSource,
-			/old agreement keeps governing until the replacement is fully signed and executed/i
+			/old agreement keeps governing until the replacement is fully signed and executed/i,
 		);
 		assert.match(draftDialogSource, /agreement-correction-comparison/);
 		assert.match(draftDialogSource, /agreement-correction-changed-field/);
@@ -89,7 +86,7 @@ describe('canonical lease lifecycle action hub', () => {
 		assert.match(detailPageSource, /> Issued PDF</);
 		assert.match(detailPageSource, /> Executed PDF</);
 		assert.match(detailPageSource, /agreement\.hasSourceScan/);
-		assert.match(detailPageSource, /href=\{`\/units\/\$\{summary\.unitId\}\?tab=lease`\}/);
+		assert.match(detailPageSource, /href=\{`\/units\/\$\{summary\.unitId\}\?tab=tenant-lease&view=agreements`\}/);
 	});
 
 	it('gives and returns possession through canonical idempotent commands', () => {
@@ -107,19 +104,14 @@ describe('canonical lease lifecycle action hub', () => {
 		assert.doesNotMatch(possessionActionsSource, /summary\.parties/);
 		assert.match(
 			detailPageSource,
-			/<PossessionActions \{summary\} canManage=\{canManageHousehold\} onchanged=\{refreshLease\} \/>/
+			/<PossessionActions \{summary\} canManage=\{canManageHousehold\} onchanged=\{refreshLease\} \/>/,
 		);
 	});
 
 	it('records the approved ending disposition without mutating an agreement', () => {
 		assert.match(endpointSource, /recordEndingDisposition:/);
 		assert.match(endpointSource, /\/ending-disposition`/);
-		for (const disposition of [
-			'Undecided',
-			'OfferRenewal',
-			'OfferMonthToMonth',
-			'NonRenewalMoveOut'
-		]) {
+		for (const disposition of ['Undecided', 'OfferRenewal', 'OfferMonthToMonth', 'NonRenewalMoveOut']) {
 			assert.match(endingDispositionSource, new RegExp(`value="${disposition}"`));
 		}
 		assert.match(endingDispositionSource, /noticeGivenAtUtc/);

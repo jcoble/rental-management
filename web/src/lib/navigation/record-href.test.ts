@@ -4,16 +4,19 @@ import { recordHref } from './record-href.ts';
 
 describe('recordHref', () => {
 	it('routes a unit-tied work order to the unit Maintenance tab', () => {
-		assert.equal(recordHref('workOrder', { id: 12, unitId: 3 }), '/units/3?tab=maintenance&wo=12');
+		assert.equal(recordHref('workOrder', { id: 12, unitId: 3 }), '/units/3?tab=maintenance&view=work-orders&wo=12');
 	});
 	it('routes a property-only work order (no unit) to the generic page', () => {
 		assert.equal(recordHref('workOrder', { id: 12, unitId: null }), '/maintenance/12');
 	});
 	it('routes lease management / expense / payment / application to the right tab + param', () => {
-		assert.equal(recordHref('leaseManagement', { id: 5, unitId: 3 }), '/units/3?tab=lease&leaseManagement=5');
-		assert.equal(recordHref('expense', { id: 7, unitId: 3 }), '/units/3?tab=ledger&ledger=expenses&expense=7');
-		assert.equal(recordHref('payment', { id: 9, unitId: 3 }), '/units/3?tab=ledger&ledger=rent&payment=9');
-		assert.equal(recordHref('application', { id: 2, unitId: 3 }), '/units/3?tab=applications&app=2');
+		assert.equal(
+			recordHref('leaseManagement', { id: 5, unitId: 3 }),
+			'/units/3?tab=tenant-lease&view=agreements&leaseManagement=5',
+		);
+		assert.equal(recordHref('expense', { id: 7, unitId: 3 }), '/units/3?tab=money&ledger=expenses&expense=7');
+		assert.equal(recordHref('payment', { id: 9, unitId: 3 }), '/units/3?tab=money&ledger=rent&payment=9');
+		assert.equal(recordHref('application', { id: 2, unitId: 3 }), '/units/3?tab=leasing&view=applications&app=2');
 	});
 	it('falls back to the generic page when unitId is missing/0', () => {
 		assert.equal(recordHref('expense', { id: 7, unitId: 0 }), '/accounting/expenses/7');

@@ -137,12 +137,12 @@
 
 	// Selecting a row is a real navigation step (no replaceState) so Back returns to the list.
 	function openWorkOrder(id: number) {
-		goto('/units/' + unitId + '?tab=maintenance&wo=' + id, { keepFocus: true, noScroll: true });
+		goto('/units/' + unitId + '?tab=maintenance&view=work-orders&wo=' + id, { keepFocus: true, noScroll: true });
 	}
 
 	// Clearing the selection drops ?wo= (replaceState — it's a peer of the list, not a new history step).
 	function clearSelection() {
-		goto('/units/' + unitId + '?tab=maintenance', { replaceState: true, keepFocus: true, noScroll: true });
+		goto('/units/' + unitId + '?tab=maintenance&view=work-orders', { replaceState: true, keepFocus: true, noScroll: true });
 	}
 
 	// ── Inline "new work order" form (reuses workOrderSchema + the app's form conventions) ──

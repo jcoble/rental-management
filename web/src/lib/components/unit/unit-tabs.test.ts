@@ -1,43 +1,46 @@
-import assert from "node:assert/strict";
-import { describe, it } from "node:test";
-import { resolveUnitTab, UNIT_TABS } from "./unit-tabs.ts";
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import { resolveUnitDestination, resolveUnitTab, UNIT_TABS } from './unit-tabs.ts';
 
-describe("unit tab routing", () => {
-  it("accepts every supported unit tab from the URL", () => {
-    for (const tab of UNIT_TABS) {
-      assert.equal(resolveUnitTab(tab), tab);
-    }
-  });
+describe('unit tab routing', () => {
+	it('exposes the six approved Unit Command Center areas', () => {
+		assert.deepEqual(UNIT_TABS, ['summary', 'leasing', 'tenant-lease', 'money', 'maintenance', 'documents-history']);
+		for (const tab of UNIT_TABS) assert.equal(resolveUnitTab(tab), tab);
+	});
 
-  it("includes listing as a first-class unit workflow tab", () => {
-    assert.deepEqual(UNIT_TABS, [
-      "overview",
-      "listing",
-      "lease",
-      "applications",
-      "ledger",
-      "maintenance",
-      "turnover",
-      "documents",
-      "timeline",
-    ]);
-  });
+	it('restores a meaningful subsection from canonical URLs', () => {
+		assert.deepEqual(resolveUnitDestination('leasing', 'applications'), {
+			tab: 'leasing',
+			view: 'applications',
+		});
+		assert.deepEqual(resolveUnitDestination('maintenance', 'turnover'), {
+			tab: 'maintenance',
+			view: 'turnover',
+		});
+	});
 
-  it("routes old rent and expense deep links to the Ledger tab", () => {
-    assert.equal(resolveUnitTab("rent"), "ledger");
-    assert.equal(resolveUnitTab("payments"), "ledger");
-    assert.equal(resolveUnitTab("expenses"), "ledger");
-  });
+	it('maps existing deep links into the consolidated areas', () => {
+		assert.deepEqual(resolveUnitDestination('applications'), {
+			tab: 'leasing',
+			view: 'applications',
+		});
+		assert.deepEqual(resolveUnitDestination('lease'), {
+			tab: 'tenant-lease',
+			view: 'agreements',
+		});
+		assert.deepEqual(resolveUnitDestination('expenses'), { tab: 'money' });
+		assert.deepEqual(resolveUnitDestination('make-ready'), {
+			tab: 'maintenance',
+			view: 'turnover',
+		});
+		assert.deepEqual(resolveUnitDestination('timeline'), {
+			tab: 'documents-history',
+			view: 'history',
+		});
+	});
 
-  it("routes make-ready and move-out deep links to the Turnover workspace", () => {
-    assert.equal(resolveUnitTab("turnover"), "turnover");
-    assert.equal(resolveUnitTab("make-ready"), "turnover");
-    assert.equal(resolveUnitTab("move-out"), "turnover");
-  });
-
-  it("falls back to overview for missing or invalid tab query values", () => {
-    assert.equal(resolveUnitTab(null), "overview");
-    assert.equal(resolveUnitTab(""), "overview");
-    assert.equal(resolveUnitTab("unknown"), "overview");
-  });
+	it('falls back to Summary for missing or invalid destinations', () => {
+		assert.deepEqual(resolveUnitDestination(null), { tab: 'summary' });
+		assert.deepEqual(resolveUnitDestination('unknown'), { tab: 'summary' });
+	});
 });

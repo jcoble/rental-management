@@ -48,7 +48,8 @@ void main() {
                     onPressed: () => openUnitCommandCenter(
                       context,
                       unitId: 42,
-                      initialTab: UnitCommandCenterTab.lease,
+                      initialTab: UnitCommandCenterTab.tenantLease,
+                      initialView: UnitCommandCenterView.agreements,
                     ),
                     child: const Text('Open unit lease'),
                   ),
@@ -72,43 +73,51 @@ void main() {
     expect(detail, isA<UnitCommandCenterLoaderScreen>());
     final loader = detail as UnitCommandCenterLoaderScreen;
     expect(loader.unitId, 42);
-    expect(loader.initialTab, UnitCommandCenterTab.lease);
+    expect(loader.initialTab, UnitCommandCenterTab.tenantLease);
+    expect(loader.initialView, UnitCommandCenterView.agreements);
   });
 
   test('unit href parser maps tab aliases to command center tabs', () {
     final lease = parseUnitCommandCenterRoute('/units/42?tab=lease');
     expect(lease?.unitId, 42);
-    expect(lease?.initialTab, UnitCommandCenterTab.lease);
+    expect(lease?.initialTab, UnitCommandCenterTab.tenantLease);
+    expect(lease?.initialView, UnitCommandCenterView.agreements);
 
     final maintenance = parseUnitCommandCenterRoute(
       '/units/42?tab=maintenance',
     );
     expect(maintenance?.unitId, 42);
-    expect(maintenance?.initialTab, UnitCommandCenterTab.work);
+    expect(maintenance?.initialTab, UnitCommandCenterTab.maintenance);
+    expect(maintenance?.initialView, UnitCommandCenterView.workOrders);
 
     final turnover = parseUnitCommandCenterRoute('/units/42?tab=turnover');
-    expect(turnover?.initialTab, UnitCommandCenterTab.turnover);
+    expect(turnover?.initialTab, UnitCommandCenterTab.maintenance);
+    expect(turnover?.initialView, UnitCommandCenterView.turnover);
 
     final makeReady = parseUnitCommandCenterRoute('/units/42?tab=make-ready');
-    expect(makeReady?.initialTab, UnitCommandCenterTab.turnover);
+    expect(makeReady?.initialTab, UnitCommandCenterTab.maintenance);
+    expect(makeReady?.initialView, UnitCommandCenterView.turnover);
 
     final moveOut = parseUnitCommandCenterRoute('/units/42?tab=move-out');
-    expect(moveOut?.initialTab, UnitCommandCenterTab.turnover);
+    expect(moveOut?.initialTab, UnitCommandCenterTab.maintenance);
+    expect(moveOut?.initialView, UnitCommandCenterView.turnover);
 
     final apps = parseUnitCommandCenterRoute('/units/42?tab=apps');
-    expect(apps?.initialTab, UnitCommandCenterTab.applications);
+    expect(apps?.initialTab, UnitCommandCenterTab.leasing);
+    expect(apps?.initialView, UnitCommandCenterView.applications);
 
     final listing = parseUnitCommandCenterRoute('/units/42?tab=listing');
-    expect(listing?.initialTab, UnitCommandCenterTab.listing);
+    expect(listing?.initialTab, UnitCommandCenterTab.leasing);
+    expect(listing?.initialView, UnitCommandCenterView.listing);
 
     final ledger = parseUnitCommandCenterRoute('/units/42?tab=ledger');
-    expect(ledger?.initialTab, UnitCommandCenterTab.ledger);
+    expect(ledger?.initialTab, UnitCommandCenterTab.money);
 
     final oldRent = parseUnitCommandCenterRoute('/units/42?tab=rent');
-    expect(oldRent?.initialTab, UnitCommandCenterTab.ledger);
+    expect(oldRent?.initialTab, UnitCommandCenterTab.money);
 
     final oldExpenses = parseUnitCommandCenterRoute('/units/42?tab=expenses');
-    expect(oldExpenses?.initialTab, UnitCommandCenterTab.ledger);
+    expect(oldExpenses?.initialTab, UnitCommandCenterTab.money);
 
     expect(parseUnitCommandCenterRoute('/units/0?tab=lease'), isNull);
     expect(parseUnitCommandCenterRoute('/work-orders/42'), isNull);
@@ -226,7 +235,8 @@ void main() {
                 daysInTurnover: 4,
               ),
             ),
-            initialTab: UnitCommandCenterTab.turnover,
+            initialTab: UnitCommandCenterTab.maintenance,
+            initialView: UnitCommandCenterView.turnover,
           ),
         ),
       ),

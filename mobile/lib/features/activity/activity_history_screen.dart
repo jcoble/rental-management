@@ -17,12 +17,14 @@ class ActivityHistoryScreen extends ConsumerStatefulWidget {
     this.entityId,
     this.title,
     this.subtitle,
+    this.embedded = false,
   });
 
   final String? entityType;
   final int? entityId;
   final String? title;
   final String? subtitle;
+  final bool embedded;
 
   @override
   ConsumerState<ActivityHistoryScreen> createState() =>
@@ -116,48 +118,52 @@ class _ActivityHistoryScreenState extends ConsumerState<ActivityHistoryScreen> {
     _listenForSearch(scope);
     final title = widget.title ?? 'Activity history';
 
+    final body = Column(
+      children: [
+        _ActivityFilters(
+          searchController: _searchController,
+          selectedSort: state.filter.sort,
+          selectedOperation: state.filter.operation,
+          scopeTitle: scope == null ? null : title,
+          scopeSubtitle: widget.subtitle,
+          onSearch: (value) => _readNotifier(scope).setSearch(value),
+          onSortChanged: (value) {
+            if (value == null) return;
+            _readNotifier(scope).setSort(value);
+          },
+          onOperationChanged: (value) =>
+              _readNotifier(scope).setOperation(value),
+          onRefresh: _refresh,
+        ),
+        if (state.error != null && state.items.isNotEmpty)
+          _InlineError(message: state.error!),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _refresh,
+            child: _ActivityBody(
+              state: state,
+              controller: _scrollController,
+              focusedEntryId: _focusedEntry?.id,
+              onOpenEntry: _openActivityDetail,
+              onCloseEntry: _closeActivityDetail,
+            ),
+          ),
+        ),
+      ],
+    );
+
     return PopScope<void>(
       canPop: _focusedEntry == null,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop || _focusedEntry == null) return;
         _closeActivityDetail();
       },
-      child: Scaffold(
-        appBar: mobileDomainRootAppBar(context, title: Text(title)),
-        body: Column(
-          children: [
-            _ActivityFilters(
-              searchController: _searchController,
-              selectedSort: state.filter.sort,
-              selectedOperation: state.filter.operation,
-              scopeTitle: scope == null ? null : title,
-              scopeSubtitle: widget.subtitle,
-              onSearch: (value) => _readNotifier(scope).setSearch(value),
-              onSortChanged: (value) {
-                if (value == null) return;
-                _readNotifier(scope).setSort(value);
-              },
-              onOperationChanged: (value) =>
-                  _readNotifier(scope).setOperation(value),
-              onRefresh: _refresh,
+      child: widget.embedded
+          ? body
+          : Scaffold(
+              appBar: mobileDomainRootAppBar(context, title: Text(title)),
+              body: body,
             ),
-            if (state.error != null && state.items.isNotEmpty)
-              _InlineError(message: state.error!),
-            Expanded(
-              child: RefreshIndicator(
-                onRefresh: _refresh,
-                child: _ActivityBody(
-                  state: state,
-                  controller: _scrollController,
-                  focusedEntryId: _focusedEntry?.id,
-                  onOpenEntry: _openActivityDetail,
-                  onCloseEntry: _closeActivityDetail,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 

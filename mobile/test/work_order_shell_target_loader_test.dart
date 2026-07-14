@@ -78,7 +78,8 @@ void main() {
       expect(detail, isA<UnitCommandCenterLoaderScreen>());
       final loader = detail as UnitCommandCenterLoaderScreen;
       expect(loader.unitId, 42);
-      expect(loader.initialTab, UnitCommandCenterTab.work);
+      expect(loader.initialTab, UnitCommandCenterTab.maintenance);
+      expect(loader.initialView, UnitCommandCenterView.workOrders);
       expect(loader.initialWorkOrder?.id, 17);
     },
   );

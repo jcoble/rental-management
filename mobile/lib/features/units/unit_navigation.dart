@@ -8,7 +8,8 @@ import 'unit_command_center_screen.dart';
 void openUnitCommandCenter(
   BuildContext context, {
   required int unitId,
-  UnitCommandCenterTab initialTab = UnitCommandCenterTab.overview,
+  UnitCommandCenterTab initialTab = UnitCommandCenterTab.summary,
+  UnitCommandCenterView? initialView,
   int? leaseManagementId,
   RentalApplication? application,
   WorkOrder? workOrder,
@@ -17,6 +18,7 @@ void openUnitCommandCenter(
   Widget detailBuilder(BuildContext _) => UnitCommandCenterLoaderScreen(
     unitId: unitId,
     initialTab: initialTab,
+    initialView: initialView,
     initialLeaseManagementId: leaseManagementId,
     initialApplication: application,
     initialWorkOrder: workOrder,
@@ -47,6 +49,7 @@ bool openUnitCommandCenterRoute(BuildContext context, String route) {
     context,
     unitId: target.unitId,
     initialTab: target.initialTab,
+    initialView: target.initialView,
   );
   return true;
 }

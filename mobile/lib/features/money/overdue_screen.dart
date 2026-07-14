@@ -28,7 +28,7 @@ class _OverdueScreenState extends ConsumerState<OverdueScreen> {
       MaterialPageRoute<void>(
         builder: (_) => UnitCommandCenterLoaderScreen(
           unitId: account.unitId,
-          initialTab: UnitCommandCenterTab.ledger,
+          initialTab: UnitCommandCenterTab.money,
           initialLeaseManagementId: account.leaseManagementId,
         ),
       ),
