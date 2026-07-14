@@ -342,64 +342,30 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
             portfolio.TimeZone == "" ? "America/New_York" : portfolio.TimeZone);
 
     private IQueryable<TeamRoutingRuleResponse> TeamRoutingRuleResponses(int portfolioId) =>
-        from row in
-            (from rule in _db.TeamRoutingRules.AsNoTracking()
-             join property in _db.Properties.AsNoTracking() on rule.PropertyId equals (int?)property.Id into properties
-             from property in properties.DefaultIfEmpty()
-             join recipient in _db.TeamRoutingRuleRecipients.AsNoTracking()
-                 on new { RuleId = rule.Id, rule.PortfolioId }
-                 equals new { RuleId = recipient.TeamRoutingRuleId, recipient.PortfolioId } into recipients
-             from recipient in recipients.DefaultIfEmpty()
-             join user in _db.Users.AsNoTracking() on recipient.UserId equals user.Id into users
-             from user in users.DefaultIfEmpty()
-             where rule.PortfolioId == portfolioId
-             select new
-             {
-                 rule.Id,
-                 rule.Topic,
-                 rule.PropertyId,
-                 PropertyName = property.Name,
-                 rule.UseWorkspaceAdministratorFallback,
-                 rule.UpdatedAtUtc,
-                 RecipientId = (int?)recipient.Id,
-                 RecipientUserId = (int?)recipient.UserId,
-                 RecipientName = user.DisplayName,
-                 RecipientReason = recipient.Reason,
-             })
-        group row by new
-        {
-            row.Id,
-            row.Topic,
-            row.PropertyId,
-            row.PropertyName,
-            row.UseWorkspaceAdministratorFallback,
-            row.UpdatedAtUtc,
-        }
-        into rule
-        orderby rule.Key.Topic, rule.Key.PropertyId
-        let recipientCount = rule.Count(recipient => recipient.RecipientId != null)
-        let recipientNames = string.Join(", ", rule
-            .Where(recipient => recipient.RecipientId != null)
-            .OrderBy(recipient => recipient.RecipientName)
-            .ThenBy(recipient => recipient.RecipientUserId)
-            .Select(recipient => recipient.RecipientName!))
-        let recipientExplanations = string.Join(" ", rule
-            .Where(recipient => recipient.RecipientId != null)
-            .OrderBy(recipient => recipient.RecipientName)
-            .ThenBy(recipient => recipient.RecipientUserId)
-            .Select(recipient => recipient.RecipientName + " receives this because " + recipient.RecipientReason + "."))
+        from rule in _db.TeamRoutingRules.AsNoTracking()
+        where rule.PortfolioId == portfolioId
+        orderby rule.Topic, rule.PropertyId
+        let recipientCount = rule.Recipients.Count()
+        let recipientNames = string.Join(", ", rule.Recipients
+            .OrderBy(recipient => recipient.User!.DisplayName)
+            .ThenBy(recipient => recipient.UserId)
+            .Select(recipient => recipient.User!.DisplayName))
+        let recipientExplanations = string.Join(" ", rule.Recipients
+            .OrderBy(recipient => recipient.User!.DisplayName)
+            .ThenBy(recipient => recipient.UserId)
+            .Select(recipient => recipient.User!.DisplayName + " receives this because " + recipient.Reason + "."))
         select new TeamRoutingRuleResponse(
-            rule.Key.Id,
-            rule.Key.Topic,
-            rule.Key.PropertyId,
-            rule.Key.PropertyId == null ? "All in-scope properties" : rule.Key.PropertyName!,
-            rule.Key.UseWorkspaceAdministratorFallback,
+            rule.Id,
+            rule.Topic,
+            rule.PropertyId,
+            rule.PropertyId == null ? "All in-scope properties" : rule.Property!.Name,
+            rule.UseWorkspaceAdministratorFallback,
             recipientCount,
             recipientCount == 0 ? "No named recipients" : recipientNames,
-            recipientCount == 0 && rule.Key.UseWorkspaceAdministratorFallback
+            recipientCount == 0 && rule.UseWorkspaceAdministratorFallback
                 ? "No named recipient is assigned; active Workspace Administrators receive this topic."
                 : recipientExplanations,
-            rule.Key.UpdatedAtUtc);
+            rule.UpdatedAtUtc);
 
     private IQueryable<TenantNoticePolicyResponse> TenantNoticePolicyResponses(int portfolioId) =>
         from policy in _db.TenantNoticePolicies.AsNoTracking()
