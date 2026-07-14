@@ -24,12 +24,12 @@
 
 	const detailQuery = createQuery(() => ({
 		queryKey: ['leasing-workspace', 'detail', record, id],
-		queryFn: () => {
-			if (record === 'rentals') return leasingWorkspace.rental(id);
-			if (record === 'applications') return leasingWorkspace.application(id);
-			if (record === 'appointments') return leasingWorkspace.appointment(id);
-			if (record === 'conversations') return leasingWorkspace.conversation(id);
-			if (record === 'move-ins') return leasingWorkspace.moveIn(id);
+		queryFn: async () => {
+			if (record === 'rentals') return await leasingWorkspace.rental(id);
+			if (record === 'applications') return await leasingWorkspace.application(id);
+			if (record === 'appointments') return await leasingWorkspace.appointment(id);
+			if (record === 'conversations') return await leasingWorkspace.conversation(id);
+			if (record === 'move-ins') return await leasingWorkspace.moveIn(id);
 			throw new Error('Unknown leasing record type.');
 		},
 		enabled: Number.isInteger(id) && id > 0 && !!meta

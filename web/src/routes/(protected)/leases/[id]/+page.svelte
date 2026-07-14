@@ -13,6 +13,7 @@
 		type LeaseAddendumHistoryItem
 	} from '$lib/api/endpoints/lease-addendums';
 	import type { LeaseAgreementSummary } from '$lib/types';
+	import type { WorkspaceExperience } from '$lib/types/user';
 	import AddendumCorrectionDialog from '$lib/components/leases/AddendumCorrectionDialog.svelte';
 	import AddendumCreateDialog from '$lib/components/leases/AddendumCreateDialog.svelte';
 	import AddendumDraftDialog from '$lib/components/leases/AddendumDraftDialog.svelte';
@@ -55,7 +56,11 @@
 	type HouseholdAction = { mode: 'add' | 'change' | 'end' | 'grant' | 'revoke'; party?: LeaseManagementParty; access?: ReturnPossessionActiveTenantUserAccess };
 	let householdAction = $state<HouseholdAction | null>(null);
 	const activeExperience = $derived(page.data.access?.selectedContext.activeExperience ?? null);
-	const activeCapabilities = $derived(new Set(page.data.access?.navigation.find((entry) => entry.experience === activeExperience)?.capabilityKeys ?? []));
+	const activeCapabilities = $derived(new Set(
+		page.data.access?.navigation.find((entry: { experience: WorkspaceExperience; capabilityKeys: string[] }) =>
+			entry.experience === activeExperience
+		)?.capabilityKeys ?? []
+	));
 	const canManageHousehold = $derived(activeCapabilities.has('rentals.manage') || activeCapabilities.has('leasing.onboarding.manage'));
 	const canPrepareAgreements = $derived(activeCapabilities.has('rentals.manage') || activeCapabilities.has('leasing.agreements.prepare'));
 

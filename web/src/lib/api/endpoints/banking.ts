@@ -12,6 +12,7 @@ import type {
 	OperationalBankTransaction,
 	PlaidLinkTokenResponse,
 	PlaidSettings,
+	RouteBankTransactionRequest,
 	SyncBankConnectionResponse
 } from '$lib/types';
 import { api } from '../client';
@@ -37,6 +38,8 @@ export const banking = {
 		api.post<ImportBankTransactionsResponse>('/banking/transactions/import', request),
 	match: (id: number, request: MatchBankTransactionRequest) =>
 		api.post<OperationalBankTransaction>(`/banking/transactions/${id}/match`, request),
+	routeTransaction: (id: number, request: RouteBankTransactionRequest) =>
+		api.put<OperationalBankTransaction>(`/banking/transactions/${id}/route`, request),
 	clearMatch: (
 		id: number,
 		request: Pick<ConfirmBankMatchRequest, 'operationKey' | 'expectedUpdatedAtUtc'>
