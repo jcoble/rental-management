@@ -10,6 +10,8 @@ using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Auth;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -94,16 +96,18 @@ public sealed class AuthServiceResetPasswordTests : IDisposable
         _ctx.Db.WorkspaceAccessContexts.Add(accessContext);
         await _ctx.Db.SaveChangesAsync();
 
-        var result = await CreateService().ChangePasswordAsync(
-            user.Id.ToString(),
-            accessContext.Id,
+        var result = await CreateService(new SuccessfulPasswordAtomicUnitOfWork()).ChangePasswordAsync(
+            new ActiveAccessContext(
+                Guid.NewGuid(), user.Id, accessContext.Id, portfolio.Id, accessContext.AccessRevision,
+                null, null, null),
             "OldPassword123!",
-            "NewPassword123!");
+            "NewPassword123!",
+            "test-password-change");
 
         result.Success.Should().BeTrue();
     }
 
-    private AuthService CreateService() => new(
+    private AuthService CreateService(IAtomicUnitOfWork? atomic = null) => new(
         _userManager,
         null!,
         Mock.Of<IAtomicAuthSessionCredentialService>(),
@@ -121,8 +125,29 @@ public sealed class AuthServiceResetPasswordTests : IDisposable
         _ctx.Db,
         Mock.Of<IAuditTrailService>(),
         Mock.Of<ICanonicalAccountBootstrapService>(),
+        atomic ?? Mock.Of<IAtomicUnitOfWork>(),
         NullLogger<AuthService>.Instance,
         TimeProvider.System);
+
+    private sealed class SuccessfulPasswordAtomicUnitOfWork : IAtomicUnitOfWork
+    {
+        public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            AtomicCommandIdentity identity,
+            TCommand command,
+            IAtomicResultCodec<TResult> resultCodec,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull
+        {
+            var password = command.Should().BeOfType<ChangePasswordCommand>().Subject;
+            var result = new ChangePasswordResult(
+                ChangePasswordOutcome.Changed, password.UserId, password.AccessContextId);
+            return Task.FromResult(new AtomicCommandOutcome<TResult>(
+                (TResult)(object)result,
+                AtomicCommandDisposition.Executed,
+                Guid.NewGuid()));
+        }
+    }
 
     private static UserManager<ApplicationUser> CreateUserManager(RentalCommandDbContext db)
     {

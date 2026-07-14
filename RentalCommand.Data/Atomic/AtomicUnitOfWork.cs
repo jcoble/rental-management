@@ -409,6 +409,67 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
                 .SqlQuery<DateTime>($"SELECT clock_timestamp() AS \"Value\"")
                 .SingleAsync(ct);
 
+        public async Task<AtomicEffectiveLoginContext?> ReadEffectiveLoginContextAsync(
+            int userId,
+            int selectedAccessContextId,
+            DateTime effectiveAtUtc,
+            CancellationToken ct = default)
+        {
+            if (userId <= 0 || selectedAccessContextId <= 0)
+            {
+                return null;
+            }
+
+            var row = await _db.Database.SqlQuery<EffectiveLoginContextRow>($$"""
+                    SELECT option."AccessContextId", option."PortfolioId",
+                           option."AccessRevision", option."TotalEffectiveContexts"
+                    FROM rc_list_effective_access_contexts({{userId}}, {{effectiveAtUtc}}) option
+                    WHERE option."AccessContextId" = {{selectedAccessContextId}}
+                    """)
+                .SingleOrDefaultAsync(ct);
+            return row is null
+                ? null
+                : new AtomicEffectiveLoginContext(
+                    row.AccessContextId,
+                    row.PortfolioId,
+                    row.AccessRevision,
+                    row.TotalEffectiveContexts);
+        }
+
+        public async Task<AtomicEffectiveLoginContext?> ReadEffectiveLoginContextRootAsync(
+            int userId,
+            DateTime effectiveAtUtc,
+            CancellationToken ct = default)
+        {
+            if (userId <= 0)
+            {
+                return null;
+            }
+
+            var row = await _db.Database.SqlQuery<EffectiveLoginContextRow>($$"""
+                    SELECT option."AccessContextId", option."PortfolioId",
+                           option."AccessRevision", option."TotalEffectiveContexts"
+                    FROM rc_list_effective_access_contexts({{userId}}, {{effectiveAtUtc}}) option
+                    ORDER BY option."AccessContextId"
+                    LIMIT 1
+                    """)
+                .SingleOrDefaultAsync(ct);
+            return row is null
+                ? null
+                : new AtomicEffectiveLoginContext(
+                    row.AccessContextId,
+                    row.PortfolioId,
+                    row.AccessRevision,
+                    row.TotalEffectiveContexts);
+        }
+
+        public Task<bool> IsScanDraftAuthorizedForReviewAsync(
+            WorkspaceReadScope scope,
+            int draftId,
+            DateTime utcNow,
+            CancellationToken ct = default) =>
+            _scanConfirmation.IsAuthorizedForReviewAsync(scope, draftId, utcNow, ct);
+
         public Task<DateOnly> ReadBusinessDateAsync(int portfolioId, CancellationToken ct = default)
         {
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(portfolioId);
@@ -513,6 +574,14 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
         {
             public DateTime WallClockUtc { get; set; }
             public DateOnly BusinessDate { get; set; }
+        }
+
+        private sealed class EffectiveLoginContextRow
+        {
+            public int AccessContextId { get; init; }
+            public int PortfolioId { get; init; }
+            public long AccessRevision { get; init; }
+            public int TotalEffectiveContexts { get; init; }
         }
     }
 }

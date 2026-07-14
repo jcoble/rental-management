@@ -134,6 +134,13 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
             template.Version == 1 && template.BasedOnSystemTemplateVersionId > 0 &&
             template.CreatedByUserId == user.Id);
 
+        var preLoginOptions = await ExecuteAsApiDatabaseIdentityAsync(() =>
+            new EffectiveAccessContextSelectionQuery(_ctx.Db)
+                .ListAsync(user.Id, DateTime.UtcNow));
+        preLoginOptions.Should().ContainSingle(option =>
+            option.AccessContextId == context.Id &&
+            option.AccessRevision == context.AccessRevision);
+
         var loggedIn = await auth.LoginAsync(user.Email!, "Password123!");
 
         loggedIn.Success.Should().BeTrue();
@@ -229,6 +236,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
                 _users,
                 _ctx.Db,
                 TimeProvider.System),
+            Mock.Of<RentalCommand.Core.Atomic.IAtomicUnitOfWork>(),
             NullLogger<AuthService>.Instance,
             TimeProvider.System);
     }

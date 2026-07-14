@@ -51,6 +51,7 @@ public sealed record LoginContextSelectionChallengeResult(
 public sealed record StartAuthSessionCommand(
     int UserId,
     int SelectedAccessContextId,
+    long ExpectedAccessRevision,
     Guid AuthSessionId,
     Guid RefreshTokenFamilyId,
     Guid CredentialId,

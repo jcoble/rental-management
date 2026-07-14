@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
@@ -9,6 +11,7 @@ using RentalCommand.Core.Time;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Auth;
+using RentalCommand.Core.Atomic;
 using Microsoft.Extensions.Options;
 using RentalCommand.Data;
 using RentalCommand.Api.Data;
@@ -106,13 +109,20 @@ public interface IAuthService
     /// Changes the signed-in user's password. Rejects accounts with no local password (external
     /// login only, e.g. Google) and surfaces Identity's password-policy/validation failures.
     /// </summary>
-    Task<AuthUserResult> ChangePasswordAsync(string userId, int accessContextId, string currentPassword, string newPassword);
+    Task<AuthUserResult> ChangePasswordAsync(
+        ActiveAccessContext active,
+        string currentPassword,
+        string newPassword,
+        string operationKey,
+        CancellationToken ct = default);
 
     Task<UserDto> MapToUserDtoAsync(ApplicationUser user);
 }
 
 public class AuthService : IAuthService
 {
+    private static readonly AtomicJsonResultCodec<ChangePasswordResult> ChangePasswordCodec =
+        new("auth-password-change-result:v1");
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly SignInManager<ApplicationUser> _signInManager;
     private readonly IAtomicAuthSessionCredentialService _atomicCredentials;
@@ -124,6 +134,7 @@ public class AuthService : IAuthService
     private readonly RentalCommandDbContext _db;
     private readonly IAuditTrailService _audit;
     private readonly ICanonicalAccountBootstrapService _accountBootstrap;
+    private readonly IAtomicUnitOfWork _atomic;
     private readonly ILogger<AuthService> _logger;
     private readonly TimeProvider _timeProvider;
 
@@ -139,6 +150,7 @@ public class AuthService : IAuthService
         RentalCommandDbContext db,
         IAuditTrailService audit,
         ICanonicalAccountBootstrapService accountBootstrap,
+        IAtomicUnitOfWork atomic,
         ILogger<AuthService> logger,
         TimeProvider timeProvider)
     {
@@ -153,6 +165,7 @@ public class AuthService : IAuthService
         _db = db;
         _audit = audit;
         _accountBootstrap = accountBootstrap;
+        _atomic = atomic;
         _logger = logger;
         _timeProvider = timeProvider;
     }
@@ -241,7 +254,8 @@ public class AuthService : IAuthService
         }
 
         var session = await _atomicCredentials.StartAsync(new AtomicAuthSessionStartRequest(
-            Guid.NewGuid(), user.Id, selected.AccessContextId, challengeId, challengeBearer), ct);
+            Guid.NewGuid(), user.Id, selected.AccessContextId, selected.AccessRevision,
+            challengeId, challengeBearer), ct);
         if (!session.Started || session.RefreshBearer is null)
         {
             return AuthResult.Fail("The selected workspace is no longer available.");
@@ -455,77 +469,91 @@ public class AuthService : IAuthService
     }
 
     public async Task<AuthUserResult> ChangePasswordAsync(
-        string userId,
-        int accessContextId,
+        ActiveAccessContext active,
         string currentPassword,
-        string newPassword)
+        string newPassword,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        _audit.EnsureAtomicCommand();
-        var user = await _userManager.FindByIdAsync(userId);
+        var user = await _userManager.FindByIdAsync(active.UserId.ToString());
         if (user == null)
         {
             return AuthUserResult.Fail("User not found");
         }
 
-        var portfolioId = await _db.WorkspaceAccessContexts
-            .AsNoTracking()
-            .Where(context => context.Id == accessContextId && context.UserId == user.Id
-                && context.Status == WorkspaceAccessContextStatus.Active
-                && context.SuspendedAtUtc == null && context.RevokedAtUtc == null)
-            .Select(context => (int?)context.PortfolioId)
-            .SingleOrDefaultAsync();
-        if (portfolioId is null)
+        var validationErrors = new List<IdentityError>();
+        foreach (var validator in _userManager.PasswordValidators)
+        {
+            var validation = await validator.ValidateAsync(_userManager, user, newPassword);
+            if (!validation.Succeeded)
+            {
+                validationErrors.AddRange(validation.Errors);
+            }
+        }
+        if (validationErrors.Count > 0)
+        {
+            return AuthUserResult.Fail(
+                string.Join("; ", validationErrors.Select(error => error.Description)),
+                AuthErrorType.BadRequest);
+        }
+
+        var command = new ChangePasswordCommand(
+            active.SessionId,
+            active.UserId,
+            active.AccessContextId,
+            active.AccessRevision,
+            currentPassword,
+            newPassword,
+            CreatePasswordIntentHash(active.UserId, currentPassword, newPassword));
+        var keyDigest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(operationKey)))
+            .ToLowerInvariant();
+        ChangePasswordResult changed;
+        try
+        {
+            changed = (await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "auth.password.change",
+                    $"{active.UserId}:{active.AccessContextId}:{keyDigest}"),
+                command,
+                ChangePasswordCodec,
+                ct)).Value;
+        }
+        catch (UnauthorizedAccessException)
         {
             return AuthUserResult.Fail("Active access context not found", AuthErrorType.BadRequest);
         }
 
-        // An external-login-only account (e.g. Google) has no local password to change. Reject
-        // clearly rather than letting Identity emit a confusing "incorrect password" error.
-        if (!await _userManager.HasPasswordAsync(user))
+        if (changed.Outcome != ChangePasswordOutcome.Changed)
         {
-            return AuthUserResult.Fail(
-                "This account signs in with Google and has no password to change.",
-                AuthErrorType.BadRequest);
+            return changed.Outcome switch
+            {
+                ChangePasswordOutcome.UserNotFound => AuthUserResult.Fail("User not found"),
+                ChangePasswordOutcome.NoLocalPassword => AuthUserResult.Fail(
+                    "This account signs in with Google and has no password to change.",
+                    AuthErrorType.BadRequest),
+                ChangePasswordOutcome.CurrentPasswordIncorrect => AuthUserResult.Fail(
+                    "The current password is incorrect.", AuthErrorType.BadRequest),
+                _ => AuthUserResult.Fail("Active access context not found", AuthErrorType.BadRequest),
+            };
         }
 
-        var result = await _userManager.ChangePasswordAsync(user, currentPassword, newPassword);
-        if (!result.Succeeded)
-        {
-            var errors = string.Join("; ", result.Errors.Select(e => e.Description));
-            return AuthUserResult.Fail(errors, AuthErrorType.BadRequest);
-        }
-
-        await LogPasswordChangeAuditAsync(user, accessContextId, portfolioId.Value);
-        _logger.LogInformation("Password changed for user {UserId}.", userId);
+        _logger.LogInformation("Password changed for user {UserId}.", active.UserId);
         return AuthUserResult.Ok(await MapToUserDtoAsync(user));
     }
 
-    private async Task LogPasswordChangeAuditAsync(
-        ApplicationUser user,
-        int accessContextId,
-        int portfolioId)
+    private string CreatePasswordIntentHash(int userId, string currentPassword, string newPassword)
     {
-        var email = user.Email ?? user.UserName ?? string.Empty;
-        await _audit.LogAsync(
-            portfolioId,
-            nameof(ApplicationUser),
-            user.Id,
-            AuditLogOperation.Updated,
-            userId: user.Id,
-            oldValues: SerializeAudit(new
-            {
-                securityEvent = "PasswordChange",
-                email,
-            }),
-            newValues: SerializeAudit(new
-            {
-                securityEvent = "PasswordChanged",
-                targetUserId = user.Id,
-                email,
-                displayName = user.DisplayName,
-                accessContextId,
-            }),
-            changeReason: "Password changed by account user.");
+        var key = Convert.FromBase64String(_credentialOptions.SigningKey);
+        var payload = Encoding.UTF8.GetBytes($"{userId}\0{currentPassword}\0{newPassword}");
+        try
+        {
+            return Convert.ToHexString(HMACSHA256.HashData(key, payload)).ToLowerInvariant();
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(key);
+            CryptographicOperations.ZeroMemory(payload);
+        }
     }
 
     private static string SerializeAudit(object values) => JsonSerializer.Serialize(values);

@@ -39,6 +39,7 @@ public sealed class AtomicAuthSessionCredentialServiceTests
             Guid.NewGuid(),
             41,
             72,
+            3,
             Guid.NewGuid(),
             challengeBearer));
 

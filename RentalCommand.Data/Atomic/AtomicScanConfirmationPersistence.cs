@@ -3,6 +3,8 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Scanning;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Data.Atomic;
 
@@ -180,6 +182,60 @@ internal sealed class AtomicScanConfirmationPersistence : IAtomicScanConfirmatio
                 NewValues: $$"""{"Status":"Confirmed","TargetEntityType":"{{entityType}}","TargetEntityId":{{entityId}}}""",
                 ChangeReason: $"Scan draft finalized as {entityType} #{entityId}."));
     }
+
+    public Task<bool> IsAuthorizedForReviewAsync(
+        WorkspaceReadScope scope,
+        int draftId,
+        DateTime utcNow,
+        CancellationToken ct = default) =>
+        _db.ScanDrafts.AsNoTracking()
+            .WhereAuthorizedForReview(_db, scope, utcNow)
+            .AnyAsync(candidate => candidate.Id == draftId, ct);
+
+    public async Task<bool> RejectAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int draftId,
+        string? reason,
+        DateTime rejectedAtUtc,
+        CancellationToken ct = default)
+    {
+        await _locking.AcquireAsync(AtomicLockResource.ScanDraft, draftId, ct);
+        var draft = await _db.ScanDrafts
+            .WhereAuthorizedForReview(_db, scope, rejectedAtUtc)
+            .AsTracking()
+            .SingleOrDefaultAsync(candidate => candidate.Id == draftId, ct);
+        if (draft is null || draft.Status is "Confirmed" or "Rejected" or "Confirming")
+        {
+            return false;
+        }
+
+        draft.Status = "Rejected";
+        draft.ReviewedAt = rejectedAtUtc;
+        draft.ReviewedBy = scope.UserId.ToString();
+        var rejectionReason = Truncate(reason?.Trim(), 500);
+        if (rejectionReason is not null)
+        {
+            draft.FailureReason = rejectionReason;
+        }
+
+        _auditScope.BindSemantic(
+            draft,
+            _db.Entry(draft),
+            new AtomicSemanticAudit(
+                scope.PortfolioId,
+                nameof(ScanDraft),
+                draftId,
+                AuditLogOperation.Rejected,
+                scope.UserId,
+                NewValues: "{\"Status\":\"Rejected\"}",
+                ChangeReason: rejectionReason ?? "Scan draft rejected."));
+        return true;
+    }
+
+    private static string? Truncate(string? value, int maxLength) =>
+        string.IsNullOrWhiteSpace(value)
+            ? null
+            : value.Length <= maxLength ? value : value[..maxLength];
 
     private static AtomicScanDraftClaim Snapshot(
         AtomicScanDraftClaimOutcome outcome,

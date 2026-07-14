@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
@@ -11,6 +13,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Models.Accounting;
 using RentalCommand.Core.Scanning;
 using RentalCommand.Core.Time;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
 
@@ -23,8 +26,10 @@ namespace RentalCommand.Api.Scanning;
 /// </summary>
 public sealed class ScanService : IScanService
 {
+    private static readonly AtomicJsonResultCodec<RejectScanDraftResult> RejectResultCodec =
+        new("scan-draft-reject-result:v1");
     private readonly RentalCommandDbContext _db;
-    private readonly IAuditTrailService _audit;
+    private readonly IAtomicUnitOfWork _atomic;
     private readonly ILogger<ScanService> _logger;
     private readonly TimeProvider _timeProvider;
     private static readonly Regex ExpenseUnitReferenceRegex = new(
@@ -38,12 +43,12 @@ public sealed class ScanService : IScanService
 
     public ScanService(
         RentalCommandDbContext db,
-        IAuditTrailService audit,
+        IAtomicUnitOfWork atomic,
         ILogger<ScanService> logger,
         TimeProvider timeProvider)
     {
         _db = db;
-        _audit = audit;
+        _atomic = atomic;
         _logger = logger;
         _timeProvider = timeProvider;
     }
@@ -715,39 +720,33 @@ public sealed class ScanService : IScanService
         string? reason,
         CancellationToken ct = default)
     {
-        _audit.EnsureAtomicCommand();
-        return await _db.ExecuteAuthorizedMutationAsync(async innerCt =>
+        var normalizedReason = Truncate(reason?.Trim(), 500);
+        var reasonDigest = Convert.ToHexString(SHA256.HashData(
+                Encoding.UTF8.GetBytes(normalizedReason ?? string.Empty)))
+            .ToLowerInvariant();
+        var command = new RejectScanDraftCommand(
+            scope.PortfolioId,
+            draftId,
+            userId,
+            scope.SessionId,
+            scope.AccessContextId,
+            scope.AccessRevision,
+            normalizedReason);
+        try
         {
-            // The session, access revision, target capability, and property scope are re-read in
-            // this transaction. A controller check is deliberately insufficient for a mutation.
-            var draft = await _db.ScanDrafts
-                .WhereAuthorizedForReview(
-                    _db, scope, _timeProvider.GetUtcNow().UtcDateTime)
-                .AsTracking()
-                .SingleOrDefaultAsync(candidate => candidate.Id == draftId, innerCt);
-
-            if (draft is null || draft.Status is "Confirmed" or "Rejected" or "Confirming")
-                return false;
-
-            draft.Status = "Rejected";
-            draft.ReviewedAt = _timeProvider.UtcNow();
-            draft.ReviewedBy = userId.ToString();
-            var rejectionReason = Truncate(reason?.Trim(), 500);
-            if (rejectionReason is not null)
-                draft.FailureReason = rejectionReason;
-            await _db.SaveChangesAsync(innerCt);
-
-            await _audit.LogAsync(
-                scope.PortfolioId,
-                "ScanDraft",
-                draftId,
-                AuditLogOperation.Rejected,
-                userId: userId,
-                changeReason: reason,
-                ct: innerCt);
-
-            return true;
-        }, ct);
+            var result = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "scan-draft.reject",
+                    $"{scope.PortfolioId}:{draftId}:{reasonDigest}"),
+                command,
+                RejectResultCodec,
+                ct);
+            return result.Value.Rejected;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private static string? Truncate(string? value, int maxLength) =>

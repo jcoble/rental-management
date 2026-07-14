@@ -48,6 +48,11 @@ public static class AtomicCommandFingerprint
         "AbsoluteFamilyExpiresAtUtc",
         "ReplacementExpiresAtUtc",
         "LinkExpiresAtUtc",
+        // Password commands carry these values only into the in-memory handler. The receipt
+        // fingerprint binds the server-keyed PasswordIntentHash instead, so a database leak does
+        // not expose an unsalted offline password verifier.
+        "CurrentPassword",
+        "NewPassword",
     };
 
     public static string Create(IAtomicCommandData command)
