@@ -40,8 +40,14 @@ export const auth = {
 			body: JSON.stringify({ email })
 		}),
 	/** Change the signed-in user's password (Bearer-authenticated). */
-	changePassword: (currentPassword: string, newPassword: string) =>
-		api.post<{ message: string }>('/auth/change-password', { currentPassword, newPassword }),
+	changePassword: (currentPassword: string, newPassword: string) => {
+		const operationKey = crypto.randomUUID();
+		return api.post<{ message: string }>(
+			'/auth/change-password',
+			{ currentPassword, newPassword },
+			{ headers: { 'Idempotency-Key': operationKey } }
+		);
+	},
 	/** Revoke the refresh token (cookie sent automatically via credentials). */
 	logout: () => api.post<void>('/auth/logout'),
 	listUsers: (portfolioId: number) => api.get(`/auth/users?portfolioId=${portfolioId}`),

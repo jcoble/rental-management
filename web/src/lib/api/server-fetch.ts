@@ -104,9 +104,11 @@ export function serverGet<T>(endpoint: string, accessToken: string): Promise<Ser
 export function serverPost<T>(
 	endpoint: string,
 	accessToken: string,
-	body?: unknown
+	body?: unknown,
+	options: RequestInit = {}
 ): Promise<ServerFetchResult<T>> {
 	return serverFetch<T>(endpoint, {
+		...options,
 		accessToken,
 		method: 'POST',
 		body: body ? JSON.stringify(body) : undefined
