@@ -1,7 +1,4 @@
-using System.Data.Common;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
@@ -11,6 +8,7 @@ using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
 using RentalCommand.Data.Operations;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -67,31 +65,4 @@ internal static class AtomicDomainTestKernel
         return services;
     }
 
-    private sealed class SqliteDatabaseClockInterceptor : DbConnectionInterceptor
-    {
-        internal static readonly SqliteDatabaseClockInterceptor Instance = new();
-
-        public override void ConnectionOpened(DbConnection connection, ConnectionEndEventData eventData)
-        {
-            Register(connection);
-            base.ConnectionOpened(connection, eventData);
-        }
-
-        public override Task ConnectionOpenedAsync(
-            DbConnection connection,
-            ConnectionEndEventData eventData,
-            CancellationToken cancellationToken = default)
-        {
-            Register(connection);
-            return base.ConnectionOpenedAsync(connection, eventData, cancellationToken);
-        }
-
-        private static void Register(DbConnection connection)
-        {
-            if (connection is SqliteConnection sqlite)
-            {
-                sqlite.CreateFunction("clock_timestamp", () => DateTime.UtcNow);
-            }
-        }
-    }
 }

@@ -16,6 +16,7 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -47,6 +48,7 @@ public class InspectionChecklistServiceTests : IDisposable
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
             .UseSqlite(_conn)
+            .AddInterceptors(SqliteDatabaseClockInterceptor.Instance)
             .AddInterceptors(new RecordingCommandInterceptor(_executedSql))
             .Options;
 
@@ -74,7 +76,9 @@ public class InspectionChecklistServiceTests : IDisposable
             AtomicInspectionMutationResult,
             AtomicInspectionMutationHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
-            builder.UseSqlite(connectionString).UseAtomicPersistenceKernel(provider));
+            builder.UseSqlite(connectionString)
+                .AddInterceptors(SqliteDatabaseClockInterceptor.Instance)
+                .UseAtomicPersistenceKernel(provider));
         _services = services.BuildServiceProvider();
         _scope = _db.SeedAdministratorScope(PortfolioId, nameof(InspectionChecklistServiceTests));
 
