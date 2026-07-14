@@ -196,6 +196,10 @@ public sealed class LeaseAgreementSuccessorDraftCancellationAtomicTests : IAsync
             predecessor.ExecutedArtifactId = predecessorArtifactId;
             predecessor.IssuedAtUtc = DateTime.UtcNow;
             predecessor.FullyExecutedAtUtc = DateTime.UtcNow;
+            arrange.LeaseAgreementSigners.Add(RequiredTenantSigner(
+                _scenario.PortfolioId,
+                predecessor.Id,
+                "executed-predecessor-signer@example.test"));
             issued.VoidedAtUtc = DateTime.UtcNow;
             issued.VoidReasonCode = "ISSUED_AGREEMENT_REPLACED";
             issued.VoidNote = "Incorrect resident legal name.";
