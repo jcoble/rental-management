@@ -66,12 +66,19 @@ export interface OwnerPortalDistributionPage {
 	take: number;
 }
 
+export interface OwnerStatementSummaryPage {
+	items: OwnerStatementSummary[];
+	totalCount: number;
+	skip: number;
+	take: number;
+}
+
 export const ownerPortal = {
 	overview: () => api.get<OwnerPortalOverview>('/owner/overview'),
 	propertiesPage: (params?: ListParams) =>
 		api.get<OwnerPortalPropertyPage>(`/owner/properties/page${buildListQuery(params)}`),
-	statements: (year: number) =>
-		api.get<OwnerStatementSummary[]>(`/owner/statements?year=${year}`),
+	statementsPage: (year: number, params?: ListParams) =>
+		api.get<OwnerStatementSummaryPage>(`/owner/statements${buildListQuery(params, { year })}`),
 	statement: (ownerEntityId: number, year: number) =>
 		api.get<OwnerStatementReport>(`/owner/statements/${ownerEntityId}?year=${year}`),
 	distributionsPage: (params?: ListParams) =>

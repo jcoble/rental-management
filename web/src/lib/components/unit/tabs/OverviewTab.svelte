@@ -22,7 +22,18 @@
 	const currentTenants = $derived(dashboard.currentTenants?.length ? dashboard.currentTenants : tenant ? [tenant] : []);
 </script>
 
-<div class="grid gap-4 lg:grid-cols-2" data-testid="unit-overview-tab">
+<div class="space-y-4" data-testid="unit-overview-tab">
+	{#if dashboard.nextBestAction?.label}
+		<a
+			href={dashboard.nextBestAction.href}
+			class="flex items-center justify-between gap-3 rounded-xl border border-primary/25 bg-primary/5 px-4 py-3 transition hover:border-primary/50 hover:bg-primary/10"
+			data-testid="next-best-action"
+		>
+			<span><span class="block text-xs font-medium uppercase tracking-wide text-primary">Next action</span><span class="font-medium">{dashboard.nextBestAction.label}</span></span>
+			<span aria-hidden="true">›</span>
+		</a>
+	{/if}
+	<div class="grid gap-4 lg:grid-cols-2">
 	<!-- Snapshot -->
 	<DetailCard title="Snapshot" icon={Home} accent="primary" testid="overview-snapshot">
 		<dl class="grid grid-cols-2 gap-3 text-sm">
@@ -135,4 +146,5 @@
 			</ul>
 		{/if}
 	</DetailCard>
+	</div>
 </div>

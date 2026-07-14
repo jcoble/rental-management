@@ -74,7 +74,10 @@ public sealed class OwnerPortalRelationshipBoundaryPostgreSqlTests : IAsyncLifet
         (await portal.GetOverviewAsync(staleScope)).Should().BeNull();
         (await portal.ListPropertiesPageAsync(staleScope, new ListQuery())).Items.Should().BeEmpty();
         (await portal.ListDistributionsPageAsync(staleScope, new ListQuery())).Items.Should().BeEmpty();
-        (await statements.ListForOwnerPortalAsync(staleScope, scenario.Year)).Should().BeEmpty();
+        (await statements.ListForOwnerPortalPageAsync(
+            staleScope,
+            scenario.Year,
+            new ListQuery())).Items.Should().BeEmpty();
 
         var now = DateTime.UtcNow;
         var access = await _context.Db.OwnerUserAccesses.SingleAsync(item =>
@@ -108,7 +111,10 @@ public sealed class OwnerPortalRelationshipBoundaryPostgreSqlTests : IAsyncLifet
         (await portal.GetOverviewAsync(scenario.ManagerScope)).Should().BeNull();
         (await portal.ListPropertiesPageAsync(scenario.ManagerScope, new ListQuery())).Items.Should().BeEmpty();
         (await portal.ListDistributionsPageAsync(scenario.ManagerScope, new ListQuery())).Items.Should().BeEmpty();
-        (await statements.ListForOwnerPortalAsync(scenario.ManagerScope, scenario.Year)).Should().BeEmpty();
+        (await statements.ListForOwnerPortalPageAsync(
+            scenario.ManagerScope,
+            scenario.Year,
+            new ListQuery())).Items.Should().BeEmpty();
         (await statements.GetForOwnerPortalAsync(
             scenario.ManagerScope,
             scenario.AuthorizedOwnerId,
@@ -179,6 +185,31 @@ public sealed class OwnerPortalRelationshipBoundaryPostgreSqlTests : IAsyncLifet
         _commands.Should().OnlyContain(sql =>
             sql.Contains("vw_effective_owner_access", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("SUM", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task StatementSummaryPage_IsCountedSortedAndBoundedInPostgreSql()
+    {
+        var scenario = await SeedScenarioAsync();
+        var statements = Statements();
+
+        _commands.Clear();
+        var page = await statements.ListForOwnerPortalPageAsync(
+            scenario.OwnerScope,
+            scenario.Year,
+            new ListQuery { Skip = 0, Take = 1, Sort = "name" });
+
+        page.TotalCount.Should().Be(1);
+        page.Skip.Should().Be(0);
+        page.Take.Should().Be(1);
+        page.Items.Should().ContainSingle(item => item.OwnerId == scenario.AuthorizedOwnerId);
+        _commands.Should().HaveCount(2, "the page is one count plus one bounded item query");
+        _commands.Should().ContainSingle(sql => IsTopLevelCountCommand(sql));
+        _commands.Should().ContainSingle(sql =>
+            !IsTopLevelCountCommand(sql) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("vw_effective_owner_access", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

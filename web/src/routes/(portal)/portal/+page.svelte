@@ -64,9 +64,9 @@
 	}));
 
 	const workOrdersQuery = createQuery(() => ({
-		queryKey: ['portal-work-orders'],
+		queryKey: ['portal-work-orders', 'dashboard-open'],
 		enabled: !!currentUser,
-		queryFn: () => portal.workOrders()
+		queryFn: () => portal.workOrders({ openOnly: true, take: 5, sort: '-requestedAt' })
 	}));
 
 	const conversationsQuery = createQuery(() => ({
@@ -89,16 +89,15 @@
 
 	const leases = $derived((leasesQuery.data ?? []) as any[]);
 	const appointments = $derived((appointmentsQuery.data ?? []) as Appointment[]);
-	const workOrders = $derived((workOrdersQuery.data ?? []) as any[]);
+	const workOrders = $derived(workOrdersQuery.data?.items ?? []);
 	const conversations = $derived(conversationsQuery.data ?? []);
 	const notificationItems = $derived(notificationsQuery.data ?? []);
 	const account = $derived(accountQuery.data ?? null);
 
 	const unreadMessages = $derived(conversations.reduce((sum, c) => sum + (c.unreadCount || 0), 0));
 	const unreadNotifications = $derived(unreadNotificationsQuery.data?.count ?? 0);
-	const openWorkOrders = $derived(
-		workOrders.filter((w) => !['Completed', 'Cancelled', 'Archived'].includes(String(w.status)))
-	);
+	const openWorkOrders = $derived(workOrders);
+	const openWorkOrderCount = $derived(workOrdersQuery.data?.totalCount ?? 0);
 	const upcomingAppointments = $derived(appointments);
 	const activeLease = $derived(leases.find((relationship) => relationship.lifecycle === 'Occupied') ?? leases[0] ?? null);
 
@@ -294,7 +293,7 @@
 			</div>
 			<a href="/portal/maintenance" class="rounded-lg border border-border bg-card p-4 transition-colors hover:bg-muted/40">
 				<div class="mb-3 flex items-center gap-2 text-[var(--m3c-error)]"><Wrench class="h-4 w-4" /><span class="text-sm font-medium">Maintenance</span></div>
-				<p class="text-3xl font-semibold">{openWorkOrders.length}</p>
+				<p class="text-3xl font-semibold">{openWorkOrderCount}</p>
 				<p class="mt-1 text-sm text-muted-foreground">Open requests</p>
 			</a>
 		</section>
@@ -347,7 +346,7 @@
 					{#if openWorkOrders.length === 0}
 						<p class="text-sm text-muted-foreground">No open requests.</p>
 					{:else}
-						{#each openWorkOrders.slice(0, 5) as order}
+						{#each openWorkOrders as order}
 							<div class="rounded-md border border-border px-3 py-2">
 								<p class="text-sm font-medium">{order.title}</p>
 								<p class="text-xs text-muted-foreground">{order.status} · {order.priority}</p>

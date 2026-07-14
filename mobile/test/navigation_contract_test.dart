@@ -219,12 +219,19 @@ void main() {
     expect(leasingSource, contains('openAuthorizedMobileScan(context, ref)'));
     expect(leasingSource, isNot(contains('MoneyHubScreen')));
     expect(leasingSource, isNot(contains('OwnerLandingScreen')));
+    expect(leasingSource, isNot(contains('UnitCommandCenterLoaderScreen')));
+    expect(leasingSource, contains('LeasingRentalDetailScreen'));
+    expect(leasingSource, contains('LeasingAppointmentDetailScreen'));
+    expect(leasingSource, contains('LeasingMoveInDetailScreen'));
     for (final route in [
       '/leasing/today',
       '/leasing/pipeline/page',
       '/leasing/rentals/page',
       '/leasing/calendar/page',
       '/leasing/inbox/page',
+      '/leasing/rentals/\$unitId',
+      '/leasing/appointments/\$appointmentId',
+      '/leasing/move-ins/\$leaseManagementId',
     ]) {
       expect(repositorySource, contains("'$route'"));
     }

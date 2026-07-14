@@ -108,18 +108,18 @@ public sealed class FoundationBaselinePostgreSqlTests
     public void DurableDeletePolicy_RequiresDatabaseValidatedSandboxAuthority()
     {
         CreateSql.Should().Contain(
-            "CREATE POLICY tenant_delete ON \"TenantLedgerEntries\" FOR DELETE USING\n" +
-            "  (rc_sandbox_graduation_allows(\"PortfolioId\"));");
+            "CREATE POLICY tenant_delete ON \"TenantLedgerEntries\" FOR DELETE USING " +
+            "(rc_sandbox_graduation_allows(\"PortfolioId\"));");
         CreateSql.Should().Contain(
             "CREATE POLICY tenant_select ON \"TenantLedgerEntries\" FOR SELECT USING " +
-            "(rc_api_scope_allows(\"PortfolioId\"));");
+            "(rc_api_resource_scope_allows(\"PortfolioId\", NULL, NULL, NULL, NULL, \"TenantAccountId\", NULL, TRUE, TRUE, FALSE));");
         CreateSql.Should().Contain(
             "CREATE POLICY tenant_insert ON \"TenantLedgerEntries\" FOR INSERT WITH CHECK " +
-            "(rc_api_scope_allows(\"PortfolioId\"));");
+            "(rc_api_resource_scope_allows(\"PortfolioId\", NULL, NULL, NULL, NULL, \"TenantAccountId\", NULL, FALSE, TRUE, FALSE));");
         CreateSql.Should().Contain(
             "CREATE POLICY tenant_update ON \"TenantLedgerEntries\" FOR UPDATE USING " +
-            "(rc_api_scope_allows(\"PortfolioId\")) WITH CHECK " +
-            "(rc_api_scope_allows(\"PortfolioId\"));");
+            "(rc_api_resource_scope_allows(\"PortfolioId\", NULL, NULL, NULL, NULL, \"TenantAccountId\", NULL, FALSE, TRUE, FALSE)) WITH CHECK " +
+            "(rc_api_resource_scope_allows(\"PortfolioId\", NULL, NULL, NULL, NULL, \"TenantAccountId\", NULL, FALSE, TRUE, FALSE));");
         CreateSql.Should().NotContain("app.rls_bypass_reason");
         CreateSql.Should().NotContain("app.is_admin");
     }
@@ -275,9 +275,10 @@ public sealed class FoundationBaselinePostgreSqlTests
         FoundationBaselinePostgreSql.RlsAuthoritySelectTables.Should().BeEquivalentTo(
         [
             "AspNetUsers", "AtomicCommandReceipts", "AuthSessions", "CapabilityDefinitions", "LeaseManagementParties",
-            "LeaseManagements", "MembershipRoleAssignments", "OwnerEntities", "OwnerUserAccesses",
-            "Portfolios", "RoleProfileCapabilities", "RoleProfiles", "SimulationClocks",
-            "SystemNoticeTemplateVersions", "TenantAccounts", "TenantUserAccesses",
+            "LeaseManagements", "MembershipRoleAssignmentProperties", "MembershipRoleAssignments",
+            "OwnerEntities", "OwnerUserAccesses", "Portfolios", "Properties", "RoleProfileCapabilities",
+            "RoleProfiles", "SimulationClocks", "SystemNoticeTemplateVersions", "TenantAccounts",
+            "TenantUserAccesses", "Units", "WorkOrders", "WorkOrderResponsibilities",
             "WorkspaceAccessContexts", "WorkspaceMemberships", "WorkspaceNoticeTemplateVersions",
         ]);
         FoundationBaselinePostgreSql.RlsAuthoritySelectViews.Should().BeEquivalentTo(
@@ -293,6 +294,7 @@ public sealed class FoundationBaselinePostgreSqlTests
         FoundationBaselinePostgreSql.RlsAuthorityOwnedFunctions.Should().BeEquivalentTo(
         [
             "rc_api_scope_allows(integer)",
+            "rc_api_resource_scope_allows(integer, integer, integer, integer, integer, integer, integer, boolean, boolean, boolean)",
             "rc_account_bootstrap_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text)",
             "rc_sandbox_graduation_allows(integer)",
             "rc_access_context_is_effective(integer, integer, timestamp with time zone)",

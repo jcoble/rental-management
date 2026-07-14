@@ -15,7 +15,7 @@
 	}));
 </script>
 
-<div class="space-y-4">
+<div class="space-y-4" data-testid="unit-lease-tab">
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div><h2 class="text-lg font-semibold">Tenant & lease</h2><p class="text-sm text-muted-foreground">Household, possession, agreement versions, and account relationship for this rental.</p></div>
 		<div class="flex gap-2"><Button variant="outline" class="gap-2" onclick={onScan}><ScanLine class="h-4 w-4" /> Import agreement</Button><Button href="/applications" class="gap-2"><Users class="h-4 w-4" /> Prepare move-in</Button></div>

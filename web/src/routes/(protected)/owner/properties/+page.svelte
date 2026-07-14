@@ -3,12 +3,23 @@
 	import { Building2, MapPin } from '@lucide/svelte';
 	import { ownerPortal } from '$lib/api/endpoints/owner-portal';
 	import { Input } from '$lib/components/ui/input';
+	import Pagination from '$lib/components/shared/Pagination.svelte';
 	import * as Card from '$lib/components/ui/card';
 
+	const pageSize = 20;
 	let search = $state('');
+	let skip = $state(0);
+	let lastSearch = $state('');
+	$effect(() => {
+		const nextSearch = search.trim();
+		if (nextSearch !== lastSearch) {
+			lastSearch = nextSearch;
+			skip = 0;
+		}
+	});
 	const propertiesQuery = createQuery(() => ({
-		queryKey: ['owner-portal', 'properties', search.trim()],
-		queryFn: () => ownerPortal.propertiesPage({ search, sort: 'name', take: 50 })
+		queryKey: ['owner-portal', 'properties', search.trim(), skip],
+		queryFn: () => ownerPortal.propertiesPage({ search, sort: 'name', skip, take: pageSize })
 	}));
 	const properties = $derived(propertiesQuery.data?.items ?? []);
 
@@ -46,6 +57,7 @@
 				</Card.Root>
 			{/each}
 		</div>
-		<p class="text-sm text-muted-foreground" data-testid="owner-properties-count">Showing {properties.length} of {propertiesQuery.data?.totalCount ?? properties.length} properties.</p>
+		{#if (propertiesQuery.data?.totalCount ?? 0) > pageSize}<Pagination bind:skip take={pageSize} count={properties.length} hasNext={skip + properties.length < (propertiesQuery.data?.totalCount ?? 0)} testid="owner-properties-pagination" />{/if}
+		<p class="text-sm text-muted-foreground" data-testid="owner-properties-count">Showing {skip + 1}–{skip + properties.length} of {propertiesQuery.data?.totalCount ?? properties.length} properties.</p>
 	{/if}
 </section>

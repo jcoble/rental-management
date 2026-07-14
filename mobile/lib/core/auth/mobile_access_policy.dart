@@ -182,9 +182,6 @@ bool canOpenMobilePath({
   // Keep only the canonical record details and global tools reached from that
   // shell; broad management hubs are not a second navigation path.
   if (experience == WorkspaceExperience.leasing) {
-    if (path.startsWith('/units/')) {
-      return hasAnyMobileCapability(capabilities, rentalReadCapabilityKeys);
-    }
     if (path == '/notifications' || path.startsWith('/messages/')) {
       return canOpenInboxHub(capabilities);
     }

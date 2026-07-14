@@ -30,18 +30,20 @@ test('staff money navigation exposes capability-gated first-class sections', () 
 	const moneyGroup = source.slice(moneyGroupStart, rentalsGroupStart);
 
 	assert.match(moneyGroup, /label: 'Money'/);
-	assert.match(moneyGroup, /\{ href: '\/accounting', label: 'Money', icon: Calculator, capabilities: \['money\.balances\.read'\] \}/);
-	assert.match(moneyGroup, /\{ href: '\/deposits', label: 'Security Deposits', icon: PiggyBank, capabilities: \['money\.deposits\.manage', 'leasing\.deposits\.read'\] \}/);
-	assert.match(moneyGroup, /\{ href: '\/reports', label: 'Reports', icon: BarChart3, capabilities: \['reports\.read', 'money\.owner-reports\.read'\] \}/);
+	assert.match(moneyGroup, /\{ href: '\/accounting', label: 'Money', icon: Calculator \}/);
+	assert.match(moneyGroup, /\{ href: '\/deposits', label: 'Security Deposits', icon: PiggyBank \}/);
+	assert.match(moneyGroup, /\{ href: '\/reports', label: 'Reports', icon: BarChart3 \}/);
 	assert.doesNotMatch(moneyGroup, /roles:/);
+	assert.match(source, /canAccessRoute\(item\.href, activeExperience, activeCapabilities\)/);
 	assert.match(source, /'\/deposits': 'savings'/);
 });
 
 test('staff users can return to setup/import from pinned nav and account menu', () => {
 	assert.match(
 		source,
-		/\{ href: '\/onboarding', label: 'Guided Setup', icon: ClipboardList, capabilities: \['rentals\.manage'\] \}/
+		/\{ href: '\/onboarding', label: 'Guided Setup', icon: ClipboardList \}/
 	);
+	assert.match(source, /canOpenGuidedSetup = \$derived\([\s\S]*canAccessRoute\('\/onboarding', activeExperience, activeCapabilities\)/);
 	assert.match(source, /data-testid="user-menu-guided-setup-collapsed"/);
 	assert.match(source, /data-testid="user-menu-guided-setup"/);
 	assert.equal(source.match(/href="\/onboarding\?from=account-menu"/g)?.length, 2);

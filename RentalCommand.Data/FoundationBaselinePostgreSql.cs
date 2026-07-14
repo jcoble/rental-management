@@ -264,16 +264,21 @@ internal static class FoundationBaselinePostgreSql
         "CapabilityDefinitions",
         "LeaseManagementParties",
         "LeaseManagements",
+        "MembershipRoleAssignmentProperties",
         "MembershipRoleAssignments",
         "OwnerEntities",
         "OwnerUserAccesses",
         "Portfolios",
+        "Properties",
         "RoleProfileCapabilities",
         "RoleProfiles",
         "SimulationClocks",
         "SystemNoticeTemplateVersions",
         "TenantAccounts",
         "TenantUserAccesses",
+        "Units",
+        "WorkOrders",
+        "WorkOrderResponsibilities",
         "WorkspaceAccessContexts",
         "WorkspaceMemberships",
         "WorkspaceNoticeTemplateVersions",
@@ -308,6 +313,7 @@ internal static class FoundationBaselinePostgreSql
     internal static IReadOnlyList<string> RlsAuthorityOwnedFunctions { get; } =
     [
         "rc_api_scope_allows(integer)",
+        "rc_api_resource_scope_allows(integer, integer, integer, integer, integer, integer, integer, boolean, boolean, boolean)",
         "rc_account_bootstrap_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text)",
         "rc_sandbox_graduation_allows(integer)",
         "rc_access_context_is_effective(integer, integer, timestamp with time zone)",
@@ -337,6 +343,18 @@ internal static class FoundationBaselinePostgreSql
     {
         "CapabilityDefinitions", "EngineWorkerHeartbeats",
         "RoleProfileCapabilities", "RoleProfiles", "SystemNoticeTemplateVersions",
+    };
+
+    // These canonical resource-bearing tables need a stricter boundary than workspace isolation.
+    // Their replacement policies keep selected-property, assigned-work, Owner, and Tenant scopes
+    // in PostgreSQL even if an application query accidentally omits its endpoint predicate.
+    private static readonly HashSet<string> ResourcePolicyTables = new(StringComparer.Ordinal)
+    {
+        "Conversations", "LeaseAddenda", "LeaseAgreements", "LeaseManagementParties",
+        "LeaseManagements", "LeaseRenewalAddendumDecisions", "Properties", "SecurityDepositAccounts",
+        "TenantAutopayEnrollments", "TenantLedgerAllocations", "TenantLedgerEntries",
+        "TenantAccountConditionPeriods", "TenantPaymentAttempts", "TechnicianWorkEntries", "Units",
+        "VendorDispatches", "WorkOrderResponsibilities", "WorkOrders", "WorkOrderStatusEvents",
     };
 
     // DELETE is deliberately exceptional. Durable leases, accounts, legal artifacts, ledgers, and
@@ -662,7 +680,9 @@ internal static class FoundationBaselinePostgreSql
     private static string BuildCreateRlsSql()
     {
         var statements = new List<string>();
-        statements.AddRange(DirectPortfolioTables.Select(table =>
+        statements.AddRange(DirectPortfolioTables
+            .Where(table => !ResourcePolicyTables.Contains(table))
+            .Select(table =>
             table == "AtomicAuditLogs"
                 ? CreateAtomicAuditPolicySql()
                 : RequiresSandboxGraduationDelete(table)
@@ -671,6 +691,7 @@ internal static class FoundationBaselinePostgreSql
                     PortfolioPredicate,
                     DirectSandboxGraduationPredicate)
                 : CreatePolicySql(table, PortfolioPredicate)));
+        statements.AddRange(BuildResourcePoliciesSql());
         statements.Add(CreatePolicySql("Portfolios", PortfolioSelfPredicate));
         statements.Add(BuildInspectionTemplatePoliciesSql());
         statements.AddRange(ChildPortfolioTables.Where(policy => policy.Table != "InspectionTemplateItems")
@@ -789,6 +810,185 @@ internal static class FoundationBaselinePostgreSql
         ALTER FUNCTION rc_api_scope_allows(integer) OWNER TO rentalcommand_rls_authority;
         REVOKE ALL ON FUNCTION rc_api_scope_allows(integer) FROM PUBLIC;
         GRANT EXECUTE ON FUNCTION rc_api_scope_allows(integer)
+          TO rentalcommand_api, rentalcommand_engine;
+
+        CREATE OR REPLACE FUNCTION rc_api_resource_scope_allows(
+          target_portfolio_id integer,
+          target_property_id integer,
+          target_unit_id integer,
+          target_work_order_id integer,
+          target_lease_management_id integer,
+          target_tenant_account_id integer,
+          target_tenant_id integer,
+          allow_owner boolean,
+          allow_tenant boolean,
+          allow_assigned_work boolean)
+        RETURNS boolean
+        LANGUAGE sql
+        STABLE
+        SECURITY DEFINER
+        SET search_path = pg_catalog, public
+        AS $function$
+          WITH resource AS (
+            SELECT
+              COALESCE(
+                target_property_id,
+                (SELECT unit."PropertyId"
+                 FROM public."Units" unit
+                 WHERE unit."Id" = target_unit_id AND unit."PortfolioId" = target_portfolio_id),
+                (SELECT work_order."PropertyId"
+                 FROM public."WorkOrders" work_order
+                 WHERE work_order."Id" = target_work_order_id
+                   AND work_order."PortfolioId" = target_portfolio_id),
+                (SELECT relationship."PropertyId"
+                 FROM public."LeaseManagements" relationship
+                 WHERE relationship."Id" = target_lease_management_id
+                   AND relationship."PortfolioId" = target_portfolio_id),
+                (SELECT relationship."PropertyId"
+                 FROM public."TenantAccounts" account
+                 JOIN public."LeaseManagements" relationship
+                   ON relationship."Id" = account."LeaseManagementId"
+                  AND relationship."PortfolioId" = account."PortfolioId"
+                 WHERE account."Id" = target_tenant_account_id
+                   AND account."PortfolioId" = target_portfolio_id)) AS property_id,
+              COALESCE(
+                target_unit_id,
+                (SELECT work_order."UnitId"
+                 FROM public."WorkOrders" work_order
+                 WHERE work_order."Id" = target_work_order_id
+                   AND work_order."PortfolioId" = target_portfolio_id),
+                (SELECT relationship."UnitId"
+                 FROM public."LeaseManagements" relationship
+                 WHERE relationship."Id" = target_lease_management_id
+                   AND relationship."PortfolioId" = target_portfolio_id),
+                (SELECT relationship."UnitId"
+                 FROM public."TenantAccounts" account
+                 JOIN public."LeaseManagements" relationship
+                   ON relationship."Id" = account."LeaseManagementId"
+                  AND relationship."PortfolioId" = account."PortfolioId"
+                 WHERE account."Id" = target_tenant_account_id
+                   AND account."PortfolioId" = target_portfolio_id)) AS unit_id,
+              COALESCE(
+                target_lease_management_id,
+                (SELECT work_order."LeaseManagementId"
+                 FROM public."WorkOrders" work_order
+                 WHERE work_order."Id" = target_work_order_id
+                   AND work_order."PortfolioId" = target_portfolio_id),
+                (SELECT account."LeaseManagementId"
+                 FROM public."TenantAccounts" account
+                 WHERE account."Id" = target_tenant_account_id
+                   AND account."PortfolioId" = target_portfolio_id)) AS lease_management_id
+          )
+          SELECT CASE
+            WHEN session_user = 'rentalcommand_engine' THEN TRUE
+            WHEN NOT public.rc_api_scope_allows(target_portfolio_id) THEN FALSE
+            ELSE EXISTS (
+              SELECT 1
+              FROM resource
+              JOIN public."WorkspaceMemberships" membership
+                ON membership."AccessContextId" = NULLIF(
+                     current_setting('app.current_access_context_id', true), '')::integer
+               AND membership."PortfolioId" = target_portfolio_id
+              JOIN public."MembershipRoleAssignments" assignment
+                ON assignment."WorkspaceMembershipId" = membership."Id"
+               AND assignment."PortfolioId" = target_portfolio_id
+              WHERE membership."Status" = 'Active'
+                AND membership."SuspendedAtUtc" IS NULL
+                AND membership."RevokedAtUtc" IS NULL
+                AND membership."EffectiveFromUtc" <= CURRENT_TIMESTAMP
+                AND (membership."EffectiveToUtc" IS NULL OR membership."EffectiveToUtc" > CURRENT_TIMESTAMP)
+                AND assignment."Status" = 'Active'
+                AND assignment."SuspendedAtUtc" IS NULL
+                AND assignment."RevokedAtUtc" IS NULL
+                AND assignment."EffectiveFromUtc" <= CURRENT_TIMESTAMP
+                AND (assignment."EffectiveToUtc" IS NULL OR assignment."EffectiveToUtc" > CURRENT_TIMESTAMP)
+                AND (assignment."ScopeKind" = 'AllProperties'
+                  OR (assignment."ScopeKind" = 'SelectedProperties'
+                    AND resource.property_id IS NOT NULL
+                    AND EXISTS (
+                      SELECT 1
+                      FROM public."MembershipRoleAssignmentProperties" selected_property
+                      WHERE selected_property."MembershipRoleAssignmentId" = assignment."Id"
+                        AND selected_property."PortfolioId" = target_portfolio_id
+                        AND selected_property."PropertyId" = resource.property_id)))
+            ) OR (allow_owner AND EXISTS (
+              SELECT 1
+              FROM resource
+              JOIN public."Properties" property
+                ON property."Id" = resource.property_id
+               AND property."PortfolioId" = target_portfolio_id
+              JOIN public."OwnerUserAccesses" owner_access
+                ON owner_access."OwnerEntityId" = property."OwnerEntityId"
+               AND owner_access."PortfolioId" = target_portfolio_id
+               AND owner_access."AccessContextId" = NULLIF(
+                     current_setting('app.current_access_context_id', true), '')::integer
+               AND owner_access."ApplicationUserId" = NULLIF(
+                     current_setting('app.current_user_id', true), '')::integer
+              WHERE owner_access."RevokedAtUtc" IS NULL
+                AND owner_access."EffectiveFromUtc" <= CURRENT_TIMESTAMP
+                AND (owner_access."EffectiveToUtc" IS NULL OR owner_access."EffectiveToUtc" > CURRENT_TIMESTAMP)
+            )) OR (allow_tenant AND EXISTS (
+              SELECT 1
+              FROM resource
+              JOIN public."vw_effective_tenant_access" tenant_access
+                ON tenant_access."AccessContextId" = NULLIF(
+                     current_setting('app.current_access_context_id', true), '')::integer
+               AND tenant_access."UserId" = NULLIF(
+                     current_setting('app.current_user_id', true), '')::integer
+               AND tenant_access."PortfolioId" = target_portfolio_id
+               AND tenant_access."AccessRevision" = NULLIF(
+                     current_setting('app.access_revision', true), '')::bigint
+              WHERE (resource.property_id IS NULL OR tenant_access."PropertyId" = resource.property_id)
+                AND (resource.unit_id IS NULL OR tenant_access."UnitId" = resource.unit_id)
+                AND (resource.lease_management_id IS NULL
+                     OR tenant_access."LeaseManagementId" = resource.lease_management_id)
+                AND (target_tenant_account_id IS NULL
+                     OR tenant_access."TenantAccountId" = target_tenant_account_id)
+                AND (target_tenant_id IS NULL OR tenant_access."TenantId" = target_tenant_id)
+                AND (target_work_order_id IS NULL OR EXISTS (
+                  SELECT 1
+                  FROM public."WorkOrders" work_order
+                  WHERE work_order."Id" = target_work_order_id
+                    AND work_order."PortfolioId" = target_portfolio_id
+                    AND work_order."TenantId" = tenant_access."TenantId"
+                    AND work_order."LeaseManagementId" = tenant_access."LeaseManagementId"))
+            )) OR (allow_assigned_work AND target_work_order_id IS NOT NULL AND EXISTS (
+              SELECT 1
+              FROM public."WorkspaceMemberships" membership
+              JOIN public."MembershipRoleAssignments" assignment
+                ON assignment."WorkspaceMembershipId" = membership."Id"
+               AND assignment."PortfolioId" = membership."PortfolioId"
+              JOIN public."WorkOrderResponsibilities" responsibility
+                ON responsibility."WorkspaceMembershipId" = membership."Id"
+               AND responsibility."MembershipRoleAssignmentId" = assignment."Id"
+               AND responsibility."PortfolioId" = target_portfolio_id
+               AND responsibility."WorkOrderId" = target_work_order_id
+              WHERE membership."AccessContextId" = NULLIF(
+                      current_setting('app.current_access_context_id', true), '')::integer
+                AND membership."PortfolioId" = target_portfolio_id
+                AND membership."Status" = 'Active'
+                AND membership."SuspendedAtUtc" IS NULL
+                AND membership."RevokedAtUtc" IS NULL
+                AND membership."EffectiveFromUtc" <= CURRENT_TIMESTAMP
+                AND (membership."EffectiveToUtc" IS NULL OR membership."EffectiveToUtc" > CURRENT_TIMESTAMP)
+                AND assignment."ScopeKind" = 'AssignedWorkOrders'
+                AND assignment."Status" = 'Active'
+                AND assignment."SuspendedAtUtc" IS NULL
+                AND assignment."RevokedAtUtc" IS NULL
+                AND assignment."EffectiveFromUtc" <= CURRENT_TIMESTAMP
+                AND (assignment."EffectiveToUtc" IS NULL OR assignment."EffectiveToUtc" > CURRENT_TIMESTAMP)
+                AND responsibility."EffectiveFromUtc" <= CURRENT_TIMESTAMP
+                AND (responsibility."EffectiveToUtc" IS NULL
+                     OR responsibility."EffectiveToUtc" > CURRENT_TIMESTAMP)
+            ))
+          END;
+        $function$;
+
+        ALTER FUNCTION rc_api_resource_scope_allows(integer, integer, integer, integer, integer, integer, integer, boolean, boolean, boolean)
+          OWNER TO rentalcommand_rls_authority;
+        REVOKE ALL ON FUNCTION rc_api_resource_scope_allows(integer, integer, integer, integer, integer, integer, integer, boolean, boolean, boolean)
+          FROM PUBLIC;
+        GRANT EXECUTE ON FUNCTION rc_api_resource_scope_allows(integer, integer, integer, integer, integer, integer, integer, boolean, boolean, boolean)
           TO rentalcommand_api, rentalcommand_engine;
 
         CREATE OR REPLACE FUNCTION rc_account_bootstrap_audit_allows(
@@ -1197,6 +1397,8 @@ internal static class FoundationBaselinePostgreSql
         DROP FUNCTION IF EXISTS rc_sandbox_graduation_allows(integer);
         DROP FUNCTION IF EXISTS rc_account_bootstrap_audit_allows(
           integer, uuid, text, text, bigint, integer, text, integer, integer, text, text);
+        DROP FUNCTION IF EXISTS rc_api_resource_scope_allows(
+          integer, integer, integer, integer, integer, integer, integer, boolean, boolean, boolean);
         DROP FUNCTION IF EXISTS rc_api_scope_allows(integer);
         """;
 
@@ -1225,6 +1427,154 @@ internal static class FoundationBaselinePostgreSql
         CREATE POLICY tenant_isolation ON {Quote(table)}
           USING ({predicate})
           WITH CHECK ({predicate});
+        """;
+
+    private static IEnumerable<string> BuildResourcePoliciesSql()
+    {
+        var teamProperty = ResourcePredicate("\"PortfolioId\"", "\"Id\"", "NULL", "NULL", "NULL", "NULL", "NULL");
+        var propertyRead = ResourcePredicate(
+            "\"PortfolioId\"", "\"Id\"", "NULL", "NULL", "NULL", "NULL", "NULL",
+            allowOwner: true, allowTenant: true);
+        yield return CreateResourcePolicySql("Properties", propertyRead, teamProperty);
+
+        var unitTeam = ResourcePredicate("\"PortfolioId\"", "\"PropertyId\"", "\"Id\"", "NULL", "NULL", "NULL", "NULL");
+        var unitRead = ResourcePredicate(
+            "\"PortfolioId\"", "\"PropertyId\"", "\"Id\"", "NULL", "NULL", "NULL", "NULL",
+            allowOwner: true, allowTenant: true);
+        yield return CreateResourcePolicySql("Units", unitRead, unitTeam);
+
+        var relationshipTeam = ResourcePredicate(
+            "\"PortfolioId\"", "\"PropertyId\"", "\"UnitId\"", "NULL", "\"Id\"", "NULL", "NULL");
+        var relationshipRead = ResourcePredicate(
+            "\"PortfolioId\"", "\"PropertyId\"", "\"UnitId\"", "NULL", "\"Id\"", "NULL", "NULL",
+            allowOwner: true, allowTenant: true);
+        yield return CreateResourcePolicySql("LeaseManagements", relationshipRead, relationshipTeam);
+
+        var agreementTeam = ResourcePredicate(
+            "\"PortfolioId\"", "NULL", "NULL", "NULL", "\"LeaseManagementId\"", "NULL", "NULL");
+        var agreementRead = ResourcePredicate(
+            "\"PortfolioId\"", "NULL", "NULL", "NULL", "\"LeaseManagementId\"", "NULL", "NULL",
+            allowOwner: true, allowTenant: true);
+        yield return CreateResourcePolicySql("LeaseAgreements", agreementRead, agreementTeam);
+        foreach (var table in new[]
+                 {
+                     "LeaseAddenda", "LeaseManagementParties", "LeaseRenewalAddendumDecisions",
+                 })
+        {
+            yield return CreateResourcePolicySql(table, agreementRead, agreementTeam);
+        }
+
+        var accountTeam = ResourcePredicate(
+            "\"PortfolioId\"", "NULL", "NULL", "NULL", "\"LeaseManagementId\"", "\"Id\"", "NULL");
+        var accountRead = ResourcePredicate(
+            "\"PortfolioId\"", "NULL", "NULL", "NULL", "\"LeaseManagementId\"", "\"Id\"", "NULL",
+            allowOwner: true, allowTenant: true);
+        yield return CreateResourcePolicySql("TenantAccounts", accountRead, accountTeam);
+        var securityDepositRead = ResourcePredicate(
+            "\"PortfolioId\"", "NULL", "NULL", "NULL", "NULL", "\"TenantAccountId\"", "NULL",
+            allowOwner: true, allowTenant: true);
+        var securityDepositWrite = ResourcePredicate(
+            "\"PortfolioId\"", "NULL", "NULL", "NULL", "NULL", "\"TenantAccountId\"", "NULL");
+        yield return CreateResourcePolicySql("SecurityDepositAccounts", securityDepositRead, securityDepositWrite);
+
+        foreach (var (table, ownerMayRead) in new (string Table, bool OwnerMayRead)[]
+                 {
+                     ("TenantAccountConditionPeriods", true),
+                     ("TenantAutopayEnrollments", false),
+                     ("TenantLedgerAllocations", true),
+                     ("TenantLedgerEntries", true),
+                     ("TenantPaymentAttempts", false),
+                 })
+        {
+            var tenantAccountRead = ResourcePredicate(
+                "\"PortfolioId\"", "NULL", "NULL", "NULL", "NULL", "\"TenantAccountId\"", "NULL",
+                allowOwner: ownerMayRead, allowTenant: true);
+            var tenantAccountWrite = ResourcePredicate(
+                "\"PortfolioId\"", "NULL", "NULL", "NULL", "NULL", "\"TenantAccountId\"", "NULL",
+                allowTenant: true);
+            // Tenant-account commands may append or update their own payment/autopay facts. The
+            // account relationship is the write boundary; unrelated same-workspace accounts remain
+            // invisible and fail WITH CHECK.
+            yield return CreateResourcePolicySql(table, tenantAccountRead, tenantAccountWrite);
+        }
+
+        var workOrderTeam = ResourcePredicate(
+            "\"PortfolioId\"", "\"PropertyId\"", "\"UnitId\"", "\"Id\"",
+            "\"LeaseManagementId\"", "NULL", "\"TenantId\"", allowAssignedWork: true);
+        var workOrderRead = ResourcePredicate(
+            "\"PortfolioId\"", "\"PropertyId\"", "\"UnitId\"", "\"Id\"",
+            "\"LeaseManagementId\"", "NULL", "\"TenantId\"",
+            allowOwner: true, allowTenant: true, allowAssignedWork: true);
+        var workOrderInsert = ResourcePredicate(
+            "\"PortfolioId\"", "\"PropertyId\"", "\"UnitId\"", "NULL",
+            "\"LeaseManagementId\"", "NULL", "\"TenantId\"", allowTenant: true);
+        yield return CreateResourcePolicySql("WorkOrders", workOrderRead, workOrderTeam, workOrderInsert);
+
+        var workTimelineRead = ResourcePredicate(
+            "\"PortfolioId\"", "NULL", "NULL", "\"WorkOrderId\"", "NULL", "NULL", "NULL",
+            allowOwner: true, allowTenant: true, allowAssignedWork: true);
+        var workChildAssignedWrite = ResourcePredicate(
+            "\"PortfolioId\"", "NULL", "NULL", "\"WorkOrderId\"", "NULL", "NULL", "NULL",
+            allowAssignedWork: true);
+        var workTimelineInsert = ResourcePredicate(
+            "\"PortfolioId\"", "NULL", "NULL", "\"WorkOrderId\"", "NULL", "NULL", "NULL",
+            allowTenant: true, allowAssignedWork: true);
+        yield return CreateResourcePolicySql(
+            "WorkOrderStatusEvents", workTimelineRead, workChildAssignedWrite, workTimelineInsert);
+        yield return CreateResourcePolicySql("TechnicianWorkEntries", workChildAssignedWrite, workChildAssignedWrite);
+        yield return CreateResourcePolicySql("WorkOrderResponsibilities", workChildAssignedWrite,
+            ResourcePredicate(
+                "\"PortfolioId\"", "\"PropertyId\"", "NULL", "\"WorkOrderId\"",
+                "NULL", "NULL", "NULL"));
+        yield return CreateResourcePolicySql("VendorDispatches",
+            ResourcePredicate(
+                "\"PortfolioId\"", "NULL", "NULL", "\"WorkOrderId\"",
+                "NULL", "NULL", "NULL"),
+            ResourcePredicate(
+                "\"PortfolioId\"", "NULL", "NULL", "\"WorkOrderId\"",
+                "NULL", "NULL", "NULL"));
+
+        var conversationRead = ResourcePredicate(
+            "\"PortfolioId\"", "\"PropertyId\"", "NULL", "\"WorkOrderId\"",
+            "NULL", "NULL", "\"TenantId\"", allowTenant: true, allowAssignedWork: true);
+        var conversationWrite = ResourcePredicate(
+            "\"PortfolioId\"", "\"PropertyId\"", "NULL", "\"WorkOrderId\"",
+            "NULL", "NULL", "\"TenantId\"", allowTenant: true, allowAssignedWork: true);
+        yield return CreateResourcePolicySql("Conversations", conversationRead, conversationWrite);
+    }
+
+    private static string ResourcePredicate(
+        string portfolioId,
+        string propertyId,
+        string unitId,
+        string workOrderId,
+        string leaseManagementId,
+        string tenantAccountId,
+        string tenantId,
+        bool allowOwner = false,
+        bool allowTenant = false,
+        bool allowAssignedWork = false) =>
+        $"rc_api_resource_scope_allows({portfolioId}, {propertyId}, {unitId}, {workOrderId}, " +
+        $"{leaseManagementId}, {tenantAccountId}, {tenantId}, " +
+        $"{allowOwner.ToString().ToUpperInvariant()}, {allowTenant.ToString().ToUpperInvariant()}, " +
+        $"{allowAssignedWork.ToString().ToUpperInvariant()})";
+
+    private static string CreateResourcePolicySql(
+        string table,
+        string readPredicate,
+        string writePredicate,
+        string? insertPredicate = null) => $"""
+        ALTER TABLE {Quote(table)} ENABLE ROW LEVEL SECURITY;
+        ALTER TABLE {Quote(table)} FORCE ROW LEVEL SECURITY;
+        DROP POLICY IF EXISTS tenant_isolation ON {Quote(table)};
+        DROP POLICY IF EXISTS tenant_select ON {Quote(table)};
+        DROP POLICY IF EXISTS tenant_insert ON {Quote(table)};
+        DROP POLICY IF EXISTS tenant_update ON {Quote(table)};
+        DROP POLICY IF EXISTS tenant_delete ON {Quote(table)};
+        CREATE POLICY tenant_select ON {Quote(table)} FOR SELECT USING ({readPredicate});
+        CREATE POLICY tenant_insert ON {Quote(table)} FOR INSERT WITH CHECK ({insertPredicate ?? writePredicate});
+        CREATE POLICY tenant_update ON {Quote(table)} FOR UPDATE USING ({writePredicate}) WITH CHECK ({writePredicate});
+        CREATE POLICY tenant_delete ON {Quote(table)} FOR DELETE USING ({DirectSandboxGraduationPredicate});
         """;
 
     private static string CreateSandboxGraduationDeletePolicySql(

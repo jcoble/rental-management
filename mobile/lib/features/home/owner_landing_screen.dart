@@ -250,7 +250,7 @@ class _OwnerPropertiesTabState extends ConsumerState<_OwnerPropertiesTab> {
                   message: 'No properties are connected to this owner account.',
                 );
               }
-              if (index == page.items.length) {
+              if (index == page.items.length && page.totalCount > page.take) {
                 return _OwnerPager(
                   skip: page.skip,
                   take: page.take,
@@ -267,6 +267,7 @@ class _OwnerPropertiesTabState extends ConsumerState<_OwnerPropertiesTab> {
                       : null,
                 );
               }
+              if (index == page.items.length) return const SizedBox.shrink();
               final property = page.items[index];
               return Card(
                 child: ListTile(
@@ -295,10 +296,13 @@ class _OwnerStatementsTab extends ConsumerStatefulWidget {
 }
 
 class _OwnerStatementsTabState extends ConsumerState<_OwnerStatementsTab> {
+  static const _pageSize = 20;
   int _year = DateTime.now().year;
+  int _statementSkip = 0;
+  int _distributionSkip = 0;
   late Future<
     ({
-      List<OwnerSummary> summaries,
+      OwnerPortalPage<OwnerSummary> summaries,
       OwnerPortalPage<OwnerDistribution> distributions,
     })
   >
@@ -312,18 +316,26 @@ class _OwnerStatementsTabState extends ConsumerState<_OwnerStatementsTab> {
 
   Future<
     ({
-      List<OwnerSummary> summaries,
+      OwnerPortalPage<OwnerSummary> summaries,
       OwnerPortalPage<OwnerDistribution> distributions,
     })
   >
   _load() async {
     final repository = ref.read(ownerPortalRepositoryProvider);
     final values = await Future.wait<Object>([
-      repository.statements(_year),
-      repository.distributionsPage(year: _year),
+      repository.statementsPage(
+        year: _year,
+        skip: _statementSkip,
+        take: _pageSize,
+      ),
+      repository.distributionsPage(
+        year: _year,
+        skip: _distributionSkip,
+        take: _pageSize,
+      ),
     ]);
     return (
-      summaries: values[0] as List<OwnerSummary>,
+      summaries: values[0] as OwnerPortalPage<OwnerSummary>,
       distributions: values[1] as OwnerPortalPage<OwnerDistribution>,
     );
   }
@@ -337,6 +349,22 @@ class _OwnerStatementsTabState extends ConsumerState<_OwnerStatementsTab> {
   void _changeYear(int year) {
     setState(() {
       _year = year;
+      _statementSkip = 0;
+      _distributionSkip = 0;
+      _future = _load();
+    });
+  }
+
+  void _pageStatements(int skip) {
+    setState(() {
+      _statementSkip = skip;
+      _future = _load();
+    });
+  }
+
+  void _pageDistributions(int skip) {
+    setState(() {
+      _distributionSkip = skip;
       _future = _load();
     });
   }
@@ -379,7 +407,7 @@ class _OwnerStatementsTabState extends ConsumerState<_OwnerStatementsTab> {
     final years = List.generate(5, (index) => DateTime.now().year - index);
     return FutureBuilder<
       ({
-        List<OwnerSummary> summaries,
+        OwnerPortalPage<OwnerSummary> summaries,
         OwnerPortalPage<OwnerDistribution> distributions,
       })
     >(
@@ -418,7 +446,7 @@ class _OwnerStatementsTabState extends ConsumerState<_OwnerStatementsTab> {
                   },
                 ),
               ),
-              if (data.summaries.isEmpty)
+              if (data.summaries.items.isEmpty)
                 _OwnerEmptyBody(
                   icon: Symbols.description_rounded,
                   title: 'No statement data for $_year',
@@ -426,7 +454,7 @@ class _OwnerStatementsTabState extends ConsumerState<_OwnerStatementsTab> {
                       'Statement totals appear after property income or expenses are recorded.',
                 )
               else
-                ...data.summaries.map(
+                ...data.summaries.items.map(
                   (owner) => Card(
                     child: ListTile(
                       title: Text(owner.ownerName),
@@ -437,6 +465,26 @@ class _OwnerStatementsTabState extends ConsumerState<_OwnerStatementsTab> {
                       onTap: () => _showStatement(owner),
                     ),
                   ),
+                ),
+              if (data.summaries.totalCount > data.summaries.take)
+                _OwnerPager(
+                  skip: data.summaries.skip,
+                  take: data.summaries.take,
+                  totalCount: data.summaries.totalCount,
+                  onPrevious: data.summaries.skip > 0
+                      ? () => _pageStatements(
+                          (data.summaries.skip - data.summaries.take)
+                              .clamp(0, data.summaries.totalCount)
+                              .toInt(),
+                        )
+                      : null,
+                  onNext:
+                      data.summaries.skip + data.summaries.items.length <
+                          data.summaries.totalCount
+                      ? () => _pageStatements(
+                          data.summaries.skip + data.summaries.take,
+                        )
+                      : null,
                 ),
               const SizedBox(height: 20),
               Text(
@@ -465,6 +513,27 @@ class _OwnerStatementsTabState extends ConsumerState<_OwnerStatementsTab> {
                     ),
                   ),
                 ),
+              if (data.distributions.totalCount > data.distributions.take)
+                _OwnerPager(
+                  skip: data.distributions.skip,
+                  take: data.distributions.take,
+                  totalCount: data.distributions.totalCount,
+                  onPrevious: data.distributions.skip > 0
+                      ? () => _pageDistributions(
+                          (data.distributions.skip - data.distributions.take)
+                              .clamp(0, data.distributions.totalCount)
+                              .toInt(),
+                        )
+                      : null,
+                  onNext:
+                      data.distributions.skip +
+                              data.distributions.items.length <
+                          data.distributions.totalCount
+                      ? () => _pageDistributions(
+                          data.distributions.skip + data.distributions.take,
+                        )
+                      : null,
+                ),
               const SizedBox(height: 16),
               Text(
                 'For reference only. Totals use collected rent allocations and paid expenses for the selected year.',
@@ -490,6 +559,8 @@ class _OwnerItemsTab extends ConsumerStatefulWidget {
 }
 
 class _OwnerItemsTabState extends ConsumerState<_OwnerItemsTab> {
+  static const _pageSize = 20;
+  int _skip = 0;
   late Future<OwnerPortalPage<OwnerPortalItem>> _future;
 
   @override
@@ -501,14 +572,21 @@ class _OwnerItemsTabState extends ConsumerState<_OwnerItemsTab> {
   Future<OwnerPortalPage<OwnerPortalItem>> _load() {
     final repository = ref.read(ownerPortalRepositoryProvider);
     return widget.kind == _OwnerItemKind.approvals
-        ? repository.approvalsPage()
-        : repository.messagesPage();
+        ? repository.approvalsPage(skip: _skip, take: _pageSize)
+        : repository.messagesPage(skip: _skip, take: _pageSize);
   }
 
   Future<void> _refresh() async {
     final next = _load();
     setState(() => _future = next);
     await next;
+  }
+
+  void _page(int skip) {
+    setState(() {
+      _skip = skip;
+      _future = _load();
+    });
   }
 
   @override
@@ -526,13 +604,14 @@ class _OwnerItemsTabState extends ConsumerState<_OwnerItemsTab> {
             onRetry: _refresh,
           );
         }
-        final items = snapshot.data!.items;
+        final page = snapshot.data!;
+        final items = page.items;
         return RefreshIndicator(
           onRefresh: _refresh,
           child: ListView.separated(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-            itemCount: items.isEmpty ? 1 : items.length,
+            itemCount: items.isEmpty ? 1 : items.length + 1,
             separatorBuilder: (_, _) => const SizedBox(height: 10),
             itemBuilder: (context, index) {
               if (items.isEmpty) {
@@ -548,6 +627,24 @@ class _OwnerItemsTabState extends ConsumerState<_OwnerItemsTab> {
                       : 'Only messages approved for your owner account will appear here.',
                 );
               }
+              if (index == items.length && page.totalCount > page.take) {
+                return _OwnerPager(
+                  skip: page.skip,
+                  take: page.take,
+                  totalCount: page.totalCount,
+                  onPrevious: page.skip > 0
+                      ? () => _page(
+                          (page.skip - page.take)
+                              .clamp(0, page.totalCount)
+                              .toInt(),
+                        )
+                      : null,
+                  onNext: page.skip + items.length < page.totalCount
+                      ? () => _page(page.skip + page.take)
+                      : null,
+                );
+              }
+              if (index == items.length) return const SizedBox.shrink();
               final item = items[index];
               return Card(
                 child: Padding(

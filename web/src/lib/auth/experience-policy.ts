@@ -57,7 +57,7 @@ export const ROUTE_ACCESS_RULES: readonly RouteAccessRule[] = [
 	{ prefix: '/my-work', experiences: ['Maintenance'] },
 	{ prefix: '/my-schedule', experiences: ['Maintenance'] },
 	{ prefix: '/assignment-inbox', experiences: ['Maintenance'] },
-	{ prefix: '/profile', experiences: ['Maintenance'] },
+	{ prefix: '/profile', experiences: ['Leasing', 'Maintenance'] },
 	// Leasing has purpose-built work queues. Keep canonical record detail routes available below,
 	// and Maintenance has assignment-scoped routes. Do not expose the broad management list
 	// screens as alternate shells for either experience.
@@ -175,7 +175,8 @@ export const ROUTE_ACCESS_RULES: readonly RouteAccessRule[] = [
 		prefix: '/scan',
 		anyCapabilities: [
 			CAPABILITY.rentalsManage,
-			CAPABILITY.leasingAgreementsPrepare
+			CAPABILITY.leasingAgreementsPrepare,
+			CAPABILITY.assignedWorkUpdate
 		]
 	}
 ];

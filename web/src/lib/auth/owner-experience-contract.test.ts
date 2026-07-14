@@ -9,6 +9,10 @@ const ownerService = readFileSync(
 	new URL('../../../../RentalCommand.Api/Services/Domain/OwnerPortalService.cs', import.meta.url),
 	'utf8'
 );
+const ownerStatementService = readFileSync(
+	new URL('../../../../RentalCommand.Api/Services/Domain/OwnerStatementService.cs', import.meta.url),
+	'utf8'
+);
 
 test('owner shell is a first-class relationship experience, not management navigation', () => {
 	const ownerNavStart = shell.indexOf('const ownerNavItems: NavItem[] = [');
@@ -58,4 +62,13 @@ test('owner server projections anchor every resource family to effective relatio
 	assert.match(ownerService, /access\.OwnerEntityId == notification\.RelatedEntityId/);
 	assert.doesNotMatch(ownerService, /ToListAsync\([^)]*\)[\s\S]{0,120}\.Where\(/);
 	assert.doesNotMatch(ownerService, /foreach\s*\(/);
+});
+
+test('owner list experiences use bounded server pages instead of fixed first-page reads', () => {
+	assert.match(ownerApi, /statementsPage:/);
+	assert.doesNotMatch(ownerApi, /statements:\s*\(/);
+	assert.match(ownerStatementService, /ListForOwnerPortalPageAsync/);
+	assert.match(ownerStatementService, /\.Skip\(query\.NormalizedSkip\)/);
+	assert.match(ownerStatementService, /\.Take\(query\.NormalizedTake\)/);
+	assert.match(ownerStatementService, /\.OrderBy\(summary => summary\.OwnerName\)/);
 });

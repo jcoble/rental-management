@@ -7,7 +7,7 @@ import '../applications/application_detail_screen.dart';
 import '../home/mobile_quick_action_helpers.dart';
 import '../home/mobile_shell_actions.dart';
 import '../messages/message_detail_screen.dart';
-import '../units/unit_command_center_screen.dart';
+import 'leasing_detail_screens.dart';
 import 'leasing_workspace_repository.dart';
 
 enum LeasingArea { today, pipeline, rentals, calendar, inbox }
@@ -386,18 +386,17 @@ class _LeasingListTabState extends ConsumerState<_LeasingListTab> {
                       ApplicationDetailScreen(applicationId: item.recordId),
                 ),
               )
+            : item.kind == 'MoveIn'
+            ? () => Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(
+                  builder: (_) => LeasingMoveInDetailScreen(
+                    leaseManagementId: item.recordId,
+                  ),
+                ),
+              )
             : item.unitId == null
             ? null
-            : () => _openUnit(
-                item.unitId!,
-                item.kind == 'Listing'
-                    ? UnitCommandCenterTab.leasing
-                    : UnitCommandCenterTab.tenantLease,
-                view: item.kind == 'Listing'
-                    ? UnitCommandCenterView.listing
-                    : UnitCommandCenterView.agreements,
-                leaseManagementId: item.kind == 'MoveIn' ? item.recordId : null,
-              ),
+            : () => _openRental(item.unitId!),
       );
     }
     if (item is LeasingRental) {
@@ -414,11 +413,7 @@ class _LeasingListTabState extends ConsumerState<_LeasingListTab> {
         ),
         isThreeLine: true,
         trailing: const Icon(Symbols.chevron_right_rounded),
-        onTap: () => _openUnit(
-          item.unitId,
-          UnitCommandCenterTab.leasing,
-          view: UnitCommandCenterView.listing,
-        ),
+        onTap: () => _openRental(item.unitId),
       );
     }
     if (item is LeasingCalendarItem) {
@@ -432,9 +427,12 @@ class _LeasingListTabState extends ConsumerState<_LeasingListTab> {
         ),
         isThreeLine: true,
         trailing: Text(item.status),
-        onTap: item.unitId == null
-            ? null
-            : () => _openUnit(item.unitId!, UnitCommandCenterTab.summary),
+        onTap: () => Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) =>
+                LeasingAppointmentDetailScreen(appointmentId: item.id),
+          ),
+        ),
       );
     }
     final message = item as LeasingInboxItem;
@@ -466,20 +464,10 @@ class _LeasingListTabState extends ConsumerState<_LeasingListTab> {
     );
   }
 
-  void _openUnit(
-    int unitId,
-    UnitCommandCenterTab tab, {
-    UnitCommandCenterView? view,
-    int? leaseManagementId,
-  }) {
+  void _openRental(int unitId) {
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (_) => UnitCommandCenterLoaderScreen(
-          unitId: unitId,
-          initialTab: tab,
-          initialView: view,
-          initialLeaseManagementId: leaseManagementId,
-        ),
+        builder: (_) => LeasingRentalDetailScreen(unitId: unitId),
       ),
     );
   }

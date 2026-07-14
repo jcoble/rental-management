@@ -46,14 +46,23 @@ public interface IPortalService
         CancellationToken ct = default);
     Task<IReadOnlyList<AppointmentResponse>> GetAppointmentsAsync(
         int portfolioId, int accessContextId, int tenantId, CancellationToken ct = default);
-    Task<IReadOnlyList<WorkOrderResponse>> GetWorkOrdersAsync(int portfolioId, int tenantId, CancellationToken ct = default);
+    Task<PortalTenantWorkOrderPageResponse> ListWorkOrdersPageAsync(
+        PortalTenantReadScope scope,
+        int tenantId,
+        PortalTenantWorkOrderListQuery query,
+        CancellationToken ct = default);
 
     /// <summary>
     /// One of the tenant's OWN work orders with its status timeline. Ownership is enforced in the
-    /// query (portfolio + tenant id), so a work order on another tenant's lease/unit returns null
-    /// (→ 404) without revealing whether it exists. IDOR-critical.
+    /// query (current access context + relationship + tenant id), so a work order outside the
+    /// tenant's current relationship scope returns null (→ 404) without revealing whether it exists.
+    /// IDOR-critical.
     /// </summary>
-    Task<WorkOrderDetailResponse?> GetWorkOrderDetailAsync(int portfolioId, int tenantId, int workOrderId, CancellationToken ct = default);
+    Task<WorkOrderDetailResponse?> GetWorkOrderDetailAsync(
+        PortalTenantReadScope scope,
+        int tenantId,
+        int workOrderId,
+        CancellationToken ct = default);
 
     Task<WorkOrderResponse?> CreateTenantWorkOrderAsync(
         ActiveAccessContext access, CreateTenantWorkOrderRequest request,

@@ -4,21 +4,21 @@ import { describe, test } from 'node:test';
 
 describe('unit lifecycle next action handoff', () => {
 	test('renders next-best-action as a real link using the API-provided href', () => {
-		const railSource = readFileSync(new URL('./LifecycleRail.svelte', import.meta.url), 'utf8');
+		const overviewSource = readFileSync(new URL('./tabs/OverviewTab.svelte', import.meta.url), 'utf8');
 
-		assert.match(railSource, /data-testid="next-best-action"/);
-		assert.match(railSource, /<a\s+[^>]*href=\{nextBestAction\.href\}/s);
-		assert.doesNotMatch(railSource, /data-testid="next-best-action"[\s\S]*?onclick=\{/);
+		assert.match(overviewSource, /data-testid="next-best-action"/);
+		assert.match(overviewSource, /<a\s+[^>]*href=\{dashboard\.nextBestAction\.href\}/s);
+		assert.doesNotMatch(overviewSource, /<a\s+[^>]*data-testid="next-best-action"[^>]*onclick=\{/s);
 	});
 
-	test('passes the unit dashboard next action through to the lifecycle rail', () => {
+	test('keeps the next action in Summary without a clickable lifecycle rail', () => {
 		const pageSource = readFileSync(
 			new URL('../../../routes/(protected)/units/[id]/+page.svelte', import.meta.url),
 			'utf8'
 		);
 
-		assert.match(pageSource, /<LifecycleRail[^>]+stage=\{dashboard\.lifecycleStage\}/s);
-		assert.match(pageSource, /<LifecycleRail[^>]+nextBestAction=\{dashboard\.nextBestAction\}/s);
+		assert.match(pageSource, /<OverviewTab \{dashboard\} onOpenTab=\{setTab\} \/>/);
+		assert.doesNotMatch(pageSource, /LifecycleRail/);
 	});
 
 	test('move-in next action funds the prepared deposit, gives canonical possession, then completes the appointment', () => {
@@ -81,16 +81,13 @@ describe('unit lifecycle next action handoff', () => {
 		assert.doesNotMatch(tenantPageSource, /tenantLeases\.filter\(\(lease\) => lease\.status === 'Active'\)/);
 	});
 
-	test('move-out and turnover stages open the dedicated turnover workspace', () => {
-		const railSource = readFileSync(new URL('./LifecycleRail.svelte', import.meta.url), 'utf8');
+	test('the dedicated turnover workspace remains in the canonical Maintenance area', () => {
 		const pageSource = readFileSync(
 			new URL('../../../routes/(protected)/units/[id]/+page.svelte', import.meta.url),
 			'utf8'
 		);
 
-		assert.match(railSource, /key: 'MoveOut'[\s\S]*tab: 'turnover'/);
-		assert.match(railSource, /key: 'Turnover'[\s\S]*tab: 'turnover'/);
-		assert.match(pageSource, /data-testid="tab-turnover"/);
+		assert.match(pageSource, /<Tabs\.Trigger value="turnover">Turnover<\/Tabs\.Trigger>/);
 		assert.match(pageSource, /<TurnoverTab \{dashboard\} onScan=\{goScan\} \/>/);
 	});
 });

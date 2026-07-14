@@ -13,7 +13,25 @@
 	import { Camera, ChevronRight, Wrench, X } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
-	const workOrdersQuery = createQuery(() => ({ queryKey: ['portal-work-orders'], queryFn: () => portal.workOrders() }));
+	const pageSize = 20;
+	let searchInput = $state('');
+	let search = $state('');
+	let status = $state('All');
+	let skip = $state(0);
+	const workOrdersQuery = createQuery(() => ({
+		queryKey: ['portal-work-orders', { search, status, skip }],
+		queryFn: () => portal.workOrders({
+			search: search || undefined,
+			status: status === 'All' ? undefined : status,
+			skip,
+			take: pageSize,
+			sort: '-requestedAt'
+		})
+	}));
+	const workOrderPage = $derived(workOrdersQuery.data);
+	const workOrders = $derived(workOrderPage?.items ?? []);
+	const hasPreviousPage = $derived(skip > 0);
+	const hasNextPage = $derived(skip + pageSize < (workOrderPage?.totalCount ?? 0));
 	let form = $state({ title: '', description: '', category: 'Resident Request', priority: 'Normal' });
 	let requestSubmitted = $state(false);
 	const requestTitleError = $derived(requestSubmitted && !form.title.trim() ? 'Issue title is required.' : '');
@@ -70,6 +88,11 @@
 		submitMutation.mutate();
 	}
 
+	function applySearch() {
+		search = searchInput.trim();
+		skip = 0;
+	}
+
 	// --- Request detail / status timeline ---
 	let openId = $state<number | null>(null);
 
@@ -88,9 +111,10 @@
 		openId = null;
 	}
 
-	function isOpen(status: unknown): boolean {
-		return !['Completed', 'Cancelled', 'Archived'].includes(String(status));
+	function isOpen(workOrderStatus: unknown): boolean {
+		return !['Completed', 'Cancelled', 'Archived'].includes(String(workOrderStatus));
 	}
+
 </script>
 
 <svelte:head><title>Maintenance - Rental Command</title></svelte:head>
@@ -100,8 +124,34 @@
 	<div class="grid gap-5 lg:grid-cols-2">
 		<section class="rounded-lg border border-border bg-card p-4">
 			<h2 class="mb-3 font-semibold">Your requests</h2>
+			<form class="mb-4 grid gap-2 sm:grid-cols-[1fr_11rem_auto]" onsubmit={(event) => { event.preventDefault(); applySearch(); }}>
+				<Input bind:value={searchInput} placeholder="Search requests" aria-label="Search maintenance requests" />
+				<Select.Root type="single" bind:value={status} onValueChange={() => { skip = 0; }}>
+					<Select.Trigger class="w-full">{status === 'All' ? 'All statuses' : status}</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="All" label="All statuses">All statuses</Select.Item>
+						<Select.Item value="New" label="New">New</Select.Item>
+						<Select.Item value="Scheduled" label="Scheduled">Scheduled</Select.Item>
+						<Select.Item value="InProgress" label="In progress">In progress</Select.Item>
+						<Select.Item value="WaitingParts" label="Waiting for parts">Waiting for parts</Select.Item>
+						<Select.Item value="OnHold" label="On hold">On hold</Select.Item>
+						<Select.Item value="Completed" label="Completed">Completed</Select.Item>
+						<Select.Item value="Cancelled" label="Cancelled">Cancelled</Select.Item>
+						<Select.Item value="Archived" label="Archived">Archived</Select.Item>
+					</Select.Content>
+				</Select.Root>
+				<Button type="submit" variant="outline">Search</Button>
+			</form>
 			<div class="space-y-3">
-				{#each (workOrdersQuery.data ?? []) as order (order.id)}
+				{#if workOrdersQuery.isLoading}
+					<p class="text-sm text-muted-foreground">Loading requests…</p>
+				{:else if workOrdersQuery.isError}
+					<div class="rounded-md border border-destructive/40 bg-destructive/5 p-3">
+						<p class="text-sm font-medium text-destructive">Requests could not be loaded.</p>
+						<Button type="button" variant="outline" size="sm" class="mt-2" onclick={() => workOrdersQuery.refetch()}>Try again</Button>
+					</div>
+				{:else}
+				{#each workOrders as order (order.id)}
 					<button
 						type="button"
 						class="flex w-full items-center gap-3 rounded-md border border-border px-3 py-2.5 text-left transition-colors hover:bg-accent/50"
@@ -118,7 +168,17 @@
 				{:else}
 					<p class="text-sm text-muted-foreground" data-testid="portal-work-orders-empty">No requests yet.</p>
 				{/each}
+				{/if}
 			</div>
+			{#if (workOrderPage?.totalCount ?? 0) > pageSize}
+				<div class="mt-4 flex items-center justify-between border-t border-border pt-3 text-sm text-muted-foreground">
+					<span>{skip + 1}–{Math.min(skip + pageSize, workOrderPage?.totalCount ?? 0)} of {workOrderPage?.totalCount ?? 0}</span>
+					<div class="flex gap-2">
+						<Button type="button" variant="outline" size="sm" disabled={!hasPreviousPage} onclick={() => { skip = Math.max(0, skip - pageSize); }}>Previous</Button>
+						<Button type="button" variant="outline" size="sm" disabled={!hasNextPage} onclick={() => { skip += pageSize; }}>Next</Button>
+					</div>
+				</div>
+			{/if}
 		</section>
 
 		<section class="rounded-lg border border-border bg-card p-4">

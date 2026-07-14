@@ -144,7 +144,7 @@ public sealed record ListingWorkspaceResponse(
             $"/scan?type={nameof(LeaseAgreement)}&propertyId={listing.PropertyId}&unitId={listing.UnitId}" +
             $"&rentalListingId={listing.Id}" +
             $"&sourceLabel={Uri.EscapeDataString("Zillow signed lease import")}" +
-            $"&returnTo={Uri.EscapeDataString($"/units/{listing.UnitId}?tab=lease")}",
+            $"&returnTo={Uri.EscapeDataString($"/units/{listing.UnitId}?tab=tenant-lease&view=agreements")}",
             listing.CreatedAt,
             listing.UpdatedAt);
 }

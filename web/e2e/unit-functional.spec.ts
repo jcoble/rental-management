@@ -50,12 +50,12 @@ test.describe('Unit Command Center — functional', () => {
 		await login(page);
 
 		const tabs: Array<[string, string, string]> = [
-			['overview', 'tab-overview', 'unit-overview-tab'],
-			['lease', 'tab-lease', 'unit-lease-tab'],
-			['ledger', 'tab-ledger', 'unit-ledger-tab'],
+			['summary', 'tab-summary', 'unit-overview-tab'],
+			['leasing', 'tab-leasing', 'unit-listing-tab'],
+			['tenant-lease', 'tab-tenant-lease', 'unit-lease-tab'],
+			['money', 'tab-money', 'unit-ledger-tab'],
 			['maintenance', 'tab-maintenance', 'unit-maintenance-tab'],
-			['documents', 'tab-documents', 'unit-documents-tab'],
-			['timeline', 'tab-timeline', 'unit-timeline-tab'],
+			['documents-history', 'tab-documents-history', 'unit-documents-tab'],
 		];
 
 		await page.goto(`/units/${unit.id}`);
@@ -75,7 +75,7 @@ test.describe('Unit Command Center — functional', () => {
 			const { unit, currentLease } = await findLeasedUnit(request, token);
 			const tenantAccountId = currentLease!.tenantAccountId!;
 			await login(page);
-			await openUnitTab(page, unit.id, 'ledger&ledger=rent', 'unit-rent-tab');
+			await openUnitTab(page, unit.id, 'money&ledger=rent', 'unit-rent-tab');
 
 			// A distinctive sub-$1000 amount (no thousands comma) and description let us prove
 			// the exact append-only ledger entry through both the page and detail read surfaces.
@@ -149,7 +149,7 @@ test.describe('Unit Command Center — functional', () => {
 			const token = await apiToken(request);
 			const { unit } = await findLeasedUnit(request, token);
 			await login(page);
-			await openUnitTab(page, unit.id, 'ledger&ledger=rent', 'unit-rent-tab');
+			await openUnitTab(page, unit.id, 'money&ledger=rent', 'unit-rent-tab');
 
 			await page.getByTestId('rent-post-payment').click();
 			await expect(page.getByTestId('rent-create-form')).toBeVisible();
@@ -168,7 +168,7 @@ test.describe('Unit Command Center — functional', () => {
 			const token = await apiToken(request);
 			const { unit } = await findLeasedUnit(request, token);
 			await login(page);
-			await openUnitTab(page, unit.id, 'ledger&ledger=rent', 'unit-rent-tab');
+			await openUnitTab(page, unit.id, 'money&ledger=rent', 'unit-rent-tab');
 
 			await page.getByTestId('rent-post-payment').click();
 			const form = page.getByTestId('rent-create-form');
@@ -205,7 +205,7 @@ test.describe('Unit Command Center — functional', () => {
 			await openUnitTab(
 				page,
 				unit.id,
-				`ledger&ledger=rent&payment=${seeded.value.ledgerEntryId}`,
+				`money&ledger=rent&payment=${seeded.value.ledgerEntryId}`,
 				'unit-rent-tab'
 			);
 			await expect(page.getByTestId('payment-detail-page')).toBeVisible({ timeout: 10_000 });
@@ -293,7 +293,7 @@ test.describe('Unit Command Center — functional', () => {
 			const token = await apiToken(request);
 			const { unit } = await findLeasedUnit(request, token);
 			await login(page);
-			await openUnitTab(page, unit.id, 'ledger&ledger=expenses', 'unit-expenses-tab');
+			await openUnitTab(page, unit.id, 'money&ledger=expenses', 'unit-expenses-tab');
 
 			const desc = unique('CC Dishwasher repair');
 			const amount = (320 + (Date.now() % 80)).toFixed(2);
@@ -338,7 +338,7 @@ test.describe('Unit Command Center — functional', () => {
 			const token = await apiToken(request);
 			const { unit } = await findLeasedUnit(request, token);
 			await login(page);
-			await openUnitTab(page, unit.id, 'ledger&ledger=expenses', 'unit-expenses-tab');
+			await openUnitTab(page, unit.id, 'money&ledger=expenses', 'unit-expenses-tab');
 
 			await page.getByTestId('expenses-create').click();
 			await expect(page.getByTestId('expenses-create-form')).toBeVisible();
@@ -359,7 +359,7 @@ test.describe('Unit Command Center — functional', () => {
 			const token = await apiToken(request);
 			const { unit } = await findLeasedUnit(request, token);
 			await login(page);
-			await openUnitTab(page, unit.id, 'ledger&ledger=expenses', 'unit-expenses-tab');
+			await openUnitTab(page, unit.id, 'money&ledger=expenses', 'unit-expenses-tab');
 
 			await page.getByTestId('expenses-scan').click();
 			await expect(page.getByTestId('scan-page')).toBeVisible({ timeout: 10_000 });
@@ -370,7 +370,7 @@ test.describe('Unit Command Center — functional', () => {
 			expect(url.searchParams.get('type')).toBe('Expense');
 			expect(url.searchParams.get('propertyId')).toBe(String(unit.propertyId));
 			expect(url.searchParams.get('unitId')).toBe(String(unit.id));
-			expect(url.searchParams.get('returnTo')).toBe(`/units/${unit.id}?tab=ledger&ledger=expenses`);
+			expect(url.searchParams.get('returnTo')).toBe(`/units/${unit.id}?tab=money&ledger=expenses`);
 		});
 
 		test('edits an expense amount + category on the card', async ({ page, request }) => {
@@ -396,7 +396,7 @@ test.describe('Unit Command Center — functional', () => {
 			expect(createRes.ok(), `seed expense failed: ${createRes.status()}`).toBeTruthy();
 			const seeded = (await createRes.json()) as { id: number };
 
-			await openUnitTab(page, unit.id, 'ledger&ledger=expenses', 'unit-expenses-tab');
+			await openUnitTab(page, unit.id, 'money&ledger=expenses', 'unit-expenses-tab');
 
 			const card = page.getByTestId(`expense-${seeded.id}`);
 			await expect(card).toBeVisible({ timeout: 10_000 });
@@ -451,7 +451,7 @@ test.describe('Unit Command Center — functional', () => {
 			const lease = (await leaseRes.json()) as { leaseNumber: string; monthlyRent: number };
 
 			await login(page);
-			await openUnitTab(page, dash.unit.id, 'lease', 'unit-lease-tab');
+			await openUnitTab(page, dash.unit.id, 'tenant-lease&view=agreements', 'unit-lease-tab');
 
 			const cur = page.getByTestId('lease-current');
 			await expect(cur).toBeVisible();
@@ -463,7 +463,7 @@ test.describe('Unit Command Center — functional', () => {
 			const dash = await findLeasedUnit(request, token);
 			const leaseId = dash.currentLease!.id;
 			await login(page);
-			await openUnitTab(page, dash.unit.id, 'lease', 'unit-lease-tab');
+			await openUnitTab(page, dash.unit.id, 'tenant-lease&view=agreements', 'unit-lease-tab');
 
 			// Follow the "Open lease" link into the lease detail page.
 			await page.getByTestId('lease-current').getByRole('link', { name: /open lease/i }).click();
@@ -486,7 +486,7 @@ test.describe('Unit Command Center — functional', () => {
 			const token = await apiToken(request);
 			const { unit } = await findLeasedUnit(request, token);
 			await login(page);
-			await openUnitTab(page, unit.id, 'overview', 'unit-overview-tab');
+			await openUnitTab(page, unit.id, 'summary', 'unit-overview-tab');
 
 			await expect(page.getByTestId('overview-snapshot')).toBeVisible();
 			await expect(page.getByTestId('overview-tenant-lease')).toBeVisible();
@@ -516,7 +516,7 @@ test.describe('Unit Command Center — functional', () => {
 			}
 			test.skip(target == null, 'No unit with documents in the seed to verify grouping');
 			await login(page);
-			await openUnitTab(page, target!, 'documents', 'unit-documents-tab');
+			await openUnitTab(page, target!, 'documents-history&view=documents', 'unit-documents-tab');
 
 			// At least one grouped document card renders (group testid is documents-group-<EntityType>).
 			await expect(page.locator('[data-testid^="documents-group-"]').first()).toBeVisible({
@@ -535,7 +535,7 @@ test.describe('Unit Command Center — functional', () => {
 			test.skip(entries.length === 0, 'No timeline history for this unit');
 
 			await login(page);
-			await openUnitTab(page, unit.id, 'timeline', 'unit-timeline-tab');
+			await openUnitTab(page, unit.id, 'documents-history&view=history', 'unit-timeline-tab');
 
 			// The feed rendered at least one entry (not the "No history yet" empty state).
 			await expect(page.getByTestId('unit-timeline-tab')).not.toContainText('No history yet');

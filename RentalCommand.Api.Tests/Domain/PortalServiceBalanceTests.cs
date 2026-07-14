@@ -144,6 +144,33 @@ public sealed class PortalServiceBalanceTests
     }
 
     [Fact]
+    public void WorkOrderPage_AuthorizesRelationshipFiltersSortsAndPagesInSql()
+    {
+        using var db = NewContext();
+        var sql = NewService(db).BuildWorkOrderPageQuery(
+            Scope,
+            73,
+            new PortalTenantWorkOrderListQuery
+            {
+                Search = "heater",
+                OpenOnly = true,
+                Sort = "-requestedAt",
+                Skip = 20,
+                Take = 20,
+            }).ToQueryString();
+
+        AssertCurrentTenantAccess(sql);
+        sql.Should().Contain("WorkOrders");
+        sql.Should().Contain("LeaseManagementId");
+        sql.Should().Contain("ILIKE");
+        sql.Should().Contain($"NOT IN ({(int)WorkOrderStatus.Completed}, {(int)WorkOrderStatus.Cancelled}, {(int)WorkOrderStatus.Archived})");
+        sql.Should().Contain("ORDER BY");
+        sql.Should().Contain("LIMIT");
+        sql.Should().Contain("OFFSET");
+        sql.Should().Contain("73");
+    }
+
+    [Fact]
     public void AdversarialAccountLookup_BindsUserContextRevisionAndRequestedAccountInSql()
     {
         using var db = NewContext();

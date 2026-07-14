@@ -12,7 +12,6 @@
 	import { Input } from '$lib/components/ui/input';
 	import UnitHeader from '$lib/components/unit/UnitHeader.svelte';
 	import ScanLauncher from '$lib/components/scan/ScanLauncher.svelte';
-	import LifecycleRail from '$lib/components/unit/LifecycleRail.svelte';
 	import UnitTimelineRail from '$lib/components/unit/UnitTimelineRail.svelte';
 	import OverviewTab from '$lib/components/unit/tabs/OverviewTab.svelte';
 	import ListingTab from '$lib/components/unit/tabs/ListingTab.svelte';
@@ -82,8 +81,8 @@
 		'action',
 	] as const;
 
-	function setTab(tab: string) {
-		const destination = resolveUnitDestination(tab);
+	function setTab(tab: string, view?: UnitView) {
+		const destination = resolveUnitDestination(tab, view);
 		activeTab = destination.tab;
 		activeView = destination.view;
 		const url = new URL(page.url);
@@ -324,8 +323,6 @@
 	{:else}
 		<div class="space-y-4">
 			<UnitHeader {dashboard} onEdit={openEditUnit} onScan={() => goScan()} />
-			<LifecycleRail stage={dashboard.lifecycleStage} nextBestAction={dashboard.nextBestAction} onStageClick={setTab} />
-
 			<div class="min-w-0">
 				<Tabs.Root value={activeTab} onValueChange={setTab}>
 					<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -339,7 +336,7 @@
 								<Tabs.Trigger value="documents-history" data-testid="tab-documents-history">Documents &amp; history</Tabs.Trigger>
 							</Tabs.List>
 						</div>
-						<UnitTimelineRail activities={dashboard.recentTimeline} onViewAll={() => setTab('timeline')} />
+						<UnitTimelineRail activities={dashboard.recentTimeline} onViewAll={() => setTab('documents-history', 'history')} />
 					</div>
 
 					<Tabs.Content value="summary" class="mt-4">

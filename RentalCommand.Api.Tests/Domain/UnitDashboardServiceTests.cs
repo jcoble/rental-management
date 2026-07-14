@@ -195,7 +195,7 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         dashboard.Should().NotBeNull();
         dashboard!.LifecycleStage.Should().Be("Ready");
         dashboard.NextBestAction.Label.Should().Be("List this unit");
-        dashboard.NextBestAction.Href.Should().Be($"/units/{unit.Id}?tab=listing");
+        dashboard.NextBestAction.Href.Should().Be($"/units/{unit.Id}?tab=leasing&view=listing");
     }
 
     [Fact]
@@ -227,7 +227,7 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         dashboard!.LifecycleStage.Should().Be("MoveIn");
         dashboard.NextBestAction.Label.Should().Be("Confirm possession / collect deposit");
         dashboard.NextBestAction.Href.Should()
-            .Be($"/units/{graph.Unit.Id}?tab=lease&action=confirm-move-in");
+            .Be($"/units/{graph.Unit.Id}?tab=tenant-lease&view=agreements&action=confirm-move-in");
     }
 
     [Fact]
