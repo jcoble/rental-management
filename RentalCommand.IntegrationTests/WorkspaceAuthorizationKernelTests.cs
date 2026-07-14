@@ -542,7 +542,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task AtomicMoneyMutation_SelectedScopeCannotWriteUnassignedProperty()
+    public async Task AtomicMoneyMutation_SelectedScopeReturnsMissingForUnassignedProperty()
     {
         SkipIfNoDocker();
         var scope = new WorkspaceReadScope(
@@ -551,13 +551,14 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, "cross-scope-test", ValidLoanRequest(_unscopedPropertyId));
         var identity = AtomicMoneyMutation.Identity(command);
 
-        var act = () => AtomicUnitOfWork.ExecuteAsync(identity, command, AtomicMoneyMutation.Codec);
-        await act.Should().ThrowAsync<UnauthorizedAccessException>();
+        var outcome = await AtomicUnitOfWork.ExecuteAsync(identity, command, AtomicMoneyMutation.Codec);
+        outcome.Value.Should().Be(new AtomicMoneyMutationResult(
+            Found: false, Applied: false, EntityId: 0));
 
         await using var verify = NewContext();
         (await verify.Loans.CountAsync(row => row.PropertyId == _unscopedPropertyId)).Should().Be(0);
         (await verify.AtomicCommandReceipts.CountAsync(row =>
-            row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(0);
+            row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
     }
 
     [SkippableFact]

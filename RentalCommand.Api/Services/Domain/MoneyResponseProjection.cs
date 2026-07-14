@@ -124,4 +124,28 @@ internal static class MoneyResponseProjection
         });
     }
 
+    public static IQueryable<LoanResponse> Loans(IQueryable<Loan> loans) =>
+        loans.Select(loan => new LoanResponse
+        {
+            Id = loan.Id,
+            PortfolioId = loan.PortfolioId,
+            PropertyId = loan.PropertyId,
+            PropertyName = loan.Property!.Name,
+            Lender = loan.Lender,
+            OriginalAmount = loan.OriginalAmount,
+            CurrentBalance = loan.CurrentBalance,
+            AnnualInterestRatePct = loan.AnnualInterestRatePct,
+            TermMonths = loan.TermMonths,
+            StartDate = loan.StartDate,
+            DayOfMonthDue = loan.DayOfMonthDue,
+            MonthlyPrincipalInterest = loan.MonthlyPrincipalInterest,
+            MonthlyEscrow = loan.MonthlyEscrow,
+            EscrowCoversTaxes = loan.EscrowCoversTaxes,
+            EscrowCoversInsurance = loan.EscrowCoversInsurance,
+            Status = loan.Status,
+            Notes = loan.Notes,
+            CreatedAt = loan.CreatedAt,
+            UpdatedAt = loan.UpdatedAt,
+        });
+
 }
