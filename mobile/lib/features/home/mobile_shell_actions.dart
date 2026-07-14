@@ -157,7 +157,7 @@ class _AccessSelectorsState extends ConsumerState<_AccessSelectors> {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final auth = ref.watch(authControllerProvider);
     if (auth is! AuthStateAuthenticated) return const SizedBox.shrink();
     final contexts =
