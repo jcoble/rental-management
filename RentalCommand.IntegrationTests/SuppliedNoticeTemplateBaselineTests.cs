@@ -698,9 +698,17 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             var foundation = new NotificationFoundationService(verify, TimeProvider.System, Atomic);
             var statuses = await foundation.ListDeliveryStatusesAsync(portfolioId, 50, CancellationToken.None);
             statuses.Should().HaveCount(3);
-            statuses.Should().ContainSingle(row => row.Channel == NoticeDeliveryChannel.TenantPortal && row.Status == "Accepted");
-            statuses.Should().ContainSingle(row => row.Channel == NoticeDeliveryChannel.Email && row.Status == "Retrying" && row.NextAttemptAtUtc != null);
-            statuses.Should().ContainSingle(row => row.Channel == NoticeDeliveryChannel.Sms && row.Status == "Failed" && row.FailedAtUtc != null);
+            statuses.Should().ContainSingle(row =>
+                row.Channel == NoticeDeliveryChannel.TenantPortal &&
+                row.Status == NoticeDeliveryState.Accepted);
+            statuses.Should().ContainSingle(row =>
+                row.Channel == NoticeDeliveryChannel.Email &&
+                row.Status == NoticeDeliveryState.Retrying &&
+                row.NextAttemptAtUtc != null);
+            statuses.Should().ContainSingle(row =>
+                row.Channel == NoticeDeliveryChannel.Sms &&
+                row.Status == NoticeDeliveryState.PermanentlyFailed &&
+                row.FailedAtUtc != null);
         }
     }
 
