@@ -22,7 +22,8 @@ import {
 	updateToken,
 	clearAuth,
 	isTokenExpired,
-	setAccessEnvelope
+	setAccessEnvelope,
+	waitForAuthInitialization
 } from '$lib/stores/auth.svelte';
 import { createSingleFlightWithReuse } from '$lib/utils/single-flight';
 import type { AccessEnvelope } from '$lib/types/user';
@@ -298,6 +299,7 @@ export async function fetchApi<T>(endpoint: string, options: FetchOptions = {}):
 	}
 
 	if (requireAuth) {
+		await waitForAuthInitialization();
 		// Refresh BEFORE sending when the token is MISSING or expires within 120s. isTokenExpired()
 		// returns true when the in-memory token/expiration is absent too — e.g. a query/mutation that
 		// fires before hydration, or after idling on one page. The previous guard (`&& auth.accessToken`)

@@ -31,6 +31,30 @@ public sealed record CreateWorkspaceMembershipCommand(
     DateTime EffectiveFromUtc,
     string WebBaseUrl) : IWorkspaceTeamAuthorityCommand;
 
+/// <summary>
+/// Anonymous, one-use completion of the account shell created by a Team invitation. The raw
+/// invitation token and password never enter the atomic command or its durable receipt.
+/// </summary>
+public sealed record ActivateWorkspaceInvitationCommand(
+    long InvitationId,
+    int InvitedUserId,
+    string TokenHash,
+    string PasswordHash,
+    string NewSecurityStamp,
+    string NewConcurrencyStamp) : IAtomicCommandData;
+
+public enum ActivateWorkspaceInvitationOutcome
+{
+    Activated = 1,
+    Invalid = 2,
+}
+
+public sealed record ActivateWorkspaceInvitationResult(
+    ActivateWorkspaceInvitationOutcome Outcome,
+    int UserId,
+    int PortfolioId,
+    int AccessContextId) : IAtomicResultData;
+
 public sealed record AddWorkspaceRoleAssignmentCommand(
     int PortfolioId,
     int ActorUserId,

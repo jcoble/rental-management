@@ -163,6 +163,11 @@ public sealed class RotateSessionRefreshCredentialHandler
         }
 
         var located = await attempt.Persistence.Query<AuthSessionRefreshCredential>()
+            // Refresh is anonymous by design, so no workspace RLS scope exists yet. These three
+            // credential/session tables are global auth state; their model filters traverse into
+            // workspace-scoped tables and would hide every valid credential from this request.
+            // Authority is validated below through the DB-owned effective-context projection.
+            .IgnoreQueryFilters()
             .AsNoTracking()
             .Where(item => item.TokenHash == command.PresentedTokenHash)
             .Select(item => new
@@ -200,7 +205,13 @@ public sealed class RotateSessionRefreshCredentialHandler
                 located.Id);
         }
 
-        if (!target.HasEffectiveAccess)
+        var authority = await attempt.Persistence.EstablishPreAuthenticatedWorkspaceScopeAsync(
+            target.Session.Id,
+            target.Session.UserId,
+            target.AccessContextId,
+            command.PresentedAtUtc,
+            ct);
+        if (authority is null)
         {
             return IssueSessionRefreshCredentialHandler.Rejected(
                 target.Session.Id,
@@ -222,11 +233,15 @@ public sealed class RotateSessionRefreshCredentialHandler
                     priorReplacementId,
                     target.Session.UserId,
                     target.AccessContextId,
-                    target.PortfolioId,
-                    target.AccessRevision);
+                    authority.PortfolioId,
+                    authority.AccessRevision);
             }
 
-            RevokeForReuse(target, command.PresentedAtUtc, attempt);
+            RevokeForReuse(
+                target,
+                authority.PortfolioId,
+                command.PresentedAtUtc,
+                attempt);
             return new SessionRefreshMutationResult(
                 SessionRefreshMutationStatus.ReuseDetected,
                 target.Session.Id,
@@ -239,7 +254,11 @@ public sealed class RotateSessionRefreshCredentialHandler
         {
             // Two live leaves are a compromised/contradictory family. Refuse to choose one branch.
             target.Credential.ConsumedAtUtc = command.PresentedAtUtc;
-            RevokeForReuse(target, command.PresentedAtUtc, attempt);
+            RevokeForReuse(
+                target,
+                authority.PortfolioId,
+                command.PresentedAtUtc,
+                attempt);
             return new SessionRefreshMutationResult(
                 SessionRefreshMutationStatus.ReuseDetected,
                 target.Session.Id,
@@ -273,8 +292,8 @@ public sealed class RotateSessionRefreshCredentialHandler
         attempt.Persistence.Add(replacement);
 
         attempt.StageSemanticEvent(IssueSessionRefreshCredentialHandler.Audit(
-            target.PortfolioId,
-            target.Session.ActiveAccessContextId,
+            authority.PortfolioId,
+            target.AccessContextId,
             AuditLogOperation.Updated,
             "Refresh credential rotated",
             new
@@ -294,8 +313,8 @@ public sealed class RotateSessionRefreshCredentialHandler
             replacement.Id,
             target.Session.UserId,
             target.AccessContextId,
-            target.PortfolioId,
-            target.AccessRevision);
+            authority.PortfolioId,
+            authority.AccessRevision);
     }
 
     private static async Task<RefreshTarget?> LocateAsync(
@@ -305,14 +324,15 @@ public sealed class RotateSessionRefreshCredentialHandler
         CancellationToken ct)
     {
         return await attempt.Persistence.Query<AuthSessionRefreshCredential>()
+            // See the pre-lock lookup above. The effective workspace context is deliberately
+            // resolved in a separate security-definer projection after this global auth read.
+            .IgnoreQueryFilters()
             .Where(item => item.TokenHash == tokenHash)
             .Select(item => new RefreshTarget(
                 item,
                 item.RefreshTokenFamily!,
                 item.RefreshTokenFamily!.AuthSession!,
-                item.RefreshTokenFamily!.AuthSession!.ActiveAccessContext!.PortfolioId,
                 item.RefreshTokenFamily!.AuthSession!.ActiveAccessContextId,
-                item.RefreshTokenFamily!.AuthSession!.ActiveAccessContext!.AccessRevision,
                 item.RevokedAtUtc == null &&
                 item.ExpiresAtUtc > presentedAtUtc &&
                 item.RefreshTokenFamily!.RevokedAtUtc == null &&
@@ -320,10 +340,6 @@ public sealed class RotateSessionRefreshCredentialHandler
                 item.RefreshTokenFamily!.AuthSession!.Status == AuthSessionStatus.Active &&
                 item.RefreshTokenFamily!.AuthSession!.RevokedAtUtc == null &&
                 item.RefreshTokenFamily!.AuthSession!.ExpiresAtUtc > presentedAtUtc,
-                AccessAuthorityDbFunctions.IsEffective(
-                    item.RefreshTokenFamily!.AuthSession!.ActiveAccessContextId,
-                    item.RefreshTokenFamily!.AuthSession!.UserId,
-                    presentedAtUtc),
                 item.RefreshTokenFamily!.Credentials.Any(candidate =>
                     candidate.Id != item.Id &&
                     candidate.ConsumedAtUtc == null &&
@@ -333,6 +349,7 @@ public sealed class RotateSessionRefreshCredentialHandler
 
     private static void RevokeForReuse(
         RefreshTarget target,
+        int portfolioId,
         DateTime now,
         IAtomicWriteAttempt attempt)
     {
@@ -347,7 +364,7 @@ public sealed class RotateSessionRefreshCredentialHandler
         target.Session.RevocationReason ??= ReuseReason;
 
         attempt.StageSemanticEvent(IssueSessionRefreshCredentialHandler.Audit(
-            target.PortfolioId,
+            portfolioId,
             target.AccessContextId,
             AuditLogOperation.Updated,
             ReuseReason,
@@ -364,10 +381,7 @@ public sealed class RotateSessionRefreshCredentialHandler
         AuthSessionRefreshCredential Credential,
         AuthSessionRefreshTokenFamily Family,
         AuthSession Session,
-        int PortfolioId,
         int AccessContextId,
-        long AccessRevision,
         bool IsEligible,
-        bool HasEffectiveAccess,
         bool AnotherLiveCredentialExists);
 }

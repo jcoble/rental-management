@@ -56,6 +56,8 @@ public static class AtomicCommandFingerprint
         // Identity password hashes and token payloads are prepared with randomized cryptographic
         // material outside the transaction. Stable server-keyed intent hashes remain fingerprinted.
         "PasswordHash",
+        "NewSecurityStamp",
+        "NewConcurrencyStamp",
         "PreparedEmailPayload",
         "ExpectedSecurityStamp",
         "TokenWasValidated",

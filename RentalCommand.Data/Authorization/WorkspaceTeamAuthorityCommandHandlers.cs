@@ -435,6 +435,103 @@ public sealed class CreateWorkspaceMembershipHandler
     }
 }
 
+public sealed class ActivateWorkspaceInvitationHandler
+    : IAtomicCommandHandler<ActivateWorkspaceInvitationCommand, ActivateWorkspaceInvitationResult>,
+      IAtomicReplayAuthorizer<ActivateWorkspaceInvitationCommand>
+{
+    public async Task<ActivateWorkspaceInvitationResult> HandleAsync(
+        ActivateWorkspaceInvitationCommand command,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        Validate(command);
+        await attempt.Locking.AcquireAsync(
+            AtomicLockResource.ApplicationUser, command.InvitedUserId, ct);
+
+        var activation = await attempt.AccountSecurity.ActivateWorkspaceInvitationAsync(
+            command.InvitationId,
+            command.InvitedUserId,
+            command.TokenHash,
+            command.PasswordHash,
+            command.NewSecurityStamp,
+            command.NewConcurrencyStamp,
+            ct);
+        if (activation is null)
+        {
+            return Invalid(command.InvitedUserId);
+        }
+
+        attempt.UseDatabaseWallClockForAudit(activation.AcceptedAtUtc);
+        attempt.StageSemanticEvent(new AtomicSemanticAudit(
+            activation.PortfolioId,
+            nameof(ApplicationUser),
+            activation.InvitedUserId,
+            AuditLogOperation.Updated,
+            activation.InvitedUserId,
+            ActorLabel: "authentication:account-security",
+            NewValues: JsonSerializer.Serialize(new
+            {
+                SecurityEvent = "WorkspaceInvitationActivated",
+                SecurityIntentHash = command.TokenHash,
+                TargetUserId = activation.InvitedUserId,
+                AuditRootAccessContextId = activation.AccessContextId,
+                command.InvitationId,
+                activation.WorkspaceMembershipId,
+            }),
+            ChangeReason: "Workspace invitation activated"), activation.AcceptedAtUtc);
+
+        return new ActivateWorkspaceInvitationResult(
+            ActivateWorkspaceInvitationOutcome.Activated,
+            activation.InvitedUserId,
+            activation.PortfolioId,
+            activation.AccessContextId);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        ActivateWorkspaceInvitationCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        Validate(command);
+        var utcNow = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var remainsUsable = await persistence.Query<WorkspaceInvitation>()
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(invitation =>
+                invitation.Id == command.InvitationId &&
+                invitation.InvitedUserId == command.InvitedUserId &&
+                invitation.TokenHash == command.TokenHash &&
+                invitation.AcceptedAtUtc == null &&
+                invitation.RevokedAtUtc == null &&
+                invitation.ExpiresAtUtc > utcNow &&
+                invitation.InvitedUser!.PasswordHash == null,
+                ct);
+        if (!remainsUsable)
+        {
+            throw new UnauthorizedAccessException(
+                "This activation link is invalid, expired, or has already been used.");
+        }
+    }
+
+    private static ActivateWorkspaceInvitationResult Invalid(int userId) =>
+        new(ActivateWorkspaceInvitationOutcome.Invalid, userId, 0, 0);
+
+    private static void Validate(ActivateWorkspaceInvitationCommand command)
+    {
+        if (command.InvitationId <= 0 || command.InvitedUserId <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(command));
+        }
+        if (command.TokenHash.Length != 64 || !command.TokenHash.All(Uri.IsHexDigit))
+        {
+            throw new ArgumentException("A SHA-256 invitation token hash is required.", nameof(command));
+        }
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.PasswordHash);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.NewSecurityStamp);
+        ArgumentException.ThrowIfNullOrWhiteSpace(command.NewConcurrencyStamp);
+    }
+}
+
 public sealed class AddWorkspaceRoleAssignmentHandler
     : IAtomicCommandHandler<AddWorkspaceRoleAssignmentCommand, WorkspaceTeamMutationResult>,
       IAtomicReplayAuthorizer<AddWorkspaceRoleAssignmentCommand>

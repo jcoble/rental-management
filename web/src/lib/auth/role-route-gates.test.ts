@@ -105,7 +105,11 @@ test('technician commands stay on the canonical assignment-scoped mutation', () 
 	assert.doesNotMatch(technicianApi, /\/work-orders\//);
 	assert.doesNotMatch(technicianApi, /assigned-update/);
 	assert.match(workOrderDetail, /technician\.update/);
-	assert.match(technicianDetail, /data-testid="assignment-status-unavailable"/);
+	assert.match(technicianDetail, /data-testid="assignment-progress-update"/);
+	assert.match(technicianDetail, /workOrderStatusActionTargets\(assignment\.data\.status, true\)/);
+	assert.match(technicianDetail, /technician\.update\(work\.id/);
+	assert.match(technicianDetail, /expectedUpdatedAtUtc: work\.updatedAtUtc/);
+	assert.match(technicianDetail, /data-testid="assignment-progress-submit"/);
 	assert.doesNotMatch(technicianDetail, /technician\.updateAssignment/);
 	assert.match(technicianDetail, /activeCapabilities\.has\(CAPABILITY\.assignedWorkUpdate\)/);
 	assert.match(technicianDetail, /activeCapabilities\.has\(CAPABILITY\.assignedWorkTimeMaterialsManage\)/);
