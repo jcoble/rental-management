@@ -255,11 +255,23 @@ class _RecordingAdapter implements HttpClientAdapter {
               },
             ],
           }
+        : options.path.endsWith('/cancel-draft')
+        ? {
+            'leaseManagementId': 44,
+            'leaseAgreementId': 82,
+            'draftCanceledAtUtc': '2026-07-13T14:00:00Z',
+            'draftCancellationReason': 'A newer draft replaced this attempt.',
+          }
         : {
             'leaseManagementId': 44,
             'leaseAgreementId': 82,
             'versionNumber': 2,
             'draftRevision': 1,
+            'sourceAgreementId': 81,
+            'leaseAgreementSignerIds': [201, 202],
+            'addendumDecisionIds': <int>[],
+            'replacementAddendumIds': <int>[],
+            'replayed': false,
           };
     return ResponseBody.fromString(
       jsonEncode(response),

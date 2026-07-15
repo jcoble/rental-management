@@ -13,6 +13,7 @@ import 'scan_models.dart';
 class TenantAccountOption {
   const TenantAccountOption({
     required this.tenantAccountId,
+    required this.leaseManagementId,
     required this.relationshipNumber,
     required this.propertyName,
     required this.unitNumber,
@@ -20,6 +21,7 @@ class TenantAccountOption {
   });
 
   final int tenantAccountId;
+  final int leaseManagementId;
   final String relationshipNumber;
   final String propertyName;
   final String unitNumber;
@@ -28,6 +30,7 @@ class TenantAccountOption {
   factory TenantAccountOption.fromJson(Map<String, dynamic> json) =>
       TenantAccountOption(
         tenantAccountId: (json['tenantAccountId'] as num).toInt(),
+        leaseManagementId: (json['leaseManagementId'] as num).toInt(),
         relationshipNumber: json['relationshipNumber'] as String? ?? '',
         propertyName: json['propertyName'] as String? ?? '',
         unitNumber: json['unitNumber'] as String? ?? '',
@@ -294,6 +297,7 @@ class ScanRepository {
   /// manage. The API applies current session, capability, and property scope.
   Future<TenantAccountOptionPage> listTenantAccountOptions({
     String? search,
+    bool? closed,
     int skip = 0,
     int take = 25,
   }) async {
@@ -305,6 +309,7 @@ class ScanRepository {
           'take': take,
           if (search != null && search.trim().isNotEmpty)
             'search': search.trim(),
+          'closed': ?closed,
         },
       );
       final items = response.data?['items'] as List<dynamic>? ?? const [];

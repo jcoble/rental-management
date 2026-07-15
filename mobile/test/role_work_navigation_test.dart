@@ -34,6 +34,15 @@ void main() {
 
     expect(canOpenWorkHub(capabilities), isTrue);
     expect(canOpenWorkOrders(capabilities), isFalse);
+    expect(destinations.map((item) => item.id), [MobileDestinationId.calendar]);
+  });
+
+  test('tenant notices require their independent capability', () {
+    final destinations = workDestinationsFor(const {
+      'leasing.showings.manage',
+      'notifications.tenant-notices.manage',
+    }, assignedWorkExperience: false);
+
     expect(destinations.map((item) => item.id), [
       MobileDestinationId.calendar,
       MobileDestinationId.notices,
@@ -46,6 +55,7 @@ void main() {
       'work.read',
       'work.manage',
       'responsibility.assign-existing-member',
+      'notifications.tenant-notices.manage',
     }, assignedWorkExperience: false);
 
     expect(destinations.map((item) => item.id), [
