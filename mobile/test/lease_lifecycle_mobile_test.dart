@@ -241,6 +241,7 @@ LeaseAgreementHistory _agreement({
   'baseRentAmount': 1500,
   'agreementStatus': 'Active',
   'isGoverning': true,
+  'hasLiveReissue': false,
 });
 
 String _date(DateTime value) => value.toIso8601String().split('T').first;

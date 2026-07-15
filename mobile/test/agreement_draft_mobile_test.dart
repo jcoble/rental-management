@@ -357,6 +357,11 @@ class _DraftAdapter implements HttpClientAdapter {
         'leaseAgreementId': 45,
         'versionNumber': 2,
         'draftRevision': 5,
+        'sourceAgreementId': 41,
+        'leaseAgreementSignerIds': [201, 202],
+        'addendumDecisionIds': <int>[],
+        'replacementAddendumIds': <int>[],
+        'replayed': false,
       },
     };
     return ResponseBody.fromString(

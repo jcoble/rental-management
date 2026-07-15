@@ -3,6 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/auth/auth_controller.dart';
+import '../../core/auth/auth_models.dart';
+import '../../core/auth/mobile_access_policy.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../core/widgets/mobile_m3_list.dart';
 import '../accounting/accounting_models.dart';
@@ -12,6 +15,7 @@ import '../home/mobile_domain_navigation.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
 import '../payments/payment_detail_screen.dart';
+import '../payments/tenant_account_receipt_flow.dart';
 import 'expense_detail_screen.dart';
 import 'expense_form_sheet.dart';
 import 'money_format.dart';
@@ -88,6 +92,11 @@ class _MoneyScreenState extends ConsumerState<MoneyScreen> {
     showCreateExpenseSheet(context, ref, onSaved: _refreshAfterManualEntry);
   }
 
+  Future<void> _addPayment() async {
+    final result = await showGlobalRecordTenantReceiptFlow(context, ref);
+    if (result != null && mounted) _refreshAfterManualEntry();
+  }
+
   void _showSnapshotDetails(AsyncValue<MoneySnapshot> snapshotAsync) {
     showModalBottomSheet<void>(
       context: context,
@@ -111,6 +120,37 @@ class _MoneyScreenState extends ConsumerState<MoneyScreen> {
   @override
   Widget build(BuildContext context) {
     final moneyAsync = ref.watch(moneySnapshotProvider);
+    final auth = ref.watch(authControllerProvider);
+    final canAddPayment =
+        auth is AuthStateAuthenticated &&
+        canUseMobileCapabilityAction(
+          experience: auth.activeExperience,
+          capabilities: auth.capabilities,
+          capability: 'money.payments.manage',
+          experiences: const {WorkspaceExperience.management},
+        );
+    final canAddExpense =
+        auth is AuthStateAuthenticated &&
+        canUseMobileCapabilityAction(
+          experience: auth.activeExperience,
+          capabilities: auth.capabilities,
+          capability: 'money.expenses.manage',
+          experiences: const {WorkspaceExperience.management},
+        );
+    final manualActions = <MobileQuickAction>[
+      if (canAddPayment)
+        MobileQuickAction(
+          label: 'Add payment',
+          icon: Icons.add_card_outlined,
+          onPressed: _addPayment,
+        ),
+      if (canAddExpense)
+        MobileQuickAction(
+          label: 'Add expense',
+          icon: Icons.receipt_long_outlined,
+          onPressed: _addExpense,
+        ),
+    ];
 
     return Scaffold(
       appBar: mobileDomainRootAppBar(context, title: const Text('Money')),
@@ -118,13 +158,7 @@ class _MoneyScreenState extends ConsumerState<MoneyScreen> {
           ? null
           : MobileQuickActionFab(
               heroTag: 'money-ledger-actions-fab',
-              primaryActions: [
-                MobileQuickAction(
-                  label: 'Add expense',
-                  icon: Icons.receipt_long_outlined,
-                  onPressed: _addExpense,
-                ),
-              ],
+              primaryActions: manualActions,
               onChat: () => openMobileAssistant(context),
               onRecord: () => openMobileRecord(context),
               onScan: () => openMobileScan(context),

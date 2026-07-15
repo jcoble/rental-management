@@ -94,20 +94,28 @@ void main() {
   });
 
   test(
-    'mobile vendors repository exposes create, update, and delete endpoints',
-    () {
-      final source = File(
-        'lib/features/vendors/vendors_repository.dart',
-      ).readAsStringSync();
+    'mobile vendors repository sends atomic create update and delete requests',
+    () async {
+      final adapter = _VendorRecordingAdapter();
+      final repository = VendorsRepository(
+        Dio(BaseOptions(baseUrl: 'https://example.test'))
+          ..httpClientAdapter = adapter,
+      );
 
-      expect(source, contains('Future<Vendor> createVendor('));
-      expect(source, contains("_dio.post<Map<String, dynamic>>("));
-      expect(source, contains("'/vendors'"));
-      expect(source, contains('Future<Vendor> updateVendor('));
-      expect(source, contains("_dio.patch<Map<String, dynamic>>("));
-      expect(source, contains("'/vendors/\$id'"));
-      expect(source, contains('Future<void> deleteVendor('));
-      expect(source, contains("_dio.delete<dynamic>('/vendors/\$id')"));
+      await repository.createVendor({'name': 'Akron Plumbing'});
+      expect(adapter.method, 'POST');
+      expect(adapter.path, '/vendors');
+      expect(adapter.headers?['Idempotency-Key'], isNotEmpty);
+
+      await repository.updateVendor(8, {'name': 'Akron Plumbing LLC'});
+      expect(adapter.method, 'PATCH');
+      expect(adapter.path, '/vendors/8');
+      expect(adapter.headers?['Idempotency-Key'], isNotEmpty);
+
+      await repository.deleteVendor(8);
+      expect(adapter.method, 'DELETE');
+      expect(adapter.path, '/vendors/8');
+      expect(adapter.headers?['Idempotency-Key'], isNotEmpty);
     },
   );
 
@@ -183,6 +191,7 @@ class _VendorRecordingAdapter implements HttpClientAdapter {
   String? method;
   String? path;
   Map<String, dynamic>? query;
+  Map<String, dynamic>? headers;
 
   @override
   Future<ResponseBody> fetch(
@@ -193,6 +202,7 @@ class _VendorRecordingAdapter implements HttpClientAdapter {
     method = options.method;
     path = options.path;
     query = Map<String, dynamic>.from(options.queryParameters);
+    headers = Map<String, dynamic>.from(options.headers);
 
     final item = {
       'id': 8,
@@ -200,7 +210,11 @@ class _VendorRecordingAdapter implements HttpClientAdapter {
       'serviceType': 'Plumbing',
       'website': 'https://akron.example',
     };
-    final body = options.path.endsWith('/page')
+    final body = options.method == 'DELETE'
+        ? <String, dynamic>{}
+        : options.method != 'GET'
+        ? item
+        : options.path.endsWith('/page')
         ? {
             'items': [item],
             'totalCount': 41,
