@@ -61,4 +61,24 @@ public sealed class SandboxGraduationTriggerContractTests
             "RAISE EXCEPTION '% is append-only; % is not permitted', TG_TABLE_NAME, TG_OP");
         TenantAccountSql.Should().NotContain("app.rls_bypass_reason");
     }
+
+    [Fact]
+    public void LedgerAllocationValidator_SerializesWithoutRequiringLedgerUpdatePermission()
+    {
+        TenantAccountSql.Should().Contain(
+            "pg_advisory_xact_lock(hashtextextended(");
+        TenantAccountSql.Should().Contain(
+            "LEAST(NEW.\"DebitEntryId\", NEW.\"CreditEntryId\")::text");
+        TenantAccountSql.Should().Contain(
+            "GREATEST(NEW.\"DebitEntryId\", NEW.\"CreditEntryId\")::text");
+
+        var validatorStart = TenantAccountSql.IndexOf(
+            "CREATE OR REPLACE FUNCTION rc_validate_tenant_ledger_allocation()",
+            StringComparison.Ordinal);
+        var validatorEnd = TenantAccountSql.IndexOf(
+            "CREATE OR REPLACE FUNCTION rc_validate_tenant_autopay_enrollment()",
+            validatorStart,
+            StringComparison.Ordinal);
+        TenantAccountSql[validatorStart..validatorEnd].Should().NotContain("FOR UPDATE");
+    }
 }

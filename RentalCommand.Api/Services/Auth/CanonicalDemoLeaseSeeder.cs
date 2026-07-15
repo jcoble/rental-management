@@ -87,7 +87,9 @@ internal static class CanonicalDemoLeaseSeeder
                 PossessionAgreementExceptionAuthorizedByUserId = actorUserId,
                 PlannedMoveOutAtUtc = isCurrent ? end : null,
                 PossessionReturnedAtUtc = isCurrent ? null : end,
-                AccountClosedAtUtc = isCurrent ? null : end,
+                // Historical money must be inserted while the account is open. Closed demo
+                // relationships are finalized after their complete ledger is persisted below.
+                AccountClosedAtUtc = null,
                 EndingDisposition = isCurrent
                     ? LeaseManagementEndingDisposition.Undecided
                     : LeaseManagementEndingDisposition.NonRenewalMoveOut,
@@ -106,9 +108,9 @@ internal static class CanonicalDemoLeaseSeeder
                 AccountNumber = $"DEMO-TA-{key}",
                 Currency = currency,
                 OpenedAtUtc = start,
-                ClosedAtUtc = isCurrent ? null : end,
-                CloseReasonCode = isCurrent ? null : "POSSESSION_RETURNED",
-                CloseNote = isCurrent ? null : "Demo tenant account closed after move-out.",
+                ClosedAtUtc = null,
+                CloseReasonCode = null,
+                CloseNote = null,
                 CreatedAtUtc = createdAt,
                 CreatedByUserId = actorUserId,
             };
@@ -324,6 +326,19 @@ internal static class CanonicalDemoLeaseSeeder
                     portfolioId, actorUserId));
                 ledgerEntryCount += 2;
             }
+        }
+
+        await db.SaveChangesAsync(ct);
+
+        // Closing an account before its historical ledger is inserted correctly trips the
+        // database guard that forbids new money on closed accounts. Seed the complete history,
+        // then close the expired relationships in the same infrastructure transaction.
+        foreach (var graph in graphs.Where(graph => !graph.IsCurrent))
+        {
+            graph.Account.ClosedAtUtc = graph.End;
+            graph.Account.CloseReasonCode = "POSSESSION_RETURNED";
+            graph.Account.CloseNote = "Demo tenant account closed after move-out.";
+            graph.Management.AccountClosedAtUtc = graph.End;
         }
 
         await db.SaveChangesAsync(ct);
