@@ -22,7 +22,7 @@
 			? '/settings#notifications'
 			: (safeLandingForAccess(access) ?? '/');
 	});
-	const canManage = $derived(hasCapability('notifications.tenant-notices.manage'));
+	const canManage = $derived(hasCapability('notifications.manage'));
 	const automationDetails: Record<string, { label: string; detail: string }> = {
 		'rent-reminder': { label: 'Rent reminder', detail: 'A courtesy reminder before rent is due.' },
 		'lease-renewal-offer': { label: 'Lease renewal offer', detail: 'An operational offer after the lease-ending decision is Offer renewal.' },

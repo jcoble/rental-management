@@ -227,11 +227,12 @@ public sealed class AtomicNoticeDraftMutationHandler
     {
         var authorizedProperties = AuthorizedProperties(command, persistence, now);
         return persistence.Query<NoticeDraft>().Where(draft =>
-            draft.PortfolioId == command.PortfolioId
-            && draft.PropertyId != null
-            && authorizedProperties.Any(property =>
-                property.Id == draft.PropertyId.Value
-                && property.PortfolioId == draft.PortfolioId));
+                draft.PortfolioId == command.PortfolioId
+                && draft.PropertyId != null
+                && authorizedProperties.Any(property =>
+                    property.Id == draft.PropertyId.Value
+                    && property.PortfolioId == draft.PortfolioId))
+            .AsTracking();
     }
 
     private static IQueryable<Property> AuthorizedProperties(

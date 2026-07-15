@@ -9,6 +9,13 @@ using RentalCommand.Core.Scanning;
 
 namespace RentalCommand.Data.Scanning;
 
+internal enum CanonicalLeaseScanDocumentSourceKind
+{
+    ImportedExternalDocument,
+    BuiltInRenderer,
+    AuthoredTemplateSnapshot,
+}
+
 /// <summary>
 /// Canonical lease-import writer. It never creates or reads a legacy Lease row. A reviewed scan
 /// either becomes an immutable already-executed Agreement artifact or an unissued Agreement draft.
@@ -22,6 +29,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
         CancellationToken ct)
     {
         Validate(command, target);
+        var documentSourceKind = SelectDocumentSource(target);
         // Different lease scans for the same empty portfolio must not create duplicate physical
         // inventory. This transaction-scoped lock serializes matching/creation before Unit locking.
         await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
@@ -56,7 +64,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
                 return existing;
         }
 
-        var templateIsValid = target.ReviewDisposition == LeaseScanReviewDisposition.AlreadyFullySigned
+        var templateIsValid = documentSourceKind != CanonicalLeaseScanDocumentSourceKind.AuthoredTemplateSnapshot
             || (target.DocumentTemplateId is > 0
                 && await attempt.Persistence.Query<DocumentTemplate>().AnyAsync(template =>
                     template.Id == target.DocumentTemplateId
@@ -125,7 +133,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
         var fixedTerm = target.EndDate.HasValue;
         LegalDocumentArtifact? importedArtifact = null;
         AtomicLegalDocumentSourceVersionResult sourceVersion;
-        if (target.ReviewDisposition == LeaseScanReviewDisposition.AlreadyFullySigned)
+        if (documentSourceKind == CanonicalLeaseScanDocumentSourceKind.ImportedExternalDocument)
         {
             var source = await attempt.Persistence.Query<StoredFile>()
                 .SingleOrDefaultAsync(file => file.Id == command.SourceStoredFileId
@@ -153,11 +161,16 @@ internal static class CanonicalLeaseScanConfirmationWriter
                 command.PortfolioId, source.Id, importedArtifact.Id, command.SourceContentSha256!,
                 command.SourceLabel, command.ConfirmedByUserId, now, ct);
         }
-        else
+        else if (documentSourceKind == CanonicalLeaseScanDocumentSourceKind.AuthoredTemplateSnapshot)
         {
             sourceVersion = await attempt.Leasing.ResolveAuthoredDocumentSourceVersionAsync(
                 command.PortfolioId, home.PropertyId, relationship.Id, target.DocumentTemplateId!.Value,
                 command.ConfirmedByUserId, now, ct);
+        }
+        else
+        {
+            sourceVersion = await attempt.Leasing.ResolveBuiltInDocumentSourceVersionAsync(
+                command.PortfolioId, command.ConfirmedByUserId, now, ct);
         }
         if (!sourceVersion.Resolved)
         {
@@ -473,6 +486,9 @@ internal static class CanonicalLeaseScanConfirmationWriter
             }
             else
             {
+                var rentalStructure = target.RentalStructure
+                    ?? throw new ScanConfirmationValidationException(
+                        "Choose SingleRental or MultiRental before creating rental inventory from this scan.");
                 property = new Property
                 {
                     PortfolioId = command.PortfolioId,
@@ -480,6 +496,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
                         ? address
                         : target.PropertyName.Trim(),
                     PropertyType = ParsePropertyType(target.PropertyType, target.UnitNumber),
+                    RentalStructure = rentalStructure,
                     Status = PropertyStatus.Active,
                     AddressLine1 = address,
                     City = city,
@@ -721,6 +738,19 @@ internal static class CanonicalLeaseScanConfirmationWriter
             || command.ExpectedAccessRevision <= 0 || command.ConfirmedByUserId <= 0)
             throw new UnauthorizedAccessException("The current access envelope is incomplete.");
     }
+
+    internal static CanonicalLeaseScanDocumentSourceKind SelectDocumentSource(
+        ScanLeaseTargetData target) => target.ReviewDisposition switch
+    {
+        LeaseScanReviewDisposition.AlreadyFullySigned =>
+            CanonicalLeaseScanDocumentSourceKind.ImportedExternalDocument,
+        LeaseScanReviewDisposition.NeedsSignatures when target.DocumentTemplateId is null =>
+            CanonicalLeaseScanDocumentSourceKind.BuiltInRenderer,
+        LeaseScanReviewDisposition.NeedsSignatures when target.DocumentTemplateId > 0 =>
+            CanonicalLeaseScanDocumentSourceKind.AuthoredTemplateSnapshot,
+        _ => throw new ScanConfirmationValidationException(
+            "Choose a valid custom lease template or use the supplied lease source."),
+    };
 
     private static string NormalizeJsonObject(string? value)
     {

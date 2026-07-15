@@ -44,6 +44,10 @@ const settingsPage = readFileSync(
 	new URL('../../routes/(protected)/settings/+page.svelte', import.meta.url),
 	'utf8'
 );
+const teamPage = readFileSync(
+	new URL('../../routes/(admin)/admin/users/+page.svelte', import.meta.url),
+	'utf8'
+);
 
 test('direct staff routes use the same role-capability gates as navigation', () => {
 	assert.match(
@@ -126,9 +130,21 @@ test('staff action URLs open route-backed message details without query aliases'
 	assert.doesNotMatch(typedMessageDetail, /conversationId=/);
 });
 
-test('notification settings expose independent personal, team, and tenant policy capabilities', () => {
+test('workspace notification administration is separate from property-scoped tenant notice work', () => {
 	assert.match(settingsPage, /canManageTeamRouting = \$derived\(hasCapability\('notifications\.manage'\)\)/);
-	assert.match(settingsPage, /canManageTenantNotices = \$derived\(hasCapability\('notifications\.tenant-notices\.manage'\)\)/);
+	assert.match(settingsPage, /canManageTenantNotices = \$derived\(hasCapability\('notifications\.manage'\)\)/);
 	assert.match(settingsPage, /\{#if canManageTeamRouting\}<a[\s\S]*href="\/settings\/notifications\/team-routing"/);
 	assert.match(settingsPage, /\{#if canManageTenantNotices\}<a[\s\S]*href="\/settings\/notifications\/tenant-notices"/);
+	assert.match(experiencePolicy, /prefix: '\/settings\/notifications\/tenant-notices',[\s\S]{0,120}experiences: \['Management'\],[\s\S]{0,120}CAPABILITY\.notificationsManage/);
+	assert.match(experiencePolicy, /prefix: '\/notices',[\s\S]{0,120}experiences: \['Management', 'Leasing'\],[\s\S]{0,120}CAPABILITY\.tenantNoticesManage/);
+	assert.match(appShell, /href: '\/notices', label: 'Tenant notices'/);
+});
+
+test('team property-scope pickers search and page on the server', () => {
+	assert.match(teamPage, /properties\.listPage\(portfolioId/);
+	assert.match(teamPage, /search: propertySearch/);
+	assert.match(teamPage, /skip: propertySkip/);
+	assert.match(teamPage, /take: PROPERTY_PAGE_SIZE/);
+	assert.doesNotMatch(teamPage, /properties\.list\(portfolioId/);
+	assert.doesNotMatch(teamPage, /take: 250/);
 });

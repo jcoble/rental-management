@@ -1,9 +1,10 @@
-import type { PropertyStatus, PropertyType } from '$lib/types';
+import type { PropertyStatus, PropertyType, RentalStructure } from '$lib/types';
 import { propertyStatusOptions, propertyTypeOptions } from './property-labels.ts';
 
 export type PropertyFormDraft = {
 	name: string;
 	type: PropertyType;
+	rentalStructure: RentalStructure | '';
 	status: PropertyStatus;
 	addressLine1: string;
 	addressLine2: string;
@@ -34,6 +35,7 @@ export function createEmptyPropertyDraft(filters: {
 	return {
 		name: '',
 		type: isPropertyType(filters.typeFilter) ? filters.typeFilter : 'MultiFamily',
+		rentalStructure: '',
 		status: isPropertyStatus(filters.statusFilter) ? filters.statusFilter : 'Active',
 		addressLine1: '',
 		addressLine2: '',

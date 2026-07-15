@@ -2,6 +2,7 @@ using System.Reflection;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Leasing;
 using RentalCommand.Data.Leasing;
 
 namespace RentalCommand.Data.Tests;
@@ -71,6 +72,28 @@ public sealed class LegalDocumentSourceVersionResolverSqlTests
         sql.Should().Contain("DO NOTHING");
         sql.Should().Contain("RETURNING \"Id\"");
         sql.Should().NotContain("UPDATE");
+    }
+
+    [Fact]
+    public void Atomic_built_in_resolver_uses_the_same_filtered_renderer_identity()
+    {
+        var sql = StaticAtomicSql("ResolveBuiltInSql");
+
+        sql.Should().Contain("'BuiltInRenderer'");
+        sql.Should().Contain("ON CONFLICT (\"PortfolioId\", \"RendererKey\", \"RendererVersion\")");
+        sql.Should().Contain("WHERE \"SourceKind\" = 'BuiltInRenderer'");
+        sql.Should().Contain("DO NOTHING");
+        sql.Should().Contain("RETURNING \"Id\"");
+        sql.Should().NotContain("DO UPDATE");
+    }
+
+    [Fact]
+    public void Supplied_lease_source_has_stable_explicit_provenance()
+    {
+        BuiltInLeaseAgreementSource.BusinessKey.Should().Be("built-in:lease-agreement:v1");
+        BuiltInLeaseAgreementSource.RendererKey.Should().Be("rental-command-built-in-lease-agreement");
+        BuiltInLeaseAgreementSource.RendererVersion.Should().Be(1);
+        BuiltInLeaseAgreementSource.SnapshotPayload.Should().Contain("RentalCommandSupplied");
     }
 
     [Fact]

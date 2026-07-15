@@ -288,6 +288,9 @@ public class DemoDataSeeder
                 State             = pd.state,
                 PostalCode        = pd.zip,
                 PropertyType      = pd.ptype,
+                RentalStructure   = pd.units.Length == 1
+                    ? RentalStructure.SingleRental
+                    : RentalStructure.MultiRental,
                 Status            = PropertyStatus.Active,
                 YearBuilt         = pd.yearBuilt,
                 ManagementFeePercent = 8m,

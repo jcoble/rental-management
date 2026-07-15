@@ -363,7 +363,7 @@ const workHubDestinations = <MobileDestination>[
     label: 'Notices',
     subtitle: 'Renewal, late-rent and move-out drafts',
     builder: _noticesBuilder,
-    capabilityKeys: ['notifications.tenant-notices.manage'],
+    capabilityKeys: [tenantNoticeDraftCapability],
   ),
 ];
 

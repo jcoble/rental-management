@@ -234,6 +234,7 @@ List<Map<String, dynamic>> _propertyListJson() => [
     'portfolioId': 1,
     'name': 'Maple Ridge',
     'type': 'SingleFamily',
+    'rentalStructure': 'SingleRental',
     'status': 'Active',
     'addressLine1': '100 Main St',
     'city': 'Columbus',

@@ -44,26 +44,40 @@ public sealed class WorkspaceAuthorityOwnershipInterceptor : SaveChangesIntercep
             return;
         }
 
-        RejectChanged<WorkspaceAccessContext>(context, nameof(WorkspaceAccessContext.UserId));
-        RejectChanged<WorkspaceAccessContext>(context, nameof(WorkspaceAccessContext.PortfolioId));
-        RejectChanged<WorkspaceMembership>(context, nameof(WorkspaceMembership.AccessContextId));
-        RejectChanged<WorkspaceMembership>(context, nameof(WorkspaceMembership.PortfolioId));
-        RejectChanged<MembershipRoleAssignment>(context, nameof(MembershipRoleAssignment.WorkspaceMembershipId));
-        RejectChanged<MembershipRoleAssignment>(context, nameof(MembershipRoleAssignment.PortfolioId));
-        RejectChanged<MembershipRoleAssignment>(context, nameof(MembershipRoleAssignment.RoleProfileId));
-        RejectChanged<MembershipRoleAssignmentProperty>(
-            context, nameof(MembershipRoleAssignmentProperty.MembershipRoleAssignmentId));
-        RejectChanged<MembershipRoleAssignmentProperty>(context, nameof(MembershipRoleAssignmentProperty.PortfolioId));
+        // This validator must run before audit/change-capture interceptors. Do not let
+        // ChangeTracker.Entries<T>() trigger global DetectChanges first: EF rejects an identifying
+        // foreign-key mutation with a generic key error before this security boundary can report
+        // the canonical authority violation. Snapshot comparison catches both explicitly marked
+        // changes and ordinary property assignments without invoking global change detection.
+        var autoDetectChanges = context.ChangeTracker.AutoDetectChangesEnabled;
+        try
+        {
+            context.ChangeTracker.AutoDetectChangesEnabled = false;
+            RejectChanged<WorkspaceAccessContext>(context, nameof(WorkspaceAccessContext.UserId));
+            RejectChanged<WorkspaceAccessContext>(context, nameof(WorkspaceAccessContext.PortfolioId));
+            RejectChanged<WorkspaceMembership>(context, nameof(WorkspaceMembership.AccessContextId));
+            RejectChanged<WorkspaceMembership>(context, nameof(WorkspaceMembership.PortfolioId));
+            RejectChanged<MembershipRoleAssignment>(context, nameof(MembershipRoleAssignment.WorkspaceMembershipId));
+            RejectChanged<MembershipRoleAssignment>(context, nameof(MembershipRoleAssignment.PortfolioId));
+            RejectChanged<MembershipRoleAssignment>(context, nameof(MembershipRoleAssignment.RoleProfileId));
+            RejectChanged<MembershipRoleAssignmentProperty>(
+                context, nameof(MembershipRoleAssignmentProperty.MembershipRoleAssignmentId));
+            RejectChanged<MembershipRoleAssignmentProperty>(context, nameof(MembershipRoleAssignmentProperty.PortfolioId));
+        }
+        finally
+        {
+            context.ChangeTracker.AutoDetectChangesEnabled = autoDetectChanges;
+        }
     }
 
     private static void RejectChanged<TEntity>(DbContext context, string propertyName)
         where TEntity : class
     {
         foreach (var entry in context.ChangeTracker.Entries<TEntity>()
-                     .Where(item => item.State == EntityState.Modified))
+                     .Where(item => item.State is EntityState.Unchanged or EntityState.Modified))
         {
             var property = entry.Property(propertyName);
-            if (property.IsModified && !Equals(property.OriginalValue, property.CurrentValue))
+            if (!Equals(property.OriginalValue, property.CurrentValue))
             {
                 throw new AccessAuthorityMutationException(
                     $"{typeof(TEntity).Name}.{propertyName} is immutable after creation.");

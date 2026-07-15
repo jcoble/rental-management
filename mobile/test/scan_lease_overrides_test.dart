@@ -1,4 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:rental_command/core/models/models.dart';
+import 'package:rental_command/features/scan/guided_rental_flow.dart';
 import 'package:rental_command/features/scan/scan_models.dart';
 import 'package:rental_command/features/scan/scan_review_screen.dart';
 
@@ -32,6 +34,84 @@ void main() {
   });
 
   group('buildOverridesMap — lease create-new-property (C3)', () {
+    test('signed import sends explicit disposition without a template', () {
+      final overrides = buildOverridesMap(
+        editedFields: const {'lease_number': 'LEASE-100'},
+        isPayment: false,
+        isWorkOrder: false,
+        isLease: true,
+        isApplication: false,
+        isLoan: false,
+        applicationPropertyId: null,
+        applicationUnitId: null,
+        isPaid: false,
+        selectedTenantAccountId: null,
+        createNewProperty: false,
+        selectedPropertyId: 7,
+        selectedUnitId: 3,
+        selectedTenantId: 5,
+        loanPropertyId: null,
+        leaseReviewDisposition: LeaseScanReviewDisposition.alreadyFullySigned,
+        // A stale selection must not leak into an executed-artifact import.
+        documentTemplateId: 91,
+      );
+
+      expect(overrides['reviewDisposition'], 'AlreadyFullySigned');
+      expect(overrides.containsKey('documentTemplateId'), isFalse);
+    });
+
+    test(
+      'unsigned import defaults to supplied lease without a template id',
+      () {
+        final overrides = buildOverridesMap(
+          editedFields: const {'lease_number': 'LEASE-101'},
+          isPayment: false,
+          isWorkOrder: false,
+          isLease: true,
+          isApplication: false,
+          isLoan: false,
+          applicationPropertyId: null,
+          applicationUnitId: null,
+          isPaid: false,
+          selectedTenantAccountId: null,
+          createNewProperty: false,
+          selectedPropertyId: 7,
+          selectedUnitId: 3,
+          selectedTenantId: 5,
+          loanPropertyId: null,
+          leaseReviewDisposition: LeaseScanReviewDisposition.needsSignatures,
+        );
+
+        expect(overrides['reviewDisposition'], 'NeedsSignatures');
+        expect(overrides.containsKey('documentTemplateId'), isFalse);
+      },
+    );
+
+    test('unsigned import can opt into an active custom template', () {
+      final overrides = buildOverridesMap(
+        editedFields: const {'lease_number': 'LEASE-102'},
+        isPayment: false,
+        isWorkOrder: false,
+        isLease: true,
+        isApplication: false,
+        isLoan: false,
+        applicationPropertyId: null,
+        applicationUnitId: null,
+        isPaid: false,
+        selectedTenantAccountId: null,
+        createNewProperty: false,
+        selectedPropertyId: 7,
+        selectedUnitId: 3,
+        selectedTenantId: 5,
+        loanPropertyId: null,
+        leaseReviewDisposition: LeaseScanReviewDisposition.needsSignatures,
+        documentTemplateId: 91,
+      );
+
+      expect(overrides['reviewDisposition'], 'NeedsSignatures');
+      expect(overrides['documentTemplateId'], 91);
+    });
+
     test('create mode sends propertyId:0 + address, never a real id', () {
       final overrides = buildOverridesMap(
         editedFields: {'monthly_rent': '1500'},
@@ -50,12 +130,14 @@ void main() {
         selectedUnitId: 42,
         selectedTenantId: null,
         loanPropertyId: null,
+        newPropertyRentalStructure: RentalStructure.singleRental,
         newPropertyName: 'Maple Court',
         newPropertyAddress: '123 Maple St',
         newPropertyCity: 'Austin',
       );
 
       expect(overrides['propertyId'], 0);
+      expect(overrides['rentalStructure'], 'SingleRental');
       expect(overrides.containsKey('unitId'), isFalse);
       expect(overrides['propertyName'], 'Maple Court');
       expect(overrides['propertyAddress'], '123 Maple St');
@@ -64,9 +146,36 @@ void main() {
       expect(overrides['monthly_rent'], '1500');
     });
 
+    test('create mode rejects a missing rental structure', () {
+      expect(
+        () => buildOverridesMap(
+          editedFields: const {},
+          isPayment: false,
+          isWorkOrder: false,
+          isLease: true,
+          isApplication: false,
+          isLoan: false,
+          applicationPropertyId: null,
+          applicationUnitId: null,
+          isPaid: false,
+          selectedTenantAccountId: null,
+          createNewProperty: true,
+          selectedPropertyId: null,
+          selectedUnitId: null,
+          selectedTenantId: null,
+          loanPropertyId: null,
+          newPropertyName: 'Maple Court',
+        ),
+        throwsArgumentError,
+      );
+    });
+
     test('link mode sends the chosen property + unit ids', () {
       final overrides = buildOverridesMap(
-        editedFields: const {},
+        editedFields: const {
+          'rentalStructure': 'SingleRental',
+          'rental_structure': 'MultiRental',
+        },
         isPayment: false,
         isWorkOrder: false,
         isLease: true,
@@ -81,6 +190,8 @@ void main() {
         selectedUnitId: 3,
         selectedTenantId: 5,
         loanPropertyId: null,
+        // A stale create-mode choice must never override persisted structure.
+        newPropertyRentalStructure: RentalStructure.multiRental,
       );
 
       expect(overrides['propertyId'], 7);
@@ -89,6 +200,24 @@ void main() {
       // Link mode must not send create-property fields.
       expect(overrides.containsKey('propertyName'), isFalse);
       expect(overrides.containsKey('propertyAddress'), isFalse);
+      expect(overrides.containsKey('rentalStructure'), isFalse);
+      expect(overrides.containsKey('rental_structure'), isFalse);
+    });
+  });
+
+  group('guided rental bootstrap target', () {
+    test('sends the explicit one-rental selection', () {
+      expect(buildGuidedRentalTargetOverrides(RentalStructure.singleRental), {
+        'propertyId': 0,
+        'rentalStructure': 'SingleRental',
+      });
+    });
+
+    test('sends the explicit multiple-rentals selection', () {
+      expect(buildGuidedRentalTargetOverrides(RentalStructure.multiRental), {
+        'propertyId': 0,
+        'rentalStructure': 'MultiRental',
+      });
     });
   });
 

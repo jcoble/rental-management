@@ -1,5 +1,6 @@
 export type PortfolioStatus = 'Onboarding' | 'Active' | 'Archived';
 export type PropertyType = 'SingleFamily' | 'MultiFamily' | 'Condo' | 'Townhome' | 'Commercial' | 'MixedUse';
+export type RentalStructure = 'SingleRental' | 'MultiRental';
 export type PropertyStatus = 'Active' | 'UnderMaintenance' | 'Inactive';
 export type DerivedUnitStatus = 'Vacant' | 'Occupied' | 'Reserved' | 'Offline';
 export type LeaseStatus = 'Draft' | 'PendingSignature' | 'Active' | 'NoticeGiven' | 'Expired' | 'Terminated';
@@ -88,6 +89,7 @@ export interface Property {
 	// Wire field is `type` (PropertyResponse maps PropertyType → "type"); the grid column,
 	// type filter, and create/edit forms all read/write this single name.
 	type: PropertyType;
+	rentalStructure: RentalStructure;
 	status: PropertyStatus;
 	addressLine1: string;
 	addressLine2?: string;

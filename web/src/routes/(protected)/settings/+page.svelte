@@ -47,7 +47,7 @@
 	const isAdmin = $derived(hasCapability('security.manage', 'billing.manage'));
 	const canBroadcast = $derived(hasCapability('rentals.manage', 'leasing.onboarding.manage'));
 	const canManageTeamRouting = $derived(hasCapability('notifications.manage'));
-	const canManageTenantNotices = $derived(hasCapability('notifications.tenant-notices.manage'));
+	const canManageTenantNotices = $derived(hasCapability('notifications.manage'));
 
 	// Tabbed hub: each section is one tab. The active tab is mirrored to the URL hash so a deep-link
 	// (e.g. /settings#messaging) lands on the right tab and a refresh keeps your place. WalkMeThrough

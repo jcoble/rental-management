@@ -1,3 +1,19 @@
+enum RentalStructure {
+  singleRental('SingleRental'),
+  multiRental('MultiRental');
+
+  const RentalStructure(this.wireValue);
+
+  final String wireValue;
+
+  static RentalStructure fromJson(Object? value) {
+    for (final structure in values) {
+      if (structure.wireValue == value) return structure;
+    }
+    throw FormatException('Unknown rentalStructure: $value');
+  }
+}
+
 class Property {
   final int id;
   final int portfolioId;
@@ -5,6 +21,7 @@ class Property {
   final int? ownerEntityId;
   final String name;
   final String type;
+  final RentalStructure rentalStructure;
   final String status;
   final String addressLine1;
   final String? addressLine2;
@@ -32,6 +49,7 @@ class Property {
     this.ownerEntityId,
     required this.name,
     required this.type,
+    required this.rentalStructure,
     required this.status,
     required this.addressLine1,
     this.addressLine2,
@@ -61,6 +79,7 @@ class Property {
       ownerEntityId: (json['ownerEntityId'] as num?)?.toInt(),
       name: json['name'] as String? ?? '',
       type: json['type'] as String? ?? '',
+      rentalStructure: RentalStructure.fromJson(json['rentalStructure']),
       status: json['status'] as String? ?? '',
       addressLine1: json['addressLine1'] as String? ?? '',
       addressLine2: json['addressLine2'] as String?,
@@ -94,6 +113,7 @@ class Property {
       if (ownerEntityId != null) 'ownerEntityId': ownerEntityId,
       'name': name,
       'type': type,
+      'rentalStructure': rentalStructure.wireValue,
       'status': status,
       'addressLine1': addressLine1,
       if (addressLine2 != null) 'addressLine2': addressLine2,

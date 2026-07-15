@@ -10,7 +10,7 @@
 	import { leaseManagements } from '$lib/api/endpoints/lease-managements';
 	import { scan } from '$lib/api/scan';
 	import { notifications } from '$lib/api/endpoints/notifications';
-	import type { Owner, Property, Unit, Tenant, OwnerEntityType } from '$lib/types';
+	import type { Owner, Property, Unit, Tenant, OwnerEntityType, RentalStructure } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { getCurrentUser } from '$lib/stores/auth.svelte';
 	import {
@@ -37,6 +37,7 @@
 	import WizardStepScaffold from '$lib/components/onboarding/WizardStepScaffold.svelte';
 	import LeasePhotoPrefill from '$lib/components/onboarding/LeasePhotoPrefill.svelte';
 	import LeaseFirstImport from '$lib/components/scan/LeaseFirstImport.svelte';
+	import LeaseScanSignatureChoice, { type LeaseScanReviewDisposition } from '$lib/components/scan/LeaseScanSignatureChoice.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import {
 		WIZARD_STEPS,
@@ -481,6 +482,7 @@
 	let propertyForm = $state({
 		name: '',
 		type: 'SingleFamily',
+		rentalStructure: '' as RentalStructure | '',
 		addressLine1: '',
 		addressLine2: '',
 		city: '',
@@ -527,6 +529,7 @@
 			propertyForm = {
 				name: '',
 				type: 'SingleFamily',
+				rentalStructure: '',
 				addressLine1: '',
 				addressLine2: '',
 				city: '',
@@ -611,10 +614,9 @@
 		unitRowErrors = unitRowErrors.filter((_, idx) => idx !== i);
 	}
 
-	// Units logic (TSK-602): single-unit property types get one auto-filled unit; multi-unit
-	// types let the user say how many up front and we generate that many rows.
-	const SINGLE_UNIT_TYPES = ['SingleFamily', 'Condo', 'Townhome'];
-	const isSingleUnitProperty = $derived(SINGLE_UNIT_TYPES.includes(propertyForm.type));
+	// RentalStructure is an explicit persisted choice. Property type does not imply whether an
+	// address has one rentable space or several (for example, a mixed-use address may have either).
+	const isSingleRental = $derived(propertyForm.rentalStructure === 'SingleRental');
 	let unitCount = $state('');
 
 	function unitsAreDefaultEmpty() {
@@ -626,11 +628,11 @@
 			!unitRows[0].marketRent
 		);
 	}
-	// Single-family (and condo/townhome): the property IS the one unit. Auto-fill it as
-	// "Unit {property name}" with sensible defaults (1 bed / 1 bath / $0) the user can edit.
-	function seedUnitsForType() {
+	// A single rental still gets one canonical Unit underneath, but the setup copy presents the
+	// address as one rental rather than asking the landlord to understand duplicate-looking records.
+	function seedUnitsForStructure() {
 		if (!unitsAreDefaultEmpty()) return; // never clobber units the user already entered
-		if (isSingleUnitProperty) {
+		if (isSingleRental && propertyIdFromSelection() == null) {
 			unitRows = [
 				{ unitNumber: propertyForm.name.trim() || '1', bedrooms: '1', bathrooms: '1', marketRent: '0' },
 			];
@@ -651,7 +653,7 @@
 
 	type SavePropertyVariables = {
 		propertyId: number | null;
-		property: Record<string, unknown>;
+		property: Record<string, unknown> & { rentalStructure: RentalStructure };
 		units: Record<string, unknown>[];
 	};
 
@@ -660,30 +662,28 @@
 		Error,
 		SavePropertyVariables
 	>(() => ({
-		mutationFn: async (vars: SavePropertyVariables) => {
-			const property =
-				vars.propertyId == null
-					? await properties.create(vars.property)
-					: await properties.update(vars.propertyId, vars.property);
-			const units: Unit[] = [];
-			for (const u of vars.units) {
-				units.push(await properties.createUnit(property.id, u));
-			}
-			return { property, units, updated: vars.propertyId != null };
-		},
+		mutationFn: (vars: SavePropertyVariables) => properties.setup({
+			...(vars.propertyId == null ? {} : { propertyId: vars.propertyId }),
+			property: vars.property,
+			units: vars.units
+		}),
 		onSuccess: ({ property, units, updated }) => {
 			createdProperty = property;
 			createdUnits = units;
 			selectedPropertyId = String(property.id);
 			propertyForm = onboardingPropertyFormFromProperty(property);
 			showSuccess(
-				units.length > 0
+				property.rentalStructure === 'SingleRental'
+					? updated ? 'Rental saved.' : 'Rental added.'
+					: units.length > 0
 					? `Property and ${units.length} unit${units.length === 1 ? '' : 's'} added.`
 					: updated
 						? 'Property saved.'
 						: 'Property added.'
 			);
 			queryClient.invalidateQueries({ queryKey: ['properties', portfolioId] });
+			queryClient.invalidateQueries({ queryKey: ['units'] });
+			queryClient.invalidateQueries({ queryKey: ['onboarding-property-units', property.id] });
 			propertySub = 'address';
 			next();
 		},
@@ -728,6 +728,7 @@
 	// Validate just the address fields before advancing the property sub-step.
 	function propertyAddressValid(): boolean {
 		const errs: Record<string, string> = {};
+		if (!propertyForm.rentalStructure) errs.rentalStructure = 'Choose one rental or multiple rentals';
 		if (!propertyForm.name.trim()) errs.name = 'Name is required';
 		if (!propertyForm.addressLine1.trim()) errs.addressLine1 = 'Address is required';
 		if (!propertyForm.city.trim()) errs.city = 'City is required';
@@ -738,6 +739,12 @@
 	}
 
 	function submitProperty() {
+		const rentalStructure = propertyForm.rentalStructure;
+		if (!rentalStructure) {
+			propertyErrors = { ...propertyErrors, rentalStructure: 'Choose one rental or multiple rentals' };
+			propertySub = 'address';
+			return;
+		}
 		const propertyPayload = buildOnboardingPropertyPayload({
 			propertyForm,
 			selectedOwnerId,
@@ -769,12 +776,21 @@
 				validUnits.push(res.data);
 			}
 		});
+		if (propertyIdFromSelection() == null && validUnits.length === 0) {
+			errors[0] = { ...errors[0], unitNumber: 'Add the details for at least one rental' };
+			hasUnitError = true;
+		}
 		unitRowErrors = errors;
 		if (hasUnitError) return;
 
 		savePropertyMutation.mutate({
 			propertyId: propertyIdFromSelection(),
-			property: { portfolioId, ...propResult.data, clearOwnerEntity: propertyPayload.clearOwnerEntity },
+			property: {
+				portfolioId,
+				...propResult.data,
+				rentalStructure,
+				clearOwnerEntity: propertyPayload.clearOwnerEntity
+			},
 			units: validUnits
 		});
 	}
@@ -796,13 +812,7 @@
 	}
 
 	const saveTenantsMutation = createMutation(() => ({
-		mutationFn: async (rows: Record<string, unknown>[]) => {
-			const made: Tenant[] = [];
-			for (const t of rows) {
-				made.push(await tenants.create(t));
-			}
-			return made;
-		},
+		mutationFn: (rows: Record<string, unknown>[]) => tenants.createGuidedSetupBatch(rows),
 		onSuccess: (made) => {
 			createdTenants = [...createdTenants, ...made];
 			showSuccess(`${made.length} tenant${made.length === 1 ? '' : 's'} added.`);
@@ -824,7 +834,7 @@
 				errors[i] = res.errors;
 				hasError = true;
 			} else {
-				valid.push({ portfolioId, ...res.data });
+				valid.push(res.data);
 			}
 		});
 		tenantRowErrors = errors;
@@ -857,6 +867,8 @@
 		rentDueDay: '1',
 	});
 	let leaseEndDateAutoDefault = $state(leaseForm.endDate);
+	let leaseReviewDisposition = $state<LeaseScanReviewDisposition | ''>('');
+	let leaseDocumentTemplateId = $state('');
 	// Pre-fill security deposit with monthly rent (common default) once — stays
 	// editable; if the user clears it we do not re-fill.
 	let securityDepositDefaulted = $state(false);
@@ -869,6 +881,10 @@
 	let leaseErrors = $state<Record<string, string>>({});
 	let leasePrefilled = false;
 	let leasePrefillDraftId = $state<number | null>(null);
+	const leaseSignatureChoiceInvalid = $derived(
+		leasePrefillDraftId != null &&
+		!leaseReviewDisposition
+	);
 
 	const leaseProperties = $derived(propertiesQuery.data ?? []);
 	const leaseTenants = $derived(tenantsQuery.data ?? []);
@@ -999,7 +1015,15 @@
 		}
 		leaseErrors = {};
 		saveLeaseMutation.mutate({
-			data: { portfolioId, ...result.data },
+			data: {
+				portfolioId,
+				...result.data,
+				reviewDisposition: leaseReviewDisposition as LeaseScanReviewDisposition,
+				documentTemplateId:
+					leaseReviewDisposition === 'NeedsSignatures' && leaseDocumentTemplateId
+						? Number(leaseDocumentTemplateId)
+						: null
+			},
 			prefillDraftId: leasePrefillDraftId
 		});
 	}
@@ -1507,6 +1531,24 @@
 										</div>
 									</div>
 									<div>
+										<fieldset>
+											<legend class="mb-1 text-xs font-medium text-muted-foreground">How many rentals are at this address?</legend>
+											<div class="grid gap-2 sm:grid-cols-2">
+												<label class="cursor-pointer rounded-lg border p-3 transition-colors {propertyForm.rentalStructure === 'SingleRental' ? 'border-primary bg-primary/10' : 'border-border hover:bg-muted/40'}">
+													<input class="sr-only" type="radio" name="onboarding-rental-structure" value="SingleRental" bind:group={propertyForm.rentalStructure} data-testid="onboarding-single-rental" />
+													<span class="block text-sm font-semibold">One rental</span>
+													<span class="mt-1 block text-xs text-muted-foreground">One house, condo, townhome, or other rentable space. Rental Command keeps its technical unit record out of your way.</span>
+												</label>
+												<label class="cursor-pointer rounded-lg border p-3 transition-colors {propertyForm.rentalStructure === 'MultiRental' ? 'border-primary bg-primary/10' : 'border-border hover:bg-muted/40'}">
+													<input class="sr-only" type="radio" name="onboarding-rental-structure" value="MultiRental" bind:group={propertyForm.rentalStructure} data-testid="onboarding-multi-rental" />
+													<span class="block text-sm font-semibold">Multiple rentals</span>
+													<span class="mt-1 block text-xs text-muted-foreground">A duplex, apartment building, or another address with separate rentals.</span>
+												</label>
+											</div>
+											{#if propertyErrors.rentalStructure}<p class="mt-1 text-xs text-destructive">{propertyErrors.rentalStructure}</p>{/if}
+										</fieldset>
+									</div>
+									<div>
 										<span class="mb-1 block text-xs font-medium text-muted-foreground">What kind of property is it?</span>
 										<Select.Root type="single" bind:value={propertyForm.type}>
 											<Select.Trigger class="w-full" data-testid="onboarding-property-type">{formatPropertyType(propertyForm.type)}</Select.Trigger>
@@ -1524,8 +1566,12 @@
 								</div>
 							{:else}
 								<div data-testid="onboarding-property-sub-units">
-									<h3 class="mb-1 text-sm font-semibold">Units</h3>
-									<p class="mb-3 text-xs text-muted-foreground">A house is one unit; a duplex is two. Add a row per unit — or leave blank and add them later. Units with leases, applications, work orders, expenses, inspections, appointments, or documents are preserved and cannot be deleted from onboarding.</p>
+									<h3 class="mb-1 text-sm font-semibold">{isSingleRental ? 'Rental details' : 'Units'}</h3>
+									<p class="mb-3 text-xs text-muted-foreground">
+										{isSingleRental
+											? 'Check the details for this one rental. Rental Command keeps the underlying Unit record synchronized for leases, payments, and maintenance.'
+											: 'Add one row for each rentable unit. Units with history are preserved and cannot be deleted from onboarding.'}
+									</p>
 									{#if selectedPropertyRecord}
 										<div class="mb-4 rounded-md border border-border bg-muted/30 p-3" data-testid="onboarding-existing-units">
 											<div class="mb-2 flex items-center justify-between gap-3">
@@ -1554,12 +1600,12 @@
 													{#each selectedPropertyUnits as unit (unit.id)}
 														<div class="flex items-center justify-between gap-3 px-3 py-2" data-testid="onboarding-existing-unit-{unit.id}">
 															<div class="min-w-0">
-																<p class="truncate text-sm font-medium">Unit {unit.unitNumber}</p>
+																<p class="truncate text-sm font-medium">{isSingleRental ? 'Rental' : `Unit ${unit.unitNumber}`}</p>
 																<p class="text-xs text-muted-foreground">
 																	{unitSummary(unit)}
 																</p>
 															</div>
-															<Button
+															{#if !isSingleRental}<Button
 																variant="outline"
 																size="icon"
 																class="text-muted-foreground hover:border-destructive/60 hover:bg-destructive/10 hover:text-destructive"
@@ -1570,15 +1616,19 @@
 																onclick={() => (unitDeleteTarget = unit)}
 															>
 																<Trash2 class="h-4 w-4" />
-															</Button>
+															</Button>{/if}
 														</div>
 													{/each}
 												</div>
 											{/if}
 										</div>
 									{/if}
-									{#if isSingleUnitProperty}
-										<p class="mb-3 text-xs text-muted-foreground" data-testid="onboarding-single-unit-note">Single-family — we filled in the one unit below as <span class="font-medium">Unit {propertyForm.name.trim() || '1'}</span>. Just check the beds, baths, and rent.</p>
+									{#if isSingleRental}
+										<p class="mb-3 rounded-md border border-primary/30 bg-primary/5 p-3 text-xs text-muted-foreground" data-testid="onboarding-single-unit-note">
+											{selectedPropertyRecord
+												? 'This address is one rental. Rental Command will keep its existing underlying Unit instead of creating a duplicate.'
+												: 'This address is one rental. Just check its beds, baths, and rent below; Rental Command creates the one underlying Unit automatically.'}
+										</p>
 									{:else}
 										<div class="mb-3 flex items-end gap-2" data-testid="onboarding-unit-count">
 											<div>
@@ -1588,15 +1638,16 @@
 											<Button variant="outline" size="sm" data-testid="onboarding-unit-count-apply" onclick={generateUnitRows} disabled={!unitCount}>Add that many</Button>
 										</div>
 									{/if}
+									{#if !(isSingleRental && selectedPropertyRecord)}
 									<div class="space-y-3" data-testid="onboarding-units">
 										{#each unitRows as row, i (i)}
 											<div class="rounded-md border border-border bg-background p-3" data-testid="onboarding-unit-row">
-												<div class="grid gap-2 sm:grid-cols-4">
-													<div>
+												<div class="grid gap-2 {isSingleRental ? 'sm:grid-cols-3' : 'sm:grid-cols-4'}">
+													{#if !isSingleRental}<div>
 														<span class="mb-1 block text-[11px] text-muted-foreground">Unit #</span>
 														<Input data-testid="onboarding-unit-number-{i}" bind:value={row.unitNumber} placeholder="1, A, etc." />
 														{#if unitRowErrors[i]?.unitNumber}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].unitNumber}</p>{/if}
-													</div>
+													</div>{/if}
 													<div>
 														<span class="mb-1 block text-[11px] text-muted-foreground">Beds</span>
 														<Input type="text" inputmode="numeric" mask="integer" data-testid="onboarding-unit-beds-{i}" bind:value={row.bedrooms} placeholder="2" />
@@ -1623,10 +1674,15 @@
 											</div>
 										{/each}
 									</div>
-									<Button variant="outline" size="sm" class="mt-2 gap-1" data-testid="onboarding-add-unit" onclick={addUnitRow}>
-										<Plus class="h-4 w-4" />
-										Add another unit
-									</Button>
+									{:else}
+										<p class="text-xs text-muted-foreground">This rental already has its saved details. Saving here updates the address without creating a second Unit.</p>
+									{/if}
+									{#if !isSingleRental}
+										<Button variant="outline" size="sm" class="mt-2 gap-1" data-testid="onboarding-add-unit" onclick={addUnitRow}>
+											<Plus class="h-4 w-4" />
+											Add another unit
+										</Button>
+									{/if}
 								</div>
 							{/if}
 						</WizardStepScaffold>
@@ -1783,6 +1839,16 @@
 										{#if leaseErrors.rentDueDay}<p class="mt-1 text-xs text-destructive">{leaseErrors.rentDueDay}</p>{/if}
 									</div>
 								</div>
+								{#if leasePrefillDraftId != null}
+									<div class="mt-4 rounded-md border border-border bg-muted/20 p-3">
+										<LeaseScanSignatureChoice
+											bind:reviewDisposition={leaseReviewDisposition}
+											bind:documentTemplateId={leaseDocumentTemplateId}
+											propertyId={Number(leaseForm.propertyId) || 0}
+											disabled={saveLeaseMutation.isPending}
+										/>
+									</div>
+								{/if}
 							{/if}
 						</WizardStepScaffold>
 
@@ -1837,7 +1903,7 @@
 						</Button>
 					{:else if currentStep.key === 'property'}
 						{#if propertySub === 'address'}
-							<Button class="gap-1" data-testid="onboarding-property-next-sub" disabled={anyPending} onclick={() => { if (propertyAddressValid()) { seedUnitsForType(); propertySub = 'units'; } }}>
+							<Button class="gap-1" data-testid="onboarding-property-next-sub" disabled={anyPending} onclick={() => { if (propertyAddressValid()) { seedUnitsForStructure(); propertySub = 'units'; } }}>
 								Next <ArrowRight class="h-4 w-4" />
 							</Button>
 						{:else}
@@ -1858,7 +1924,7 @@
 								Finish
 							</Button>
 						{:else}
-							<Button class="gap-1" data-testid="onboarding-finish" disabled={anyPending} onclick={submitLease}>
+							<Button class="gap-1" data-testid="onboarding-finish" disabled={anyPending || leaseSignatureChoiceInvalid} onclick={submitLease}>
 								{saveLeaseMutation.isPending ? 'Creating…' : leasePrefillDraftId != null ? 'Import agreement & finish' : 'Continue to applications'}
 								<CheckCircle2 class="h-4 w-4" />
 							</Button>

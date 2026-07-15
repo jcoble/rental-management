@@ -186,7 +186,8 @@ public sealed class ScanService : IScanService
             target = new(kind, LeaseAgreement: new ScanLeaseTargetData(
                 fields.PropertyId, fields.UnitId, fields.TenantId, fields.TenantName,
                 fields.TenantEmail, fields.TenantPhone, fields.TenantEmergencyContact,
-                fields.PropertyName, fields.PropertyType, fields.PropertyAddress, fields.PropertyCity,
+                fields.PropertyName, fields.PropertyType, fields.RentalStructure,
+                fields.PropertyAddress, fields.PropertyCity,
                 fields.PropertyState, fields.PropertyPostalCode, fields.UnitNumber,
                 fields.UnitBedrooms, fields.UnitBathrooms, fields.UnitSquareFeet, fields.LeaseNumber,
                 fields.StartDate, fields.EndDate, fields.MonthlyRent, fields.SecurityDeposit,
@@ -1285,6 +1286,17 @@ public sealed class ScanService : IScanService
                 fields.PropertyName = propertyName;
             if (TryGetOverrideString(root, out var propertyType, "propertyType", "property_type"))
                 fields.PropertyType = propertyType;
+            if (TryGetOverrideString(root, out var rentalStructure, "rentalStructure", "rental_structure"))
+            {
+                if (!Enum.TryParse<RentalStructure>(rentalStructure, ignoreCase: true, out var parsedStructure)
+                    || !Enum.IsDefined(parsedStructure))
+                {
+                    throw new ScanConfirmationValidationException(
+                        "Rental structure must be SingleRental or MultiRental.");
+                }
+
+                fields.RentalStructure = parsedStructure;
+            }
             if (TryGetOverrideString(root, out var propertyAddress, "propertyAddress", "property_address"))
                 fields.PropertyAddress = propertyAddress;
             if (TryGetOverrideString(root, out var propertyCity, "propertyCity", "property_city"))
@@ -1730,6 +1742,7 @@ public sealed class ScanService : IScanService
         // Property/Unit when the grounded ids were absent or uncertain.
         public string? PropertyName { get; set; }
         public string? PropertyType { get; set; }
+        public RentalStructure? RentalStructure { get; set; }
         public string? PropertyAddress { get; set; }
         public string? PropertyCity { get; set; }
         public string? PropertyState { get; set; }

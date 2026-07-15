@@ -170,7 +170,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         {
             WorkspaceMembershipId = membership.Id,
             PortfolioId = _portfolioId,
-            RoleProfileId = 2,
+            RoleProfileId = 1,
             Status = MembershipRoleAssignmentStatus.Active,
             ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
             EffectiveFromUtc = CommandTime.AddDays(-1),
@@ -348,6 +348,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
             propertyCity: "Akron",
             propertyState: "OH",
             propertyPostalCode: "44308",
+            rentalStructure: RentalStructure.SingleRental,
             unitNumber: null);
         var identity = ScanConfirmationCommandIdentity.Create(
             _portfolioId, source.DraftId, "empty-portfolio-bootstrap");
@@ -384,7 +385,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
     }
 
     [SkippableFact]
-    public async Task ForeignPropertyReference_RejectsAndRollsBackClaimTargetAndReceipt()
+    public async Task ForeignPropertyReference_IsUnauthorizedAndRollsBackClaimTargetAndReceipt()
     {
         SkipIfDockerUnavailable();
         int foreignPropertyId;
@@ -431,7 +432,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
 
         var action = () => UnitOfWork.ExecuteAsync(identity, command, Codec);
 
-        await action.Should().ThrowAsync<ScanConfirmationValidationException>();
+        await action.Should().ThrowAsync<UnauthorizedAccessException>();
         await using var verify = Scope();
         (await verify.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == draftId)).Status
             .Should().Be("Reviewing");
@@ -510,6 +511,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         string? propertyCity = null,
         string? propertyState = null,
         string? propertyPostalCode = null,
+        RentalStructure? rentalStructure = null,
         string? unitNumber = "1") => new(
         propertyId,
         unitId,
@@ -520,6 +522,7 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         TenantEmergencyContact: null,
         PropertyName: propertyName,
         PropertyType: null,
+        RentalStructure: rentalStructure,
         PropertyAddress: propertyAddress,
         PropertyCity: propertyCity,
         PropertyState: propertyState,

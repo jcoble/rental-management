@@ -4,27 +4,32 @@ import { test } from 'node:test';
 
 const source = readFileSync(new URL('./AppShell.svelte', import.meta.url), 'utf8');
 
-test('tenant-only users get a portal security link instead of the protected staff settings route', () => {
+test('relationship users get purpose-built security routes instead of staff settings', () => {
 	assert.match(
 		source,
-		/const userSecurityHref = \$derived\(portalUser \? '\/portal\/security' : '\/settings\/security'\)/
+		/portalUser \? '\/portal\/security' : ownerUser \? '\/owner\/security' : '\/settings\/security'/
 	);
+	assert.match(source, /const canOpenUserSecurity = \$derived\(true\)/);
 	assert.equal(source.match(/href=\{userSecurityHref\}/g)?.length, 2);
 	assert.doesNotMatch(source, /href="\/settings\/security"/);
 });
 
-test('portal security contributes to shell title resolution without becoming a sidebar nav item', () => {
+test('tenant shell uses five plain-language destinations while subpages retain title context', () => {
 	const portalNavStart = source.indexOf('const portalNavItems: NavItem[] = [');
 	const portalUtilityStart = source.indexOf('const portalUtilityItems: NavItem[] = [');
 	const portalNavBlock = source.slice(portalNavStart, portalUtilityStart);
 
 	assert.match(source, /const portalUtilityItems: NavItem\[\] = \[/);
-	assert.match(source, /\{ href: '\/portal\/security', label: 'Security', icon: Shield \}/);
+	for (const label of ['Home', 'Account & lease', 'Maintenance', 'Messages', 'Profile']) {
+		assert.match(portalNavBlock, new RegExp(`label: '${label}'`));
+	}
+	assert.equal(portalNavBlock.match(/\{ href:/g)?.length, 5);
+	assert.match(source, /\{ href: '\/portal\/security', label: 'Profile', icon: Shield \}/);
 	assert.match(source, /portalUser\s+\?\s+\[\.\.\.visiblePortalNavItems, \.\.\.portalUtilityItems\]/);
 	assert.doesNotMatch(portalNavBlock, /href: '\/portal\/security'/);
 });
 
-test('all five experience shells expose personal alerts with consistent alert semantics', () => {
+test('all five experience shells keep personal alerts discoverable without exposing administration', () => {
 	const portalNavStart = source.indexOf('const portalNavItems: NavItem[] = [');
 	const portalNavEnd = source.indexOf('const portalUtilityItems: NavItem[] = [', portalNavStart);
 	const ownerNavStart = source.indexOf('const ownerNavItems: NavItem[] = [');
@@ -37,7 +42,6 @@ test('all five experience shells expose personal alerts with consistent alert se
 	const settingsGroupEnd = source.indexOf('const navGlyphByHref', settingsGroupStart);
 
 	for (const nav of [
-		source.slice(portalNavStart, portalNavEnd),
 		source.slice(ownerNavStart, ownerNavEnd),
 		source.slice(leasingNavStart, leasingNavEnd),
 		source.slice(technicianNavStart, technicianNavEnd),
@@ -48,6 +52,7 @@ test('all five experience shells expose personal alerts with consistent alert se
 			/\{ href: '\/settings\/notifications\/my-alerts', label: 'My alerts', icon: BellRing \}/
 		);
 	}
+	assert.match(source, /\{ href: '\/settings\/notifications\/my-alerts', label: 'Profile', icon: BellRing \}/);
 
 	for (const relationshipNav of [
 		source.slice(portalNavStart, portalNavEnd),
@@ -55,6 +60,10 @@ test('all five experience shells expose personal alerts with consistent alert se
 	]) {
 		assert.doesNotMatch(relationshipNav, /team-routing|tenant-notices/);
 	}
+
+	assert.match(source.slice(leasingNavStart, leasingNavEnd), /href: '\/notices', label: 'Tenant notices'/);
+	assert.doesNotMatch(source.slice(leasingNavStart, leasingNavEnd), /team-routing|settings\/notifications\/tenant-notices/);
+	assert.doesNotMatch(source.slice(technicianNavStart, technicianNavEnd), /team-routing|tenant-notices/);
 });
 
 test('staff money navigation exposes capability-gated first-class sections', () => {

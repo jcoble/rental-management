@@ -97,6 +97,7 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
                work."PortfolioId",
                work."TenantNoticePolicyId",
                work."LeaseManagementId",
+               work."RecipientLeaseManagementPartyId",
                work."TenantLedgerEntryId",
                policy."AutomationKey"
         FROM "TenantNoticeWorkItems" AS work
@@ -193,6 +194,7 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
                  policy."PortfolioId",
                  policy."Id" AS "TenantNoticePolicyId",
                  management."Id" AS "LeaseManagementId",
+                 NULL::integer AS "RecipientLeaseManagementPartyId",
                  lifecycle."TenantAccountId",
                  lifecycle."CurrentAgreementId",
                  lifecycle."BusinessDate",
@@ -228,6 +230,7 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
                  relationship."PortfolioId",
                  relationship."TenantNoticePolicyId",
                  relationship."LeaseManagementId",
+                 relationship."RecipientLeaseManagementPartyId",
                  NULL::bigint AS "TenantLedgerEntryId",
                  relationship."AutomationKey"
           FROM relationships AS relationship
@@ -257,11 +260,13 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
                  relationship."PortfolioId",
                  relationship."TenantNoticePolicyId",
                  relationship."LeaseManagementId",
+                 relationship."RecipientLeaseManagementPartyId",
                  charge."TenantLedgerEntryId",
                  relationship."AutomationKey",
                  row_number() OVER (
                    PARTITION BY relationship."TenantNoticePolicyId",
                                 relationship."LeaseManagementId",
+                                relationship."RecipientLeaseManagementPartyId",
                                 charge."DueOn"
                    ORDER BY CASE WHEN charge."EntryType" = 'RentCharge' THEN 0 ELSE 1 END,
                             charge."OpenAmount" DESC,
@@ -291,6 +296,7 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
                money."PortfolioId",
                money."TenantNoticePolicyId",
                money."LeaseManagementId",
+               money."RecipientLeaseManagementPartyId",
                money."TenantLedgerEntryId",
                money."AutomationKey"
         FROM ranked_money_candidates AS money
@@ -408,20 +414,17 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
               AND party."EffectiveFrom" <= lifecycle."BusinessDate"
               AND (party."EffectiveThrough" IS NULL
                    OR party."EffectiveThrough" >= lifecycle."BusinessDate")
+              AND (source."RecipientLeaseManagementPartyId" IS NULL
+                   OR party."Id" = source."RecipientLeaseManagementPartyId")
               AND ((party."Role" = 'PrimaryTenant' AND policy."IncludePrimaryTenant")
                 OR (party."Role" = 'CoTenant' AND policy."IncludeCoTenant")
                 OR (party."Role" = 'Guarantor' AND policy."IncludeEligibleGuarantor"
+                    AND policy."Classification" = 'Legal'
                     AND party."GuarantorLegalNoticeEligible")
-                OR (party."Role" = 'Occupant' AND policy."IncludeOccupant"))
+                OR (party."Role" = 'Occupant' AND policy."IncludeOccupant"
+                    AND policy."Classification" <> 'Legal'
+                    AND policy."AutomationKey" NOT IN ('rent-reminder', 'late-rent-late-fee')))
               AND (@recipient_tenant_id IS NULL OR tenant."Id" = @recipient_tenant_id)
-            ORDER BY CASE party."Role"
-                       WHEN 'PrimaryTenant' THEN 0
-                       WHEN 'CoTenant' THEN 1
-                       WHEN 'Guarantor' THEN 2
-                       ELSE 3
-                     END,
-                     party."Id"
-            LIMIT 1
           ) AS recipient ON TRUE
           LEFT JOIN "TenantLedgerEntries" AS ledger
             ON ledger."PortfolioId" = source."PortfolioId"
@@ -454,10 +457,7 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
         ),
         token_values AS (
           SELECT candidate.*,
-                 CASE WHEN @recipient_tenant_id IS NULL
-                      THEN 'Resident'
-                      ELSE candidate."TenantName"
-                 END AS "RenderedTenantName",
+                 candidate."TenantName" AS "RenderedTenantName",
                  concat(candidate."PropertyName",
                         CASE WHEN nullif(btrim(candidate."UnitNumber"), '') IS NULL
                              THEN '' ELSE concat(' Unit ', candidate."UnitNumber") END)
@@ -517,6 +517,7 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
                  (COALESCE(token."DueOn", token."TermEndOn", token."BusinessDate")::timestamp
                    AT TIME ZONE token."TimeZone") AS "RenderedTriggerDate",
                  concat(token."PortfolioId", ':', token."AutomationKey", ':', token."LeaseManagementId", ':',
+                        'party:', token."RecipientLeaseManagementPartyId", ':',
                         COALESCE(concat('ledger:', token."TenantLedgerEntryId"),
                                  concat('agreement:', token."CurrentAgreementId"))) AS "DedupeKey"
           FROM token_values AS token
@@ -556,7 +557,7 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
                  candidate."EffectiveNowUtc"
           FROM candidates AS candidate
           WHERE candidate."TenantLedgerEntryId" IS NOT NULL
-          ON CONFLICT ("PortfolioId", "TenantLedgerEntryId", "NoticeType")
+          ON CONFLICT ("PortfolioId", "TenantLedgerEntryId", "RecipientLeaseManagementPartyId", "NoticeType")
             WHERE "TenantLedgerEntryId" IS NOT NULL AND "Status" IN ('Draft', 'Approved')
           DO UPDATE SET "UpdatedAt" = "NoticeDrafts"."UpdatedAt"
           RETURNING "NoticeDrafts".*, (xmax = 0) AS "WasCreated"
@@ -589,7 +590,8 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
                  candidate."EffectiveNowUtc"
           FROM candidates AS candidate
           WHERE candidate."TenantLedgerEntryId" IS NULL
-          ON CONFLICT ("PortfolioId", "LeaseManagementId", "LeaseAgreementId", "NoticeType")
+          ON CONFLICT ("PortfolioId", "LeaseManagementId", "LeaseAgreementId",
+                       "RecipientLeaseManagementPartyId", "NoticeType")
             WHERE "TenantLedgerEntryId" IS NULL
               AND "LeaseAgreementId" IS NOT NULL
               AND "Status" IN ('Draft', 'Approved')
@@ -609,6 +611,7 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
             ON upserted."PortfolioId" = candidate."PortfolioId"
            AND upserted."NoticeType" = candidate."AutomationKey"
            AND upserted."LeaseManagementId" = candidate."LeaseManagementId"
+           AND upserted."RecipientLeaseManagementPartyId" = candidate."RecipientLeaseManagementPartyId"
            AND upserted."LeaseAgreementId" = COALESCE(candidate."LedgerLeaseAgreementId", candidate."CurrentAgreementId")
            AND upserted."TenantLedgerEntryId" IS NOT DISTINCT FROM candidate."TenantLedgerEntryId"
         )

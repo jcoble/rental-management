@@ -1,5 +1,5 @@
-import { CAPABILITY } from '$lib/auth/experience-policy';
-import { SCAN_DOC_TYPES, type ScanDocType } from './scan-context';
+import { CAPABILITY } from '../auth/experience-policy.ts';
+import { SCAN_DOC_TYPES, type ScanDocType } from './scan-context.ts';
 
 /**
  * The scan launcher is a command surface, not merely navigation. Keep its choices aligned with the

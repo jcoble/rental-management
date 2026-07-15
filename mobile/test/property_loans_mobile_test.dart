@@ -5,6 +5,8 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:rental_command/core/auth/auth_controller.dart';
+import 'package:rental_command/core/auth/auth_models.dart';
 import 'package:rental_command/core/models/models.dart';
 import 'package:rental_command/features/properties/properties_repository.dart';
 import 'package:rental_command/features/properties/property_detail_screen.dart';
@@ -125,6 +127,11 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          authControllerProvider.overrideWith(
+            () => _StaticAuthController(
+              _managementAuthority({'money.expenses.manage'}),
+            ),
+          ),
           propertiesRepositoryProvider.overrideWithValue(
             _FakePropertiesRepository(),
           ),
@@ -163,6 +170,47 @@ void main() {
     expect(find.text('Record voice note'), findsNothing);
     expect(find.text('Take a photo'), findsOneWidget);
   });
+}
+
+AuthStateAuthenticated _managementAuthority(Set<String> capabilities) {
+  const experience = WorkspaceExperience.management;
+  return AuthStateAuthenticated(
+    const AuthUser(
+      id: 1,
+      email: 'manager@example.test',
+      displayName: 'Test manager',
+      emailVerified: true,
+    ),
+    AccessEnvelope(
+      identity: const AccessIdentity(userId: 1, displayName: 'Test manager'),
+      selectedContext: const SelectedAccessContext(
+        accessContextId: 1,
+        portfolioId: 1,
+        workspaceName: 'Test workspace',
+        accessRevision: 1,
+        activeExperience: experience,
+      ),
+      defaultExperience: experience,
+      availableExperiences: const [experience],
+      assignments: const [],
+      navigation: [
+        NavigationCapabilities(
+          experience: experience,
+          capabilityKeys: capabilities.toList(growable: false),
+        ),
+      ],
+    ),
+    activeExperience: experience,
+  );
+}
+
+class _StaticAuthController extends AuthController {
+  _StaticAuthController(this.initialState);
+
+  final AuthState initialState;
+
+  @override
+  AuthState build() => initialState;
 }
 
 Map<String, dynamic> _loanJson({
@@ -228,6 +276,7 @@ Property _property() {
     portfolioId: 1,
     name: 'Lake House',
     type: 'SingleFamily',
+    rentalStructure: RentalStructure.singleRental,
     status: 'Active',
     addressLine1: '12 Lake Dr',
     city: 'Akron',

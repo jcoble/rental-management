@@ -18,6 +18,9 @@ public interface ITenantService
         WorkspaceReadScope scope, int id, CancellationToken ct = default);
     Task<TenantResponse?> CreateAuthorizedAsync(
         WorkspaceReadScope scope, CreateTenantRequest request, string operationKey, CancellationToken ct = default);
+    Task<IReadOnlyList<TenantResponse>> CreateGuidedSetupBatchAsync(
+        WorkspaceReadScope scope, GuidedTenantSetupRequest request, string operationKey,
+        CancellationToken ct = default);
     Task<TenantResponse?> UpdateAuthorizedAsync(
         WorkspaceReadScope scope, int id, UpdateTenantRequest request, string operationKey, CancellationToken ct = default);
     Task<bool> DeleteAuthorizedAsync(

@@ -371,20 +371,12 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
     private Task<int> ResolveBuiltInSourceAsync(
         int portfolioId, int actorUserId, CancellationToken ct)
     {
-        const string businessKey = "built-in:lease-agreement:v1";
-        const string rendererKey = "rental-command-built-in-lease-agreement";
-        const int rendererVersion = 1;
         return _sourceVersions.ResolveBuiltInAsync(
             portfolioId,
-            businessKey,
-            rendererKey,
-            rendererVersion,
-            JsonSerializer.Serialize(new
-            {
-                rendererKey,
-                rendererVersion,
-                termsContract = "lease-agreement-render-data-v1",
-            }, JsonOptions),
+            BuiltInLeaseAgreementSource.BusinessKey,
+            BuiltInLeaseAgreementSource.RendererKey,
+            BuiltInLeaseAgreementSource.RendererVersion,
+            BuiltInLeaseAgreementSource.SnapshotPayload,
             actorUserId,
             DateTime.UtcNow,
             ct);

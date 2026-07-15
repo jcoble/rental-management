@@ -19,6 +19,7 @@ public sealed class TenantNoticeCandidateGenerationService : ITenantNoticeCandid
                  policy."LeadDays",
                  policy."SendHourLocal",
                  management."Id" AS "LeaseManagementId",
+                 party."Id" AS "RecipientLeaseManagementPartyId",
                  management."EndingDisposition",
                  lifecycle."TenantAccountId",
                  lifecycle."CurrentAgreementId",
@@ -46,6 +47,24 @@ public sealed class TenantNoticeCandidateGenerationService : ITenantNoticeCandid
            AND account."LeaseManagementId" = lifecycle."LeaseManagementId"
            AND account."Id" = lifecycle."TenantAccountId"
            AND account."ClosedAtUtc" IS NULL
+          INNER JOIN "LeaseManagementParties" AS party
+            ON party."PortfolioId" = lifecycle."PortfolioId"
+           AND party."LeaseManagementId" = lifecycle."LeaseManagementId"
+           AND party."EffectiveFrom" <= lifecycle."BusinessDate"
+           AND (party."EffectiveThrough" IS NULL
+                OR party."EffectiveThrough" >= lifecycle."BusinessDate")
+           AND ((party."Role" = 'PrimaryTenant' AND policy."IncludePrimaryTenant")
+             OR (party."Role" = 'CoTenant' AND policy."IncludeCoTenant")
+             OR (party."Role" = 'Guarantor' AND policy."IncludeEligibleGuarantor"
+                 AND policy."Classification" = 'Legal'
+                 AND party."GuarantorLegalNoticeEligible")
+             OR (party."Role" = 'Occupant' AND policy."IncludeOccupant"
+                 AND policy."Classification" <> 'Legal'
+                 AND policy."AutomationKey" NOT IN ('rent-reminder', 'late-rent-late-fee')))
+          INNER JOIN "Tenants" AS tenant
+            ON tenant."PortfolioId" = party."PortfolioId"
+           AND tenant."Id" = party."TenantId"
+           AND tenant."DeletedAt" IS NULL
           INNER JOIN "Portfolios" AS portfolio
             ON portfolio."Id" = policy."PortfolioId"
            AND portfolio."DeletedAt" IS NULL
@@ -54,50 +73,50 @@ public sealed class TenantNoticeCandidateGenerationService : ITenantNoticeCandid
             AND NOT lifecycle."HasReconciliationException"
             AND management."CanceledAtUtc" IS NULL
             AND management."PossessionReturnedAtUtc" IS NULL
-            AND EXISTS (
-              SELECT 1
-              FROM "LeaseManagementParties" AS party
-              INNER JOIN "Tenants" AS tenant
-                ON tenant."PortfolioId" = party."PortfolioId"
-               AND tenant."Id" = party."TenantId"
-               AND tenant."DeletedAt" IS NULL
-              WHERE party."PortfolioId" = lifecycle."PortfolioId"
-                AND party."LeaseManagementId" = lifecycle."LeaseManagementId"
-                AND party."EffectiveFrom" <= lifecycle."BusinessDate"
-                AND (party."EffectiveThrough" IS NULL
-                     OR party."EffectiveThrough" >= lifecycle."BusinessDate")
-                AND ((party."Role" = 'PrimaryTenant' AND policy."IncludePrimaryTenant")
-                  OR (party."Role" = 'CoTenant' AND policy."IncludeCoTenant")
-                  OR (party."Role" = 'Guarantor' AND policy."IncludeEligibleGuarantor"
-                      AND party."GuarantorLegalNoticeEligible")
-                  OR (party."Role" = 'Occupant' AND policy."IncludeOccupant"))
-                AND ((policy."SendEmail" AND nullif(btrim(tenant."Email"), '') IS NOT NULL)
-                  OR (policy."SendSms" AND nullif(btrim(tenant."Phone"), '') IS NOT NULL)
-                  OR ((policy."SendTenantPortal" OR policy."SendMobilePush") AND EXISTS (
-                      SELECT 1
-                      FROM "TenantUserAccesses" AS tenant_access
-                      INNER JOIN "WorkspaceAccessContexts" AS access_context
-                        ON access_context."Id" = tenant_access."AccessContextId"
-                       AND access_context."UserId" = tenant_access."ApplicationUserId"
-                       AND access_context."PortfolioId" = tenant_access."PortfolioId"
-                      WHERE tenant_access."PortfolioId" = party."PortfolioId"
-                        AND tenant_access."LeaseManagementPartyId" = party."Id"
-                        AND tenant_access."RevokedAtUtc" IS NULL
-                        AND access_context."Status" = 'Active'
-                        AND access_context."SuspendedAtUtc" IS NULL
-                        AND access_context."RevokedAtUtc" IS NULL)))
-            )
+            AND ((policy."SendEmail" AND nullif(btrim(tenant."Email"), '') IS NOT NULL)
+              OR (policy."SendSms" AND nullif(btrim(tenant."Phone"), '') IS NOT NULL)
+              OR (policy."SendTenantPortal" AND EXISTS (
+                  SELECT 1
+                  FROM "TenantUserAccesses" AS tenant_access
+                  INNER JOIN "WorkspaceAccessContexts" AS access_context
+                    ON access_context."Id" = tenant_access."AccessContextId"
+                   AND access_context."UserId" = tenant_access."ApplicationUserId"
+                   AND access_context."PortfolioId" = tenant_access."PortfolioId"
+                  WHERE tenant_access."PortfolioId" = party."PortfolioId"
+                    AND tenant_access."LeaseManagementPartyId" = party."Id"
+                    AND tenant_access."RevokedAtUtc" IS NULL
+                    AND access_context."Status" = 'Active'
+                    AND access_context."SuspendedAtUtc" IS NULL
+                    AND access_context."RevokedAtUtc" IS NULL))
+              OR (policy."SendMobilePush" AND EXISTS (
+                  SELECT 1
+                  FROM "TenantUserAccesses" AS tenant_access
+                  INNER JOIN "WorkspaceAccessContexts" AS access_context
+                    ON access_context."Id" = tenant_access."AccessContextId"
+                   AND access_context."UserId" = tenant_access."ApplicationUserId"
+                   AND access_context."PortfolioId" = tenant_access."PortfolioId"
+                  INNER JOIN "DeviceTokens" AS device
+                    ON device."PortfolioId" = tenant_access."PortfolioId"
+                   AND device."UserId" = tenant_access."ApplicationUserId"
+                  WHERE tenant_access."PortfolioId" = party."PortfolioId"
+                    AND tenant_access."LeaseManagementPartyId" = party."Id"
+                    AND tenant_access."RevokedAtUtc" IS NULL
+                    AND access_context."Status" = 'Active'
+                    AND access_context."SuspendedAtUtc" IS NULL
+                    AND access_context."RevokedAtUtc" IS NULL)))
         ),
         lease_end_candidates AS (
           SELECT relationship."PortfolioId",
                  relationship."TenantNoticePolicyId",
                  relationship."LeaseManagementId",
+                 relationship."RecipientLeaseManagementPartyId",
                  NULL::bigint AS "TenantLedgerEntryId",
                  ((relationship."TermEndOn" - relationship."LeadDays"
                     + relationship."SendHourLocal" * interval '1 hour')
                    AT TIME ZONE relationship."TimeZone") AS "DueAtUtc",
                  concat('tenant-notice:', relationship."PortfolioId", ':',
                         relationship."TenantNoticePolicyId", ':', relationship."LeaseManagementId",
+                        ':party:', relationship."RecipientLeaseManagementPartyId",
                         ':agreement:', relationship."CurrentAgreementId", ':', relationship."TermEndOn")
                    AS "BusinessKey",
                  relationship."EffectiveNowUtc"
@@ -114,6 +133,7 @@ public sealed class TenantNoticeCandidateGenerationService : ITenantNoticeCandid
           SELECT relationship."PortfolioId",
                  relationship."TenantNoticePolicyId",
                  relationship."LeaseManagementId",
+                 relationship."RecipientLeaseManagementPartyId",
                  charge."TenantLedgerEntryId",
                  charge."DueOn",
                  relationship."LeadDays",
@@ -124,6 +144,7 @@ public sealed class TenantNoticeCandidateGenerationService : ITenantNoticeCandid
                  row_number() OVER (
                    PARTITION BY relationship."TenantNoticePolicyId",
                                 relationship."LeaseManagementId",
+                                relationship."RecipientLeaseManagementPartyId",
                                 charge."DueOn"
                    ORDER BY CASE WHEN charge."EntryType" = 'RentCharge' THEN 0 ELSE 1 END,
                             charge."OpenAmount" DESC,
@@ -146,6 +167,7 @@ public sealed class TenantNoticeCandidateGenerationService : ITenantNoticeCandid
           SELECT money."PortfolioId",
                  money."TenantNoticePolicyId",
                  money."LeaseManagementId",
+                 money."RecipientLeaseManagementPartyId",
                  money."TenantLedgerEntryId",
                  (((CASE money."AutomationKey"
                        WHEN 'rent-reminder' THEN money."DueOn" - money."LeadDays"
@@ -153,7 +175,8 @@ public sealed class TenantNoticeCandidateGenerationService : ITenantNoticeCandid
                      END) + money."SendHourLocal" * interval '1 hour')
                    AT TIME ZONE money."TimeZone") AS "DueAtUtc",
                  concat('tenant-notice:', money."PortfolioId", ':', money."TenantNoticePolicyId",
-                        ':', money."LeaseManagementId", ':ledger:', money."TenantLedgerEntryId")
+                        ':', money."LeaseManagementId", ':party:', money."RecipientLeaseManagementPartyId",
+                        ':ledger:', money."TenantLedgerEntryId")
                    AS "BusinessKey",
                  money."EffectiveNowUtc"
           FROM ranked_money_candidates AS money
@@ -165,11 +188,13 @@ public sealed class TenantNoticeCandidateGenerationService : ITenantNoticeCandid
           SELECT * FROM money_candidates
         )
         INSERT INTO "TenantNoticeWorkItems"
-            ("PortfolioId", "TenantNoticePolicyId", "LeaseManagementId", "TenantLedgerEntryId",
+            ("PortfolioId", "TenantNoticePolicyId", "LeaseManagementId",
+             "RecipientLeaseManagementPartyId", "TenantLedgerEntryId",
              "DueAtUtc", "Status", "BusinessKey", "AttemptCount", "CreatedAtUtc")
         SELECT candidate."PortfolioId",
                candidate."TenantNoticePolicyId",
                candidate."LeaseManagementId",
+               candidate."RecipientLeaseManagementPartyId",
                candidate."TenantLedgerEntryId",
                candidate."DueAtUtc",
                'Pending',

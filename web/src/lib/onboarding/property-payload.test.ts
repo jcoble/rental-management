@@ -10,6 +10,7 @@ import {
 const propertyForm = {
 	name: 'Maple Grove Duplex',
 	type: 'MultiFamily',
+	rentalStructure: 'MultiRental' as const,
 	addressLine1: '1100 Maple Ave',
 	addressLine2: '',
 	city: 'Columbus',
@@ -94,6 +95,7 @@ test('selected property fills the editable onboarding property fields', () => {
 			id: 11,
 			name: 'Clintonville Townhome',
 			type: 'Townhome',
+			rentalStructure: 'SingleRental',
 			addressLine1: '88 Maple Ave',
 			addressLine2: 'Unit Main',
 			city: 'Columbus',
@@ -104,6 +106,7 @@ test('selected property fills the editable onboarding property fields', () => {
 		{
 			name: 'Clintonville Townhome',
 			type: 'Townhome',
+			rentalStructure: 'SingleRental',
 			addressLine1: '88 Maple Ave',
 			addressLine2: 'Unit Main',
 			city: 'Columbus',

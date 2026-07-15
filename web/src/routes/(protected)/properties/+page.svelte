@@ -39,6 +39,7 @@
 		createEmptyPropertyDraft,
 		getPropertiesEmptyStateCopy
 	} from '$lib/properties/property-list-state';
+	import { propertyUpdateFields } from '$lib/properties/property-update-payload';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -141,12 +142,12 @@
 	const deleteState = $derived(deleteTarget ? getPropertyDeleteState(deleteTarget) : null);
 
 	const propertySteps: FormStepperStep[] = [
-		{ id: 'identity', label: 'Identity', description: 'Name and type' },
+		{ id: 'identity', label: 'Identity', description: 'Name and rental setup' },
 		{ id: 'address', label: 'Address', description: 'Street and ZIP' },
 		{ id: 'setup', label: 'Setup', description: 'Status and owner' },
 	];
 	const propertyStepFields = [
-		['name', 'type'],
+		['name', 'type', 'rentalStructure'],
 		['addressLine1', 'city', 'state', 'postalCode'],
 		['status', 'addressLine2', 'ownerEntityId'],
 	] as const;
@@ -177,10 +178,10 @@
 	}
 
 	const savePropertyMutation = createMutation(() => ({
-		mutationFn: ({ id, data }: { id: number | null; data: Record<string, unknown> }) =>
-			id == null ? properties.create(data) : properties.update(id, data),
-		onSuccess: (_res, vars) => {
-			showSuccess(vars.id == null ? 'Property created.' : 'Property updated.');
+		mutationFn: ({ id, data }: { id: number; data: Record<string, unknown> }) =>
+			properties.update(id, data),
+		onSuccess: () => {
+			showSuccess('Property updated.');
 			closeForm();
 			invalidateList();
 		},
@@ -199,12 +200,7 @@
 
 	function openCreate() {
 		if (!canManageRentals) return;
-		editingId = null;
-		form = createEmptyPropertyDraft({ typeFilter, statusFilter });
-		formErrors = {};
-		propertyStep = 0;
-		completedPropertySteps = [];
-		showForm = true;
+		void goto('/onboarding?step=property&from=properties');
 	}
 
 	function openEdit(p: Property) {
@@ -213,6 +209,7 @@
 		form = {
 			name: p.name,
 			type: p.type ?? 'MultiFamily',
+			rentalStructure: p.rentalStructure,
 			status: p.status ?? 'Active',
 			addressLine1: p.addressLine1,
 			addressLine2: p.addressLine2 ?? '',
@@ -273,6 +270,7 @@
 
 	function submitProperty() {
 		if (!canManageRentals) return;
+		if (editingId == null) return;
 		const result = parseForm(propertySchema, form);
 		if (result.errors) {
 			formErrors = result.errors;
@@ -284,11 +282,12 @@
 			return;
 		}
 		formErrors = {};
+		const mutableProperty = propertyUpdateFields(result.data);
 		savePropertyMutation.mutate({
 			id: editingId,
 			data: {
 				portfolioId,
-				...result.data,
+				...mutableProperty,
 				clearOwnerEntity: result.data.ownerEntityId == null,
 			},
 		});
@@ -474,7 +473,7 @@
 		>
 			<div class="space-y-3" data-testid="property-form">
 				{#if propertyStep === 0}
-					<PropertyFields bind:form errors={formErrors} section="identity" />
+					<PropertyFields bind:form errors={formErrors} section="identity" rentalStructureLocked={editingId != null} />
 				{:else if propertyStep === 1}
 					<PropertyFields bind:form errors={formErrors} section="address" />
 				{:else}

@@ -1,4 +1,4 @@
-import type { Property, Unit } from '$lib/types';
+import type { Property, RentalStructure, Unit } from '$lib/types';
 import { api } from '../client';
 import { idempotentMutation } from '../idempotency';
 import { buildListQuery, type ListParams } from '../list-params';
@@ -15,6 +15,18 @@ export interface PropertyListResponse {
 	take: number;
 }
 
+export interface SetupPropertyRequest {
+	propertyId?: number;
+	property: Record<string, unknown> & { rentalStructure: RentalStructure };
+	units: Record<string, unknown>[];
+}
+
+export interface SetupPropertyResponse {
+	property: Property;
+	units: Unit[];
+	updated: boolean;
+}
+
 export const properties = {
 	list: (portfolioId: number, params?: ListParams) =>
 		api.get<Property[]>(`/properties${buildListQuery(params, { portfolioId })}`),
@@ -27,9 +39,11 @@ export const properties = {
 			})}`
 		),
 	get: (id: number) => api.get<Property>(`/properties/${id}`),
-	create: (data: Record<string, unknown>) =>
-		idempotentMutation(`properties:create:${JSON.stringify(data)}`, (key) =>
-			api.post<Property>('/properties', data, { headers: { 'Idempotency-Key': key } })
+	setup: (data: SetupPropertyRequest) =>
+		idempotentMutation(`properties:setup:${JSON.stringify(data)}`, (key) =>
+			api.post<SetupPropertyResponse>('/properties/setup', data, {
+				headers: { 'Idempotency-Key': key }
+			})
 		),
 	update: (id: number, data: Record<string, unknown>) =>
 		idempotentMutation(`properties:update:${id}:${JSON.stringify(data)}`, (key) =>

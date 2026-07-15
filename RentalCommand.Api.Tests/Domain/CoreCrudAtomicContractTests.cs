@@ -10,7 +10,6 @@ namespace RentalCommand.Api.Tests.Domain;
 public sealed class CoreCrudAtomicContractTests
 {
     [Theory]
-    [InlineData(typeof(PropertyController))]
     [InlineData(typeof(OwnerEntityController))]
     [InlineData(typeof(TenantController))]
     [InlineData(typeof(VendorController))]
@@ -38,6 +37,47 @@ public sealed class CoreCrudAtomicContractTests
         source.Should().Contain("ReadDatabaseClockUtcAsync");
         source.Should().NotContain("ExecuteUpdateAsync");
         source.Should().NotContain("ExecuteDeleteAsync");
+    }
+
+    [Fact]
+    public void PropertySetupIsOneReceiptBackedMutationWithNoImplicitCanonicalUnitPath()
+    {
+        var setup = typeof(PropertyController).GetMethod(nameof(PropertyController.Setup));
+        setup.Should().NotBeNull();
+        setup!.GetParameters().Any(parameter =>
+            parameter.GetCustomAttribute<FromHeaderAttribute>()?.Name == "Idempotency-Key")
+            .Should().BeTrue();
+        typeof(PropertyController).GetMethod("Create").Should().BeNull(
+            "Property creation must go through setup so Property and Units commit together");
+
+        var source = ReadSource("RentalCommand.Api", "Services", "Domain", "AtomicCoreCrudMutation.cs");
+        source.Should().Contain("AtomicCoreCrudMutationOperation.Setup");
+        source.Should().Contain("SetupPropertyAsync");
+        source.Should().NotContain("NewCanonicalUnit");
+        source.Should().NotContain("Canonical unit created");
+    }
+
+    [Fact]
+    public void GuidedTenantSetupIsOneReceiptBackedBatchWithoutAClientMutationLoop()
+    {
+        var endpoint = typeof(TenantController).GetMethod(nameof(TenantController.CreateGuidedSetupBatch));
+        endpoint.Should().NotBeNull();
+        endpoint!.GetParameters().Any(parameter =>
+            parameter.GetCustomAttribute<FromHeaderAttribute>()?.Name == "Idempotency-Key")
+            .Should().BeTrue();
+        typeof(AtomicGuidedTenantSetupHandler)
+            .Should().Implement<IAtomicReplayAuthorizer<AtomicGuidedTenantSetupCommand>>();
+
+        var handler = ReadSource(
+            "RentalCommand.Api", "Services", "Domain", "AtomicGuidedTenantSetup.cs");
+        handler.Should().Contain("CapabilityKeys.SecurityManage");
+        handler.Should().NotContain("CapabilityKeys.RentalsManage");
+        handler.Should().NotContain("CapabilityKeys.LeasingOnboardingManage");
+
+        var onboarding = ReadSource("web", "src", "routes", "(protected)", "onboarding", "+page.svelte");
+        onboarding.Should().Contain("tenants.createGuidedSetupBatch(rows)");
+        onboarding.Should().NotContain("made.push(await tenants.create(t))");
+        onboarding.Should().NotContain("for (const t of rows)");
     }
 
     [Fact]

@@ -49,21 +49,28 @@ public class PropertyController : ManagementControllerBase
         return item == null ? NotFound(new { error = "Property not found" }) : Ok(item);
     }
 
-    [HttpPost]
-    [ProducesResponseType(typeof(PropertyResponse), StatusCodes.Status201Created)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<PropertyResponse>> Create(
-        [FromBody] CreatePropertyRequest request,
+    /// <summary>
+    /// Creates or updates one Property and explicitly supplied Units in one receipt-backed database
+    /// transaction. No implicit Unit is created from the Property type or RentalStructure.
+    /// </summary>
+    [HttpPost("setup")]
+    [ProducesResponseType(typeof(PropertySetupResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(PropertySetupResponse), StatusCodes.Status201Created)]
+    public async Task<ActionResult<PropertySetupResponse>> Setup(
+        [FromBody] SetupPropertyRequest request,
         [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
         if (!TryReadManagementScope(out var scope)) return Forbid();
         if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
             return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
-        var created = await _service.CreateAsync(scope, request, operationKey, ct);
-        return created == null
-            ? NotFound(new { error = "Referenced owner or owner entity not found in this portfolio" })
-            : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
+
+        var result = await _service.SetupAsync(scope, request, operationKey, ct);
+        if (result is null)
+            return NotFound(new { error = "Property, owner, or owner entity not found in this portfolio" });
+        return result.Updated
+            ? Ok(result)
+            : CreatedAtAction(nameof(Get), new { id = result.Property.Id }, result);
     }
 
     [HttpPatch("{id:int}")]

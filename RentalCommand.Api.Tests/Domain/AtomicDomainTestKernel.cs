@@ -58,6 +58,10 @@ internal static class AtomicDomainTestKernel
             AtomicCoreCrudMutationCommand,
             AtomicCoreCrudMutationResult,
             AtomicCoreCrudMutationHandler>();
+        services.AddAtomicCommandHandler<
+            AtomicGuidedTenantSetupCommand,
+            AtomicGuidedTenantSetupResult,
+            AtomicGuidedTenantSetupHandler>();
         return services.BuildServiceProvider();
     }
 

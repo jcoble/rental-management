@@ -160,6 +160,12 @@ public sealed class TenantNoticeWorkItem
     public int TenantNoticePolicyId { get; set; }
     public int LeaseManagementId { get; set; }
     /// <summary>
+    /// Exact effective relationship party this work item will render and deliver to. Keeping the
+    /// recipient on the durable work row prevents a multi-recipient policy from collapsing to one
+    /// arbitrary tenant during retries or concurrent generation.
+    /// </summary>
+    public int RecipientLeaseManagementPartyId { get; set; }
+    /// <summary>
     /// Exact canonical charge that triggered a rent reminder or past-due notice. Lease-lifecycle
     /// candidates do not have a ledger entry.
     /// </summary>
@@ -173,4 +179,5 @@ public sealed class TenantNoticeWorkItem
     public DateTime? ClaimExpiresAtUtc { get; set; }
     public DateTime CreatedAtUtc { get; set; }
     public TenantNoticePolicy? Policy { get; set; }
+    public LeaseManagementParty? RecipientLeaseManagementParty { get; set; }
 }

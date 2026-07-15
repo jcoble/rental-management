@@ -53,6 +53,18 @@ public class TenantService : ITenantService
         return DeserializeSnapshot<TenantResponse>(outcome.Value);
     }
 
+    public async Task<IReadOnlyList<TenantResponse>> CreateGuidedSetupBatchAsync(
+        WorkspaceReadScope scope,
+        GuidedTenantSetupRequest request,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicGuidedTenantSetup.Command(scope, request, operationKey);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicGuidedTenantSetup.Identity(command), command, AtomicGuidedTenantSetup.Codec, ct);
+        return JsonSerializer.Deserialize<List<TenantResponse>>(outcome.Value.TenantsJson) ?? [];
+    }
+
     public async Task<TenantResponse?> UpdateAuthorizedAsync(
         WorkspaceReadScope scope,
         int id,

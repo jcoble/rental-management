@@ -3,9 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/auth/auth_controller.dart';
+import '../../core/auth/mobile_access_policy.dart';
 import '../home/mobile_quick_action_helpers.dart';
 import '../home/mobile_role_shell.dart';
 import '../home/mobile_shell_actions.dart';
+import '../notices/notices_screen.dart';
 import 'leasing_detail_screens.dart';
 import 'leasing_workspace_repository.dart';
 
@@ -98,6 +101,11 @@ class _LeasingTodayTabState extends ConsumerState<_LeasingTodayTab> {
 
   @override
   Widget build(BuildContext context) {
+    final auth = ref.watch(authControllerProvider);
+    final canReviewTenantNotices =
+        auth is AuthStateAuthenticated &&
+        canManagePropertyTenantNoticeDrafts(auth.capabilities);
+
     return FutureBuilder<LeasingToday>(
       future: _future,
       builder: (context, snapshot) {
@@ -154,6 +162,28 @@ class _LeasingTodayTabState extends ConsumerState<_LeasingTodayTab> {
                 label: 'Unread conversations',
                 value: today.unreadConversations,
               ),
+              if (canReviewTenantNotices) ...[
+                const SizedBox(height: 8),
+                Card(
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    leading: const Icon(Symbols.mark_email_unread_rounded),
+                    title: const Text('Tenant notices'),
+                    subtitle: const Text(
+                      'Review renewal, late-rent, and move-out drafts for your assigned rentals.',
+                    ),
+                    trailing: const Icon(Symbols.chevron_right_rounded),
+                    onTap: () => Navigator.of(context).push<void>(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const NoticesScreen(),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
               const SizedBox(height: 8),
               Card(
                 child: Padding(

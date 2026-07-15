@@ -69,7 +69,10 @@ public sealed class NoticeDraftGenerationServiceTests
         var token = Guid.Empty;
         var work = Work(isAuto: false);
         var claims = Claims(work, claimedToken => token = claimedToken);
-        claims.Setup(store => store.CompleteAsync(work.Id, token, It.IsAny<CancellationToken>()))
+        claims.Setup(store => store.CompleteAsync(
+                work.Id,
+                It.Is<Guid>(claimedToken => claimedToken == token),
+                It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
         var drafts = new Mock<ITenantNoticeDraftSetStore>(MockBehavior.Strict);
         drafts.Setup(store => store.GenerateClaimedBatchAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
@@ -122,9 +125,10 @@ public sealed class NoticeDraftGenerationServiceTests
         PortfolioId = 7,
         TenantNoticePolicyId = 12,
         LeaseManagementId = 23,
+        RecipientLeaseManagementPartyId = 24,
         TenantLedgerEntryId = 34,
         DueAtUtc = DateTime.UtcNow.AddMinutes(-1),
-        BusinessKey = "tenant-notice:7:12:23:ledger:34",
+        BusinessKey = "tenant-notice:7:12:23:party:24:ledger:34",
         AttemptCount = 1,
         AutomationKey = "rent-reminder",
         IsAuto = isAuto,

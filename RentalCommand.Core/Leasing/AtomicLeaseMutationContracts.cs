@@ -140,6 +140,12 @@ public interface IAtomicLeaseMutationPersistence
         DateTime createdAtUtc,
         CancellationToken ct = default);
 
+    Task<AtomicLegalDocumentSourceVersionResult> ResolveBuiltInDocumentSourceVersionAsync(
+        int portfolioId,
+        int actorUserId,
+        DateTime createdAtUtc,
+        CancellationToken ct = default);
+
     Task<AtomicLegalDocumentSourceVersionResult> ResolveImportedDocumentSourceVersionAsync(
         int portfolioId,
         int sourceStoredFileId,

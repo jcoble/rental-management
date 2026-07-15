@@ -15,21 +15,23 @@ import 'property_form_sheet.dart';
 import 'properties_repository.dart';
 import 'property_detail_screen.dart';
 
-/// Opens the "New property" bottom sheet and resolves to `true` once a property
-/// was created (the sheet pops `true` on save), or `null`/`false` if dismissed.
+/// Opens the "New property" bottom sheet and returns the atomic Property + Unit
+/// setup result. A dismissed sheet returns `null`.
 ///
 /// Shared by the properties-list FAB and the first-login Live setup screen so
 /// both use the same create flow (no duplicate form). [onSaved] still fires on
 /// save for callers that want to refresh a list in place.
-Future<bool?> showAddPropertySheet(
+Future<PropertySetupResult?> showAddPropertySheet(
   BuildContext context, {
   VoidCallback? onSaved,
 }) async {
+  PropertySetupResult? setupResult;
   final saved = await showPropertyFormSheet(
     context,
     onSaved: (_) => onSaved?.call(),
+    onSetupSaved: (result) => setupResult = result,
   );
-  return saved == null ? null : true;
+  return saved == null ? null : setupResult;
 }
 
 /// Full-page list of properties with pull-to-refresh and an add-property FAB.
@@ -315,6 +317,8 @@ class _PropertyCard extends StatelessWidget {
     final colorScheme = theme.colorScheme;
     final unitCount = property.unitCount ?? 0;
     final occupied = property.occupiedUnits ?? 0;
+    final isSingleRental =
+        property.rentalStructure == RentalStructure.singleRental;
 
     return MobileM3ListItem(
       position: position,
@@ -348,10 +352,19 @@ class _PropertyCard extends StatelessWidget {
         children: [
           _StatusChip(status: property.status, colorScheme: colorScheme),
           _MetaChip(
-            icon: Icons.apartment_outlined,
-            label: '$unitCount ${unitCount == 1 ? 'unit' : 'units'}',
+            icon: isSingleRental
+                ? Icons.home_outlined
+                : Icons.apartment_outlined,
+            label: isSingleRental
+                ? 'One rental'
+                : '$unitCount ${unitCount == 1 ? 'unit' : 'units'}',
           ),
-          _MetaChip(icon: Icons.person_outline, label: '$occupied occupied'),
+          _MetaChip(
+            icon: Icons.person_outline,
+            label: isSingleRental
+                ? (occupied > 0 ? 'Occupied' : 'Vacant')
+                : '$occupied occupied',
+          ),
           _MetaChip(
             icon: Icons.home_outlined,
             label: _formatPropertyType(property.type),

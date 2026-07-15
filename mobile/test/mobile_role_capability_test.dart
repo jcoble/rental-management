@@ -19,6 +19,7 @@ void main() {
     'money.owner-reports.read',
     'money.reconciliation.operate',
     'responsibility.assign-existing-member',
+    'notifications.tenant-notices.manage',
   };
 
   const leasingCapabilities = <String>{
@@ -371,15 +372,54 @@ void main() {
     }
   });
 
+  test(
+    'property-scoped notice drafts do not grant workspace notification administration',
+    () {
+      for (final experience in [
+        WorkspaceExperience.management,
+        WorkspaceExperience.leasing,
+      ]) {
+        expect(
+          canManagePropertyTenantNoticeDrafts({tenantNoticeDraftCapability}),
+          isTrue,
+        );
+        for (final path in [
+          '/settings/notifications/team-routing',
+          '/settings/notifications/tenant-notices',
+        ]) {
+          expect(
+            canOpenMobilePath(
+              experience: experience,
+              capabilities: const {tenantNoticeDraftCapability},
+              path: path,
+            ),
+            isFalse,
+            reason:
+                'Draft review must not unlock workspace notification policy at $path.',
+          );
+        }
+      }
+    },
+  );
+
   test('workspace setup is management-only and capability-gated', () {
     for (final path in ['/choose-setup', '/setting-up', '/live-setup']) {
+      expect(
+        canOpenMobilePath(
+          experience: WorkspaceExperience.management,
+          capabilities: const {'security.manage'},
+          path: path,
+        ),
+        isTrue,
+      );
       expect(
         canOpenMobilePath(
           experience: WorkspaceExperience.management,
           capabilities: const {'rentals.manage'},
           path: path,
         ),
-        isTrue,
+        isFalse,
+        reason: 'Property Managers do not administer workspace setup.',
       );
       expect(
         canOpenMobilePath(

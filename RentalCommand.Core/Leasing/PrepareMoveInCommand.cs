@@ -37,7 +37,7 @@ public sealed record PrepareMoveInCommand(
     DateTime? PlannedPossessionAtUtc,
     DateOnly PartyEffectiveFrom,
     IReadOnlyList<PrepareMoveInParty> Parties,
-    int DocumentTemplateId,
+    int? DocumentTemplateId,
     LeaseAgreementTermType TermType,
     DateOnly TermStartOn,
     DateOnly? TermEndOn,

@@ -42,6 +42,11 @@ public sealed class TenantNoticeCandidateGenerationServiceTests
         sql.Should().Contain("SendMobilePush");
         sql.Should().Contain("TenantUserAccesses");
         sql.Should().Contain("WorkspaceAccessContexts");
+        sql.Should().Contain("DeviceTokens");
+        sql.Should().Contain("party.\"Id\" AS \"RecipientLeaseManagementPartyId\"");
+        sql.Should().Contain(":party:");
+        sql.Should().Contain("policy.\"Classification\" = 'Legal'");
+        sql.Should().Contain("policy.\"AutomationKey\" NOT IN ('rent-reminder', 'late-rent-late-fee')");
     }
 
     [Fact]
@@ -72,5 +77,6 @@ public sealed class TenantNoticeCandidateGenerationServiceTests
         sql.Should().Contain("row_number() OVER");
         sql.Should().Contain("\"TenantLedgerEntryId\"");
         sql.Should().Contain(":ledger:");
+        sql.Should().Contain("\"RecipientLeaseManagementPartyId\", \"TenantLedgerEntryId\"");
     }
 }

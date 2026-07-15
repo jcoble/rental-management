@@ -30,13 +30,32 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
 
     private void GuardImmutableNoticeVersions()
     {
-        var changedSystemVersion = ChangeTracker.Entries<SystemNoticeTemplateVersion>()
-            .Any(entry => entry.State is EntityState.Modified or EntityState.Deleted);
-        var changedWorkspaceVersion = ChangeTracker.Entries<WorkspaceNoticeTemplateVersion>()
-            .Any(entry => entry.State is EntityState.Modified or EntityState.Deleted);
-        if (changedSystemVersion || changedWorkspaceVersion)
-            throw new InvalidOperationException("Notice template versions are immutable; create a successor version instead.");
+        // ChangeTracker.Entries<T>() normally runs DetectChanges across every tracked entity.
+        // Doing that before EF invokes SaveChanges interceptors can make an unrelated invalid
+        // authority-key mutation throw EF's generic key error before the authorization interceptor
+        // can reject it with the canonical access-boundary exception. Inspect only the immutable
+        // version entries here and compare their snapshots without triggering global detection.
+        var autoDetectChanges = ChangeTracker.AutoDetectChangesEnabled;
+        try
+        {
+            ChangeTracker.AutoDetectChangesEnabled = false;
+            var changedSystemVersion = HasImmutableVersionMutation<SystemNoticeTemplateVersion>();
+            var changedWorkspaceVersion = HasImmutableVersionMutation<WorkspaceNoticeTemplateVersion>();
+            if (changedSystemVersion || changedWorkspaceVersion)
+                throw new InvalidOperationException("Notice template versions are immutable; create a successor version instead.");
+        }
+        finally
+        {
+            ChangeTracker.AutoDetectChangesEnabled = autoDetectChanges;
+        }
     }
+
+    private bool HasImmutableVersionMutation<TEntity>() where TEntity : class =>
+        ChangeTracker.Entries<TEntity>().Any(entry =>
+            entry.State == EntityState.Deleted ||
+            entry.State == EntityState.Modified ||
+            (entry.State == EntityState.Unchanged &&
+             entry.Properties.Any(property => !Equals(property.OriginalValue, property.CurrentValue))));
 
     // Domain entities
     public DbSet<Portfolio> Portfolios => Set<Portfolio>();
@@ -746,9 +765,16 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.HasIndex(e => new { e.Status, e.DueAtUtc, e.ClaimExpiresAtUtc, e.Id });
             entity.HasIndex(e => new { e.PortfolioId, e.TenantLedgerEntryId })
                 .HasFilter("\"TenantLedgerEntryId\" IS NOT NULL");
+            entity.HasIndex(e => new
+                { e.RecipientLeaseManagementPartyId, e.LeaseManagementId, e.PortfolioId });
             entity.HasOne(e => e.Policy).WithMany()
                 .HasForeignKey(e => new { e.TenantNoticePolicyId, e.PortfolioId })
                 .HasPrincipalKey(e => new { e.Id, e.PortfolioId }).OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.RecipientLeaseManagementParty).WithMany()
+                .HasForeignKey(e => new
+                    { e.RecipientLeaseManagementPartyId, e.LeaseManagementId, e.PortfolioId })
+                .HasPrincipalKey(e => new { e.Id, e.LeaseManagementId, e.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<BankConnection>(entity =>
@@ -1012,12 +1038,14 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.HasIndex(e => e.LeaseAddendumId);
             entity.HasIndex(e => e.TenantLedgerEntryId);
             entity.HasIndex(e => e.Status);
-            entity.HasIndex(e => new { e.PortfolioId, e.TenantLedgerEntryId, e.NoticeType })
+            entity.HasIndex(e => new
+                { e.PortfolioId, e.TenantLedgerEntryId, e.RecipientLeaseManagementPartyId, e.NoticeType })
                 .IsUnique()
                 .HasFilter("\"TenantLedgerEntryId\" IS NOT NULL AND \"Status\" IN ('Draft','Approved')")
                 .HasDatabaseName("UX_NoticeDrafts_OpenLedgerNotice");
             entity.HasIndex(e => new
-                { e.PortfolioId, e.LeaseManagementId, e.LeaseAgreementId, e.NoticeType })
+                { e.PortfolioId, e.LeaseManagementId, e.LeaseAgreementId,
+                    e.RecipientLeaseManagementPartyId, e.NoticeType })
                 .IsUnique()
                 .HasFilter("\"TenantLedgerEntryId\" IS NULL AND \"LeaseAgreementId\" IS NOT NULL AND \"Status\" IN ('Draft','Approved')")
                 .HasDatabaseName("UX_NoticeDrafts_OpenAgreementNotice");
@@ -1491,6 +1519,7 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.Property(e => e.AccumulatedDepreciation).HasPrecision(18, 2);
             entity.Property(e => e.Notes).HasMaxLength(2000);
             entity.Property(e => e.PropertyType).HasConversion<int>();
+            entity.Property(e => e.RentalStructure).HasConversion<string>().HasMaxLength(20);
             entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.OwnerId);

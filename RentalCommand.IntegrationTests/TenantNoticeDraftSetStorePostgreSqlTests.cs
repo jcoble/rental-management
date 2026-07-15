@@ -10,9 +10,11 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Auditing;
 using RentalCommand.Data.Notifications;
 using Testcontainers.PostgreSql;
 using Xunit;
@@ -56,6 +58,7 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
 
         var services = new ServiceCollection();
         services.AddSingleton(TimeProvider.System);
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
         services.AddAtomicCommandHandler<
             AtomicNotificationMutationCommand,
@@ -143,10 +146,10 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
             policy.Mode = TenantNoticeMode.Draft;
 
             var valid = ClaimedWork(
-                portfolio.Id, policy.Id, first.LeaseManagementId, first.LedgerEntryId, token,
+                portfolio.Id, policy.Id, first.LeaseManagementId, first.PartyId, first.LedgerEntryId, token,
                 "notice-set-valid", now);
             var mismatched = ClaimedWork(
-                portfolio.Id, policy.Id, first.LeaseManagementId, second.LedgerEntryId, token,
+                portfolio.Id, policy.Id, first.LeaseManagementId, first.PartyId, second.LedgerEntryId, token,
                 "notice-set-cross-account", now);
             setup.AddRange(valid, mismatched);
             await setup.SaveChangesAsync();
@@ -309,9 +312,8 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
         persisted.TenantLedgerEntryId.Should().Be(validLedgerId);
         persisted.Status.Should().Be("Draft");
         persisted.Subject.Should().Contain("Upcoming rent reminder");
-        persisted.Body.Should().Contain("Resident");
-        persisted.Body.Should().NotContain("Casey A",
-            because: "an automated draft can be delivered to several eligible parties and must not name only the first one");
+        persisted.Body.Should().Contain("Casey A",
+            because: "each durable notice draft is rendered for one exact eligible relationship party");
         persisted.Body.Should().Contain("$1,000");
     }
 
@@ -319,6 +321,7 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
         int portfolioId,
         int policyId,
         int leaseManagementId,
+        int recipientLeaseManagementPartyId,
         long ledgerEntryId,
         Guid token,
         string businessKey,
@@ -327,6 +330,7 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
         PortfolioId = portfolioId,
         TenantNoticePolicyId = policyId,
         LeaseManagementId = leaseManagementId,
+        RecipientLeaseManagementPartyId = recipientLeaseManagementPartyId,
         TenantLedgerEntryId = ledgerEntryId,
         DueAtUtc = now,
         Status = TenantNoticeWorkStatus.Claimed,
@@ -627,7 +631,7 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
         };
         db.Add(charge);
         await db.SaveChangesAsync();
-        return new RelationshipSeed(property.Id, management.Id, account.Id, tenant.Id, charge.Id);
+        return new RelationshipSeed(property.Id, management.Id, account.Id, party.Id, tenant.Id, charge.Id);
     }
 
     private RentalCommandDbContext NewContext(CommandRecorder? recorder = null)
@@ -693,6 +697,7 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
         int PropertyId,
         int LeaseManagementId,
         int TenantAccountId,
+        int PartyId,
         int TenantId,
         long LedgerEntryId);
 

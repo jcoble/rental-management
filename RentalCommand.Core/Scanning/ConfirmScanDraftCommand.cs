@@ -92,6 +92,7 @@ public sealed record ScanLeaseTargetData(
     string? TenantEmergencyContact,
     string? PropertyName,
     string? PropertyType,
+    RentalStructure? RentalStructure,
     string? PropertyAddress,
     string? PropertyCity,
     string? PropertyState,

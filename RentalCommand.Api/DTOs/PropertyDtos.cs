@@ -23,6 +23,12 @@ public class PropertyResponse
     [JsonPropertyName("type")]
     public PropertyType PropertyType { get; set; }
 
+    /// <summary>
+    /// Controls whether the UI collapses the redundant Property-to-Unit navigation layer. It does
+    /// not select a different rental, lease, accounting, or maintenance model.
+    /// </summary>
+    public RentalStructure RentalStructure { get; set; }
+
     public PropertyStatus Status { get; set; }
     public string AddressLine1 { get; set; } = string.Empty;
     public string? AddressLine2 { get; set; }
@@ -69,6 +75,7 @@ public class PropertyResponse
         OwnerName = e.OwnerEntity?.Name ?? e.Owner?.Name,
         Name = e.Name,
         PropertyType = e.PropertyType,
+        RentalStructure = e.RentalStructure,
         Status = e.Status,
         AddressLine1 = e.AddressLine1,
         AddressLine2 = e.AddressLine2,
@@ -126,6 +133,7 @@ public class CreatePropertyRequest
 
     [JsonPropertyName("type")]
     public PropertyType PropertyType { get; set; } = PropertyType.MultiFamily;
+    public RentalStructure RentalStructure { get; set; } = RentalStructure.MultiRental;
     public PropertyStatus Status { get; set; } = PropertyStatus.Active;
 
     [Required]
@@ -226,4 +234,53 @@ public class UpdatePropertyRequest
 
     [Range(0, 999_999_999)]
     public decimal? ManualAnnualDepreciation { get; set; }
+}
+
+/// <summary>One explicit Unit supplied with the atomic Property setup command.</summary>
+public sealed class SetupUnitRequest
+{
+    [Required]
+    [MaxLength(50)]
+    public string UnitNumber { get; set; } = string.Empty;
+
+    [MaxLength(100)]
+    public string? FloorPlan { get; set; }
+
+    [Range(0, 99)]
+    public decimal Bedrooms { get; set; }
+
+    [Range(0, 99)]
+    public decimal Bathrooms { get; set; }
+
+    [Range(0, 99999)]
+    public int? SquareFeet { get; set; }
+
+    [Range(0, 99999999)]
+    public decimal MarketRent { get; set; }
+
+    [MaxLength(2000)]
+    public string? Notes { get; set; }
+}
+
+/// <summary>
+/// Atomic Guided Setup payload. The nested Property shape deliberately matches the normal create
+/// contract while Units omit PropertyId because the transaction owns that relationship.
+/// </summary>
+public sealed class SetupPropertyRequest
+{
+    [Range(1, int.MaxValue)]
+    public int? PropertyId { get; set; }
+
+    [Required]
+    public CreatePropertyRequest Property { get; set; } = new();
+
+    [Required]
+    public List<SetupUnitRequest> Units { get; set; } = [];
+}
+
+public sealed class PropertySetupResponse
+{
+    public PropertyResponse Property { get; set; } = new();
+    public IReadOnlyList<UnitResponse> Units { get; set; } = [];
+    public bool Updated { get; set; }
 }

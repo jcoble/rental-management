@@ -50,7 +50,7 @@ public class AiController : ManagementControllerBase
     public async Task<ActionResult<BriefingResponse>> Briefing(CancellationToken ct)
     {
         var scope = GetWorkspaceReadScope();
-        if (!await HasAnyAuthorizedPropertyAsync(scope, CapabilityKeys.ReportsRead, ct)) return Forbid();
+        if (!await HasPropertyCapabilityAsync(scope, CapabilityKeys.ReportsRead, ct)) return Forbid();
         return Ok(await _briefing.ComposeAsync(scope, ct));
     }
 
@@ -67,7 +67,7 @@ public class AiController : ManagementControllerBase
         if (req.Question.Length > 4000) return BadRequest("Question is too long (max 4000 characters).");
 
         var scope = GetWorkspaceReadScope();
-        if (!await HasAnyAuthorizedPropertyAsync(scope, CapabilityKeys.ReportsRead, ct)) return Forbid();
+        if (!await HasPropertyCapabilityAsync(scope, CapabilityKeys.ReportsRead, ct)) return Forbid();
         var delivery = await BuildDeliveryAsync(req, ct);
         return Ok(await _qa.AskAsync(scope, req.Question, req.History, delivery, ct));
     }
@@ -87,7 +87,7 @@ public class AiController : ManagementControllerBase
         if (req.Command.Length > 2000) return BadRequest("Command is too long (max 2000 characters).");
 
         var scope = GetWorkspaceReadScope();
-        if (!await HasAnyAuthorizedPropertyAsync(scope, CapabilityKeys.MoneyExpensesManage, ct)) return Forbid();
+        if (!await HasPropertyCapabilityAsync(scope, CapabilityKeys.MoneyExpensesManage, ct)) return Forbid();
         return Ok(await _actions.DraftAsync(scope, req, ct));
     }
 
@@ -143,14 +143,30 @@ public class AiController : ManagementControllerBase
             req.DeliverViaSms && !string.IsNullOrWhiteSpace(recipient?.PhoneNumber) ? recipient.PhoneNumber : null);
     }
 
-    private Task<bool> HasAnyAuthorizedPropertyAsync(
+    /// <summary>
+    /// Property-scoped capabilities remain usable for an AllProperties assignment before the first
+    /// Property exists. Checking only the authorized Property query incorrectly forbids a brand-new
+    /// workspace administrator from loading the empty Daily Briefing or using setup-adjacent AI.
+    /// SelectedProperties assignments still require an actual authorized Property.
+    /// </summary>
+    private async Task<bool> HasPropertyCapabilityAsync(
         WorkspaceReadScope scope,
         string capabilityKey,
-        CancellationToken ct) =>
-        _db.Properties
+        CancellationToken ct)
+    {
+        if (await HasCapabilityAsync(
+                capabilityKey,
+                new PortfolioWidePropertyCapabilityAuthorizationTarget(scope.PortfolioId),
+                ct))
+        {
+            return true;
+        }
+
+        return await _db.Properties
             .AsNoTracking()
             .WhereAuthorized(_db, scope, capabilityKey, _timeProvider.GetUtcNow().UtcDateTime)
             .AnyAsync(ct);
+    }
 
     /// <summary>Direct assistant chat for the in-app AI page.</summary>
     [HttpPost("chat")]

@@ -13,6 +13,7 @@
 	import UnitFields from '$lib/components/forms/UnitFields.svelte';
 	import TenantFields from '$lib/components/forms/TenantFields.svelte';
 	import LeaseTermFields from '$lib/components/forms/LeaseTermFields.svelte';
+	import LeaseScanSignatureChoice, { type LeaseScanReviewDisposition } from './LeaseScanSignatureChoice.svelte';
 	import { propertySchema, unitSchema, tenantSchema, leaseSchema, parseForm } from '$lib/schemas';
 	import { toLeasePrefill, type PrefillConfidence } from '$lib/scan/lease-prefill';
 	import { createNewRentalPropertyForm, findNewRentalExistingUnitId, formatNewRentalStepLabel, formatNewRentalStepPosition, newRentalDraftUrl, seedNewRentalLateFeeAmount, type NewRentalPhase } from '$lib/scan/new-rental-state';
@@ -69,6 +70,8 @@
 	let unitErrors = $state<Record<string, string>>({});
 	let tenantErrors = $state<Record<string, string>>({});
 	let leaseErrors = $state<Record<string, string>>({});
+	let reviewDisposition = $state<LeaseScanReviewDisposition | ''>('');
+	let documentTemplateId = $state('');
 
 	// Which step-form fields were auto-filled (drives the "from your lease" badge).
 	let autoFilled = $state<Set<string>>(new Set());
@@ -118,6 +121,8 @@
 		unitErrors = {};
 		tenantErrors = {};
 		leaseErrors = {};
+		reviewDisposition = '';
+		documentTemplateId = '';
 		autoFilled = new Set();
 		propertyChoice = CREATE;
 		unitChoice = CREATE;
@@ -314,6 +319,7 @@
 		const o: Record<string, unknown> = {};
 		if (isCreatingProperty) {
 			o.propertyId = null;
+			o.rentalStructure = propertyForm.rentalStructure;
 			if (propertyForm.type) o.propertyType = propertyForm.type;
 			if (propertyForm.name.trim()) o.propertyName = propertyForm.name.trim();
 			if (propertyForm.addressLine1.trim()) o.propertyAddress = propertyForm.addressLine1.trim();
@@ -350,8 +356,14 @@
 		if (leaseForm.securityDeposit.trim()) o.securityDeposit = Number(leaseForm.securityDeposit);
 		if (leaseForm.lateFeeAmount.trim()) o.lateFee = Number(leaseForm.lateFeeAmount);
 		if (leaseForm.rentDueDay.trim()) o.rentDueDay = Number(leaseForm.rentDueDay);
+		o.reviewDisposition = reviewDisposition;
+		if (reviewDisposition === 'NeedsSignatures' && documentTemplateId) {
+			o.documentTemplateId = Number(documentTemplateId);
+		}
 		return JSON.stringify(o);
 	}
+
+	const signatureChoiceInvalid = $derived(!reviewDisposition);
 
 	const confirmMutation = createMutation(() => ({
 		mutationFn: () => scan.confirm(draftId as number, buildOverrides()),
@@ -504,6 +516,12 @@
 				</li>
 				<li data-testid="review-lease"><span class="font-medium">Lease:</span> ${leaseForm.monthlyRent}/mo, {leaseForm.startDate} – {leaseForm.endDate}</li>
 			</ul>
+			<LeaseScanSignatureChoice
+				bind:reviewDisposition
+				bind:documentTemplateId
+				propertyId={isCreatingProperty ? 0 : Number(propertyChoice)}
+				disabled={confirmMutation.isPending}
+			/>
 			<p class="text-xs text-muted-foreground">Nothing is saved until you tap Confirm. We'll create everything in one step.</p>
 		</div>
 	{/if}
@@ -513,7 +531,7 @@
 		{#if step < TOTAL}
 			<Button onclick={next} data-testid="new-rental-next">Next</Button>
 		{:else}
-			<Button onclick={() => confirmMutation.mutate()} disabled={confirmMutation.isPending} data-testid="new-rental-confirm">
+			<Button onclick={() => confirmMutation.mutate()} disabled={confirmMutation.isPending || signatureChoiceInvalid} data-testid="new-rental-confirm">
 				{confirmMutation.isPending ? 'Creating…' : 'Confirm & create'}
 			</Button>
 		{/if}

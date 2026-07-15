@@ -86,6 +86,8 @@ internal sealed class AtomicCoreCsvImportPersistence
                 "State" text,
                 "PostalCode" text,
                 "PropertyType" integer,
+                "RentalStructure" text,
+                "UnitNumber" text,
                 "Errors" text[])
         ), classified AS (
             SELECT input.*,
@@ -235,7 +237,8 @@ internal sealed class AtomicCoreCsvImportPersistence
     private const string PropertyImportSql = """
         , prepared AS (
             SELECT classified.*,
-                   nextval(pg_get_serial_sequence('"Properties"', 'Id'))::integer AS "CreatedId"
+                   nextval(pg_get_serial_sequence('"Properties"', 'Id'))::integer AS "CreatedId",
+                   nextval(pg_get_serial_sequence('"Units"', 'Id'))::integer AS "CreatedUnitId"
             FROM classified
             CROSS JOIN authorization
             WHERE authorization."Authorized"
@@ -243,7 +246,7 @@ internal sealed class AtomicCoreCsvImportPersistence
             ORDER BY classified."RowNumber"
         ), inserted_properties AS (
             INSERT INTO "Properties" (
-                "Id", "PortfolioId", "OwnerEntityId", "Name", "PropertyType", "Status",
+                "Id", "PortfolioId", "OwnerEntityId", "Name", "PropertyType", "RentalStructure", "Status",
                 "AddressLine1", "AddressLine2", "City", "State", "PostalCode",
                 "AccumulatedDepreciation", "CreatedAt", "UpdatedAt")
             SELECT prepared."CreatedId", @portfolioId,
@@ -251,26 +254,21 @@ internal sealed class AtomicCoreCsvImportPersistence
                     WHERE owner."PortfolioId" = @portfolioId
                       AND owner."IsPrimary" AND owner."DeletedAt" IS NULL
                     ORDER BY owner."Id" LIMIT 1),
-                   trim(prepared."Name"), prepared."PropertyType", 0,
+                   trim(prepared."Name"), prepared."PropertyType", prepared."RentalStructure", 0,
                    trim(prepared."AddressLine1"), nullif(trim(prepared."AddressLine2"), ''),
                    trim(prepared."City"), trim(prepared."State"), trim(prepared."PostalCode"),
                    0, @createdAt, @createdAt
             FROM prepared
             RETURNING "Id"
-        ), prepared_units AS (
-            SELECT prepared."CreatedId" AS "PropertyId",
-                   nextval(pg_get_serial_sequence('"Units"', 'Id'))::integer AS "UnitId",
-                   left(trim(prepared."Name"), 50) AS "UnitNumber"
-            FROM prepared
-            WHERE prepared."PropertyType" IN (0, 2, 3)
         ), inserted_units AS (
             INSERT INTO "Units" (
                 "Id", "PortfolioId", "PropertyId", "UnitNumber", "Bedrooms", "Bathrooms",
                 "MarketRent", "CreatedAt", "UpdatedAt")
-            SELECT prepared_units."UnitId", @portfolioId, prepared_units."PropertyId",
-                   prepared_units."UnitNumber", 0, 0, 0, @createdAt, @createdAt
-            FROM prepared_units
-            RETURNING "Id", "PropertyId"
+            SELECT prepared."CreatedUnitId", @portfolioId, prepared."CreatedId",
+                   trim(prepared."UnitNumber"), 0, 0, 0, @createdAt, @createdAt
+            FROM prepared
+            JOIN inserted_properties ON inserted_properties."Id" = prepared."CreatedId"
+            RETURNING "Id"
         ), output AS (
             SELECT classified."RowNumber",
                    cardinality(classified."FinalErrors") = 0 AS "Valid",
@@ -282,7 +280,7 @@ internal sealed class AtomicCoreCsvImportPersistence
             CROSS JOIN authorization
             LEFT JOIN prepared ON prepared."RowNumber" = classified."RowNumber"
             LEFT JOIN inserted_properties ON inserted_properties."Id" = prepared."CreatedId"
-            LEFT JOIN inserted_units ON inserted_units."PropertyId" = inserted_properties."Id"
+            LEFT JOIN inserted_units ON inserted_units."Id" = prepared."CreatedUnitId"
         )
         SELECT authorization."Authorized",
                COALESCE(jsonb_agg(to_jsonb(output) ORDER BY output."RowNumber"), '[]'::jsonb)::text AS "ResultsJson",

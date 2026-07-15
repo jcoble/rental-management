@@ -250,6 +250,41 @@ public sealed class NotificationFoundationModelTests
                 nameof(NoticeDraft.LeaseManagementId),
                 nameof(NoticeDraft.PortfolioId),
             }));
+
+        entity.GetIndexes().Should().Contain(index => index.IsUnique &&
+            index.Properties.Select(property => property.Name).SequenceEqual(new[]
+            {
+                nameof(NoticeDraft.PortfolioId),
+                nameof(NoticeDraft.TenantLedgerEntryId),
+                nameof(NoticeDraft.RecipientLeaseManagementPartyId),
+                nameof(NoticeDraft.NoticeType),
+            }));
+        entity.GetIndexes().Should().Contain(index => index.IsUnique &&
+            index.Properties.Select(property => property.Name).SequenceEqual(new[]
+            {
+                nameof(NoticeDraft.PortfolioId),
+                nameof(NoticeDraft.LeaseManagementId),
+                nameof(NoticeDraft.LeaseAgreementId),
+                nameof(NoticeDraft.RecipientLeaseManagementPartyId),
+                nameof(NoticeDraft.NoticeType),
+            }));
+    }
+
+    [Fact]
+    public void TenantNoticeWorkItem_IsBoundToOneCanonicalRecipientParty()
+    {
+        using var db = CreateDb();
+        var entity = db.Model.FindEntityType(typeof(TenantNoticeWorkItem))!;
+
+        entity.FindProperty(nameof(TenantNoticeWorkItem.RecipientLeaseManagementPartyId))
+            .Should().NotBeNull();
+        entity.GetForeignKeys().Should().Contain(foreignKey =>
+            foreignKey.Properties.Select(property => property.Name).SequenceEqual(new[]
+            {
+                nameof(TenantNoticeWorkItem.RecipientLeaseManagementPartyId),
+                nameof(TenantNoticeWorkItem.LeaseManagementId),
+                nameof(TenantNoticeWorkItem.PortfolioId),
+            }));
     }
 
     [Fact]

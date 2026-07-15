@@ -158,6 +158,7 @@ class _FakePropertiesRepository extends PropertiesRepository {
       portfolioId: 1,
       name: 'Lake House',
       type: 'SingleFamily',
+      rentalStructure: RentalStructure.singleRental,
       status: 'Active',
       addressLine1: '12 Lake Dr',
       city: 'Akron',

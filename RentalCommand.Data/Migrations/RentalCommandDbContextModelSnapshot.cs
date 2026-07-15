@@ -4651,7 +4651,7 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("LeaseAgreementId", "LeaseManagementId", "PortfolioId");
 
-                    b.HasIndex("PortfolioId", "TenantLedgerEntryId", "NoticeType")
+                    b.HasIndex("PortfolioId", "TenantLedgerEntryId", "RecipientLeaseManagementPartyId", "NoticeType")
                         .IsUnique()
                         .HasDatabaseName("UX_NoticeDrafts_OpenLedgerNotice")
                         .HasFilter("\"TenantLedgerEntryId\" IS NOT NULL AND \"Status\" IN ('Draft','Approved')");
@@ -4662,7 +4662,7 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("TenantLedgerEntryId", "TenantAccountId", "PortfolioId");
 
-                    b.HasIndex("PortfolioId", "LeaseManagementId", "LeaseAgreementId", "NoticeType")
+                    b.HasIndex("PortfolioId", "LeaseManagementId", "LeaseAgreementId", "RecipientLeaseManagementPartyId", "NoticeType")
                         .IsUnique()
                         .HasDatabaseName("UX_NoticeDrafts_OpenAgreementNotice")
                         .HasFilter("\"TenantLedgerEntryId\" IS NULL AND \"LeaseAgreementId\" IS NOT NULL AND \"Status\" IN ('Draft','Approved')");
@@ -5471,6 +5471,11 @@ namespace RentalCommand.Data.Migrations
 
                     b.Property<int>("PropertyType")
                         .HasColumnType("integer");
+
+                    b.Property<string>("RentalStructure")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
 
                     b.Property<decimal?>("PurchasePrice")
                         .HasPrecision(18, 2)
@@ -8311,6 +8316,9 @@ namespace RentalCommand.Data.Migrations
                     b.Property<int>("PortfolioId")
                         .HasColumnType("integer");
 
+                    b.Property<int>("RecipientLeaseManagementPartyId")
+                        .HasColumnType("integer");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -8329,6 +8337,8 @@ namespace RentalCommand.Data.Migrations
 
                     b.HasIndex("PortfolioId", "TenantLedgerEntryId")
                         .HasFilter("\"TenantLedgerEntryId\" IS NOT NULL");
+
+                    b.HasIndex("RecipientLeaseManagementPartyId", "LeaseManagementId", "PortfolioId");
 
                     b.HasIndex("TenantNoticePolicyId", "PortfolioId");
 
@@ -12600,6 +12610,13 @@ namespace RentalCommand.Data.Migrations
 
             modelBuilder.Entity("RentalCommand.Core.Entities.TenantNoticeWorkItem", b =>
                 {
+                    b.HasOne("RentalCommand.Core.Entities.LeaseManagementParty", "RecipientLeaseManagementParty")
+                        .WithMany()
+                        .HasForeignKey("RecipientLeaseManagementPartyId", "LeaseManagementId", "PortfolioId")
+                        .HasPrincipalKey("Id", "LeaseManagementId", "PortfolioId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
                     b.HasOne("RentalCommand.Core.Entities.TenantNoticePolicy", "Policy")
                         .WithMany()
                         .HasForeignKey("TenantNoticePolicyId", "PortfolioId")
@@ -12608,6 +12625,8 @@ namespace RentalCommand.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Policy");
+
+                    b.Navigation("RecipientLeaseManagementParty");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.TenantPaymentAttempt", b =>

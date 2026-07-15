@@ -1,10 +1,19 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../core/models/models.dart';
+import '../places/address_autocomplete_field.dart';
 import 'lease_prefill.dart';
 import 'scan_models.dart';
 import 'scan_repository.dart';
-import '../places/address_autocomplete_field.dart';
+
+/// Canonical create-new-property target for the guided lease bootstrap.
+///
+/// The structure is a user decision, never a guess derived from PropertyType.
+Map<String, dynamic> buildGuidedRentalTargetOverrides(
+  RentalStructure rentalStructure,
+) => {'propertyId': 0, 'rentalStructure': rentalStructure.wireValue};
 
 /// Guided, explicitly-stepped, PRE-FILLED "New rental from your lease" flow (mobile mirror of the
 /// web /scan/new-rental). One entity per step with a visible "Step N of 4" indicator (AC-1/AC-5),
@@ -40,6 +49,7 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
   final _propCity = TextEditingController();
   final _propState = TextEditingController();
   final _propZip = TextEditingController();
+  RentalStructure? _rentalStructure;
   // Unit
   final _unitNumber = TextEditingController();
   final _unitBeds = TextEditingController();
@@ -55,6 +65,7 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
   final _dueDay = TextEditingController(text: '1');
   DateTime? _start;
   DateTime? _end;
+  String? _reviewDisposition;
 
   @override
   void initState() {
@@ -217,9 +228,13 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
   }
 
   String _overridesJson() {
-    final o = <String, dynamic>{};
-    // This flow always creates from the document (mobile v1: no existing-link picker — parity follow-up).
-    o['propertyId'] = null;
+    final rentalStructure = _rentalStructure;
+    if (rentalStructure == null) {
+      throw StateError('Rental structure must be selected before confirming.');
+    }
+    final o = buildGuidedRentalTargetOverrides(rentalStructure);
+    // This flow always creates from the document. Zero explicitly selects the
+    // canonical create-new-property path; it is never treated as a real id.
     if (_propName.text.trim().isNotEmpty) {
       o['propertyName'] = _propName.text.trim();
     }
@@ -235,7 +250,6 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
     if (_propZip.text.trim().isNotEmpty) {
       o['propertyPostalCode'] = _propZip.text.trim();
     }
-    o['unitId'] = null;
     if (_unitNumber.text.trim().isNotEmpty) {
       o['unitNumber'] = _unitNumber.text.trim();
     }
@@ -269,6 +283,9 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
     if (_dueDay.text.trim().isNotEmpty) {
       o['rentDueDay'] = int.tryParse(_dueDay.text.trim());
     }
+    if (_reviewDisposition != null) {
+      o['reviewDisposition'] = _reviewDisposition;
+    }
     return jsonEncode(o);
   }
 
@@ -278,7 +295,10 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
   bool _validateStep() {
     String? err;
     if (_step == 0) {
-      if (_propName.text.trim().isEmpty && _propAddress.text.trim().isEmpty) {
+      if (_rentalStructure == null) {
+        err = 'Choose one rental or multiple rentals.';
+      } else if (_propName.text.trim().isEmpty &&
+          _propAddress.text.trim().isEmpty) {
         err = 'Enter a property name or address.';
       }
     } else if (_step == 1) {
@@ -290,7 +310,9 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
         err = "Enter the tenant's first name.";
       }
     } else if (_step == 3) {
-      if (_start == null || _end == null) {
+      if (_reviewDisposition == null) {
+        err = 'Choose whether the lease is already signed.';
+      } else if (_start == null || _end == null) {
         err = 'Pick the lease start and end dates.';
       } else if ((num.tryParse(_rent.text.trim()) ?? 0) <= 0) {
         err = 'Enter the monthly rent.';
@@ -437,6 +459,47 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Text(
+              'How is this address rented?',
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            SegmentedButton<RentalStructure>(
+              segments: const [
+                ButtonSegment<RentalStructure>(
+                  value: RentalStructure.singleRental,
+                  label: Text('One rental'),
+                  icon: Icon(Icons.home_outlined),
+                ),
+                ButtonSegment<RentalStructure>(
+                  value: RentalStructure.multiRental,
+                  label: Text('Multiple rentals'),
+                  icon: Icon(Icons.apartment_outlined),
+                ),
+              ],
+              selected: _rentalStructure == null
+                  ? const {}
+                  : {_rentalStructure!},
+              emptySelectionAllowed: true,
+              showSelectedIcon: false,
+              onSelectionChanged: (selection) => setState(
+                () => _rentalStructure = selection.isEmpty
+                    ? null
+                    : selection.first,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              _rentalStructure == RentalStructure.multiRental
+                  ? 'Create this unit from the lease now; add the other units afterward.'
+                  : 'Choose One rental for a house, condo, or other address rented as one space.',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 16),
             _field('Property name', _propName, extractionKey: 'property_name'),
             // Places-backed street address (AC: Google Places on mobile via existing proxy)
             Row(
@@ -533,6 +596,33 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
               extractionKey: 'rent_due_day',
               keyboard: TextInputType.number,
             ),
+            const SizedBox(height: 8),
+            Text(
+              'What signing state is this lease in?',
+              style: Theme.of(
+                context,
+              ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            RadioListTile<String>(
+              contentPadding: EdgeInsets.zero,
+              value: 'AlreadyFullySigned',
+              groupValue: _reviewDisposition,
+              onChanged: (value) => setState(() => _reviewDisposition = value),
+              title: const Text('Already fully signed'),
+              subtitle: const Text(
+                'Import the uploaded document as the executed agreement.',
+              ),
+            ),
+            RadioListTile<String>(
+              contentPadding: EdgeInsets.zero,
+              value: 'NeedsSignatures',
+              groupValue: _reviewDisposition,
+              onChanged: (value) => setState(() => _reviewDisposition = value),
+              title: const Text('Still needs signatures'),
+              subtitle: const Text(
+                'Use the Rental Command supplied lease and prepare it for signing. No template setup is required.',
+              ),
+            ),
           ],
         );
       default:
@@ -555,6 +645,10 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
                       'Property: ${_propName.text.isNotEmpty ? _propName.text : _propAddress.text} — ${[_propAddress.text, _propCity.text, _propState.text].where((s) => s.isNotEmpty).join(', ')}',
                     ),
                     const SizedBox(height: 4),
+                    Text(
+                      'Rental setup: ${_rentalStructure == RentalStructure.multiRental ? 'Multiple rentals' : 'One rental'}',
+                    ),
+                    const SizedBox(height: 4),
                     Text('Unit: ${_unitNumber.text}'),
                     const SizedBox(height: 4),
                     Text(
@@ -563,6 +657,12 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
                     const SizedBox(height: 4),
                     Text(
                       'Lease: \$${_rent.text}/mo, ${_start != null ? _iso(_start!) : '—'} – ${_end != null ? _iso(_end!) : '—'}',
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _reviewDisposition == 'AlreadyFullySigned'
+                          ? 'Signing: import as already fully signed'
+                          : 'Signing: prepare the Rental Command supplied lease',
                     ),
                   ],
                 ),
