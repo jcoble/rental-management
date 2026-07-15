@@ -16,6 +16,7 @@ import '../../features/onboarding/onboarding_choice_screen.dart';
 import '../../features/onboarding/onboarding_live_setup_screen.dart';
 import '../../features/onboarding/onboarding_seeding_screen.dart';
 import '../../features/maintenance/work_order_unit_aware_loader.dart';
+import '../../features/leasing/leasing_detail_screens.dart';
 import '../../features/messages/message_detail_screen.dart';
 import '../../features/money/expense_detail_screen.dart';
 import '../../features/notifications/notifications_inbox_screen.dart';
@@ -221,6 +222,31 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/technician/assignments/:id',
         builder: (context, state) =>
             TechnicianAssignmentDetailScreen(workOrderId: _idParam(state)),
+      ),
+      GoRoute(
+        path: '/leasing/rentals/:id',
+        builder: (context, state) =>
+            LeasingRentalDetailScreen(unitId: _idParam(state)),
+      ),
+      GoRoute(
+        path: '/leasing/applications/:id',
+        builder: (context, state) =>
+            LeasingApplicationDetailScreen(applicationId: _idParam(state)),
+      ),
+      GoRoute(
+        path: '/leasing/appointments/:id',
+        builder: (context, state) =>
+            LeasingAppointmentDetailScreen(appointmentId: _idParam(state)),
+      ),
+      GoRoute(
+        path: '/leasing/conversations/:id',
+        builder: (context, state) =>
+            LeasingConversationDetailScreen(conversationId: _idParam(state)),
+      ),
+      GoRoute(
+        path: '/leasing/move-ins/:id',
+        builder: (context, state) =>
+            LeasingMoveInDetailScreen(leaseManagementId: _idParam(state)),
       ),
       GoRoute(
         path: '/units/:id',

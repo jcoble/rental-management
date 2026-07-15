@@ -137,24 +137,28 @@ class OwnerPortalRepository {
   Future<OwnerPortalPage<OwnerPortalProperty>> propertiesPage({
     int skip = 0,
     int take = 20,
+    String? search,
   }) => _getPage(
     '/owner/properties/page',
     OwnerPortalProperty.fromJson,
     skip: skip,
     take: take,
     sort: 'name',
+    search: search,
   );
 
   Future<OwnerPortalPage<OwnerSummary>> statementsPage({
     required int year,
     int skip = 0,
     int take = 20,
+    String? search,
   }) => _getPage(
     '/owner/statements',
     OwnerSummary.fromJson,
     skip: skip,
     take: take,
     sort: 'name',
+    search: search,
     extra: {'year': year},
   );
 
@@ -225,12 +229,19 @@ class OwnerPortalRepository {
     required int skip,
     required int take,
     required String sort,
+    String? search,
     Map<String, dynamic>? extra,
   }) async {
     try {
       final response = await _dio.get<Map<String, dynamic>>(
         path,
-        queryParameters: {'skip': skip, 'take': take, 'sort': sort, ...?extra},
+        queryParameters: {
+          'skip': skip,
+          'take': take,
+          'sort': sort,
+          if (search?.trim().isNotEmpty == true) 'search': search!.trim(),
+          ...?extra,
+        },
       );
       final data = response.data ?? const <String, dynamic>{};
       final rawItems = data['items'];

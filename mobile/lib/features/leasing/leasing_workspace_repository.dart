@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 
 class LeasingToday {
   const LeasingToday({
@@ -181,6 +182,66 @@ class LeasingRentalDetail {
       );
 }
 
+/// Assignment-scoped application projection for the Leasing experience.
+///
+/// This deliberately mirrors `/leasing/applications/{id}` instead of reusing
+/// the management Applications API. A leasing agent must never gain a second,
+/// broader read path merely because both screens happen to display an
+/// application.
+class LeasingApplicationDetail {
+  const LeasingApplicationDetail({
+    required this.id,
+    required this.applicantName,
+    required this.status,
+    required this.consentGiven,
+    required this.submittedAtUtc,
+    this.propertyId,
+    this.unitId,
+    this.email,
+    this.phone,
+    this.propertyName,
+    this.unitNumber,
+    this.monthlyIncome,
+    this.desiredMoveInDate,
+    this.notes,
+  });
+
+  final int id;
+  final int? propertyId;
+  final int? unitId;
+  final String applicantName;
+  final String? email;
+  final String? phone;
+  final String? propertyName;
+  final String? unitNumber;
+  final String status;
+  final double? monthlyIncome;
+  final DateTime? desiredMoveInDate;
+  final String? notes;
+  final bool consentGiven;
+  final DateTime submittedAtUtc;
+
+  factory LeasingApplicationDetail.fromJson(Map<String, dynamic> json) =>
+      LeasingApplicationDetail(
+        id: (json['id'] as num).toInt(),
+        propertyId: (json['propertyId'] as num?)?.toInt(),
+        unitId: (json['unitId'] as num?)?.toInt(),
+        applicantName: json['applicantName'] as String? ?? '',
+        email: json['email'] as String?,
+        phone: json['phone'] as String?,
+        propertyName: json['propertyName'] as String?,
+        unitNumber: json['unitNumber'] as String?,
+        status: json['status'] as String? ?? 'Submitted',
+        monthlyIncome: (json['monthlyIncome'] as num?)?.toDouble(),
+        desiredMoveInDate: _date(json['desiredMoveInDate']),
+        notes: json['notes'] as String?,
+        consentGiven: json['consentGiven'] as bool? ?? false,
+        submittedAtUtc:
+            _date(json['submittedAtUtc']) ??
+            DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      );
+}
+
 class LeasingAppointmentDetail {
   const LeasingAppointmentDetail({
     required this.id,
@@ -273,6 +334,58 @@ class LeasingMoveInDetail {
         agreementFullyExecuted:
             json['agreementFullyExecuted'] as bool? ?? false,
         possessionGiven: json['possessionGiven'] as bool? ?? false,
+      );
+}
+
+class LeasingConversationMessage {
+  const LeasingConversationMessage({
+    required this.id,
+    required this.senderRole,
+    required this.body,
+    required this.createdAt,
+  });
+
+  final int id;
+  final String senderRole;
+  final String body;
+  final DateTime createdAt;
+
+  factory LeasingConversationMessage.fromJson(Map<String, dynamic> json) =>
+      LeasingConversationMessage(
+        id: (json['id'] as num).toInt(),
+        senderRole: json['senderRole'] as String? ?? '',
+        body: json['body'] as String? ?? '',
+        createdAt:
+            _date(json['createdAt']) ??
+            DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+      );
+}
+
+class LeasingConversationDetail {
+  const LeasingConversationDetail({
+    required this.id,
+    required this.tenantName,
+    required this.subject,
+    required this.messages,
+    this.propertyName,
+  });
+
+  final int id;
+  final String tenantName;
+  final String subject;
+  final String? propertyName;
+  final List<LeasingConversationMessage> messages;
+
+  factory LeasingConversationDetail.fromJson(Map<String, dynamic> json) =>
+      LeasingConversationDetail(
+        id: (json['id'] as num).toInt(),
+        tenantName: json['tenantName'] as String? ?? '',
+        subject: json['subject'] as String? ?? '',
+        propertyName: json['propertyName'] as String?,
+        messages: (json['messages'] as List? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map(LeasingConversationMessage.fromJson)
+            .toList(growable: false),
       );
 }
 
@@ -425,10 +538,40 @@ class LeasingWorkspaceRepository {
   Future<LeasingRentalDetail> rental(int unitId) =>
       _getObject('/leasing/rentals/$unitId', LeasingRentalDetail.fromJson);
 
+  Future<LeasingApplicationDetail> application(int applicationId) => _getObject(
+    '/leasing/applications/$applicationId',
+    LeasingApplicationDetail.fromJson,
+  );
+
   Future<LeasingAppointmentDetail> appointment(int appointmentId) => _getObject(
     '/leasing/appointments/$appointmentId',
     LeasingAppointmentDetail.fromJson,
   );
+
+  Future<LeasingConversationDetail> conversation(int conversationId) =>
+      _getObject(
+        '/leasing/conversations/$conversationId',
+        LeasingConversationDetail.fromJson,
+      );
+
+  Future<void> replyToConversation(int conversationId, String body) =>
+      IdempotentMutation.run('leasing:conversations:$conversationId:reply', (
+        operationKey,
+      ) async {
+        try {
+          await _dio.post<void>(
+            '/leasing/conversations/$conversationId/messages',
+            data: {
+              'operationKey': operationKey,
+              'body': body.trim(),
+              'channels': const ['Portal'],
+            },
+            options: Options(headers: {'Idempotency-Key': operationKey}),
+          );
+        } on DioException catch (error) {
+          throw ApiException.fromDioException(error);
+        }
+      });
 
   Future<LeasingMoveInDetail> moveIn(int leaseManagementId) => _getObject(
     '/leasing/move-ins/$leaseManagementId',
@@ -467,7 +610,7 @@ class LeasingWorkspaceRepository {
           'take': take,
           if (search != null && search.trim().isNotEmpty)
             'search': search.trim(),
-          if (sort != null) 'sort': sort,
+          'sort': ?sort,
         },
       );
       final data = response.data ?? const <String, dynamic>{};

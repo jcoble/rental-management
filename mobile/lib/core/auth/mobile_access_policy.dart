@@ -87,10 +87,20 @@ bool canUseAssistant(Set<String> capabilities) =>
     capabilities.contains('reports.read');
 
 bool canManageOwnMobileAlerts(WorkspaceExperience experience) =>
-    experience != WorkspaceExperience.tenant &&
-    experience != WorkspaceExperience.owner;
+    switch (experience) {
+      WorkspaceExperience.management ||
+      WorkspaceExperience.leasing ||
+      WorkspaceExperience.maintenance ||
+      WorkspaceExperience.owner ||
+      WorkspaceExperience.tenant => true,
+    };
 
-bool canManageMobileNotificationFoundation(Set<String> capabilities) =>
+bool canManageMobileNotificationFoundation({
+  required WorkspaceExperience experience,
+  required Set<String> capabilities,
+}) =>
+    experience != WorkspaceExperience.owner &&
+    experience != WorkspaceExperience.tenant &&
     capabilities.contains(notificationManagementCapability);
 
 bool canUseManagementOnboarding({
@@ -150,17 +160,35 @@ bool canOpenMobilePath({
   }
 
   if (experience == WorkspaceExperience.tenant) {
-    return path == '/notifications' || path.startsWith('/messages/');
+    return path == '/notifications' ||
+        path.startsWith('/messages/') ||
+        path == '/settings' ||
+        path == '/settings/notifications/my-alerts';
   }
 
   if (experience == WorkspaceExperience.maintenance) {
-    if (path == '/')
+    if (path == '/') {
       return capabilities.contains('maintenance.assigned-work.read');
+    }
     if (path.startsWith('/technician/assignments/')) {
       return capabilities.contains('maintenance.assigned-work.read');
     }
+    if (path == '/notifications') {
+      return capabilities.contains('maintenance.assigned-work.read') ||
+          capabilities.contains('maintenance.assigned-work.converse');
+    }
+    if (path.startsWith('/scan/')) {
+      return capabilities.contains('maintenance.assigned-work.update');
+    }
     if (path == '/settings' || path == '/settings/notifications/my-alerts') {
       return true;
+    }
+    if (path == '/settings/notifications/team-routing' ||
+        path == '/settings/notifications/tenant-notices') {
+      return canManageMobileNotificationFoundation(
+        experience: experience,
+        capabilities: capabilities,
+      );
     }
     return false;
   }
@@ -170,18 +198,39 @@ bool canOpenMobilePath({
   }
   if (path == '/settings/notifications/team-routing' ||
       path == '/settings/notifications/tenant-notices') {
-    return canManageOwnMobileAlerts(experience) &&
-        canManageMobileNotificationFoundation(capabilities);
+    return canManageMobileNotificationFoundation(
+      experience: experience,
+      capabilities: capabilities,
+    );
   }
 
   // Owner has a dedicated relationship-scoped shell. Never infer management
   // access from overlapping capabilities.
-  if (experience == WorkspaceExperience.owner) return false;
+  if (experience == WorkspaceExperience.owner) {
+    return path == '/notifications';
+  }
 
   // Leasing also has a dedicated shell backed by `/leasing/*` projections.
   // Keep only the canonical record details and global tools reached from that
   // shell; broad management hubs are not a second navigation path.
   if (experience == WorkspaceExperience.leasing) {
+    if (path.startsWith('/leasing/applications/')) {
+      return capabilities.contains('leasing.applications.manage');
+    }
+    if (path.startsWith('/leasing/rentals/')) {
+      return capabilities.contains('leasing.listings.manage') ||
+          capabilities.contains('leasing.applications.manage') ||
+          capabilities.contains('leasing.showings.manage');
+    }
+    if (path.startsWith('/leasing/appointments/')) {
+      return capabilities.contains('leasing.showings.manage');
+    }
+    if (path.startsWith('/leasing/conversations/')) {
+      return capabilities.contains('leasing.onboarding.manage');
+    }
+    if (path.startsWith('/leasing/move-ins/')) {
+      return capabilities.contains('leasing.onboarding.manage');
+    }
     if (path == '/notifications' || path.startsWith('/messages/')) {
       return canOpenInboxHub(capabilities);
     }

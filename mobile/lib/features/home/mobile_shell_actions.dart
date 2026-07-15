@@ -22,7 +22,9 @@ class MobileNotificationBell extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final auth = ref.watch(authControllerProvider);
     if (auth is! AuthStateAuthenticated ||
-        (!auth.isTenantExperience && !canOpenInboxHub(auth.capabilities))) {
+        (!auth.isTenantExperience &&
+            auth.activeExperience != WorkspaceExperience.owner &&
+            !canOpenInboxHub(auth.capabilities))) {
       return const SizedBox.shrink();
     }
     final count = ref
@@ -31,6 +33,10 @@ class MobileNotificationBell extends ConsumerWidget {
     return IconButton(
       tooltip: 'Notifications',
       onPressed: () {
+        if (auth.activeExperience != WorkspaceExperience.management) {
+          context.push('/notifications');
+          return;
+        }
         final shellNavigator = mobileShellNavigatorOf(context);
         if (shellNavigator?.openRoute('/notifications') == true) {
           revealMobileShellIfDetached(context);
