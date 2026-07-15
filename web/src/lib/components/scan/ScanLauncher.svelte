@@ -5,11 +5,13 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { buildScanReviewTarget, contextualScanTitle, scanLauncherMode } from '$lib/scan/scan-launcher';
-	import type { ScanContext, ScanDocType } from '$lib/scan/scan-context';
+	import { SCAN_DOC_TYPES, type ScanContext, type ScanDocType } from '$lib/scan/scan-context';
 	import ScanCapturePanel from './ScanCapturePanel.svelte';
 
 	let {
 		context = {},
+		allowedTypes = SCAN_DOC_TYPES,
+		allowVoice = true,
 		open = $bindable(false),
 		triggerLabel,
 		ariaLabel,
@@ -20,6 +22,8 @@
 		showTrigger = true
 	}: {
 		context?: ScanContext;
+		allowedTypes?: readonly ScanDocType[];
+		allowVoice?: boolean;
 		open?: boolean;
 		triggerLabel?: string;
 		ariaLabel?: string;
@@ -69,7 +73,7 @@
 			<Dialog.Description>{description}</Dialog.Description>
 		</Dialog.Header>
 		<div class="mt-5">
-			<ScanCapturePanel {context} compact oncreated={handleCreated} />
+			<ScanCapturePanel {context} {allowedTypes} {allowVoice} compact oncreated={handleCreated} />
 		</div>
 	</Dialog.Content>
 </Dialog.Root>

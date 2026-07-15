@@ -16,7 +16,7 @@ const ownerStatementService = readFileSync(
 
 test('owner shell is a first-class relationship experience, not management navigation', () => {
 	const ownerNavStart = shell.indexOf('const ownerNavItems: NavItem[] = [');
-	const ownerNavEnd = shell.indexOf('const commandCenterTitleItem', ownerNavStart);
+	const ownerNavEnd = shell.indexOf('const leasingNavItems', ownerNavStart);
 	const ownerNav = shell.slice(ownerNavStart, ownerNavEnd);
 
 	assert.match(policy, /prefix: '\/owner', experiences: \['Owner'\]/);
@@ -25,7 +25,8 @@ test('owner shell is a first-class relationship experience, not management navig
 	assert.match(ownerNav, /href: '\/owner\/statements'/);
 	assert.match(ownerNav, /href: '\/owner\/approvals'/);
 	assert.match(ownerNav, /href: '\/owner\/messages'/);
-	assert.doesNotMatch(ownerNav, /admin\/users|banking|billing|settings/);
+	assert.match(ownerNav, /href: '\/settings\/notifications\/my-alerts'/);
+	assert.doesNotMatch(ownerNav, /admin\/users|banking|billing|team-routing|tenant-notices/);
 	assert.match(shell, /let relationshipUser = \$derived\(portalUser \|\| ownerUser\)/);
 	assert.match(shell, /const canOpenUserSecurity = \$derived\(!ownerUser\)/);
 	assert.match(shell, /\{#if !ownerUser\}[\s\S]{0,120}<NotificationBell/);

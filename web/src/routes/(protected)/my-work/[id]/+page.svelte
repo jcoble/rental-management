@@ -1,8 +1,11 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { technician, type TechnicianWorkEntryKind, type TechnicianWorkOrderStatus } from '$lib/api/endpoints/technician';
+	import { technician, type TechnicianWorkEntryKind } from '$lib/api/endpoints/technician';
+	import { CAPABILITY } from '$lib/auth/experience-policy';
 	import { documentFileHref, documents } from '$lib/api/endpoints/documents';
+	import { getAuthState } from '$lib/stores/auth.svelte';
+	import { capabilityKeysForExperience } from '$lib/types/user';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -11,14 +14,29 @@
 
 	const id = $derived(Number(page.params.id));
 	const queryClient = useQueryClient();
+	const authState = getAuthState();
+	const currentAccess = $derived(page.data.access ?? authState.accessEnvelope);
+	const currentExperience = $derived(
+		authState.activeExperience ?? currentAccess?.selectedContext.activeExperience ?? null
+	);
+	const activeCapabilities = $derived(
+		capabilityKeysForExperience(currentAccess, currentExperience)
+	);
+	const canUpdateWork = $derived(activeCapabilities.has(CAPABILITY.assignedWorkUpdate));
+	const canManageTimeMaterials = $derived(
+		activeCapabilities.has(CAPABILITY.assignedWorkTimeMaterialsManage)
+	);
+	const canConverse = $derived(activeCapabilities.has(CAPABILITY.assignedWorkConverse));
+	const allowedEntryKinds = $derived<TechnicianWorkEntryKind[]>([
+		...(canUpdateWork ? (['Note', 'Photo'] as TechnicianWorkEntryKind[]) : []),
+		...(canManageTimeMaterials ? (['Time', 'Material'] as TechnicianWorkEntryKind[]) : [])
+	]);
 	const assignment = createQuery(() => ({
 		queryKey: ['technician', 'assignment', id],
 		queryFn: () => technician.detail(id),
 		enabled: Number.isInteger(id) && id > 0
 	}));
 
-	let status = $state<TechnicianWorkOrderStatus | ''>('');
-	let statusNote = $state('');
 	let entryKind = $state<TechnicianWorkEntryKind>('Note');
 	let entryNote = $state('');
 	let quantity = $state('');
@@ -28,11 +46,13 @@
 	let markedConversationRead = $state(false);
 
 	$effect(() => {
-		if (!status && assignment.data?.status) status = assignment.data.status;
+		if (!allowedEntryKinds.includes(entryKind) && allowedEntryKinds[0]) {
+			entryKind = allowedEntryKinds[0];
+		}
 	});
 
 	$effect(() => {
-		if (!markedConversationRead && assignment.data?.conversationId) {
+		if (canConverse && !markedConversationRead && assignment.data?.conversationId) {
 			markedConversationRead = true;
 			technician.markConversationRead(id).then(refresh).catch(() => {});
 		}
@@ -42,18 +62,11 @@
 		queryClient.invalidateQueries({ queryKey: ['technician'] });
 	}
 
-	const updateMutation = createMutation(() => ({
-		mutationFn: () => technician.updateAssignment(id, {
-			expectedUpdatedAtUtc: assignment.data!.updatedAtUtc,
-			status: status || undefined,
-			technicianNote: statusNote.trim() || undefined
-		}),
-		onSuccess: () => { showSuccess('Assignment updated.'); statusNote = ''; refresh(); },
-		onError: (error) => showError(apiErrorMessage(error))
-	}));
-
 	const entryMutation = createMutation(() => ({
 		mutationFn: async () => {
+			if (!allowedEntryKinds.includes(entryKind)) {
+				throw new Error('Your assignment does not allow this kind of field entry.');
+			}
 			if (entryKind === 'Photo') {
 				if (!photoFile) throw new Error('Choose a photo first.');
 				const uploaded = await documents.upload('WorkOrder', id, photoFile, 'Technician photo', crypto.randomUUID());
@@ -74,7 +87,10 @@
 	}));
 
 	const messageMutation = createMutation(() => ({
-		mutationFn: () => technician.sendMessage(id, message.trim()),
+		mutationFn: () => {
+			if (!canConverse) throw new Error('Your assignment does not allow messaging.');
+			return technician.sendMessage(id, message.trim());
+		},
 		onSuccess: () => { showSuccess('Message sent.'); message = ''; refresh(); },
 		onError: (error) => showError(apiErrorMessage(error))
 	}));
@@ -125,22 +141,16 @@
 					{:else}<p class="mt-3 text-sm text-muted-foreground">No resident contact is shared for this assignment.</p>{/if}
 				</section>
 
-				<section class="rounded-2xl border border-border bg-card p-5">
-					<h2 class="font-semibold">Update progress</h2>
-					<div class="mt-4 grid gap-3 sm:grid-cols-[12rem_1fr_auto]">
-						<select bind:value={status} class="h-10 rounded-md border border-border bg-background px-3 text-sm" aria-label="Assignment status">
-							<option value="New">New</option><option value="Scheduled">Scheduled</option><option value="InProgress">In progress</option><option value="WaitingParts">Waiting for parts</option><option value="OnHold">On hold</option><option value="Completed">Completed</option>
-						</select>
-						<Input bind:value={statusNote} placeholder="Optional progress note" />
-						<Button disabled={updateMutation.isPending || (status === work.status && !statusNote.trim())} onclick={() => updateMutation.mutate()}>Save update</Button>
-					</div>
+				<section class="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-5" data-testid="assignment-status-unavailable">
+					<h2 class="font-semibold">Progress updates are temporarily unavailable</h2>
+					<p class="mt-2 text-sm leading-6 text-muted-foreground">This assignment is read-only for status changes right now. Any field notes, time, materials, photos, and messages included in your assignment remain available below.</p>
 				</section>
 
 				<section class="rounded-2xl border border-border bg-card p-5">
 					<h2 class="font-semibold">Field log</h2>
-					<div class="mt-4 grid gap-3 sm:grid-cols-[10rem_1fr_auto]">
+					{#if allowedEntryKinds.length > 0}<div class="mt-4 grid gap-3 sm:grid-cols-[10rem_1fr_auto]">
 						<select bind:value={entryKind} class="h-10 rounded-md border border-border bg-background px-3 text-sm" aria-label="Entry type">
-							<option value="Note">Note</option><option value="Time">Time</option><option value="Material">Material</option><option value="Photo">Photo</option>
+							{#each allowedEntryKinds as kind}<option value={kind}>{kind}</option>{/each}
 						</select>
 						{#if entryKind === 'Time' || entryKind === 'Material'}
 							<div class="grid grid-cols-2 gap-2"><Input bind:value={quantity} type="number" min="0.001" step="0.25" placeholder="Quantity" /><Input bind:value={unit} placeholder={entryKind === 'Time' ? 'hours' : 'units'} /></div>
@@ -148,7 +158,7 @@
 							<input type="file" accept="image/*" capture="environment" class="text-sm" onchange={(event) => photoFile = event.currentTarget.files?.[0] ?? null} />
 						{:else}<Input bind:value={entryNote} placeholder="What did you find or do?" />{/if}
 						<Button disabled={entryMutation.isPending || (entryKind === 'Note' && !entryNote.trim()) || ((entryKind === 'Time' || entryKind === 'Material') && (!quantity || !unit.trim())) || (entryKind === 'Photo' && !photoFile)} onclick={() => entryMutation.mutate()}>Add</Button>
-					</div>
+					</div>{:else}<p class="mt-3 text-sm text-muted-foreground">You can review the field log, but this assignment does not allow you to add entries.</p>{/if}
 					<div class="mt-5 space-y-3">
 						{#each work.entries as entry (entry.id)}
 							<div class="rounded-xl border border-border p-3 text-sm">
@@ -162,7 +172,7 @@
 				</section>
 			</div>
 
-			<section id="conversation" class="h-fit rounded-2xl border border-border bg-card p-5 lg:sticky lg:top-20">
+			{#if canConverse}<section id="conversation" class="h-fit rounded-2xl border border-border bg-card p-5 lg:sticky lg:top-20">
 				<h2 class="flex items-center gap-2 font-semibold"><MessageSquare class="h-4 w-4" />Assignment conversation</h2>
 				<p class="mt-1 text-xs text-muted-foreground">Messages stay attached to this assignment.</p>
 				<div class="mt-4 max-h-[28rem] space-y-3 overflow-y-auto">
@@ -171,7 +181,7 @@
 					{:else}<p class="py-8 text-center text-sm text-muted-foreground">No messages yet.</p>{/each}
 				</div>
 				<div class="mt-4 flex gap-2"><Input bind:value={message} placeholder="Message the office or resident" onkeydown={(event) => { if (event.key === 'Enter' && message.trim()) messageMutation.mutate(); }} /><Button size="icon" aria-label="Send message" disabled={!message.trim() || messageMutation.isPending} onclick={() => messageMutation.mutate()}><Send class="h-4 w-4" /></Button></div>
-			</section>
+			</section>{:else}<section class="h-fit rounded-2xl border border-border bg-card p-5"><h2 class="flex items-center gap-2 font-semibold"><MessageSquare class="h-4 w-4" />Assignment conversation</h2><p class="mt-2 text-sm text-muted-foreground">Messaging is not included in this assignment.</p></section>{/if}
 		</div>
 	{/if}
 </div>

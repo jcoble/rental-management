@@ -14,9 +14,10 @@
 	import { parseScanContext } from '$lib/scan/scan-context';
 	import { SCAN_HISTORY_FILTERS, formatScanHistoryEmptyMessage, resolveScanHistoryFilter, type ScanHistoryFilter } from '$lib/scans/scan-history-filters';
 	import { createdRecordHref } from '$lib/scans/scan-review-state';
-	import { hasCapability } from '$lib/stores/auth.svelte';
-	import { workOrders } from '$lib/api/endpoints/workOrders';
-	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import { getAuthState } from '$lib/stores/auth.svelte';
+	import { capabilityKeysForExperience } from '$lib/types/user';
+	import { technician } from '$lib/api/endpoints/technician';
+	import { canUseUnstructuredVoiceCapture, scanDocumentTypesForCapabilities } from '$lib/scan/scan-access';
 
 	const PAGE_SIZE = 20;
 
@@ -46,13 +47,22 @@
 	});
 
 	const scanContext = $derived(parseScanContext(page.url.searchParams));
-	const portfolioId = $derived(getCurrentPortfolioId());
+	const authState = getAuthState();
+	const currentAccess = $derived(page.data.access ?? authState.accessEnvelope);
+	const currentExperience = $derived(
+		authState.activeExperience ?? currentAccess?.selectedContext.activeExperience ?? null
+	);
+	const activeCapabilities = $derived(
+		capabilityKeysForExperience(currentAccess, currentExperience)
+	);
+	const allowedScanTypes = $derived(scanDocumentTypesForCapabilities(activeCapabilities));
+	const allowVoiceCapture = $derived(canUseUnstructuredVoiceCapture(allowedScanTypes));
 	const assignedTechnicianOnly = $derived(
-		hasCapability('maintenance.assigned-work.update') && !hasCapability('work.manage')
+		activeCapabilities.has('maintenance.assigned-work.update') && !activeCapabilities.has('work.manage')
 	);
 	const assignedWorkOrdersQuery = createQuery(() => ({
 		queryKey: ['assigned-work-order-scan-picker'],
-		queryFn: () => workOrders.listPage(portfolioId, { openOnly: true, take: 100 }),
+		queryFn: () => technician.assignments({ openOnly: true, sort: 'scheduledForUtc', take: 50 }),
 		enabled: assignedTechnicianOnly && !scanContext.workOrderId
 	}));
 
@@ -68,7 +78,8 @@
 	// Recent bulk-import batches (lease imports). Shown as quick links back into review.
 	const batchesQuery = createQuery(() => ({
 		queryKey: ['scan-batches'],
-		queryFn: () => scan.listBatches()
+		queryFn: () => scan.listBatches(),
+		enabled: !assignedTechnicianOnly
 	}));
 	const recentBatches = $derived((batchesQuery.data ?? []).slice(0, 5));
 
@@ -195,7 +206,11 @@
 				{/each}
 			</div>
 		{:else}
-			<ScanCapturePanel context={scanContext} />
+			<ScanCapturePanel
+				context={scanContext}
+				allowedTypes={allowedScanTypes}
+				allowVoice={allowVoiceCapture}
+			/>
 		{/if}
 	</div>
 

@@ -29,6 +29,7 @@ describe('experience route policy', () => {
 		const capabilities = new Set<string>([
 			CAPABILITY.rentalsRead,
 			CAPABILITY.leasingApplicationsManage,
+			CAPABILITY.leasingListingsManage,
 			CAPABILITY.leasingShowingsManage
 		]);
 		assert.equal(canAccessRoute('/leasing', 'Leasing', capabilities), true);
@@ -70,16 +71,23 @@ describe('experience route policy', () => {
 		const noCapabilities = new Set<string>();
 		assert.equal(canAccessRoute('/owner', 'Owner', noCapabilities), true);
 		assert.equal(canAccessRoute('/settings/security', 'Owner', noCapabilities), false);
-		assert.equal(canAccessRoute('/settings/notifications/my-alerts', 'Owner', noCapabilities), false);
+		assert.equal(canAccessRoute('/settings/notifications/my-alerts', 'Owner', noCapabilities), true);
 		assert.equal(canAccessRoute('/properties', 'Owner', noCapabilities), false);
 		assert.equal(canAccessRoute('/', 'Owner', noCapabilities), false);
 	});
 
 	it('keeps personal alerts available while capability-gating notification administration', () => {
 		const noCapabilities = new Set<string>();
-		const notificationAdministrator = new Set([CAPABILITY.notificationsManage]);
+		const teamRoutingAdministrator = new Set([CAPABILITY.notificationsManage]);
+		const tenantNoticeAdministrator = new Set([CAPABILITY.tenantNoticesManage]);
+		const completeNotificationAdministrator = new Set([
+			CAPABILITY.notificationsManage,
+			CAPABILITY.tenantNoticesManage
+		]);
+		const staffExperiences = ['Management', 'Leasing', 'Maintenance'] as const;
+		const relationshipExperiences = ['Owner', 'Tenant'] as const;
 
-		for (const experience of ['Management', 'Leasing', 'Maintenance'] as const) {
+		for (const experience of ['Management', 'Leasing', 'Maintenance', 'Owner', 'Tenant'] as const) {
 			assert.equal(
 				canAccessRoute('/settings/notifications/my-alerts', experience, noCapabilities),
 				true
@@ -88,18 +96,64 @@ describe('experience route policy', () => {
 				canAccessRoute('/settings/notifications/team-routing', experience, noCapabilities),
 				false
 			);
+			assert.equal(
+				canAccessRoute('/settings/notifications/tenant-notices', experience, noCapabilities),
+				false
+			);
 		}
 
-		assert.equal(
-			canAccessRoute('/settings/notifications/team-routing', 'Management', notificationAdministrator),
-			true
-		);
-		assert.equal(
-			canAccessRoute('/settings/notifications/tenant-notices', 'Management', notificationAdministrator),
-			true
-		);
-		assert.equal(canAccessRoute('/settings/notifications/my-alerts', 'Tenant', noCapabilities), false);
-		assert.equal(canAccessRoute('/settings/notifications/my-alerts', 'Owner', noCapabilities), false);
+		for (const experience of staffExperiences) {
+			assert.equal(canAccessRoute('/settings/notifications/team-routing', experience, teamRoutingAdministrator), true);
+			assert.equal(canAccessRoute('/settings/notifications/tenant-notices', experience, teamRoutingAdministrator), false);
+			assert.equal(canAccessRoute('/settings/notifications/team-routing', experience, tenantNoticeAdministrator), false);
+			assert.equal(canAccessRoute('/settings/notifications/tenant-notices', experience, tenantNoticeAdministrator), true);
+		}
+
+		for (const experience of relationshipExperiences) {
+			assert.equal(
+				canAccessRoute('/settings/notifications/team-routing', experience, completeNotificationAdministrator),
+				false
+			);
+			assert.equal(
+				canAccessRoute('/settings/notifications/tenant-notices', experience, completeNotificationAdministrator),
+				false
+			);
+		}
+	});
+
+	it('uses exact capability gates for purpose-built Leasing and Maintenance destinations', () => {
+		const leasingMatrix = [
+			[CAPABILITY.leasingApplicationsManage, '/leasing/applications/12'],
+			[CAPABILITY.leasingListingsManage, '/leasing/rentals'],
+			[CAPABILITY.leasingShowingsManage, '/leasing/calendar'],
+			[CAPABILITY.leasingOnboardingManage, '/leasing/inbox']
+		] as const;
+		for (const [capability, path] of leasingMatrix) {
+			assert.equal(canAccessRoute(path, 'Leasing', new Set([capability])), true, `${path} must accept ${capability}`);
+			assert.equal(canAccessRoute(path, 'Leasing', new Set()), false, `${path} must fail closed without ${capability}`);
+		}
+
+		assert.equal(canAccessRoute('/my-work/12', 'Maintenance', new Set([CAPABILITY.assignedWorkRead])), true);
+		assert.equal(canAccessRoute('/my-work/12', 'Maintenance', new Set([CAPABILITY.assignedWorkUpdate])), false);
+		assert.equal(canAccessRoute('/assignment-inbox', 'Maintenance', new Set([CAPABILITY.assignedWorkConverse])), true);
+		assert.equal(canAccessRoute('/assignment-inbox', 'Maintenance', new Set([CAPABILITY.assignedWorkRead])), false);
+	});
+
+	it('keeps six representative personas in their own navigation boundaries', () => {
+		const personas = [
+			{ name: 'workspace administrator', experience: 'Management', caps: [CAPABILITY.securityManage, CAPABILITY.rentalsManage, CAPABILITY.rentalsRead], allowed: '/settings', denied: '/leasing' },
+			{ name: 'property manager', experience: 'Management', caps: [CAPABILITY.rentalsRead, CAPABILITY.workRead, CAPABILITY.moneyBalancesRead], allowed: '/properties', denied: '/settings' },
+			{ name: 'leasing agent', experience: 'Leasing', caps: [CAPABILITY.leasingApplicationsManage], allowed: '/leasing/pipeline', denied: '/properties' },
+			{ name: 'maintenance technician', experience: 'Maintenance', caps: [CAPABILITY.assignedWorkRead], allowed: '/my-work', denied: '/maintenance' },
+			{ name: 'owner', experience: 'Owner', caps: [], allowed: '/owner', denied: '/' },
+			{ name: 'tenant', experience: 'Tenant', caps: [], allowed: '/portal', denied: '/owner' }
+		] as const;
+
+		for (const persona of personas) {
+			const capabilities = new Set<string>(persona.caps);
+			assert.equal(canAccessRoute(persona.allowed, persona.experience, capabilities), true, `${persona.name} expected ${persona.allowed}`);
+			assert.equal(canAccessRoute(persona.denied, persona.experience, capabilities), false, `${persona.name} must not open ${persona.denied}`);
+		}
 	});
 
 	it('splits operational reconciliation from bank administration', () => {

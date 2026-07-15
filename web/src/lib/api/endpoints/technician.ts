@@ -115,21 +115,6 @@ export const technician = {
     api.get<TechnicianAssignmentPage>(`/technician/inbox${listQuery(params)}`),
   detail: (id: number) =>
     api.get<TechnicianAssignmentDetail>(`/technician/assignments/${id}`),
-  updateAssignment: (
-    id: number,
-    data: {
-      expectedUpdatedAtUtc: string;
-      status?: TechnicianWorkOrderStatus;
-      technicianNote?: string;
-    }
-  ) =>
-    idempotentMutation(
-      `technician:update:${id}:${JSON.stringify(data)}`,
-      (key) =>
-        api.patch(`/work-orders/${id}/assigned-update`, data, {
-          headers: { "Idempotency-Key": key },
-        })
-    ),
   recordEntry: (
     id: number,
     data: {

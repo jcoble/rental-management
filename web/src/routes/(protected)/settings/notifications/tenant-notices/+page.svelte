@@ -22,7 +22,7 @@
 			? '/settings#notifications'
 			: (safeLandingForAccess(access) ?? '/');
 	});
-	const canManage = $derived(hasCapability('notifications.manage'));
+	const canManage = $derived(hasCapability('notifications.tenant-notices.manage'));
 	const automationDetails: Record<string, { label: string; detail: string }> = {
 		'rent-reminder': { label: 'Rent reminder', detail: 'A courtesy reminder before rent is due.' },
 		'lease-renewal-offer': { label: 'Lease renewal offer', detail: 'An operational offer after the lease-ending decision is Offer renewal.' },
@@ -165,7 +165,7 @@
 	<Card.Root class="gap-0 py-0"><Card.Content class="grid gap-3 p-5 text-sm md:grid-cols-3"><div><p class="font-medium">Off</p><p class="text-muted-foreground">No draft or delivery is created.</p></div><div><p class="font-medium">Draft for review</p><p class="text-muted-foreground">Creates a draft for an authorized team member to check.</p></div><div><p class="font-medium">Send automatically</p><p class="text-muted-foreground">Uses the saved policy only when the notice and legal review permit it.</p></div></Card.Content></Card.Root>
 
 	{#if !canManage}
-		<Card.Root><Card.Content class="p-6"><h2 class="font-semibold">Administrator access required</h2><p class="mt-2 text-sm text-muted-foreground">Tenant delivery policy and legal template review require notification-management access.</p></Card.Content></Card.Root>
+		<Card.Root><Card.Content class="p-6"><h2 class="font-semibold">Tenant notice access required</h2><p class="mt-2 text-sm text-muted-foreground">Your team assignment does not include permission to manage tenant delivery policies and legal templates.</p></Card.Content></Card.Root>
 	{:else if policiesQuery.isLoading}
 		<Card.Root><Card.Content class="p-6 text-sm text-muted-foreground">Loading tenant notice policies and supplied templates…</Card.Content></Card.Root>
 	{:else if policiesQuery.isError}

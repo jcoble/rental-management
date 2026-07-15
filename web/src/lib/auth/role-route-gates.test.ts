@@ -20,6 +20,22 @@ const propertyDetail = readFileSync(
 	new URL('../../routes/(protected)/properties/[id]/+page.svelte', import.meta.url),
 	'utf8'
 );
+const technicianApi = readFileSync(
+	new URL('../api/endpoints/technician.ts', import.meta.url),
+	'utf8'
+);
+const technicianDetail = readFileSync(
+	new URL('../../routes/(protected)/my-work/[id]/+page.svelte', import.meta.url),
+	'utf8'
+);
+const scanPage = readFileSync(
+	new URL('../../routes/(protected)/scan/+page.svelte', import.meta.url),
+	'utf8'
+);
+const settingsPage = readFileSync(
+	new URL('../../routes/(protected)/settings/+page.svelte', import.meta.url),
+	'utf8'
+);
 
 test('direct staff routes use the same role-capability gates as navigation', () => {
 	assert.match(
@@ -73,4 +89,26 @@ test('rental collections keep owners in Rentals and leasing inbox uses canonical
 		/kind === 'inbox'\) return `\/leasing\/conversations\/\$\{item\.id\}`/
 	);
 	assert.doesNotMatch(leasingListPage, /kind === 'inbox'\) return `\/messages/);
+});
+
+test('technician commands stay on assignment-scoped endpoints and fail closed for missing status mutation', () => {
+	assert.match(technicianApi, /\/technician\/assignments/);
+	assert.doesNotMatch(technicianApi, /\/work-orders\//);
+	assert.doesNotMatch(technicianApi, /updateAssignment/);
+	assert.match(technicianDetail, /data-testid="assignment-status-unavailable"/);
+	assert.doesNotMatch(technicianDetail, /technician\.updateAssignment/);
+	assert.match(technicianDetail, /activeCapabilities\.has\(CAPABILITY\.assignedWorkUpdate\)/);
+	assert.match(technicianDetail, /activeCapabilities\.has\(CAPABILITY\.assignedWorkTimeMaterialsManage\)/);
+	assert.match(technicianDetail, /activeCapabilities\.has\(CAPABILITY\.assignedWorkConverse\)/);
+	assert.match(technicianDetail, /\{#if allowedEntryKinds\.length > 0\}/);
+	assert.match(technicianDetail, /\{#if canConverse\}<section id="conversation"/);
+	assert.match(scanPage, /technician\.assignments\(\{ openOnly: true, sort: 'scheduledForUtc', take: 50 \}\)/);
+	assert.doesNotMatch(scanPage, /workOrders\.listPage/);
+});
+
+test('notification settings expose independent personal, team, and tenant policy capabilities', () => {
+	assert.match(settingsPage, /canManageTeamRouting = \$derived\(hasCapability\('notifications\.manage'\)\)/);
+	assert.match(settingsPage, /canManageTenantNotices = \$derived\(hasCapability\('notifications\.tenant-notices\.manage'\)\)/);
+	assert.match(settingsPage, /\{#if canManageTeamRouting\}<a[\s\S]*href="\/settings\/notifications\/team-routing"/);
+	assert.match(settingsPage, /\{#if canManageTenantNotices\}<a[\s\S]*href="\/settings\/notifications\/tenant-notices"/);
 });
