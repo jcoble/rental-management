@@ -12,6 +12,7 @@ using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
+using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Notifications;
 using RentalCommand.Engine.Services;
 using Testcontainers.PostgreSql;
@@ -55,6 +56,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         await db.Database.EnsureCreatedAsync();
         await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateEffectiveNowUtc);
         await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateBusinessDate);
+        await db.Database.ExecuteSqlRawAsync(RelationshipAccessProjectionSql.Create);
         await db.Database.ExecuteSqlRawAsync(LeaseAgreementStatusViewSql.Create);
         await db.Database.ExecuteSqlRawAsync(LeaseManagementLifecycleViewSql.Create);
         await db.Database.ExecuteSqlRawAsync(TenantChargeBalanceViewSql.Create);
