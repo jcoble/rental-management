@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.Auth;
@@ -17,6 +18,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -614,6 +616,14 @@ public sealed class PortfolioQaServiceTests : IDisposable
         await _db.SaveChangesAsync();
 
         var qa = new CapturingPortfolioQaService();
+        using var requestServices = new ServiceCollection()
+            .AddSingleton<IWorkspaceAuthorizationEvaluator>(new WorkspaceAuthorizationEvaluator(_db))
+            .AddSingleton(TimeProvider.System)
+            .BuildServiceProvider();
+        var httpContext = new DefaultHttpContext
+        {
+            RequestServices = requestServices,
+        };
         var controller = new AiController(
             Mock.Of<IDailyBriefingService>(),
             qa,
@@ -623,7 +633,7 @@ public sealed class PortfolioQaServiceTests : IDisposable
             _db,
             TimeProvider.System)
         {
-            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
+            ControllerContext = new ControllerContext { HttpContext = httpContext },
         };
         controller.HttpContext.Items[CanonicalAccessContextHttpItem.Key] = new ActiveAccessContext(
             _scope.SessionId,

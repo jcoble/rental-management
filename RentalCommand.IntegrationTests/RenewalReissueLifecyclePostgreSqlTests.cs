@@ -48,23 +48,13 @@ public sealed class RenewalReissueLifecyclePostgreSqlTests : IAsyncLifetime
 
         _connectionString = _postgres.GetConnectionString();
         await using var db = NewContext();
-        await db.Database.EnsureCreatedAsync();
-        foreach (var statement in LeaseLegalSchemaSql.CreateStatements)
-        {
-            await db.Database.ExecuteSqlRawAsync(statement);
-        }
-        await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateEffectiveNowUtc);
-        await db.Database.ExecuteSqlRawAsync(LeaseEffectiveClockSql.CreateBusinessDate);
-        await db.Database.ExecuteSqlRawAsync(LeaseAddendumStatusViewSql.Create);
-        db.SimulationClocks.Add(new SimulationClock
-        {
-            Id = 1,
-            Mode = ClockMode.Frozen,
-            SimAnchorUtc = BoundaryUtc,
-            RealAnchorUtc = BoundaryUtc,
-            TimeZoneId = "UTC",
-            UpdatedAtRealUtc = BoundaryUtc,
-        });
+        await db.Database.MigrateAsync();
+        var clock = await db.SimulationClocks.SingleAsync(item => item.Id == 1);
+        clock.Mode = ClockMode.Frozen;
+        clock.SimAnchorUtc = BoundaryUtc;
+        clock.RealAnchorUtc = BoundaryUtc;
+        clock.TimeZoneId = "UTC";
+        clock.UpdatedAtRealUtc = BoundaryUtc;
         await db.SaveChangesAsync();
     }
 

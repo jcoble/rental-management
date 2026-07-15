@@ -72,6 +72,29 @@ public class ConversationNotificationTests : IAsyncLifetime
     public async Task TenantStartAsync_NotifiesOnlyCapabilityAndLeasePropertyScopedStaff()
     {
         var tenant = SeedTenantWithStaffAndTenantUsers();
+        var now = DateTime.UtcNow;
+        var routingRule = new TeamRoutingRule
+        {
+            PortfolioId = 1,
+            Topic = TeamRoutingTopic.ApplicationsAndLeasing,
+            UseWorkspaceAdministratorFallback = true,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        routingRule.Recipients.Add(new TeamRoutingRuleRecipient
+        {
+            PortfolioId = 1,
+            UserId = 10,
+            Reason = "Assigned leasing staff",
+        });
+        routingRule.Recipients.Add(new TeamRoutingRuleRecipient
+        {
+            PortfolioId = 1,
+            UserId = 30,
+            Reason = "Out-of-scope staff",
+        });
+        _ctx.Db.TeamRoutingRules.Add(routingRule);
+        _ctx.Db.SaveChanges();
         var sut = CreateSut();
 
         var result = await sut.TenantStartAsync(
@@ -82,7 +105,7 @@ public class ConversationNotificationTests : IAsyncLifetime
         notification.Type.Should().Be("TenantMessage");
         notification.UserId.Should().Be(10);
         notification.Title.Should().Be("New message from Emily Chen");
-        notification.ActionUrl.Should().Be($"/messages?conversationId={result!.Id}");
+        notification.ActionUrl.Should().Be($"/messages/{result!.Id}");
         _ctx.Db.Notifications.Should().NotContain(item => item.UserId == 30);
     }
 
