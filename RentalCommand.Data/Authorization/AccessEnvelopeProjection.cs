@@ -32,21 +32,28 @@ public sealed class AccessEnvelopeQuery : IAccessEnvelopeQuery
     public AccessEnvelopeQuery(RentalCommandDbContext db) => _db = db;
 
     public async Task<AccessEnvelope?> GetAsync(
+        Guid sessionId,
         int userId,
         int accessContextId,
+        long accessRevision,
+        DateTime effectiveAtUtc,
         CancellationToken cancellationToken = default)
     {
-        if (userId <= 0 || accessContextId <= 0)
+        if (sessionId == Guid.Empty || userId <= 0 || accessContextId <= 0 || accessRevision <= 0)
         {
             return null;
         }
 
-        var row = await _db.Set<AccessEnvelopeProjectionRow>()
-            .AsNoTracking()
-            .SingleOrDefaultAsync(
-                item => item.AccessContextId == accessContextId &&
-                        item.UserId == userId,
-                cancellationToken);
+        var row = await _db.Database.SqlQuery<AccessEnvelopeProjectionRow>($"""
+                SELECT *
+                FROM rc_get_access_envelope_for_session(
+                    {sessionId},
+                    {userId},
+                    {accessContextId},
+                    {accessRevision},
+                    {effectiveAtUtc})
+                """)
+            .SingleOrDefaultAsync(cancellationToken);
 
         return row is null
             ? null

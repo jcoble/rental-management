@@ -194,6 +194,7 @@ public interface IEffectiveAccessContextSelectionQuery
 {
     Task<IReadOnlyList<EffectiveAccessContextOption>> ListAsync(
         int userId,
+        int? selectedAccessContextId,
         DateTime utcNow,
         CancellationToken cancellationToken = default);
 }
@@ -201,7 +202,10 @@ public interface IEffectiveAccessContextSelectionQuery
 public interface IAccessEnvelopeQuery
 {
     Task<AccessEnvelope?> GetAsync(
+        Guid sessionId,
         int userId,
         int accessContextId,
+        long accessRevision,
+        DateTime effectiveAtUtc,
         CancellationToken cancellationToken = default);
 }

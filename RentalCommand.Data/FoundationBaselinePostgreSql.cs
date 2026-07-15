@@ -287,6 +287,7 @@ internal static class FoundationBaselinePostgreSql
 
     internal static IReadOnlyList<string> RlsAuthoritySelectViews { get; } =
     [
+        "vw_access_envelopes",
         "vw_effective_tenant_access",
     ];
 
@@ -322,6 +323,7 @@ internal static class FoundationBaselinePostgreSql
         "rc_sandbox_graduation_allows(integer)",
         "rc_access_context_is_effective(integer, integer, timestamp with time zone)",
         "rc_list_effective_access_contexts(integer, timestamp with time zone)",
+        "rc_get_access_envelope_for_session(uuid, integer, integer, bigint, timestamp with time zone)",
         "rc_bootstrap_initial_workspace(integer, text, text, text, text, timestamp with time zone)",
     ];
 
@@ -1347,6 +1349,55 @@ internal static class FoundationBaselinePostgreSql
         GRANT EXECUTE ON FUNCTION rc_list_effective_access_contexts(integer, timestamp with time zone)
           TO rentalcommand_api;
 
+        CREATE OR REPLACE FUNCTION rc_get_access_envelope_for_session(
+          target_auth_session_id uuid,
+          target_user_id integer,
+          target_access_context_id integer,
+          target_access_revision bigint,
+          effective_at_utc timestamp with time zone)
+        RETURNS TABLE (
+          "AccessContextId" integer,
+          "UserId" integer,
+          "PortfolioId" integer,
+          "EnvelopeJson" text)
+        LANGUAGE sql
+        STABLE
+        SECURITY DEFINER
+        SET search_path = pg_catalog, public
+        AS $function$
+          SELECT envelope."AccessContextId",
+                 envelope."UserId",
+                 envelope."PortfolioId",
+                 envelope."EnvelopeJson"
+          FROM public."AuthSessions" auth_session
+          JOIN public."WorkspaceAccessContexts" access_context
+            ON access_context."Id" = auth_session."ActiveAccessContextId"
+           AND access_context."UserId" = auth_session."UserId"
+          JOIN public."vw_access_envelopes" envelope
+            ON envelope."AccessContextId" = access_context."Id"
+           AND envelope."UserId" = access_context."UserId"
+           AND envelope."PortfolioId" = access_context."PortfolioId"
+          WHERE session_user = 'rentalcommand_api'
+            AND auth_session."Id" = target_auth_session_id
+            AND auth_session."UserId" = target_user_id
+            AND auth_session."ActiveAccessContextId" = target_access_context_id
+            AND auth_session."Status" = 'Active'
+            AND auth_session."RevokedAtUtc" IS NULL
+            AND auth_session."ExpiresAtUtc" > effective_at_utc
+            AND access_context."AccessRevision" = target_access_revision
+            AND public.rc_access_context_is_effective(
+                  target_access_context_id,
+                  target_user_id,
+                  effective_at_utc);
+        $function$;
+
+        ALTER FUNCTION rc_get_access_envelope_for_session(uuid, integer, integer, bigint, timestamp with time zone)
+          OWNER TO rentalcommand_rls_authority;
+        REVOKE ALL ON FUNCTION rc_get_access_envelope_for_session(uuid, integer, integer, bigint, timestamp with time zone)
+          FROM PUBLIC;
+        GRANT EXECUTE ON FUNCTION rc_get_access_envelope_for_session(uuid, integer, integer, bigint, timestamp with time zone)
+          TO rentalcommand_api;
+
         CREATE OR REPLACE FUNCTION rc_pre_auth_email_audit_allows(
           target_portfolio_id integer,
           target_attempt_id uuid,
@@ -1647,6 +1698,8 @@ internal static class FoundationBaselinePostgreSql
 
     private const string DropRlsAuthorityFunctions = """
         DROP FUNCTION IF EXISTS rc_bootstrap_initial_workspace(integer, text, text, text, text, timestamp with time zone);
+        DROP FUNCTION IF EXISTS rc_get_access_envelope_for_session(
+          uuid, integer, integer, bigint, timestamp with time zone);
         DROP FUNCTION IF EXISTS rc_pre_auth_account_security_audit_allows(
           integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb);
         DROP FUNCTION IF EXISTS rc_pre_auth_email_audit_allows(

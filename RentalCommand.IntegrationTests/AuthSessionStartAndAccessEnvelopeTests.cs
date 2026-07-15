@@ -2,6 +2,7 @@ using System.Data.Common;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -211,6 +212,46 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         (await verify.AtomicAuditLogs.CountAsync(row =>
             row.AttemptId == started.AttemptId &&
             row.ChangeReason == "Authentication session started")).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task RuntimeApiRole_WithBlankScope_ReadsOnlyTheExactActiveSessionEnvelope()
+    {
+        SkipIfNoDocker();
+        var challenge = Challenge();
+        await RuntimeAtomic.ExecuteAsync(
+            SessionRefreshCommandIdentity.ForContextSelectionChallenge(Guid.NewGuid()),
+            challenge,
+            ChallengeCodec);
+        var start = Start(challenge);
+        var started = await RuntimeAtomic.ExecuteAsync(
+            SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()),
+            start,
+            StartCodec);
+        started.Value.Started.Should().BeTrue();
+
+        await using var scope = (_runtimeServices
+            ?? throw new InvalidOperationException("Runtime auth-start services are unavailable."))
+            .CreateAsyncScope();
+        var query = new AccessEnvelopeQuery(
+            scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
+
+        var envelope = await query.GetAsync(
+            start.AuthSessionId,
+            _userId,
+            _firstContextId,
+            1,
+            _now.AddSeconds(1));
+        envelope.Should().NotBeNull("the security-definer read must not depend on request GUCs");
+
+        (await query.GetAsync(Guid.NewGuid(), _userId, _firstContextId, 1, _now.AddSeconds(1)))
+            .Should().BeNull();
+        (await query.GetAsync(start.AuthSessionId, _otherUserId, _firstContextId, 1, _now.AddSeconds(1)))
+            .Should().BeNull();
+        (await query.GetAsync(start.AuthSessionId, _userId, _secondContextId, 1, _now.AddSeconds(1)))
+            .Should().BeNull();
+        (await query.GetAsync(start.AuthSessionId, _userId, _firstContextId, 2, _now.AddSeconds(1)))
+            .Should().BeNull();
     }
 
     [SkippableTheory]
@@ -577,7 +618,8 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         await using var scope = Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         _queryCapture!.Reset();
-        var options = await new EffectiveAccessContextSelectionQuery(db).ListAsync(_userId, _now);
+        var query = new EffectiveAccessContextSelectionQuery(db);
+        var options = await query.ListAsync(_userId, null, _now);
 
         options.Should().HaveCount(2);
         options.Should().OnlyContain(item => item.TotalEffectiveContexts == 2);
@@ -585,9 +627,15 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             .DefaultExperience.Should().Be(WorkspaceExperience.Management,
                 "the membership default is unavailable and SQL must choose the first effective experience");
         _queryCapture.ReaderCommands.Should().HaveCount(1);
-        _queryCapture.ReaderCommands[0].ToUpperInvariant().Should().Contain("COUNT(*)");
-        _queryCapture.ReaderCommands[0].Should().Contain("MembershipRoleAssignments");
-        _queryCapture.ReaderCommands[0].Should().Contain("ORDER BY");
+        _queryCapture.ReaderCommands[0].Should().Contain("rc_list_effective_access_contexts");
+        _queryCapture.ReaderCommands[0].Should().Contain("AccessContextId");
+
+        _queryCapture.Reset();
+        var selected = await query.ListAsync(_userId, _secondContextId, _now);
+        selected.Should().ContainSingle(item =>
+            item.AccessContextId == _secondContextId && item.TotalEffectiveContexts == 2);
+        _queryCapture.ReaderCommands.Should().HaveCount(1);
+        _queryCapture.ReaderCommands[0].Should().Contain("AccessContextId");
     }
 
     [SkippableFact]
@@ -595,16 +643,14 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
     {
         SkipIfNoDocker();
         await using var db = NewPlainContext();
-        var query = new AccessEnvelopeQuery(db);
-
-        var first = await query.GetAsync(_userId, _firstContextId);
+        var first = await ReadEnvelopeViewAsync(db, _userId, _firstContextId);
         first.Should().NotBeNull();
         first!.Identity.UserId.Should().Be(_userId);
         first.SelectedContext.AccessContextId.Should().Be(_firstContextId);
         first.Assignments.Should().ContainSingle();
 
-        (await query.GetAsync(_otherUserId, _firstContextId)).Should().BeNull();
-        (await query.GetAsync(_userId, _otherUserContextId)).Should().BeNull();
+        (await ReadEnvelopeViewAsync(db, _otherUserId, _firstContextId)).Should().BeNull();
+        (await ReadEnvelopeViewAsync(db, _userId, _otherUserContextId)).Should().BeNull();
 
         var assignment = await db.MembershipRoleAssignments.SingleAsync(item => item.Id == _secondAssignmentId);
         assignment.Status = MembershipRoleAssignmentStatus.Suspended;
@@ -613,7 +659,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         await db.SaveChangesAsync();
         db.ChangeTracker.Clear();
 
-        (await query.GetAsync(_userId, _secondContextId)).Should().BeNull(
+        (await ReadEnvelopeViewAsync(db, _userId, _secondContextId)).Should().BeNull(
             "a context without any effective assignment must not survive the view's inner joins");
     }
 
@@ -652,8 +698,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         await db.SaveChangesAsync();
         db.ChangeTracker.Clear();
 
-        var query = new AccessEnvelopeQuery(db);
-        var envelope = await query.GetAsync(_userId, _firstContextId);
+        var envelope = await ReadEnvelopeViewAsync(db, _userId, _firstContextId);
 
         envelope.Should().NotBeNull();
         envelope!.DefaultExperience.Should().Be(WorkspaceExperience.Management);
@@ -672,7 +717,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         await db.SaveChangesAsync();
         db.ChangeTracker.Clear();
 
-        var expanded = await query.GetAsync(_userId, _firstContextId);
+        var expanded = await ReadEnvelopeViewAsync(db, _userId, _firstContextId);
         expanded!.AvailableExperiences.Should().Equal(
             WorkspaceExperience.Management,
             WorkspaceExperience.Owner);
@@ -793,15 +838,14 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         db.ChangeTracker.Clear();
 
         var ownerOptions = await new EffectiveAccessContextSelectionQuery(db)
-            .ListAsync(ownerUser.Id, now);
+            .ListAsync(ownerUser.Id, null, now);
         var tenantOptions = await new EffectiveAccessContextSelectionQuery(db)
-            .ListAsync(tenantUser.Id, now);
+            .ListAsync(tenantUser.Id, null, now);
         ownerOptions.Should().ContainSingle(item => item.DefaultExperience == WorkspaceExperience.Owner);
         tenantOptions.Should().ContainSingle(item => item.DefaultExperience == WorkspaceExperience.Tenant);
 
-        var envelopeQuery = new AccessEnvelopeQuery(db);
-        var ownerEnvelope = await envelopeQuery.GetAsync(ownerUser.Id, ownerContext.Id);
-        var tenantEnvelope = await envelopeQuery.GetAsync(tenantUser.Id, tenantContext.Id);
+        var ownerEnvelope = await ReadEnvelopeViewAsync(db, ownerUser.Id, ownerContext.Id);
+        var tenantEnvelope = await ReadEnvelopeViewAsync(db, tenantUser.Id, tenantContext.Id);
         ownerEnvelope!.Assignments.Should().BeEmpty();
         tenantEnvelope!.Assignments.Should().BeEmpty();
         ownerEnvelope.Navigation.Should().OnlyContain(item => item.CapabilityKeys.Count == 0);
@@ -820,9 +864,10 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         await db.SaveChangesAsync();
         db.ChangeTracker.Clear();
 
-        (await new EffectiveAccessContextSelectionQuery(db).ListAsync(tenantUser.Id, now.AddMinutes(1)))
+        (await new EffectiveAccessContextSelectionQuery(db).ListAsync(
+            tenantUser.Id, null, now.AddMinutes(1)))
             .Should().BeEmpty("revoking the relationship removes the relationship-only login context");
-        (await envelopeQuery.GetAsync(tenantUser.Id, tenantContext.Id)).Should().BeNull();
+        (await ReadEnvelopeViewAsync(db, tenantUser.Id, tenantContext.Id)).Should().BeNull();
         (await db.EffectiveTenantAccess.AnyAsync(item => item.AccessContextId == tenantContext.Id))
             .Should().BeFalse();
     }
@@ -981,6 +1026,28 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         return new DateTime(
             now.Ticks - (now.Ticks % TimeSpan.TicksPerSecond),
             DateTimeKind.Utc);
+    }
+
+    private static async Task<AccessEnvelope?> ReadEnvelopeViewAsync(
+        RentalCommandDbContext db,
+        int userId,
+        int accessContextId)
+    {
+        var row = await db.Set<AccessEnvelopeProjectionRow>()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(item =>
+                item.UserId == userId && item.AccessContextId == accessContextId);
+        if (row is null)
+        {
+            return null;
+        }
+
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            PropertyNameCaseInsensitive = true,
+        };
+        options.Converters.Add(new JsonStringEnumConverter());
+        return JsonSerializer.Deserialize<AccessEnvelope>(row.EnvelopeJson, options);
     }
 
     private RentalCommandDbContext NewPlainContext() => new(

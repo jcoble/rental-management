@@ -381,7 +381,7 @@ public sealed class FoundationBaselinePostgreSqlTests
             "WorkspaceAccessContexts", "WorkspaceMemberships", "WorkspaceNoticeTemplateVersions",
         ]);
         FoundationBaselinePostgreSql.RlsAuthoritySelectViews.Should().BeEquivalentTo(
-            ["vw_effective_tenant_access"]);
+            ["vw_access_envelopes", "vw_effective_tenant_access"]);
         FoundationBaselinePostgreSql.RlsAuthorityInsertTables.Should().BeEquivalentTo(
         [
             "AutomationSettings", "MembershipRoleAssignments", "OwnerEntities", "OwnerUserAccesses",
@@ -401,6 +401,7 @@ public sealed class FoundationBaselinePostgreSqlTests
             "rc_sandbox_graduation_allows(integer)",
             "rc_access_context_is_effective(integer, integer, timestamp with time zone)",
             "rc_list_effective_access_contexts(integer, timestamp with time zone)",
+            "rc_get_access_envelope_for_session(uuid, integer, integer, bigint, timestamp with time zone)",
             "rc_bootstrap_initial_workspace(integer, text, text, text, text, timestamp with time zone)",
         ]);
 
@@ -483,5 +484,48 @@ public sealed class FoundationBaselinePostgreSqlTests
         CreateSql.Should().Contain("Initial workspace bootstrap is API-only");
         CreateSql.Should().NotContain(
             "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO rentalcommand_rls_authority;");
+    }
+
+    [Fact]
+    public void EffectiveAccessContextProjection_ComputesTheTotalBeforeOuterSelection()
+    {
+        var normalizedSql = Regex.Replace(CreateSql, @"\s+", " ");
+
+        normalizedSql.Should().Contain("count(*) OVER ()::integer AS \"TotalEffectiveContexts\"");
+        normalizedSql.Should().Contain(
+            "FROM options ORDER BY options.\"WorkspaceName\", options.\"AccessContextId\"");
+    }
+
+    [Fact]
+    public void AccessEnvelopeSessionRead_RequiresExactLiveCoordinatesAndRuntimeIdentity()
+    {
+        var normalizedSql = Regex.Replace(
+            FoundationBaselinePostgreSql.RlsAuthorityFunctionSql, @"\s+", " ");
+
+        normalizedSql.Should().Contain(
+            "CREATE OR REPLACE FUNCTION rc_get_access_envelope_for_session( target_auth_session_id uuid, target_user_id integer, target_access_context_id integer, target_access_revision bigint, effective_at_utc timestamp with time zone)");
+        normalizedSql.Should().Contain("FROM public.\"AuthSessions\" auth_session");
+        normalizedSql.Should().Contain("JOIN public.\"WorkspaceAccessContexts\" access_context");
+        normalizedSql.Should().Contain("JOIN public.\"vw_access_envelopes\" envelope");
+        normalizedSql.Should().Contain("session_user = 'rentalcommand_api'");
+        normalizedSql.Should().Contain("auth_session.\"Id\" = target_auth_session_id");
+        normalizedSql.Should().Contain("auth_session.\"UserId\" = target_user_id");
+        normalizedSql.Should().Contain(
+            "auth_session.\"ActiveAccessContextId\" = target_access_context_id");
+        normalizedSql.Should().Contain("auth_session.\"Status\" = 'Active'");
+        normalizedSql.Should().Contain("auth_session.\"RevokedAtUtc\" IS NULL");
+        normalizedSql.Should().Contain("auth_session.\"ExpiresAtUtc\" > effective_at_utc");
+        normalizedSql.Should().Contain(
+            "access_context.\"AccessRevision\" = target_access_revision");
+        normalizedSql.Should().Contain(
+            "public.rc_access_context_is_effective( target_access_context_id, target_user_id, effective_at_utc)");
+        normalizedSql.Should().Contain(
+            "ALTER FUNCTION rc_get_access_envelope_for_session(uuid, integer, integer, bigint, timestamp with time zone) OWNER TO rentalcommand_rls_authority;");
+        normalizedSql.Should().Contain(
+            "REVOKE ALL ON FUNCTION rc_get_access_envelope_for_session(uuid, integer, integer, bigint, timestamp with time zone) FROM PUBLIC;");
+        normalizedSql.Should().Contain(
+            "GRANT EXECUTE ON FUNCTION rc_get_access_envelope_for_session(uuid, integer, integer, bigint, timestamp with time zone) TO rentalcommand_api;");
+        DropSql.Should().Contain(
+            "DROP FUNCTION IF EXISTS rc_get_access_envelope_for_session(\n  uuid, integer, integer, bigint, timestamp with time zone);");
     }
 }

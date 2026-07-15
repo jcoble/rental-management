@@ -197,7 +197,13 @@ public class AuthController : ControllerBase
             return Unauthorized(new { error = "Active access context is unavailable." });
         }
 
-        var envelope = await _accessEnvelopes.GetAsync(active.UserId, active.AccessContextId, ct);
+        var envelope = await _accessEnvelopes.GetAsync(
+            active.SessionId,
+            active.UserId,
+            active.AccessContextId,
+            active.AccessRevision,
+            _timeProvider.GetUtcNow().UtcDateTime,
+            ct);
         return envelope is null
             ? Unauthorized(new { error = "Active access context is unavailable." })
             : Ok(envelope);
@@ -214,6 +220,7 @@ public class AuthController : ControllerBase
 
         return Ok(await _contextSelection.ListAsync(
             active.UserId,
+            null,
             _timeProvider.GetUtcNow().UtcDateTime,
             ct));
     }
@@ -241,11 +248,19 @@ public class AuthController : ControllerBase
                     _timeProvider.GetUtcNow().UtcDateTime),
                 Guid.NewGuid(),
                 ct);
+            if (!switched.Switched)
+            {
+                return Forbid();
+            }
+
             var envelope = await _accessEnvelopes.GetAsync(
+                switched.AuthSessionId,
                 switched.UserId,
                 switched.AccessContextId,
+                switched.AccessRevision,
+                _timeProvider.GetUtcNow().UtcDateTime,
                 ct);
-            if (!switched.Switched || envelope is null)
+            if (envelope is null)
             {
                 return Forbid();
             }
