@@ -11,6 +11,7 @@ preview_port="${PREVIEW_WEB_PORT:-15667}"
 state_dir="$preview_root/$stack_id"
 data_dir="$preview_data_root/$stack_id"
 credentials_file="$data_dir/credentials.env"
+integrations_file="${PREVIEW_INTEGRATIONS_FILE:-$preview_data_root/integrations.env}"
 project="rc-preview-$stack_id"
 
 mkdir -p "$artifact_dir" "$preview_root" "$preview_data_root"
@@ -126,7 +127,15 @@ tailscale_host="$(tailscale ip -4 2>/dev/null | head -n1)"
   echo "Tailscale is not connected or did not return a tailnet IPv4 address" >&2
   exit 1
 }
-web_origin="http://$tailscale_host:$preview_port"
+private_url="http://$tailscale_host:$preview_port"
+# SvelteKit validates enhanced form submissions against ORIGIN. The browser
+# reaches this stack through the persistent Tailscale Service, not the private
+# host port used by the health probe.
+web_origin="${PREVIEW_PUBLIC_ORIGIN:-https://redacted-host.example.invalid}"
+[[ "$web_origin" =~ ^https://[^/]+$ ]] || {
+  echo "PREVIEW_PUBLIC_ORIGIN must be an HTTPS origin without a path" >&2
+  exit 1
+}
 expires_at="$(( $(date +%s) + ttl_hours * 3600 ))"
 mkdir -p "$data_dir/postgres"
 if [[ ! -f "$credentials_file" ]]; then
@@ -141,6 +150,64 @@ API_DB_PASSWORD=$api_db_password
 ENGINE_DB_PASSWORD=$engine_db_password
 EOF
   chmod 600 "$credentials_file"
+fi
+
+# Non-delivery integration credentials persist independently from disposable
+# source and stack state. Never copy production notification-delivery secrets
+# into this preview: email, SMS, and push remain suppressed in compose.
+if [[ ! -f "$integrations_file" ]]; then
+  cat > "$integrations_file" <<'EOF'
+ASSISTANT_PROVIDER=openai
+ASSISTANT_MODEL_ID=gpt-4o
+ASSISTANT_API_KEY=
+GOOGLE_PLACES_API_KEY=
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+EOF
+fi
+chmod 600 "$integrations_file"
+
+integration_value() {
+  local key="$1" line value
+  line="$(grep -E "^${key}=" "$integrations_file" | tail -n 1 || true)"
+  value="${line#*=}"
+  if [[ "$value" == \"*\" && "$value" == *\" ]]; then
+    value="${value:1:${#value}-2}"
+  elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
+    value="${value:1:${#value}-2}"
+  fi
+  printf '%s' "$value"
+}
+
+google_client_id="$(integration_value GOOGLE_CLIENT_ID)"
+google_client_secret="$(integration_value GOOGLE_CLIENT_SECRET)"
+assistant_api_key="$(integration_value ASSISTANT_API_KEY)"
+assistant_provider="$(integration_value ASSISTANT_PROVIDER)"
+assistant_model_id="$(integration_value ASSISTANT_MODEL_ID)"
+google_places_api_key="$(integration_value GOOGLE_PLACES_API_KEY)"
+
+if [[ -n "$google_client_id" || -n "$google_client_secret" ]]; then
+  [[ -n "$google_client_id" && -n "$google_client_secret" ]] || {
+    echo "Google sign-in configuration is incomplete in $integrations_file" >&2
+    exit 1
+  }
+  echo "Preview Google sign-in: enabled"
+else
+  echo "Preview Google sign-in: disabled (credentials are empty in $integrations_file)"
+fi
+if [[ -n "$assistant_api_key" ]]; then
+  [[ -n "$assistant_provider" && -n "$assistant_model_id" ]] || {
+    echo "Assistant configuration is incomplete in $integrations_file" >&2
+    exit 1
+  }
+  echo "Preview assistant: enabled"
+else
+  echo "Preview assistant: disabled (API key is empty in $integrations_file)"
+fi
+if [[ -n "$google_places_api_key" ]]; then
+  echo "Preview Google Places: enabled"
+else
+  echo "Preview Google Places: disabled (API key is empty in $integrations_file)"
 fi
 
 # shellcheck disable=SC1090
@@ -177,6 +244,18 @@ WEB_ORIGIN=$web_origin
 PREVIEW_WEB_PORT=$preview_port
 TAILSCALE_IP=$tailscale_host
 EOF
+# Append only the allowlisted non-delivery integration settings. Keeping this
+# copy in the mode-600 disposable state file lets Docker Compose consume normal
+# dotenv escaping without ever printing secret values into logs.
+for key in ASSISTANT_PROVIDER ASSISTANT_MODEL_ID ASSISTANT_API_KEY \
+  GOOGLE_PLACES_API_KEY GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET; do
+  line="$(grep -E "^${key}=" "$integrations_file" | tail -n 1 || true)"
+  if [[ -n "$line" ]]; then
+    printf '%s\n' "$line" >> "$state_dir/.env"
+  else
+    printf '%s=\n' "$key" >> "$state_dir/.env"
+  fi
+done
 chmod 600 "$state_dir/.env"
 printf '%s\n' "$expires_at" > "$state_dir/expires-at"
 cat > "$state_dir/metadata.txt" <<EOF
@@ -184,7 +263,8 @@ stack_id=$stack_id
 commit=$resolved_sha
 started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 expires_at=$(date -u -d "@$expires_at" +%Y-%m-%dT%H:%M:%SZ)
-private_url=$web_origin
+private_url=$private_url
+public_url=$web_origin
 EOF
 
 # A failed restore/build/image/start must not leave a half-created preview or
@@ -207,7 +287,7 @@ docker build -f Dockerfile.web -t "rc-preview-web:$stack_id" \
 
 compose up -d
 for _ in $(seq 1 60); do
-  if curl --fail --silent "$web_origin/health" > "$artifact_dir/health.json"; then
+  if curl --fail --silent "$private_url/health" > "$artifact_dir/health.json"; then
     capture_logs
     trap - ERR
     cat "$state_dir/metadata.txt"
