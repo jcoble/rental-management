@@ -479,9 +479,14 @@ internal static class FoundationBaselinePostgreSql
     private static readonly HashSet<string> EngineAppendOnlyTables = new(StringComparer.Ordinal)
     {
         "AtomicAuditLogs", "NoticeDeliveryEvidence", "Notifications",
-        "RenderedNotices", "SecurityDepositEntries", "SignatureAuditEvents",
+        "LoanPayments", "RenderedNotices", "SecurityDepositEntries", "SignatureAuditEvents",
         "TenantLedgerAllocations", "TenantLedgerEntries", "WorkspaceNoticeTemplateVersions",
         "WorkOrderStatusEvents",
+    };
+
+    private static readonly HashSet<string> EngineUpdateOnlyTables = new(StringComparer.Ordinal)
+    {
+        "Loans",
     };
 
     // Worker claim state is mutable; this list is intentionally separate from the API matrix.
@@ -512,7 +517,7 @@ internal static class FoundationBaselinePostgreSql
         "Inspections", "LeaseAddenda", "LeaseAddendumFinancialEffects", "LeaseAddendumSigners",
         "LeaseAgreementSigners", "LeaseManagementParties", "LeaseManagements",
         "LeaseRenewalAddendumDecisions", "LegalDocumentArtifacts", "LegalDocumentSourceVersions", "ListingPhotos",
-        "ListingPublications", "LoanPayments", "Loans", "MembershipRoleAssignmentProperties",
+        "ListingPublications", "MembershipRoleAssignmentProperties",
         "MembershipRoleAssignments", "AutomationSettings", "MessagingProviderSettings",
         "OwnerDistributions", "OwnerEntities", "OwnerUserAccesses", "Owners",
         "Portfolios", "Properties", "PropertyDispositions", "QueuedJobs", "RentalApplications",
@@ -2115,6 +2120,7 @@ internal static class FoundationBaselinePostgreSql
         if (EngineDeniedTables.Contains(table)) return TableOperation.None;
         if (EngineSystemTemplateTables.Contains(table)) return TableOperation.All;
         if (EngineAppendOnlyTables.Contains(table)) return TableOperation.Select | TableOperation.Insert;
+        if (EngineUpdateOnlyTables.Contains(table)) return TableOperation.Select | TableOperation.Update;
         if (EngineMutableTables.Contains(table)) return TableOperation.Select | TableOperation.Insert | TableOperation.Update;
         if (EngineReadOnlyTables.Contains(table)) return TableOperation.Select;
         throw new InvalidOperationException($"Mapped table {table} has no explicit engine grant classification.");
