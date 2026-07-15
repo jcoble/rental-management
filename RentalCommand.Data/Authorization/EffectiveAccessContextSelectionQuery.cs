@@ -13,6 +13,7 @@ public sealed class EffectiveAccessContextSelectionQuery : IEffectiveAccessConte
 
     public async Task<IReadOnlyList<EffectiveAccessContextOption>> ListAsync(
         int userId,
+        int? selectedAccessContextId,
         DateTime utcNow,
         CancellationToken cancellationToken = default)
     {
@@ -22,8 +23,10 @@ public sealed class EffectiveAccessContextSelectionQuery : IEffectiveAccessConte
         }
 
         var rows = await _db.Database.SqlQuery<EffectiveAccessContextOptionRow>($"""
-                SELECT *
-                FROM rc_list_effective_access_contexts({userId}, {utcNow})
+                SELECT option.*
+                FROM rc_list_effective_access_contexts({userId}, {utcNow}) option
+                WHERE {selectedAccessContextId}::integer IS NULL
+                   OR option."AccessContextId" = {selectedAccessContextId}
                 """)
             .ToListAsync(cancellationToken);
 

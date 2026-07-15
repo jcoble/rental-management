@@ -23,13 +23,16 @@ public sealed class WorkspaceExperienceController : AuthenticatedPortfolioContro
 
     private readonly IAtomicUnitOfWork _atomic;
     private readonly IAccessEnvelopeQuery _accessEnvelopes;
+    private readonly TimeProvider _timeProvider;
 
     public WorkspaceExperienceController(
         IAtomicUnitOfWork atomic,
-        IAccessEnvelopeQuery accessEnvelopes)
+        IAccessEnvelopeQuery accessEnvelopes,
+        TimeProvider timeProvider)
     {
         _atomic = atomic;
         _accessEnvelopes = accessEnvelopes;
+        _timeProvider = timeProvider;
     }
 
     [HttpPost("select")]
@@ -77,7 +80,13 @@ public sealed class WorkspaceExperienceController : AuthenticatedPortfolioContro
             return Forbid();
         }
 
-        var envelope = await _accessEnvelopes.GetAsync(active.UserId, active.AccessContextId, ct);
+        var envelope = await _accessEnvelopes.GetAsync(
+            active.SessionId,
+            active.UserId,
+            active.AccessContextId,
+            active.AccessRevision,
+            _timeProvider.GetUtcNow().UtcDateTime,
+            ct);
         return envelope is null ? Forbid() : Ok(envelope);
     }
 }

@@ -190,7 +190,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         await db.SaveChangesAsync();
 
         var option = (await new EffectiveAccessContextSelectionQuery(db)
-                .ListAsync(_userId, _now.AddMinutes(1)))
+                .ListAsync(_userId, null, _now.AddMinutes(1)))
             .Single(item => item.AccessContextId == _accessContextId);
 
         option.DefaultExperience.Should().Be(

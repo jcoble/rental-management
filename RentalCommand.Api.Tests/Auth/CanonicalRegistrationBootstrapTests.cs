@@ -65,8 +65,10 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
             });
         var envelopes = new Mock<IAccessEnvelopeQuery>();
         envelopes.Setup(query => query.GetAsync(
-                It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((int userId, int contextId, CancellationToken _) =>
+                It.IsAny<Guid>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<long>(),
+                It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid sessionId, int userId, int contextId, long accessRevision,
+                DateTime effectiveAtUtc, CancellationToken cancellationToken) =>
             {
                 var graph = _ctx.Db.WorkspaceAccessContexts.AsNoTracking()
                     .Where(context => context.Id == contextId && context.UserId == userId)
@@ -144,7 +146,7 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
 
         var preLoginOptions = await ExecuteAsApiDatabaseIdentityAsync(() =>
             new EffectiveAccessContextSelectionQuery(_ctx.Db)
-                .ListAsync(user.Id, DateTime.UtcNow));
+                .ListAsync(user.Id, null, DateTime.UtcNow));
         preLoginOptions.Should().ContainSingle(option =>
             option.AccessContextId == context.Id &&
             option.AccessRevision == context.AccessRevision);

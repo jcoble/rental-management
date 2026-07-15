@@ -216,25 +216,28 @@ public class AuthService : IAuthService
         // succeeded. The DB exposes only the narrow effective-context option projection here; it
         // does not grant the runtime API generic cross-workspace table access.
         var now = _timeProvider.UtcNow();
-        var contexts = await _contextSelection.ListAsync(user.Id, now, ct);
-        if (contexts.Count == 0)
+        var contexts = await _contextSelection.ListAsync(user.Id, accessContextId, now, ct);
+        var firstContext = contexts.FirstOrDefault();
+        if (firstContext is null)
         {
-            return AuthResult.Fail("This account has no active workspace access.");
-        }
-
-        var selected = accessContextId is null
-            ? contexts.Count == 1 ? contexts[0] : null
-            : contexts.SingleOrDefault(item => item.AccessContextId == accessContextId.Value);
-        if (selected is null)
-        {
-            return contexts.Count > 1 && accessContextId is null
-                ? AuthResult.ContextSelectionRequired(contexts)
+            return accessContextId is null
+                ? AuthResult.Fail("This account has no active workspace access.")
                 : AuthResult.Fail("The selected workspace is not available.", AuthErrorType.BadRequest);
         }
 
+        if (accessContextId is null && firstContext.TotalEffectiveContexts > 1)
+        {
+            return AuthResult.ContextSelectionRequired(contexts);
+        }
+
+        // A supplied context is filtered by PostgreSQL; .NET never materializes all contexts and
+        // then selects one in memory. Without a supplied context, PostgreSQL's projected total
+        // proves that this first row is the only effective option.
+        var selected = firstContext;
+
         Guid? challengeId = null;
         string? challengeBearer = null;
-        if (contexts.Count > 1)
+        if (selected.TotalEffectiveContexts > 1)
         {
             var challenge = await _atomicCredentials.IssueContextSelectionChallengeAsync(user.Id, ct);
             if (!challenge.Issued || challenge.ChallengeBearer is null)
@@ -259,7 +262,8 @@ public class AuthService : IAuthService
             session.AuthSessionId,
             session.AccessContextId,
             session.AccessRevision,
-            session.RefreshBearer);
+            session.RefreshBearer,
+            ct);
     }
 
     public async Task<AuthResult> RegisterAsync(
@@ -335,9 +339,16 @@ public class AuthService : IAuthService
         Guid sessionId,
         int accessContextId,
         long accessRevision,
-        string refreshBearer)
+        string refreshBearer,
+        CancellationToken ct = default)
     {
-        var envelope = await _accessEnvelopes.GetAsync(user.Id, accessContextId);
+        var envelope = await _accessEnvelopes.GetAsync(
+            sessionId,
+            user.Id,
+            accessContextId,
+            accessRevision,
+            _timeProvider.UtcNow(),
+            ct);
         if (envelope is null || envelope.SelectedContext.AccessRevision != accessRevision)
         {
             return AuthResult.Fail("The selected workspace access changed. Sign in again.");
