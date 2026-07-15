@@ -37,6 +37,10 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         new("start-auth-session-result.v1");
     private static readonly AtomicJsonResultCodec<AuthEmailOutboxResult> AuthEmailCodec =
         new("auth-email-outbox-result:v1");
+    private static readonly AtomicJsonResultCodec<ConfirmAccountEmailResult> ConfirmEmailCodec =
+        new("auth-email-confirm-result:v1");
+    private static readonly AtomicJsonResultCodec<ResetAccountPasswordResult> ResetPasswordCodec =
+        new("auth-password-reset-result:v1");
 
     private readonly DateTime _now = CurrentTestTimeUtc();
     private PostgreSqlContainer? _postgres;
@@ -115,6 +119,18 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             AuthEmailOutboxCommand,
             AuthEmailOutboxResult,
             AuthEmailOutboxHandler>();
+        services.AddAtomicCommandHandler<
+            ConfirmAccountEmailCommand,
+            ConfirmAccountEmailResult,
+            ConfirmAccountEmailHandler>();
+        services.AddAtomicCommandHandler<
+            ResetAccountPasswordCommand,
+            ResetAccountPasswordResult,
+            ResetAccountPasswordHandler>();
+        services.AddAtomicCommandHandler<
+            ConfirmGoogleAccountEmailCommand,
+            ConfirmAccountEmailResult,
+            ConfirmGoogleAccountEmailHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(connectionString)
                 .UseAtomicPersistenceKernel(provider)
@@ -241,6 +257,96 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         (await verify.OutboxMessages.CountAsync(row =>
             row.PortfolioId == enqueued.Value.PortfolioId &&
             row.IdempotencyKey == deliveryKey)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task RuntimeApiRole_WithBlankScope_ConfirmsAndReplaysPreAuthAccountEmail()
+    {
+        SkipIfNoDocker();
+        var operationDigest = LowerSha256(Guid.NewGuid().ToString("N"));
+        var command = new ConfirmAccountEmailCommand(
+            _userId,
+            _securityStamp,
+            true,
+            LowerSha256($"{_userId}\0confirm-email"));
+        var identity = new AtomicCommandIdentity(
+            "auth.email.confirm",
+            $"{_userId}:{operationDigest}");
+
+        var confirmed = await RuntimeAtomic.ExecuteAsync(identity, command, ConfirmEmailCodec);
+        var replayed = await RuntimeAtomic.ExecuteAsync(identity, command, ConfirmEmailCodec);
+
+        confirmed.Value.Outcome.Should().Be(ConfirmAccountEmailOutcome.Confirmed);
+        confirmed.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replayed.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replayed.Value.Should().Be(confirmed.Value);
+
+        await using var verify = NewPlainContext();
+        (await verify.Users.SingleAsync(user => user.Id == _userId)).EmailConfirmed.Should().BeTrue();
+        (await verify.AtomicAuditLogs.CountAsync(row =>
+            row.AttemptId == confirmed.AttemptId &&
+            row.ChangeReason == "Account email confirmed")).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task RuntimeApiRole_WithBlankScope_ResetsAndReplaysPreAuthAccountPassword()
+    {
+        SkipIfNoDocker();
+        var operationDigest = LowerSha256(Guid.NewGuid().ToString("N"));
+        var newPasswordHash = "integration-password-hash";
+        var command = new ResetAccountPasswordCommand(
+            _userId,
+            _securityStamp,
+            true,
+            newPasswordHash,
+            LowerSha256($"{_userId}\0reset-password"));
+        var identity = new AtomicCommandIdentity(
+            "auth.password.reset",
+            $"{_userId}:{operationDigest}");
+
+        var reset = await RuntimeAtomic.ExecuteAsync(identity, command, ResetPasswordCodec);
+        var replayed = await RuntimeAtomic.ExecuteAsync(identity, command, ResetPasswordCodec);
+
+        reset.Value.Outcome.Should().Be(ResetAccountPasswordOutcome.Reset);
+        reset.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replayed.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replayed.Value.Should().Be(reset.Value);
+
+        await using var verify = NewPlainContext();
+        var user = await verify.Users.SingleAsync(candidate => candidate.Id == _userId);
+        user.EmailConfirmed.Should().BeTrue();
+        user.PasswordHash.Should().Be(newPasswordHash);
+        (await verify.AtomicAuditLogs.CountAsync(row =>
+            row.AttemptId == reset.AttemptId &&
+            row.ChangeReason == "Password reset completed")).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task RuntimeApiRole_WithBlankScope_ConfirmsAndReplaysGoogleVerifiedAccountEmail()
+    {
+        SkipIfNoDocker();
+        var subjectHash = LowerSha256(Guid.NewGuid().ToString("N"));
+        var command = new ConfirmGoogleAccountEmailCommand(
+            _userId,
+            _securityStamp,
+            subjectHash);
+        var identity = new AtomicCommandIdentity(
+            "auth.email.google-confirm",
+            $"{_userId}:{subjectHash}");
+
+        var confirmed = await RuntimeAtomic.ExecuteAsync(identity, command, ConfirmEmailCodec);
+        var replayed = await RuntimeAtomic.ExecuteAsync(identity, command, ConfirmEmailCodec);
+
+        confirmed.Value.Outcome.Should().Be(ConfirmAccountEmailOutcome.Confirmed);
+        confirmed.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replayed.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replayed.Value.Should().Be(confirmed.Value);
+
+        await using var verify = NewPlainContext();
+        (await verify.Users.SingleAsync(user => user.Id == _userId)).EmailConfirmed.Should().BeTrue();
+        (await verify.AtomicAuditLogs.CountAsync(row =>
+            row.AttemptId == confirmed.AttemptId &&
+            row.ChangeReason == "Google-verified account email confirmed")).Should().Be(1);
     }
 
     [SkippableFact]
@@ -865,6 +971,9 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
 
     private static string Hash(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+
+    private static string LowerSha256(string value) =>
+        Hash(value).ToLowerInvariant();
 
     private static DateTime CurrentTestTimeUtc()
     {

@@ -204,6 +204,45 @@ public sealed class FoundationBaselinePostgreSqlTests
     }
 
     [Fact]
+    public void PreAuthAccountSecurityAudit_HasExactTransactionBoundAdmissionForConfirmationAndReset()
+    {
+        var normalizedSql = Regex.Replace(CreateSql, @"\s+", " ");
+
+        CreateSql.Should().Contain(
+            "OR rc_pre_auth_account_security_audit_allows(\n" +
+            "    \"PortfolioId\", \"AttemptId\", \"CommandType\", \"CommandIdempotencyKey\", \"MutationOrdinal\",");
+        normalizedSql.Should().Contain(
+            "target_command_type IN ( 'auth.email.confirm', 'auth.email.google-confirm', 'auth.password.reset')");
+        normalizedSql.Should().Contain(
+            "target_command_idempotency_key ~ ('^' || target_user_id::text || ':[0-9a-f]{64}$')");
+        normalizedSql.Should().Contain("target_mutation_ordinal = 1");
+        normalizedSql.Should().Contain("target_entity_type = 'ApplicationUser'");
+        normalizedSql.Should().Contain("target_entity_id = target_user_id");
+        normalizedSql.Should().Contain("target_operation = 1");
+        normalizedSql.Should().Contain("target_actor_label = 'authentication:account-security'");
+        normalizedSql.Should().Contain("target_new_values ->> 'TargetUserId' = target_user_id::text");
+        normalizedSql.Should().Contain(
+            "target_new_values ->> 'SecurityIntentHash' ~ '^[0-9a-f]{64}$'");
+        normalizedSql.Should().Contain("target_new_values ->> 'SecurityEvent' = 'EmailConfirmed'");
+        normalizedSql.Should().Contain("target_change_reason = 'Account email confirmed'");
+        normalizedSql.Should().Contain("target_new_values ->> 'SecurityEvent' = 'GoogleEmailConfirmed'");
+        normalizedSql.Should().Contain("target_change_reason = 'Google-verified account email confirmed'");
+        normalizedSql.Should().Contain("target_new_values ->> 'SecurityEvent' = 'PasswordReset'");
+        normalizedSql.Should().Contain("target_change_reason = 'Password reset completed'");
+        normalizedSql.Should().Contain(
+            "split_part(target_command_idempotency_key, ':', 2) = target_new_values ->> 'SecurityIntentHash'");
+        normalizedSql.Should().Contain("user_row.\"EmailConfirmed\" = TRUE");
+        normalizedSql.Should().Contain("user_row.\"PasswordHash\" IS NOT NULL");
+        normalizedSql.Should().Contain("user_row.\"AccessFailedCount\" = 0");
+        normalizedSql.Should().Contain("user_row.\"LockoutEnd\" IS NULL");
+        normalizedSql.Should().Contain("user_row.xmin = pg_current_xact_id()::xid");
+        normalizedSql.Should().Contain(
+            "root.\"AccessContextId\" = (target_new_values ->> 'AuditRootAccessContextId')::integer");
+        normalizedSql.Should().Contain("receipt.\"AttemptId\" = target_attempt_id");
+        normalizedSql.Should().Contain("receipt.xmin = pg_current_xact_id()::xid");
+    }
+
+    [Fact]
     public void SandboxGraduation_ClassifiesEveryPortfolioScopedTableExactlyOnce()
     {
         var mappedPortfolioTables = FoundationBaselinePostgreSql.DirectPortfolioTables
@@ -358,6 +397,7 @@ public sealed class FoundationBaselinePostgreSqlTests
             "rc_account_bootstrap_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text)",
             "rc_pre_auth_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb)",
             "rc_pre_auth_email_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb)",
+            "rc_pre_auth_account_security_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb)",
             "rc_sandbox_graduation_allows(integer)",
             "rc_access_context_is_effective(integer, integer, timestamp with time zone)",
             "rc_list_effective_access_contexts(integer, timestamp with time zone)",
