@@ -2,9 +2,9 @@
 
 Date: 2026-07-15  
 Tester: `foundation-rentals`  
-Source SHA: `2404ec7abc802477569d0dfe7d4fec60b2760636`
+Source SHA: `8419a55ff9ae850ef833431ac1c5cff65fd85bd7`
 Environment: `https://rental-command.chimp-map.ts.net`  
-Status: In progress
+Status: Fail — source fixes pending serialized verification and preview refresh
 
 ## Scenario
 
@@ -13,24 +13,26 @@ move-in preparation, and immutable Agreement correction/renewal/month-to-month w
 
 ## Summary
 
-The public preview is reachable and the seeded management administrator signed in through the
-visible `/login` form. The global rental lists, one LeaseManagement detail, its draft Agreement,
-one Unit Command Center, and the global Scan/Add chooser were exercised at a `1440 x 900` browser
-viewport. The remaining mutation journeys are blocked on a refreshed preview after the focused
-Units query and move-in command changes are built and deployed.
+The exact refreshed preview SHA was exercised at a `1440 x 900` browser viewport. Management login,
+global rental lists, all six Unit Command Center sections, global/contextual Scan/Add, the Leases
+list, one Ending relationship, its draft Agreement, and its ending-decision dialog render. The
+Units list now returns instead of loading forever, but remained severely slow and flaky (roughly
+11–20 seconds). A freshly generated public application link immediately returns 404 because the
+anonymous route has no token-scoped RLS coordinate; that blocks application submission, approval,
+move-in, and the later executed-Agreement correction/renewal journeys on this preview.
 
 ## Section Status
 
 | Section | Status | Evidence / blocker |
 |---|---|---|
-| A. Global rental navigation and lists | Fail | Properties, Owners, Tenants, Leases, and Applications load; Units permanently loads (BUG-2) |
+| A. Global rental navigation and lists | Fail | All lists render, but Units takes roughly 11–20 seconds and can outlive the UI request window (BUG-2) |
 | B. One-rental and multi-rental setup | Blocked | Mutation proof deferred until the refreshed preview; source contract still requires one explicit Unit |
-| C. Unit Command Center | In progress | `/units/1` and its six top-level sections render; full section/data agreement remains to be proven |
-| D. Contextual scan/import | In progress | Global chooser exposes all expected scan types; upload/review/confirm and inherited Unit context remain to be run |
-| E. Applications and prepare move-in | Blocked | Applications empty/share-link state works; no marked Application exists for destructive transition proof |
-| F. Agreement draft/issue/sign/possession | In progress | LeaseManagement and draft Agreement editor render; issue/sign/atomic possession mutation not run |
-| G. Correction/versioning | Not run | Requires an executed governing Agreement in the refreshed preview |
-| H. Renewal/month-to-month | Not run | Requires an executed governing Agreement in the refreshed preview |
+| C. Unit Command Center | Pass with data concern | `/units/10` and all six top-level sections render; seeded facts disagree about possession/account/agreement state |
+| D. Contextual scan/import | Fail | Global chooser works; Unit launch does not visibly name the inherited Unit/property (source fix added) |
+| E. Applications and prepare move-in | Blocked | Freshly generated public link immediately returns 404 under anonymous RLS (BUG-4) |
+| F. Agreement draft/issue/sign/possession | Blocked | Ending relationship, draft version, household, tenant account, possession, and decision dialog render; no executed fixture and BUG-4 blocks creating one |
+| G. Correction/versioning | Blocked | No executed governing Agreement exists in demo data and BUG-4 blocks producing one through the UI |
+| H. Renewal/month-to-month | Blocked | Ending decision dialog renders all choices; successor workflow needs an executed governing Agreement |
 | Cross-cutting errors/security/query behavior | Fail | Dashboard and Units expose slow-query failures; global list paging/search otherwise remains URL/DB-backed |
 
 ## Bugs Found
@@ -49,13 +51,13 @@ Units query and move-in command changes are built and deployed.
 - **Disposition:** Reported to the orchestrator because Dashboard is outside this Rentals slice;
   Rentals remains reachable through the rendered sidebar.
 
-### BUG-2 — Units list times out into a permanent loading row
+### BUG-2 — Units list remains severely slow and intermittently outlives the UI request window
 
 - **Severity:** High; users cannot discover or open Units from the canonical global list.
 - **Repro:** Open `/units` from Rentals and wait more than 12 seconds.
-- **Observed:** The table remains at `Loading…`; the UI repeatedly aborts
-  `/api/v1/units/list-with-health/page?take=20`. A direct authenticated request returns the expected
-  200 payload, but took `11,757 ms`, beyond the client request window.
+- **Observed:** `/api/v1/units/list-with-health/page?take=20` returned 200 in `11,238–11,788 ms` on
+  two measured runs. A fresh navigation was still at `Loading…` after 20 seconds. Rows eventually
+  rendered in the successful runs, but the experience remains visibly broken.
 - **Expected:** The paged list returns within the UI request window; a genuine timeout must render a
   retryable error, never an endless loading row.
 - **Fix in working tree:** Replaced the per-Unit correlated document count with one page-scoped
@@ -63,6 +65,23 @@ Units query and move-in command changes are built and deployed.
   The endpoint now remains exactly three queries for a non-empty page: count, authorized/sorted/
   paged health rows, and document counts for only those returned Unit IDs. Verification is pending
   the orchestrator's serialized build/test and preview refresh.
+
+### BUG-4 — A freshly generated public application link is immediately invalid
+
+- **Severity:** Launch blocking; no applicant can enter the application-to-move-in journey.
+- **Repro:** Sign in, open `/applications`, click **Get application link**, then open the exact
+  returned `/apply/{token}` URL.
+- **Observed:** The public page says the link is invalid or expired. Its exact API request returns
+  404 `{"error":"This application link is invalid or no longer active."}`.
+- **Root cause:** The anonymous request opens PostgreSQL with no workspace access context. RLS hides
+  `Portfolios`, so the exact opaque token cannot resolve even though the authenticated rotation
+  command just stored and returned it. Anonymous submission has the same boundary.
+- **Fix in working tree:** The connection interceptor now places a validated base64url token in a
+  dedicated GUC only for `/api/v1/public/applications/{token}`. A database-owned predicate grants
+  that exact token SELECT access only to form/occupancy dependencies and INSERT access only to
+  `RentalApplications` and `AtomicAuditLogs`; it grants no applicant-row SELECT, update, delete, or
+  ordinary workspace access. The duplicate-email precheck was removed and the existing unique
+  index violation remains the 409 guard. Focused API/data contract tests were added.
 
 ### BUG-3 — Lease list/detail routes retain a previous route's browser title
 
@@ -95,6 +114,12 @@ Units query and move-in command changes are built and deployed.
 - The global Scan/Add dialog exposes Auto classify, Receipt/Bill, Payment, Maintenance, Lease,
   Application, Mortgage/Loan, and voice-note entry points. Context inheritance and confirmation
   persistence were not yet exercised.
+- `/units/10` exposed a contextual Scan/Add dialog, but its copy only said the scan would stay
+  connected to the page; it did not name the Unit/property. The working-tree fix supplies and
+  renders `Eastland 8-Plex · Unit 1`-style context so the user can verify where confirmation lands.
+- `/leases/17` renders Darius Clark's Ending relationship, tenant account #17, current household,
+  possession, one draft Agreement, and the **Record decision** dialog with renewal, month-to-month,
+  and move-out choices. The list correctly calls out that no agreement currently governs.
 
 ## What Was Tested
 
@@ -109,7 +134,8 @@ Units query and move-in command changes are built and deployed.
   history, edit, and delete controls.
 - `/tenants`: 22 records loaded server-paged; Next moved to URL-backed `?page=2` and displayed
   records 21–22 with correct disabled/enabled pager state.
-- `/units`: shell and filters rendered, but the paged data request timed out (BUG-2).
+- `/units`: shell, filters, rows, and Unit navigation rendered, but measured 11–20 second latency
+  remains unacceptable (BUG-2).
 - `/leases`: data loaded after roughly 13 seconds; rows showed relationships and Agreement draft
   state. Opened LeaseManagement `1` and its Agreement draft editor. List/detail title defects are
   fixed in the working tree (BUG-3).
@@ -117,7 +143,15 @@ Units query and move-in command changes are built and deployed.
 - `/units/1`: canonical Unit Command Center loaded directly; summary facts, next action, rent,
   repairs, documents, upcoming items, and six Unit sections rendered.
 - Global Scan/Add: all supported classification/capture entry points rendered.
+- `/units/10`: Summary, Leasing/Listing/Applications, Tenant & lease, Money, Maintenance, and
+  Documents & history all rendered with stable query-backed destinations.
+- Contextual Unit Scan/Add: dialog rendered and the missing human-readable context was reproduced.
+- `/applications`: generated a new public link; opening the exact returned link reproduced BUG-4.
+- `/leases/17`: relationship detail and ending-decision dialog rendered; dialog was canceled without
+  changing the seeded relationship.
 
 ## Created Test Data
 
-None.
+No application, lease, tenant, payment, or work-order records were created. Clicking **Get
+application link** rotated the demo portfolio's opaque public application token once; the returned
+link was invalid under anonymous RLS and no applicant data was submitted.

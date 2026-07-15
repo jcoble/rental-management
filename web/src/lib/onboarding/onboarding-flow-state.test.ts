@@ -91,6 +91,18 @@ describe('onboarding flow state', () => {
 		assert.match(source, /autoAdvanced && !finished && currentStep/);
 	});
 
+	it('does not expose editable setup steps before existing-record detection settles', () => {
+		const source = readFileSync(
+			new URL('../../routes/(protected)/onboarding/+page.svelte', import.meta.url),
+			'utf8'
+		);
+
+		assert.match(source, /data-testid="onboarding-detection-loading"/);
+		assert.match(source, /\{:else if !detectionReady \|\| !autoAdvanced\}/);
+		assert.match(source, /data-testid="onboarding-detection-error"/);
+		assert.match(source, /retryExistingDataDetection/);
+	});
+
 	it('keeps the guided import center reachable from the finished screen', () => {
 		const source = readFileSync(
 			new URL('../../routes/(protected)/onboarding/+page.svelte', import.meta.url),

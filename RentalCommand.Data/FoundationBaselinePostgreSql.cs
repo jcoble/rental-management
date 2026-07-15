@@ -321,6 +321,7 @@ internal static class FoundationBaselinePostgreSql
     internal static IReadOnlyList<string> RlsAuthorityOwnedFunctions { get; } =
     [
         "rc_api_scope_allows(integer)",
+        "rc_public_application_scope_allows(integer)",
         "rc_api_resource_scope_allows(integer, integer, integer, integer, integer, integer, integer, boolean, boolean, boolean)",
         "rc_account_bootstrap_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text)",
         "rc_pre_auth_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb)",
@@ -715,6 +716,7 @@ internal static class FoundationBaselinePostgreSql
                 : CreatePolicySql(table, PortfolioPredicate)));
         statements.AddRange(BuildResourcePoliciesSql());
         statements.Add(CreatePolicySql("Portfolios", PortfolioSelfPredicate));
+        statements.Add(BuildPublicApplicationPoliciesSql());
         statements.Add(BuildInspectionTemplatePoliciesSql());
         statements.AddRange(ChildPortfolioTables.Where(policy => policy.Table != "InspectionTemplateItems")
             .Select(policy => RequiresSandboxGraduationDelete(policy.Table)
@@ -833,6 +835,36 @@ internal static class FoundationBaselinePostgreSql
         REVOKE ALL ON FUNCTION rc_api_scope_allows(integer) FROM PUBLIC;
         GRANT EXECUTE ON FUNCTION rc_api_scope_allows(integer)
           TO rentalcommand_api, rentalcommand_engine;
+
+        CREATE OR REPLACE FUNCTION rc_public_application_scope_allows(target_portfolio_id integer)
+        RETURNS boolean
+        LANGUAGE sql
+        STABLE
+        SECURITY DEFINER
+        SET search_path = pg_catalog, public
+        AS $function$
+          SELECT CASE
+            WHEN session_user IS DISTINCT FROM 'rentalcommand_api'
+              OR target_portfolio_id IS NULL OR target_portfolio_id <= 0
+              OR NULLIF(current_setting('app.public_application_token', true), '') IS NULL
+            THEN FALSE
+            ELSE EXISTS (
+              SELECT 1
+              FROM public."Portfolios" portfolio
+              WHERE portfolio."Id" = target_portfolio_id
+                AND portfolio."PublicApplicationToken" =
+                    current_setting('app.public_application_token', true)
+                AND portfolio."Status" = 1
+                AND portfolio."DeletedAt" IS NULL
+            )
+          END;
+        $function$;
+
+        ALTER FUNCTION rc_public_application_scope_allows(integer)
+          OWNER TO rentalcommand_rls_authority;
+        REVOKE ALL ON FUNCTION rc_public_application_scope_allows(integer) FROM PUBLIC;
+        GRANT EXECUTE ON FUNCTION rc_public_application_scope_allows(integer)
+          TO rentalcommand_api;
 
         CREATE OR REPLACE FUNCTION rc_api_resource_scope_allows(
           target_portfolio_id integer,
@@ -1850,6 +1882,7 @@ internal static class FoundationBaselinePostgreSql
         DROP FUNCTION IF EXISTS rc_api_resource_scope_allows(
           integer, integer, integer, integer, integer, integer, integer, boolean, boolean, boolean);
         DROP FUNCTION IF EXISTS rc_api_scope_allows(integer);
+        DROP FUNCTION IF EXISTS rc_public_application_scope_allows(integer);
         """;
 
     private static string BuildDropRlsSql()
@@ -1865,6 +1898,8 @@ internal static class FoundationBaselinePostgreSql
             DROP POLICY IF EXISTS tenant_update ON {Quote(table)};
             DROP POLICY IF EXISTS tenant_delete ON {Quote(table)};
             DROP POLICY IF EXISTS tenant_isolation ON {Quote(table)};
+            DROP POLICY IF EXISTS public_application_select ON {Quote(table)};
+            DROP POLICY IF EXISTS public_application_insert ON {Quote(table)};
             ALTER TABLE {Quote(table)} NO FORCE ROW LEVEL SECURITY;
             ALTER TABLE {Quote(table)} DISABLE ROW LEVEL SECURITY;
             """));
@@ -1877,6 +1912,40 @@ internal static class FoundationBaselinePostgreSql
         CREATE POLICY tenant_isolation ON {Quote(table)}
           USING ({predicate})
           WITH CHECK ({predicate});
+        """;
+
+    private static string BuildPublicApplicationPoliciesSql() => """
+        DROP POLICY IF EXISTS public_application_select ON "Portfolios";
+        CREATE POLICY public_application_select ON "Portfolios" FOR SELECT
+          USING (rc_public_application_scope_allows("Id"));
+
+        DROP POLICY IF EXISTS public_application_select ON "Properties";
+        CREATE POLICY public_application_select ON "Properties" FOR SELECT
+          USING (rc_public_application_scope_allows("PortfolioId"));
+
+        DROP POLICY IF EXISTS public_application_select ON "Units";
+        CREATE POLICY public_application_select ON "Units" FOR SELECT
+          USING (rc_public_application_scope_allows("PortfolioId"));
+
+        DROP POLICY IF EXISTS public_application_select ON "LeaseManagements";
+        CREATE POLICY public_application_select ON "LeaseManagements" FOR SELECT
+          USING (rc_public_application_scope_allows("PortfolioId"));
+
+        DROP POLICY IF EXISTS public_application_select ON "LeaseAgreements";
+        CREATE POLICY public_application_select ON "LeaseAgreements" FOR SELECT
+          USING (rc_public_application_scope_allows("PortfolioId"));
+
+        DROP POLICY IF EXISTS public_application_select ON "UnitOperationalPeriods";
+        CREATE POLICY public_application_select ON "UnitOperationalPeriods" FOR SELECT
+          USING (rc_public_application_scope_allows("PortfolioId"));
+
+        DROP POLICY IF EXISTS public_application_insert ON "RentalApplications";
+        CREATE POLICY public_application_insert ON "RentalApplications" FOR INSERT
+          WITH CHECK (rc_public_application_scope_allows("PortfolioId"));
+
+        DROP POLICY IF EXISTS public_application_insert ON "AtomicAuditLogs";
+        CREATE POLICY public_application_insert ON "AtomicAuditLogs" FOR INSERT
+          WITH CHECK (rc_public_application_scope_allows("PortfolioId"));
         """;
 
     private static IEnumerable<string> BuildResourcePoliciesSql()

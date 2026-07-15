@@ -154,17 +154,25 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
                             || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
                                 && assignment.SelectedProperties.Any(scope => scope.PortfolioId == portfolioId
                                     && scope.PropertyId == rule.PropertyId)))))
-            select new TeamRoutingRecipientPreview(user.Id, user.DisplayName, user.Email, user.PhoneNumber,
-                !_db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id)
+            select new
+            {
+                UserId = user.Id,
+                user.DisplayName,
+                user.Email,
+                user.PhoneNumber,
+                EnableInApp = !_db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id)
                     || _db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id && preference.EnableInApp),
-                !_db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id)
+                EnableMobilePush = !_db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id)
                     || _db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id && preference.EnableMobilePush),
-                !_db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id)
+                EnableEmail = !_db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id)
                     || _db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id && preference.EnableEmail),
-                _db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id && preference.EnableSms),
+                EnableSms = _db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id && preference.EnableSms),
                 rule.PropertyId,
-                rule.Topic == TeamRoutingTopic.AccountAndSecurity ? "Workspace" :
-                rule.PropertyId == null ? "All in-scope properties" : "Selected property", recipient.Reason, false);
+                Scope = rule.Topic == TeamRoutingTopic.AccountAndSecurity ? "Workspace" :
+                    rule.PropertyId == null ? "All in-scope properties" : "Selected property",
+                recipient.Reason,
+                IsFallback = false
+            };
 
         var administratorFallback =
             from rule in _db.TeamRoutingRules.AsNoTracking()
@@ -184,19 +192,30 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
                 && assignment.RevokedAtUtc == null && assignment.SuspendedAtUtc == null
                 && assignment.EffectiveFromUtc <= now && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now)
                 && assignment.RoleProfile!.Key == RoleProfileKeys.WorkspaceAdministrator
-            select new TeamRoutingRecipientPreview(user.Id, user.DisplayName, user.Email, user.PhoneNumber,
-                !_db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id)
+            select new
+            {
+                UserId = user.Id,
+                user.DisplayName,
+                user.Email,
+                user.PhoneNumber,
+                EnableInApp = !_db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id)
                     || _db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id && preference.EnableInApp),
-                !_db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id)
+                EnableMobilePush = !_db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id)
                     || _db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id && preference.EnableMobilePush),
-                !_db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id)
+                EnableEmail = !_db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id)
                     || _db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id && preference.EnableEmail),
-                _db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id && preference.EnableSms),
+                EnableSms = _db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id && preference.EnableSms),
                 rule.PropertyId,
-                "Workspace", "No named recipient is assigned; active Workspace Administrators receive this topic.", true);
+                Scope = "Workspace",
+                Reason = "No named recipient is assigned; active Workspace Administrators receive this topic.",
+                IsFallback = true
+            };
 
         return await explicitRecipients.Concat(administratorFallback)
             .Distinct().OrderBy(row => row.DisplayName).ThenBy(row => row.UserId)
+            .Select(row => new TeamRoutingRecipientPreview(row.UserId, row.DisplayName, row.Email, row.PhoneNumber,
+                row.EnableInApp, row.EnableMobilePush, row.EnableEmail, row.EnableSms, row.PropertyId,
+                row.Scope, row.Reason, row.IsFallback))
             .TagWith("TSK-668 Team routing named-recipient preview with visible administrator fallback")
             .ToListAsync(ct);
     }

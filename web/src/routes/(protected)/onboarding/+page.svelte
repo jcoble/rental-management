@@ -257,6 +257,20 @@
 			tenantsQuery.isSuccess &&
 			leasesQuery.isSuccess
 	);
+	const detectionFailed = $derived(
+		portfolioQuery.isError ||
+			ownersQuery.isError ||
+			propertiesQuery.isError ||
+			tenantsQuery.isError ||
+			leasesQuery.isError
+	);
+	function retryExistingDataDetection() {
+		void portfolioQuery.refetch();
+		void ownersQuery.refetch();
+		void propertiesQuery.refetch();
+		void tenantsQuery.refetch();
+		void leasesQuery.refetch();
+	}
 	$effect(() => {
 		if (autoAdvanced || finished || !detectionReady) return;
 		autoAdvanced = true;
@@ -1184,7 +1198,28 @@
 
 <div class="box-border h-full overflow-y-auto bg-muted/30 p-6 pb-20" data-testid="onboarding-page">
 	<div class="mx-auto max-w-5xl">
-		{#if finished}
+		{#if detectionFailed}
+			<Card.Root class="mt-10" data-testid="onboarding-detection-error">
+				<Card.Content class="flex flex-col items-center gap-4 px-8 py-12 text-center">
+					<h1 class="text-2xl font-bold">We couldn't load your setup</h1>
+					<p class="max-w-md text-sm text-muted-foreground">
+						Your existing portfolio has not been changed. Try loading it again before continuing setup.
+					</p>
+					<Button variant="outline" data-testid="onboarding-detection-retry" onclick={retryExistingDataDetection}>
+						Try again
+					</Button>
+				</Card.Content>
+			</Card.Root>
+		{:else if !detectionReady || !autoAdvanced}
+			<Card.Root class="mt-10" data-testid="onboarding-detection-loading">
+				<Card.Content class="flex flex-col items-center gap-3 px-8 py-12 text-center">
+					<h1 class="text-xl font-semibold">Checking your existing setup…</h1>
+					<p class="max-w-md text-sm text-muted-foreground">
+						We're finding the portfolio, properties, people, and leases you've already added.
+					</p>
+				</Card.Content>
+			</Card.Root>
+		{:else if finished}
 			<Card.Root class="mt-10" data-testid="onboarding-complete">
 				<Card.Content class="flex flex-col items-center gap-4 px-8 py-12 text-center">
 					{#if coreSpineComplete}
