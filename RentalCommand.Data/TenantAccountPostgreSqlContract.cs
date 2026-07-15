@@ -671,13 +671,20 @@ internal static class TenantAccountPostgreSqlContract
           debit_allocated numeric(18,2);
           credit_allocated numeric(18,2);
         BEGIN
+          -- Serialize allocations against both ledger entries without requiring UPDATE
+          -- privilege on the append-only ledger table. Lock in a stable order so two
+          -- concurrent allocations cannot deadlock or both pass the balance check.
+          PERFORM pg_advisory_xact_lock(hashtextextended(
+            'rc:tenant-ledger-entry:' || LEAST(NEW."DebitEntryId", NEW."CreditEntryId")::text, 0));
+          PERFORM pg_advisory_xact_lock(hashtextextended(
+            'rc:tenant-ledger-entry:' || GREATEST(NEW."DebitEntryId", NEW."CreditEntryId")::text, 0));
+
           SELECT entry."Direction", entry."Amount", entry."Currency"
             INTO debit
           FROM "TenantLedgerEntries" AS entry
           WHERE entry."PortfolioId" = NEW."PortfolioId"
             AND entry."TenantAccountId" = NEW."TenantAccountId"
-            AND entry."Id" = NEW."DebitEntryId"
-          FOR UPDATE;
+            AND entry."Id" = NEW."DebitEntryId";
 
           IF NOT FOUND THEN
             RAISE EXCEPTION 'TenantLedgerAllocation % debit entry does not exist', NEW."Id"
@@ -689,8 +696,7 @@ internal static class TenantAccountPostgreSqlContract
           FROM "TenantLedgerEntries" AS entry
           WHERE entry."PortfolioId" = NEW."PortfolioId"
             AND entry."TenantAccountId" = NEW."TenantAccountId"
-            AND entry."Id" = NEW."CreditEntryId"
-          FOR UPDATE;
+            AND entry."Id" = NEW."CreditEntryId";
 
           IF NOT FOUND THEN
             RAISE EXCEPTION 'TenantLedgerAllocation % credit entry does not exist', NEW."Id"
