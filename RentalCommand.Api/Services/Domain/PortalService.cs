@@ -123,6 +123,45 @@ public class PortalService : IPortalService
                 },
         };
 
+    public Task<LegalArtifactFileReference?> GetExecutedAgreementArtifactAsync(
+        PortalTenantReadScope scope,
+        int leaseManagementId,
+        int leaseAgreementId,
+        CancellationToken ct = default) =>
+        BuildExecutedAgreementArtifactQuery(scope, leaseManagementId, leaseAgreementId)
+            .SingleOrDefaultAsync(ct);
+
+    internal IQueryable<LegalArtifactFileReference> BuildExecutedAgreementArtifactQuery(
+        PortalTenantReadScope scope,
+        int leaseManagementId,
+        int leaseAgreementId) =>
+            from access in _db.EffectiveTenantAccess.AsNoTracking()
+            join agreement in _db.LeaseAgreements.AsNoTracking()
+                on new { access.PortfolioId, access.LeaseManagementId }
+                equals new { agreement.PortfolioId, agreement.LeaseManagementId }
+            join artifact in _db.LegalDocumentArtifacts.AsNoTracking()
+                on new { agreement.PortfolioId, ArtifactId = agreement.ExecutedArtifactId!.Value }
+                equals new { artifact.PortfolioId, ArtifactId = artifact.Id }
+            join storedFile in _db.StoredFiles.AsNoTracking()
+                on new { artifact.PortfolioId, StoredFileId = artifact.StoredFileId }
+                equals new { storedFile.PortfolioId, StoredFileId = storedFile.Id }
+            where access.PortfolioId == scope.PortfolioId
+                && access.UserId == scope.UserId
+                && access.AccessContextId == scope.AccessContextId
+                && access.AccessRevision == scope.AccessRevision
+                && access.LeaseManagementId == leaseManagementId
+                && agreement.Id == leaseAgreementId
+                && agreement.FullyExecutedAtUtc != null
+                && agreement.ExecutedArtifactId != null
+                && agreement.VoidedAtUtc == null
+                && artifact.ArtifactKind == LegalDocumentArtifactKind.ExecutedAgreement
+                && storedFile.DeletedAt == null
+            select new LegalArtifactFileReference(
+                storedFile.Id,
+                artifact.StorageKey,
+                artifact.FileName,
+                artifact.ContentType);
+
     public async Task<PortalTenantAccountPageResponse> ListTenantAccountsPageAsync(
         PortalTenantReadScope scope,
         PortalTenantAccountListQuery query,

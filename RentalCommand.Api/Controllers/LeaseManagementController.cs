@@ -15,7 +15,7 @@ namespace RentalCommand.Api.Controllers;
 public sealed class LeaseManagementController : ManagementControllerBase
 {
     private static readonly AtomicJsonResultCodec<PrepareMoveInResult> ResultCodec =
-        new("lease-management.prepare-move-in.v1");
+        new("lease-management.prepare-move-in.v2");
     private static readonly AtomicJsonResultCodec<LeasePartyMutationResult> AddPartyResultCodec =
         new("lease-management.party.add.v1");
     private static readonly AtomicJsonResultCodec<LeasePartyMutationResult> EndPartyResultCodec =
@@ -96,6 +96,23 @@ public sealed class LeaseManagementController : ManagementControllerBase
 
         var item = await _queryService.GetAsync(access, leaseManagementId, ct);
         return item is null ? NotFound(new { error = "Lease management relationship not found" }) : Ok(item);
+    }
+
+    [HttpGet("{leaseManagementId:int}/party-legal-bases/page")]
+    [ProducesResponseType(typeof(LeasePartyLegalBasisPageResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<LeasePartyLegalBasisPageResponse>> PartyLegalBases(
+        int leaseManagementId,
+        [FromQuery] ListQuery query,
+        CancellationToken ct)
+    {
+        if (!TryReadAccessContext(out var access)) return Forbid();
+        var page = await _queryService.ListEligiblePartyLegalBasisPageAsync(
+            access, leaseManagementId, query, ct);
+        return page is null
+            ? NotFound(new { error = "Lease management relationship not found" })
+            : Ok(page);
     }
 
     /// <summary>
@@ -215,6 +232,12 @@ public sealed class LeaseManagementController : ManagementControllerBase
                 request.PartyEffectiveFrom,
                 request.Parties.Select(party => new PrepareMoveInParty(
                     party.TenantId,
+                    party.NewTenant is null ? null : new PrepareMoveInNewTenant(
+                        party.NewTenant.FirstName,
+                        party.NewTenant.LastName,
+                        party.NewTenant.Email,
+                        party.NewTenant.Phone,
+                        party.NewTenant.EmergencyContact),
                     party.Role!.Value,
                     party.GuarantorLegalNoticeEligible,
                     party.ChangeReason,
@@ -236,12 +259,12 @@ public sealed class LeaseManagementController : ManagementControllerBase
                 request.OpeningBalanceAmount,
                 request.OpeningBalanceEffectiveOn,
                 request.OpeningBalanceNote,
-                $"prepare-move-in:{portfolioId}:{request.ApplicationId}:{keyDigest}");
+                $"prepare-move-in:{portfolioId}:{(request.ApplicationId.HasValue ? $"application:{request.ApplicationId}" : $"unit:{request.UnitId}")}:{keyDigest}");
 
             var outcome = await _atomic.ExecuteAsync(
                 new AtomicCommandIdentity(
                     "lease-management.prepare-move-in",
-                    $"{portfolioId}:{request.ApplicationId}:{keyDigest}"),
+                    $"{portfolioId}:{(request.ApplicationId.HasValue ? $"application:{request.ApplicationId}" : $"unit:{request.UnitId}")}:{keyDigest}"),
                 command,
                 ResultCodec,
                 ct);

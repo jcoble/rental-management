@@ -56,9 +56,29 @@ public sealed class LeaseAgreementDraftDetailResponse
     public int DocumentSourceVersionId { get; init; }
     public int? DocumentTemplateId { get; init; }
     public int? DocumentTemplateVersion { get; init; }
+    /// <summary>The exact immutable Agreement this successor was copied from, when applicable.</summary>
+    public LeaseAgreementSourceComparisonResponse? SourceAgreement { get; init; }
     public IReadOnlyList<LeaseAgreementDraftSignerResponse> Signers { get; init; } = [];
     public DateTime CreatedAtUtc { get; init; }
     public DateTime UpdatedAtUtc { get; init; }
+}
+
+public sealed class LeaseAgreementSourceComparisonResponse
+{
+    public int LeaseAgreementId { get; init; }
+    public string AgreementNumber { get; init; } = string.Empty;
+    public int VersionNumber { get; init; }
+    public LeaseAgreementChangeType ChangeType { get; init; }
+    public LeaseAgreementTermType TermType { get; init; }
+    public DateOnly TermStartOn { get; init; }
+    public DateOnly? TermEndOn { get; init; }
+    public DateOnly GoverningFromOn { get; init; }
+    public decimal BaseRentAmount { get; init; }
+    public short RentDueDay { get; init; }
+    public decimal SecurityDepositObligation { get; init; }
+    public decimal LateFeeAmount { get; init; }
+    public short GracePeriodDays { get; init; }
+    public string Currency { get; init; } = string.Empty;
 }
 
 public sealed class EditLeaseAgreementDraftRequest
@@ -93,6 +113,11 @@ public sealed class CreateLeaseAgreementSuccessorDraftRequest
     public DateOnly TermStartOn { get; set; }
     public DateOnly? TermEndOn { get; set; }
     public DateOnly GoverningFromOn { get; set; }
+    /// <summary>
+    /// Required when the governing Agreement was imported from an external document. The selected
+    /// active template becomes the editable authored source snapshot for the successor draft.
+    /// </summary>
+    public int? DocumentTemplateId { get; set; }
     public List<LeaseRenewalAddendumDecisionRequest> AddendumDecisions { get; set; } = [];
 }
 

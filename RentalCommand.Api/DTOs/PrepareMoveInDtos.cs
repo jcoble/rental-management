@@ -6,7 +6,8 @@ namespace RentalCommand.Api.DTOs;
 
 public sealed class PrepareMoveInPartyRequest
 {
-    public int TenantId { get; set; }
+    public int? TenantId { get; set; }
+    public PrepareMoveInNewTenantRequest? NewTenant { get; set; }
     public LeaseManagementPartyRole? Role { get; set; }
     public bool GuarantorLegalNoticeEligible { get; set; }
     public string ChangeReason { get; set; } = string.Empty;
@@ -15,9 +16,18 @@ public sealed class PrepareMoveInPartyRequest
     public bool IsRequiredSigner { get; set; } = true;
 }
 
+public sealed class PrepareMoveInNewTenantRequest
+{
+    public string FirstName { get; set; } = string.Empty;
+    public string LastName { get; set; } = string.Empty;
+    public string? Email { get; set; }
+    public string? Phone { get; set; }
+    public string? EmergencyContact { get; set; }
+}
+
 public sealed class PrepareMoveInRequest
 {
-    public int ApplicationId { get; set; }
+    public int? ApplicationId { get; set; }
     public int UnitId { get; set; }
     public DateTime? PlannedPossessionAtUtc { get; set; }
     public DateOnly PartyEffectiveFrom { get; set; }
@@ -44,12 +54,13 @@ public sealed class PrepareMoveInRequest
 }
 
 public sealed record PrepareMoveInResponse(
-    int ApplicationId,
+    int? ApplicationId,
     int LeaseManagementId,
     int TenantAccountId,
     int LeaseAgreementId,
     long? OpeningBalanceLedgerEntryId,
     int? SecurityDepositAccountId,
+    IReadOnlyList<int> TenantIds,
     IReadOnlyList<int> LeaseManagementPartyIds,
     IReadOnlyList<int> LeaseAgreementSignerIds,
     bool Replayed)
@@ -61,6 +72,7 @@ public sealed record PrepareMoveInResponse(
         result.LeaseAgreementId,
         result.OpeningBalanceLedgerEntryId,
         result.SecurityDepositAccountId,
+        result.TenantIds,
         result.LeaseManagementPartyIds,
         result.LeaseAgreementSignerIds,
         replayed);

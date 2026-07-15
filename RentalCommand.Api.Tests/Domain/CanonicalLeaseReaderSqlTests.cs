@@ -361,6 +361,10 @@ public sealed class CanonicalLeaseReaderSqlTests
         sql.Should().Contain("TermsSchemaVersion");
         sql.Should().Contain("TermsPayload");
         sql.Should().Contain("DocumentTemplateId");
+        sql.Should().Contain("ReplacesAgreementId");
+        sql.Should().Contain("RenewsAgreementId");
+        sql.Should().Contain("ReissuesAgreementId");
+        sql.Should().Contain("TransferredFromAgreementId");
         sql.Should().Contain("SigningOrder");
         sql.Should().Contain("IssuedAtUtc\" IS NULL");
         sql.Should().Contain("DraftCanceledAtUtc\" IS NULL");
@@ -401,6 +405,31 @@ public sealed class CanonicalLeaseReaderSqlTests
         sql.Should().NotContain("\"Leases\"");
         sql.Should().NotContain("LeaseTenants");
         sql.Should().NotContain("ClientEvaluation");
+    }
+
+    [Fact]
+    public void Party_legal_basis_picker_filters_searches_and_scopes_executed_agreements_in_sql()
+    {
+        using var db = NewContext();
+        var service = NewLeaseManagementQueryService(db);
+
+        var sql = service.BuildEligiblePartyLegalBasisQuery(
+                ReadAccess(), 42, new ListQuery { Search = "name correction" })
+            .OrderByDescending(item => item.FullyExecutedAtUtc)
+            .Skip(5)
+            .Take(20)
+            .ToQueryString();
+
+        sql.Should().Contain("AuthSessions");
+        sql.Should().Contain("rentals.manage");
+        sql.Should().Contain("leasing.agreements.prepare");
+        sql.Should().Contain("LeaseAgreements");
+        sql.Should().Contain("FullyExecutedAtUtc");
+        sql.Should().Contain("ExecutedArtifactId");
+        sql.Should().Contain("ILIKE");
+        sql.Should().Contain("ORDER BY");
+        sql.Should().Contain("LIMIT");
+        sql.Should().Contain("OFFSET");
     }
 
     [Fact]

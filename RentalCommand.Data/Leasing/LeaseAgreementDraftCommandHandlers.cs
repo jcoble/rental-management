@@ -172,11 +172,19 @@ public sealed class CreateLeaseAgreementSuccessorDraftHandler
         var source = await LeaseAgreementDraftCommandSupport.AuthorizedRelationships(
                 command, attempt.Persistence, times.WallClockUtc)
             .SelectMany(relationship => relationship.Agreements)
-            .SingleOrDefaultAsync(candidate =>
+            .Where(candidate =>
                 candidate.Id == command.SourceAgreementId
-                && candidate.PortfolioId == command.PortfolioId,
-                ct)
+                && candidate.PortfolioId == command.PortfolioId)
+            .Select(candidate => new
+            {
+                Agreement = candidate,
+                SourceKind = candidate.DocumentSourceVersion!.SourceKind,
+                candidate.LeaseManagement!.PropertyId,
+            })
+            .SingleOrDefaultAsync(ct)
             ?? throw LeaseAgreementDraftCommandSupport.Unauthorized();
+
+        var sourceAgreement = source.Agreement;
 
         var sourceIsCurrent = await attempt.Persistence.Query<LeaseAgreementStatusProjection>()
             .AnyAsync(status =>
@@ -185,9 +193,9 @@ public sealed class CreateLeaseAgreementSuccessorDraftHandler
                 && status.AgreementId == command.SourceAgreementId
                 && status.IsGoverning,
                 ct);
-        if (!sourceIsCurrent || source.FullyExecutedAtUtc == null
-            || source.ExecutedArtifactId == null || source.VoidedAtUtc != null
-            || source.DraftCanceledAtUtc != null)
+        if (!sourceIsCurrent || sourceAgreement.FullyExecutedAtUtc == null
+            || sourceAgreement.ExecutedArtifactId == null || sourceAgreement.VoidedAtUtc != null
+            || sourceAgreement.DraftCanceledAtUtc != null)
         {
             return LeaseAgreementDraftCommandSupport.Error(
                 LeaseAgreementDraftMutationOutcome.SourceAgreementNotCurrent,
@@ -202,7 +210,7 @@ public sealed class CreateLeaseAgreementSuccessorDraftHandler
             .AnyAsync(candidate =>
                 candidate.PortfolioId == command.PortfolioId
                 && candidate.LeaseManagementId == command.LeaseManagementId
-                && (candidate.ReplacesAgreementId == source.Id || candidate.RenewsAgreementId == source.Id)
+                && (candidate.ReplacesAgreementId == sourceAgreement.Id || candidate.RenewsAgreementId == sourceAgreement.Id)
                 && candidate.DraftCanceledAtUtc == null
                 && (candidate.VoidedAtUtc == null || candidate.FullyExecutedAtUtc != null),
                 ct);
@@ -219,9 +227,9 @@ public sealed class CreateLeaseAgreementSuccessorDraftHandler
 
         var isReplacement = command.ChangeType is LeaseAgreementChangeType.Correction
             or LeaseAgreementChangeType.Restatement;
-        if (isReplacement && (command.TermStartOn != source.TermStartOn
-                || command.TermEndOn != source.TermEndOn
-                || command.GoverningFromOn <= source.GoverningFromOn))
+        if (isReplacement && (command.TermStartOn != sourceAgreement.TermStartOn
+                || command.TermEndOn != sourceAgreement.TermEndOn
+                || command.GoverningFromOn <= sourceAgreement.GoverningFromOn))
         {
             return LeaseAgreementDraftCommandSupport.Error(
                 LeaseAgreementDraftMutationOutcome.InvalidTerms,
@@ -234,8 +242,8 @@ public sealed class CreateLeaseAgreementSuccessorDraftHandler
         var isRenewal = command.ChangeType is LeaseAgreementChangeType.Renewal
             or LeaseAgreementChangeType.MonthToMonth;
         if (isRenewal && (command.GoverningFromOn != command.TermStartOn
-                || (source.TermEndOn.HasValue && command.GoverningFromOn <= source.TermEndOn.Value)
-                || (!source.TermEndOn.HasValue && command.GoverningFromOn <= times.BusinessDate)))
+                || (sourceAgreement.TermEndOn.HasValue && command.GoverningFromOn <= sourceAgreement.TermEndOn.Value)
+                || (!sourceAgreement.TermEndOn.HasValue && command.GoverningFromOn <= times.BusinessDate)))
         {
             return LeaseAgreementDraftCommandSupport.Error(
                 LeaseAgreementDraftMutationOutcome.InvalidTerms,
@@ -264,6 +272,51 @@ public sealed class CreateLeaseAgreementSuccessorDraftHandler
                 "Renewal and month-to-month drafts require one valid decision for every currently effective Addendum series.");
         }
 
+        var sourceVersionId = sourceAgreement.DocumentSourceVersionId;
+        if (source.SourceKind == LegalDocumentSourceKind.ImportedExternalDocument)
+        {
+            if (command.DocumentTemplateId is not > 0)
+            {
+                return LeaseAgreementDraftCommandSupport.Error(
+                    LeaseAgreementDraftMutationOutcome.InvalidTemplate,
+                    command,
+                    0,
+                    nextVersion,
+                    0,
+                    "An active lease template is required to turn an imported Agreement into an editable successor draft.");
+            }
+
+            var authoredSource = await attempt.Leasing.ResolveAuthoredDocumentSourceVersionAsync(
+                command.PortfolioId,
+                source.PropertyId,
+                command.LeaseManagementId,
+                command.DocumentTemplateId.Value,
+                command.ActorUserId,
+                times.WallClockUtc,
+                ct);
+            if (!authoredSource.Resolved)
+            {
+                return LeaseAgreementDraftCommandSupport.Error(
+                    LeaseAgreementDraftMutationOutcome.InvalidTemplate,
+                    command,
+                    0,
+                    nextVersion,
+                    0,
+                    "The selected lease template is not active for this property.");
+            }
+            sourceVersionId = authoredSource.DocumentSourceVersionId;
+        }
+        else if (command.DocumentTemplateId.HasValue)
+        {
+            return LeaseAgreementDraftCommandSupport.Error(
+                LeaseAgreementDraftMutationOutcome.InvalidTemplate,
+                command,
+                0,
+                nextVersion,
+                0,
+                "A template selection is only accepted when the governing Agreement was imported.");
+        }
+
         var successor = new LeaseAgreement
         {
             PortfolioId = command.PortfolioId,
@@ -274,28 +327,28 @@ public sealed class CreateLeaseAgreementSuccessorDraftHandler
             CorrectionReason = command.ChangeType == LeaseAgreementChangeType.Correction
                 ? command.CorrectionReason!.Trim()
                 : null,
-            ReplacesAgreementId = isReplacement ? source.Id : null,
-            RenewsAgreementId = isReplacement ? null : source.Id,
+            ReplacesAgreementId = isReplacement ? sourceAgreement.Id : null,
+            RenewsAgreementId = isReplacement ? null : sourceAgreement.Id,
             TermType = command.ChangeType switch
             {
                 LeaseAgreementChangeType.MonthToMonth => LeaseAgreementTermType.MonthToMonth,
                 LeaseAgreementChangeType.Renewal => LeaseAgreementTermType.FixedTerm,
-                _ => source.TermType,
+                _ => sourceAgreement.TermType,
             },
             TermStartOn = command.TermStartOn,
             TermEndOn = command.ChangeType == LeaseAgreementChangeType.MonthToMonth
                 ? null
                 : command.TermEndOn,
             GoverningFromOn = command.GoverningFromOn,
-            BaseRentAmount = source.BaseRentAmount,
-            RentDueDay = source.RentDueDay,
-            SecurityDepositObligation = source.SecurityDepositObligation,
-            LateFeeAmount = source.LateFeeAmount,
-            GracePeriodDays = source.GracePeriodDays,
-            Currency = source.Currency,
-            TermsSchemaVersion = source.TermsSchemaVersion,
-            TermsPayload = source.TermsPayload,
-            DocumentSourceVersionId = source.DocumentSourceVersionId,
+            BaseRentAmount = sourceAgreement.BaseRentAmount,
+            RentDueDay = sourceAgreement.RentDueDay,
+            SecurityDepositObligation = sourceAgreement.SecurityDepositObligation,
+            LateFeeAmount = sourceAgreement.LateFeeAmount,
+            GracePeriodDays = sourceAgreement.GracePeriodDays,
+            Currency = sourceAgreement.Currency,
+            TermsSchemaVersion = sourceAgreement.TermsSchemaVersion,
+            TermsPayload = sourceAgreement.TermsPayload,
+            DocumentSourceVersionId = sourceVersionId,
             CreatedAtUtc = times.WallClockUtc,
             CreatedByUserId = command.ActorUserId,
             UpdatedAtUtc = times.WallClockUtc,
@@ -308,7 +361,7 @@ public sealed class CreateLeaseAgreementSuccessorDraftHandler
         var signerIds = await attempt.Leasing.CopyAgreementDraftSignersAsync(
             command.PortfolioId,
             command.LeaseManagementId,
-            source.Id,
+            sourceAgreement.Id,
             successor.Id,
             ct);
         foreach (var signerId in signerIds)
@@ -323,7 +376,7 @@ public sealed class CreateLeaseAgreementSuccessorDraftHandler
             ? await attempt.Leasing.CreateRenewalAddendumDraftsAsync(
                 command.PortfolioId,
                 command.LeaseManagementId,
-                source.Id,
+                sourceAgreement.Id,
                 successor.Id,
                 successor.GoverningFromOn,
                 command.AddendumDecisions.Select(decision => new AtomicRenewalAddendumDecisionInput(
@@ -379,7 +432,7 @@ public sealed class CreateLeaseAgreementSuccessorDraftHandler
             successor.Id,
             successor.VersionNumber,
             successor.DraftRevision,
-            source.Id,
+            sourceAgreement.Id,
             signerIds,
             addendumResult.DecisionIds,
             addendumResult.ReplacementAddendumIds,
@@ -816,6 +869,7 @@ internal static class LeaseAgreementDraftCommandSupport
     internal static void ValidateSuccessorShape(CreateLeaseAgreementSuccessorDraftCommand command)
     {
         if (command.SourceAgreementId <= 0
+            || (command.DocumentTemplateId.HasValue && command.DocumentTemplateId <= 0)
             || command.ChangeType is not (LeaseAgreementChangeType.Correction
                 or LeaseAgreementChangeType.Restatement or LeaseAgreementChangeType.Renewal
                 or LeaseAgreementChangeType.MonthToMonth)
