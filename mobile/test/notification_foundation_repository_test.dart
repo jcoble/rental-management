@@ -154,6 +154,126 @@ void main() {
     expect(statuses.single.nextAttemptAtUtc, isNotNull);
   });
 
+  test('Tenant delivery status accepts only canonical queue states', () {
+    expect(noticeDeliveryStatusValues, {
+      'Queued',
+      'Accepted',
+      'Retrying',
+      'Sent',
+      'PermanentlyFailed',
+    });
+    final payload = <String, dynamic>{
+      'evidenceId': 91,
+      'renderedNoticeId': 81,
+      'noticeDraftId': 71,
+      'subject': 'Rent reminder',
+      'leaseManagementId': 61,
+      'recipientRole': 'PrimaryTenant',
+      'channel': 'Email',
+      'destination': 'tenant@example.test',
+      'attemptCount': 1,
+      'createdAtUtc': '2026-07-13T01:00:00Z',
+    };
+
+    for (final status in noticeDeliveryStatusValues) {
+      expect(
+        NoticeDeliveryStatus.fromJson({...payload, 'status': status}).status,
+        status,
+      );
+    }
+    for (final legacyStatus in ['Delivered', 'Failed']) {
+      expect(
+        () =>
+            NoticeDeliveryStatus.fromJson({...payload, 'status': legacyStatus}),
+        throwsFormatException,
+      );
+    }
+  });
+
+  test(
+    'Notification previews expose effective recipients, destinations, and channels',
+    () async {
+      final adapter = _RecordingAdapter((options) {
+        if (options.path.endsWith('/preview')) {
+          return [
+            {
+              'userId': 11,
+              'displayName': 'Pat Manager',
+              'email': 'pat@example.test',
+              'phoneNumber': '+15551234567',
+              'enableInApp': true,
+              'enableMobilePush': false,
+              'enableEmail': true,
+              'enableSms': true,
+              'propertyId': null,
+              'scope': 'All properties',
+              'reason': 'Named rent contact.',
+              'isAdministratorFallback': false,
+            },
+          ];
+        }
+        return [
+          {
+            'leaseManagementPartyId': 71,
+            'tenantId': 81,
+            'displayName': 'Taylor Tenant',
+            'role': 'PrimaryTenant',
+            'eligible': true,
+            'availableChannels': ['TenantPortal', 'Email'],
+            'email': 'taylor@example.test',
+            'phone': null,
+            'reason': 'Effective primary tenant.',
+          },
+        ];
+      });
+      final repository = NotificationFoundationRepository(_dio(adapter));
+
+      final teamPreview = await repository.previewTeamRouting(31);
+      final tenantPreview = await repository.previewTenantNoticeRecipients(
+        automationKey: 'rent-reminder',
+        leaseManagementId: 61,
+      );
+
+      expect(teamPreview.single.phoneNumber, '+15551234567');
+      expect(teamPreview.single.enableEmail, isTrue);
+      expect(teamPreview.single.enableSms, isTrue);
+      expect(adapter.requests.first.path, '/team-routing/31/preview');
+      expect(
+        adapter.requests.last.path,
+        '/tenant-notices/rent-reminder/recipients',
+      );
+      expect(adapter.requests.last.queryParameters, {'leaseManagementId': 61});
+      expect(tenantPreview.single.availableChannels, ['TenantPortal', 'Email']);
+      expect(tenantPreview.single.reason, 'Effective primary tenant.');
+    },
+  );
+
+  test('Template merge-field help uses the server contract', () async {
+    final adapter = _RecordingAdapter(
+      (_) => [
+        {
+          'key': 'tenant_name',
+          'token': '{{tenant_name}}',
+          'label': 'Tenant name',
+          'description': 'The effective primary tenant.',
+          'example': 'Taylor Tenant',
+        },
+      ],
+    );
+    final repository = NotificationFoundationRepository(_dio(adapter));
+
+    final fields = await repository.listTenantNoticeMergeFields(
+      'rent-reminder',
+    );
+
+    expect(
+      adapter.requests.single.path,
+      '/tenant-notices/templates/rent-reminder/merge-fields',
+    );
+    expect(fields.single.token, '{{tenant_name}}');
+    expect(fields.single.example, 'Taylor Tenant');
+  });
+
   test(
     'Tenant policy update never sends a legacy global tenant switch',
     () async {

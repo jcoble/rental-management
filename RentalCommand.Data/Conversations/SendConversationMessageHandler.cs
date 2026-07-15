@@ -367,15 +367,15 @@ public sealed class SendConversationMessageHandler
         Tenant tenant,
         CancellationToken ct)
     {
-        // A tenant message reaches only management users whose effective assignment has rentals.read
-        // on the property of an effective issued lease for this tenant. No legacy role-wide fanout,
-        // no Owner fanout, and no guessed recipient when an authoritative relationship is absent.
+        // A tenant message resolves the current relationship property and the saved leasing topic
+        // responsibility in one query. Named recipients are revalidated at event time and the
+        // visible administrator fallback applies only when nobody eligible is assigned.
         var userIds = await ScopedNotificationRecipientQuery
-            .ForTenantRelationship(
+            .ForTenantTeamTopic(
                 attempt,
                 command.PortfolioId,
                 tenant.Id,
-                CapabilityKeys.RentalsRead,
+                TeamRoutingTopic.ApplicationsAndLeasing,
                 command.CreatedAtUtc)
             .OrderBy(userId => userId)
             .ToListAsync(ct);
@@ -390,7 +390,7 @@ public sealed class SendConversationMessageHandler
             Title = $"New message from {tenantName}",
             Message = Preview(command.Body) ?? conversation.Subject,
             Severity = "Info",
-            ActionUrl = $"/messages?conversationId={conversation.Id}",
+            ActionUrl = $"/messages/{conversation.Id}",
             RelatedEntityType = nameof(Conversation),
             RelatedEntityId = conversation.Id,
             CreatedAt = command.CreatedAtUtc,

@@ -13,6 +13,8 @@ public sealed class TechnicianAssignmentQuery : ListQuery
 
 public sealed record TechnicianAssignmentListItem(
     int Id,
+    int PropertyId,
+    int? UnitId,
     string Title,
     string Category,
     WorkOrderStatus Status,
@@ -55,6 +57,8 @@ public sealed record TechnicianConversationMessageDto(
 
 public sealed record TechnicianAssignmentDetail(
     int Id,
+    int PropertyId,
+    int? UnitId,
     string Title,
     string Description,
     string Category,

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { workOrders } from '$lib/api/endpoints/workOrders';
+	import { technician } from '$lib/api/endpoints/technician';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { vendors } from '$lib/api/endpoints/vendors';
 	import type { Vendor } from '$lib/types';
@@ -245,10 +246,10 @@
 		mutationFn: ({ id: woId, status, note }: { id: number; status: string; note?: string }) =>
 			canManageWork
 				? workOrders.updateStatus(woId, status, note)
-				: workOrders.updateAssigned(woId, {
+				: technician.update(woId, {
 						status,
 						technicianNote: note,
-						expectedUpdatedAtUtc: wo?.updatedAt
+						expectedUpdatedAtUtc: wo!.updatedAt
 					}),
 		onSuccess: () => {
 			showSuccess('Status updated.');

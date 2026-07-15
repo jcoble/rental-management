@@ -66,7 +66,7 @@ void main() {
         canOpenMobilePath(
           experience: WorkspaceExperience.maintenance,
           capabilities: maintenance,
-          path: '/technician/assignments/11',
+          path: '/maintenance/work/11',
         ),
         isTrue,
       );
@@ -74,7 +74,7 @@ void main() {
         canOpenMobilePath(
           experience: WorkspaceExperience.maintenance,
           capabilities: maintenance,
-          path: '/work-orders/11',
+          path: '/maintenance/11',
         ),
         isFalse,
       );

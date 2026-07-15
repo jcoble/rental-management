@@ -152,7 +152,6 @@ public sealed class AtomicNoticeDeliveryHandler
             command, nameof(RenderedNotice), checked((int)rendered.Id), AuditLogOperation.Created,
             "Tenant notice content and template provenance frozen for delivery"), now);
 
-        var today = DateOnly.FromDateTime(now);
         var eligibleParties =
             from party in attempt.Persistence.Query<LeaseManagementParty>().AsNoTracking()
             join tenant in attempt.Persistence.Query<Tenant>().AsNoTracking()
@@ -161,11 +160,16 @@ public sealed class AtomicNoticeDeliveryHandler
             join management in attempt.Persistence.Query<LeaseManagement>().AsNoTracking()
                 on new { LeaseManagementId = party.LeaseManagementId, party.PortfolioId }
                 equals new { LeaseManagementId = management.Id, management.PortfolioId }
+            join lifecycle in attempt.Persistence.Query<LeaseManagementLifecycleProjection>().AsNoTracking()
+                on new { LeaseManagementId = management.Id, management.PortfolioId }
+                equals new { LeaseManagementId = lifecycle.LeaseManagementId, lifecycle.PortfolioId }
             where party.PortfolioId == command.PortfolioId
                 && party.LeaseManagementId == draft.LeaseManagementId
                 && tenant.DeletedAt == null
-                && party.EffectiveFrom <= today
-                && (party.EffectiveThrough == null || party.EffectiveThrough >= today)
+                && lifecycle.TenantAccountId == draft.TenantAccountId
+                && !lifecycle.HasReconciliationException
+                && party.EffectiveFrom <= lifecycle.BusinessDate
+                && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)
                 && ((party.Role == LeaseManagementPartyRole.PrimaryTenant && foundation.IncludePrimaryTenant)
                     || (party.Role == LeaseManagementPartyRole.CoTenant && foundation.IncludeCoTenant)
                     || (party.Role == LeaseManagementPartyRole.Guarantor
@@ -174,7 +178,9 @@ public sealed class AtomicNoticeDeliveryHandler
                             || party.GuarantorLegalNoticeEligible))
                     || (party.Role == LeaseManagementPartyRole.Occupant
                         && foundation.IncludeOccupant
-                        && foundation.Classification != NoticeClassification.Legal))
+                        && foundation.Classification != NoticeClassification.Legal
+                        && foundation.SystemKey != "rent-reminder"
+                        && foundation.SystemKey != "late-rent-late-fee"))
             select new
             {
                 TenantId = tenant.Id,
@@ -186,13 +192,23 @@ public sealed class AtomicNoticeDeliveryHandler
                 management.UnitId,
             };
 
-        var portal = eligibleParties
-            .Where(_ => command.Channels.Contains(NoticeDeliveryChannel.TenantPortal)
-                && foundation.SendTenantPortal)
-            .Select(row => new DeliveryProjection(
-                row.LeaseManagementPartyId, row.TenantId, row.Role,
-                NoticeDeliveryChannel.TenantPortal, row.TenantId.ToString(),
-                row.PropertyId, row.UnitId));
+        var portal =
+            from party in eligibleParties
+            join access in attempt.Persistence.Query<EffectiveTenantAccessProjection>().AsNoTracking()
+                on new { party.LeaseManagementPartyId, PortfolioId = command.PortfolioId }
+                equals new { access.LeaseManagementPartyId, access.PortfolioId }
+            where command.Channels.Contains(NoticeDeliveryChannel.TenantPortal)
+                && foundation.SendTenantPortal
+                && access.UserId == attempt.Persistence.Query<EffectiveTenantAccessProjection>()
+                    .Where(candidate => candidate.PortfolioId == command.PortfolioId
+                        && candidate.LeaseManagementPartyId == party.LeaseManagementPartyId)
+                    .OrderBy(candidate => candidate.UserId)
+                    .Select(candidate => candidate.UserId)
+                    .First()
+            select new DeliveryProjection(
+                party.LeaseManagementPartyId, party.TenantId, party.Role,
+                NoticeDeliveryChannel.TenantPortal, access.UserId.ToString(),
+                party.PropertyId, party.UnitId);
         var email = eligibleParties
             .Where(row => command.Channels.Contains(NoticeDeliveryChannel.Email)
                 && foundation.SendEmail && row.Email != null && row.Email != "")

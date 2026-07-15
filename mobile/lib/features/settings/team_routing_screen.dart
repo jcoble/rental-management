@@ -624,7 +624,11 @@ class _TeamRoutingEditorSheetState
                     ),
                     title: Text(recipient.displayName),
                     subtitle: Text(
-                      '${recipient.email ?? 'No email'} · ${recipient.scope}\n${recipient.reason}',
+                      '${recipient.scope}\n'
+                      'Email: ${recipient.email ?? 'Not available'} · '
+                      'Phone: ${recipient.phoneNumber ?? 'Not available'}\n'
+                      'Enabled channels: ${_teamRecipientChannelSummary(recipient)}\n'
+                      '${recipient.reason}',
                     ),
                     isThreeLine: true,
                   ),
@@ -788,6 +792,15 @@ class _RoutingEditorData {
 
   final List<TeamRoutingRecipient> recipients;
   final List<TeamRoutingRecipientPreview> preview;
+}
+
+String _teamRecipientChannelSummary(TeamRoutingRecipientPreview recipient) {
+  final channels = <String>[];
+  if (recipient.enableInApp) channels.add('In-app');
+  if (recipient.enableMobilePush) channels.add('Mobile push');
+  if (recipient.enableEmail) channels.add('Email');
+  if (recipient.enableSms) channels.add('SMS');
+  return channels.isEmpty ? 'No enabled channels' : channels.join(', ');
 }
 
 String _topicLabel(String topic) => switch (topic) {

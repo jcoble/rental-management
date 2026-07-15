@@ -34,6 +34,21 @@ public sealed class NotificationFoundationTests
     }
 
     [Fact]
+    public void LegacyMutableBlankNoticeTemplate_IsRemoved()
+    {
+        typeof(TenantNoticePolicy).Assembly
+            .GetType("RentalCommand.Core.Entities.NoticeTemplate")
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void DeliveryState_DistinguishesProviderAcceptanceFromFinalOutcome()
+    {
+        Enum.GetNames<NoticeDeliveryState>().Should().Equal(
+            "Queued", "Accepted", "Retrying", "Sent", "PermanentlyFailed");
+    }
+
+    [Fact]
     public void LegalAuto_RequiresReviewedJurisdictionFacts()
     {
         var policy = new TenantNoticePolicy

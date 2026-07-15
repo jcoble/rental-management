@@ -31,7 +31,9 @@ Routing topics include rent and money, applications and leasing, work orders, ow
 - the reason each person receives that topic; and
 - whether Workspace Administrators are the fallback when nobody is named.
 
-Named recipients must be active members of the current workspace. Their actual delivery channels come from **their own My alerts** choices. Tenant channels are never inherited from Team routing.
+Named recipients must be active members of the current workspace. A saved name is not permanent authority: Rental Command resolves the real recipient again when the event occurs and requires a current access context, access revision, capability, job assignment, and matching property scope. A directly assigned maintenance team member can receive a work-order event through that current responsibility. If neither a named recipient nor a direct responsibility is eligible, the visible Workspace Administrator fallback applies when enabled. Owner relationships are never silently treated as internal staff.
+
+The preview explains the decision in plain language, such as “Alex receives this because Alex manages Rimview.” Actual delivery channels come from each recipient's **My alerts** choices. Tenant channels are never inherited from Team routing.
 
 The Morning Briefing is the scheduled landlord/team rundown of rent, lease, appointment, inspection, and urgent work that needs attention. It remains workspace-wide because every recipient sees only records allowed by that person's active capabilities and property scope. Notification managers can pause or resume it, choose its local send hour, decide whether all-clear days should send, and name its responsible recipient. The recipient's own **My alerts** choices determine whether it arrives by email, SMS, or mobile push.
 
@@ -55,7 +57,7 @@ Every automation has one mode:
 - **Draft for review** — prepares a draft for an authorized team member.
 - **Send automatically** — uses the saved policy only when its operational and legal requirements are satisfied.
 
-Each policy separately chooses timing, tenant channels, eligible relationship roles, and what happens after a delivery failure. A primary tenant, co-tenant, guarantor, and occupant are not interchangeable. Legal notices never include an occupant merely because the person lives in the unit, and a guarantor must be explicitly eligible for legal delivery.
+Each policy separately chooses timing, tenant channels, eligible relationship roles, the exact immutable template version, and what happens after a delivery failure. Its recipient preview evaluates the current LeaseManagement parties and shows every eligible person, available destination, and exclusion reason. A primary tenant, co-tenant, guarantor, and occupant are not interchangeable. Legal notices never include an occupant merely because the person lives in the unit, and a guarantor must be explicitly designated for legal delivery.
 
 ## Supplied templates and versions
 
@@ -63,13 +65,13 @@ Rental Command supplies complete starting copy for every tenant-notice automatio
 
 Every new workspace receives these copies during setup. If an automation or supplied template is missing, the settings screen reports a workspace-setup problem instead of asking the user to create blank content.
 
-Saving an edit creates a new immutable workspace template version. Older versions remain available as history, and an already prepared notice stays tied to the exact template version used to render it. **Restore current supplied default** also creates a new version; it does not erase prior customization.
+Saving an edit creates a new immutable workspace template version. Older versions remain available as history, and an already prepared notice stays tied to the exact template version used to render it. **Restore current supplied default** also creates a new version; it does not erase prior customization. The editor's merge-field help explains each token, shows an example, and lists only fields supported by that notice type. A platform template update is shown as available and never silently overwrites customized copy.
 
 Legal templates require a reviewed jurisdiction before automatic delivery is available. This is a workflow safeguard, not legal advice; the workspace administrator remains responsible for confirming the notice and timing for the applicable jurisdiction.
 
 ## Who can change what?
 
-- Any signed-in staff or owner account can change **My alerts** for itself.
+- Any signed-in account can change **My alerts** for itself in its current experience; it can never edit another account's preferences.
 - A user with notification-management access can change **Team routing** and **Tenant notices**.
 - Tenant portal notification preferences are managed in the tenant experience, not the staff settings area.
 - Channel selection never bypasses record access, property scope, or role capabilities.
@@ -83,7 +85,7 @@ The delivery list distinguishes submission to a provider from confirmed delivery
 - **Queued** — the durable delivery worker has not made the first attempt yet.
 - **Accepted** — the provider accepted the message, but final delivery has not been confirmed.
 - **Retrying** — a temporary provider failure occurred and another attempt is scheduled.
-- **Delivered** — the provider confirmed delivery.
-- **Failed** — retries ended. Review the recorded error and the recipient's destination before trying again.
+- **Sent** — the provider confirmed delivery.
+- **Permanently failed** — retries ended. Review the recorded error and the recipient's destination before trying again.
 
 The list also shows the recipient relationship role, channel, destination, attempt count, next retry when applicable, and the provider's last error. It is delivery evidence, not a second set of notification preferences.

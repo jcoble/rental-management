@@ -248,7 +248,7 @@ class TechnicianRepository {
   ) async {
     try {
       await _dio.patch<void>(
-        '/work-orders/$id/assigned-update',
+        '/technician/assignments/$id',
         data: {
           'expectedUpdatedAtUtc': expectedUpdatedAtUtc
               .toUtc()

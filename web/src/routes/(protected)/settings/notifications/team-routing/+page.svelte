@@ -2,7 +2,7 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { notifications } from '$lib/api/endpoints/notifications';
 	import { team, type TeamMemberSummary } from '$lib/api/endpoints/team';
-	import type { TeamRoutingRuleResponse, TeamRoutingTopic } from '$lib/api/types/notification';
+	import type { TeamRoutingRecipientPreview, TeamRoutingRuleResponse, TeamRoutingTopic } from '$lib/api/types/notification';
 	import { hasCapability } from '$lib/stores/auth.svelte';
 	import { getAuthState } from '$lib/stores/auth.svelte';
 	import { canAccessPathForEnvelope, safeLandingForAccess } from '$lib/auth/experience-policy';
@@ -110,6 +110,15 @@
 
 	function topicMeta(topic: TeamRoutingTopic) {
 		return topics.find((item) => item.topic === topic)!;
+	}
+
+	function teamRecipientChannelSummary(recipient: TeamRoutingRecipientPreview): string {
+		const channels: string[] = [];
+		if (recipient.enableInApp) channels.push('In-app');
+		if (recipient.enableMobilePush) channels.push('Mobile push');
+		if (recipient.enableEmail) channels.push('Email');
+		if (recipient.enableSms) channels.push('SMS');
+		return channels.length > 0 ? channels.join(', ') : 'No enabled channels';
 	}
 
 	function beginEdit(topic: TeamRoutingTopic, rule?: TeamRoutingRuleResponse) {
@@ -247,7 +256,7 @@
 					<label class="flex min-h-16 items-start gap-3 rounded-lg border border-border p-4"><Checkbox checked={useFallback} onCheckedChange={(value) => (useFallback = value === true)} /><span><span class="block font-medium">Fall back to Workspace Administrators</span><span class="block text-sm text-muted-foreground">Used only when this saved rule has no named recipient. The fallback is always shown in the preview.</span></span></label>
 
 					{#if editingRuleId && previewQuery.data}
-						<div class="rounded-lg bg-muted/40 p-4"><p class="text-sm font-medium">Current recipient preview</p>{#each previewQuery.data as recipient (recipient.userId)}<p class="mt-2 text-sm">{recipient.displayName} · {recipient.email || 'No email'} · {recipient.scope}<span class="block text-xs text-muted-foreground">{recipient.reason}</span></p>{/each}</div>
+						<div class="rounded-lg bg-muted/40 p-4"><p class="text-sm font-medium">Current recipient preview</p>{#each previewQuery.data as recipient (recipient.userId)}<div class="mt-3 rounded-md border border-border/70 bg-background/60 p-3"><p class="text-sm font-medium">{recipient.displayName} · {recipient.scope}</p><p class="mt-1 text-xs text-muted-foreground">Email: {recipient.email || 'Not available'} · Phone: {recipient.phoneNumber || 'Not available'}</p><p class="mt-1 text-xs"><span class="font-medium">Enabled channels:</span> {teamRecipientChannelSummary(recipient)}</p><p class="mt-1 text-xs text-muted-foreground">{recipient.reason}</p></div>{/each}</div>
 					{/if}
 
 					<div class="flex flex-wrap items-center gap-3"><Button onclick={() => saveMutation.mutate()} disabled={saveMutation.isPending || (Object.keys(selectedRecipients).length === 0 && !useFallback)}>{saveMutation.isPending ? 'Saving…' : 'Save team routing'}</Button><Button variant="ghost" onclick={() => (editingTopic = null)}>Cancel</Button><p class="text-xs text-muted-foreground">Delivery channels come from each recipient's My alerts; tenant channels are never inherited here.</p></div>

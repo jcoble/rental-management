@@ -484,6 +484,14 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Operations.MarkTechnicianAssignmentConversationReadResult,
     RentalCommand.Data.Operations.MarkTechnicianAssignmentConversationReadHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Owners.DecideOwnerApprovalCommand,
+    RentalCommand.Core.Owners.OwnerPortalCommandResult,
+    RentalCommand.Data.Owners.DecideOwnerApprovalHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Owners.ReplyToOwnerMessageCommand,
+    RentalCommand.Core.Owners.OwnerPortalCommandResult,
+    RentalCommand.Data.Owners.ReplyToOwnerMessageHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Auth.IssueSessionRefreshCredentialCommand,
     RentalCommand.Core.Auth.SessionRefreshMutationResult,
     RentalCommand.Data.Auth.IssueSessionRefreshCredentialHandler>();

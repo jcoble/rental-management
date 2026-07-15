@@ -8,7 +8,6 @@
 	import { portfolios } from '$lib/api/endpoints/portfolios';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { conversationReadKey, markConversationRead } from '$lib/messages/conversation-read-state';
-	import { conversationSelectionUrl, readConversationId } from '$lib/messages/conversation-url-state';
 	import { showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatRelative } from '$lib/utils/date';
 	import { ApiError, type FairHousingConcern } from '$lib/api/client';
@@ -26,9 +25,12 @@
 
 	// --- Selected thread --------------------------------------------------------
 	let selectedId = $state<number | null>(null);
+	const canonicalConversationId = $derived.by(() => {
+		const routeId = Number(page.params.id);
+		return Number.isInteger(routeId) && routeId > 0 ? routeId : null;
+	});
 	$effect(() => {
-		const queryId = readConversationId(page.url.searchParams);
-		if (selectedId !== queryId) selectedId = queryId;
+		if (selectedId !== canonicalConversationId) selectedId = canonicalConversationId;
 	});
 
 	// --- Conversation list (left pane) -----------------------------------------
@@ -40,6 +42,7 @@
 			skip: (conversationPage - 1) * CONVERSATION_PAGE_SIZE,
 			take: CONVERSATION_PAGE_SIZE,
 		}),
+		enabled: canonicalConversationId === null
 	}));
 
 	$effect(() => {
@@ -96,8 +99,7 @@
 
 	function openConversation(id: number) {
 		selectedId = id;
-		void goto(conversationSelectionUrl(page.url, id), {
-			replaceState: true,
+		void goto(`/messages/${id}`, {
 			noScroll: true,
 			keepFocus: true
 		});
@@ -105,17 +107,15 @@
 
 	function backToList() {
 		selectedId = null;
-		void goto(conversationSelectionUrl(page.url, null), {
-			replaceState: true,
-			noScroll: true,
-			keepFocus: true
-		});
+		if (typeof history !== 'undefined' && history.length > 1) history.back();
+		else void goto('/notifications');
 	}
 
 	// --- Portfolio + tenant search (for compose) -------------------------------
 	const portfolioQuery = createQuery(() => ({
 		queryKey: ['portfolio', portfolioId],
 		queryFn: () => portfolios.get(portfolioId),
+		enabled: canonicalConversationId === null
 	}));
 
 	// Read Email/SMS defaults out of Portfolio.settings JSON ("messaging" key).
@@ -333,6 +333,7 @@
 	<div class="flex min-h-0 flex-1 overflow-hidden">
 		<!-- LEFT: thread list ------------------------------------------------ -->
 		<aside
+			class:hidden={canonicalConversationId !== null}
 			class="flex w-full shrink-0 flex-col border-r border-border md:w-80 lg:w-96
 				{selectedId !== null ? 'hidden md:flex' : 'flex'}"
 			data-testid="conversation-list-pane"
@@ -426,7 +427,7 @@
 					<Button
 						variant="ghost"
 						size="icon"
-						class="md:hidden"
+						class={canonicalConversationId === null ? 'md:hidden' : ''}
 						data-testid="conversation-back"
 						onclick={backToList}
 						aria-label="Back to conversations"

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../settings/notification_foundation_repository.dart';
 import 'notices_models.dart';
 import 'notices_repository.dart';
 
@@ -160,12 +161,14 @@ class _ReviewNoticeSheet extends ConsumerStatefulWidget {
 class _ReviewNoticeSheetState extends ConsumerState<_ReviewNoticeSheet> {
   final Map<int, TextEditingController> _subjectCtrls = {};
   final Map<int, TextEditingController> _bodyCtrls = {};
+  final Map<int, List<TenantNoticeRecipientPreview>> _recipientPreviews = {};
 
   bool _portal = true;
   bool _email = true;
   bool _sms = true;
   bool _busy = false;
   String? _error;
+  int? _previewingDraftId;
 
   @override
   void initState() {
@@ -241,6 +244,28 @@ class _ReviewNoticeSheetState extends ConsumerState<_ReviewNoticeSheet> {
       );
   }
 
+  Future<void> _previewRecipients(NoticeDraft draft) async {
+    setState(() {
+      _previewingDraftId = draft.id;
+      _error = null;
+    });
+    try {
+      final recipients = await ref
+          .read(notificationFoundationRepositoryProvider)
+          .previewTenantNoticeRecipients(
+            automationKey: draft.noticeType,
+            leaseManagementId: draft.leaseManagementId,
+          );
+      if (mounted) {
+        setState(() => _recipientPreviews[draft.id] = recipients);
+      }
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _previewingDraftId = null);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -306,6 +331,53 @@ class _ReviewNoticeSheetState extends ConsumerState<_ReviewNoticeSheet> {
                               border: OutlineInputBorder(),
                             ),
                           ),
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'Effective recipients and available destinations',
+                                  style: theme.textTheme.labelMedium,
+                                ),
+                              ),
+                              OutlinedButton.icon(
+                                onPressed: _previewingDraftId == d.id
+                                    ? null
+                                    : () => _previewRecipients(d),
+                                icon: const Icon(Icons.visibility_outlined),
+                                label: Text(
+                                  _previewingDraftId == d.id
+                                      ? 'Loading…'
+                                      : 'Preview',
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (_recipientPreviews[d.id] != null) ...[
+                            const SizedBox(height: 6),
+                            for (final recipient in _recipientPreviews[d.id]!)
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                dense: true,
+                                title: Text(
+                                  '${recipient.displayName} · ${recipient.role}',
+                                ),
+                                subtitle: Text(
+                                  'Channels: ${recipient.availableChannels.isEmpty ? 'None' : recipient.availableChannels.join(', ')}\n'
+                                  'Email: ${recipient.email ?? 'Not available'} · Phone: ${recipient.phone ?? 'Not available'}\n'
+                                  '${recipient.reason}',
+                                ),
+                                trailing: Text(
+                                  recipient.eligible ? 'Eligible' : 'Excluded',
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: recipient.eligible
+                                        ? Colors.green
+                                        : cs.onSurfaceVariant,
+                                  ),
+                                ),
+                                isThreeLine: true,
+                              ),
+                          ],
                           if (!editable) ...[
                             const SizedBox(height: 8),
                             Text(

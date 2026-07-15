@@ -21,6 +21,13 @@ public sealed class TenantNoticePoliciesController : AuthenticatedPortfolioContr
     public Task<IReadOnlyList<TenantNoticePolicyResponse>> ListPolicies(CancellationToken ct) =>
         _service.ListTenantNoticePoliciesAsync(GetPortfolioId(), ct);
 
+    [HttpGet("{automationKey}/recipients")]
+    public Task<IReadOnlyList<TenantNoticeRecipientPreviewResponse>> PreviewRecipients(
+        string automationKey,
+        [FromQuery] int leaseManagementId,
+        CancellationToken ct) =>
+        _service.PreviewTenantNoticeRecipientsAsync(GetPortfolioId(), automationKey, leaseManagementId, ct);
+
     [HttpPut("{automationKey}")]
     public async Task<ActionResult<TenantNoticePolicyResponse>> UpsertPolicy(
         string automationKey,
@@ -40,6 +47,10 @@ public sealed class TenantNoticePoliciesController : AuthenticatedPortfolioContr
     [HttpGet("templates")]
     public Task<IReadOnlyList<WorkspaceNoticeTemplateResponse>> ListTemplates(CancellationToken ct) =>
         _service.ListTemplatesAsync(GetPortfolioId(), ct);
+
+    [HttpGet("templates/{systemKey}/merge-fields")]
+    public ActionResult<IReadOnlyList<NoticeMergeFieldHelpResponse>> ListMergeFields(string systemKey) =>
+        Ok(_service.ListMergeFields(systemKey));
 
     [HttpPost("templates/{systemKey}/versions")]
     public async Task<ActionResult<TenantNoticePolicyResponse>> CreateTemplateVersion(

@@ -28,6 +28,14 @@ const technicianDetail = readFileSync(
 	new URL('../../routes/(protected)/my-work/[id]/+page.svelte', import.meta.url),
 	'utf8'
 );
+const workOrderDetail = readFileSync(
+	new URL('../components/records/WorkOrderDetail.svelte', import.meta.url),
+	'utf8'
+);
+const typedMessageDetail = readFileSync(
+	new URL('../../routes/(protected)/messages/[id]/+page.svelte', import.meta.url),
+	'utf8'
+);
 const scanPage = readFileSync(
 	new URL('../../routes/(protected)/scan/+page.svelte', import.meta.url),
 	'utf8'
@@ -91,10 +99,12 @@ test('rental collections keep owners in Rentals and leasing inbox uses canonical
 	assert.doesNotMatch(leasingListPage, /kind === 'inbox'\) return `\/messages/);
 });
 
-test('technician commands stay on assignment-scoped endpoints and fail closed for missing status mutation', () => {
+test('technician commands stay on the canonical assignment-scoped mutation', () => {
 	assert.match(technicianApi, /\/technician\/assignments/);
+	assert.match(technicianApi, /api\.patch\(`\/technician\/assignments\/\$\{id\}`/);
 	assert.doesNotMatch(technicianApi, /\/work-orders\//);
-	assert.doesNotMatch(technicianApi, /updateAssignment/);
+	assert.doesNotMatch(technicianApi, /assigned-update/);
+	assert.match(workOrderDetail, /technician\.update/);
 	assert.match(technicianDetail, /data-testid="assignment-status-unavailable"/);
 	assert.doesNotMatch(technicianDetail, /technician\.updateAssignment/);
 	assert.match(technicianDetail, /activeCapabilities\.has\(CAPABILITY\.assignedWorkUpdate\)/);
@@ -104,6 +114,12 @@ test('technician commands stay on assignment-scoped endpoints and fail closed fo
 	assert.match(technicianDetail, /\{#if canConverse\}<section id="conversation"/);
 	assert.match(scanPage, /technician\.assignments\(\{ openOnly: true, sort: 'scheduledForUtc', take: 50 \}\)/);
 	assert.doesNotMatch(scanPage, /workOrders\.listPage/);
+});
+
+test('staff action URLs open route-backed message details without query aliases', () => {
+	assert.match(typedMessageDetail, /import MessagesPage from '\.\.\/\+page\.svelte'/);
+	assert.match(experiencePolicy, /prefix: '\/messages'/);
+	assert.doesNotMatch(typedMessageDetail, /conversationId=/);
 });
 
 test('notification settings expose independent personal, team, and tenant policy capabilities', () => {

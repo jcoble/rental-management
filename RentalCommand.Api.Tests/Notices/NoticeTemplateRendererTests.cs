@@ -13,6 +13,19 @@ public class NoticeTemplateRendererTests
     };
 
     [Fact]
+    public void MergeFieldHelp_IsTypeSpecificAndExplainsTokensInPlainLanguage()
+    {
+        var help = NoticeMergeFields.HelpForType("rent-reminder");
+
+        Assert.Contains(help, row => row.Key == NoticeMergeFields.TenantName
+            && row.Token == "{{tenant_name}}"
+            && !string.IsNullOrWhiteSpace(row.Description)
+            && !string.IsNullOrWhiteSpace(row.Example));
+        Assert.Contains(help, row => row.Key == NoticeMergeFields.RentAmount);
+        Assert.DoesNotContain(help, row => row.Key == NoticeMergeFields.RenewalStartDate);
+    }
+
+    [Fact]
     public void Render_replaces_known_tokens()
     {
         var (subject, body) = NoticeTemplateRenderer.Render(

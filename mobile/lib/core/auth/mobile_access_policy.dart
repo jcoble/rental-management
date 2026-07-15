@@ -170,7 +170,7 @@ bool canOpenMobilePath({
     if (path == '/') {
       return capabilities.contains('maintenance.assigned-work.read');
     }
-    if (path.startsWith('/technician/assignments/')) {
+    if (path.startsWith('/maintenance/work/')) {
       return capabilities.contains('maintenance.assigned-work.read');
     }
     if (path == '/notifications') {
@@ -257,7 +257,8 @@ bool canOpenMobilePath({
       'leasing.showings.manage',
     ]);
   }
-  if (path.startsWith('/work-orders/')) {
+  if (path.startsWith('/maintenance/work/')) return false;
+  if (path.startsWith('/maintenance/')) {
     return hasAnyMobileCapability(capabilities, workOrderCapabilityKeys);
   }
   if (path == '/money') {

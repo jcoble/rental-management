@@ -87,7 +87,10 @@ public sealed class OwnerPortalService : IOwnerPortalService
             properties = properties.Where(property =>
                 EF.Functions.ILike(property.Name, $"%{search}%") ||
                 EF.Functions.ILike(property.AddressLine1, $"%{search}%") ||
-                EF.Functions.ILike(property.City, $"%{search}%"));
+                (property.AddressLine2 != null && EF.Functions.ILike(property.AddressLine2, $"%{search}%")) ||
+                EF.Functions.ILike(property.City, $"%{search}%") ||
+                EF.Functions.ILike(property.State, $"%{search}%") ||
+                EF.Functions.ILike(property.PostalCode, $"%{search}%"));
         }
 
         properties = (query.SortField, query.SortDescending) switch
@@ -129,27 +132,7 @@ public sealed class OwnerPortalService : IOwnerPortalService
     public async Task<OwnerPortalDistributionPageResponse> ListDistributionsPageAsync(
         OwnerPortalReadScope scope, ListQuery query, CancellationToken ct = default)
     {
-        var ownerAccess = EffectiveOwnerAccess(scope);
-        var distributions = _db.OwnerDistributions
-            .AsNoTracking()
-            .Where(distribution =>
-                distribution.PortfolioId == scope.PortfolioId &&
-                distribution.DeletedAt == null &&
-                ownerAccess.Any(access =>
-                    access.OwnerEntityId == distribution.OwnerEntityId &&
-                    (distribution.PropertyId == null || access.PropertyId == distribution.PropertyId)));
-        if (query.From is not null)
-        {
-            distributions = distributions.Where(distribution => distribution.Date >= query.From.Value);
-        }
-        if (query.To is not null)
-        {
-            var through = query.To.Value.Date.AddDays(1);
-            distributions = distributions.Where(distribution => distribution.Date < through);
-        }
-        distributions = query.SortDescending
-            ? distributions.OrderByDescending(distribution => distribution.Date).ThenByDescending(distribution => distribution.Id)
-            : distributions.OrderBy(distribution => distribution.Date).ThenBy(distribution => distribution.Id);
+        var distributions = BuildDistributionsQuery(scope, query);
 
         var totalCount = await distributions.CountAsync(ct);
         var items = await distributions
@@ -178,6 +161,41 @@ public sealed class OwnerPortalService : IOwnerPortalService
         };
     }
 
+    internal IQueryable<OwnerDistribution> BuildDistributionsQuery(
+        OwnerPortalReadScope scope, ListQuery query)
+    {
+        var ownerAccess = EffectiveOwnerAccess(scope);
+        var distributions = _db.OwnerDistributions
+            .AsNoTracking()
+            .Where(distribution =>
+                distribution.PortfolioId == scope.PortfolioId &&
+                distribution.DeletedAt == null &&
+                ownerAccess.Any(access =>
+                    access.OwnerEntityId == distribution.OwnerEntityId &&
+                    (distribution.PropertyId == null || access.PropertyId == distribution.PropertyId)));
+        var search = query.Search?.Trim();
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            distributions = distributions.Where(distribution =>
+                EF.Functions.ILike(distribution.OwnerEntity!.Name, $"%{search}%") ||
+                (distribution.Property != null && EF.Functions.ILike(distribution.Property.Name, $"%{search}%")) ||
+                (distribution.Memo != null && EF.Functions.ILike(distribution.Memo, $"%{search}%")));
+        }
+        if (query.From is not null)
+        {
+            distributions = distributions.Where(distribution => distribution.Date >= query.From.Value);
+        }
+        if (query.To is not null)
+        {
+            var through = query.To.Value.Date.AddDays(1);
+            distributions = distributions.Where(distribution => distribution.Date < through);
+        }
+        distributions = query.SortDescending
+            ? distributions.OrderByDescending(distribution => distribution.Date).ThenByDescending(distribution => distribution.Id)
+            : distributions.OrderBy(distribution => distribution.Date).ThenBy(distribution => distribution.Id);
+        return distributions;
+    }
+
     public Task<OwnerPortalItemPageResponse> ListApprovalsPageAsync(
         OwnerPortalReadScope scope, ListQuery query, CancellationToken ct = default) =>
         ListItemsPageAsync(scope, query, ApprovalNotificationType, ct);
@@ -192,11 +210,7 @@ public sealed class OwnerPortalService : IOwnerPortalService
         string notificationType,
         CancellationToken ct)
     {
-        var notifications = OwnerItems(scope, EffectiveOwnerAccess(scope))
-            .Where(notification => notification.Type == notificationType);
-        notifications = query.SortDescending
-            ? notifications.OrderByDescending(notification => notification.CreatedAt).ThenByDescending(notification => notification.Id)
-            : notifications.OrderBy(notification => notification.CreatedAt).ThenBy(notification => notification.Id);
+        var notifications = BuildOwnerItemsQuery(scope, query, notificationType);
 
         var totalCount = await notifications.CountAsync(ct);
         var items = await notifications
@@ -223,6 +237,24 @@ public sealed class OwnerPortalService : IOwnerPortalService
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,
         };
+    }
+
+    internal IQueryable<Notification> BuildOwnerItemsQuery(
+        OwnerPortalReadScope scope, ListQuery query, string notificationType)
+    {
+        var notifications = OwnerItems(scope, EffectiveOwnerAccess(scope))
+            .Where(notification => notification.Type == notificationType);
+        var search = query.Search?.Trim();
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            notifications = notifications.Where(notification =>
+                EF.Functions.ILike(notification.Title, $"%{search}%") ||
+                EF.Functions.ILike(notification.Message, $"%{search}%"));
+        }
+        notifications = query.SortDescending
+            ? notifications.OrderByDescending(notification => notification.CreatedAt).ThenByDescending(notification => notification.Id)
+            : notifications.OrderBy(notification => notification.CreatedAt).ThenBy(notification => notification.Id);
+        return notifications;
     }
 
     private IQueryable<EffectiveOwnerAccessProjection> EffectiveOwnerAccess(OwnerPortalReadScope scope) =>
