@@ -155,9 +155,15 @@ public class UnitServiceListTests : IAsyncLifetime
         result.Items[0].UnitNumber.Should().Be("2A");
         result.Items[0].SimpleStage.Should().Be("Renewal");
 
-        _commands.Should().HaveCount(2);
-        _commands.Should().OnlyContain(sql =>
-            sql.Contains("FROM \"Units\"", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().HaveCount(3);
+        _commands.Count(sql =>
+                sql.Contains("FROM \"Units\"", StringComparison.OrdinalIgnoreCase) &&
+                sql.Contains("vw_unit_occupancy", StringComparison.OrdinalIgnoreCase))
+            .Should().Be(2);
+        _commands.Should().ContainSingle(sql =>
+            sql.Contains("StoredFiles", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("UNION", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase));
         _commands.Should().Contain(sql =>
             sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("vw_unit_occupancy", StringComparison.OrdinalIgnoreCase));
@@ -283,12 +289,15 @@ public class UnitServiceListTests : IAsyncLifetime
         dashboard.Should().NotBeNull();
         row.DocsNeedingReviewCount.Should().Be(7);
         row.DocsNeedingReviewCount.Should().Be(dashboard!.Header.DocsNeedingReviewCount);
+        listSql.Should().HaveCount(3);
         listSql.Should().Contain(sql =>
             sql.Contains("StoredFiles", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("LeaseAgreements", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("LegalDocumentArtifacts", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("WorkOrders", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("Inspections", StringComparison.OrdinalIgnoreCase));
+            sql.Contains("Inspections", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("UNION", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase));
     }
 
     private void SeedUnit(string unitNumber, string propertyName, int openWorkOrders)

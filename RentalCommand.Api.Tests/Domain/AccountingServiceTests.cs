@@ -89,7 +89,7 @@ public class AccountingServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task GetSummaryAsync_OrdersAndTotalsExpenseCategoriesInSql()
+    public async Task GetSummaryAsync_OrdersCategoriesAndReturnsHeadlineRollupInTwoSqlStatements()
     {
         var now = new DateTime(2026, 05, 25, 12, 0, 0, DateTimeKind.Utc);
         var (property, _) = SeedPropertyAndLease(now);
@@ -107,16 +107,16 @@ public class AccountingServiceTests : IDisposable
             ScheduleECategory.Repairs);
         summary.TotalExpenses.Should().Be(240m);
 
-        _commands.Should().Contain(sql =>
-            sql.Contains("FROM \"Expenses\"", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase),
-            "expense category ordering must run in SQL before materialization");
-        _commands.Should().Contain(sql =>
-            sql.Contains("FROM \"Expenses\"", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("SUM", StringComparison.OrdinalIgnoreCase) &&
-            !sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase),
-            "the total expense aggregate must be computed by SQL instead of summing the materialized category rows");
+        _commands.Should().HaveCount(2,
+            "the page summary uses one category statement and one combined DB-side headline rollup");
+        _commands[0].Should().Contain("FROM \"Expenses\"")
+            .And.Contain("GROUP BY")
+            .And.Contain("ORDER BY",
+                "expense category ordering must run in SQL before materialization");
+        _commands[1].Should().Contain("SUM",
+            "headline totals must be aggregated by the database rather than from materialized rows");
+        _commands[1].Should().Contain("TenantLedgerAllocations",
+            "the same statement must derive collected tenant income from canonical allocations");
     }
 
     [Fact]

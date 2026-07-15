@@ -149,7 +149,7 @@
 		onSuccess: (result) => {
 			showSuccess(
 				result.value.requiresAccountActivation
-					? 'Team member added. Their activation email is queued.'
+					? 'Team member added. Activation is required before they can sign in; the email is queued.'
 					: 'Team access added to the existing account.'
 			);
 			showInvite = false;
@@ -344,6 +344,11 @@
 								{member.displayName}{#if isSelf(member)} <span class="text-xs text-muted-foreground">(you)</span>{/if}
 							</p>
 							<p class="truncate text-sm text-muted-foreground">{member.email}</p>
+							{#if member.requiresAccountActivation}
+								<p class="mt-1 text-xs font-medium text-amber-600 dark:text-amber-400">
+									Activation required — this person cannot sign in until the queued email is delivered and its link is used.
+								</p>
+							{/if}
 						</div>
 						<div class="min-w-48">
 							<p class="text-sm font-medium">{member.roleSummary || 'No active assignment'}</p>

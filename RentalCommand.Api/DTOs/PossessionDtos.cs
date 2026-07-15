@@ -16,6 +16,24 @@ public sealed record GivePossessionResponse(
     DateTime PossessionGivenAtUtc,
     bool Replayed);
 
+public sealed class ConfirmMoveInRequest
+{
+    public int UnitId { get; set; }
+    public DateOnly? DepositEffectiveOn { get; set; }
+    public string? DepositPaymentMethodSummary { get; set; }
+    public string? DepositExternalReference { get; set; }
+    public int? MoveInAppointmentId { get; set; }
+}
+
+public sealed record ConfirmMoveInResponse(
+    int LeaseManagementId,
+    int UnitId,
+    DateTime PossessionGivenAtUtc,
+    long? SecurityDepositEntryId,
+    long? TenantLedgerEntryId,
+    int? CompletedAppointmentId,
+    bool Replayed);
+
 public sealed class ReturnPossessionPartyRequest
 {
     public int LeaseManagementPartyId { get; set; }

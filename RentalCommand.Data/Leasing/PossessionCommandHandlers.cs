@@ -5,6 +5,10 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Leasing;
+using RentalCommand.Core.Operations;
+using RentalCommand.Core.Payments;
+using RentalCommand.Data.Operations;
+using RentalCommand.Data.Payments;
 
 namespace RentalCommand.Data.Leasing;
 
@@ -130,6 +134,357 @@ public sealed class GivePossessionHandler
     private sealed record GiveTarget(LeaseManagement Relationship, bool HasOpenAccount,
         bool HasExecutedGoverningAgreement, bool HasCurrentResident, bool HasOtherPossession,
         bool HasOpenOperationalPeriod);
+}
+
+/// <summary>
+/// One transaction for the Unit Command Center's physical move-in confirmation. Deposit funding,
+/// possession, and the optional MoveIn appointment completion either all commit with one receipt or
+/// all roll back. Account ids and the governing deposit amount are always resolved in PostgreSQL.
+/// </summary>
+public sealed class ConfirmMoveInHandler
+    : IAtomicCommandHandler<ConfirmMoveInCommand, ConfirmMoveInResult>,
+      IAtomicReplayAuthorizer<ConfirmMoveInCommand>
+{
+    public async Task<ConfirmMoveInResult> HandleAsync(
+        ConfirmMoveInCommand command,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        Validate(command);
+        await attempt.Locking.AcquireAsync(AtomicLockResource.Unit, command.UnitId, ct);
+        await attempt.Locking.AcquireAsync(
+            AtomicLockResource.LeaseManagement, command.LeaseManagementId, ct);
+
+        var nowUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        attempt.UseDatabaseWallClockForAudit(nowUtc);
+        var target = await LoadTarget(command, attempt.Persistence, nowUtc).SingleOrDefaultAsync(ct);
+        if (target is null)
+        {
+            throw new UnauthorizedAccessException(
+                "The lease relationship is not authorized in the current property scope.");
+        }
+        if (target.Relationship.CanceledAtUtc is not null
+            || target.Relationship.PossessionReturnedAtUtc is not null)
+        {
+            return Empty(ConfirmMoveInOutcome.RelationshipNotEligible, command,
+                "The lease relationship is not eligible for possession.");
+        }
+        if (target.Relationship.PossessionGivenAtUtc is not null)
+        {
+            return new ConfirmMoveInResult(
+                ConfirmMoveInOutcome.AlreadyConfirmed,
+                command.LeaseManagementId,
+                command.UnitId,
+                target.Relationship.PossessionGivenAtUtc,
+                null,
+                null,
+                null,
+                "Move-in has already been confirmed.");
+        }
+        if (!target.HasCurrentResident)
+        {
+            return Empty(ConfirmMoveInOutcome.RelationshipNotEligible, command,
+                "The lease relationship has no current resident party.");
+        }
+        if (!target.HasOpenAccount || target.TenantAccountId is null)
+        {
+            return Empty(ConfirmMoveInOutcome.AccountNotOpen, command,
+                "The tenant account must be open.");
+        }
+        if (!target.HasExecutedGoverningAgreement
+            || target.SecurityDepositObligation is null)
+        {
+            return Empty(ConfirmMoveInOutcome.AgreementNotExecuted, command,
+                "An executed governing agreement is required before move-in can be confirmed.");
+        }
+        if (target.HasOtherPossession || target.HasOpenOperationalPeriod)
+        {
+            return Empty(ConfirmMoveInOutcome.UnitUnavailable, command,
+                "The unit has conflicting possession or an open operational period.");
+        }
+
+        Appointment? appointment = null;
+        if (command.MoveInAppointmentId is { } appointmentId)
+        {
+            appointment = await attempt.Persistence.Query<Appointment>()
+                .Where(candidate => candidate.Id == appointmentId
+                    && candidate.PortfolioId == command.PortfolioId
+                    && candidate.PropertyId == target.PropertyId
+                    && candidate.UnitId == command.UnitId
+                    && candidate.Type == AppointmentType.MoveIn
+                    && (candidate.Status == AppointmentStatus.Scheduled
+                        || candidate.Status == AppointmentStatus.Confirmed))
+                .SingleOrDefaultAsync(ct);
+            if (appointment is null)
+            {
+                return Empty(ConfirmMoveInOutcome.AppointmentInvalid, command,
+                    "The selected move-in appointment is not open for this unit.");
+            }
+        }
+
+        SecurityDepositMutationResult? fundedDeposit = null;
+        var depositAmount = target.SecurityDepositObligation.Value;
+        if (depositAmount > 0m)
+        {
+            if (target.SecurityDepositAccountId is null)
+            {
+                return Empty(ConfirmMoveInOutcome.DepositNotConfigured, command,
+                    "Prepare the security deposit account before confirming move-in.");
+            }
+            if (command.DepositEffectiveOn is null
+                || string.IsNullOrWhiteSpace(command.DepositPaymentMethodSummary))
+            {
+                return Empty(ConfirmMoveInOutcome.DepositNotConfigured, command,
+                    "Deposit received date and payment method are required.");
+            }
+
+            await attempt.Locking.AcquireAsync(
+                AtomicLockResource.TenantAccount, target.TenantAccountId.Value, ct);
+            var depositCommand = DepositCommand(
+                command,
+                target.TenantAccountId.Value,
+                target.SecurityDepositAccountId.Value,
+                target.GoverningAgreementNumber,
+                depositAmount);
+            fundedDeposit = await new FundSecurityDepositHandler()
+                .HandleAsync(depositCommand, attempt, ct);
+            if (!fundedDeposit.Applied)
+            {
+                return Empty(ConfirmMoveInOutcome.DepositConflict, command,
+                    fundedDeposit.Error ?? "The security deposit could not be funded.");
+            }
+        }
+
+        target.Relationship.PossessionGivenAtUtc = nowUtc;
+        target.Relationship.UpdatedAtUtc = nowUtc;
+        target.Relationship.RowVersion = Guid.NewGuid();
+        attempt.BindSemanticAudit(target.Relationship, new AtomicSemanticAudit(
+            command.PortfolioId,
+            nameof(LeaseManagement),
+            command.LeaseManagementId,
+            AuditLogOperation.Updated,
+            UserId: command.CreatedByUserId,
+            ChangeReason: "Move-in confirmed under an executed governing agreement."));
+        attempt.StageOutbox(PossessionOutbox.Create(
+            command.PortfolioId,
+            $"{command.DeliveryIdempotencyKey}:possession",
+            nowUtc,
+            "move-in-confirmed",
+            nameof(LeaseManagement),
+            command.LeaseManagementId,
+            command.LeaseManagementId,
+            command.UnitId));
+
+        if (appointment is not null)
+        {
+            appointment.Status = AppointmentStatus.Completed;
+            appointment.UpdatedAt = nowUtc;
+            attempt.BindSemanticAudit(appointment, new AtomicSemanticAudit(
+                command.PortfolioId,
+                nameof(Appointment),
+                appointment.Id,
+                AuditLogOperation.Updated,
+                UserId: command.CreatedByUserId,
+                NewValues: JsonSerializer.Serialize(new { appointment.Status }),
+                ChangeReason: "Completed when move-in was confirmed."));
+            attempt.StageOutbox(PossessionOutbox.Create(
+                command.PortfolioId,
+                $"{command.DeliveryIdempotencyKey}:appointment",
+                nowUtc,
+                "move-in-appointment-completed",
+                nameof(Appointment),
+                appointment.Id,
+                command.LeaseManagementId,
+                command.UnitId));
+        }
+
+        await attempt.FlushBusinessAsync(ct);
+        return new ConfirmMoveInResult(
+            ConfirmMoveInOutcome.Confirmed,
+            command.LeaseManagementId,
+            command.UnitId,
+            nowUtc,
+            fundedDeposit?.SecurityDepositEntryId,
+            fundedDeposit?.TenantLedgerEntryId,
+            appointment?.Id,
+            null);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        ConfirmMoveInCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        Validate(command);
+        var nowUtc = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var target = await LoadTarget(command, persistence, nowUtc)
+            .Select(candidate => new
+            {
+                candidate.PropertyId,
+            })
+            .SingleOrDefaultAsync(ct);
+        if (target is null)
+        {
+            throw new UnauthorizedAccessException(
+                "The lease relationship is not authorized in the current property scope.");
+        }
+        if (command.DepositEffectiveOn.HasValue
+            && !await StaffOperationAuthorization.CanManagePropertyAsync(
+                command.PortfolioId,
+                new StaffOperationActor(
+                    command.CreatedByUserId,
+                    command.AuthSessionId,
+                    command.AccessContextId,
+                    command.ExpectedAccessRevision),
+                target.PropertyId,
+                CapabilityKeys.MoneyDepositsManage,
+                persistence,
+                nowUtc,
+                ct))
+        {
+            throw new UnauthorizedAccessException(
+                "The current access context cannot manage deposits for this property.");
+        }
+    }
+
+    private static IQueryable<ConfirmMoveInTarget> LoadTarget(
+        ConfirmMoveInCommand command,
+        IAtomicPersistenceSession persistence,
+        DateTime nowUtc)
+    {
+        var statuses = persistence.Query<LeaseAgreementStatusProjection>();
+        return PossessionCommandAuthorization.AuthorizedRelationships(
+                persistence,
+                command.PortfolioId,
+                command.LeaseManagementId,
+                command.UnitId,
+                command.CreatedByUserId,
+                command.AuthSessionId,
+                command.AccessContextId,
+                command.ExpectedAccessRevision,
+                nowUtc)
+            .Select(relationship => new ConfirmMoveInTarget(
+                relationship,
+                relationship.PropertyId,
+                relationship.TenantAccount != null ? relationship.TenantAccount.Id : null,
+                relationship.TenantAccount != null
+                    && relationship.TenantAccount.SecurityDepositAccount != null
+                        ? relationship.TenantAccount.SecurityDepositAccount.Id
+                        : null,
+                relationship.TenantAccount != null
+                    && relationship.TenantAccount.ClosedAtUtc == null,
+                relationship.Agreements.Any(agreement =>
+                    agreement.FullyExecutedAtUtc != null
+                    && agreement.ExecutedArtifactId != null
+                    && agreement.VoidedAtUtc == null
+                    && agreement.DraftCanceledAtUtc == null
+                    && statuses.Any(status => status.PortfolioId == command.PortfolioId
+                        && status.LeaseManagementId == relationship.Id
+                        && status.AgreementId == agreement.Id
+                        && status.IsGoverning)),
+                relationship.Agreements
+                    .Where(agreement => statuses.Any(status =>
+                        status.PortfolioId == command.PortfolioId
+                        && status.LeaseManagementId == relationship.Id
+                        && status.AgreementId == agreement.Id
+                        && status.IsGoverning))
+                    .Select(agreement => (decimal?)agreement.SecurityDepositObligation)
+                    .FirstOrDefault(),
+                relationship.Agreements
+                    .Where(agreement => statuses.Any(status =>
+                        status.PortfolioId == command.PortfolioId
+                        && status.LeaseManagementId == relationship.Id
+                        && status.AgreementId == agreement.Id
+                        && status.IsGoverning))
+                    .Select(agreement => agreement.AgreementNumber)
+                    .FirstOrDefault(),
+                persistence.Query<LeaseManagement>().Any(other =>
+                    other.PortfolioId == command.PortfolioId
+                    && other.UnitId == command.UnitId
+                    && other.Id != relationship.Id
+                    && other.PossessionGivenAtUtc != null
+                    && other.PossessionReturnedAtUtc == null),
+                persistence.Query<UnitOperationalPeriod>().Any(period =>
+                    period.PortfolioId == command.PortfolioId
+                    && period.UnitId == command.UnitId
+                    && period.EndedAtUtc == null),
+                persistence.Query<LeaseManagementLifecycleProjection>().Any(lifecycle =>
+                    lifecycle.PortfolioId == command.PortfolioId
+                    && lifecycle.LeaseManagementId == relationship.Id
+                    && lifecycle.CurrentResidentCount > 0)));
+    }
+
+    private static FundSecurityDepositCommand DepositCommand(
+        ConfirmMoveInCommand command,
+        int tenantAccountId,
+        int securityDepositAccountId,
+        string? governingAgreementNumber,
+        decimal amount) => new(
+            command.PortfolioId,
+            tenantAccountId,
+            securityDepositAccountId,
+            amount,
+            command.DepositEffectiveOn!.Value,
+            $"Security deposit received at move-in for {governingAgreementNumber ?? command.LeaseManagementId.ToString()}",
+            command.DepositPaymentMethodSummary!.Trim(),
+            Clean(command.DepositExternalReference),
+            null,
+            command.CreatedByUserId,
+            command.AuthSessionId,
+            command.AccessContextId,
+            command.ExpectedAccessRevision,
+            CapabilityKeys.MoneyDepositsManage,
+            $"{command.DeliveryIdempotencyKey}:deposit",
+            $"{command.DeliveryIdempotencyKey}:deposit");
+
+    private static void Validate(ConfirmMoveInCommand command)
+    {
+        PossessionCommandAuthorization.ValidateShape(
+            command.PortfolioId,
+            command.LeaseManagementId,
+            command.UnitId,
+            command.CreatedByUserId,
+            command.AuthSessionId,
+            command.AccessContextId,
+            command.ExpectedAccessRevision,
+            command.DeliveryIdempotencyKey);
+        if (command.MoveInAppointmentId is <= 0
+            || command.DepositPaymentMethodSummary?.Trim().Length > 200
+            || command.DepositExternalReference?.Trim().Length > 200)
+        {
+            throw new ArgumentException(
+                "Move-in appointment and deposit reference values are invalid.");
+        }
+    }
+
+    private static string? Clean(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static ConfirmMoveInResult Empty(
+        ConfirmMoveInOutcome outcome,
+        ConfirmMoveInCommand command,
+        string error) => new(
+            outcome,
+            command.LeaseManagementId,
+            command.UnitId,
+            null,
+            null,
+            null,
+            null,
+            error);
+
+    private sealed record ConfirmMoveInTarget(
+        LeaseManagement Relationship,
+        int PropertyId,
+        int? TenantAccountId,
+        int? SecurityDepositAccountId,
+        bool HasOpenAccount,
+        bool HasExecutedGoverningAgreement,
+        decimal? SecurityDepositObligation,
+        string? GoverningAgreementNumber,
+        bool HasOtherPossession,
+        bool HasOpenOperationalPeriod,
+        bool HasCurrentResident);
 }
 
 public sealed class ReturnPossessionHandler

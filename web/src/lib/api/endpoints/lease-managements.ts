@@ -373,6 +373,24 @@ export interface GivePossessionResponse {
   replayed: boolean;
 }
 
+export interface ConfirmMoveInRequest {
+  unitId: number;
+  depositEffectiveOn: string | null;
+  depositPaymentMethodSummary: string | null;
+  depositExternalReference: string | null;
+  moveInAppointmentId: number | null;
+}
+
+export interface ConfirmMoveInResponse {
+  leaseManagementId: number;
+  unitId: number;
+  possessionGivenAtUtc: string;
+  securityDepositEntryId: number | null;
+  tenantLedgerEntryId: number | null;
+  completedAppointmentId: number | null;
+  replayed: boolean;
+}
+
 export type ReturnPossessionPartyDisposition =
   | "EndMembership"
   | "RetainGuarantor";
@@ -548,6 +566,17 @@ export const leaseManagements = {
   ) =>
     idempotentJson<GivePossessionResponse>(
       `/lease-managements/${leaseManagementId}/give-possession`,
+      "POST",
+      request,
+      operationKey
+    ),
+  confirmMoveIn: (
+    leaseManagementId: number,
+    request: ConfirmMoveInRequest,
+    operationKey: string
+  ) =>
+    idempotentJson<ConfirmMoveInResponse>(
+      `/lease-managements/${leaseManagementId}/confirm-move-in`,
       "POST",
       request,
       operationKey

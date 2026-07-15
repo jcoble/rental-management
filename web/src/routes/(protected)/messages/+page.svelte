@@ -107,8 +107,10 @@
 
 	function backToList() {
 		selectedId = null;
-		if (typeof history !== 'undefined' && history.length > 1) history.back();
-		else void goto('/notifications');
+		void goto('/messages', {
+			noScroll: true,
+			keepFocus: true
+		});
 	}
 
 	// --- Portfolio + tenant search (for compose) -------------------------------

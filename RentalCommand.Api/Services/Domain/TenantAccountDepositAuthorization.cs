@@ -18,9 +18,13 @@ internal static class TenantAccountDepositAuthorization
         DateTime utcNow)
     {
         var properties = db.Properties.AsNoTracking();
-        return properties
-            .WhereAuthorized(db, scope, CapabilityKeys.MoneyDepositsManage, utcNow)
-            .Union(properties.WhereAuthorized(
-                db, scope, CapabilityKeys.LeasingDepositsRead, utcNow));
+        // One assignment carrying either capability authorizes the property. Keep both keys in a
+        // single EXISTS/IN predicate; UNION would duplicate the complete session, access-revision,
+        // membership, role, and selected-property graph in every deposit count/page query.
+        return properties.WhereAuthorized(
+            db,
+            scope,
+            [CapabilityKeys.MoneyDepositsManage, CapabilityKeys.LeasingDepositsRead],
+            utcNow);
     }
 }

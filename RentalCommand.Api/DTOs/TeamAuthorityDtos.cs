@@ -15,6 +15,7 @@ public sealed record TeamMemberSummaryDto(
     long AccessRevision,
     int AssignmentCount,
     string RoleSummary,
+    bool RequiresAccountActivation,
     DateTime CreatedAtUtc);
 
 public sealed record TeamMemberPageDto(

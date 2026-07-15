@@ -28,6 +28,8 @@ public sealed class LeaseManagementController : ManagementControllerBase
         new("lease-management.party.access.revoke.v1");
     private static readonly AtomicJsonResultCodec<GivePossessionResult> GivePossessionCodec =
         new("lease-management.give-possession.v1");
+    private static readonly AtomicJsonResultCodec<ConfirmMoveInResult> ConfirmMoveInCodec =
+        new("lease-management.confirm-move-in.v1");
     private static readonly AtomicJsonResultCodec<ReturnPossessionResult> ReturnPossessionCodec =
         new("lease-management.return-possession.v1");
     private static readonly AtomicJsonResultCodec<RecordLeaseEndingDispositionResult>
@@ -671,6 +673,77 @@ public sealed class LeaseManagementController : ManagementControllerBase
                 GivePossessionOutcome.RelationshipNotEligible
                     or GivePossessionOutcome.AgreementNotExecuted
                     or GivePossessionOutcome.AccountNotOpen =>
+                    UnprocessableEntity(new { error = outcome.Value.Error }),
+                _ => StatusCode(StatusCodes.Status500InternalServerError),
+            };
+        }
+        catch (UnauthorizedAccessException) { return Forbid(); }
+        catch (ArgumentException exception) { return BadRequest(new { error = exception.Message }); }
+    }
+
+    [HttpPost("{leaseManagementId:int}/confirm-move-in")]
+    [ProducesResponseType(typeof(ConfirmMoveInResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> ConfirmMoveIn(
+        int leaseManagementId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] ConfirmMoveInRequest request,
+        CancellationToken ct)
+    {
+        if (!TryPrepareCommand(idempotencyKey, out var normalizedKey, out var sessionId,
+                out var accessContextId, out var accessRevision, out var failure))
+        {
+            return failure!;
+        }
+
+        var portfolioId = GetPortfolioId();
+        var userId = GetUserId();
+        var digest = Digest(normalizedKey!);
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "lease-management.confirm-move-in",
+                    $"{portfolioId}:{leaseManagementId}:{digest}"),
+                new ConfirmMoveInCommand(
+                    portfolioId,
+                    leaseManagementId,
+                    request.UnitId,
+                    request.DepositEffectiveOn,
+                    request.DepositPaymentMethodSummary,
+                    request.DepositExternalReference,
+                    request.MoveInAppointmentId,
+                    userId,
+                    sessionId,
+                    accessContextId,
+                    accessRevision,
+                    $"confirm-move-in:{portfolioId}:{leaseManagementId}:{digest}"),
+                ConfirmMoveInCodec,
+                ct);
+
+            return outcome.Value.Outcome switch
+            {
+                ConfirmMoveInOutcome.Confirmed or ConfirmMoveInOutcome.AlreadyConfirmed
+                    when outcome.Value.PossessionGivenAtUtc.HasValue =>
+                    Ok(new ConfirmMoveInResponse(
+                        outcome.Value.LeaseManagementId,
+                        outcome.Value.UnitId,
+                        outcome.Value.PossessionGivenAtUtc.Value,
+                        outcome.Value.SecurityDepositEntryId,
+                        outcome.Value.TenantLedgerEntryId,
+                        outcome.Value.CompletedAppointmentId,
+                        outcome.Disposition != AtomicCommandDisposition.Executed)),
+                ConfirmMoveInOutcome.UnitUnavailable
+                    or ConfirmMoveInOutcome.DepositConflict =>
+                    Conflict(new { error = outcome.Value.Error }),
+                ConfirmMoveInOutcome.RelationshipNotEligible
+                    or ConfirmMoveInOutcome.AgreementNotExecuted
+                    or ConfirmMoveInOutcome.AccountNotOpen
+                    or ConfirmMoveInOutcome.DepositNotConfigured
+                    or ConfirmMoveInOutcome.AppointmentInvalid =>
                     UnprocessableEntity(new { error = outcome.Value.Error }),
                 _ => StatusCode(StatusCodes.Status500InternalServerError),
             };

@@ -17,6 +17,7 @@ class TeamMember {
     required this.accessRevision,
     required this.assignmentCount,
     required this.roleSummary,
+    required this.requiresAccountActivation,
     required this.createdAtUtc,
   });
 
@@ -30,6 +31,7 @@ class TeamMember {
   final int accessRevision;
   final int assignmentCount;
   final String roleSummary;
+  final bool requiresAccountActivation;
   final DateTime createdAtUtc;
 
   bool get isActive =>
@@ -47,6 +49,8 @@ class TeamMember {
     accessRevision: (json['accessRevision'] as num).toInt(),
     assignmentCount: (json['assignmentCount'] as num).toInt(),
     roleSummary: json['roleSummary'] as String? ?? '',
+    requiresAccountActivation:
+        json['requiresAccountActivation'] as bool? ?? false,
     createdAtUtc:
         DateTime.tryParse(json['createdAtUtc'] as String? ?? '') ??
         DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
