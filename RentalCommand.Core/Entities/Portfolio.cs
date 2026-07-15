@@ -55,7 +55,6 @@ public class Portfolio
     public List<RecurringMaintenanceTask> RecurringMaintenanceTasks { get; set; } = [];
     public List<Appointment> Appointments { get; set; } = [];
     public List<Inspection> Inspections { get; set; } = [];
-    public List<PortalMessage> PortalMessages { get; set; } = [];
     public List<RentalApplication> RentalApplications { get; set; } = [];
     public List<DocumentTemplate> DocumentTemplates { get; set; } = [];
     public List<WorkspaceAccessContext> AccessContexts { get; set; } = [];

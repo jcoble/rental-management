@@ -142,11 +142,14 @@ public sealed class NoticeDeliveryEvidence
     public NoticeDeliveryChannel Channel { get; set; }
     public string Destination { get; set; } = string.Empty;
     public long OutboxMessageId { get; set; }
+    /// <summary>The tenant-inbox message created for a portal delivery.</summary>
+    public int? ConversationMessageId { get; set; }
     public string IdempotencyKey { get; set; } = string.Empty;
     public DateTime CreatedAtUtc { get; set; }
     public RenderedNotice? RenderedNotice { get; set; }
     public LeaseManagementParty? RecipientLeaseManagementParty { get; set; }
     public OutboxMessage? OutboxMessage { get; set; }
+    public ConversationMessage? ConversationMessage { get; set; }
 }
 
 /// <summary>Concrete automation candidate. Workers lease these rows with a fencing token.</summary>

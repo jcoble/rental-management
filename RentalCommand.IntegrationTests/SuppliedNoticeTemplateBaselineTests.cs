@@ -1,7 +1,13 @@
 using FluentAssertions;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Moq;
+using System.Text.Json;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Hubs;
+using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -476,6 +482,8 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         int draftId;
         long workItemId;
         int baselineOutboxCount;
+        Guid tenantSessionId = Guid.Empty;
+        long tenantAccessRevision = 0;
         WorkspaceReadScope scope = default;
         var claimToken = Guid.NewGuid();
         await using (var setup = NewContext())
@@ -489,6 +497,15 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
                 DisplayName = "Notice Delivery Owner",
                 CreatedAt = now,
             };
+            var tenantUser = new ApplicationUser
+            {
+                UserName = "taylor-recipient@example.test",
+                NormalizedUserName = "TAYLOR-RECIPIENT@EXAMPLE.TEST",
+                Email = "taylor-recipient@example.test",
+                NormalizedEmail = "TAYLOR-RECIPIENT@EXAMPLE.TEST",
+                DisplayName = "Taylor Recipient",
+                CreatedAt = now,
+            };
             var portfolio = new Portfolio
             {
                 Name = "Notice Delivery Workspace",
@@ -499,7 +516,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
                 CreatedAt = now,
                 UpdatedAt = now,
             };
-            setup.AddRange(actor, portfolio);
+            setup.AddRange(actor, tenantUser, portfolio);
             await setup.SaveChangesAsync();
             scope = await SeedAdministratorScopeAsync(setup, portfolio, actor, now);
 
@@ -577,6 +594,40 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             };
             setup.AddRange(account, party);
             await setup.SaveChangesAsync();
+            var tenantContext = new WorkspaceAccessContext
+            {
+                UserId = tenantUser.Id,
+                PortfolioId = portfolio.Id,
+                Status = WorkspaceAccessContextStatus.Active,
+                LastAuthorizedExperience = WorkspaceExperience.Tenant,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+            };
+            var tenantAccess = new TenantUserAccess
+            {
+                PublicId = Guid.NewGuid(),
+                PortfolioId = portfolio.Id,
+                AccessContext = tenantContext,
+                ApplicationUserId = tenantUser.Id,
+                LeaseManagementPartyId = party.Id,
+                GrantedAtUtc = now,
+                GrantedByUserId = actor.Id,
+                Reason = "Tenant notice delivery integration proof",
+            };
+            var tenantSession = new AuthSession
+            {
+                Id = Guid.NewGuid(),
+                UserId = tenantUser.Id,
+                ActiveAccessContext = tenantContext,
+                Status = AuthSessionStatus.Active,
+                CreatedAtUtc = now,
+                LastSeenAtUtc = now,
+                ExpiresAtUtc = now.AddHours(1),
+            };
+            setup.AddRange(tenantAccess, tenantSession);
+            await setup.SaveChangesAsync();
+            tenantSessionId = tenantSession.Id;
+            tenantAccessRevision = tenantContext.AccessRevision;
 
             var foundation = new NotificationFoundationService(setup, TimeProvider.System, Atomic);
             await foundation.SeedSuppliedTemplatesAsync(
@@ -648,7 +699,11 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             (await rolledBack.OutboxMessages.CountAsync(row => row.PortfolioId == portfolioId))
                 .Should().Be(baselineOutboxCount);
             (await rolledBack.NoticeDeliveryEvidence.CountAsync(row => row.PortfolioId == portfolioId)).Should().Be(0);
-            (await rolledBack.PortalMessages.CountAsync(row => row.PortfolioId == portfolioId)).Should().Be(0);
+            (await rolledBack.Conversations.CountAsync(row => row.PortfolioId == portfolioId)).Should().Be(0);
+            (await rolledBack.ConversationMessages.CountAsync(row =>
+                row.Conversation!.PortfolioId == portfolioId)).Should().Be(0);
+            (await rolledBack.Notifications.CountAsync(row =>
+                row.PortfolioId == portfolioId && row.Type == "TenantNotice")).Should().Be(0);
             (await rolledBack.NoticeDrafts.SingleAsync(row => row.Id == draftId)).Status.Should().Be("Draft");
             (await rolledBack.TenantNoticeWorkItems.SingleAsync(row => row.Id == workItemId)).Status
                 .Should().Be(TenantNoticeWorkStatus.Claimed);
@@ -672,18 +727,44 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
 
         await using (var mutate = NewContext())
         {
-            var outbox = await mutate.OutboxMessages
-                .Where(row => row.PortfolioId == portfolioId)
-                .OrderBy(row => row.MessageType)
+            var outbox = await (
+                    from evidence in mutate.NoticeDeliveryEvidence
+                    join row in mutate.OutboxMessages on evidence.OutboxMessageId equals row.Id
+                    where evidence.PortfolioId == portfolioId
+                    orderby row.MessageType
+                    select row)
                 .ToListAsync();
             outbox.Select(row => row.MessageType).Should().BeEquivalentTo(["data-update", "email", "sms"]);
             outbox.Should().OnlyContain(row => row.MessageType != "TenantNoticeDelivery");
-            (await mutate.PortalMessages.CountAsync(row => row.PortfolioId == portfolioId)).Should().Be(1);
+            (await mutate.Conversations.CountAsync(row => row.PortfolioId == portfolioId)).Should().Be(1);
+            var portalMessage = await mutate.ConversationMessages
+                .SingleAsync(row => row.Conversation!.PortfolioId == portfolioId);
+            portalMessage.SenderRole.Should().Be(ConversationSenderRole.Landlord);
+            portalMessage.Channels.Should().Be("Portal");
+            portalMessage.Body.Should().Be("Your rent is due soon.");
+            var conversation = await mutate.Conversations.SingleAsync(row => row.Id == portalMessage.ConversationId);
+            conversation.TenantUnreadCount.Should().Be(1);
+            (await mutate.NoticeDrafts.SingleAsync(row => row.Id == draftId)).ConversationId
+                .Should().Be(conversation.Id);
+            var notification = await mutate.Notifications.SingleAsync(row =>
+                row.PortfolioId == portfolioId && row.Type == "TenantNotice");
+            notification.RelatedEntityType.Should().Be(nameof(Conversation));
+            notification.RelatedEntityId.Should().Be(conversation.Id);
+            notification.ActionUrl.Should().Be($"/portal/messages?conversation={conversation.Id}");
             (await mutate.NoticeDeliveryEvidence.CountAsync(row => row.PortfolioId == portfolioId)).Should().Be(3);
+            (await mutate.NoticeDeliveryEvidence.CountAsync(row =>
+                row.PortfolioId == portfolioId
+                && row.Channel == NoticeDeliveryChannel.TenantPortal
+                && row.ConversationMessageId == portalMessage.Id)).Should().Be(1);
             (await mutate.TenantNoticeWorkItems.SingleAsync(row => row.Id == workItemId)).Status
                 .Should().Be(TenantNoticeWorkStatus.Completed);
 
             var portal = outbox.Single(row => row.MessageType == "data-update");
+            using (var payload = JsonDocument.Parse(portal.Payload))
+            {
+                payload.RootElement.GetProperty("entityType").GetString().Should().Be(nameof(Conversation));
+                payload.RootElement.GetProperty("entityId").GetInt32().Should().Be(conversation.Id);
+            }
             portal.AcceptedAtUtc = now.AddMinutes(1);
             portal.LastAttemptAtUtc = now.AddMinutes(1);
             portal.AttemptCount = 1;
@@ -718,6 +799,42 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
                 row.Channel == NoticeDeliveryChannel.Sms &&
                 row.Status == NoticeDeliveryState.PermanentlyFailed &&
                 row.FailedAtUtc != null);
+        }
+
+        await using (var realtime = NewContext())
+        {
+            var deliveredGroups = new List<string>();
+            var client = new Mock<IClientProxy>();
+            client.Setup(value => value.SendCoreAsync(
+                    It.IsAny<string>(), It.IsAny<object?[]>(), It.IsAny<CancellationToken>()))
+                .Returns(Task.CompletedTask);
+            var clients = new Mock<IHubClients>();
+            clients.Setup(value => value.Groups(It.IsAny<IReadOnlyList<string>>()))
+                .Callback<IReadOnlyList<string>>(groups => deliveredGroups.AddRange(groups))
+                .Returns(client.Object);
+            var hub = new Mock<IHubContext<DataUpdateHub>>();
+            hub.SetupGet(value => value.Clients).Returns(clients.Object);
+            var service = new DataUpdateService(
+                realtime,
+                hub.Object,
+                TimeProvider.System,
+                Mock.Of<ILogger<DataUpdateService>>());
+            var conversationId = await realtime.NoticeDrafts
+                .Where(row => row.Id == draftId)
+                .Select(row => row.ConversationId!.Value)
+                .SingleAsync();
+
+            await service.BroadcastEntityUpdateAsync(
+                portfolioId,
+                nameof(Conversation),
+                conversationId,
+                new { conversationId },
+                CancellationToken.None);
+
+            deliveredGroups.Should().Contain(
+                DataUpdateHub.SessionRevisionGroup(tenantSessionId, tenantAccessRevision));
+            deliveredGroups.Should().Contain(
+                DataUpdateHub.SessionRevisionGroup(scope.SessionId, scope.AccessRevision));
         }
     }
 

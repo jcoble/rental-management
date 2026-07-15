@@ -59,9 +59,12 @@ public sealed class DataUpdateService : IDataUpdateService
     {
         try
         {
-            var recipients = string.Equals(entityType, "Notification", StringComparison.Ordinal)
-                ? BuildNotificationRecipientQuery(portfolioId, entityId)
-                : BuildPropertyRecipientQuery(portfolioId, entityType, entityId);
+            var recipients = entityType switch
+            {
+                "Notification" => BuildNotificationRecipientQuery(portfolioId, entityId),
+                "Conversation" => BuildConversationRecipientQuery(portfolioId, entityId),
+                _ => BuildPropertyRecipientQuery(portfolioId, entityType, entityId),
+            };
 
             if (recipients is null)
             {
@@ -208,6 +211,40 @@ public sealed class DataUpdateService : IDataUpdateService
                 AccessRevision = context.AccessRevision,
             })
             .TagWith("Realtime notification recipients: current addressed user or Team membership");
+    }
+
+    private IQueryable<RealtimeSessionRecipient> BuildConversationRecipientQuery(
+        int portfolioId,
+        int conversationId)
+    {
+        var teamRecipients = BuildPropertyRecipientQuery(portfolioId, "Conversation", conversationId)
+            ?? throw new InvalidOperationException("Conversation property audience is not configured.");
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        var tenantRecipients =
+            from session in _db.AuthSessions.AsNoTracking()
+            join access in _db.EffectiveTenantAccess.AsNoTracking()
+                on new
+                {
+                    AccessContextId = session.ActiveAccessContextId,
+                    session.UserId,
+                }
+                equals new { access.AccessContextId, access.UserId }
+            where access.PortfolioId == portfolioId
+                && session.Status == AuthSessionStatus.Active
+                && session.RevokedAtUtc == null
+                && session.ExpiresAtUtc > utcNow
+                && _db.Conversations.IgnoreQueryFilters().AsNoTracking().Any(conversation =>
+                    conversation.Id == conversationId
+                    && conversation.PortfolioId == portfolioId
+                    && conversation.TenantId == access.TenantId)
+            select new RealtimeSessionRecipient
+            {
+                SessionId = session.Id,
+                AccessRevision = access.AccessRevision,
+            };
+
+        return teamRecipients.Union(tenantRecipients)
+            .TagWith("Realtime conversation recipients: authorized Team scope plus exact tenant relationship");
     }
 
     private PropertyAudience? BuildPropertyAudience(int portfolioId, string entityType, int entityId)

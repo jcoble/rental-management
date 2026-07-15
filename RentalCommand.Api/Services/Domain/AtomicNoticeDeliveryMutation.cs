@@ -31,8 +31,8 @@ public sealed record AtomicNoticeDeliveryResult(
 
 /// <summary>
 /// Freezes one approved notice and its exact destination fan-out under one receipt. The recipient
-/// projection is one translated SQL query; the resulting immutable evidence/outbox graph, optional
-/// portal copies, draft transition, and fenced work completion share the kernel-owned transaction.
+/// projection is one translated SQL query; the resulting immutable evidence/outbox graph, canonical
+/// tenant-inbox messages, draft transition, and fenced work completion share the kernel-owned transaction.
 /// </summary>
 public sealed class AtomicNoticeDeliveryHandler
     : IAtomicCommandHandler<AtomicNoticeDeliveryCommand, AtomicNoticeDeliveryResult>,
@@ -166,6 +166,7 @@ public sealed class AtomicNoticeDeliveryHandler
                 equals new { LeaseManagementId = lifecycle.LeaseManagementId, lifecycle.PortfolioId }
             where party.PortfolioId == command.PortfolioId
                 && party.LeaseManagementId == draft.LeaseManagementId
+                && party.Id == draft.RecipientLeaseManagementPartyId
                 && tenant.DeletedAt == null
                 && lifecycle.TenantAccountId == draft.TenantAccountId
                 && !lifecycle.HasReconciliationException
@@ -213,6 +214,7 @@ public sealed class AtomicNoticeDeliveryHandler
                 PartyRole = party.Role,
                 Channel = NoticeDeliveryChannel.TenantPortal,
                 Destination = access.UserId.ToString(),
+                RecipientUserId = (int?)access.UserId,
                 party.PropertyId,
                 party.UnitId,
             };
@@ -226,6 +228,7 @@ public sealed class AtomicNoticeDeliveryHandler
                 PartyRole = row.Role,
                 Channel = NoticeDeliveryChannel.Email,
                 Destination = row.Email!,
+                RecipientUserId = (int?)null,
                 row.PropertyId,
                 row.UnitId,
             });
@@ -239,6 +242,7 @@ public sealed class AtomicNoticeDeliveryHandler
                 PartyRole = row.Role,
                 Channel = NoticeDeliveryChannel.Sms,
                 Destination = row.Phone!,
+                RecipientUserId = (int?)null,
                 row.PropertyId,
                 row.UnitId,
             });
@@ -266,6 +270,7 @@ public sealed class AtomicNoticeDeliveryHandler
                 PartyRole = party.Role,
                 Channel = NoticeDeliveryChannel.MobilePush,
                 Destination = device.Token,
+                RecipientUserId = (int?)access.UserId,
                 party.PropertyId,
                 party.UnitId,
             };
@@ -282,6 +287,7 @@ public sealed class AtomicNoticeDeliveryHandler
             row.PartyRole,
             row.Channel,
             row.Destination,
+            row.RecipientUserId,
             row.PropertyId,
             row.UnitId)).ToList();
         if (destinations.Count == 0)
@@ -290,15 +296,72 @@ public sealed class AtomicNoticeDeliveryHandler
                 "No eligible recipient has a configured destination for the selected channels.");
         }
 
-        var portalMessages = new List<PortalMessage>();
+        var portalMessages = new Dictionary<int, ConversationMessage>();
+        foreach (var destination in destinations)
+        {
+            if (destination.Channel != NoticeDeliveryChannel.TenantPortal) continue;
+            var conversation = new Conversation
+            {
+                PortfolioId = command.PortfolioId,
+                TenantId = destination.TenantId,
+                Subject = rendered.Subject,
+                PropertyId = destination.PropertyId,
+                StartedByLandlord = true,
+                CreatedAt = now,
+                LastMessageAt = now,
+                LastMessagePreview = rendered.Body.Length <= 280 ? rendered.Body : rendered.Body[..280],
+                TenantUnreadCount = 1,
+            };
+            var message = new ConversationMessage
+            {
+                Conversation = conversation,
+                SenderRole = ConversationSenderRole.Landlord,
+                Body = rendered.Body,
+                Channels = "Portal",
+                CreatedAt = now,
+            };
+            attempt.Persistence.Add(message);
+            portalMessages.Add(destination.LeaseManagementPartyId, message);
+        }
+        if (portalMessages.Count > 0)
+        {
+            await attempt.FlushBusinessAsync(ct);
+        }
+        if (portalMessages.TryGetValue(draft.RecipientLeaseManagementPartyId, out var recipientMessage))
+        {
+            draft.ConversationId = recipientMessage.ConversationId;
+        }
+
         var evidenceRows = new List<NoticeDeliveryEvidence>(destinations.Count);
+        var portalNotifications = new List<Notification>(portalMessages.Count);
         foreach (var destination in destinations)
         {
             var destinationHash = Convert.ToHexString(
                     SHA256.HashData(Encoding.UTF8.GetBytes(destination.Destination)))
                 .ToLowerInvariant()[..16];
             var deliveryKey = $"notice:{rendered.Id}:party:{destination.LeaseManagementPartyId}:{destination.Channel}:{destinationHash}";
-            var (messageType, payload) = Payload(rendered, draft, destination);
+            ConversationMessage? portalMessage = null;
+            if (destination.Channel == NoticeDeliveryChannel.TenantPortal)
+            {
+                portalMessage = portalMessages[destination.LeaseManagementPartyId];
+                var notification = new Notification
+                {
+                    PortfolioId = command.PortfolioId,
+                    UserId = destination.RecipientUserId
+                        ?? throw new InvalidOperationException("Portal delivery requires an effective tenant user."),
+                    Type = "TenantNotice",
+                    Title = rendered.Subject,
+                    Message = rendered.Body.Length <= 280 ? rendered.Body : rendered.Body[..280],
+                    Severity = "Info",
+                    ActionUrl = $"/portal/messages?conversation={portalMessage.ConversationId}",
+                    RelatedEntityType = nameof(Conversation),
+                    RelatedEntityId = portalMessage.ConversationId,
+                    CreatedAt = now,
+                };
+                attempt.Persistence.Add(notification);
+                portalNotifications.Add(notification);
+            }
+            var (messageType, payload) = Payload(rendered, draft, destination, portalMessage);
             var outbox = new OutboxMessage
             {
                 PortfolioId = command.PortfolioId,
@@ -309,26 +372,6 @@ public sealed class AtomicNoticeDeliveryHandler
                 NextAttemptAtUtc = now,
             };
 
-            if (destination.Channel == NoticeDeliveryChannel.TenantPortal)
-            {
-                var portalMessage = new PortalMessage
-                {
-                    PortfolioId = command.PortfolioId,
-                    RecipientTenantId = destination.TenantId,
-                    FromLandlord = true,
-                    Channels = "Portal",
-                    PropertyId = destination.PropertyId,
-                    UnitId = destination.UnitId,
-                    Subject = rendered.Subject,
-                    Body = rendered.Body,
-                    Status = PortalMessageStatus.Open,
-                    CreatedAt = now,
-                    UpdatedAt = now,
-                };
-                attempt.Persistence.Add(portalMessage);
-                portalMessages.Add(portalMessage);
-            }
-
             var evidence = new NoticeDeliveryEvidence
             {
                 PortfolioId = command.PortfolioId,
@@ -338,6 +381,7 @@ public sealed class AtomicNoticeDeliveryHandler
                 Channel = destination.Channel,
                 Destination = destination.Destination,
                 OutboxMessage = outbox,
+                ConversationMessage = portalMessage,
                 IdempotencyKey = deliveryKey,
                 CreatedAtUtc = now,
             };
@@ -370,17 +414,26 @@ public sealed class AtomicNoticeDeliveryHandler
         }
 
         await attempt.FlushBusinessAsync(ct);
-        foreach (var portalMessage in portalMessages)
+        foreach (var portalMessage in portalMessages.Values)
         {
             attempt.StageSemanticEvent(Audit(
-                command, nameof(PortalMessage), portalMessage.Id, AuditLogOperation.Created,
-                "Approved tenant notice copied to the tenant portal"), now);
+                command, nameof(Conversation), portalMessage.ConversationId, AuditLogOperation.Created,
+                "Approved tenant notice opened a canonical tenant conversation"), now);
+            attempt.StageSemanticEvent(Audit(
+                command, nameof(ConversationMessage), portalMessage.Id, AuditLogOperation.Created,
+                "Approved tenant notice committed to the canonical tenant inbox"), now);
         }
         foreach (var evidence in evidenceRows)
         {
             attempt.StageSemanticEvent(Audit(
                 command, nameof(NoticeDeliveryEvidence), checked((int)evidence.Id),
                 AuditLogOperation.Created, $"Tenant notice queued for {evidence.Channel}"), now);
+        }
+        foreach (var notification in portalNotifications)
+        {
+            attempt.StageSemanticEvent(Audit(
+                command, nameof(Notification), notification.Id, AuditLogOperation.Created,
+                "Approved tenant notice added to the recipient notification inbox"), now);
         }
         attempt.StageSemanticEvent(Audit(
             command, nameof(NoticeDraft), draft.Id, AuditLogOperation.Updated,
@@ -507,7 +560,8 @@ public sealed class AtomicNoticeDeliveryHandler
     private static (string MessageType, string Payload) Payload(
         RenderedNotice rendered,
         NoticeDraft draft,
-        DeliveryProjection destination) => destination.Channel switch
+        DeliveryProjection destination,
+        ConversationMessage? portalMessage) => destination.Channel switch
     {
         NoticeDeliveryChannel.Email => ("email", JsonSerializer.Serialize(new
         {
@@ -532,17 +586,22 @@ public sealed class AtomicNoticeDeliveryHandler
             relatedEntityType = nameof(RenderedNotice),
             relatedEntityId = rendered.Id.ToString(),
         })),
-        NoticeDeliveryChannel.TenantPortal => ("data-update", JsonSerializer.Serialize(new
-        {
-            entityType = "TenantNotice",
-            entityId = draft.Id,
-            data = new
+        NoticeDeliveryChannel.TenantPortal when portalMessage is not null =>
+            ("data-update", JsonSerializer.Serialize(new
             {
-                renderedNoticeId = rendered.Id,
-                tenantId = destination.TenantId,
-                leaseManagementId = rendered.LeaseManagementId,
-            },
-        })),
+                entityType = nameof(Conversation),
+                entityId = portalMessage.ConversationId,
+                operation = "create",
+                data = new
+                {
+                    renderedNoticeId = rendered.Id,
+                    noticeDraftId = draft.Id,
+                    tenantId = destination.TenantId,
+                    leaseManagementId = rendered.LeaseManagementId,
+                    conversationId = portalMessage.ConversationId,
+                    messageId = portalMessage.Id,
+                },
+            })),
         _ => throw new InvalidOperationException(
             $"Unsupported tenant notice channel {destination.Channel}."),
     };
@@ -622,6 +681,7 @@ public sealed class AtomicNoticeDeliveryHandler
         LeaseManagementPartyRole PartyRole,
         NoticeDeliveryChannel Channel,
         string Destination,
+        int? RecipientUserId,
         int PropertyId,
         int UnitId);
 }

@@ -107,8 +107,7 @@ nullable `DeletedAt` soft-delete with a global query filter.
   old/new jsonb), `ActivityLog` (UI feed), `OutboxMessage` (sms/email payload + retry).
 - **Messaging**: `Conversation` (per-topic thread: `TenantId`, `Subject`, per-side
   `LandlordUnreadCount`/`TenantUnreadCount`, `LastMessageAt`/preview) + `ConversationMessage`
-  (`ConversationSenderRole` Landlord/Tenant, `Body`, `Channels` comma-separated). (`PortalMessage`
-  remains as the backfill source for the old ticket model.)
+  (`ConversationSenderRole` Landlord/Tenant, `Body`, `Channels` comma-separated).
 - **Auth**: `ApplicationUser : IdentityUser<int>` (**int PK**; nullable `PortfolioId`/`OwnerEntityId`/
   `TenantId`), `RefreshToken`, `UserAccount` (domain login row with `UserRole`).
 - **Stripe**: `PaymentTransaction`, `StripeWebhookEvent` (idempotent by event id).
