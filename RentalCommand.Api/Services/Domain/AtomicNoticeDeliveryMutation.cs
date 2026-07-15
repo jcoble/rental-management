@@ -206,22 +206,42 @@ public sealed class AtomicNoticeDeliveryHandler
                     .OrderBy(candidate => candidate.UserId)
                     .Select(candidate => candidate.UserId)
                     .First()
-            select new DeliveryProjection(
-                party.LeaseManagementPartyId, party.TenantId, party.Role,
-                NoticeDeliveryChannel.TenantPortal, access.UserId.ToString(),
-                party.PropertyId, party.UnitId);
+            select new
+            {
+                party.LeaseManagementPartyId,
+                party.TenantId,
+                PartyRole = party.Role,
+                Channel = NoticeDeliveryChannel.TenantPortal,
+                Destination = access.UserId.ToString(),
+                party.PropertyId,
+                party.UnitId,
+            };
         var email = eligibleParties
             .Where(row => command.Channels.Contains(NoticeDeliveryChannel.Email)
                 && foundation.SendEmail && row.Email != null && row.Email != "")
-            .Select(row => new DeliveryProjection(
-                row.LeaseManagementPartyId, row.TenantId, row.Role,
-                NoticeDeliveryChannel.Email, row.Email!, row.PropertyId, row.UnitId));
+            .Select(row => new
+            {
+                row.LeaseManagementPartyId,
+                row.TenantId,
+                PartyRole = row.Role,
+                Channel = NoticeDeliveryChannel.Email,
+                Destination = row.Email!,
+                row.PropertyId,
+                row.UnitId,
+            });
         var sms = eligibleParties
             .Where(row => command.Channels.Contains(NoticeDeliveryChannel.Sms)
                 && foundation.SendSms && row.Phone != null && row.Phone != "")
-            .Select(row => new DeliveryProjection(
-                row.LeaseManagementPartyId, row.TenantId, row.Role,
-                NoticeDeliveryChannel.Sms, row.Phone!, row.PropertyId, row.UnitId));
+            .Select(row => new
+            {
+                row.LeaseManagementPartyId,
+                row.TenantId,
+                PartyRole = row.Role,
+                Channel = NoticeDeliveryChannel.Sms,
+                Destination = row.Phone!,
+                row.PropertyId,
+                row.UnitId,
+            });
         var push =
             from party in eligibleParties
             join access in attempt.Persistence.Query<EffectiveTenantAccessProjection>().AsNoTracking()
@@ -239,17 +259,31 @@ public sealed class AtomicNoticeDeliveryHandler
                     .ThenByDescending(candidate => candidate.Id)
                     .Select(candidate => candidate.Id)
                     .First()
-            select new DeliveryProjection(
-                party.LeaseManagementPartyId, party.TenantId, party.Role,
-                NoticeDeliveryChannel.MobilePush, device.Token,
-                party.PropertyId, party.UnitId);
+            select new
+            {
+                party.LeaseManagementPartyId,
+                party.TenantId,
+                PartyRole = party.Role,
+                Channel = NoticeDeliveryChannel.MobilePush,
+                Destination = device.Token,
+                party.PropertyId,
+                party.UnitId,
+            };
 
-        var destinations = await portal.Union(email).Union(sms).Union(push)
+        var destinationRows = await portal.Union(email).Union(sms).Union(push)
             .OrderBy(row => row.TenantId)
             .ThenBy(row => row.Channel)
             .ThenBy(row => row.Destination)
             .TagWith("TSK-668 exact effective tenant notice recipients and destinations")
             .ToListAsync(ct);
+        var destinations = destinationRows.Select(row => new DeliveryProjection(
+            row.LeaseManagementPartyId,
+            row.TenantId,
+            row.PartyRole,
+            row.Channel,
+            row.Destination,
+            row.PropertyId,
+            row.UnitId)).ToList();
         if (destinations.Count == 0)
         {
             throw new InvalidOperationException(
