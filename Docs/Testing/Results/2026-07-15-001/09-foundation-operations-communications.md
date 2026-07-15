@@ -124,6 +124,10 @@ verified deployment/configuration fix at the refreshed SHA.
   then incorrectly renders **No security deposit accounts yet**.
 - **Additional source fix:** The deposits page now renders an explicit, retryable load error and says
   that no deposit records were changed, rather than presenting a timeout as an empty register.
+- **Live proof:** after the slow request exhausted its retry window, `/deposits` rendered `Security
+  deposits could not be loaded`, `Try again. No deposit records have been changed.`, and a **Try
+  again** button. It no longer lies that the register is empty. The server-side query remains a
+  release-performance blocker.
 - **Remaining boundary:** The count/page statements still compose canonical access, lifecycle, and
   `vw_security_deposit_balances`. A bounded review did not prove a dominant plan node, so this result
   records the blocker rather than introducing an unproven query rewrite.
@@ -170,6 +174,9 @@ verified deployment/configuration fix at the refreshed SHA.
   `Concat`, `Distinct`, and ordering before the final DTO projection. The operation remains one
   database-side SQL statement. The web editor also renders an explicit preview failure with Retry
   instead of silently hiding who will receive the topic.
+- **Live proof:** opening **Account and security** rendered `Rental Command Admin · Workspace`, the
+  saved email destination, enabled In-app/Mobile push/Email channels, and the explicit Workspace
+  Administrator fallback. The prior 500 is resolved.
 - **Landlord impact:** Responsibility routing is only understandable if the administrator can verify
   the effective recipient and why they receive the alert before saving.
 

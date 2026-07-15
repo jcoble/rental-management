@@ -26,4 +26,21 @@
 
 ## Outcome
 
-In progress.
+Partial pass. The release-blocking sign-in failure and every source defect repaired during this run
+are now proven against the protected preview. Unknown and wrong-password accounts receive the same
+visible error; valid administrator login succeeds; Guided Setup waits for canonical resume detection;
+Unit Scan names its inherited property and Unit; Team Routing shows its effective-recipient preview;
+and a newly generated anonymous application link accepts a submission that immediately appears in
+the authenticated Applications list.
+
+The public-application test exposed one additional PostgreSQL boundary after the form first loaded:
+`INSERT ... RETURNING` also requires token-scoped SELECT policy on the inserted application, audit,
+and outbox rows. Commit `ae9eb1cf` adds those policies without granting update/delete or ordinary
+workspace access. The focused foundation SQL contract passes 21/21 tests, and the exact policies
+were applied to the preserved preview schema before the successful browser submission.
+
+Known remaining release work is explicit rather than hidden: Units/list-detail, Accounting Reports,
+and Security Deposits still have slow server-side queries; Security Deposits now ends in a retryable
+error instead of a false empty state. Google OAuth still requires external callback registration,
+and the positive Property Manager, Leasing, Maintenance, Owner, and Tenant persona walkthroughs need
+activated test identities.

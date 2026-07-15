@@ -4,7 +4,8 @@ Date: 2026-07-15
 Tester: `foundation-rentals`  
 Source SHA: `8419a55ff9ae850ef833431ac1c5cff65fd85bd7`
 Environment: `https://rental-command.chimp-map.ts.net`  
-Status: Fail — source fixes pending serialized verification and preview refresh
+Status: Partial pass — contextual scan and public application intake pass live; lease lifecycle
+journeys still need an executed Agreement fixture and the Units query remains too slow
 
 ## Scenario
 
@@ -17,9 +18,9 @@ The exact refreshed preview SHA was exercised at a `1440 x 900` browser viewport
 global rental lists, all six Unit Command Center sections, global/contextual Scan/Add, the Leases
 list, one Ending relationship, its draft Agreement, and its ending-decision dialog render. The
 Units list now returns instead of loading forever, but remained severely slow and flaky (roughly
-11–20 seconds). A freshly generated public application link immediately returns 404 because the
-anonymous route has no token-scoped RLS coordinate; that blocks application submission, approval,
-move-in, and the later executed-Agreement correction/renewal journeys on this preview.
+11–20 seconds). The refreshed public-application implementation now passes its full anonymous-to-
+management journey: generate the link, open the form, submit, and see the Submitted row. Approval,
+move-in, and the executed-Agreement correction/renewal journeys still need suitable lifecycle data.
 
 ## Section Status
 
@@ -28,10 +29,10 @@ move-in, and the later executed-Agreement correction/renewal journeys on this pr
 | A. Global rental navigation and lists | Fail | All lists render, but Units takes roughly 11–20 seconds and can outlive the UI request window (BUG-2) |
 | B. One-rental and multi-rental setup | Blocked | Mutation proof deferred until the refreshed preview; source contract still requires one explicit Unit |
 | C. Unit Command Center | Pass with data concern | `/units/10` and all six top-level sections render; seeded facts disagree about possession/account/agreement state |
-| D. Contextual scan/import | Fail | Global chooser works; Unit launch does not visibly name the inherited Unit/property (source fix added) |
-| E. Applications and prepare move-in | Blocked | Freshly generated public link immediately returns 404 under anonymous RLS (BUG-4) |
-| F. Agreement draft/issue/sign/possession | Blocked | Ending relationship, draft version, household, tenant account, possession, and decision dialog render; no executed fixture and BUG-4 blocks creating one |
-| G. Correction/versioning | Blocked | No executed governing Agreement exists in demo data and BUG-4 blocks producing one through the UI |
+| D. Contextual scan/import | Partial pass | Unit launch visibly names `Eastland 8-Plex · Unit 1`; document extraction/confirmation still needs a supplied fixture |
+| E. Applications and prepare move-in | Partial pass | Anonymous link and submission pass; approval/prepare-move-in remain unexecuted |
+| F. Agreement draft/issue/sign/possession | Blocked | Ending relationship, draft version, household, tenant account, possession, and decision dialog render; no executed fixture exists |
+| G. Correction/versioning | Blocked | No executed governing Agreement exists in demo data |
 | H. Renewal/month-to-month | Blocked | Ending decision dialog renders all choices; successor workflow needs an executed governing Agreement |
 | Cross-cutting errors/security/query behavior | Fail | Dashboard and Units expose slow-query failures; global list paging/search otherwise remains URL/DB-backed |
 
@@ -66,7 +67,7 @@ move-in, and the later executed-Agreement correction/renewal journeys on this pr
   paged health rows, and document counts for only those returned Unit IDs. Verification is pending
   the orchestrator's serialized build/test and preview refresh.
 
-### BUG-4 — A freshly generated public application link is immediately invalid
+### BUG-4 — Resolved live — public link opens and submits under token-scoped RLS
 
 - **Severity:** Launch blocking; no applicant can enter the application-to-move-in journey.
 - **Repro:** Sign in, open `/applications`, click **Get application link**, then open the exact
@@ -76,12 +77,14 @@ move-in, and the later executed-Agreement correction/renewal journeys on this pr
 - **Root cause:** The anonymous request opens PostgreSQL with no workspace access context. RLS hides
   `Portfolios`, so the exact opaque token cannot resolve even though the authenticated rotation
   command just stored and returned it. Anonymous submission has the same boundary.
-- **Fix in working tree:** The connection interceptor now places a validated base64url token in a
-  dedicated GUC only for `/api/v1/public/applications/{token}`. A database-owned predicate grants
-  that exact token SELECT access only to form/occupancy dependencies and INSERT access only to
-  `RentalApplications` and `AtomicAuditLogs`; it grants no applicant-row SELECT, update, delete, or
-  ordinary workspace access. The duplicate-email precheck was removed and the existing unique
-  index violation remains the 409 guard. Focused API/data contract tests were added.
+- **Fix:** The connection interceptor places a validated base64url token in a dedicated GUC only for
+  `/api/v1/public/applications/{token}`. A database-owned predicate grants that token only the reads
+  and append operations required by intake; it grants no update/delete or ordinary workspace access.
+  PostgreSQL `INSERT ... RETURNING` also required token-scoped SELECT on the just-inserted application,
+  audit, and outbox rows, which commit `ae9eb1cf` now supplies.
+- **Live proof:** a fresh link opened the full anonymous form, `E2E Applicant` submitted successfully,
+  the public page rendered `Application submitted!`, and `/applications` immediately displayed the
+  new Submitted row. The focused foundation SQL contract passes 21/21 tests.
 
 ### BUG-3 — Lease list/detail routes retain a previous route's browser title
 
@@ -146,12 +149,12 @@ move-in, and the later executed-Agreement correction/renewal journeys on this pr
 - `/units/10`: Summary, Leasing/Listing/Applications, Tenant & lease, Money, Maintenance, and
   Documents & history all rendered with stable query-backed destinations.
 - Contextual Unit Scan/Add: dialog rendered and the missing human-readable context was reproduced.
-- `/applications`: generated a new public link; opening the exact returned link reproduced BUG-4.
+- `/applications`: generated a new public link, opened it anonymously, submitted one test applicant,
+  and verified the Submitted row in the authenticated list.
 - `/leases/17`: relationship detail and ending-decision dialog rendered; dialog was canceled without
   changing the seeded relationship.
 
 ## Created Test Data
 
-No application, lease, tenant, payment, or work-order records were created. Clicking **Get
-application link** rotated the demo portfolio's opaque public application token once; the returned
-link was invalid under anonymous RLS and no applicant data was submitted.
+One deliberately labeled sample application was created: `E2E Applicant` using
+`e2e.applicant.20260715@example.test`. No lease, tenant, payment, or work-order record was created.
