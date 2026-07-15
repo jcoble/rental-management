@@ -33,9 +33,48 @@ internal sealed class AtomicAccountSecurityPersistence : IAtomicAccountSecurityP
         return new AtomicInitialWorkspaceBootstrap(row.PortfolioId, row.AccessContextId);
     }
 
+    public async Task<AtomicWorkspaceInvitationActivation?> ActivateWorkspaceInvitationAsync(
+        long invitationId,
+        int invitedUserId,
+        string tokenHash,
+        string passwordHash,
+        string newSecurityStamp,
+        string newConcurrencyStamp,
+        CancellationToken ct = default)
+    {
+        if (invitationId <= 0 || invitedUserId <= 0)
+        {
+            return null;
+        }
+
+        var row = await _db.Database.SqlQuery<WorkspaceInvitationActivationRow>($"""
+                SELECT * FROM rc_activate_workspace_invitation(
+                    {invitationId}, {invitedUserId}, {tokenHash}, {passwordHash},
+                    {newSecurityStamp}, {newConcurrencyStamp})
+                """)
+            .SingleOrDefaultAsync(ct);
+        return row is null
+            ? null
+            : new AtomicWorkspaceInvitationActivation(
+                row.PortfolioId,
+                row.WorkspaceMembershipId,
+                row.AccessContextId,
+                row.InvitedUserId,
+                row.AcceptedAtUtc);
+    }
+
     private sealed class InitialWorkspaceBootstrapRow
     {
         public int PortfolioId { get; set; }
         public int AccessContextId { get; set; }
+    }
+
+    private sealed class WorkspaceInvitationActivationRow
+    {
+        public int PortfolioId { get; set; }
+        public int WorkspaceMembershipId { get; set; }
+        public int AccessContextId { get; set; }
+        public int InvitedUserId { get; set; }
+        public DateTime AcceptedAtUtc { get; set; }
     }
 }

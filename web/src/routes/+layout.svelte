@@ -23,6 +23,7 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { shouldRetryQuery } from '$lib/api/query-retry';
 	import { onNavigate } from '$app/navigation';
+	import { browser } from '$app/environment';
 	import { initAuth } from '$lib/stores/auth.svelte';
 	import { env } from '$env/dynamic/public';
 	import SimClockPanel from '$lib/dev/SimClockPanel.svelte';
@@ -114,8 +115,21 @@
 		}
 	}
 
-	// Seed the runes auth store from server-provided session data. Re-runs when
-	// the server data changes (e.g. after login/logout navigations).
+	// Seed before protected child queries are created. Waiting for an effect here leaves a short
+	// post-login window where the token expiration is null; authenticated children interpret that
+	// as expired and can rotate a brand-new refresh credential unnecessarily.
+	// svelte-ignore state_referenced_locally
+	if (browser) {
+		initAuth(
+			data.user ?? null,
+			data.accessToken ?? null,
+			data.accessTokenExpiration ? new Date(data.accessTokenExpiration) : null,
+			data.access ?? null,
+			data.isPlatformAdmin ?? false
+		);
+	}
+
+	// Reconcile again when server data changes (e.g. login/logout or context navigation).
 	$effect(() => {
 		initAuth(
 			data.user ?? null,

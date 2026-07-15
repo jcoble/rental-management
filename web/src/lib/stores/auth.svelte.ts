@@ -18,6 +18,10 @@ let accessTokenExpiration = $state<Date | null>(null);
 let accessEnvelope = $state<AccessEnvelope | null>(null);
 let activeExperience = $state<WorkspaceExperience | null>(null);
 let isLoading = $state(true);
+let resolveInitialization: (() => void) | null = null;
+const initialization = new Promise<void>((resolve) => {
+	resolveInitialization = resolve;
+});
 // Resolved server-side from the PLATFORM_ADMIN_EMAILS allowlist (root +layout.server.ts).
 // There is no super-admin role; this boolean gates the platform-operator shell (F6/TSK-212).
 let platformAdmin = $state(false);
@@ -58,6 +62,18 @@ export function initAuth(
 	activeExperience = initialAccess?.selectedContext.activeExperience ?? null;
 	platformAdmin = initialPlatformAdmin;
 	isLoading = false;
+	resolveInitialization?.();
+	resolveInitialization = null;
+}
+
+/**
+ * Wait until the root layout has seeded the browser auth mirror. Protected child queries can be
+ * constructed before the root layout instance body runs, so treating the initial null token as an
+ * expired session would rotate (or reject) a brand-new refresh credential during hydration.
+ */
+export async function waitForAuthInitialization(): Promise<void> {
+	if (!browser || !isLoading) return;
+	await initialization;
 }
 
 /** Set auth after a successful login (client-side). */

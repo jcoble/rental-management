@@ -221,7 +221,7 @@ public sealed class FoundationBaselinePostgreSqlTests
             "OR rc_pre_auth_account_security_audit_allows(\n" +
             "    \"PortfolioId\", \"AttemptId\", \"CommandType\", \"CommandIdempotencyKey\", \"MutationOrdinal\",");
         normalizedSql.Should().Contain(
-            "target_command_type IN ( 'auth.email.confirm', 'auth.email.google-confirm', 'auth.password.reset')");
+            "target_command_type IN ( 'auth.email.confirm', 'auth.email.google-confirm', 'auth.password.reset', 'workspace-invitation.activate')");
         normalizedSql.Should().Contain(
             "target_command_idempotency_key ~ ('^' || target_user_id::text || ':[0-9a-f]{64}$')");
         normalizedSql.Should().Contain("target_mutation_ordinal = 1");
@@ -387,7 +387,7 @@ public sealed class FoundationBaselinePostgreSqlTests
             "OwnerEntities", "OwnerUserAccesses", "Portfolios", "Properties", "RoleProfileCapabilities",
             "RoleProfiles", "SimulationClocks", "SystemNoticeTemplateVersions", "TenantAccounts",
             "TenantUserAccesses", "Units", "WorkOrders", "WorkOrderResponsibilities",
-            "WorkspaceAccessContexts", "WorkspaceMemberships", "WorkspaceNoticeTemplateVersions",
+            "WorkspaceAccessContexts", "WorkspaceInvitations", "WorkspaceMemberships", "WorkspaceNoticeTemplateVersions",
         ]);
         FoundationBaselinePostgreSql.RlsAuthoritySelectViews.Should().BeEquivalentTo(
             ["vw_access_envelopes", "vw_effective_tenant_access"]);
@@ -397,6 +397,8 @@ public sealed class FoundationBaselinePostgreSqlTests
             "Portfolios", "TeamRoutingRules", "TenantNoticePolicies", "UserAlertPreferences",
             "WorkspaceAccessContexts", "WorkspaceMemberships", "WorkspaceNoticeTemplateVersions",
         ]);
+        FoundationBaselinePostgreSql.RlsAuthorityUpdateTables.Should().BeEquivalentTo(
+            ["AspNetUsers", "WorkspaceInvitations"]);
         FoundationBaselinePostgreSql.RlsAuthorityExecuteFunctions.Should().BeEquivalentTo(
             ["rc_business_date(integer)", "rc_effective_now_utc(integer)"]);
         FoundationBaselinePostgreSql.RlsAuthorityOwnedFunctions.Should().BeEquivalentTo(
@@ -412,6 +414,7 @@ public sealed class FoundationBaselinePostgreSqlTests
             "rc_list_effective_access_contexts(integer, timestamp with time zone)",
             "rc_get_access_envelope_for_session(uuid, integer, integer, bigint, timestamp with time zone)",
             "rc_bootstrap_initial_workspace(integer, text, text, text, text, timestamp with time zone)",
+            "rc_activate_workspace_invitation(bigint, integer, text, text, text, text)",
         ]);
 
         var normalizedAuthoritySql = Regex.Replace(
@@ -432,7 +435,8 @@ public sealed class FoundationBaselinePostgreSqlTests
         directlyReferencedRelations.Should().BeSubsetOf(
             FoundationBaselinePostgreSql.RlsAuthoritySelectTables
                 .Concat(FoundationBaselinePostgreSql.RlsAuthoritySelectViews)
-                .Concat(FoundationBaselinePostgreSql.RlsAuthorityInsertTables),
+                .Concat(FoundationBaselinePostgreSql.RlsAuthorityInsertTables)
+                .Concat(FoundationBaselinePostgreSql.RlsAuthorityUpdateTables),
             "every directly referenced authority relation must have an explicit minimum grant");
 
         var insertTargets = Regex.Matches(
@@ -476,6 +480,13 @@ public sealed class FoundationBaselinePostgreSqlTests
                 $"GRANT INSERT ON TABLE \"{table}\" TO rentalcommand_rls_authority;");
             DropSql.Should().Contain(
                 $"REVOKE INSERT ON TABLE \"{table}\" FROM rentalcommand_rls_authority;");
+        }
+        foreach (var table in FoundationBaselinePostgreSql.RlsAuthorityUpdateTables)
+        {
+            CreateSql.Should().Contain(
+                $"GRANT UPDATE ON TABLE \"{table}\" TO rentalcommand_rls_authority;");
+            DropSql.Should().Contain(
+                $"REVOKE UPDATE ON TABLE \"{table}\" FROM rentalcommand_rls_authority;");
         }
         foreach (var function in FoundationBaselinePostgreSql.RlsAuthorityExecuteFunctions)
         {

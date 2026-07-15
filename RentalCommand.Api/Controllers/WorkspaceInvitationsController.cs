@@ -1,4 +1,3 @@
-using System.Data;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Authorization;
@@ -7,8 +6,9 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Data;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
-using RentalCommand.Core.Enums;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Controllers;
@@ -20,15 +20,20 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public sealed class WorkspaceInvitationsController : ControllerBase
 {
+    private static readonly AtomicJsonResultCodec<ActivateWorkspaceInvitationResult> ActivationCodec =
+        new("workspace-invitation-activation-result:v1");
     private readonly RentalCommandDbContext _db;
     private readonly UserManager<ApplicationUser> _users;
+    private readonly IAtomicUnitOfWork _atomic;
 
     public WorkspaceInvitationsController(
         RentalCommandDbContext db,
-        UserManager<ApplicationUser> users)
+        UserManager<ApplicationUser> users,
+        IAtomicUnitOfWork atomic)
     {
         _db = db;
         _users = users;
+        _atomic = atomic;
     }
 
     [HttpPost("activate")]
@@ -42,22 +47,78 @@ public sealed class WorkspaceInvitationsController : ControllerBase
             return InvalidInvitation();
         }
 
-        ct.ThrowIfCancellationRequested();
-        return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+        var tokenHash = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(token)))
+            .ToLowerInvariant();
+        var invitation = await _db.WorkspaceInvitations
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .Include(candidate => candidate.InvitedUser)
+            .SingleOrDefaultAsync(candidate =>
+                candidate.TokenHash == tokenHash &&
+                candidate.AcceptedAtUtc == null &&
+                candidate.RevokedAtUtc == null &&
+                candidate.ExpiresAtUtc > DateTime.UtcNow &&
+                candidate.InvitedUser!.PasswordHash == null,
+                ct);
+        if (invitation?.InvitedUser is null)
         {
-            error = "Workspace invitation activation is temporarily unavailable while token admission is moved to a database-validated command.",
-        });
+            return InvalidInvitation();
+        }
+
+        var passwordErrors = new List<IdentityError>();
+        foreach (var validator in _users.PasswordValidators)
+        {
+            var validation = await validator.ValidateAsync(
+                _users, invitation.InvitedUser, request.Password);
+            if (!validation.Succeeded)
+            {
+                passwordErrors.AddRange(validation.Errors);
+            }
+        }
+        if (passwordErrors.Count > 0)
+        {
+            return ValidationProblem(new ValidationProblemDetails(
+                new Dictionary<string, string[]>
+                {
+                    [nameof(request.Password)] = passwordErrors
+                        .Select(error => error.Description)
+                        .ToArray(),
+                })
+            {
+                Title = "Choose a stronger password.",
+                Status = StatusCodes.Status400BadRequest,
+            });
+        }
+
+        var command = new ActivateWorkspaceInvitationCommand(
+            invitation.Id,
+            invitation.InvitedUserId,
+            tokenHash,
+            _users.PasswordHasher.HashPassword(invitation.InvitedUser, request.Password),
+            Guid.NewGuid().ToString("N"),
+            Guid.NewGuid().ToString("N"));
+        try
+        {
+            var result = (await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "workspace-invitation.activate",
+                    $"{invitation.InvitedUserId}:{tokenHash}"),
+                command,
+                ActivationCodec,
+                ct)).Value;
+            return result.Outcome == ActivateWorkspaceInvitationOutcome.Activated
+                ? Ok(new { activated = true })
+                : InvalidInvitation();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return InvalidInvitation();
+        }
     }
 
     private IActionResult InvalidInvitation() => BadRequest(new
     {
         error = "This activation link is invalid, expired, or has already been used.",
     });
-
-    public sealed class LockedInvitationRow
-    {
-        public long Id { get; set; }
-        public int PortfolioId { get; set; }
-        public DateTime WallClockUtc { get; set; }
-    }
 }

@@ -288,6 +288,10 @@ builder.Services.AddAtomicCommandHandler<
     CreateWorkspaceMembershipResult,
     CreateWorkspaceMembershipHandler>();
 builder.Services.AddAtomicCommandHandler<
+    ActivateWorkspaceInvitationCommand,
+    ActivateWorkspaceInvitationResult,
+    ActivateWorkspaceInvitationHandler>();
+builder.Services.AddAtomicCommandHandler<
     AddWorkspaceRoleAssignmentCommand,
     WorkspaceTeamMutationResult,
     AddWorkspaceRoleAssignmentHandler>();

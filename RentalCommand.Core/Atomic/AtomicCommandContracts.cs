@@ -336,7 +336,28 @@ public interface IAtomicAccountSecurityPersistence
         string ownerEmail,
         DateTime createdAtUtc,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Atomically validates and consumes one Team invitation through the database-owned pre-login
+    /// authority boundary. A missing result means the token is invalid, expired, already consumed,
+    /// or no longer points at active workspace authority.
+    /// </summary>
+    Task<AtomicWorkspaceInvitationActivation?> ActivateWorkspaceInvitationAsync(
+        long invitationId,
+        int invitedUserId,
+        string tokenHash,
+        string passwordHash,
+        string newSecurityStamp,
+        string newConcurrencyStamp,
+        CancellationToken ct = default);
 }
+
+public sealed record AtomicWorkspaceInvitationActivation(
+    int PortfolioId,
+    int WorkspaceMembershipId,
+    int AccessContextId,
+    int InvitedUserId,
+    DateTime AcceptedAtUtc);
 
 /// <summary>Kernel-owned set-based inspection mutations that cannot be expressed as tracked rows.</summary>
 public interface IAtomicInspectionPersistence
@@ -812,6 +833,19 @@ public interface IAtomicPersistenceSession
 
     Task<AtomicEffectiveLoginContext?> ReadEffectiveLoginContextRootAsync(
         int userId,
+        DateTime effectiveAtUtc,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Revalidates an anonymous authentication transition against the live session and DB-owned
+    /// effective-context projection, then establishes that exact workspace as transaction-local
+    /// RLS scope. This is not a general scope override: no caller-supplied portfolio or revision is
+    /// accepted, and no scope is established unless PostgreSQL resolves the complete tuple.
+    /// </summary>
+    Task<AtomicEffectiveLoginContext?> EstablishPreAuthenticatedWorkspaceScopeAsync(
+        Guid authSessionId,
+        int userId,
+        int selectedAccessContextId,
         DateTime effectiveAtUtc,
         CancellationToken ct = default);
 

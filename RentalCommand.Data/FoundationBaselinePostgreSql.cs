@@ -280,6 +280,7 @@ internal static class FoundationBaselinePostgreSql
         "WorkOrders",
         "WorkOrderResponsibilities",
         "WorkspaceAccessContexts",
+        "WorkspaceInvitations",
         "WorkspaceMemberships",
         "WorkspaceNoticeTemplateVersions",
     ];
@@ -305,6 +306,12 @@ internal static class FoundationBaselinePostgreSql
         "WorkspaceNoticeTemplateVersions",
     ];
 
+    internal static IReadOnlyList<string> RlsAuthorityUpdateTables { get; } =
+    [
+        "AspNetUsers",
+        "WorkspaceInvitations",
+    ];
+
     internal static IReadOnlyList<string> RlsAuthorityExecuteFunctions { get; } =
     [
         "rc_business_date(integer)",
@@ -324,6 +331,7 @@ internal static class FoundationBaselinePostgreSql
         "rc_list_effective_access_contexts(integer, timestamp with time zone)",
         "rc_get_access_envelope_for_session(uuid, integer, integer, bigint, timestamp with time zone)",
         "rc_bootstrap_initial_workspace(integer, text, text, text, text, timestamp with time zone)",
+        "rc_activate_workspace_invitation(bigint, integer, text, text, text, text)",
     ];
 
     private static IReadOnlyList<string> MappedTables { get; } =
@@ -634,6 +642,8 @@ internal static class FoundationBaselinePostgreSql
             $"GRANT SELECT ON TABLE {Quote(view)} TO rentalcommand_rls_authority;"));
         statements.AddRange(RlsAuthorityInsertTables.Select(table =>
             $"GRANT INSERT ON TABLE {Quote(table)} TO rentalcommand_rls_authority;"));
+        statements.AddRange(RlsAuthorityUpdateTables.Select(table =>
+            $"GRANT UPDATE ON TABLE {Quote(table)} TO rentalcommand_rls_authority;"));
         statements.AddRange(RlsAuthorityExecuteFunctions.Select(function =>
             $"GRANT EXECUTE ON FUNCTION {function} TO rentalcommand_rls_authority;"));
         statements.Add(BuildSequenceGrantSql(
@@ -671,6 +681,8 @@ internal static class FoundationBaselinePostgreSql
             $"REVOKE EXECUTE ON FUNCTION {function} FROM rentalcommand_rls_authority;"));
         statements.AddRange(RlsAuthorityInsertTables.Select(table =>
             $"REVOKE INSERT ON TABLE {Quote(table)} FROM rentalcommand_rls_authority;"));
+        statements.AddRange(RlsAuthorityUpdateTables.Select(table =>
+            $"REVOKE UPDATE ON TABLE {Quote(table)} FROM rentalcommand_rls_authority;"));
         statements.AddRange(RlsAuthoritySelectViews.Select(view =>
             $"REVOKE SELECT ON TABLE {Quote(view)} FROM rentalcommand_rls_authority;"));
         statements.AddRange(RlsAuthoritySelectTables.Select(table =>
@@ -1402,6 +1414,98 @@ internal static class FoundationBaselinePostgreSql
         GRANT EXECUTE ON FUNCTION rc_get_access_envelope_for_session(uuid, integer, integer, bigint, timestamp with time zone)
           TO rentalcommand_api;
 
+        CREATE OR REPLACE FUNCTION rc_activate_workspace_invitation(
+          target_invitation_id bigint,
+          target_invited_user_id integer,
+          target_token_hash text,
+          target_password_hash text,
+          target_security_stamp text,
+          target_concurrency_stamp text)
+        RETURNS TABLE (
+          "PortfolioId" integer,
+          "WorkspaceMembershipId" integer,
+          "AccessContextId" integer,
+          "InvitedUserId" integer,
+          "AcceptedAtUtc" timestamp with time zone)
+        LANGUAGE plpgsql
+        SECURITY DEFINER
+        SET search_path = pg_catalog, public
+        AS $function$
+        DECLARE
+          accepted_at_utc timestamp with time zone := clock_timestamp();
+        BEGIN
+          IF session_user IS DISTINCT FROM 'rentalcommand_api' THEN
+            RETURN;
+          END IF;
+
+          RETURN QUERY
+          WITH candidate AS MATERIALIZED (
+            SELECT invitation."Id", invitation."PortfolioId",
+                   invitation."WorkspaceMembershipId", invitation."InvitedUserId",
+                   membership."AccessContextId"
+            FROM public."WorkspaceInvitations" invitation
+            JOIN public."WorkspaceMemberships" membership
+              ON membership."Id" = invitation."WorkspaceMembershipId"
+             AND membership."PortfolioId" = invitation."PortfolioId"
+            JOIN public."WorkspaceAccessContexts" access_context
+              ON access_context."Id" = membership."AccessContextId"
+             AND access_context."PortfolioId" = membership."PortfolioId"
+             AND access_context."UserId" = invitation."InvitedUserId"
+            JOIN public."AspNetUsers" invited_user
+              ON invited_user."Id" = invitation."InvitedUserId"
+            JOIN public."Portfolios" portfolio
+              ON portfolio."Id" = invitation."PortfolioId"
+             AND portfolio."DeletedAt" IS NULL
+            WHERE invitation."Id" = target_invitation_id
+              AND invitation."InvitedUserId" = target_invited_user_id
+              AND invitation."TokenHash" = target_token_hash
+              AND invitation."AcceptedAtUtc" IS NULL
+              AND invitation."RevokedAtUtc" IS NULL
+              AND invitation."ExpiresAtUtc" > accepted_at_utc
+              AND membership."Status" = 'Active'
+              AND membership."SuspendedAtUtc" IS NULL
+              AND membership."RevokedAtUtc" IS NULL
+              AND access_context."Status" = 'Active'
+              AND access_context."SuspendedAtUtc" IS NULL
+              AND access_context."RevokedAtUtc" IS NULL
+              AND invited_user."PasswordHash" IS NULL
+            FOR UPDATE OF invitation, invited_user
+          ), updated_user AS (
+            UPDATE public."AspNetUsers" invited_user
+            SET "PasswordHash" = target_password_hash,
+                "EmailConfirmed" = TRUE,
+                "SecurityStamp" = target_security_stamp,
+                "ConcurrencyStamp" = target_concurrency_stamp,
+                "AccessFailedCount" = 0,
+                "LockoutEnd" = NULL
+            FROM candidate
+            WHERE invited_user."Id" = candidate."InvitedUserId"
+            RETURNING invited_user."Id"
+          ), accepted_invitation AS (
+            UPDATE public."WorkspaceInvitations" invitation
+            SET "AcceptedAtUtc" = accepted_at_utc
+            FROM candidate, updated_user
+            WHERE invitation."Id" = candidate."Id"
+              AND updated_user."Id" = candidate."InvitedUserId"
+            RETURNING invitation."PortfolioId", invitation."WorkspaceMembershipId",
+                      candidate."AccessContextId", invitation."InvitedUserId"
+          )
+          SELECT accepted_invitation."PortfolioId",
+                 accepted_invitation."WorkspaceMembershipId",
+                 accepted_invitation."AccessContextId",
+                 accepted_invitation."InvitedUserId",
+                 accepted_at_utc
+          FROM accepted_invitation;
+        END;
+        $function$;
+
+        ALTER FUNCTION rc_activate_workspace_invitation(bigint, integer, text, text, text, text)
+          OWNER TO rentalcommand_rls_authority;
+        REVOKE ALL ON FUNCTION rc_activate_workspace_invitation(bigint, integer, text, text, text, text)
+          FROM PUBLIC;
+        GRANT EXECUTE ON FUNCTION rc_activate_workspace_invitation(bigint, integer, text, text, text, text)
+          TO rentalcommand_api;
+
         CREATE OR REPLACE FUNCTION rc_pre_auth_email_audit_allows(
           target_portfolio_id integer,
           target_attempt_id uuid,
@@ -1500,7 +1604,8 @@ internal static class FoundationBaselinePostgreSql
              AND target_command_type IN (
                'auth.email.confirm',
                'auth.email.google-confirm',
-               'auth.password.reset')
+               'auth.password.reset',
+               'workspace-invitation.activate')
              AND target_command_idempotency_key ~
                ('^' || target_user_id::text || ':[0-9a-f]{64}$')
              AND target_mutation_ordinal = 1
@@ -1524,7 +1629,11 @@ internal static class FoundationBaselinePostgreSql
                OR
                (target_command_type = 'auth.password.reset'
                 AND target_new_values ->> 'SecurityEvent' = 'PasswordReset'
-                AND target_change_reason = 'Password reset completed'))
+                AND target_change_reason = 'Password reset completed')
+               OR
+               (target_command_type = 'workspace-invitation.activate'
+                AND target_new_values ->> 'SecurityEvent' = 'WorkspaceInvitationActivated'
+                AND target_change_reason = 'Workspace invitation activated'))
              AND (target_command_type <> 'auth.email.google-confirm'
                   OR split_part(target_command_idempotency_key, ':', 2) =
                      target_new_values ->> 'SecurityIntentHash')
@@ -1533,23 +1642,45 @@ internal static class FoundationBaselinePostgreSql
                FROM public."AspNetUsers" user_row
                WHERE user_row."Id" = target_user_id
                  AND user_row."EmailConfirmed" = TRUE
-                 AND (target_command_type <> 'auth.password.reset'
+                 AND (target_command_type NOT IN (
+                        'auth.password.reset', 'workspace-invitation.activate')
                       OR (user_row."PasswordHash" IS NOT NULL
                           AND user_row."SecurityStamp" IS NOT NULL
                           AND user_row."AccessFailedCount" = 0
                           AND user_row."LockoutEnd" IS NULL))
                  AND user_row.xmin = pg_current_xact_id()::xid)
-             AND EXISTS (
-               SELECT 1
-               FROM (
-                 SELECT option."AccessContextId", option."PortfolioId"
-                 FROM public.rc_list_effective_access_contexts(
-                   target_user_id, clock_timestamp()) option
-                 ORDER BY option."AccessContextId"
-                 LIMIT 1) root
-               WHERE root."PortfolioId" = target_portfolio_id
-                 AND root."AccessContextId" =
-                   (target_new_values ->> 'AuditRootAccessContextId')::integer)
+             AND (
+               (target_command_type = 'workspace-invitation.activate'
+                AND split_part(target_command_idempotency_key, ':', 2) =
+                    target_new_values ->> 'SecurityIntentHash'
+                AND EXISTS (
+                  SELECT 1
+                  FROM public."WorkspaceInvitations" invitation
+                  JOIN public."WorkspaceMemberships" membership
+                    ON membership."Id" = invitation."WorkspaceMembershipId"
+                   AND membership."PortfolioId" = invitation."PortfolioId"
+                  WHERE invitation."Id" = (target_new_values ->> 'InvitationId')::bigint
+                    AND invitation."InvitedUserId" = target_user_id
+                    AND invitation."PortfolioId" = target_portfolio_id
+                    AND invitation."AcceptedAtUtc" IS NOT NULL
+                    AND invitation.xmin = pg_current_xact_id()::xid
+                    AND membership."Id" =
+                        (target_new_values ->> 'WorkspaceMembershipId')::integer
+                    AND membership."AccessContextId" =
+                        (target_new_values ->> 'AuditRootAccessContextId')::integer))
+               OR
+               (target_command_type <> 'workspace-invitation.activate'
+                AND EXISTS (
+                  SELECT 1
+                  FROM (
+                    SELECT option."AccessContextId", option."PortfolioId"
+                    FROM public.rc_list_effective_access_contexts(
+                      target_user_id, clock_timestamp()) option
+                    ORDER BY option."AccessContextId"
+                    LIMIT 1) root
+                  WHERE root."PortfolioId" = target_portfolio_id
+                    AND root."AccessContextId" =
+                      (target_new_values ->> 'AuditRootAccessContextId')::integer)))
              AND EXISTS (
                SELECT 1
                FROM public."AtomicCommandReceipts" receipt
@@ -1701,6 +1832,7 @@ internal static class FoundationBaselinePostgreSql
         """;
 
     private const string DropRlsAuthorityFunctions = """
+        DROP FUNCTION IF EXISTS rc_activate_workspace_invitation(bigint, integer, text, text, text, text);
         DROP FUNCTION IF EXISTS rc_bootstrap_initial_workspace(integer, text, text, text, text, timestamp with time zone);
         DROP FUNCTION IF EXISTS rc_get_access_envelope_for_session(
           uuid, integer, integer, bigint, timestamp with time zone);

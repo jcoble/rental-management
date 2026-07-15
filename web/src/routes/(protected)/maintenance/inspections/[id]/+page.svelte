@@ -335,8 +335,16 @@
 		},
 	}));
 
-	// Combine the just-completed result with any IDs already on a reloaded inspection.
-	const createdWorkOrderIds = $derived(completeResult?.createdWorkOrderIds ?? []);
+	// Keep follow-up work orders visible after reload. The completion response provides them
+	// immediately; the durable item relationship is the source of truth on later visits.
+	const createdWorkOrderIds = $derived.by(() => [
+		...new Set([
+			...(completeResult?.createdWorkOrderIds ?? []),
+			...(inspection?.items ?? [])
+				.map((item) => item.spawnedWorkOrderId)
+				.filter((workOrderId): workOrderId is number => typeof workOrderId === 'number' && workOrderId > 0),
+		]),
+	]);
 
 	// --- Report download ---
 	let downloadingReport = $state(false);

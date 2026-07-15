@@ -497,6 +497,50 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
                     row.TotalEffectiveContexts);
         }
 
+        public async Task<AtomicEffectiveLoginContext?> EstablishPreAuthenticatedWorkspaceScopeAsync(
+            Guid authSessionId,
+            int userId,
+            int selectedAccessContextId,
+            DateTime effectiveAtUtc,
+            CancellationToken ct = default)
+        {
+            if (authSessionId == Guid.Empty || userId <= 0 || selectedAccessContextId <= 0)
+            {
+                return null;
+            }
+
+            // The SECURITY DEFINER projection supplies the portfolio and revision. The caller can
+            // name only the already-discovered session/user/context tuple, never a portfolio or a
+            // revision. set_config(..., true) confines the resolved scope to this atomic transaction.
+            var row = await _db.Database.SqlQuery<ActivatedPreAuthScopeRow>($$"""
+                    SELECT option."AccessContextId", option."PortfolioId",
+                           option."AccessRevision", option."TotalEffectiveContexts",
+                           concat(
+                               set_config('app.current_portfolio_id', option."PortfolioId"::text, true),
+                               set_config('app.auth_session_id', session."Id"::text, true),
+                               set_config('app.current_user_id', session."UserId"::text, true),
+                               set_config('app.current_access_context_id', option."AccessContextId"::text, true),
+                               set_config('app.access_revision', option."AccessRevision"::text, true)) AS "ScopeActivation"
+                    FROM rc_list_effective_access_contexts({{userId}}, {{effectiveAtUtc}}) option
+                    JOIN "AuthSessions" session
+                      ON session."Id" = {{authSessionId}}
+                     AND session."UserId" = {{userId}}
+                     AND session."ActiveAccessContextId" = option."AccessContextId"
+                     AND session."Status" = 'Active'
+                     AND session."RevokedAtUtc" IS NULL
+                     AND session."ExpiresAtUtc" > {{effectiveAtUtc}}
+                    WHERE option."AccessContextId" = {{selectedAccessContextId}}
+                    """)
+                .SingleOrDefaultAsync(ct);
+            return row is null
+                ? null
+                : new AtomicEffectiveLoginContext(
+                    row.AccessContextId,
+                    row.PortfolioId,
+                    row.AccessRevision,
+                    row.TotalEffectiveContexts);
+        }
+
         public Task<bool> IsScanDraftAuthorizedForReviewAsync(
             WorkspaceReadScope scope,
             int draftId,
@@ -664,6 +708,15 @@ public sealed class AtomicUnitOfWork : IAtomicUnitOfWork
             public int PortfolioId { get; init; }
             public long AccessRevision { get; init; }
             public int TotalEffectiveContexts { get; init; }
+        }
+
+        private sealed class ActivatedPreAuthScopeRow
+        {
+            public int AccessContextId { get; init; }
+            public int PortfolioId { get; init; }
+            public long AccessRevision { get; init; }
+            public int TotalEffectiveContexts { get; init; }
+            public string ScopeActivation { get; init; } = string.Empty;
         }
     }
 }
