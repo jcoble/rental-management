@@ -48,13 +48,16 @@ public class AccountingService : IAccountingService
         CancellationToken ct)
     {
         // Expense totals grouped by Schedule E category (soft-deleted expenses are excluded by the
-        // global query filter).
-        var categoryGroups = await _db.Expenses
+        // global query filter). Keep the authorized source reusable so the category breakdown and
+        // the headline rollup are the only two database statements required by this page.
+        var authorizedExpenses = _db.Expenses
             .AsNoTracking()
             .Where(e =>
                 e.PortfolioId == portfolioId &&
                 e.PropertyId != null &&
-                authorizedProperties.Any(property => property.Id == e.PropertyId))
+                authorizedProperties.Any(property => property.Id == e.PropertyId));
+
+        var categoryGroups = await authorizedExpenses
             .GroupBy(e => e.Category)
             .Select(g => new
             {
@@ -75,54 +78,73 @@ public class AccountingService : IAccountingService
             })
             .ToList();
 
-        var expenseTotal = await _db.Expenses
-            .AsNoTracking()
-            .Where(e =>
-                e.PortfolioId == portfolioId &&
-                e.PropertyId != null &&
-                authorizedProperties.Any(property => property.Id == e.PropertyId))
-            .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
-
-        var totalExpenses = expenseTotal;
-
         // Payment collection rollup. Collected cash remains historical; operational receivables are
         // limited to possession-backed Occupied/Ending relationships. Agreement expiry by itself does
-        // not end possession or erase an amount still owed by a current resident.
-        var collectedRaw = await TenantIncomeQuery(portfolioId, authorizedProperties)
+        // not end possession or erase an amount still owed by a current resident. Each source is
+        // aggregated before joining to the one portfolio anchor, so PostgreSQL scans each relation
+        // once and returns the complete headline rollup in one statement.
+        var expenseRollupQuery = authorizedExpenses
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                Collected = g.Sum(row => row.Amount),
-            })
-            .FirstOrDefaultAsync(ct);
+                Key = g.Key,
+                TotalExpenses = g.Sum(expense => (decimal?)expense.Amount),
+            });
 
-        var receivablesRaw = await CurrentTenantBalanceQuery(portfolioId, authorizedProperties)
+        var collectedRollupQuery = TenantIncomeQuery(portfolioId, authorizedProperties)
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                Outstanding = g.Sum(balance => balance.ReceivableBalance > 0m
+                Key = g.Key,
+                Collected = g.Sum(row => (decimal?)row.Amount),
+            });
+
+        var receivablesRollupQuery = CurrentTenantBalanceQuery(portfolioId, authorizedProperties)
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Key = g.Key,
+                Outstanding = g.Sum(balance => (decimal?)(balance.ReceivableBalance > 0m
                     ? balance.ReceivableBalance
-                    : 0m),
-                Overdue = g.Sum(balance => balance.PastDueAmount),
-                OverdueCount = g.Sum(balance => balance.PastDueCount),
-            })
-            .FirstOrDefaultAsync(ct);
+                    : 0m)),
+                Overdue = g.Sum(balance => (decimal?)balance.PastDueAmount),
+                OverdueCount = g.Sum(balance => (int?)balance.PastDueCount),
+            });
+
+        var raw = await (
+                from portfolio in _db.Portfolios.AsNoTracking()
+                where portfolio.Id == portfolioId
+                join expense in expenseRollupQuery on 1 equals expense.Key into expenseRows
+                from expense in expenseRows.DefaultIfEmpty()
+                join collected in collectedRollupQuery on 1 equals collected.Key into collectedRows
+                from collected in collectedRows.DefaultIfEmpty()
+                join receivables in receivablesRollupQuery on 1 equals receivables.Key into receivableRows
+                from receivables in receivableRows.DefaultIfEmpty()
+                select new
+                {
+                    TotalExpenses = expense.TotalExpenses ?? 0m,
+                    Collected = collected.Collected ?? 0m,
+                    Outstanding = receivables.Outstanding ?? 0m,
+                    Overdue = receivables.Overdue ?? 0m,
+                    OverdueCount = receivables.OverdueCount ?? 0,
+                })
+            .SingleAsync(ct);
 
         var rollup = new PaymentRollup
         {
-            Collected = collectedRaw?.Collected ?? 0m,
-            Outstanding = receivablesRaw?.Outstanding ?? 0m,
-            Overdue = receivablesRaw?.Overdue ?? 0m,
-            OverdueCount = receivablesRaw?.OverdueCount ?? 0,
+            Collected = raw.Collected,
+            Outstanding = raw.Outstanding,
+            Overdue = raw.Overdue,
+            OverdueCount = raw.OverdueCount,
         };
 
         return new AccountingSummaryResponse
         {
             PortfolioId = portfolioId,
             ExpensesByCategory = expensesByCategory,
-            TotalExpenses = totalExpenses,
+            TotalExpenses = raw.TotalExpenses,
             Payments = rollup,
-            Snapshot = BuildMoneySnapshot(rollup, totalExpenses, expensesByCategory),
+            Snapshot = BuildMoneySnapshot(rollup, raw.TotalExpenses, expensesByCategory),
         };
     }
 

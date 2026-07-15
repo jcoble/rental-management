@@ -219,14 +219,23 @@ public class VendorDispatchService : IVendorDispatchService
 
         // Filtering and averaging stay in one translated SQL statement; scorecards must not load
         // every historical dispatch merely to compute one scalar.
-        var avgResponseTicks = await _db.VendorDispatches
+        var completedResponseTimes = _db.VendorDispatches
             .AsNoTracking()
             .Where(d => d.VendorId == vendorId && d.PortfolioId == portfolioId &&
-                        d.Status == VendorDispatchStatus.Completed && d.RespondedAtUtc != null)
-            .Select(d => (double?)(d.RespondedAtUtc!.Value.Ticks - d.DispatchedAtUtc.Ticks))
-            .AverageAsync(ct);
-        var avgResponseHours = avgResponseTicks.HasValue
-            ? Math.Round((decimal)(avgResponseTicks.Value / TimeSpan.TicksPerHour), 2)
+                        d.Status == VendorDispatchStatus.Completed && d.RespondedAtUtc != null);
+
+        // PostgreSQL translates DateTime subtraction and TimeSpan.TotalHours directly. DateTime.Ticks
+        // is not translated by Npgsql and caused the live scorecard endpoint to return 500. SQLite is
+        // retained only as the test-provider expression; both paths still average in one DB query.
+        var avgResponseHoursRaw = _db.Database.IsNpgsql()
+            ? await completedResponseTimes
+                .Select(d => (double?)((d.RespondedAtUtc!.Value - d.DispatchedAtUtc).TotalHours))
+                .AverageAsync(ct)
+            : await completedResponseTimes
+                .Select(d => (double?)(d.RespondedAtUtc!.Value.Ticks - d.DispatchedAtUtc.Ticks))
+                .AverageAsync(ct) / TimeSpan.TicksPerHour;
+        var avgResponseHours = avgResponseHoursRaw.HasValue
+            ? Math.Round((decimal)avgResponseHoursRaw.Value, 2)
             : (decimal?)null;
 
         return new VendorScorecardResponse

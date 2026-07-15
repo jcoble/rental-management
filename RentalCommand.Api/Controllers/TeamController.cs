@@ -104,6 +104,7 @@ public sealed class TeamController : AuthenticatedPortfolioControllerBase
                     .OrderBy(assignment => assignment.RoleProfile!.DisplayName)
                     .ThenBy(assignment => assignment.Id)
                     .Select(assignment => assignment.RoleProfile!.DisplayName)),
+                row.user.PasswordHash == null || row.user.PasswordHash == string.Empty,
                 row.context.CreatedAtUtc))
             .ToListAsync(ct);
         return Ok(new TeamMemberPageDto(items, total, query.NormalizedSkip, query.NormalizedTake));

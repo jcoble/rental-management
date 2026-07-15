@@ -299,6 +299,14 @@ class _MemberCardState extends ConsumerState<_MemberCard> {
                           color: colors.onSurfaceVariant,
                         ),
                       ),
+                      if (member.requiresAccountActivation)
+                        Text(
+                          'Activation required — cannot sign in until the queued email is delivered and used.',
+                          style: theme.textTheme.labelSmall?.copyWith(
+                            color: colors.tertiary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                     ],
                   ),
                 ),
@@ -1137,7 +1145,7 @@ class _CreateTeamMemberSheetState
           SnackBar(
             content: Text(
               result.requiresAccountActivation
-                  ? 'Team member added. Their secure activation email is queued.'
+                  ? 'Team member added. Activation is required before sign-in; the secure email is queued.'
                   : 'Team access added to the existing account.',
             ),
           ),

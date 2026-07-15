@@ -155,7 +155,14 @@
 	}));
 	// Single accounting rollup: payment collection (collected/outstanding/overdue) + expense totals.
 	const accountingSummaryQuery = createQuery(() => ({ queryKey: ['accounting-summary', portfolioId], queryFn: () => accounting.summary() }));
-	const accountingReportsQuery = createQuery(() => ({ queryKey: ['accounting-reports', portfolioId], queryFn: () => accounting.reports() }));
+	const accountingReportsQuery = createQuery(() => ({
+		queryKey: ['accounting-reports', portfolioId],
+		queryFn: () => accounting.reports(),
+		// Reports is the heaviest accounting read and is not used by Ledger or Overview.
+		// Fetch it only when the user asks for that tab so the everyday ledger does not
+		// compete with an unrelated report build or fail behind its timeout.
+		enabled: activeTab === 'reports',
+	}));
 	const vendorsQuery = createQuery(() => ({ queryKey: ['vendors', portfolioId], queryFn: () => vendors.list(portfolioId, { take: 200 }) }));
 	const propertiesQuery = createQuery(() => ({ queryKey: ['properties', portfolioId], queryFn: () => properties.list(portfolioId, { take: 200 }) }));
 	const workOrdersQuery = createQuery(() => ({ queryKey: ['work-orders', portfolioId], queryFn: () => workOrders.list(portfolioId, { take: 200 }) }));
@@ -804,6 +811,8 @@
 				<p class="text-xs font-medium text-muted-foreground" title="Rent and fees received (security deposits are tracked separately under Deposits).">Total Collected</p>
 				{#if accountingSummaryQuery.isLoading}
 					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
+				{:else if accountingSummaryQuery.isError}
+					<p class="mt-1 text-sm font-medium text-destructive">Unavailable</p>
 				{:else}
 					<p class="font-mono text-2xl font-bold tabular-nums text-success">{money(summary?.payments.collected || 0)}</p>
 				{/if}
@@ -814,6 +823,8 @@
 				<p class="text-xs font-medium text-muted-foreground">Outstanding</p>
 				{#if accountingSummaryQuery.isLoading}
 					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
+				{:else if accountingSummaryQuery.isError}
+					<p class="mt-1 text-sm font-medium text-destructive">Unavailable</p>
 				{:else}
 					<p class="font-mono text-2xl font-bold tabular-nums">{money(summary?.payments.outstanding || 0)}</p>
 				{/if}
@@ -824,6 +835,8 @@
 				<p class="text-xs font-medium text-muted-foreground">Overdue</p>
 				{#if accountingSummaryQuery.isLoading}
 					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
+				{:else if accountingSummaryQuery.isError}
+					<p class="mt-1 text-sm font-medium text-destructive">Unavailable</p>
 				{:else}
 					<p class="font-mono text-2xl font-bold tabular-nums {(summary?.payments.overdue || 0) > 0 ? 'text-destructive' : ''}">{money(summary?.payments.overdue || 0)}</p>
 				{/if}
@@ -834,6 +847,8 @@
 				<p class="text-xs font-medium text-muted-foreground">Expenses</p>
 				{#if accountingSummaryQuery.isLoading}
 					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
+				{:else if accountingSummaryQuery.isError}
+					<p class="mt-1 text-sm font-medium text-destructive">Unavailable</p>
 				{:else}
 					<p class="font-mono text-2xl font-bold tabular-nums text-[var(--warning)]">{money(summary?.totalExpenses || 0)}</p>
 				{/if}
@@ -883,6 +898,14 @@
 			</div>
 		</div>
 
+		{#if accountingReportsQuery.isLoading}
+			<p class="rounded-lg border border-border p-6 text-sm text-muted-foreground">Loading accounting reports…</p>
+		{:else if accountingReportsQuery.isError}
+			<div class="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 p-6">
+				<p class="text-sm text-destructive">Could not load accounting reports.</p>
+				<Button size="sm" variant="outline" onclick={() => accountingReportsQuery.refetch()}>Retry</Button>
+			</div>
+		{:else}
 		<div class="grid gap-4 lg:grid-cols-4">
 			<Card.Root class="m3-tonal-card m3-tonal-card--mint gap-0 py-0">
 				<Card.Content class="p-4">
@@ -1008,9 +1031,10 @@
 						{/each}
 					</div>
 				</div>
-			</details>
+				</details>
+			</div>
+		{/if}
 		</div>
-	</div>
 
 		</Tabs.Content>
 
@@ -1129,6 +1153,11 @@
 						<div class="space-y-2">
 							<div class="h-5 w-64 animate-pulse rounded bg-muted"></div>
 							<div class="h-4 w-full max-w-2xl animate-pulse rounded bg-muted"></div>
+						</div>
+					{:else if accountingSummaryQuery.isError}
+						<div class="flex flex-wrap items-center gap-3">
+							<p class="text-sm text-destructive">Could not load the money summary.</p>
+							<Button size="sm" variant="outline" onclick={() => accountingSummaryQuery.refetch()}>Retry</Button>
 						</div>
 					{:else if summary?.snapshot}
 						<p class="text-base font-semibold">{summary.snapshot.title}</p>

@@ -233,6 +233,15 @@ public class UnitService : IUnitService
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
+        // Documents are aggregated once for the returned page. Keeping this out of the main
+        // health projection avoids executing a deeply correlated StoredFiles subquery once per
+        // Unit while still doing all association resolution and counting in PostgreSQL.
+        var pageUnitIds = rows.Select(row => row.Id).ToArray();
+        var documentCounts = pageUnitIds.Length == 0
+            ? new Dictionary<int, int>()
+            : await BuildUnitDocumentCountsQuery(portfolioId, pageUnitIds)
+                .ToDictionaryAsync(row => row.UnitId, row => row.Count, ct);
+
         return new UnitHealthListResponse
         {
             Items = rows.Select(r => new UnitHealthResponse
@@ -250,7 +259,7 @@ public class UnitService : IUnitService
                 LeaseEndsInDays = r.CurrentAgreementEndOn is { } end && r.BusinessDate is { } businessDate
                     ? Math.Max(0, end.DayNumber - businessDate.DayNumber)
                     : null,
-                DocsNeedingReviewCount = r.DocsCount,
+                DocsNeedingReviewCount = documentCounts.GetValueOrDefault(r.Id),
                 SimpleStage = ComputeSimpleStage(r),
             }).ToList(),
             TotalCount = totalCount,
@@ -265,6 +274,20 @@ public class UnitService : IUnitService
     /// </summary>
     internal IQueryable<UnitHealthReadRow> BuildHealthQuery(int portfolioId)
     {
+        var openWorkOrderCounts = _db.WorkOrders
+            .AsNoTracking()
+            .Where(workOrder => workOrder.PortfolioId == portfolioId
+                && workOrder.UnitId != null
+                && workOrder.Status != WorkOrderStatus.Completed
+                && workOrder.Status != WorkOrderStatus.Cancelled
+                && workOrder.Status != WorkOrderStatus.Archived)
+            .GroupBy(workOrder => workOrder.UnitId!.Value)
+            .Select(group => new UnitAggregateCountRow
+            {
+                UnitId = group.Key,
+                Count = group.Count(),
+            });
+
         // Occupancy, lifecycle, and the governing agreement are database projections over the
         // canonical LeaseManagement graph. This query deliberately does not consult Unit.Status,
         // Unit.Leases, Lease.Status, or LeaseTenants: those legacy columns cannot be allowed to
@@ -286,6 +309,9 @@ public class UnitService : IUnitService
                 .Where(row => row.PortfolioId == unit.PortfolioId
                     && row.Id == lifecycle!.CurrentAgreementId)
                 .DefaultIfEmpty()
+            from openWorkOrderCount in openWorkOrderCounts
+                .Where(row => row.UnitId == unit.Id)
+                .DefaultIfEmpty()
             select new UnitHealthReadRow
             {
                 Id = unit.Id,
@@ -305,43 +331,116 @@ public class UnitService : IUnitService
                 Lifecycle = lifecycle == null ? null : lifecycle.Lifecycle,
                 BusinessDate = lifecycle == null ? null : lifecycle.BusinessDate,
                 CurrentAgreementEndOn = agreement == null ? null : agreement.TermEndOn,
-                OpenWorkOrderCount = unit.WorkOrders.Count(workOrder =>
-                    workOrder.Status != WorkOrderStatus.Completed
-                    && workOrder.Status != WorkOrderStatus.Cancelled
-                    && workOrder.Status != WorkOrderStatus.Archived),
-                DocsCount = _db.StoredFiles.Count(file =>
-                    file.PortfolioId == portfolioId
-                    && (
-                        _db.LegalDocumentArtifacts.Any(artifact =>
-                            artifact.PortfolioId == portfolioId
-                            && artifact.StoredFileId == file.Id
-                            && _db.LeaseAgreements.Any(legalAgreement =>
-                                legalAgreement.PortfolioId == portfolioId
-                                && (legalAgreement.IssuedArtifactId == artifact.Id
-                                    || legalAgreement.ExecutedArtifactId == artifact.Id)
-                                && _db.LeaseManagements.Any(management =>
-                                    management.PortfolioId == portfolioId
-                                    && management.UnitId == unit.Id
-                                    && management.Id == legalAgreement.LeaseManagementId)))
-                        || (file.EntityId != null && (
-                            (file.EntityType == "Unit" && file.EntityId == unit.Id)
-                            || (file.EntityType == "Expense" && _db.Expenses.Any(expense =>
-                                expense.PortfolioId == portfolioId
-                                && expense.Id == file.EntityId.Value
-                                && (expense.UnitId == unit.Id
-                                    || (expense.WorkOrderId != null && _db.WorkOrders.Any(workOrder =>
-                                        workOrder.PortfolioId == portfolioId
-                                        && workOrder.UnitId == unit.Id
-                                        && workOrder.Id == expense.WorkOrderId.Value)))))
-                            || (file.EntityType == "WorkOrder" && _db.WorkOrders.Any(workOrder =>
-                                workOrder.PortfolioId == portfolioId
-                                && workOrder.UnitId == unit.Id
-                                && workOrder.Id == file.EntityId.Value))
-                            || (file.EntityType == "Inspection" && _db.Inspections.Any(inspection =>
-                                inspection.PortfolioId == portfolioId
-                                && inspection.UnitId == unit.Id
-                                && inspection.Id == file.EntityId.Value)))))),
+                OpenWorkOrderCount = openWorkOrderCount == null ? 0 : openWorkOrderCount.Count,
             };
+    }
+
+    /// <summary>
+    /// One page-scoped, set-based PostgreSQL aggregate for Unit document badges. UNION removes a
+    /// file that reaches the same Unit through more than one relationship before GROUP BY counts it.
+    /// </summary>
+    internal IQueryable<UnitAggregateCountRow> BuildUnitDocumentCountsQuery(
+        int portfolioId,
+        IReadOnlyCollection<int> unitIds)
+    {
+        var directUnitFiles =
+            from file in _db.StoredFiles.AsNoTracking()
+            join unit in _db.Units.AsNoTracking()
+                on file.EntityId equals (long?)unit.Id
+            where file.PortfolioId == portfolioId
+                && unit.PortfolioId == portfolioId
+                && file.EntityType == EntityType
+                && unitIds.Contains(unit.Id)
+            select new UnitDocumentAssociationRow { UnitId = unit.Id, FileId = file.Id };
+
+        var directExpenseFiles =
+            from file in _db.StoredFiles.AsNoTracking()
+            join expense in _db.Expenses.AsNoTracking()
+                on file.EntityId equals (long?)expense.Id
+            where file.PortfolioId == portfolioId
+                && expense.PortfolioId == portfolioId
+                && file.EntityType == nameof(Expense)
+                && expense.UnitId != null
+                && unitIds.Contains(expense.UnitId.Value)
+            select new UnitDocumentAssociationRow { UnitId = expense.UnitId!.Value, FileId = file.Id };
+
+        var workOrderExpenseFiles =
+            from file in _db.StoredFiles.AsNoTracking()
+            join expense in _db.Expenses.AsNoTracking()
+                on file.EntityId equals (long?)expense.Id
+            join workOrder in _db.WorkOrders.AsNoTracking()
+                on expense.WorkOrderId equals (int?)workOrder.Id
+            where file.PortfolioId == portfolioId
+                && expense.PortfolioId == portfolioId
+                && workOrder.PortfolioId == portfolioId
+                && file.EntityType == nameof(Expense)
+                && workOrder.UnitId != null
+                && unitIds.Contains(workOrder.UnitId.Value)
+            select new UnitDocumentAssociationRow { UnitId = workOrder.UnitId!.Value, FileId = file.Id };
+
+        var workOrderFiles =
+            from file in _db.StoredFiles.AsNoTracking()
+            join workOrder in _db.WorkOrders.AsNoTracking()
+                on file.EntityId equals (long?)workOrder.Id
+            where file.PortfolioId == portfolioId
+                && workOrder.PortfolioId == portfolioId
+                && file.EntityType == nameof(WorkOrder)
+                && workOrder.UnitId != null
+                && unitIds.Contains(workOrder.UnitId.Value)
+            select new UnitDocumentAssociationRow { UnitId = workOrder.UnitId!.Value, FileId = file.Id };
+
+        var inspectionFiles =
+            from file in _db.StoredFiles.AsNoTracking()
+            join inspection in _db.Inspections.AsNoTracking()
+                on file.EntityId equals (long?)inspection.Id
+            where file.PortfolioId == portfolioId
+                && inspection.PortfolioId == portfolioId
+                && file.EntityType == nameof(Inspection)
+                && inspection.UnitId != null
+                && unitIds.Contains(inspection.UnitId.Value)
+            select new UnitDocumentAssociationRow { UnitId = inspection.UnitId!.Value, FileId = file.Id };
+
+        var issuedAgreementFiles =
+            from agreement in _db.LeaseAgreements.AsNoTracking()
+            join management in _db.LeaseManagements.AsNoTracking()
+                on new { agreement.PortfolioId, Id = agreement.LeaseManagementId }
+                equals new { management.PortfolioId, management.Id }
+            join artifact in _db.LegalDocumentArtifacts.AsNoTracking()
+                on agreement.IssuedArtifactId equals (int?)artifact.Id
+            join file in _db.StoredFiles.AsNoTracking()
+                on new { artifact.PortfolioId, Id = artifact.StoredFileId }
+                equals new { file.PortfolioId, file.Id }
+            where agreement.PortfolioId == portfolioId
+                && unitIds.Contains(management.UnitId)
+            select new UnitDocumentAssociationRow { UnitId = management.UnitId, FileId = file.Id };
+
+        var executedAgreementFiles =
+            from agreement in _db.LeaseAgreements.AsNoTracking()
+            join management in _db.LeaseManagements.AsNoTracking()
+                on new { agreement.PortfolioId, Id = agreement.LeaseManagementId }
+                equals new { management.PortfolioId, management.Id }
+            join artifact in _db.LegalDocumentArtifacts.AsNoTracking()
+                on agreement.ExecutedArtifactId equals (int?)artifact.Id
+            join file in _db.StoredFiles.AsNoTracking()
+                on new { artifact.PortfolioId, Id = artifact.StoredFileId }
+                equals new { file.PortfolioId, file.Id }
+            where agreement.PortfolioId == portfolioId
+                && unitIds.Contains(management.UnitId)
+            select new UnitDocumentAssociationRow { UnitId = management.UnitId, FileId = file.Id };
+
+        return directUnitFiles
+            .Union(directExpenseFiles)
+            .Union(workOrderExpenseFiles)
+            .Union(workOrderFiles)
+            .Union(inspectionFiles)
+            .Union(issuedAgreementFiles)
+            .Union(executedAgreementFiles)
+            .GroupBy(row => row.UnitId)
+            .Select(group => new UnitAggregateCountRow
+            {
+                UnitId = group.Key,
+                Count = group.Count(),
+            });
     }
 
     private static UnitHealthListQuery ToUnitHealthListQuery(ListQuery query, int? propertyId) => new()
@@ -452,7 +551,18 @@ public class UnitService : IUnitService
         public DateOnly? BusinessDate { get; init; }
         public DateOnly? CurrentAgreementEndOn { get; init; }
         public int OpenWorkOrderCount { get; init; }
-        public int DocsCount { get; init; }
+    }
+
+    internal sealed class UnitDocumentAssociationRow
+    {
+        public int UnitId { get; init; }
+        public int FileId { get; init; }
+    }
+
+    internal sealed class UnitAggregateCountRow
+    {
+        public int UnitId { get; init; }
+        public int Count { get; init; }
     }
 
     public async Task<UnitResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)

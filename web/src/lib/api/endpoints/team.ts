@@ -15,6 +15,7 @@ export interface TeamMemberSummary {
 	accessRevision: number;
 	assignmentCount: number;
 	roleSummary: string;
+	requiresAccountActivation: boolean;
 	createdAtUtc: string;
 }
 

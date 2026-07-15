@@ -88,6 +88,10 @@
 	];
 </script>
 
+<svelte:head>
+	<title>Leases - Rental Command</title>
+</svelte:head>
+
 <div class="space-y-6">
 	<PageHeader
 		title="Leases"

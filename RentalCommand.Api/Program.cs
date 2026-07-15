@@ -676,6 +676,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Leasing.GivePossessionResult,
     RentalCommand.Data.Leasing.GivePossessionHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.ConfirmMoveInCommand,
+    RentalCommand.Core.Leasing.ConfirmMoveInResult,
+    RentalCommand.Data.Leasing.ConfirmMoveInHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Core.Leasing.ReturnPossessionCommand,
     RentalCommand.Core.Leasing.ReturnPossessionResult,
     RentalCommand.Data.Leasing.ReturnPossessionHandler>();

@@ -218,6 +218,12 @@
 	}
 </script>
 
+<svelte:head>
+	<title>{relationshipQuery.data?.primaryTenantName
+		? `${relationshipQuery.data.primaryTenantName} - Lease - Rental Command`
+		: 'Lease - Rental Command'}</title>
+</svelte:head>
+
 {#if relationshipQuery.isLoading}
 	<p class="text-muted-foreground">Loading tenant and lease relationship…</p>
 {:else if relationshipQuery.error || !relationshipQuery.data}

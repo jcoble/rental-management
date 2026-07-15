@@ -394,7 +394,8 @@ public sealed class TenantAccountQueryServiceSqlTests
         sql.Should().Contain("MembershipRoleAssignmentProperties");
         sql.Should().Contain(CapabilityKeys.MoneyDepositsManage);
         sql.Should().Contain(CapabilityKeys.LeasingDepositsRead);
-        sql.Should().Contain("UNION");
+        sql.Should().NotContain("UNION",
+            "both allowed capabilities must share one authorization predicate instead of duplicating the full session/access graph");
         sql.Should().NotContain(CapabilityKeys.MoneyBalancesRead,
             "balance-only access must not authorize security-deposit reads");
         sql.Should().Contain(Scope.SessionId.ToString());

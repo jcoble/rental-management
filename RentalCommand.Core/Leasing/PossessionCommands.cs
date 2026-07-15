@@ -29,6 +29,48 @@ public sealed record GivePossessionResult(
     DateTime? PossessionGivenAtUtc,
     string? Error) : IAtomicResultData;
 
+/// <summary>
+/// Confirms the complete physical move-in as one receipt-backed command. The handler derives the
+/// governing deposit obligation and tenant/deposit accounts from the relationship inside the
+/// transaction; callers cannot choose a different account or amount.
+/// </summary>
+public sealed record ConfirmMoveInCommand(
+    int PortfolioId,
+    int LeaseManagementId,
+    int UnitId,
+    DateOnly? DepositEffectiveOn,
+    string? DepositPaymentMethodSummary,
+    string? DepositExternalReference,
+    int? MoveInAppointmentId,
+    int CreatedByUserId,
+    Guid AuthSessionId,
+    int AccessContextId,
+    long ExpectedAccessRevision,
+    string DeliveryIdempotencyKey) : IAtomicCommandData;
+
+public enum ConfirmMoveInOutcome
+{
+    Confirmed,
+    AlreadyConfirmed,
+    RelationshipNotEligible,
+    AgreementNotExecuted,
+    AccountNotOpen,
+    UnitUnavailable,
+    DepositNotConfigured,
+    DepositConflict,
+    AppointmentInvalid,
+}
+
+public sealed record ConfirmMoveInResult(
+    ConfirmMoveInOutcome Outcome,
+    int LeaseManagementId,
+    int UnitId,
+    DateTime? PossessionGivenAtUtc,
+    long? SecurityDepositEntryId,
+    long? TenantLedgerEntryId,
+    int? CompletedAppointmentId,
+    string? Error) : IAtomicResultData;
+
 public enum ReturnPartyDisposition
 {
     EndMembership,

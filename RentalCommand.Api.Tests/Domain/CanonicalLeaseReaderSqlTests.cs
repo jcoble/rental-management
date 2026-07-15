@@ -33,17 +33,28 @@ public sealed class CanonicalLeaseReaderSqlTests
             .Skip(20)
             .Take(20)
             .ToQueryString();
+        var documentSql = service.BuildUnitDocumentCountsQuery(17, [42, 43])
+            .ToQueryString();
 
         sql.Should().Contain("vw_unit_occupancy");
         sql.Should().Contain("vw_lease_management_lifecycle");
         sql.Should().Contain("LeaseAgreements");
-        sql.Should().Contain("LegalDocumentArtifacts");
         sql.Should().Contain("TenantAccountId");
+        sql.Should().Contain("GROUP BY");
+        sql.Should().Contain("WorkOrders");
         sql.Should().Contain("ORDER BY");
         sql.Should().Contain("LIMIT");
         sql.Should().Contain("OFFSET");
         sql.Should().NotContain("\"Leases\"");
         sql.Should().NotContain("LeaseTenants");
+        sql.Should().NotContain("StoredFiles");
+
+        documentSql.Should().Contain("LegalDocumentArtifacts");
+        documentSql.Should().Contain("StoredFiles");
+        documentSql.Should().Contain("UNION");
+        documentSql.Should().Contain("GROUP BY");
+        documentSql.Should().NotContain("\"Leases\"");
+        documentSql.Should().NotContain("LeaseTenants");
     }
 
     [Fact]

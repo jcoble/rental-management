@@ -209,6 +209,11 @@
 			<Card.Content>
 				{#if scorecardQuery.isLoading}
 					<p class="py-4 text-sm text-muted-foreground" data-testid="vendor-scorecard-loading">Loading scorecard…</p>
+				{:else if scorecardQuery.isError}
+					<div class="flex items-center justify-between gap-4 py-4" data-testid="vendor-scorecard-error">
+						<p class="text-sm text-destructive">The scorecard could not be loaded.</p>
+						<Button variant="outline" size="sm" onclick={() => scorecardQuery.refetch()}>Try again</Button>
+					</div>
 				{:else if scorecard}
 					<div class="grid gap-x-8 gap-y-6 sm:grid-cols-2 lg:grid-cols-4">
 						<div>

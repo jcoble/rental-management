@@ -34,8 +34,8 @@ public class UnitResponse
 }
 
 /// <summary>
-/// A units-list row with cheap health badges for the <c>/units</c> page (spec section 10). Every field
-/// is computed DB-side in one projection query (grouped counts + canonical occupancy/lifecycle scalars) — the list
+/// A units-list row with cheap health badges for the <c>/units</c> page (spec section 10). Fields
+/// come from the paged canonical health query plus one page-scoped DB aggregate for documents; the list
 /// never calls the per-unit dashboard per row. <see cref="SimpleStage"/> is a simplified label
 /// derived from possession, operational periods, lifecycle, and governing-agreement dates.
 /// </summary>

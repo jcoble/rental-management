@@ -3,8 +3,6 @@
 	import { goto } from '$app/navigation';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { units } from '$lib/api/endpoints/units';
-	import { securityDeposits } from '$lib/api/endpoints/securityDeposits';
-	import { appointments } from '$lib/api/endpoints/appointments';
 	import { leaseManagements } from '$lib/api/endpoints/lease-managements';
 	import * as Tabs from '$lib/components/ui/tabs';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -52,7 +50,7 @@
 	let moveInDepositPaymentMethod = $state('');
 	let moveInDepositReference = $state('');
 	let moveInDepositErrors = $state<Record<string, string>>({});
-	let moveInOperation = $state({ fingerprint: '', depositKey: '', possessionKey: '' });
+	let moveInOperation = $state({ fingerprint: '', operationKey: '' });
 	let showScanLauncher = $state(false);
 	let scanLauncherContext = $state<ScanContext>({});
 	let handledMoveInActionKey = $state('');
@@ -136,7 +134,7 @@
 			moveInDepositPaymentMethod = '';
 			moveInDepositReference = '';
 			moveInDepositErrors = {};
-			moveInOperation = { fingerprint: '', depositKey: '', possessionKey: '' };
+			moveInOperation = { fingerprint: '', operationKey: '' };
 			showMoveInDialog = true;
 		}
 	});
@@ -161,45 +159,27 @@
 	const moveInMutation = createMutation(() => ({
 		mutationFn: async ({
 			lease,
-			depositOperationKey,
-			possessionOperationKey
+			operationKey
 		}: {
 			lease: UnitLeaseSummary;
-			depositOperationKey: string;
-			possessionOperationKey: string;
+			operationKey: string;
 		}) => {
-			if (lease.securityDeposit > 0) {
-				if (lease.tenantAccountId == null) {
-					throw new Error('This move-in does not have a prepared security deposit account. Prepare the approved application before recording funds.');
-				}
-				const account = await securityDeposits.get(lease.tenantAccountId);
-				await securityDeposits.fund(account.tenantAccountId, depositOperationKey, {
-					securityDepositAccountId: account.securityDepositAccountId,
-					amount: lease.securityDeposit,
-					effectiveOn: moveInDepositEffectiveOn,
-					description: `Security deposit received at move-in for ${lease.leaseNumber}`,
-					paymentMethodSummary: moveInDepositPaymentMethod.trim(),
-					...(moveInDepositReference.trim()
-						? { externalReference: moveInDepositReference.trim() }
-						: {}),
-				});
-			}
-
-			await leaseManagements.givePossession(
+			return leaseManagements.confirmMoveIn(
 				lease.leaseManagementId,
-				{ unitId: id },
-				possessionOperationKey
+				{
+					unitId: id,
+					depositEffectiveOn: lease.securityDeposit > 0 ? moveInDepositEffectiveOn : null,
+					depositPaymentMethodSummary:
+						lease.securityDeposit > 0 ? moveInDepositPaymentMethod.trim() : null,
+					depositExternalReference: moveInDepositReference.trim() || null,
+					moveInAppointmentId: moveInAppointment?.id ?? null,
+				},
+				operationKey
 			);
-
-			if (moveInAppointment) {
-				await appointments.update(moveInAppointment.id, { status: 'Completed' });
-			}
-
-			return true;
 		},
 		onSuccess: () => {
 			showSuccess('Possession given. Move-in confirmed.');
-			moveInOperation = { fingerprint: '', depositKey: '', possessionKey: '' };
+			moveInOperation = { fingerprint: '', operationKey: '' };
 			closeMoveInDialog();
 			queryClient.invalidateQueries({ queryKey: ['unit-dashboard', id] });
 			queryClient.invalidateQueries({ queryKey: ['unit-timeline', id] });
@@ -227,22 +207,20 @@
 			effectiveOn: moveInDepositEffectiveOn,
 			paymentMethod: moveInDepositPaymentMethod.trim(),
 			reference: moveInDepositReference.trim(),
+			appointmentId: moveInAppointment?.id ?? null,
 		});
 		if (
 			moveInOperation.fingerprint !== fingerprint ||
-			!moveInOperation.depositKey ||
-			!moveInOperation.possessionKey
+			!moveInOperation.operationKey
 		) {
 			moveInOperation = {
 				fingerprint,
-				depositKey: crypto.randomUUID(),
-				possessionKey: crypto.randomUUID()
+				operationKey: crypto.randomUUID()
 			};
 		}
 		moveInMutation.mutate({
 			lease,
-			depositOperationKey: moveInOperation.depositKey,
-			possessionOperationKey: moveInOperation.possessionKey
+			operationKey: moveInOperation.operationKey
 		});
 	}
 
