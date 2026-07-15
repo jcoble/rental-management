@@ -396,7 +396,10 @@ public class SandboxServiceTests : IDisposable
 
         // Demo data was actually seeded.
         (await _ctx.Db.Properties.CountAsync()).Should().BeGreaterThan(0);
-        (await _ctx.Db.DocumentTemplates.SingleAsync()).IsSandboxSeeded.Should().BeTrue();
+        (await _ctx.Db.DocumentTemplates.CountAsync()).Should().Be(0,
+            "demo data must not expose a placeholder as an active landlord template");
+        (await _ctx.Db.LegalDocumentSourceVersions.SingleAsync()).SourceKind
+            .Should().Be(LegalDocumentSourceKind.BuiltInRenderer);
 
         var portfolio = await _ctx.Db.Portfolios.SingleAsync(p => p.Id == 1);
         portfolio.IsSandbox.Should().BeTrue();
