@@ -93,7 +93,6 @@ export function buildPrepareMoveInRequest(form: PrepareMoveInForm): {
 	if (!tenantId) errors.tenantId = 'The approved tenant could not be resolved.';
 	if (!form.partyEffectiveFrom)
 		errors.partyEffectiveFrom = 'Choose when this household relationship begins.';
-	if (!documentTemplateId) errors.documentTemplateId = 'Choose an active lease template.';
 	if (!form.termStartOn) errors.termStartOn = 'Choose the agreement start date.';
 	if (form.termType === 'FixedTerm' && !form.termEndOn) {
 		errors.termEndOn = 'Choose the fixed-term end date.';
@@ -131,7 +130,6 @@ export function buildPrepareMoveInRequest(form: PrepareMoveInForm): {
 		!applicationId ||
 		!unitId ||
 		!tenantId ||
-		!documentTemplateId ||
 		rentDueDay == null ||
 		gracePeriodDays == null ||
 		baseRentAmount == null ||

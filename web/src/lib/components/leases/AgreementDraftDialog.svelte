@@ -8,6 +8,7 @@
 		type LeaseLegalSignerRole
 	} from '$lib/api/endpoints/lease-managements';
 	import type { LeaseAgreementSummary } from '$lib/types';
+	import { documentTemplates } from '$lib/api/endpoints/document-templates';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -33,6 +34,7 @@
 	} = $props();
 
 	type DraftForm = {
+		documentTemplateId: string;
 		agreementNumber: string;
 		termType: 'FixedTerm' | 'MonthToMonth';
 		termStartOn: string;
@@ -81,9 +83,20 @@
 		queryKey: ['lease-managements', leaseManagementId, 'agreements', leaseAgreementId, 'draft'],
 		queryFn: () => leaseManagements.getAgreementDraft(leaseManagementId, leaseAgreementId)
 	}));
+	const templatesQuery = createQuery(() => ({
+		queryKey: ['document-templates', 'agreement-draft', 'active'],
+		queryFn: () =>
+			documentTemplates.listPage({
+				kind: 'Lease',
+				status: 'Active',
+				sort: 'name',
+				take: 50
+			})
+	}));
 
 	function seedForm(draft: LeaseAgreementDraftDetail): DraftForm {
 		return {
+			documentTemplateId: draft.documentTemplateId ? String(draft.documentTemplateId) : '',
 			agreementNumber: draft.agreementNumber,
 			termType: draft.termType,
 			termStartOn: draft.termStartOn,
@@ -177,11 +190,6 @@
 		else if (new Set(form.signers.map((signer) => signer.signingOrder)).size !== form.signers.length)
 			validationError = 'Signer order values must be unique.';
 		if (validationError) return null;
-		if (!draft.documentTemplateId) {
-			validationError = 'This draft has no authored template id and cannot be edited in this flow.';
-			return null;
-		}
-
 		return {
 			draftRevision: draft.draftRevision,
 			agreementNumber: form.agreementNumber.trim(),
@@ -196,7 +204,7 @@
 			gracePeriodDays,
 			termsSchemaVersion: draft.termsSchemaVersion,
 			termsPayload: draft.termsPayload,
-			documentTemplateId: draft.documentTemplateId,
+			documentTemplateId: form.documentTemplateId ? Number(form.documentTemplateId) : null,
 				signers: form.signers.map((signer) => ({ ...signer, isRequired: true }))
 		};
 	}
@@ -350,8 +358,18 @@
 				<div class="flex flex-wrap gap-2 text-xs text-muted-foreground">
 					<span>Version {draft.versionNumber}</span><span>·</span>
 					<span>Revision {draft.draftRevision}</span><span>·</span>
-					<span>Template {draft.documentTemplateId ?? 'not editable'}{draft.documentTemplateVersion ? ` v${draft.documentTemplateVersion}` : ''}</span>
+					<span>{draft.documentTemplateId ? `Landlord template ${draft.documentTemplateId}${draft.documentTemplateVersion ? ` v${draft.documentTemplateVersion}` : ''}` : 'Rental Command supplied lease'}</span>
 				</div>
+				<label class="block space-y-1">
+					<span class="text-sm font-medium">Lease document</span>
+					<select bind:value={form.documentTemplateId} class="m3-field-surface h-10 w-full px-3 text-sm" data-testid="agreement-draft-template">
+						<option value="">Rental Command supplied lease · Recommended</option>
+						{#each templatesQuery.data?.items ?? [] as template (template.id)}
+							<option value={String(template.id)}>{template.name} · v{template.version}</option>
+						{/each}
+					</select>
+					<p class="text-xs text-muted-foreground">Changing this before issuance freezes the newly selected source with this draft.</p>
+				</label>
 
 				<div class="grid gap-4 md:grid-cols-3">
 					<label class="space-y-1 md:col-span-2">
@@ -453,7 +471,7 @@
 			{#if draftQuery.data && form}
 				{#if canCancel}<Button variant="destructive" class="gap-2" onclick={() => (cancelConfirmationOpen = true)} disabled={editMutation.isPending || issueMutation.isPending || cancelMutation.isPending}><Trash2 class="h-4 w-4" /> Cancel draft</Button>{/if}
 				<Button variant="outline" class="gap-2" onclick={openIssueConfirmation} disabled={isDirty || editMutation.isPending || issueMutation.isPending}><FileSignature class="h-4 w-4" /> Prepare &amp; issue</Button>
-				<Button class="gap-2" onclick={saveDraft} disabled={!isDirty || editMutation.isPending || issueMutation.isPending || !draftQuery.data.documentTemplateId}>{#if editMutation.isPending}<Loader2 class="h-4 w-4 animate-spin" /> Saving…{:else}<Save class="h-4 w-4" /> Save draft{/if}</Button>
+				<Button class="gap-2" onclick={saveDraft} disabled={!isDirty || editMutation.isPending || issueMutation.isPending}>{#if editMutation.isPending}<Loader2 class="h-4 w-4 animate-spin" /> Saving…{:else}<Save class="h-4 w-4" /> Save draft{/if}</Button>
 			{/if}
 		</Dialog.Footer>
 	</Dialog.Content>
