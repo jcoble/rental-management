@@ -7,6 +7,7 @@ export const CAPABILITY = {
 	workManage: 'work.manage',
 	reportsRead: 'reports.read',
 	moneyBalancesRead: 'money.balances.read',
+	moneyPaymentsManage: 'money.payments.manage',
 	moneyExpensesManage: 'money.expenses.manage',
 	moneyDepositsManage: 'money.deposits.manage',
 	moneyOwnerReportsRead: 'money.owner-reports.read',
@@ -53,38 +54,111 @@ export const ROUTE_ACCESS_RULES: readonly RouteAccessRule[] = [
 	},
 	{ prefix: '/portal', experiences: ['Tenant'] },
 	{ prefix: '/owner', experiences: ['Owner'] },
-	{ prefix: '/leasing', experiences: ['Leasing'] },
-	{ prefix: '/my-work', experiences: ['Maintenance'] },
-	{ prefix: '/my-schedule', experiences: ['Maintenance'] },
-	{ prefix: '/assignment-inbox', experiences: ['Maintenance'] },
+	{
+		prefix: '/leasing/applications',
+		experiences: ['Leasing'],
+		anyCapabilities: [CAPABILITY.leasingApplicationsManage]
+	},
+	{
+		prefix: '/leasing/appointments',
+		experiences: ['Leasing'],
+		anyCapabilities: [CAPABILITY.leasingShowingsManage]
+	},
+	{
+		prefix: '/leasing/conversations',
+		experiences: ['Leasing'],
+		anyCapabilities: [CAPABILITY.leasingOnboardingManage]
+	},
+	{
+		prefix: '/leasing/move-ins',
+		experiences: ['Leasing'],
+		anyCapabilities: [CAPABILITY.leasingOnboardingManage]
+	},
+	{
+		prefix: '/leasing/rentals',
+		experiences: ['Leasing'],
+		anyCapabilities: [CAPABILITY.leasingListingsManage]
+	},
+	{
+		prefix: '/leasing/pipeline',
+		experiences: ['Leasing'],
+		anyCapabilities: [
+			CAPABILITY.leasingApplicationsManage,
+			CAPABILITY.leasingAgreementsPrepare,
+			CAPABILITY.leasingOnboardingManage
+		]
+	},
+	{
+		prefix: '/leasing/calendar',
+		experiences: ['Leasing'],
+		anyCapabilities: [CAPABILITY.leasingShowingsManage]
+	},
+	{
+		prefix: '/leasing/inbox',
+		experiences: ['Leasing'],
+		anyCapabilities: [CAPABILITY.leasingOnboardingManage]
+	},
+	{
+		prefix: '/leasing',
+		experiences: ['Leasing'],
+		anyCapabilities: [
+			CAPABILITY.leasingApplicationsManage,
+			CAPABILITY.leasingListingsManage,
+			CAPABILITY.leasingShowingsManage,
+			CAPABILITY.leasingAgreementsPrepare,
+			CAPABILITY.leasingOnboardingManage,
+			CAPABILITY.leasingTermsRead,
+			CAPABILITY.leasingDepositsRead
+		]
+	},
+	{
+		prefix: '/my-work',
+		experiences: ['Maintenance'],
+		anyCapabilities: [CAPABILITY.assignedWorkRead]
+	},
+	{
+		prefix: '/my-schedule',
+		experiences: ['Maintenance'],
+		anyCapabilities: [CAPABILITY.assignedWorkRead]
+	},
+	{
+		prefix: '/assignment-inbox',
+		experiences: ['Maintenance'],
+		anyCapabilities: [CAPABILITY.assignedWorkConverse]
+	},
 	{ prefix: '/profile', experiences: ['Leasing', 'Maintenance'] },
-	// Leasing has purpose-built work queues. Keep canonical record detail routes available below,
-	// and Maintenance has assignment-scoped routes. Do not expose the broad management list
-	// screens as alternate shells for either experience.
-	{ prefix: '/properties', exact: true, experiences: ['Management'] },
-	{ prefix: '/units', exact: true, experiences: ['Management'] },
-	{ prefix: '/tenants', exact: true, experiences: ['Management'] },
-	{ prefix: '/leases', exact: true, experiences: ['Management'] },
-	{ prefix: '/applications', exact: true, experiences: ['Management'] },
-	{ prefix: '/appointments', exact: true, experiences: ['Management'] },
+	// Leasing has purpose-built work queues and Maintenance has assignment-scoped routes. Do not
+	// expose broad management list or detail screens as alternate shells for either experience.
+	{ prefix: '/properties', exact: true, experiences: ['Management'], anyCapabilities: [CAPABILITY.rentalsRead] },
+	{ prefix: '/units', exact: true, experiences: ['Management'], anyCapabilities: [CAPABILITY.rentalsRead] },
+	{ prefix: '/tenants', exact: true, experiences: ['Management'], anyCapabilities: [CAPABILITY.rentalsRead] },
+	{ prefix: '/leases', exact: true, experiences: ['Management'], anyCapabilities: [CAPABILITY.rentalsRead] },
+	{ prefix: '/applications', exact: true, experiences: ['Management'], anyCapabilities: [CAPABILITY.leasingApplicationsManage] },
+	{ prefix: '/appointments', exact: true, experiences: ['Management'], anyCapabilities: [CAPABILITY.workRead, CAPABILITY.leasingShowingsManage] },
 	{
 		prefix: '/messages',
 		exact: true,
-		experiences: ['Management']
+		experiences: ['Management'],
+		anyCapabilities: [CAPABILITY.rentalsRead, CAPABILITY.leasingOnboardingManage]
 	},
 	{ prefix: '/admin/users', anyCapabilities: [CAPABILITY.teamRead, CAPABILITY.teamManage] },
 	{ prefix: '/admin/audit', anyCapabilities: [CAPABILITY.reportsRead] },
+	// Personal alert destinations belong to the signed-in user in every experience. Administrative
+	// routing and tenant-delivery policy remain staff-only even if a stale relationship envelope
+	// happens to contain the workspace notification capability.
 	{
 		prefix: '/settings/notifications/my-alerts',
-		experiences: ['Management', 'Leasing', 'Maintenance']
+		experiences: ['Management', 'Leasing', 'Maintenance', 'Owner', 'Tenant']
 	},
 	{
 		prefix: '/settings/notifications/team-routing',
+		experiences: ['Management', 'Leasing', 'Maintenance'],
 		anyCapabilities: [CAPABILITY.notificationsManage]
 	},
 	{
 		prefix: '/settings/notifications/tenant-notices',
-		anyCapabilities: [CAPABILITY.notificationsManage]
+		experiences: ['Management', 'Leasing', 'Maintenance'],
+		anyCapabilities: [CAPABILITY.tenantNoticesManage]
 	},
 	{
 		prefix: '/settings/security',
@@ -134,10 +208,12 @@ export const ROUTE_ACCESS_RULES: readonly RouteAccessRule[] = [
 	{ prefix: '/units', experiences: ['Management'], anyCapabilities: [CAPABILITY.rentalsRead] },
 	{
 		prefix: '/tenants',
+		experiences: ['Management'],
 		anyCapabilities: [CAPABILITY.rentalsRead, CAPABILITY.leasingOnboardingManage]
 	},
 	{
 		prefix: '/leases',
+		experiences: ['Management'],
 		anyCapabilities: [CAPABILITY.rentalsRead, CAPABILITY.leasingTermsRead]
 	},
 	{
@@ -151,6 +227,7 @@ export const ROUTE_ACCESS_RULES: readonly RouteAccessRule[] = [
 	},
 	{
 		prefix: '/maintenance',
+		experiences: ['Management'],
 		anyCapabilities: [CAPABILITY.workRead]
 	},
 	{
@@ -158,7 +235,7 @@ export const ROUTE_ACCESS_RULES: readonly RouteAccessRule[] = [
 		experiences: ['Management'],
 		anyCapabilities: [CAPABILITY.workRead, CAPABILITY.leasingShowingsManage]
 	},
-	{ prefix: '/vendors', anyCapabilities: [CAPABILITY.workManage] },
+	{ prefix: '/vendors', experiences: ['Management'], anyCapabilities: [CAPABILITY.workManage] },
 	{
 		prefix: '/messages',
 		experiences: ['Management'],
@@ -169,13 +246,19 @@ export const ROUTE_ACCESS_RULES: readonly RouteAccessRule[] = [
 	},
 	{
 		prefix: '/notices',
+		experiences: ['Management', 'Leasing'],
 		anyCapabilities: [CAPABILITY.tenantNoticesManage]
 	},
 	{
 		prefix: '/scan',
+		experiences: ['Management', 'Leasing', 'Maintenance'],
 		anyCapabilities: [
 			CAPABILITY.rentalsManage,
+			CAPABILITY.moneyExpensesManage,
+			CAPABILITY.moneyPaymentsManage,
+			CAPABILITY.workManage,
 			CAPABILITY.leasingAgreementsPrepare,
+			CAPABILITY.leasingApplicationsManage,
 			CAPABILITY.assignedWorkUpdate
 		]
 	}

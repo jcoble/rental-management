@@ -62,6 +62,7 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { messages as messagesApi } from '$lib/api/endpoints/messages';
 	import { appointments as appointmentsApi } from '$lib/api/endpoints/appointments';
+	import { leasingWorkspace } from '$lib/api/endpoints/leasing-workspace';
 	import NavigationLoader from '$lib/components/NavigationLoader.svelte';
 	import SandboxBanner from '$lib/components/SandboxBanner.svelte';
 	import M3TooltipLayer from '$lib/components/shared/M3TooltipLayer.svelte';
@@ -69,6 +70,7 @@
 	import ScanLauncher from '$lib/components/scan/ScanLauncher.svelte';
 	import BrandMark from '$lib/components/BrandMark.svelte';
 	import { canAccessRoute, CAPABILITY, safeLandingForAccess } from '$lib/auth/experience-policy';
+	import { canUseUnstructuredVoiceCapture, scanDocumentTypesForCapabilities } from '$lib/scan/scan-access';
 
 	let { children }: { children: import('svelte').Snippet } = $props();
 
@@ -179,6 +181,8 @@
 		icon: Settings,
 		items: [
 			{ href: '/settings/notifications/my-alerts', label: 'My alerts', icon: BellRing },
+			{ href: '/settings/notifications/team-routing', label: 'Team routing', icon: Users },
+			{ href: '/settings/notifications/tenant-notices', label: 'Tenant notices', icon: BellRing },
 			{ href: '/settings', label: 'Settings', icon: Settings },
 			{ href: '/admin/users', label: 'Team', icon: Shield },
 			{ href: '/audit', label: 'Activity history', icon: History }
@@ -211,6 +215,8 @@
 		'/ai': 'auto_awesome',
 		'/docs': 'menu_book',
 		'/settings/notifications/my-alerts': 'notifications',
+		'/settings/notifications/team-routing': 'account_tree',
+		'/settings/notifications/tenant-notices': 'campaign',
 		'/settings': 'settings',
 		'/admin/users': 'shield',
 		'/owners': 'account_balance',
@@ -266,6 +272,8 @@
 	const canOpenHeaderScan = $derived(
 		canAccessRoute('/scan', activeExperience, activeCapabilities)
 	);
+	const allowedHeaderScanTypes = $derived(scanDocumentTypesForCapabilities(activeCapabilities));
+	const allowHeaderVoiceCapture = $derived(canUseUnstructuredVoiceCapture(allowedHeaderScanTypes));
 	const headerMessagesHref = $derived(
 		technicianUser ? '/assignment-inbox' : leasingUser ? '/leasing/inbox' : '/messages'
 	);
@@ -281,6 +289,7 @@
 		{ href: '/portal', label: 'Dashboard', icon: Home },
 		{ href: '/portal/messages', label: 'Messages', icon: MessageSquare },
 		{ href: '/portal/notifications', label: 'Notifications', icon: BellRing },
+		{ href: '/settings/notifications/my-alerts', label: 'My alerts', icon: BellRing },
 		{ href: '/portal/maintenance', label: 'Maintenance', icon: Wrench },
 		{ href: '/portal/payments', label: 'Payments', icon: CreditCard },
 		{ href: '/portal/lease', label: 'Lease', icon: FileText },
@@ -295,19 +304,26 @@
 		{ href: '/owner/properties', label: 'Properties', icon: Building },
 		{ href: '/owner/statements', label: 'Statements & documents', icon: FileText },
 		{ href: '/owner/approvals', label: 'Approvals', icon: ClipboardList },
-		{ href: '/owner/messages', label: 'Messages', icon: MessageSquare }
+		{ href: '/owner/messages', label: 'Messages', icon: MessageSquare },
+		{ href: '/settings/notifications/my-alerts', label: 'My alerts', icon: BellRing }
 	];
 	const leasingNavItems: NavItem[] = [
 		{ href: '/leasing', label: 'Today', icon: LayoutDashboard },
-		{ href: '/leasing/pipeline', label: 'Pipeline', icon: ClipboardList },
-		{ href: '/leasing/rentals', label: 'Rentals & listings', icon: Home },
-		{ href: '/leasing/calendar', label: 'Calendar', icon: Calendar },
-		{ href: '/leasing/inbox', label: 'Inbox', icon: MessageSquare }
+		{ href: '/leasing/pipeline', label: 'Applications & move-ins', icon: ClipboardList },
+		{ href: '/leasing/rentals', label: 'Properties, units & listings', icon: Home },
+		{ href: '/leasing/calendar', label: 'Showings', icon: Calendar },
+		{ href: '/leasing/inbox', label: 'Inbox', icon: MessageSquare },
+		{ href: '/settings/notifications/my-alerts', label: 'My alerts', icon: BellRing },
+		{ href: '/settings/notifications/team-routing', label: 'Team routing', icon: Users },
+		{ href: '/settings/notifications/tenant-notices', label: 'Tenant notices', icon: BellRing }
 	];
 	const technicianNavItems: NavItem[] = [
 		{ href: '/my-work', label: 'My work', icon: Wrench },
 		{ href: '/my-schedule', label: 'Schedule', icon: Clock3 },
-		{ href: '/assignment-inbox', label: 'Inbox', icon: MessageSquare }
+		{ href: '/assignment-inbox', label: 'Inbox', icon: MessageSquare },
+		{ href: '/settings/notifications/my-alerts', label: 'My alerts', icon: BellRing },
+		{ href: '/settings/notifications/team-routing', label: 'Team routing', icon: Users },
+		{ href: '/settings/notifications/tenant-notices', label: 'Tenant notices', icon: BellRing }
 	];
 	const commandCenterTitleItem: NavItem = { href: '/units/', label: 'Command Center', icon: Home };
 
@@ -337,17 +353,21 @@
 		const items = settingsGroup.items.filter(itemVisible);
 		return items.length > 0 ? { ...settingsGroup, items } : null;
 	});
+	let visiblePortalNavItems = $derived.by(() => portalNavItems.filter(itemVisible));
+	let visibleOwnerNavItems = $derived.by(() => ownerNavItems.filter(itemVisible));
+	let visibleLeasingNavItems = $derived.by(() => leasingNavItems.filter(itemVisible));
+	let visibleTechnicianNavItems = $derived.by(() => technicianNavItems.filter(itemVisible));
 
 	// Flat list of every visible nav item (both modes) for title resolution.
 	let allItems = $derived.by(() =>
 		portalUser
-			? [...portalNavItems, ...portalUtilityItems]
-			: ownerUser
-				? ownerNavItems
-				: leasingUser
-					? [...leasingNavItems, { href: '/profile', label: 'Profile', icon: UserRound }]
-					: technicianUser
-						? [...technicianNavItems, { href: '/profile', label: 'Profile', icon: UserRound }]
+				? [...visiblePortalNavItems, ...portalUtilityItems]
+				: ownerUser
+					? visibleOwnerNavItems
+					: leasingUser
+						? [...visibleLeasingNavItems, { href: '/profile', label: 'Profile', icon: UserRound }]
+						: technicianUser
+							? [...visibleTechnicianNavItems, { href: '/profile', label: 'Profile', icon: UserRound }]
 						: [
 						...visiblePinned,
 						...(canSeeCommandCenter ? [commandCenterTitleItem] : []),
@@ -515,25 +535,45 @@
 	// Gate the live-count queries on the server-sourced identity too, so they don't fire a
 	// 401-bound request during the brief pre-hydration window. `enabled` is reactive (createQuery
 	// takes a thunk), so it flips on once page.data.user is present.
-	const isStaffSession = $derived(activeExperience !== 'Tenant' && activeCapabilities.size > 0);
+	const isManagementSession = $derived(activeExperience === 'Management' && activeCapabilities.size > 0);
+	const isLeasingSession = $derived(activeExperience === 'Leasing' && activeCapabilities.size > 0);
 	const showStaffHeader = $derived(!relationshipUser);
 	const unreadMessagesQuery = createQuery(() => ({
-		queryKey: ['header-unread-messages'],
-		enabled: isStaffSession && !portalUser && canOpenHeaderMessages,
+		queryKey: ['header-unread-messages', 'management'],
+		enabled: isManagementSession && canOpenHeaderMessages,
 		queryFn: () => messagesApi.unreadCount(),
 		staleTime: 30_000,
 		refetchInterval: 60_000
 	}));
-	let unreadMessages = $derived(unreadMessagesQuery.data?.count ?? 0);
 
 	const upcomingApptsQuery = createQuery(() => ({
-		queryKey: ['header-upcoming-appointments', getCurrentPortfolioId()],
-		enabled: isStaffSession && !portalUser && canOpenHeaderAppointments,
+		queryKey: ['header-upcoming-appointments', 'management', getCurrentPortfolioId()],
+		enabled: isManagementSession && canOpenHeaderAppointments,
 		queryFn: () => appointmentsApi.scheduleSummary(),
 		staleTime: 60_000,
 		refetchInterval: 120_000
 	}));
-	let upcomingAppts = $derived(upcomingApptsQuery.data?.nextSevenDaysCount ?? 0);
+	const leasingTodayQuery = createQuery(() => ({
+		queryKey: ['leasing-workspace', 'header-today'],
+		enabled: isLeasingSession && (canOpenHeaderMessages || canOpenHeaderAppointments),
+		queryFn: () => leasingWorkspace.today(),
+		staleTime: 30_000,
+		refetchInterval: 60_000
+	}));
+	let unreadMessages = $derived(
+		isLeasingSession
+			? (leasingTodayQuery.data?.unreadConversations ?? 0)
+			: isManagementSession
+				? (unreadMessagesQuery.data?.count ?? 0)
+				: 0
+	);
+	let upcomingAppts = $derived(
+		isLeasingSession
+			? (leasingTodayQuery.data?.showingsToday ?? 0)
+			: isManagementSession
+				? (upcomingApptsQuery.data?.nextSevenDaysCount ?? 0)
+				: 0
+	);
 </script>
 
 <NavigationLoader />
@@ -681,7 +721,7 @@
 		<!-- Navigation -->
 		<nav class="flex-1 overflow-y-auto px-2 py-3" data-testid="main-nav">
 			{#if portalUser}
-				{#each portalNavItems as item}
+				{#each visiblePortalNavItems as item}
 					{@const active = isActive(item.href)}
 					<a
 						href={item.href}
@@ -702,7 +742,7 @@
 					</a>
 				{/each}
 			{:else if ownerUser}
-				{#each ownerNavItems as item}
+				{#each visibleOwnerNavItems as item}
 					{#if sidebarCollapsed && !isMobile}
 						{@render navLinkCollapsed(item)}
 					{:else}
@@ -710,7 +750,7 @@
 					{/if}
 				{/each}
 			{:else if leasingUser}
-				{#each leasingNavItems as item}
+				{#each visibleLeasingNavItems as item}
 					{#if sidebarCollapsed && !isMobile}
 						{@render navLinkCollapsed(item)}
 					{:else}
@@ -718,7 +758,7 @@
 					{/if}
 				{/each}
 			{:else if technicianUser}
-				{#each technicianNavItems as item}
+				{#each visibleTechnicianNavItems as item}
 					{#if sidebarCollapsed && !isMobile}
 						{@render navLinkCollapsed(item)}
 					{:else}
@@ -984,6 +1024,8 @@
 							testid="header-scan"
 							triggerVariant="ghost"
 							triggerClass="m3-state-layer relative size-9 p-0 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+							allowedTypes={allowedHeaderScanTypes}
+							allowVoice={allowHeaderVoiceCapture}
 						/>{/if}
 					{/if}
 

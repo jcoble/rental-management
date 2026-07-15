@@ -12,7 +12,7 @@
 	import { buildScanReviewTarget, shouldAskForScanDocumentType } from '$lib/scan/scan-launcher';
 	import { scanUploadCopy } from '$lib/scan/scan-copy';
 	import { prepareScanDocumentUpload } from '$lib/scan/scan-upload';
-	import type { ScanContext, ScanDocType } from '$lib/scan/scan-context';
+	import { SCAN_DOC_TYPES, type ScanContext, type ScanDocType } from '$lib/scan/scan-context';
 	import {
 		VOICE_MAX_AUDIO_BYTES,
 		VOICE_MAX_RECORDING_SECONDS,
@@ -35,11 +35,15 @@
 	let {
 		context = {},
 		defaultType = context.type ?? 'Expense',
+		allowedTypes = SCAN_DOC_TYPES,
+		allowVoice = true,
 		compact = false,
 		oncreated
 	}: {
 		context?: ScanContext;
 		defaultType?: ScanDocType;
+		allowedTypes?: readonly ScanDocType[];
+		allowVoice?: boolean;
 		compact?: boolean;
 		oncreated?: (draftId: number, docType: ScanDocType) => void;
 	} = $props();
@@ -54,11 +58,16 @@
 	let recordingTimer: ReturnType<typeof setInterval> | null = null;
 	let voiceChunks: Blob[] = [];
 
-	const askForType = $derived(shouldAskForScanDocumentType(context));
+	const availableDocTypes = $derived(DOC_TYPES.filter((option) => allowedTypes.includes(option.value)));
+	const askForType = $derived(shouldAskForScanDocumentType(context) && availableDocTypes.length > 1);
 	const uploadCopy = $derived(scanUploadCopy(docType));
 
 	$effect(() => {
-		const nextDefault = context.type ?? defaultType;
+		const requestedDefault = context.type ?? defaultType;
+		const nextDefault = allowedTypes.includes(requestedDefault)
+			? requestedDefault
+			: availableDocTypes[0]?.value;
+		if (!nextDefault) return;
 		if (lastDefaultType !== nextDefault) {
 			lastDefaultType = nextDefault;
 			docType = nextDefault;
@@ -204,7 +213,12 @@
 </script>
 
 <div class={compact ? 'space-y-4' : 'space-y-6'} data-testid="scan-capture-panel">
-	{#if askForType && !uploadMutation.isPending && !isPreparingUpload}
+	{#if availableDocTypes.length === 0}
+		<div class="rounded-lg border border-border bg-muted/30 p-4" data-testid="scan-no-authorized-types">
+			<p class="text-sm font-medium">No scan command is available for this access.</p>
+			<p class="mt-1 text-xs text-muted-foreground">Switch to an authorized workspace experience or ask an administrator to update your assignment.</p>
+		</div>
+	{:else if askForType && !uploadMutation.isPending && !isPreparingUpload}
 		<div data-testid="scan-doc-type">
 			<div class="mb-2 flex items-center gap-1.5">
 				<span class="block text-sm font-medium">What are you scanning?</span>
@@ -216,7 +230,7 @@
 				/>
 			</div>
 			<div class="grid gap-3 sm:grid-cols-2 {compact ? '' : 'lg:grid-cols-3'}">
-				{#each DOC_TYPES as opt}
+				{#each availableDocTypes as opt}
 					<button
 						type="button"
 						data-testid="scan-doc-type-{opt.value}"
@@ -234,7 +248,7 @@
 		</div>
 	{/if}
 
-	<div data-testid="scan-upload">
+	{#if availableDocTypes.length > 0}<div data-testid="scan-upload">
 		{#if uploadMutation.isPending || isPreparingUpload}
 			<Card.Root class="flex items-center justify-center border-2 border-dashed px-6 py-8">
 				<Card.Content class="p-0">
@@ -247,9 +261,9 @@
 		{:else}
 			<FileDrop multiple onselectedmany={handleFilesSelected} title={uploadCopy.title} helperText={uploadCopy.helperText} />
 		{/if}
-	</div>
+	</div>{/if}
 
-	<div class="flex flex-wrap items-center gap-3 border-t pt-4" data-testid="voice-capture">
+	{#if allowVoice && availableDocTypes.length > 0}<div class="flex flex-wrap items-center gap-3 border-t pt-4" data-testid="voice-capture">
 		<Button
 			type="button"
 			variant={isRecording ? 'destructive' : 'outline'}
@@ -279,5 +293,5 @@
 				Recording {formatRecordingTime(recordingSeconds)} / {formatRecordingTime(VOICE_MAX_RECORDING_SECONDS)}
 			</span>
 		{/if}
-	</div>
+	</div>{/if}
 </div>

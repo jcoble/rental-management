@@ -46,6 +46,8 @@
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const isAdmin = $derived(hasCapability('security.manage', 'billing.manage'));
 	const canBroadcast = $derived(hasCapability('rentals.manage', 'leasing.onboarding.manage'));
+	const canManageTeamRouting = $derived(hasCapability('notifications.manage'));
+	const canManageTenantNotices = $derived(hasCapability('notifications.tenant-notices.manage'));
 
 	// Tabbed hub: each section is one tab. The active tab is mirrored to the URL hash so a deep-link
 	// (e.g. /settings#messaging) lands on the right tab and a refresh keeps your place. WalkMeThrough
@@ -565,7 +567,7 @@
 							<ArrowRight class="mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
 						</div>
 					</a>
-					<a class="group rounded-xl border border-border bg-card p-5 transition-colors hover:border-primary/50" href="/settings/notifications/team-routing">
+					{#if canManageTeamRouting}<a class="group rounded-xl border border-border bg-card p-5 transition-colors hover:border-primary/50" href="/settings/notifications/team-routing">
 						<div class="flex items-start justify-between gap-3">
 							<div>
 								<h2 class="font-semibold">Team routing</h2>
@@ -573,8 +575,8 @@
 							</div>
 							<ArrowRight class="mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
 						</div>
-					</a>
-					<a class="group rounded-xl border border-border bg-card p-5 transition-colors hover:border-primary/50" href="/settings/notifications/tenant-notices">
+					</a>{/if}
+					{#if canManageTenantNotices}<a class="group rounded-xl border border-border bg-card p-5 transition-colors hover:border-primary/50" href="/settings/notifications/tenant-notices">
 						<div class="flex items-start justify-between gap-3">
 							<div>
 								<h2 class="font-semibold">Tenant notices</h2>
@@ -582,7 +584,7 @@
 							</div>
 							<ArrowRight class="mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
 						</div>
-					</a>
+					</a>{/if}
 				</div>
 
 				{#if canBroadcast}
@@ -641,12 +643,12 @@
 			<div class="space-y-4">
 				{@render sectionIntro(section('automations'))}
 
-				<Card.Root class="gap-0 py-0" data-coach="settings-automations">
+				{#if canManageTenantNotices}<Card.Root class="gap-0 py-0" data-coach="settings-automations">
 					<Card.Content class="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
 						<div><p class="text-sm font-semibold">Tenant communication automations</p><p class="mt-1 text-xs text-muted-foreground">Each tenant notice now has its own Off, Draft for review, or Send automatically policy.</p></div>
 						<Button variant="outline" href="/settings/notifications/tenant-notices">Open tenant notices</Button>
 					</Card.Content>
-				</Card.Root>
+				</Card.Root>{:else}<Card.Root class="gap-0 py-0"><Card.Content class="p-5"><p class="text-sm font-semibold">Tenant communication automations</p><p class="mt-1 text-xs text-muted-foreground">Your team assignment does not include permission to manage tenant notice automations.</p></Card.Content></Card.Root>{/if}
 			</div>
 		</Tabs.Content>
 
