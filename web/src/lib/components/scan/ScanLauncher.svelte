@@ -5,7 +5,12 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { buildScanReviewTarget, contextualScanTitle, scanLauncherMode } from '$lib/scan/scan-launcher';
-	import { SCAN_DOC_TYPES, type ScanContext, type ScanDocType } from '$lib/scan/scan-context';
+	import {
+		SCAN_DOC_TYPES,
+		type ScanContext,
+		type ScanDocType,
+		type ScanIntakeType
+	} from '$lib/scan/scan-context';
 	import ScanCapturePanel from './ScanCapturePanel.svelte';
 
 	let {
@@ -42,9 +47,14 @@
 			: 'Choose a document type, upload a PDF or photos, then review what the app extracted before it creates a record.'
 	);
 
-	function handleCreated(draftId: number, docType: ScanDocType) {
+	function handleCreated(draftId: number, docType: ScanIntakeType) {
 		open = false;
-		goto(buildScanReviewTarget(draftId, { ...context, type: docType }));
+		goto(
+			buildScanReviewTarget(
+				draftId,
+				docType === 'Auto' ? { ...context, type: undefined } : { ...context, type: docType }
+			)
+		);
 	}
 </script>
 
@@ -59,7 +69,7 @@
 		data-testid={testid}
 	>
 		<ScanLine class="h-4 w-4" />
-		{triggerLabel ?? title}
+		<span>{triggerLabel ?? title}</span>
 	</Button>
 {/if}
 

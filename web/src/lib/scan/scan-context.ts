@@ -1,5 +1,6 @@
 export const SCAN_DOC_TYPES = ['Expense', 'Payment', 'WorkOrder', 'LeaseAgreement', 'Application', 'Loan'] as const;
 export type ScanDocType = (typeof SCAN_DOC_TYPES)[number];
+export type ScanIntakeType = ScanDocType | 'Auto';
 
 export interface ScanContext {
 	type?: ScanDocType;

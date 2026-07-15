@@ -12,7 +12,12 @@
 	import { buildScanReviewTarget, shouldAskForScanDocumentType } from '$lib/scan/scan-launcher';
 	import { scanUploadCopy } from '$lib/scan/scan-copy';
 	import { prepareScanDocumentUpload } from '$lib/scan/scan-upload';
-	import { SCAN_DOC_TYPES, type ScanContext, type ScanDocType } from '$lib/scan/scan-context';
+	import {
+		SCAN_DOC_TYPES,
+		type ScanContext,
+		type ScanDocType,
+		type ScanIntakeType
+	} from '$lib/scan/scan-context';
 	import {
 		VOICE_MAX_AUDIO_BYTES,
 		VOICE_MAX_RECORDING_SECONDS,
@@ -22,6 +27,12 @@
 	} from '$lib/scan/voice-capture';
 
 	const queryClient = useQueryClient();
+
+	const AUTO_TYPE: { value: ScanIntakeType; label: string; hint: string } = {
+		value: 'Auto',
+		label: 'Auto / classify for me',
+		hint: 'Best for mixed paperwork — identify it first, then show the right review'
+	};
 
 	const DOC_TYPES: { value: ScanDocType; label: string; hint: string }[] = [
 		{ value: 'Expense', label: 'Receipt / Bill', hint: 'Becomes an expense record' },
@@ -45,11 +56,11 @@
 		allowedTypes?: readonly ScanDocType[];
 		allowVoice?: boolean;
 		compact?: boolean;
-		oncreated?: (draftId: number, docType: ScanDocType) => void;
+		oncreated?: (draftId: number, docType: ScanIntakeType) => void;
 	} = $props();
 
-	let docType = $state<ScanDocType>('Expense');
-	let lastDefaultType = $state<ScanDocType | null>(null);
+	let docType = $state<ScanIntakeType>('Expense');
+	let lastDefaultType = $state<ScanIntakeType | null>(null);
 	let isPreparingUpload = $state(false);
 	let isRecording = $state(false);
 	let recordingSeconds = $state(0);
@@ -59,12 +70,20 @@
 	let voiceChunks: Blob[] = [];
 
 	const availableDocTypes = $derived(DOC_TYPES.filter((option) => allowedTypes.includes(option.value)));
+	const canAutoClassify = $derived(
+		SCAN_DOC_TYPES.every((type) => allowedTypes.includes(type)) && !context.type
+	);
+	const availableIntakeTypes = $derived([
+		...(canAutoClassify ? [AUTO_TYPE] : []),
+		...availableDocTypes
+	]);
 	const askForType = $derived(shouldAskForScanDocumentType(context) && availableDocTypes.length > 1);
 	const uploadCopy = $derived(scanUploadCopy(docType));
+	const selectedTarget = $derived(docType === 'Auto' ? undefined : docType);
 
 	$effect(() => {
-		const requestedDefault = context.type ?? defaultType;
-		const nextDefault = allowedTypes.includes(requestedDefault)
+		const requestedDefault: ScanIntakeType = context.type ?? (canAutoClassify ? 'Auto' : defaultType);
+		const nextDefault = requestedDefault === 'Auto' || allowedTypes.includes(requestedDefault)
 			? requestedDefault
 			: availableDocTypes[0]?.value;
 		if (!nextDefault) return;
@@ -77,12 +96,17 @@
 	function navigateToDraft(draftId: number) {
 		oncreated?.(draftId, docType);
 		if (!oncreated) {
-			goto(buildScanReviewTarget(draftId, { ...context, type: docType }));
+			goto(
+				buildScanReviewTarget(
+					draftId,
+					docType === 'Auto' ? { ...context, type: undefined } : { ...context, type: docType }
+				)
+			);
 		}
 	}
 
 	const uploadMutation = createMutation(() => ({
-		mutationFn: (file: File) => scan.upload(file, docType, context),
+		mutationFn: (file: File) => scan.upload(file, selectedTarget, context),
 		onSuccess: (res) => {
 			queryClient.invalidateQueries({ queryKey: ['scans'] });
 			navigateToDraft(res.draftId);
@@ -230,17 +254,22 @@
 				/>
 			</div>
 			<div class="grid gap-3 sm:grid-cols-2 {compact ? '' : 'lg:grid-cols-3'}">
-				{#each availableDocTypes as opt}
+				{#each availableIntakeTypes as opt}
 					<button
 						type="button"
 						data-testid="scan-doc-type-{opt.value}"
 						aria-pressed={docType === opt.value}
 						onclick={() => { docType = opt.value; }}
-						class="flex flex-col items-start gap-0.5 rounded-lg border px-4 py-3 text-left transition-colors active:scale-[0.99] {docType === opt.value
+						class="flex flex-col items-start gap-0.5 rounded-lg border px-4 py-3 text-left transition-[color,background-color,border-color,transform] active:scale-[0.98] {docType === opt.value
 							? 'border-accent bg-accent/10 ring-2 ring-accent'
 							: 'border-border bg-background hover:bg-muted/50'}"
 					>
-						<span class="text-sm font-semibold">{opt.label}</span>
+						<span class="flex items-center gap-2 text-sm font-semibold">
+							{opt.label}
+							{#if opt.value === 'Auto'}
+								<span class="rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">Recommended</span>
+							{/if}
+						</span>
 						<span class="text-xs text-muted-foreground">{opt.hint}</span>
 					</button>
 				{/each}

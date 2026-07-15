@@ -13,6 +13,7 @@ import '../tenants/tenants_repository.dart';
 import '../units/unit_command_center_screen.dart';
 import 'scan_models.dart';
 import 'scan_repository.dart';
+import 'scan_target_options.dart';
 
 // ---------------------------------------------------------------------------
 // Providers
@@ -925,7 +926,7 @@ class _ReviewBody extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Review Scan #${draft.id}'),
+        title: const Text('Review before saving'),
         actions: [
           _StatusChip(status: draft.status),
           const SizedBox(width: 12),
@@ -936,6 +937,8 @@ class _ReviewBody extends ConsumerWidget {
           : ListView(
               padding: const EdgeInsets.only(bottom: 140),
               children: [
+                _ReviewCheckpointCard(draft: draft),
+
                 if (draft.status == 'Failed')
                   _Banner(
                     color: colorScheme.errorContainer,
@@ -971,9 +974,6 @@ class _ReviewBody extends ConsumerWidget {
                     textColor: colorScheme.onSurfaceVariant,
                     child: const Text('This scan has been rejected.'),
                   ),
-
-                if (draft.captureContext?.hasBusinessContext ?? false)
-                  _CaptureContextBanner(context: draft.captureContext!),
 
                 // ---- Document preview ----
                 _DocumentPreview(draftId: draft.id),
@@ -1219,59 +1219,139 @@ class _ReviewBody extends ConsumerWidget {
   }
 }
 
-class _CaptureContextBanner extends StatelessWidget {
-  const _CaptureContextBanner({required this.context});
+class _ReviewCheckpointCard extends StatelessWidget {
+  const _ReviewCheckpointCard({required this.draft});
 
-  final ScanCaptureContext context;
+  final ScanDraft draft;
+
+  String get _command {
+    if (draft.isPayment) return 'Record one payment';
+    if (draft.isWorkOrder && draft.captureContext?.workOrderId != null) {
+      return 'Update work order #${draft.captureContext!.workOrderId}';
+    }
+    if (draft.isWorkOrder) return 'Create one work order';
+    if (draft.isLease) return 'Create one lease agreement';
+    if (draft.isApplication) return 'Create one rental application';
+    if (draft.isLoan) return 'Create one property loan';
+    return 'Create one expense';
+  }
+
+  String get _destination {
+    if (draft.createdEntityType?.trim().isNotEmpty ?? false) {
+      final id = draft.createdEntityId;
+      return '${draft.createdEntityType}${id == null ? '' : ' #$id'}';
+    }
+    final capture = draft.captureContext;
+    final label = capture?.sourceLabel?.trim();
+    if (label?.isNotEmpty == true) return label!;
+    if (capture?.userFacingParts.isNotEmpty ?? false) {
+      return capture!.userFacingParts.join(' · ');
+    }
+    if (draft.isPayment) return 'Rental account selected below';
+    if (draft.isLease) return 'Property and unit selected below';
+    if (draft.isLoan) return 'Property selected below';
+    return 'Current workspace';
+  }
 
   @override
-  Widget build(BuildContext buildContext) {
-    final colorScheme = Theme.of(buildContext).colorScheme;
-    final items = <String>[
-      if (context.propertyId != null) 'Property #${context.propertyId}',
-      if (context.unitId != null) 'Unit #${context.unitId}',
-      if (context.leaseManagementId != null)
-        'Rental relationship #${context.leaseManagementId}',
-      if (context.leaseAgreementId != null)
-        'Agreement #${context.leaseAgreementId}',
-      if (context.tenantAccountId != null)
-        'Rental account #${context.tenantAccountId}',
-      if (context.tenantLedgerEntryId != null)
-        'Ledger entry #${context.tenantLedgerEntryId}',
-      if (context.workOrderId != null) 'Work order #${context.workOrderId}',
-      if (context.applicationId != null)
-        'Application #${context.applicationId}',
-      if (context.rentalListingId != null)
-        'Listing #${context.rentalListingId}',
-    ];
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final lowConfidence = draft.scalarFields
+        .where((field) => field.confidence < 0.8)
+        .length;
+    final target = scanTargetFor(draft.targetEntityType);
 
-    return _Banner(
-      color: colorScheme.secondaryContainer,
-      borderColor: colorScheme.secondary.withValues(alpha: 0.35),
-      textColor: colorScheme.onSecondaryContainer,
-      child: Column(
+    return Card.filled(
+      margin: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(target.icon, color: colorScheme.primary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    target.label,
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            _CheckpointRow(
+              label: 'Source',
+              value:
+                  draft.captureContext?.sourceLabel?.trim().isNotEmpty ?? false
+                  ? draft.captureContext!.sourceLabel!.trim()
+                  : 'Uploaded document #${draft.id}',
+            ),
+            _CheckpointRow(
+              label: 'Review',
+              value: draft.fields.isEmpty
+                  ? 'Waiting for extracted fields'
+                  : lowConfidence == 0
+                  ? '${draft.scalarFields.length} fields ready to verify'
+                  : '$lowConfidence field${lowConfidence == 1 ? '' : 's'} need extra attention',
+              warning: lowConfidence > 0,
+            ),
+            _CheckpointRow(label: 'Destination', value: _destination),
+            _CheckpointRow(label: 'Save command', value: _command),
+            const SizedBox(height: 8),
+            Text(
+              'Nothing is created until you use the save button below. The server rechecks your access and safely reuses a completed result if the same save is retried.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CheckpointRow extends StatelessWidget {
+  const _CheckpointRow({
+    required this.label,
+    required this.value,
+    this.warning = false,
+  });
+
+  final String label;
+  final String value;
+  final bool warning;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'This scan will stay connected to:',
-            style: Theme.of(buildContext).textTheme.labelLarge?.copyWith(
-              color: colorScheme.onSecondaryContainer,
-              fontWeight: FontWeight.w700,
+          SizedBox(
+            width: 92,
+            child: Text(
+              label,
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            children: items.map((item) => Chip(label: Text(item))).toList(),
-          ),
-          if (context.sourceLabel?.trim().isNotEmpty ?? false) ...[
-            const SizedBox(height: 6),
-            Text('Source: ${context.sourceLabel!.trim()}'),
-          ],
-          const SizedBox(height: 6),
-          const Text(
-            'Rental Command will verify this context again when you confirm.',
+          Expanded(
+            child: Text(
+              value,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: warning ? Colors.amber.shade800 : null,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ),
         ],
       ),

@@ -175,6 +175,18 @@ class ScanCaptureContext {
       applicationId != null ||
       rentalListingId != null;
 
+  List<String> get userFacingParts => [
+    if (propertyId != null) 'Property #$propertyId',
+    if (unitId != null) 'Unit #$unitId',
+    if (leaseManagementId != null) 'Rental #$leaseManagementId',
+    if (leaseAgreementId != null) 'Agreement #$leaseAgreementId',
+    if (tenantAccountId != null) 'Account #$tenantAccountId',
+    if (tenantLedgerEntryId != null) 'Ledger entry #$tenantLedgerEntryId',
+    if (workOrderId != null) 'Work order #$workOrderId',
+    if (applicationId != null) 'Application #$applicationId',
+    if (rentalListingId != null) 'Listing #$rentalListingId',
+  ];
+
   factory ScanCaptureContext.fromJson(Map<String, dynamic> json) {
     return ScanCaptureContext(
       experience: json['experience'] as String?,
@@ -205,11 +217,15 @@ class ScanDraft {
     this.modelId,
     this.tokensUsed,
     this.costUsd,
+    this.failureReason,
     required this.createdAt,
     this.reviewedAt,
     this.confirmedAt,
     this.leaseProposal,
     this.captureContext,
+    this.createdEntityType,
+    this.createdEntityId,
+    this.createdUnitId,
   });
 
   final int id;
@@ -229,6 +245,7 @@ class ScanDraft {
   final String? modelId;
   final int? tokensUsed;
   final double? costUsd;
+  final String? failureReason;
   final DateTime createdAt;
   final DateTime? reviewedAt;
   final DateTime? confirmedAt;
@@ -240,6 +257,11 @@ class ScanDraft {
   /// Server-preserved launch context used to preselect the exact account when
   /// a payment scan starts from a Unit or account surface.
   final ScanCaptureContext? captureContext;
+
+  /// Canonical destination populated after confirmation.
+  final String? createdEntityType;
+  final int? createdEntityId;
+  final int? createdUnitId;
 
   /// Target is a Payment draft (vs. an Expense draft).
   bool get isPayment => targetEntityType == 'Payment';
@@ -292,6 +314,7 @@ class ScanDraft {
       modelId: json['modelId'] as String?,
       tokensUsed: (json['tokensUsed'] as num?)?.toInt(),
       costUsd: (json['costUsd'] as num?)?.toDouble(),
+      failureReason: json['failureReason'] as String?,
       createdAt:
           DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime(0),
       reviewedAt: json['reviewedAt'] != null
@@ -310,6 +333,9 @@ class ScanDraft {
               json['captureContext'] as Map<String, dynamic>,
             )
           : null,
+      createdEntityType: json['createdEntityType'] as String?,
+      createdEntityId: (json['createdEntityId'] as num?)?.toInt(),
+      createdUnitId: (json['createdUnitId'] as num?)?.toInt(),
     );
   }
 
