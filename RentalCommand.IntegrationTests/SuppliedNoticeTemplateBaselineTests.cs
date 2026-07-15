@@ -7,9 +7,11 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Auditing;
 using RentalCommand.Data.Notifications;
 using RentalCommand.Engine.Services;
 using Testcontainers.PostgreSql;
@@ -59,6 +61,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
 
         var services = new ServiceCollection();
         services.AddSingleton(TimeProvider.System);
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
         services.AddAtomicCommandHandler<
             AtomicNotificationMutationCommand,
