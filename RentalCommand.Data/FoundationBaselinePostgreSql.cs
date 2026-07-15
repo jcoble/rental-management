@@ -1943,9 +1943,28 @@ internal static class FoundationBaselinePostgreSql
         CREATE POLICY public_application_insert ON "RentalApplications" FOR INSERT
           WITH CHECK (rc_public_application_scope_allows("PortfolioId"));
 
+        -- EF/Npgsql inserts use INSERT ... RETURNING "Id". PostgreSQL applies SELECT RLS to
+        -- returned rows, so the token-scoped caller must be able to read the row it just inserted.
+        -- The token GUC is populated only for the dedicated anonymous application endpoints.
+        DROP POLICY IF EXISTS public_application_select ON "RentalApplications";
+        CREATE POLICY public_application_select ON "RentalApplications" FOR SELECT
+          USING (rc_public_application_scope_allows("PortfolioId"));
+
         DROP POLICY IF EXISTS public_application_insert ON "AtomicAuditLogs";
         CREATE POLICY public_application_insert ON "AtomicAuditLogs" FOR INSERT
           WITH CHECK (rc_public_application_scope_allows("PortfolioId"));
+
+        DROP POLICY IF EXISTS public_application_select ON "AtomicAuditLogs";
+        CREATE POLICY public_application_select ON "AtomicAuditLogs" FOR SELECT
+          USING (rc_public_application_scope_allows("PortfolioId"));
+
+        DROP POLICY IF EXISTS public_application_insert ON "OutboxMessages";
+        CREATE POLICY public_application_insert ON "OutboxMessages" FOR INSERT
+          WITH CHECK (rc_public_application_scope_allows("PortfolioId"));
+
+        DROP POLICY IF EXISTS public_application_select ON "OutboxMessages";
+        CREATE POLICY public_application_select ON "OutboxMessages" FOR SELECT
+          USING (rc_public_application_scope_allows("PortfolioId"));
         """;
 
     private static IEnumerable<string> BuildResourcePoliciesSql()

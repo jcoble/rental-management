@@ -532,10 +532,16 @@ public sealed class FoundationBaselinePostgreSqlTests
 
         CreateSql.Should().Contain(
             "CREATE POLICY public_application_insert ON \"RentalApplications\" FOR INSERT");
-        CreateSql.Should().NotContain(
-            "CREATE POLICY public_application_select ON \"RentalApplications\"");
+        CreateSql.Should().Contain(
+            "CREATE POLICY public_application_select ON \"RentalApplications\" FOR SELECT");
         CreateSql.Should().Contain(
             "CREATE POLICY public_application_insert ON \"AtomicAuditLogs\" FOR INSERT");
+        CreateSql.Should().Contain(
+            "CREATE POLICY public_application_select ON \"AtomicAuditLogs\" FOR SELECT");
+        CreateSql.Should().Contain(
+            "CREATE POLICY public_application_insert ON \"OutboxMessages\" FOR INSERT");
+        CreateSql.Should().Contain(
+            "CREATE POLICY public_application_select ON \"OutboxMessages\" FOR SELECT");
         CreateSql.Should().NotContain("public_application_update");
         CreateSql.Should().NotContain("public_application_delete");
         DropSql.Should().Contain(
