@@ -205,7 +205,7 @@ this lane; this is source inspection only.
 - **Refreshed verification:** `/admin/users` now shows the explicit activation-required sentence for
   the pending QA member while retaining its separate `Active` membership control.
 
-### BUG-7 — Medium / source fix pending deployment — editable Step 1 flashes before resume detection completes
+### BUG-7 — Resolved in protected preview — setup waits for resume detection
 
 - **Route:** `/onboarding`
 - **Expected:** existing-record detection finishes before an editable wizard step is shown; a
@@ -218,9 +218,11 @@ this lane; this is source inspection only.
 - **Narrow source fix:** render `Checking your existing setup…` until both detection and initial
   positioning complete; show a retryable, non-destructive error state if any detection query fails;
   render the editable wizard only afterward.
-- **Focused contract:** `onboarding-flow-state.test.ts` now asserts the loading/error gate remains
-  ahead of editable setup. No test command was run in this lane per the orchestrator's serialized
-  verification instruction.
+- **Focused contract:** `onboarding-flow-state.test.ts` asserts the loading/error gate remains ahead
+  of editable setup.
+- **Live proof:** a cold `/onboarding` load first showed `Checking your existing setup…`, did not
+  expose editable setup fields, and then resolved to `You're all set!` after the existing records
+  completed loading.
 
 ## Not yet proven end to end
 
