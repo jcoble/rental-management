@@ -35,7 +35,7 @@ public sealed record StoredDocumentManagementAccess(
     Guid SessionId,
     int UserId,
     int AccessContextId,
-    long AccessRevision);
+    long AccessRevision) : IAtomicCommandData;
 
 /// <summary>
 /// Persists one already-uploaded blob as a general document. Blob I/O is deliberately excluded from

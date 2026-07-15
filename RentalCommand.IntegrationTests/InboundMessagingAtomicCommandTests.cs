@@ -139,7 +139,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         (await db.AtomicAuditLogs.CountAsync(log => log.EntityType == nameof(ConversationMessage)))
             .Should().Be(2);
         _probe.Commands.Count(sql => sql.Contains(
-            "ScopedNotificationRecipients: canonical tenant relationship and assignment scope",
+            "TSK-668 tenant relationship Team routing with exact property and administrator fallback",
             StringComparison.Ordinal)).Should().Be(2);
     }
 
@@ -182,7 +182,7 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             .Distinct()
             .ToListAsync()).Should().Equal((int?)_facts.AuthorizedUserId);
         _probe.Commands.Count(sql => sql.Contains(
-            "ScopedNotificationRecipients: property capability and assignment scope",
+            "TSK-668 event-time team routing with direct responsibility and visible administrator fallback",
             StringComparison.Ordinal)).Should().Be(2);
     }
 
@@ -659,6 +659,17 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             PropertyId = samePortfolioDecoyProperty.Id,
             PortfolioId = firstPortfolio.Id,
         });
+        db.TeamRoutingRules.AddRange(
+            NewRoutingRule(
+                firstPortfolio.Id,
+                TeamRoutingTopic.ApplicationsAndLeasing,
+                admin.Id,
+                decoyUser.Id),
+            NewRoutingRule(
+                firstPortfolio.Id,
+                TeamRoutingTopic.WorkOrders,
+                admin.Id,
+                decoyUser.Id));
 
         var workOrder = NewWorkOrder(firstPortfolio.Id, property.Id, "Primary repair");
         db.WorkOrders.Add(workOrder);
@@ -701,6 +712,34 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             admin.Id,
             decoyUser.Id);
     }
+
+    private TeamRoutingRule NewRoutingRule(
+        int portfolioId,
+        TeamRoutingTopic topic,
+        int authorizedUserId,
+        int decoyUserId) => new()
+    {
+        PortfolioId = portfolioId,
+        Topic = topic,
+        UseWorkspaceAdministratorFallback = true,
+        CreatedAtUtc = _now,
+        UpdatedAtUtc = _now,
+        Recipients =
+        [
+            new TeamRoutingRuleRecipient
+            {
+                PortfolioId = portfolioId,
+                UserId = authorizedUserId,
+                Reason = "Authorized event recipient",
+            },
+            new TeamRoutingRuleRecipient
+            {
+                PortfolioId = portfolioId,
+                UserId = decoyUserId,
+                Reason = "Out-of-scope recipient",
+            },
+        ],
+    };
 
     private WorkspaceAccessContext NewAccessContext(int userId, int portfolioId) => new()
     {

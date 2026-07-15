@@ -357,6 +357,40 @@ public class VendorDispatchServiceTests : IDisposable
         SeedScopedMember(userId: 101, decoyProperty.Id, roleProfileId: 2);
         // Leasing is in property scope but does not supply work.read.
         SeedScopedMember(userId: 102, property.Id, roleProfileId: 3);
+        var now = DateTime.UtcNow;
+        var routingRule = new TeamRoutingRule
+        {
+            PortfolioId = PortfolioId,
+            Topic = TeamRoutingTopic.WorkOrders,
+            UseWorkspaceAdministratorFallback = true,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        routingRule.Recipients.Add(new TeamRoutingRuleRecipient
+        {
+            PortfolioId = PortfolioId,
+            UserId = _scope.UserId,
+            Reason = "Workspace administrator",
+        });
+        routingRule.Recipients.Add(new TeamRoutingRuleRecipient
+        {
+            PortfolioId = PortfolioId,
+            UserId = 100,
+            Reason = "Assigned maintenance staff",
+        });
+        routingRule.Recipients.Add(new TeamRoutingRuleRecipient
+        {
+            PortfolioId = PortfolioId,
+            UserId = 101,
+            Reason = "Unrelated property staff",
+        });
+        routingRule.Recipients.Add(new TeamRoutingRuleRecipient
+        {
+            PortfolioId = PortfolioId,
+            UserId = 102,
+            Reason = "Leasing staff without work access",
+        });
+        _ctx.Db.TeamRoutingRules.Add(routingRule);
         await _ctx.Db.SaveChangesAsync();
 
         var result = await CreateDoneSut().TryHandleAsync(
