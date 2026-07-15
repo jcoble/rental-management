@@ -1,5 +1,7 @@
 using System.Data.Common;
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Api.Auth;
@@ -14,7 +16,8 @@ internal readonly record struct RlsSessionState(
     int? UserId = null,
     int? AccessContextId = null,
     long? AccessRevision = null,
-    string? PublicApplicationToken = null);
+    string? PublicApplicationToken = null,
+    string? PublicSigningTokenHash = null);
 
 /// <summary>
 /// Sets PostgreSQL RLS coordinates from the middleware-validated canonical access context and
@@ -104,6 +107,18 @@ public sealed class RlsConnectionInterceptor : DbConnectionInterceptor
             return new RlsSessionState(0, PublicApplicationToken: token);
         }
 
+        // Native e-sign links are anonymous by design. Only their SHA-256 digest reaches the
+        // PostgreSQL session; dedicated policies use it to expose this signer, this packet, and
+        // the packet's legal artifact. It never satisfies ordinary workspace authorization.
+        if (httpContext is not null
+            && httpContext.Request.Path.StartsWithSegments("/api/v1/sign")
+            && httpContext.Request.RouteValues.TryGetValue("token", out var signingRouteToken)
+            && signingRouteToken is string signingToken
+            && IsOpaquePublicToken(signingToken))
+        {
+            return new RlsSessionState(0, PublicSigningTokenHash: TokenHash(signingToken));
+        }
+
         // This also permits the canonical resolver to read the non-portfolio authority tables before
         // it has validated the context, while every portfolio-scoped table remains invisible.
         return new RlsSessionState(0);
@@ -115,9 +130,16 @@ public sealed class RlsConnectionInterceptor : DbConnectionInterceptor
         $"set_config('app.current_user_id', '{state.UserId?.ToString() ?? string.Empty}', false), " +
         $"set_config('app.current_access_context_id', '{state.AccessContextId?.ToString() ?? string.Empty}', false), " +
         $"set_config('app.access_revision', '{state.AccessRevision?.ToString() ?? string.Empty}', false), " +
-        $"set_config('app.public_application_token', '{state.PublicApplicationToken ?? string.Empty}', false);";
+        $"set_config('app.public_application_token', '{state.PublicApplicationToken ?? string.Empty}', false), " +
+        $"set_config('app.public_signing_token_hash', '{state.PublicSigningTokenHash ?? string.Empty}', false);";
 
     private static bool IsPublicApplicationToken(string token) =>
+        IsOpaquePublicToken(token);
+
+    private static bool IsOpaquePublicToken(string token) =>
         token.Length is >= 20 and <= 64
         && token.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
+
+    private static string TokenHash(string token) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
 }

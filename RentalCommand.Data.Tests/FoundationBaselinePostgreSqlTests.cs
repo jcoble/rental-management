@@ -383,9 +383,9 @@ public sealed class FoundationBaselinePostgreSqlTests
         FoundationBaselinePostgreSql.RlsAuthoritySelectTables.Should().BeEquivalentTo(
         [
             "AspNetUsers", "AtomicCommandReceipts", "AuthSessions", "CapabilityDefinitions", "LeaseManagementParties",
-            "LeaseManagements", "LoginContextSelectionChallenges", "MembershipRoleAssignmentProperties", "MembershipRoleAssignments",
+            "LeaseManagements", "LegalDocumentArtifacts", "LoginContextSelectionChallenges", "MembershipRoleAssignmentProperties", "MembershipRoleAssignments",
             "OwnerEntities", "OwnerUserAccesses", "Portfolios", "Properties", "RoleProfileCapabilities",
-            "RoleProfiles", "SimulationClocks", "SystemNoticeTemplateVersions", "TenantAccounts",
+            "RoleProfiles", "SignatureRequests", "SignatureSigners", "SimulationClocks", "StoredFiles", "SystemNoticeTemplateVersions", "TenantAccounts",
             "TenantUserAccesses", "Units", "WorkOrders", "WorkOrderResponsibilities",
             "WorkspaceAccessContexts", "WorkspaceInvitations", "WorkspaceMemberships", "WorkspaceNoticeTemplateVersions",
         ]);
@@ -405,6 +405,10 @@ public sealed class FoundationBaselinePostgreSqlTests
         [
             "rc_api_scope_allows(integer)",
             "rc_public_application_scope_allows(integer)",
+            "rc_public_signing_scope_allows(integer)",
+            "rc_public_signing_request_allows(integer, integer)",
+            "rc_public_signing_artifact_allows(integer, integer)",
+            "rc_public_signing_file_allows(integer, integer, text, integer)",
             "rc_api_resource_scope_allows(integer, integer, integer, integer, integer, integer, integer, boolean, boolean, boolean)",
             "rc_account_bootstrap_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text)",
             "rc_pre_auth_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb)",
@@ -546,6 +550,34 @@ public sealed class FoundationBaselinePostgreSqlTests
         CreateSql.Should().NotContain("public_application_delete");
         DropSql.Should().Contain(
             "DROP FUNCTION IF EXISTS rc_public_application_scope_allows(integer);");
+    }
+
+    [Fact]
+    public void PublicSigningScope_IsTokenHashBoundAndLimitedToSigningResources()
+    {
+        CreateSql.Should().Contain(
+            "CREATE OR REPLACE FUNCTION rc_public_signing_scope_allows(target_portfolio_id integer)");
+        CreateSql.Should().Contain("current_setting('app.public_signing_token_hash', true)");
+        CreateSql.Should().Contain("signer.\"TokenHash\" = current_setting('app.public_signing_token_hash', true)");
+
+        foreach (var table in new[]
+                 {
+                     "Portfolios", "SignatureSigners", "SignatureRequests", "SignatureAuditEvents",
+                     "LegalDocumentArtifacts", "StoredFiles", "PendingFileUploads", "AtomicAuditLogs",
+                 })
+        {
+            CreateSql.Should().Contain($"public_signing_select ON \"{table}\"");
+        }
+
+        CreateSql.Should().Contain("public_signing_update ON \"SignatureSigners\"");
+        CreateSql.Should().Contain("public_signing_update ON \"SignatureRequests\"");
+        CreateSql.Should().Contain("public_signing_insert ON \"SignatureAuditEvents\"");
+        CreateSql.Should().Contain("public_signing_insert ON \"StoredFiles\"");
+        CreateSql.Should().Contain("public_signing_insert ON \"PendingFileUploads\"");
+        CreateSql.Should().Contain("public_signing_insert ON \"AtomicAuditLogs\"");
+        CreateSql.Should().NotContain("public_signing_delete");
+        DropSql.Should().Contain(
+            "DROP FUNCTION IF EXISTS rc_public_signing_scope_allows(integer);");
     }
 
     [Fact]

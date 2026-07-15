@@ -263,6 +263,7 @@ internal static class FoundationBaselinePostgreSql
         "CapabilityDefinitions",
         "LeaseManagementParties",
         "LeaseManagements",
+        "LegalDocumentArtifacts",
         "LoginContextSelectionChallenges",
         "MembershipRoleAssignmentProperties",
         "MembershipRoleAssignments",
@@ -272,7 +273,10 @@ internal static class FoundationBaselinePostgreSql
         "Properties",
         "RoleProfileCapabilities",
         "RoleProfiles",
+        "SignatureRequests",
+        "SignatureSigners",
         "SimulationClocks",
+        "StoredFiles",
         "SystemNoticeTemplateVersions",
         "TenantAccounts",
         "TenantUserAccesses",
@@ -322,6 +326,10 @@ internal static class FoundationBaselinePostgreSql
     [
         "rc_api_scope_allows(integer)",
         "rc_public_application_scope_allows(integer)",
+        "rc_public_signing_scope_allows(integer)",
+        "rc_public_signing_request_allows(integer, integer)",
+        "rc_public_signing_artifact_allows(integer, integer)",
+        "rc_public_signing_file_allows(integer, integer, text, bigint)",
         "rc_api_resource_scope_allows(integer, integer, integer, integer, integer, integer, integer, boolean, boolean, boolean)",
         "rc_account_bootstrap_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text)",
         "rc_pre_auth_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb)",
@@ -717,6 +725,7 @@ internal static class FoundationBaselinePostgreSql
         statements.AddRange(BuildResourcePoliciesSql());
         statements.Add(CreatePolicySql("Portfolios", PortfolioSelfPredicate));
         statements.Add(BuildPublicApplicationPoliciesSql());
+        statements.Add(BuildPublicSigningPoliciesSql());
         statements.Add(BuildInspectionTemplatePoliciesSql());
         statements.AddRange(ChildPortfolioTables.Where(policy => policy.Table != "InspectionTemplateItems")
             .Select(policy => RequiresSandboxGraduationDelete(policy.Table)
@@ -864,6 +873,127 @@ internal static class FoundationBaselinePostgreSql
           OWNER TO rentalcommand_rls_authority;
         REVOKE ALL ON FUNCTION rc_public_application_scope_allows(integer) FROM PUBLIC;
         GRANT EXECUTE ON FUNCTION rc_public_application_scope_allows(integer)
+          TO rentalcommand_api;
+
+        CREATE OR REPLACE FUNCTION rc_public_signing_scope_allows(target_portfolio_id integer)
+        RETURNS boolean
+        LANGUAGE sql
+        STABLE
+        SECURITY DEFINER
+        SET search_path = pg_catalog, public
+        AS $function$
+          SELECT CASE
+            WHEN session_user IS DISTINCT FROM 'rentalcommand_api'
+              OR target_portfolio_id IS NULL OR target_portfolio_id <= 0
+              OR NULLIF(current_setting('app.public_signing_token_hash', true), '') IS NULL
+            THEN FALSE
+            ELSE EXISTS (
+              SELECT 1
+              FROM public."SignatureSigners" signer
+              JOIN public."SignatureRequests" request
+                ON request."Id" = signer."SignatureRequestId"
+               AND request."PortfolioId" = signer."PortfolioId"
+              WHERE signer."TokenHash" = current_setting('app.public_signing_token_hash', true)
+                AND signer."PortfolioId" = target_portfolio_id
+            )
+          END;
+        $function$;
+
+        ALTER FUNCTION rc_public_signing_scope_allows(integer)
+          OWNER TO rentalcommand_rls_authority;
+        REVOKE ALL ON FUNCTION rc_public_signing_scope_allows(integer) FROM PUBLIC;
+        GRANT EXECUTE ON FUNCTION rc_public_signing_scope_allows(integer)
+          TO rentalcommand_api;
+
+        CREATE OR REPLACE FUNCTION rc_public_signing_request_allows(
+          target_portfolio_id integer,
+          target_signature_request_id integer)
+        RETURNS boolean
+        LANGUAGE sql
+        STABLE
+        SECURITY DEFINER
+        SET search_path = pg_catalog, public
+        AS $function$
+          SELECT public.rc_public_signing_scope_allows(target_portfolio_id)
+             AND EXISTS (
+               SELECT 1
+               FROM public."SignatureSigners" signer
+               WHERE signer."PortfolioId" = target_portfolio_id
+                 AND signer."SignatureRequestId" = target_signature_request_id
+                 AND signer."TokenHash" = current_setting('app.public_signing_token_hash', true)
+             );
+        $function$;
+
+        ALTER FUNCTION rc_public_signing_request_allows(integer, integer)
+          OWNER TO rentalcommand_rls_authority;
+        REVOKE ALL ON FUNCTION rc_public_signing_request_allows(integer, integer) FROM PUBLIC;
+        GRANT EXECUTE ON FUNCTION rc_public_signing_request_allows(integer, integer)
+          TO rentalcommand_api;
+
+        CREATE OR REPLACE FUNCTION rc_public_signing_artifact_allows(
+          target_portfolio_id integer,
+          target_artifact_id integer)
+        RETURNS boolean
+        LANGUAGE sql
+        STABLE
+        SECURITY DEFINER
+        SET search_path = pg_catalog, public
+        AS $function$
+          SELECT public.rc_public_signing_scope_allows(target_portfolio_id)
+             AND EXISTS (
+               SELECT 1
+               FROM public."SignatureRequests" request
+               JOIN public."SignatureSigners" signer
+                 ON signer."SignatureRequestId" = request."Id"
+                AND signer."PortfolioId" = request."PortfolioId"
+               WHERE request."PortfolioId" = target_portfolio_id
+                 AND (request."IssuedArtifactId" = target_artifact_id
+                      OR request."ExecutedArtifactId" = target_artifact_id)
+                 AND signer."TokenHash" = current_setting('app.public_signing_token_hash', true)
+             );
+        $function$;
+
+        ALTER FUNCTION rc_public_signing_artifact_allows(integer, integer)
+          OWNER TO rentalcommand_rls_authority;
+        REVOKE ALL ON FUNCTION rc_public_signing_artifact_allows(integer, integer) FROM PUBLIC;
+        GRANT EXECUTE ON FUNCTION rc_public_signing_artifact_allows(integer, integer)
+          TO rentalcommand_api;
+
+        CREATE OR REPLACE FUNCTION rc_public_signing_file_allows(
+          target_portfolio_id integer,
+          target_file_id integer,
+          target_entity_type text,
+          target_entity_id bigint)
+        RETURNS boolean
+        LANGUAGE sql
+        STABLE
+        SECURITY DEFINER
+        SET search_path = pg_catalog, public
+        AS $function$
+          SELECT public.rc_public_signing_scope_allows(target_portfolio_id)
+             AND (
+               EXISTS (
+                 SELECT 1
+                 FROM public."LegalDocumentArtifacts" artifact
+                 WHERE artifact."PortfolioId" = target_portfolio_id
+                   AND artifact."StoredFileId" = target_file_id
+                   AND public.rc_public_signing_artifact_allows(
+                         target_portfolio_id, artifact."Id"))
+               OR (
+                 target_entity_type = 'SignatureSigner'
+                 AND EXISTS (
+                   SELECT 1
+                   FROM public."SignatureSigners" signer
+                   WHERE signer."Id" = target_entity_id
+                     AND signer."PortfolioId" = target_portfolio_id
+                     AND signer."TokenHash" = current_setting('app.public_signing_token_hash', true)))
+             );
+        $function$;
+
+        ALTER FUNCTION rc_public_signing_file_allows(integer, integer, text, bigint)
+          OWNER TO rentalcommand_rls_authority;
+        REVOKE ALL ON FUNCTION rc_public_signing_file_allows(integer, integer, text, bigint) FROM PUBLIC;
+        GRANT EXECUTE ON FUNCTION rc_public_signing_file_allows(integer, integer, text, bigint)
           TO rentalcommand_api;
 
         CREATE OR REPLACE FUNCTION rc_api_resource_scope_allows(
@@ -1882,6 +2012,10 @@ internal static class FoundationBaselinePostgreSql
         DROP FUNCTION IF EXISTS rc_api_resource_scope_allows(
           integer, integer, integer, integer, integer, integer, integer, boolean, boolean, boolean);
         DROP FUNCTION IF EXISTS rc_api_scope_allows(integer);
+        DROP FUNCTION IF EXISTS rc_public_signing_file_allows(integer, integer, text, bigint);
+        DROP FUNCTION IF EXISTS rc_public_signing_artifact_allows(integer, integer);
+        DROP FUNCTION IF EXISTS rc_public_signing_request_allows(integer, integer);
+        DROP FUNCTION IF EXISTS rc_public_signing_scope_allows(integer);
         DROP FUNCTION IF EXISTS rc_public_application_scope_allows(integer);
         """;
 
@@ -1900,6 +2034,9 @@ internal static class FoundationBaselinePostgreSql
             DROP POLICY IF EXISTS tenant_isolation ON {Quote(table)};
             DROP POLICY IF EXISTS public_application_select ON {Quote(table)};
             DROP POLICY IF EXISTS public_application_insert ON {Quote(table)};
+            DROP POLICY IF EXISTS public_signing_select ON {Quote(table)};
+            DROP POLICY IF EXISTS public_signing_insert ON {Quote(table)};
+            DROP POLICY IF EXISTS public_signing_update ON {Quote(table)};
             ALTER TABLE {Quote(table)} NO FORCE ROW LEVEL SECURITY;
             ALTER TABLE {Quote(table)} DISABLE ROW LEVEL SECURITY;
             """));
@@ -1965,6 +2102,83 @@ internal static class FoundationBaselinePostgreSql
         DROP POLICY IF EXISTS public_application_select ON "OutboxMessages";
         CREATE POLICY public_application_select ON "OutboxMessages" FOR SELECT
           USING (rc_public_application_scope_allows("PortfolioId"));
+        """;
+
+    internal static string PublicSigningPoliciesSql => BuildPublicSigningPoliciesSql();
+
+    private static string BuildPublicSigningPoliciesSql() => """
+        DROP POLICY IF EXISTS public_signing_select ON "Portfolios";
+        CREATE POLICY public_signing_select ON "Portfolios" FOR SELECT
+          USING (rc_public_signing_scope_allows("Id"));
+
+        DROP POLICY IF EXISTS public_signing_select ON "SignatureSigners";
+        CREATE POLICY public_signing_select ON "SignatureSigners" FOR SELECT
+          USING ("TokenHash" = current_setting('app.public_signing_token_hash', true)
+                 AND rc_public_signing_scope_allows("PortfolioId"));
+        DROP POLICY IF EXISTS public_signing_update ON "SignatureSigners";
+        CREATE POLICY public_signing_update ON "SignatureSigners" FOR UPDATE
+          USING ("TokenHash" = current_setting('app.public_signing_token_hash', true)
+                 AND rc_public_signing_scope_allows("PortfolioId"))
+          WITH CHECK ("TokenHash" = current_setting('app.public_signing_token_hash', true)
+                      AND rc_public_signing_scope_allows("PortfolioId"));
+
+        DROP POLICY IF EXISTS public_signing_select ON "SignatureRequests";
+        CREATE POLICY public_signing_select ON "SignatureRequests" FOR SELECT
+          USING (rc_public_signing_request_allows("PortfolioId", "Id"));
+        DROP POLICY IF EXISTS public_signing_update ON "SignatureRequests";
+        CREATE POLICY public_signing_update ON "SignatureRequests" FOR UPDATE
+          USING (rc_public_signing_request_allows("PortfolioId", "Id"))
+          WITH CHECK (rc_public_signing_request_allows("PortfolioId", "Id"));
+
+        DROP POLICY IF EXISTS public_signing_select ON "SignatureAuditEvents";
+        CREATE POLICY public_signing_select ON "SignatureAuditEvents" FOR SELECT
+          USING (rc_public_signing_request_allows("PortfolioId", "SignatureRequestId"));
+        DROP POLICY IF EXISTS public_signing_insert ON "SignatureAuditEvents";
+        CREATE POLICY public_signing_insert ON "SignatureAuditEvents" FOR INSERT
+          WITH CHECK (rc_public_signing_request_allows("PortfolioId", "SignatureRequestId"));
+
+        DROP POLICY IF EXISTS public_signing_select ON "LegalDocumentArtifacts";
+        CREATE POLICY public_signing_select ON "LegalDocumentArtifacts" FOR SELECT
+          USING (rc_public_signing_artifact_allows("PortfolioId", "Id"));
+
+        DROP POLICY IF EXISTS public_signing_select ON "StoredFiles";
+        CREATE POLICY public_signing_select ON "StoredFiles" FOR SELECT
+          USING (rc_public_signing_file_allows(
+            "PortfolioId", "Id", "EntityType", "EntityId"));
+        DROP POLICY IF EXISTS public_signing_insert ON "StoredFiles";
+        CREATE POLICY public_signing_insert ON "StoredFiles" FOR INSERT
+          WITH CHECK (rc_public_signing_file_allows(
+            "PortfolioId", "Id", "EntityType", "EntityId"));
+
+        DROP POLICY IF EXISTS public_signing_select ON "PendingFileUploads";
+        CREATE POLICY public_signing_select ON "PendingFileUploads" FOR SELECT
+          USING (rc_public_signing_scope_allows("PortfolioId")
+                 AND "Purpose" = 'native-esign-drawn-signature'
+                 AND "ActorScopeId" = 0);
+        DROP POLICY IF EXISTS public_signing_insert ON "PendingFileUploads";
+        CREATE POLICY public_signing_insert ON "PendingFileUploads" FOR INSERT
+          WITH CHECK (rc_public_signing_scope_allows("PortfolioId")
+                      AND "Purpose" = 'native-esign-drawn-signature'
+                      AND "ActorScopeId" = 0);
+        DROP POLICY IF EXISTS public_signing_update ON "PendingFileUploads";
+        CREATE POLICY public_signing_update ON "PendingFileUploads" FOR UPDATE
+          USING (rc_public_signing_scope_allows("PortfolioId")
+                 AND "Purpose" = 'native-esign-drawn-signature'
+                 AND "ActorScopeId" = 0)
+          WITH CHECK (rc_public_signing_scope_allows("PortfolioId")
+                      AND "Purpose" = 'native-esign-drawn-signature'
+                      AND "ActorScopeId" = 0);
+
+        DROP POLICY IF EXISTS public_signing_select ON "AtomicAuditLogs";
+        CREATE POLICY public_signing_select ON "AtomicAuditLogs" FOR SELECT
+          USING (rc_public_signing_scope_allows("PortfolioId")
+                 AND "ActorLabel" = 'esign-signer'
+                 AND "CommandType" IN ('native-esign.view', 'native-esign.sign', 'native-esign.decline'));
+        DROP POLICY IF EXISTS public_signing_insert ON "AtomicAuditLogs";
+        CREATE POLICY public_signing_insert ON "AtomicAuditLogs" FOR INSERT
+          WITH CHECK (rc_public_signing_scope_allows("PortfolioId")
+                      AND "ActorLabel" = 'esign-signer'
+                      AND "CommandType" IN ('native-esign.view', 'native-esign.sign', 'native-esign.decline'));
         """;
 
     private static IEnumerable<string> BuildResourcePoliciesSql()
