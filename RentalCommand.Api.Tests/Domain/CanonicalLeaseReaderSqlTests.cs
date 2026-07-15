@@ -40,7 +40,6 @@ public sealed class CanonicalLeaseReaderSqlTests
         sql.Should().Contain("vw_lease_management_lifecycle");
         sql.Should().Contain("LeaseAgreements");
         sql.Should().Contain("TenantAccountId");
-        sql.Should().Contain("GROUP BY");
         sql.Should().Contain("WorkOrders");
         sql.Should().Contain("ORDER BY");
         sql.Should().Contain("LIMIT");

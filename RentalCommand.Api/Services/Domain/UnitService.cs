@@ -274,20 +274,6 @@ public class UnitService : IUnitService
     /// </summary>
     internal IQueryable<UnitHealthReadRow> BuildHealthQuery(int portfolioId)
     {
-        var openWorkOrderCounts = _db.WorkOrders
-            .AsNoTracking()
-            .Where(workOrder => workOrder.PortfolioId == portfolioId
-                && workOrder.UnitId != null
-                && workOrder.Status != WorkOrderStatus.Completed
-                && workOrder.Status != WorkOrderStatus.Cancelled
-                && workOrder.Status != WorkOrderStatus.Archived)
-            .GroupBy(workOrder => workOrder.UnitId!.Value)
-            .Select(group => new UnitAggregateCountRow
-            {
-                UnitId = group.Key,
-                Count = group.Count(),
-            });
-
         // Occupancy, lifecycle, and the governing agreement are database projections over the
         // canonical LeaseManagement graph. This query deliberately does not consult Unit.Status,
         // Unit.Leases, Lease.Status, or LeaseTenants: those legacy columns cannot be allowed to
@@ -309,9 +295,6 @@ public class UnitService : IUnitService
                 .Where(row => row.PortfolioId == unit.PortfolioId
                     && row.Id == lifecycle!.CurrentAgreementId)
                 .DefaultIfEmpty()
-            from openWorkOrderCount in openWorkOrderCounts
-                .Where(row => row.UnitId == unit.Id)
-                .DefaultIfEmpty()
             select new UnitHealthReadRow
             {
                 Id = unit.Id,
@@ -331,7 +314,10 @@ public class UnitService : IUnitService
                 Lifecycle = lifecycle == null ? null : lifecycle.Lifecycle,
                 BusinessDate = lifecycle == null ? null : lifecycle.BusinessDate,
                 CurrentAgreementEndOn = agreement == null ? null : agreement.TermEndOn,
-                OpenWorkOrderCount = openWorkOrderCount == null ? 0 : openWorkOrderCount.Count,
+                OpenWorkOrderCount = unit.WorkOrders.Count(workOrder =>
+                    workOrder.Status != WorkOrderStatus.Completed
+                    && workOrder.Status != WorkOrderStatus.Cancelled
+                    && workOrder.Status != WorkOrderStatus.Archived),
             };
     }
 
