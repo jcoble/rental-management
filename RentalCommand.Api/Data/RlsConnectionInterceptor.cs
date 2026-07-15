@@ -13,7 +13,8 @@ internal readonly record struct RlsSessionState(
     Guid? AuthSessionId = null,
     int? UserId = null,
     int? AccessContextId = null,
-    long? AccessRevision = null);
+    long? AccessRevision = null,
+    string? PublicApplicationToken = null);
 
 /// <summary>
 /// Sets PostgreSQL RLS coordinates from the middleware-validated canonical access context and
@@ -90,6 +91,19 @@ public sealed class RlsConnectionInterceptor : DbConnectionInterceptor
                 accessRevision);
         }
 
+        // Anonymous application pages are deliberately limited to an opaque, generated token.
+        // PostgreSQL uses this coordinate only in the dedicated public-application policies; it
+        // never satisfies the ordinary workspace predicate. Validate the generated base64url
+        // alphabet here before placing it in the connection GUC.
+        if (httpContext is not null
+            && httpContext.Request.Path.StartsWithSegments("/api/v1/public/applications")
+            && httpContext.Request.RouteValues.TryGetValue("token", out var routeToken)
+            && routeToken is string token
+            && IsPublicApplicationToken(token))
+        {
+            return new RlsSessionState(0, PublicApplicationToken: token);
+        }
+
         // This also permits the canonical resolver to read the non-portfolio authority tables before
         // it has validated the context, while every portfolio-scoped table remains invisible.
         return new RlsSessionState(0);
@@ -100,5 +114,10 @@ public sealed class RlsConnectionInterceptor : DbConnectionInterceptor
         $"set_config('app.auth_session_id', '{state.AuthSessionId?.ToString() ?? string.Empty}', false), " +
         $"set_config('app.current_user_id', '{state.UserId?.ToString() ?? string.Empty}', false), " +
         $"set_config('app.current_access_context_id', '{state.AccessContextId?.ToString() ?? string.Empty}', false), " +
-        $"set_config('app.access_revision', '{state.AccessRevision?.ToString() ?? string.Empty}', false);";
+        $"set_config('app.access_revision', '{state.AccessRevision?.ToString() ?? string.Empty}', false), " +
+        $"set_config('app.public_application_token', '{state.PublicApplicationToken ?? string.Empty}', false);";
+
+    private static bool IsPublicApplicationToken(string token) =>
+        token.Length is >= 20 and <= 64
+        && token.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
 }

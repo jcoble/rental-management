@@ -48,19 +48,6 @@ public sealed class AtomicPublicApplicationSubmissionHandler
 
         var references = await ResolveReferencesAsync(
             portfolioId.Value, request.PropertyId, request.UnitId, attempt.Persistence, ct);
-        var normalizedEmail = Normalize(request.Email)?.ToLowerInvariant();
-        if (normalizedEmail is not null && await attempt.Persistence.Query<RentalApplication>()
-                .AsNoTracking().AnyAsync(application =>
-                    application.PortfolioId == portfolioId.Value
-                    && application.DeletedAt == null
-                    && application.Email != null
-                    && application.Email.Trim().ToLower() == normalizedEmail
-                    && (application.Status == ApplicationStatus.Submitted
-                        || application.Status == ApplicationStatus.UnderReview
-                        || application.Status == ApplicationStatus.Approved), ct))
-            throw new DomainValidationException(
-                $"An open application for {normalizedEmail} already exists. Review it before creating another.", 409);
-
         var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
         var entity = new RentalApplication
         {

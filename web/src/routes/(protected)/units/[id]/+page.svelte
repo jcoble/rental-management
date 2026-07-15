@@ -274,6 +274,7 @@
 			type: context.type ?? 'Expense',
 			propertyId: context.propertyId ?? unit.propertyId,
 			unitId: context.unitId ?? unit.id,
+			sourceLabel: context.sourceLabel ?? `${dashboard.propertyName} · Unit ${unit.unitNumber}`,
 			returnTo: context.returnTo ?? currentUnitReturnTo()
 		};
 		showScanLauncher = true;

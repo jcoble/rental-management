@@ -168,6 +168,17 @@
 		</p>
 	</div>
 
+	{#if depositsQuery.isError}
+		<div class="rounded-lg border border-destructive/40 bg-destructive/5 p-4" data-testid="deposits-load-error">
+			<div class="flex items-center justify-between gap-4">
+				<div>
+					<p class="font-medium text-destructive">Security deposits could not be loaded.</p>
+					<p class="mt-1 text-sm text-muted-foreground">Try again. No deposit records have been changed.</p>
+				</div>
+				<Button variant="outline" onclick={() => depositsQuery.refetch()}>Try again</Button>
+			</div>
+		</div>
+	{:else}
 	<DataGrid
 		data={accounts}
 		{columns}
@@ -205,4 +216,5 @@
 			</div>
 		{/snippet}
 	</DataGrid>
+	{/if}
 </div>

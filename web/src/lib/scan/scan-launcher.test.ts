@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
 import {
@@ -7,6 +8,9 @@ import {
 	scanLauncherMode,
 	shouldAskForScanDocumentType
 } from './scan-launcher.ts';
+
+const launcherSource = readFileSync(new URL('../components/scan/ScanLauncher.svelte', import.meta.url), 'utf8');
+const unitPageSource = readFileSync(new URL('../../routes/(protected)/units/[id]/+page.svelte', import.meta.url), 'utf8');
 
 describe('scan launcher helpers', () => {
 	it('hides document-type selection when launched from a contextual page', () => {
@@ -40,5 +44,14 @@ describe('scan launcher helpers', () => {
 		assert.equal(contextualScanTitle({}), 'Scan a document');
 		assert.equal(scanLauncherMode({ type: 'WorkOrder' }), 'contextual');
 		assert.equal(scanLauncherMode({}), 'global');
+	});
+
+	it('shows the human rental context instead of only promising an invisible connection', () => {
+		assert.match(launcherSource, /data-testid="scan-context-source"/);
+		assert.match(launcherSource, /Connected to/);
+		assert.match(launcherSource, /context\.sourceLabel/);
+		assert.match(unitPageSource, /sourceLabel:\s*context\.sourceLabel\s*\?\?/);
+		assert.match(unitPageSource, /dashboard\.propertyName/);
+		assert.match(unitPageSource, /unit\.unitNumber/);
 	});
 });

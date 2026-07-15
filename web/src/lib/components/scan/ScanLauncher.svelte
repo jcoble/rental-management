@@ -82,6 +82,15 @@
 			</Dialog.Title>
 			<Dialog.Description>{description}</Dialog.Description>
 		</Dialog.Header>
+		{#if mode === 'contextual' && context.sourceLabel}
+			<div
+				class="mt-4 rounded-lg border border-accent/30 bg-accent/5 px-4 py-3 text-sm"
+				data-testid="scan-context-source"
+			>
+				<span class="text-muted-foreground">Connected to</span>
+				<strong class="ml-1 font-semibold text-foreground">{context.sourceLabel}</strong>
+			</div>
+		{/if}
 		<div class="mt-5">
 			<ScanCapturePanel {context} {allowedTypes} {allowVoice} compact oncreated={handleCreated} />
 		</div>

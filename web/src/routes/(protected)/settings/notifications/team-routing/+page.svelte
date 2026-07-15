@@ -255,7 +255,12 @@
 
 					<label class="flex min-h-16 items-start gap-3 rounded-lg border border-border p-4"><Checkbox checked={useFallback} onCheckedChange={(value) => (useFallback = value === true)} /><span><span class="block font-medium">Fall back to Workspace Administrators</span><span class="block text-sm text-muted-foreground">Used only when this saved rule has no named recipient. The fallback is always shown in the preview.</span></span></label>
 
-					{#if editingRuleId && previewQuery.data}
+					{#if editingRuleId && previewQuery.isError}
+						<div class="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-4">
+							<p class="text-sm text-destructive">We couldn't load the current recipient preview. No routing changes have been made.</p>
+							<Button variant="outline" size="sm" onclick={() => previewQuery.refetch()}>Retry preview</Button>
+						</div>
+					{:else if editingRuleId && previewQuery.data}
 						<div class="rounded-lg bg-muted/40 p-4"><p class="text-sm font-medium">Current recipient preview</p>{#each previewQuery.data as recipient (recipient.userId)}<div class="mt-3 rounded-md border border-border/70 bg-background/60 p-3"><p class="text-sm font-medium">{recipient.displayName} · {recipient.scope}</p><p class="mt-1 text-xs text-muted-foreground">Email: {recipient.email || 'Not available'} · Phone: {recipient.phoneNumber || 'Not available'}</p><p class="mt-1 text-xs"><span class="font-medium">Enabled channels:</span> {teamRecipientChannelSummary(recipient)}</p><p class="mt-1 text-xs text-muted-foreground">{recipient.reason}</p></div>{/each}</div>
 					{/if}
 

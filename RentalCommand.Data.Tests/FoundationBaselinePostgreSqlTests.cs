@@ -404,6 +404,7 @@ public sealed class FoundationBaselinePostgreSqlTests
         FoundationBaselinePostgreSql.RlsAuthorityOwnedFunctions.Should().BeEquivalentTo(
         [
             "rc_api_scope_allows(integer)",
+            "rc_public_application_scope_allows(integer)",
             "rc_api_resource_scope_allows(integer, integer, integer, integer, integer, integer, integer, boolean, boolean, boolean)",
             "rc_account_bootstrap_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text)",
             "rc_pre_auth_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb)",
@@ -504,6 +505,41 @@ public sealed class FoundationBaselinePostgreSqlTests
         CreateSql.Should().Contain("Initial workspace bootstrap is API-only");
         CreateSql.Should().NotContain(
             "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO rentalcommand_rls_authority;");
+    }
+
+    [Fact]
+    public void PublicApplicationScope_IsOpaqueTokenBoundAndCannotMutateWorkspaceRows()
+    {
+        CreateSql.Should().Contain(
+            "CREATE OR REPLACE FUNCTION rc_public_application_scope_allows(target_portfolio_id integer)");
+        CreateSql.Should().Contain("portfolio.\"PublicApplicationToken\" =");
+        CreateSql.Should().Contain("current_setting('app.public_application_token', true)");
+        CreateSql.Should().Contain("portfolio.\"Status\" = 1");
+        CreateSql.Should().MatchRegex(
+            @"ALTER FUNCTION rc_public_application_scope_allows\(integer\)\s+OWNER TO rentalcommand_rls_authority;");
+        CreateSql.Should().MatchRegex(
+            @"GRANT EXECUTE ON FUNCTION rc_public_application_scope_allows\(integer\)\s+TO rentalcommand_api;");
+
+        foreach (var table in new[]
+                 {
+                     "Portfolios", "Properties", "Units", "LeaseManagements",
+                     "LeaseAgreements", "UnitOperationalPeriods",
+                 })
+        {
+            CreateSql.Should().Contain(
+                $"CREATE POLICY public_application_select ON \"{table}\" FOR SELECT");
+        }
+
+        CreateSql.Should().Contain(
+            "CREATE POLICY public_application_insert ON \"RentalApplications\" FOR INSERT");
+        CreateSql.Should().NotContain(
+            "CREATE POLICY public_application_select ON \"RentalApplications\"");
+        CreateSql.Should().Contain(
+            "CREATE POLICY public_application_insert ON \"AtomicAuditLogs\" FOR INSERT");
+        CreateSql.Should().NotContain("public_application_update");
+        CreateSql.Should().NotContain("public_application_delete");
+        DropSql.Should().Contain(
+            "DROP FUNCTION IF EXISTS rc_public_application_scope_allows(integer);");
     }
 
     [Fact]
