@@ -298,7 +298,13 @@ public sealed class AuthEmailOutboxHandler
             AuditLogOperation.Updated,
             user.Id,
             ActorLabel: "authentication:email-outbox",
-            NewValues: JsonSerializer.Serialize(new { command.EmailKind, TargetUserId = user.Id }),
+            NewValues: JsonSerializer.Serialize(new
+            {
+                command.EmailKind,
+                TargetUserId = user.Id,
+                AuditRootAccessContextId = root.AccessContextId,
+                command.DeliveryIdempotencyKey,
+            }),
             ChangeReason: "Transactional account email enqueued"), now);
         return new AuthEmailOutboxResult(true, user.Id, root.PortfolioId, command.EmailKind);
     }
@@ -323,6 +329,8 @@ public sealed class AuthEmailOutboxHandler
         if (command.UserId <= 0 || command.ExpectedPortfolioId is <= 0)
             throw new ArgumentOutOfRangeException(nameof(command));
         ArgumentException.ThrowIfNullOrWhiteSpace(command.EmailKind);
+        if (command.EmailKind is not ("email-confirmation" or "password-reset"))
+            throw new ArgumentOutOfRangeException(nameof(command.EmailKind));
         ArgumentException.ThrowIfNullOrWhiteSpace(command.PreparedEmailPayload);
         ArgumentException.ThrowIfNullOrWhiteSpace(command.DeliveryIdempotencyKey);
         BootstrapAccountHandler.ValidateDigest(command.EmailIntentHash, nameof(command.EmailIntentHash));

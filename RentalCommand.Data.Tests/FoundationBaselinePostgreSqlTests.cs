@@ -173,6 +173,37 @@ public sealed class FoundationBaselinePostgreSqlTests
     }
 
     [Fact]
+    public void PreAuthEmailAudit_HasExactTransactionBoundAdmissionForConfirmationAndReset()
+    {
+        var normalizedSql = Regex.Replace(CreateSql, @"\s+", " ");
+
+        CreateSql.Should().Contain(
+            "OR rc_pre_auth_email_audit_allows(\n" +
+            "    \"PortfolioId\", \"AttemptId\", \"CommandType\", \"CommandIdempotencyKey\", \"MutationOrdinal\",");
+        normalizedSql.Should().Contain(
+            "target_command_type IN ( 'auth.email.email-confirmation', 'auth.email.password-reset')");
+        normalizedSql.Should().Contain(
+            "target_command_idempotency_key ~ ('^' || target_user_id::text || ':[0-9a-f]{64}$')");
+        normalizedSql.Should().Contain("target_mutation_ordinal = 1");
+        normalizedSql.Should().Contain("target_entity_type = 'ApplicationUser'");
+        normalizedSql.Should().Contain("target_entity_id = target_user_id");
+        normalizedSql.Should().Contain("target_operation = 1");
+        normalizedSql.Should().Contain("target_actor_label = 'authentication:email-outbox'");
+        normalizedSql.Should().Contain("target_change_reason = 'Transactional account email enqueued'");
+        normalizedSql.Should().Contain("target_new_values ->> 'TargetUserId' = target_user_id::text");
+        normalizedSql.Should().Contain("target_command_type = 'auth.email.' || (target_new_values ->> 'EmailKind')");
+        normalizedSql.Should().Contain(
+            "target_new_values ->> 'DeliveryIdempotencyKey' = 'auth:' || (target_new_values ->> 'EmailKind') || ':' || target_command_idempotency_key");
+        normalizedSql.Should().Contain(
+            "FROM public.rc_list_effective_access_contexts( target_user_id, clock_timestamp()) option");
+        normalizedSql.Should().Contain("ORDER BY option.\"AccessContextId\" LIMIT 1");
+        normalizedSql.Should().Contain(
+            "root.\"AccessContextId\" = (target_new_values ->> 'AuditRootAccessContextId')::integer");
+        normalizedSql.Should().Contain("receipt.\"AttemptId\" = target_attempt_id");
+        normalizedSql.Should().Contain("receipt.xmin = pg_current_xact_id()::xid");
+    }
+
+    [Fact]
     public void SandboxGraduation_ClassifiesEveryPortfolioScopedTableExactlyOnce()
     {
         var mappedPortfolioTables = FoundationBaselinePostgreSql.DirectPortfolioTables
@@ -326,6 +357,7 @@ public sealed class FoundationBaselinePostgreSqlTests
             "rc_api_resource_scope_allows(integer, integer, integer, integer, integer, integer, integer, boolean, boolean, boolean)",
             "rc_account_bootstrap_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text)",
             "rc_pre_auth_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb)",
+            "rc_pre_auth_email_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb)",
             "rc_sandbox_graduation_allows(integer)",
             "rc_access_context_is_effective(integer, integer, timestamp with time zone)",
             "rc_list_effective_access_contexts(integer, timestamp with time zone)",
