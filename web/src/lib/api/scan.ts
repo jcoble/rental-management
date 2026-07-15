@@ -8,16 +8,17 @@ const scanBatchUploadOperationIds = new WeakMap<File[], string>();
 const scanRetryOperationIds = new Map<number, string>();
 const voiceDraftOperationIds = new WeakMap<Blob, string>();
 
-function singleUploadOperationId(file: File, targetEntityType: string): string {
+function singleUploadOperationId(file: File, targetEntityType?: string): string {
+	const targetKey = targetEntityType ?? 'Auto';
 	let byTarget = scanUploadOperationIds.get(file);
 	if (!byTarget) {
 		byTarget = new Map();
 		scanUploadOperationIds.set(file, byTarget);
 	}
-	let operationId = byTarget.get(targetEntityType);
+	let operationId = byTarget.get(targetKey);
 	if (!operationId) {
 		operationId = crypto.randomUUID();
-		byTarget.set(targetEntityType, operationId);
+		byTarget.set(targetKey, operationId);
 	}
 	return operationId;
 }
@@ -82,6 +83,9 @@ export interface ScanDraftResponse {
 	 */
 	leaseProposal?: LeaseImportProposal | null;
 	captureContext?: {
+		experience?: string | null;
+		accessContextId?: number | null;
+		accessRevision?: number | null;
 		propertyId?: number | null;
 		unitId?: number | null;
 		leaseManagementId?: number | null;
@@ -93,6 +97,7 @@ export interface ScanDraftResponse {
 		rentalListingId?: number | null;
 		sourceLabel?: string | null;
 	} | null;
+	sourceContentSha256?: string | null;
 }
 
 export interface ScanCreatedResponse {
@@ -118,14 +123,14 @@ export interface ScanConfirmResponse {
 	atomicDisposition: 'Executed' | 'Replayed' | 'Joined';
 }
 
-const scanConfirmOperationIds = new Map<number, string>();
-
 export interface ScanDraftListResponse {
 	items: ScanDraftResponse[];
 	totalCount: number;
 	skip: number;
 	take: number;
 }
+
+const scanConfirmOperationIds = new Map<number, string>();
 
 // ---- Bulk scan batches (e.g. importing many leases at once) ----
 
@@ -196,11 +201,15 @@ export const scan = {
 
 	get: (id: number): Promise<ScanDraftResponse> => api.get<ScanDraftResponse>(`/scans/${id}`),
 
-	upload: async (file: File, targetEntityType: string, context: ScanContext = {}): Promise<ScanCreatedResponse> => {
+	upload: async (
+		file: File,
+		targetEntityType: string | undefined,
+		context: ScanContext = {}
+	): Promise<ScanCreatedResponse> => {
 		const operationId = singleUploadOperationId(file, targetEntityType);
 		const fd = new FormData();
 		fd.append('file', file);
-		fd.append('targetEntityType', targetEntityType);
+		if (targetEntityType) fd.append('targetEntityType', targetEntityType);
 		fd.append('clientOperationId', operationId);
 		if (context.propertyId) fd.append('propertyId', String(context.propertyId));
 		if (context.unitId) fd.append('unitId', String(context.unitId));
@@ -213,7 +222,7 @@ export const scan = {
 		if (context.rentalListingId) fd.append('rentalListingId', String(context.rentalListingId));
 		if (context.sourceLabel) fd.append('sourceLabel', context.sourceLabel);
 		const response = await api.upload<ScanCreatedResponse>('/scans', fd);
-		scanUploadOperationIds.get(file)?.delete(targetEntityType);
+		scanUploadOperationIds.get(file)?.delete(targetEntityType ?? 'Auto');
 		return response;
 	},
 
@@ -235,9 +244,13 @@ export const scan = {
 	retry: async (id: number): Promise<unknown> => {
 		const operationId = scanRetryOperationIds.get(id) ?? crypto.randomUUID();
 		scanRetryOperationIds.set(id, operationId);
-		const response = await api.post(`/scans/${id}/retry`, {}, {
-			headers: { 'Idempotency-Key': operationId }
-		});
+		const response = await api.post(
+			`/scans/${id}/retry`,
+			{},
+			{
+				headers: { 'Idempotency-Key': operationId }
+			}
+		);
 		scanRetryOperationIds.delete(id);
 		return response;
 	},

@@ -61,11 +61,11 @@ public class ScanBatchControllerTests : IDisposable
     }
 
     // -------------------------------------------------------------------------
-    // Batch upload: N files -> 1 batch + N Pending Lease drafts linked by BatchId
+    // Batch upload: N files -> 1 batch + N Pending classification drafts linked by BatchId
     // -------------------------------------------------------------------------
 
     [Fact]
-    public async Task UploadBatch_WithThreeFiles_CreatesBatchAndThreePendingLeaseDrafts()
+    public async Task UploadBatch_WithoutTarget_CreatesBatchAndThreePendingClassificationDrafts()
     {
         // A recording scan service that persists a Pending draft per call (mirrors production
         // ScanService.CreateBatchDraftAsync) so we can assert the rows it created.
@@ -86,12 +86,12 @@ public class ScanBatchControllerTests : IDisposable
         var body = created.Value.Should().BeOfType<ScanBatchCreatedResponse>().Subject;
 
         body.FileCount.Should().Be(3);
-        body.TargetEntityType.Should().Be("LeaseAgreement"); // default target
+        body.TargetEntityType.Should().BeEmpty(); // each draft is classified independently by the worker
         body.Name.Should().Be("Spring imports");
         body.Status.Should().Be(nameof(ScanBatchStatus.Processing));
         body.DraftIds.Should().HaveCount(3);
 
-        // One batch row, all drafts Pending + Lease + linked to the batch.
+        // One batch row, all drafts Pending classification + linked to the batch.
         var batch = await _db.ScanBatches.SingleAsync();
         batch.PortfolioId.Should().Be(PortfolioId);
         batch.FileCount.Should().Be(3);
@@ -99,7 +99,7 @@ public class ScanBatchControllerTests : IDisposable
         var drafts = await _db.ScanDrafts.Where(d => d.BatchId == batch.Id).ToListAsync();
         drafts.Should().HaveCount(3);
         drafts.Should().OnlyContain(d => d.Status == "Pending");
-        drafts.Should().OnlyContain(d => d.TargetEntityType == "LeaseAgreement");
+        drafts.Should().OnlyContain(d => d.TargetEntityType == string.Empty);
         drafts.Should().OnlyContain(d => d.PortfolioId == PortfolioId);
         drafts.Select(d => d.Id).Should().BeEquivalentTo(body.DraftIds);
     }

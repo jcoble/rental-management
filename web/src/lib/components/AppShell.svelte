@@ -104,11 +104,12 @@
 	};
 
 	// Pinned single links above all groups (IA Wave 1 §4.2): the dashboard + the flagship
-	// "Scan / Edit" action, one tap away and outside any group.
+	// "Scan / Add" action, one click away and outside any group. This is the persistent capture
+	// doorway; screen-specific Add buttons remain visible for people who already know the record type.
 	const pinnedNavItems: NavItem[] = [
 		{ href: '/', label: 'Dashboard', icon: LayoutDashboard },
 		{ href: '/onboarding', label: 'Guided Setup', icon: ClipboardList },
-		{ href: '/scan', label: 'Scan / Edit', icon: ScanLine }
+		{ href: '/scan', label: 'Scan / Add', icon: ScanLine }
 	];
 
 	// Grouped navigation (IA Wave 1 §4.2): four landlord-noun groups in frequency order —
@@ -1011,19 +1012,21 @@
 
 			<div class="ml-auto flex items-center gap-1">
 				{#if showStaffHeader}
-					<!-- Scan / Edit -->
+					<!-- Persistent scan-first command. Keep the label visible at desktop widths so this
+					     differentiator does not collapse into an unexplained icon. -->
 					{#if canOpenHeaderScan}
 						{#if activeCapabilities.has('maintenance.assigned-work.update') && !activeCapabilities.has('work.manage')}
-							<Button href="/scan" variant="ghost" class="m3-state-layer relative size-9 p-0 text-muted-foreground" aria-label="Scan / Edit" data-testid="header-scan">
+							<Button href="/scan" variant="ghost" class="m3-state-layer relative gap-2 px-3 text-muted-foreground" aria-label="Scan / Add" data-testid="header-scan">
 								<ScanLine class="h-4 w-4" />
+								<span class="hidden xl:inline">Scan / Add</span>
 							</Button>
 						{:else}<ScanLauncher
-							triggerLabel=""
-							ariaLabel="Scan / Edit"
-							tooltip="Scan / Edit"
+							triggerLabel="Scan / Add"
+							ariaLabel="Scan / Add"
+							tooltip="Scan a document or add a record"
 							testid="header-scan"
 							triggerVariant="ghost"
-							triggerClass="m3-state-layer relative size-9 p-0 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+							triggerClass="m3-state-layer relative gap-2 px-3 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground [&>span]:hidden xl:[&>span]:inline"
 							allowedTypes={allowedHeaderScanTypes}
 							allowVoice={allowHeaderVoiceCapture}
 						/>{/if}

@@ -1,4 +1,4 @@
-import type { ScanDocType } from './scan-context';
+import type { ScanDocType, ScanIntakeType } from './scan-context';
 
 export interface ScanUploadCopy {
 	title: string;
@@ -39,6 +39,11 @@ const UPLOAD_COPY: Record<ScanDocType, ScanUploadCopy> = {
 	}
 };
 
+const AUTO_UPLOAD_COPY: ScanUploadCopy = {
+	title: 'Drop any rental document here',
+	helperText: 'or click to browse — Rental Command will identify it before you review'
+};
+
 const PROCESSING_COPY: Record<ScanDocType, ScanProcessingCopy> = {
 	Expense: {
 		title: 'Reading your receipt or invoice…',
@@ -67,12 +72,17 @@ const PROCESSING_COPY: Record<ScanDocType, ScanProcessingCopy> = {
 };
 
 function normalizeDocType(type: ScanDocType | string | null | undefined): ScanDocType {
-	return type === 'Payment' || type === 'WorkOrder' || type === 'LeaseAgreement' || type === 'Application' || type === 'Loan'
+	return type === 'Payment' ||
+		type === 'WorkOrder' ||
+		type === 'LeaseAgreement' ||
+		type === 'Application' ||
+		type === 'Loan'
 		? type
 		: 'Expense';
 }
 
-export function scanUploadCopy(type: ScanDocType | string | null | undefined): ScanUploadCopy {
+export function scanUploadCopy(type: ScanIntakeType | string | null | undefined): ScanUploadCopy {
+	if (type === 'Auto' || !type) return AUTO_UPLOAD_COPY;
 	return UPLOAD_COPY[normalizeDocType(type)];
 }
 

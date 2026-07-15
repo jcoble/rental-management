@@ -88,6 +88,7 @@ void main() {
     );
 
     await tester.ensureVisible(find.byType(DropdownButtonFormField<int>));
+    await tester.pumpAndSettle();
     await tester.tap(find.byType(DropdownButtonFormField<int>));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Lake House').last);

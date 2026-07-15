@@ -51,6 +51,11 @@ public class ScanProcessingWorker : EngineWorkerBase
                         ? new ExtractionSchema(LoanExtractionSchema.Instructions, LoanExtractionSchema.Fields)
                         : new ExtractionSchema(ReceiptExtractionSchema.Instructions, ReceiptExtractionSchema.Fields);
 
+    private static readonly HashSet<string> SupportedTargets = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Expense", "Payment", "WorkOrder", nameof(LeaseAgreement), "Application", "Loan",
+    };
+
     /// <summary>
     /// A lease import uses the explicit canonical upload target "LeaseAgreement".
     /// </summary>
@@ -118,14 +123,56 @@ public class ScanProcessingWorker : EngineWorkerBase
                 // prompt small/cheap on large portfolios.
                 var groundingContext = await BuildGroundingContextAsync(db, draft.PortfolioId, ct);
 
-                var schema = ChooseExtractionSchema(draft.TargetEntityType);
+                var resolvedTargetEntityType = draft.TargetEntityType;
+                ExtractedFields? classification = null;
+                if (string.IsNullOrWhiteSpace(resolvedTargetEntityType))
+                {
+                    var classificationSchema = new ExtractionSchema(
+                        DocumentClassificationExtractionSchema.Instructions,
+                        DocumentClassificationExtractionSchema.Fields);
+                    classification = await ExtractWithRetryAsync(
+                        llm, bytes, contentType, classificationSchema, groundingContext, draft.Id, logger, ct);
+                    var classificationFailure = GetExtractionFailureReason(
+                        classification, classificationSchema.Fields);
+                    if (classificationFailure is not null
+                        || !classification.Fields.TryGetValue("target_entity_type", out var targetField)
+                        || !SupportedTargets.Contains(targetField.Value))
+                    {
+                        await MarkFailedAsync(
+                            scoped, dataUpdate, draft.PortfolioId, draft.Id,
+                            draft.ClaimOwner, draft.ClaimToken, logger,
+                            classificationFailure ?? "document destination could not be classified");
+                        continue;
+                    }
 
+                    resolvedTargetEntityType = SupportedTargets.First(target =>
+                        string.Equals(target, targetField.Value, StringComparison.OrdinalIgnoreCase));
+                    logger.LogInformation(
+                        "Scan draft {DraftId} classified as {Target}; starting typed extraction",
+                        draft.Id, resolvedTargetEntityType);
+                }
+
+                var schema = ChooseExtractionSchema(resolvedTargetEntityType);
                 var extracted = await ExtractWithRetryAsync(
                     llm, bytes, contentType, schema, groundingContext, draft.Id, logger, ct);
 
+                // Preserve classification evidence in the review proposal, but never treat it as
+                // authority. Confirmation still validates current session, capability, and scope.
+                if (classification is not null)
+                {
+                    CopyClassificationField(classification, extracted, "document_kind");
+                    CopyClassificationField(classification, extracted, "classification_reason");
+                    extracted.InputTokens += classification.InputTokens;
+                    extracted.OutputTokens += classification.OutputTokens;
+                    extracted.TokensUsed += classification.TokensUsed;
+                    extracted.ModelId = string.IsNullOrWhiteSpace(extracted.ModelId)
+                        ? classification.ModelId
+                        : extracted.ModelId;
+                }
+
                 if (string.IsNullOrWhiteSpace(extracted.FailureReason))
                 {
-                    var repairInstruction = GetExtractionQualityRepairInstruction(draft.TargetEntityType, extracted);
+                    var repairInstruction = GetExtractionQualityRepairInstruction(resolvedTargetEntityType, extracted);
                     if (repairInstruction is not null)
                     {
                         logger.LogInformation(
@@ -141,7 +188,7 @@ public class ScanProcessingWorker : EngineWorkerBase
                                 schema.Fields);
                             var repaired = await llm.ExtractAsync(
                                 bytes, contentType, repairSchema.Instructions, repairSchema.Fields, groundingContext, ct);
-                            ApplyQualityRepair(draft.TargetEntityType, extracted, repaired);
+                            ApplyQualityRepair(resolvedTargetEntityType, extracted, repaired);
                         }
                         catch (Exception ex) when (!ct.IsCancellationRequested)
                         {
@@ -151,7 +198,7 @@ public class ScanProcessingWorker : EngineWorkerBase
                         }
                     }
 
-                    NormalizeExtractionQuality(draft.TargetEntityType, extracted);
+                    NormalizeExtractionQuality(resolvedTargetEntityType, extracted);
                 }
 
                 // Guard against the silent-empty-draft bug: a failed/empty/truncated/unparseable
@@ -175,44 +222,7 @@ public class ScanProcessingWorker : EngineWorkerBase
                 var fieldJson = JsonSerializer.Serialize(extracted.Fields.ToDictionary(
                     kv => kv.Key,
                     kv => new { value = kv.Value.Value, confidence = kv.Value.Confidence }));
-                string targetEntityType;
-
-                if (string.Equals(draft.TargetEntityType, "WorkOrder", StringComparison.OrdinalIgnoreCase))
-                {
-                    targetEntityType = "WorkOrder";
-                }
-                else if (IsLeaseTarget(draft.TargetEntityType))
-                {
-                    targetEntityType = nameof(LeaseAgreement);
-                }
-                else if (IsApplicationTarget(draft.TargetEntityType))
-                {
-                    // A completed rental application was uploaded with the Application target: it was
-                    // extracted with the application schema, so confirm it as an Application.
-                    targetEntityType = "Application";
-                }
-                else if (IsLoanTarget(draft.TargetEntityType))
-                {
-                    // A mortgage statement / closing disclosure was uploaded with the Loan target: it was
-                    // extracted with the loan schema, so confirm it as a Loan on the property.
-                    targetEntityType = "Loan";
-                }
-                else
-                {
-                    // Route by classified document kind: a lease agreement the model recognised becomes a
-                    // Lease, rent checks become Payments, everything else Expenses. (A document classified
-                    // as a lease here was extracted with the receipt schema, so the confirm step still asks
-                    // the reviewer to fill the lease terms — but it lands on the correct review branch.)
-                    var classifiedKind = extracted.Fields.TryGetValue("document_kind", out var kindField)
-                        ? kindField.Value ?? string.Empty
-                        : string.Empty;
-                    targetEntityType = classifiedKind switch
-                    {
-                        "Lease" or "LeaseAgreement" => nameof(LeaseAgreement),
-                        "RentCheck" => "Payment",
-                        _ => "Expense",
-                    };
-                }
+                var targetEntityType = resolvedTargetEntityType;
 
                 var completed = await claimStore.MarkReviewingAsync(
                     draft.Id,
@@ -283,6 +293,19 @@ public class ScanProcessingWorker : EngineWorkerBase
             }
         }
         return processed;
+    }
+
+    private static void CopyClassificationField(
+        ExtractedFields classification,
+        ExtractedFields extracted,
+        string fieldName)
+    {
+        if (!extracted.Fields.ContainsKey(fieldName)
+            && classification.Fields.TryGetValue(fieldName, out var field)
+            && !string.IsNullOrWhiteSpace(field.Value))
+        {
+            extracted.Fields[fieldName] = field;
+        }
     }
 
     // Per-list cap on grounding records so the prompt stays small/cheap even on large

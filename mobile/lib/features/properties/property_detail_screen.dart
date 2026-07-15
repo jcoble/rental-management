@@ -298,6 +298,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
       initialTargetEntityType: 'Loan',
       lockTargetEntityType: true,
       propertyId: _property.id,
+      sourceLabel: _property.name,
     );
     if (draftId == null || !context.mounted) return;
 

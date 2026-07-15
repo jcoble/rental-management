@@ -45,7 +45,7 @@ Future<void> openAuthorizedMobileScan(
 
 Future<void> openMobileScan(
   BuildContext context, {
-  String initialTargetEntityType = 'Expense',
+  String initialTargetEntityType = '',
   bool lockTargetEntityType = false,
   int? propertyId,
   int? unitId,

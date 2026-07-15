@@ -11,6 +11,7 @@
 	} from '$lib/api/endpoints/tenant-accounts';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
+	import { units } from '$lib/api/endpoints/units';
 	import { invalidateQueriesAfterScanConfirm } from '$lib/scans/scan-confirm-invalidation';
 	import { LEASE_REVIEW_NEW_UNIT_DETAIL_FIELDS, seedLeaseUnitId, shouldSeedLeaseReviewState } from '$lib/scans/lease-review-state';
 	import {
@@ -41,7 +42,6 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as Table from '$lib/components/ui/table';
 	import * as Select from '$lib/components/ui/select';
-	import * as Tabs from '$lib/components/ui/tabs';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { AlertTriangle, CheckCircle2, X } from '@lucide/svelte';
@@ -144,6 +144,13 @@
 	// Select's "nothing selected" state in bits-ui).
 	const NO_PROPERTY = 'none';
 	let selectedPropertyId = $state<string>(NO_PROPERTY);
+	let propertySearch = $state('');
+	let propertySkip = $state(0);
+	let tenantSearch = $state('');
+	let tenantSkip = $state(0);
+	let unitSearch = $state('');
+	let unitSkip = $state(0);
+	const CONTEXT_PAGE_SIZE = 20;
 
 	const tenantAccountOptionsQuery = createQuery(() => ({
 		queryKey: ['tenant-account-options', getCurrentPortfolioId(), tenantAccountSearch.trim(), tenantAccountSkip],
@@ -186,10 +193,23 @@
 	});
 
 	const propertiesQuery = createQuery(() => ({
-		queryKey: ['properties', getCurrentPortfolioId()],
-		queryFn: () => properties.list(getCurrentPortfolioId(), { take: 200 }),
+		queryKey: [
+			'properties',
+			getCurrentPortfolioId(),
+			'scan-context',
+			propertySearch.trim(),
+			propertySkip
+		],
+		queryFn: () =>
+			properties.listPage(getCurrentPortfolioId(), {
+				search: propertySearch.trim() || undefined,
+				sort: 'name',
+				skip: propertySkip,
+				take: CONTEXT_PAGE_SIZE
+			}),
 		enabled: !isPayment
 	}));
+	const propertyChoices = $derived(propertiesQuery.data?.items ?? []);
 
 	// --- Lease draft selectors ---
 	// A Lease confirm needs a property + unit; tenant is optional (when omitted the server matches the
@@ -202,6 +222,7 @@
 	let selectedLeasePropertyId = $state<string>('');
 	let selectedLeaseUnitId = $state<string>('');
 	let selectedTenantId = $state<string>(NO_TENANT);
+	let previousLeasePropertyId = $state<string>('');
 	// True when the property dropdown is on "create new" — the unit becomes a free-text new unit number
 	// (you can't pick a unit of a property that doesn't exist yet) and editable address fields appear.
 	const isCreatingLeaseProperty = $derived(selectedLeasePropertyId === CREATE_PROPERTY);
@@ -222,6 +243,7 @@
 		selectedLeasePropertyId = '';
 		selectedLeaseUnitId = '';
 		selectedTenantId = NO_TENANT;
+		previousLeasePropertyId = '';
 		leasePropertySeeded = false;
 		newPropertyName = '';
 		newPropertyAddress = '';
@@ -235,16 +257,36 @@
 	// Units scoped to the chosen EXISTING property (required pick). Skipped in create-new mode (the
 	// CREATE_PROPERTY sentinel isn't a real id — the unit is created from a free-text number instead).
 	const leaseUnitsQuery = createQuery(() => ({
-		queryKey: ['units-for-lease-scan', selectedLeasePropertyId],
-		queryFn: () => properties.listUnits(Number(selectedLeasePropertyId)),
+		queryKey: [
+			'units-for-lease-scan',
+			selectedLeasePropertyId,
+			unitSearch.trim(),
+			unitSkip
+		],
+		queryFn: () =>
+			units.listWithHealthPage({
+				propertyId: Number(selectedLeasePropertyId),
+				search: unitSearch.trim() || undefined,
+				sort: 'unitNumber',
+				skip: unitSkip,
+				take: CONTEXT_PAGE_SIZE
+			}),
 		enabled: isLease && !!selectedLeasePropertyId && selectedLeasePropertyId !== CREATE_PROPERTY
 	}));
+	const leaseUnitChoices = $derived(leaseUnitsQuery.data?.items ?? []);
 
 	const tenantsQuery = createQuery(() => ({
-		queryKey: ['tenants', getCurrentPortfolioId()],
-		queryFn: () => tenants.list(getCurrentPortfolioId(), { take: 200 }),
+		queryKey: ['tenants', getCurrentPortfolioId(), 'scan-context', tenantSearch.trim(), tenantSkip],
+		queryFn: () =>
+			tenants.listPage(getCurrentPortfolioId(), {
+				search: tenantSearch.trim() || undefined,
+				sort: 'lastName',
+				skip: tenantSkip,
+				take: CONTEXT_PAGE_SIZE
+			}),
 		enabled: isLease
 	}));
+	const tenantChoices = $derived(tenantsQuery.data?.items ?? []);
 
 	// Extracted tenant name from the scan (drives the "create new tenant" default).
 	const extractedTenantName = $derived((fieldValue('tenant_name') ?? '').trim());
@@ -263,14 +305,14 @@
 	const selectedLeasePropertyLabel = $derived.by(() => {
 		if (selectedLeasePropertyId === CREATE_PROPERTY) return newPropertyLabel;
 		if (!selectedLeasePropertyId) return '— Select a property —';
-		const sel = propertiesQuery.data?.find((p) => String(p.id) === selectedLeasePropertyId);
-		return sel ? sel.name : '— Select a property —';
+		const sel = propertyChoices.find((p) => String(p.id) === selectedLeasePropertyId);
+		return sel ? sel.name : `Property #${selectedLeasePropertyId}`;
 	});
 
 	const selectedLeaseUnitLabel = $derived.by(() => {
 		if (!selectedLeaseUnitId) return '— Select a unit —';
-		const sel = leaseUnitsQuery.data?.find((u) => String(u.id) === selectedLeaseUnitId);
-		return sel ? `Unit ${sel.unitNumber}` : '— Select a unit —';
+		const sel = leaseUnitChoices.find((u) => String(u.id) === selectedLeaseUnitId);
+		return sel ? `Unit ${sel.unitNumber}` : `Unit #${selectedLeaseUnitId}`;
 	});
 
 	function tenantLabel(t: { fullName?: string | null; firstName: string; lastName: string }): string {
@@ -285,8 +327,8 @@
 
 	const selectedTenantLabel = $derived.by(() => {
 		if (selectedTenantId === NO_TENANT) return newTenantLabel;
-		const sel = tenantsQuery.data?.find((t) => String(t.id) === selectedTenantId);
-		return sel ? tenantLabel(sel) : newTenantLabel;
+		const sel = tenantChoices.find((t) => String(t.id) === selectedTenantId);
+		return sel ? tenantLabel(sel) : `Tenant #${selectedTenantId}`;
 	});
 
 	// Applicant fields shown as editable inputs for an Application draft (in display order). Single-entity
@@ -355,24 +397,26 @@
 		{ name: 'rent_due_day', label: 'Rent due day', type: 'number' }
 	];
 
-	// Reset the unit pick whenever the property changes (units are property-scoped).
+	// Reset the unit pick only when the reviewer changes property. A paged/search result that does not
+	// contain the selected unit must not erase a valid choice.
 	$effect(() => {
-		const _ = selectedLeasePropertyId;
+		const nextPropertyId = selectedLeasePropertyId;
+		if (previousLeasePropertyId && previousLeasePropertyId !== nextPropertyId) {
+			selectedLeaseUnitId = '';
+			unitSearch = '';
+			unitSkip = 0;
+		}
+		previousLeasePropertyId = nextPropertyId;
 		// Create-new mode has no existing-unit pick — drop any stale id so it can't leak.
 		if (isCreatingLeaseProperty) {
 			if (selectedLeaseUnitId) selectedLeaseUnitId = '';
-			return;
-		}
-		// Clear a stale unit selection if it no longer belongs to the chosen property.
-		if (selectedLeaseUnitId && leaseUnitsQuery.data && !leaseUnitsQuery.data.some((u) => String(u.id) === selectedLeaseUnitId)) {
-			selectedLeaseUnitId = '';
 		}
 	});
 
 	const selectedPropertyLabel = $derived.by(() => {
 		if (!selectedPropertyId || selectedPropertyId === NO_PROPERTY) return '— No property —';
-		const sel = propertiesQuery.data?.find((p) => String(p.id) === selectedPropertyId);
-		return sel ? sel.name : '— No property —';
+		const sel = propertyChoices.find((p) => String(p.id) === selectedPropertyId);
+		return sel ? sel.name : `Property #${selectedPropertyId}`;
 	});
 
 	function tenantAccountLabel(account: TenantAccountChoice): string {
@@ -500,6 +544,12 @@
 		tenantAccountSearch = '';
 		tenantAccountSkip = 0;
 		selectedPropertyId = NO_PROPERTY;
+		propertySearch = '';
+		propertySkip = 0;
+		tenantSearch = '';
+		tenantSkip = 0;
+		unitSearch = '';
+		unitSkip = 0;
 		loanEscrowCoversTaxes = false;
 		loanEscrowCoversInsurance = false;
 		loanEscrowSeeded = false;
@@ -538,11 +588,11 @@
 				isPaid = defaultIsPaidFromKind(kindField?.value);
 				isPaidInitialized = true;
 			}
-			if ((data.targetEntityType === 'WorkOrder' || data.targetEntityType === 'Expense' || data.targetEntityType === 'Loan') && selectedPropertyId === NO_PROPERTY) {
+			if ((data.targetEntityType === 'WorkOrder' || data.targetEntityType === 'Expense' || data.targetEntityType === 'Application' || data.targetEntityType === 'Loan') && selectedPropertyId === NO_PROPERTY) {
 				const resolvedPropertyId = resolveScanReviewPropertyId({
 					contextPropertyId: scanContext.propertyId,
 					fields: data.fields,
-					properties: propertiesQuery.data
+					properties: propertyChoices
 				});
 				if (resolvedPropertyId) selectedPropertyId = resolvedPropertyId;
 			}
@@ -585,7 +635,7 @@
 				if (!leasePropertySeeded && (propertiesQuery.data || leaseProposal)) {
 					const propertyField = data.fields.find((f) => f.name === 'property_id' || f.name === 'propertyId');
 					const extractedId = propertyField?.value;
-					if (extractedId && propertiesQuery.data?.some((p) => String(p.id) === extractedId)) {
+					if (extractedId && propertyChoices.some((p) => String(p.id) === extractedId)) {
 						selectedLeasePropertyId = extractedId;
 					} else if (leaseProposal?.property.action === 'link' && leaseProposal.property.existingId != null) {
 						selectedLeasePropertyId = String(leaseProposal.property.existingId);
@@ -703,6 +753,49 @@
 	let confirmedRecord = $state<{ type: 'Expense' | 'Payment' | 'WorkOrder'; id: number | null; amount: number | null; unitId: number | null } | null>(null);
 	const isTerminal = $derived(isTerminalScanReview(data?.status, !!confirmedRecord));
 	const reviewControlsDisabled = $derived(shouldDisableScanReviewControls(data?.status, !!confirmedRecord));
+	const lowConfidenceFields = $derived(
+		(data?.fields ?? []).filter(
+			(field) => field.name !== LINE_ITEMS_FIELD && confidenceLevel(field.confidence) === 'low'
+		)
+	);
+	const mediumConfidenceFields = $derived(
+		(data?.fields ?? []).filter(
+			(field) => field.name !== LINE_ITEMS_FIELD && confidenceLevel(field.confidence) === 'medium'
+		)
+	);
+	const proposedCommand = $derived.by(() => {
+		if (isPayment) return 'Record one payment receipt on the selected rental account';
+		if (isWorkOrder) return 'Create one work order for the selected property';
+		if (isLease) {
+			return isCreatingLeaseProperty
+				? 'Create a property and unit, then create the rental relationship and agreement'
+				: 'Create one rental relationship and agreement for the selected unit';
+		}
+		if (isApplication) return 'Create one rental application';
+		if (isLoan) return 'Add one loan to the selected property';
+		return 'Create one expense and attach this source document';
+	});
+	const proposedDestination = $derived.by(() => {
+		if (isPayment) return selectedTenantAccountLabel;
+		if (isLease) {
+			if (isCreatingLeaseProperty) {
+				return `${newPropertyAddress || newPropertyName || 'New property'} · Unit ${newUnitNumber || 'not selected'}`;
+			}
+			return `${selectedLeasePropertyLabel} · ${selectedLeaseUnitLabel}`;
+		}
+		if (isApplication) {
+			return selectedPropertyId !== NO_PROPERTY
+				? selectedPropertyLabel
+				: scanContext.unitId
+					? `Unit #${scanContext.unitId}`
+					: 'Applications queue';
+		}
+		if (isWorkOrder || isLoan || isExpense) return selectedPropertyLabel;
+		return 'Review required';
+	});
+	const extractionWarningCount = $derived(
+		lowConfidenceFields.length + (data?.missingRequired?.length ?? 0) + (data?.ambiguous ? 1 : 0)
+	);
 	const linkedRecordHref = $derived((() => {
 		const type = confirmedRecord?.type ?? data?.createdEntityType;
 		const id = confirmedRecord?.id ?? data?.createdEntityId;
@@ -865,8 +958,16 @@
 			// the applicant can be filed under the unit they applied for (server re-validates it in-portfolio).
 			const propertyField = data?.fields.find((f) => f.name === 'property_id' || f.name === 'propertyId');
 			const unitField = data?.fields.find((f) => f.name === 'unit_id' || f.name === 'unitId');
-			if (propertyField?.value) overrides['propertyId'] = Number(propertyField.value) || null;
-			if (unitField?.value) overrides['unitId'] = Number(unitField.value) || null;
+			const selectedApplicationPropertyId = selectedPropertyId !== NO_PROPERTY
+				? Number(selectedPropertyId)
+				: Number(propertyField?.value) || scanContext.propertyId || null;
+			overrides['propertyId'] = selectedApplicationPropertyId;
+			if (selectedApplicationPropertyId && selectedApplicationPropertyId !== scanContext.propertyId) {
+				// Never carry a unit from the old inherited property into a newly selected destination.
+				overrides['unitId'] = null;
+			} else {
+				overrides['unitId'] = Number(unitField?.value) || scanContext.unitId || null;
+			}
 			return JSON.stringify(overrides);
 		}
 
@@ -963,7 +1064,6 @@
 	// Reject dialog state
 	let showRejectDialog = $state(false);
 	let rejectReason = $state('');
-	let reviewTab = $state<'document' | 'details'>('details');
 
 	function handleReject() {
 		rejectReason = '';
@@ -1139,17 +1239,38 @@
 			</div>
 		{/if}
 
-		<Tabs.Root bind:value={reviewTab} class="gap-4" data-testid="scan-review-tabs">
-			<Tabs.List class="w-full sm:w-auto">
-				<Tabs.Trigger value="details" data-testid="scan-review-tab-details">Extracted fields</Tabs.Trigger>
-				<Tabs.Trigger value="document" data-testid="scan-review-tab-document">Document preview</Tabs.Trigger>
-			</Tabs.List>
-			<Tabs.Content value="document" class="mt-0">
-			{#if reviewTab === 'document'}
+		<div class="mb-4 grid gap-px overflow-hidden rounded-xl border bg-border md:grid-cols-[1.15fr_1fr_1fr]" data-testid="scan-proposed-command">
+			<div class="bg-card px-4 py-3">
+				<p class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Exact proposed command</p>
+				<p class="mt-1 text-sm font-semibold text-foreground">{proposedCommand}</p>
+			</div>
+			<div class="bg-card px-4 py-3">
+				<p class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Destination</p>
+				<p class="mt-1 text-sm text-foreground">{proposedDestination}</p>
+				<p class="mt-1 text-xs text-muted-foreground">You can change authorized destinations in the review.</p>
+			</div>
+			<div class="bg-card px-4 py-3">
+				<p class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Review checks</p>
+				<p class="mt-1 text-sm font-medium {extractionWarningCount > 0 ? 'text-[var(--warning)]' : 'text-[var(--success)]'}">
+					{extractionWarningCount > 0 ? `${extractionWarningCount} item${extractionWarningCount === 1 ? '' : 's'} need attention` : 'No extraction warnings'}
+				</p>
+				<p class="mt-1 text-xs text-muted-foreground">
+					{lowConfidenceFields.length} low confidence · {mediumConfidenceFields.length} medium · duplicate and access checks run again when saved
+				</p>
+			</div>
+		</div>
+
+		<div class="grid items-start gap-4 xl:grid-cols-[minmax(20rem,0.82fr)_minmax(34rem,1.18fr)]" data-testid="scan-review-workspace">
 				<!-- Left: document preview -->
-				<Card.Root class="flex flex-col gap-0 py-0">
+				<Card.Root class="flex flex-col gap-0 py-0 xl:sticky xl:top-4">
 					<Card.Header class="border-b border-border px-4 py-3 [.border-b]:pb-3">
-						<Card.Title class="text-sm">Document Preview</Card.Title>
+						<div class="flex items-center justify-between gap-3">
+							<Card.Title class="text-sm">Source document</Card.Title>
+							{#if data.sourceContentSha256}
+								<span class="font-mono text-[10px] text-muted-foreground" title={data.sourceContentSha256}>SHA-256 {data.sourceContentSha256.slice(0, 10)}…</span>
+							{/if}
+						</div>
+						{#if scanContext.sourceLabel}<p class="text-xs text-muted-foreground">{scanContext.sourceLabel}</p>{/if}
 					</Card.Header>
 					<Card.Content class="flex flex-1 items-center justify-center overflow-hidden p-4">
 						{#if isWorkOrder && fieldValue('transcript')}
@@ -1187,10 +1308,7 @@
 						{/if}
 					</Card.Content>
 				</Card.Root>
-			{/if}
-			</Tabs.Content>
 
-			<Tabs.Content value="details" class="mt-0">
 			<!-- Right: extracted fields form -->
 			<Card.Root class="flex flex-col gap-0 py-0">
 				<Card.Header class="border-b border-border px-4 py-3 [.border-b]:pb-3">
@@ -1300,14 +1418,24 @@
 									<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-property-select">
 										Which property is this lease for? <span class="text-[var(--m3c-error)]">*</span>
 									</label>
+									<Input
+										aria-label="Search properties"
+										placeholder="Search properties by name or address"
+										value={propertySearch}
+										disabled={reviewControlsDisabled}
+										oninput={(event) => {
+											propertySearch = (event.currentTarget as HTMLInputElement).value;
+											propertySkip = 0;
+										}}
+									/>
 									<Select.Root type="single" bind:value={selectedLeasePropertyId} disabled={reviewControlsDisabled}>
 										<Select.Trigger id="scan-lease-property-select" data-testid="scan-lease-property-select" class="w-full" disabled={reviewControlsDisabled}>
 											{selectedLeasePropertyLabel}
 										</Select.Trigger>
 										<Select.Content>
 											<Select.Item value={CREATE_PROPERTY} label={newPropertyLabel}>{newPropertyLabel}</Select.Item>
-											{#if propertiesQuery.data}
-												{#each propertiesQuery.data as prop (prop.id)}
+									{#if propertiesQuery.data}
+										{#each propertyChoices as prop (prop.id)}
 													<Select.Item value={String(prop.id)} label={prop.name}>
 														{prop.name}
 													</Select.Item>
@@ -1317,6 +1445,14 @@
 									</Select.Root>
 									{#if propertiesQuery.isLoading}
 										<p class="mt-1 text-xs text-muted-foreground">Loading properties…</p>
+									{:else if propertiesQuery.data}
+										<div class="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+											<span>{propertiesQuery.data.totalCount === 0 ? 'No matching properties' : `${propertySkip + 1}–${Math.min(propertySkip + CONTEXT_PAGE_SIZE, propertiesQuery.data.totalCount)} of ${propertiesQuery.data.totalCount}`}</span>
+											<div class="flex gap-1">
+												<Button type="button" variant="outline" size="sm" disabled={propertySkip === 0} onclick={() => (propertySkip = Math.max(0, propertySkip - CONTEXT_PAGE_SIZE))}>Previous</Button>
+												<Button type="button" variant="outline" size="sm" disabled={propertySkip + CONTEXT_PAGE_SIZE >= propertiesQuery.data.totalCount} onclick={() => (propertySkip += CONTEXT_PAGE_SIZE)}>Next</Button>
+											</div>
+										</div>
 									{/if}
 								</div>
 
@@ -1365,13 +1501,23 @@
 										<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-unit-select">
 											Which unit? <span class="text-[var(--m3c-error)]">*</span>
 										</label>
+										<Input
+											aria-label="Search units"
+											placeholder="Search units in this property"
+											value={unitSearch}
+											disabled={!selectedLeasePropertyId || reviewControlsDisabled}
+											oninput={(event) => {
+												unitSearch = (event.currentTarget as HTMLInputElement).value;
+												unitSkip = 0;
+											}}
+										/>
 										<Select.Root type="single" bind:value={selectedLeaseUnitId} disabled={!selectedLeasePropertyId || reviewControlsDisabled}>
 											<Select.Trigger id="scan-lease-unit-select" data-testid="scan-lease-unit-select" class="w-full" disabled={!selectedLeasePropertyId || reviewControlsDisabled}>
 												{selectedLeaseUnitLabel}
 											</Select.Trigger>
 											<Select.Content>
-												{#if leaseUnitsQuery.data}
-													{#each leaseUnitsQuery.data as unit (unit.id)}
+										{#if leaseUnitsQuery.data}
+											{#each leaseUnitChoices as unit (unit.id)}
 														<Select.Item value={String(unit.id)} label={`Unit ${unit.unitNumber}`}>
 															Unit {unit.unitNumber} ({unit.status})
 														</Select.Item>
@@ -1383,8 +1529,17 @@
 											<p class="mt-1 text-xs text-muted-foreground">Pick a property first to see its units.</p>
 										{:else if leaseUnitsQuery.isLoading}
 											<p class="mt-1 text-xs text-muted-foreground">Loading units…</p>
-										{:else if (leaseUnitsQuery.data?.length ?? 0) === 0}
+										{:else if (leaseUnitsQuery.data?.items.length ?? 0) === 0}
 											<p class="mt-1 text-xs text-[var(--warning)]">This property has no units yet — switch to "{newPropertyLabel}" above, or add a unit to this property first.</p>
+										{/if}
+										{#if leaseUnitsQuery.data}
+											<div class="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+												<span>{leaseUnitsQuery.data.totalCount === 0 ? 'No matching units' : `${unitSkip + 1}–${Math.min(unitSkip + CONTEXT_PAGE_SIZE, leaseUnitsQuery.data.totalCount)} of ${leaseUnitsQuery.data.totalCount}`}</span>
+												<div class="flex gap-1">
+													<Button type="button" variant="outline" size="sm" disabled={unitSkip === 0} onclick={() => (unitSkip = Math.max(0, unitSkip - CONTEXT_PAGE_SIZE))}>Previous</Button>
+													<Button type="button" variant="outline" size="sm" disabled={unitSkip + CONTEXT_PAGE_SIZE >= leaseUnitsQuery.data.totalCount} onclick={() => (unitSkip += CONTEXT_PAGE_SIZE)}>Next</Button>
+												</div>
+											</div>
 										{/if}
 									</div>
 								{/if}
@@ -1393,14 +1548,24 @@
 									<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-tenant-select">
 										Tenant <span class="font-normal text-muted-foreground">(optional)</span>
 									</label>
+									<Input
+										aria-label="Search tenants"
+										placeholder="Search tenants by name, email, or phone"
+										value={tenantSearch}
+										disabled={reviewControlsDisabled}
+										oninput={(event) => {
+											tenantSearch = (event.currentTarget as HTMLInputElement).value;
+											tenantSkip = 0;
+										}}
+									/>
 									<Select.Root type="single" bind:value={selectedTenantId} disabled={reviewControlsDisabled}>
 										<Select.Trigger id="scan-lease-tenant-select" data-testid="scan-lease-tenant-select" class="w-full" disabled={reviewControlsDisabled}>
 											{selectedTenantLabel}
 										</Select.Trigger>
 										<Select.Content>
 											<Select.Item value={NO_TENANT} label={newTenantLabel}>{newTenantLabel}</Select.Item>
-											{#if tenantsQuery.data}
-												{#each tenantsQuery.data as t (t.id)}
+										{#if tenantsQuery.data}
+											{#each tenantChoices as t (t.id)}
 													<Select.Item value={String(t.id)} label={tenantLabel(t)}>
 														{tenantLabel(t)}
 													</Select.Item>
@@ -1411,6 +1576,15 @@
 									<p class="mt-1 text-xs text-muted-foreground">
 										Leave on "{newTenantLabel}" to use the name from the lease, or pick an existing tenant to match it.
 									</p>
+									{#if tenantsQuery.data}
+										<div class="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+											<span>{tenantsQuery.data.totalCount === 0 ? 'No matching tenants' : `${tenantSkip + 1}–${Math.min(tenantSkip + CONTEXT_PAGE_SIZE, tenantsQuery.data.totalCount)} of ${tenantsQuery.data.totalCount}`}</span>
+											<div class="flex gap-1">
+												<Button type="button" variant="outline" size="sm" disabled={tenantSkip === 0} onclick={() => (tenantSkip = Math.max(0, tenantSkip - CONTEXT_PAGE_SIZE))}>Previous</Button>
+												<Button type="button" variant="outline" size="sm" disabled={tenantSkip + CONTEXT_PAGE_SIZE >= tenantsQuery.data.totalCount} onclick={() => (tenantSkip += CONTEXT_PAGE_SIZE)}>Next</Button>
+											</div>
+										</div>
+									{/if}
 								</div>
 							</div>
 							{/if}
@@ -1447,6 +1621,46 @@
 					{:else if isApplication}
 						<!-- Applicant review — a single editable applicant form (Payment/Expense model, NOT the
 						     4-step guided lease flow). Confirming creates a RentalApplication on /applications. -->
+						{#if !isTerminal}
+							<div class="mb-5 rounded-md border border-border bg-muted/30 p-3" data-testid="scan-application-destination">
+								<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-application-property-select">
+									Which property is this application for? <span class="font-normal text-muted-foreground">(optional)</span>
+								</label>
+								<Input
+									aria-label="Search application properties"
+									placeholder="Search properties by name or address"
+									value={propertySearch}
+									disabled={reviewControlsDisabled}
+									oninput={(event) => {
+										propertySearch = (event.currentTarget as HTMLInputElement).value;
+										propertySkip = 0;
+									}}
+								/>
+								<Select.Root type="single" bind:value={selectedPropertyId} disabled={reviewControlsDisabled}>
+									<Select.Trigger id="scan-application-property-select" class="w-full" disabled={reviewControlsDisabled}>
+										{selectedPropertyLabel}
+									</Select.Trigger>
+									<Select.Content>
+										<Select.Item value={NO_PROPERTY} label="— No property —">— No property —</Select.Item>
+										{#each propertyChoices as prop (prop.id)}
+											<Select.Item value={String(prop.id)} label={prop.name}>{prop.name}</Select.Item>
+										{/each}
+									</Select.Content>
+								</Select.Root>
+								{#if propertiesQuery.isLoading}
+									<p class="mt-1 text-xs text-muted-foreground">Loading properties…</p>
+								{:else if propertiesQuery.data}
+									<div class="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+										<span>{propertiesQuery.data.totalCount === 0 ? 'No matching properties' : `${propertySkip + 1}–${Math.min(propertySkip + CONTEXT_PAGE_SIZE, propertiesQuery.data.totalCount)} of ${propertiesQuery.data.totalCount}`}</span>
+										<div class="flex gap-1">
+											<Button type="button" variant="outline" size="sm" disabled={propertySkip === 0} onclick={() => (propertySkip = Math.max(0, propertySkip - CONTEXT_PAGE_SIZE))}>Previous</Button>
+											<Button type="button" variant="outline" size="sm" disabled={propertySkip + CONTEXT_PAGE_SIZE >= propertiesQuery.data.totalCount} onclick={() => (propertySkip += CONTEXT_PAGE_SIZE)}>Next</Button>
+										</div>
+									</div>
+								{/if}
+								<p class="mt-2 text-xs text-muted-foreground">Changing the property clears any inherited unit from the previous property when saved.</p>
+							</div>
+						{/if}
 						<div class="mb-5" data-testid="scan-application-fields">
 							<h2 class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Applicant details</h2>
 							<div class="grid grid-cols-2 gap-x-4 gap-y-3">
@@ -1484,6 +1698,16 @@
 								<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-loan-property-select">
 									Which property is this loan for? <span class="text-[var(--m3c-error)]">*</span>
 								</label>
+								<Input
+									aria-label="Search properties"
+									placeholder="Search properties by name or address"
+									value={propertySearch}
+									disabled={reviewControlsDisabled}
+									oninput={(event) => {
+										propertySearch = (event.currentTarget as HTMLInputElement).value;
+										propertySkip = 0;
+									}}
+								/>
 								<Select.Root type="single" bind:value={selectedPropertyId} disabled={reviewControlsDisabled}>
 									<Select.Trigger id="scan-loan-property-select" data-testid="scan-loan-property-select" class="w-full" disabled={reviewControlsDisabled}>
 										{selectedPropertyLabel}
@@ -1491,7 +1715,7 @@
 									<Select.Content>
 										<Select.Item value={NO_PROPERTY} label="— Select a property —">— Select a property —</Select.Item>
 										{#if propertiesQuery.data}
-											{#each propertiesQuery.data as prop (prop.id)}
+											{#each propertyChoices as prop (prop.id)}
 												<Select.Item value={String(prop.id)} label={prop.name}>
 													{prop.name}
 												</Select.Item>
@@ -1503,6 +1727,15 @@
 									<p class="mt-1 text-xs text-muted-foreground">Loading properties…</p>
 								{:else if selectedPropertyId === NO_PROPERTY}
 									<p class="mt-1 text-xs text-[var(--warning)]">Select a property to create this loan.</p>
+								{/if}
+								{#if propertiesQuery.data}
+									<div class="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+										<span>{propertiesQuery.data.totalCount === 0 ? 'No matching properties' : `${propertySkip + 1}–${Math.min(propertySkip + CONTEXT_PAGE_SIZE, propertiesQuery.data.totalCount)} of ${propertiesQuery.data.totalCount}`}</span>
+										<div class="flex gap-1">
+											<Button type="button" variant="outline" size="sm" disabled={propertySkip === 0} onclick={() => (propertySkip = Math.max(0, propertySkip - CONTEXT_PAGE_SIZE))}>Previous</Button>
+											<Button type="button" variant="outline" size="sm" disabled={propertySkip + CONTEXT_PAGE_SIZE >= propertiesQuery.data.totalCount} onclick={() => (propertySkip += CONTEXT_PAGE_SIZE)}>Next</Button>
+										</div>
+									</div>
 								{/if}
 							</div>
 						{/if}
@@ -1556,6 +1789,16 @@
 								<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-property-select">
 									Which property is this for? {#if isWorkOrder}<span class="text-[var(--m3c-error)]">*</span>{:else}<span class="font-normal text-muted-foreground">(optional)</span>{/if}
 								</label>
+								<Input
+									aria-label="Search properties"
+									placeholder="Search properties by name or address"
+									value={propertySearch}
+									disabled={reviewControlsDisabled}
+									oninput={(event) => {
+										propertySearch = (event.currentTarget as HTMLInputElement).value;
+										propertySkip = 0;
+									}}
+								/>
 								<Select.Root type="single" bind:value={selectedPropertyId} disabled={reviewControlsDisabled}>
 									<Select.Trigger id="scan-property-select" data-testid="scan-property-select" class="w-full" disabled={reviewControlsDisabled}>
 										{selectedPropertyLabel}
@@ -1563,7 +1806,7 @@
 									<Select.Content>
 										<Select.Item value={NO_PROPERTY} label="— No property —">— No property —</Select.Item>
 										{#if propertiesQuery.data}
-											{#each propertiesQuery.data as prop (prop.id)}
+											{#each propertyChoices as prop (prop.id)}
 												<Select.Item value={String(prop.id)} label={prop.name}>
 													{prop.name}
 												</Select.Item>
@@ -1576,6 +1819,15 @@
 								{/if}
 								{#if isWorkOrder && selectedPropertyId === NO_PROPERTY}
 									<p class="mt-1 text-xs text-[var(--warning)]">Select a property to create this work order.</p>
+								{/if}
+								{#if propertiesQuery.data}
+									<div class="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+										<span>{propertiesQuery.data.totalCount === 0 ? 'No matching properties' : `${propertySkip + 1}–${Math.min(propertySkip + CONTEXT_PAGE_SIZE, propertiesQuery.data.totalCount)} of ${propertiesQuery.data.totalCount}`}</span>
+										<div class="flex gap-1">
+											<Button type="button" variant="outline" size="sm" disabled={propertySkip === 0} onclick={() => (propertySkip = Math.max(0, propertySkip - CONTEXT_PAGE_SIZE))}>Previous</Button>
+											<Button type="button" variant="outline" size="sm" disabled={propertySkip + CONTEXT_PAGE_SIZE >= propertiesQuery.data.totalCount} onclick={() => (propertySkip += CONTEXT_PAGE_SIZE)}>Next</Button>
+										</div>
+									</div>
 								{/if}
 							</div>
 							{/if}
@@ -1897,8 +2149,7 @@
 					</div>
 				</Card.Footer>
 			</Card.Root>
-			</Tabs.Content>
-		</Tabs.Root>
+		</div>
 	{/if}
 </div>
 

@@ -46,8 +46,8 @@ public class ScanController : ManagementControllerBase
         "application/pdf", "image/jpeg", "image/png", "image/gif", "image/webp", "image/heic"
     };
 
-    // Recognised scan targets. Empty/null at single-file upload is allowed (the worker auto-classifies);
-    // a batch always has a concrete target (defaulting to the canonical Agreement import on-ramp).
+    // Recognised scan targets. Empty/null is the canonical classify-first path for both a single
+    // upload and each file in a batch; an explicit target skips classification.
     private static readonly HashSet<string> ValidTargets = new(StringComparer.OrdinalIgnoreCase)
     {
         "Expense", "Payment", "WorkOrder", nameof(LeaseAgreement), "Application", "Loan"
@@ -171,13 +171,13 @@ public class ScanController : ManagementControllerBase
         if (nonEmpty.Count > MaxBatchFiles)
             return BadRequest(new { error = $"A batch can contain at most {MaxBatchFiles} files (got {nonEmpty.Count})." });
 
-        // A batch always targets a concrete entity; default to the lease-import on-ramp.
-        var target = string.IsNullOrWhiteSpace(targetEntityType) ? nameof(LeaseAgreement) : targetEntityType.Trim();
-        if (!ValidTargets.Contains(target))
-            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, LeaseAgreement, Application, Loan." });
-
-        // Normalize to the canonical casing so the worker's case-sensitive target checks match.
-        target = ValidTargets.First(t => string.Equals(t, target, StringComparison.OrdinalIgnoreCase));
+        // An omitted target is the canonical classify-first path. Every file in the batch is
+        // independently routed to its own typed review draft; an explicit target skips that pass.
+        var target = targetEntityType?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(target) && !ValidTargets.Contains(target))
+            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, LeaseAgreement, Application, Loan (or omit to auto-classify)." });
+        if (!string.IsNullOrWhiteSpace(target))
+            target = ValidTargets.First(t => string.Equals(t, target, StringComparison.OrdinalIgnoreCase));
 
         var portfolioId = GetPortfolioId();
 
