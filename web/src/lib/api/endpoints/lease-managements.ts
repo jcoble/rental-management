@@ -141,7 +141,7 @@ export interface EditLeaseAgreementDraftRequest {
   gracePeriodDays: number;
   termsSchemaVersion: number;
   termsPayload: Record<string, unknown>;
-  documentTemplateId: number;
+  documentTemplateId: number | null;
   signers: Array<{
     leaseManagementPartyId: number | null;
     tenantId: number | null;
@@ -279,7 +279,7 @@ export interface PrepareMoveInRequest {
   plannedPossessionAtUtc: string | null;
   partyEffectiveFrom: string;
   parties: PrepareMoveInPartyRequest[];
-  documentTemplateId: number;
+  documentTemplateId: number | null;
   termType: LeaseAgreementTermType;
   termStartOn: string;
   termEndOn: string | null;

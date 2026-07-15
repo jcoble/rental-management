@@ -40,7 +40,7 @@ public sealed record EditLeaseAgreementDraftCommand(
     short GracePeriodDays,
     int TermsSchemaVersion,
     string TermsPayload,
-    int DocumentTemplateId,
+    int? DocumentTemplateId,
     IReadOnlyList<LeaseAgreementDraftSignerInput> Signers,
     int ActorUserId,
     Guid AuthSessionId,

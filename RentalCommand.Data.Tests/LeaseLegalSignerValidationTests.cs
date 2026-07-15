@@ -26,6 +26,21 @@ public sealed class LeaseLegalSignerValidationTests
     }
 
     [Fact]
+    public void Agreement_draft_accepts_the_supplied_lease_without_a_custom_template()
+    {
+        var command = new EditLeaseAgreementDraftCommand(
+            1, 2, 3, 1, "A-1", LeaseAgreementTermType.FixedTerm,
+            new DateOnly(2026, 1, 1), new DateOnly(2026, 12, 31), new DateOnly(2026, 1, 1),
+            1000m, 1, 1000m, 25m, 5, 1, "{}", null,
+            [AgreementSigner(10, 20, LeaseLegalSignerRole.PrimaryTenant, "tenant@example.com", true, 1)],
+            5, Guid.NewGuid(), 6, 1, "agreement-edit:test");
+
+        var act = () => LeaseAgreementDraftCommandSupport.ValidateEditShape(command);
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
     public void Addendum_draft_rejects_a_mixed_required_and_optional_signer_snapshot()
     {
         var command = new CreateLeaseAddendumDraftCommand(

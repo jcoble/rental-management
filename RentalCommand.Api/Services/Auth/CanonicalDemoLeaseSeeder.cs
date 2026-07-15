@@ -36,30 +36,22 @@ internal static class CanonicalDemoLeaseSeeder
                 "Canonical demo lease facts must be seeded inside the admitted infrastructure transaction.");
         }
 
-        var template = new DocumentTemplate
+        // Demo agreements use the same supplied renderer available to a real workspace. Do not
+        // create an active placeholder template with no immutable PDF and expose it as issuable.
+        var sourceVersionId = await sourceVersions.ResolveBuiltInAsync(
+            portfolioId,
+            BuiltInLeaseAgreementSource.BusinessKey,
+            BuiltInLeaseAgreementSource.RendererKey,
+            BuiltInLeaseAgreementSource.RendererVersion,
+            BuiltInLeaseAgreementSource.SnapshotPayload,
+            actorUserId,
+            now,
+            ct);
+        if (sourceVersionId <= 0)
         {
-            PortfolioId = portfolioId,
-            Kind = DocumentTemplateKind.Lease,
-            Status = DocumentTemplateStatus.Active,
-            RenderMode = DocumentTemplateRenderMode.Restyle,
-            Name = "Demo lease template",
-            Description = "Seed-only template backing canonical demo agreements.",
-            IsSandboxSeeded = true,
-            DraftHtml = "<p>Demo lease agreement</p>",
-            Version = 1,
-            CreatedAtUtc = now,
-            UpdatedAtUtc = now,
-        };
-        db.DocumentTemplates.Add(template);
-        await db.SaveChangesAsync(ct);
-        var sourceVersion = await sourceVersions.ResolveAuthoredTemplateAsync(
-                portfolioId,
-                template.Id,
-                actorUserId,
-                now,
-                ct)
-            ?? throw new InvalidOperationException(
-                $"Demo lease template {template.Id} could not be resolved to immutable provenance.");
+            throw new InvalidOperationException(
+                "Rental Command's supplied lease source could not be resolved for demo agreements.");
+        }
 
         var graphs = new List<DemoLeaseGraph>();
         var activeManagements = new List<LeaseManagement>();
@@ -142,7 +134,7 @@ internal static class CanonicalDemoLeaseSeeder
                     startDate = start.ToString("yyyy-MM-dd"),
                     endDate = end.ToString("yyyy-MM-dd"),
                 }),
-                DocumentSourceVersionId = sourceVersion.DocumentSourceVersionId,
+                DocumentSourceVersionId = sourceVersionId,
                 CreatedAtUtc = createdAt,
                 CreatedByUserId = actorUserId,
                 UpdatedAtUtc = createdAt,

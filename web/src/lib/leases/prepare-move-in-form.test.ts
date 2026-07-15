@@ -79,6 +79,16 @@ describe('Prepare move-in form contract', () => {
 		assert.equal(result.request?.openingBalanceEffectiveOn, null);
 	});
 
+	it('uses the supplied Rental Command lease when no custom template is selected', () => {
+		const form = completeForm();
+		form.documentTemplateId = '';
+
+		const result = buildPrepareMoveInRequest(form);
+
+		assert.deepEqual(result.errors, {});
+		assert.equal(result.request?.documentTemplateId, null);
+	});
+
 	it('rejects incomplete dates and half-specified opening balances', () => {
 		const form = completeForm();
 		form.termEndOn = '2026-08-31';

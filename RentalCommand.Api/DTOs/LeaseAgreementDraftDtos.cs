@@ -96,7 +96,10 @@ public sealed class EditLeaseAgreementDraftRequest
     public short GracePeriodDays { get; set; }
     public int TermsSchemaVersion { get; set; }
     public JsonElement TermsPayload { get; set; }
-    public int DocumentTemplateId { get; set; }
+    /// <summary>
+    /// Optional landlord-authored template. Null selects Rental Command's supplied lease renderer.
+    /// </summary>
+    public int? DocumentTemplateId { get; set; }
     public List<LeaseAgreementDraftSignerRequest> Signers { get; set; } = [];
 }
 

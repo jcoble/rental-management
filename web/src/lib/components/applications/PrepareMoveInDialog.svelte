@@ -468,7 +468,7 @@
 				<div class="grid gap-4 md:grid-cols-2" data-testid="prepare-move-in-agreement-step">
 					<div class="space-y-2 md:col-span-2">
 						<label class="block text-sm font-medium" for="prepare-template"
-							>Active lease template</label
+							>Lease document</label
 						>
 						<Input
 							id="prepare-template-search"
@@ -484,7 +484,7 @@
 							class="m3-field-surface h-10 w-full px-3 text-sm"
 							data-testid="prepare-move-in-template-input"
 						>
-							<option value="">Choose an active lease template</option>
+							<option value="">Rental Command supplied lease · Recommended</option>
 							{#each templatesQuery.data?.items ?? [] as template (template.id)}
 								<option
 									value={String(template.id)}
@@ -494,6 +494,9 @@
 								>
 							{/each}
 						</select>
+						<p class="text-xs text-muted-foreground">
+							Use the supplied lease now, or choose an active landlord PDF prepared in Lease Templates.
+						</p>
 						{#if templatesQuery.isLoading}<p class="text-xs text-muted-foreground">
 								Loading active lease templates…
 							</p>{/if}

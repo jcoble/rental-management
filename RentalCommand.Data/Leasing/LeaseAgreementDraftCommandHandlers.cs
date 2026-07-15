@@ -75,15 +75,20 @@ public sealed class EditLeaseAgreementDraftHandler
                 "The template and every signer provenance reference must belong to this lease relationship and portfolio.");
         }
 
-        var sourceVersion = await attempt.Leasing.ResolveAuthoredDocumentSourceVersionAsync(
-            command.PortfolioId, 0, command.LeaseManagementId, command.DocumentTemplateId,
-            command.ActorUserId, nowUtc, ct);
+        var sourceVersion = command.DocumentTemplateId is { } documentTemplateId
+            ? await attempt.Leasing.ResolveAuthoredDocumentSourceVersionAsync(
+                command.PortfolioId, 0, command.LeaseManagementId, documentTemplateId,
+                command.ActorUserId, nowUtc, ct)
+            : await attempt.Leasing.ResolveBuiltInDocumentSourceVersionAsync(
+                command.PortfolioId, command.ActorUserId, nowUtc, ct);
         if (!sourceVersion.Resolved)
         {
             return LeaseAgreementDraftCommandSupport.Error(
                 LeaseAgreementDraftMutationOutcome.InvalidSigners, command, command.LeaseAgreementId,
                 agreement.VersionNumber, agreement.DraftRevision,
-                "The selected lease template could not be frozen as immutable source provenance.");
+                command.DocumentTemplateId.HasValue
+                    ? "The selected lease template could not be frozen as immutable source provenance."
+                    : "The supplied lease source could not be frozen as immutable provenance.");
         }
 
         agreement.AgreementNumber = command.AgreementNumber.Trim();
@@ -730,13 +735,14 @@ internal static class LeaseAgreementDraftCommandSupport
                 PartyCount = relationship.Parties.Count(party => partyIds.Contains(party.Id)),
                 TenantCount = persistence.Query<Tenant>().Count(tenant =>
                     tenant.PortfolioId == command.PortfolioId && tenantIds.Contains(tenant.Id)),
-                TemplateValid = persistence.Query<DocumentTemplate>().Any(template =>
-                    template.Id == command.DocumentTemplateId
-                    && template.PortfolioId == command.PortfolioId
-                    && template.Kind == DocumentTemplateKind.Lease
-                    && template.Status == DocumentTemplateStatus.Active
-                    && template.ArchivedAtUtc == null
-                    && (template.PropertyId == null || template.PropertyId == relationship.PropertyId)),
+                TemplateValid = command.DocumentTemplateId == null
+                    || persistence.Query<DocumentTemplate>().Any(template =>
+                        template.Id == command.DocumentTemplateId
+                        && template.PortfolioId == command.PortfolioId
+                        && template.Kind == DocumentTemplateKind.Lease
+                        && template.Status == DocumentTemplateStatus.Active
+                        && template.ArchivedAtUtc == null
+                        && (template.PropertyId == null || template.PropertyId == relationship.PropertyId)),
             })
             .SingleAsync(ct);
         return facts.PartyCount == partyIds.Length && facts.TenantCount == tenantIds.Length
@@ -858,7 +864,8 @@ internal static class LeaseAgreementDraftCommandSupport
             || !ValidTerms(command.TermType, command.TermStartOn, command.TermEndOn,
                 command.GoverningFromOn, command.BaseRentAmount, command.RentDueDay,
                 command.SecurityDepositObligation, command.LateFeeAmount, command.GracePeriodDays)
-            || command.TermsSchemaVersion <= 0 || command.DocumentTemplateId <= 0
+            || command.TermsSchemaVersion <= 0
+            || (command.DocumentTemplateId.HasValue && command.DocumentTemplateId <= 0)
             || !IsJsonObject(command.TermsPayload)
             || !ValidSigners(command.Signers))
         {
