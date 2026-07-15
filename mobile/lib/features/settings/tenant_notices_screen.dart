@@ -183,7 +183,10 @@ class _PolicyCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                _StatusChip(label: _modeLabel(policy.mode)),
+                _StatusChip(
+                  label: _modeLabel(policy.mode),
+                  status: policy.mode,
+                ),
               ],
             ),
             const SizedBox(height: 12),

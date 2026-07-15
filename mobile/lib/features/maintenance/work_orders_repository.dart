@@ -584,7 +584,7 @@ class WorkOrderDetailNotifier extends Notifier<AsyncValue<WorkOrderDetail>> {
           'expectedUpdatedAtUtc': state.value?.workOrder.updatedAt
               .toUtc()
               .toIso8601String(),
-          if (note != null) 'technicianNote': note,
+          'technicianNote': ?note,
         });
       } else {
         await _repo.updateStatus(_id, status, note: note);
