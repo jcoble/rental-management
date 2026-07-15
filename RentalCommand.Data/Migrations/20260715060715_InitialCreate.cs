@@ -565,38 +565,6 @@ namespace RentalCommand.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
-                name: "NotificationReadStates",
-                columns: table => new
-                {
-                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
-                    NotificationId = table.Column<int>(type: "integer", nullable: false),
-                    UserId = table.Column<int>(type: "integer", nullable: false),
-                    ReadAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_NotificationReadStates", x => new { x.PortfolioId, x.NotificationId, x.UserId });
-                    table.ForeignKey(
-                        name: "FK_NotificationReadStates_AspNetUsers_UserId",
-                        column: x => x.UserId,
-                        principalTable: "AspNetUsers",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                    table.ForeignKey(
-                        name: "FK_NotificationReadStates_Notifications_NotificationId_Portfo~",
-                        columns: x => new { x.NotificationId, x.PortfolioId },
-                        principalTable: "Notifications",
-                        principalColumns: new[] { "Id", "PortfolioId" },
-                        onDelete: ReferentialAction.Cascade);
-                    table.ForeignKey(
-                        name: "FK_NotificationReadStates_Portfolios_PortfolioId",
-                        column: x => x.PortfolioId,
-                        principalTable: "Portfolios",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Restrict);
-                });
-
-            migrationBuilder.CreateTable(
                 name: "OAuthStates",
                 columns: table => new
                 {
@@ -1168,6 +1136,38 @@ namespace RentalCommand.Data.Migrations
                         principalTable: "InspectionTemplates",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "NotificationReadStates",
+                columns: table => new
+                {
+                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
+                    NotificationId = table.Column<int>(type: "integer", nullable: false),
+                    UserId = table.Column<int>(type: "integer", nullable: false),
+                    ReadAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_NotificationReadStates", x => new { x.PortfolioId, x.NotificationId, x.UserId });
+                    table.ForeignKey(
+                        name: "FK_NotificationReadStates_AspNetUsers_UserId",
+                        column: x => x.UserId,
+                        principalTable: "AspNetUsers",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                    table.ForeignKey(
+                        name: "FK_NotificationReadStates_Notifications_NotificationId_Portfol~",
+                        columns: x => new { x.NotificationId, x.PortfolioId },
+                        principalTable: "Notifications",
+                        principalColumns: new[] { "Id", "PortfolioId" },
+                        onDelete: ReferentialAction.Cascade);
+                    table.ForeignKey(
+                        name: "FK_NotificationReadStates_Portfolios_PortfolioId",
+                        column: x => x.PortfolioId,
+                        principalTable: "Portfolios",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
                 });
 
             migrationBuilder.CreateTable(
@@ -2154,61 +2154,6 @@ namespace RentalCommand.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
-                name: "PortalMessages",
-                columns: table => new
-                {
-                    Id = table.Column<int>(type: "integer", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
-                    AuthorAccessContextId = table.Column<int>(type: "integer", nullable: true),
-                    RecipientTenantId = table.Column<int>(type: "integer", nullable: true),
-                    FromLandlord = table.Column<bool>(type: "boolean", nullable: false),
-                    Channels = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: true),
-                    PropertyId = table.Column<int>(type: "integer", nullable: true),
-                    UnitId = table.Column<int>(type: "integer", nullable: true),
-                    Subject = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
-                    Body = table.Column<string>(type: "character varying(5000)", maxLength: 5000, nullable: false),
-                    Status = table.Column<int>(type: "integer", nullable: false),
-                    Reply = table.Column<string>(type: "character varying(5000)", maxLength: 5000, nullable: true),
-                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_PortalMessages", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_PortalMessages_Portfolios_PortfolioId",
-                        column: x => x.PortfolioId,
-                        principalTable: "Portfolios",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                    table.ForeignKey(
-                        name: "FK_PortalMessages_Properties_PropertyId",
-                        column: x => x.PropertyId,
-                        principalTable: "Properties",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.SetNull);
-                    table.ForeignKey(
-                        name: "FK_PortalMessages_Tenants_RecipientTenantId",
-                        column: x => x.RecipientTenantId,
-                        principalTable: "Tenants",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.SetNull);
-                    table.ForeignKey(
-                        name: "FK_PortalMessages_Units_UnitId",
-                        column: x => x.UnitId,
-                        principalTable: "Units",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.SetNull);
-                    table.ForeignKey(
-                        name: "FK_PortalMessages_WorkspaceAccessContexts_AuthorAccessContextI~",
-                        columns: x => new { x.AuthorAccessContextId, x.PortfolioId },
-                        principalTable: "WorkspaceAccessContexts",
-                        principalColumns: new[] { "Id", "PortfolioId" },
-                        onDelete: ReferentialAction.Restrict);
-                });
-
-            migrationBuilder.CreateTable(
                 name: "RecurringExpenses",
                 columns: table => new
                 {
@@ -2436,11 +2381,11 @@ namespace RentalCommand.Data.Migrations
                     AgreementNumber = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: false),
                     ChangeType = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false),
                     CorrectionReason = table.Column<string>(type: "character varying(1000)", maxLength: 1000, nullable: true),
-                    ReissueReason = table.Column<string>(type: "character varying(1000)", maxLength: 1000, nullable: true),
                     TransferredFromAgreementId = table.Column<int>(type: "integer", nullable: true),
                     ReplacesAgreementId = table.Column<int>(type: "integer", nullable: true),
                     RenewsAgreementId = table.Column<int>(type: "integer", nullable: true),
                     ReissuesAgreementId = table.Column<int>(type: "integer", nullable: true),
+                    ReissueReason = table.Column<string>(type: "character varying(1000)", maxLength: 1000, nullable: true),
                     TermType = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: false),
                     TermStartOn = table.Column<DateOnly>(type: "date", nullable: false),
                     TermEndOn = table.Column<DateOnly>(type: "date", nullable: true),
@@ -2486,8 +2431,8 @@ namespace RentalCommand.Data.Migrations
                     table.CheckConstraint("CK_LeaseAgreement_GoverningDate", "\"GoverningFromOn\" >= \"TermStartOn\" AND (\"TermEndOn\" IS NULL OR \"GoverningFromOn\" <= \"TermEndOn\")");
                     table.CheckConstraint("CK_LeaseAgreement_Issuance", "(\"IssuedAtUtc\" IS NULL) = (\"IssuedArtifactId\" IS NULL)");
                     table.CheckConstraint("CK_LeaseAgreement_Lineage", "(\"ChangeType\" = 'Initial' AND ((\"VersionNumber\" = 1 AND \"ReissuesAgreementId\" IS NULL) OR (\"VersionNumber\" > 1 AND \"ReissuesAgreementId\" IS NOT NULL)) AND \"ReplacesAgreementId\" IS NULL AND \"RenewsAgreementId\" IS NULL AND \"TransferredFromAgreementId\" IS NULL) OR (\"ChangeType\" = 'Transfer' AND ((\"VersionNumber\" = 1 AND \"ReissuesAgreementId\" IS NULL) OR (\"VersionNumber\" > 1 AND \"ReissuesAgreementId\" IS NOT NULL)) AND \"TransferredFromAgreementId\" IS NOT NULL AND \"ReplacesAgreementId\" IS NULL AND \"RenewsAgreementId\" IS NULL) OR (\"ChangeType\" IN ('Correction', 'Restatement') AND \"ReplacesAgreementId\" IS NOT NULL AND \"RenewsAgreementId\" IS NULL AND \"TransferredFromAgreementId\" IS NULL) OR (\"ChangeType\" IN ('Renewal', 'MonthToMonth') AND \"RenewsAgreementId\" IS NOT NULL AND \"ReplacesAgreementId\" IS NULL AND \"TransferredFromAgreementId\" IS NULL)");
-                    table.CheckConstraint("CK_LeaseAgreement_Reissue", "(\"ReissuesAgreementId\" IS NULL AND \"ReissueReason\" IS NULL) OR (\"ReissuesAgreementId\" IS NOT NULL AND \"ReissuesAgreementId\" <> \"Id\" AND \"ReissueReason\" IS NOT NULL AND length(btrim(\"ReissueReason\")) > 0)");
                     table.CheckConstraint("CK_LeaseAgreement_Money", "\"BaseRentAmount\" >= 0 AND \"SecurityDepositObligation\" >= 0 AND \"LateFeeAmount\" >= 0");
+                    table.CheckConstraint("CK_LeaseAgreement_Reissue", "(\"ReissuesAgreementId\" IS NULL AND \"ReissueReason\" IS NULL) OR (\"ReissuesAgreementId\" IS NOT NULL AND \"ReissuesAgreementId\" <> \"Id\" AND \"ReissueReason\" IS NOT NULL AND length(btrim(\"ReissueReason\")) > 0)");
                     table.CheckConstraint("CK_LeaseAgreement_RentPolicy", "\"RentDueDay\" BETWEEN 1 AND 31 AND \"GracePeriodDays\" BETWEEN 0 AND 31");
                     table.CheckConstraint("CK_LeaseAgreement_SchemaVersions", "\"TermsSchemaVersion\" >= 1");
                     table.CheckConstraint("CK_LeaseAgreement_Supersession", "(\"SupersededEffectiveOn\" IS NULL AND \"SupersededByAgreementId\" IS NULL AND \"SupersessionRecordedAtUtc\" IS NULL) OR (\"SupersededEffectiveOn\" IS NOT NULL AND \"SupersededByAgreementId\" IS NOT NULL AND \"SupersessionRecordedAtUtc\" IS NOT NULL AND \"SupersededEffectiveOn\" > \"GoverningFromOn\")");
@@ -2508,6 +2453,12 @@ namespace RentalCommand.Data.Migrations
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Restrict);
                     table.ForeignKey(
+                        name: "FK_LeaseAgreements_LeaseAgreements_ReissuesAgreementId_LeaseMa~",
+                        columns: x => new { x.ReissuesAgreementId, x.LeaseManagementId, x.PortfolioId },
+                        principalTable: "LeaseAgreements",
+                        principalColumns: new[] { "Id", "LeaseManagementId", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
                         name: "FK_LeaseAgreements_LeaseAgreements_RenewsAgreementId_LeaseMana~",
                         columns: x => new { x.RenewsAgreementId, x.LeaseManagementId, x.PortfolioId },
                         principalTable: "LeaseAgreements",
@@ -2516,12 +2467,6 @@ namespace RentalCommand.Data.Migrations
                     table.ForeignKey(
                         name: "FK_LeaseAgreements_LeaseAgreements_ReplacesAgreementId_LeaseMa~",
                         columns: x => new { x.ReplacesAgreementId, x.LeaseManagementId, x.PortfolioId },
-                        principalTable: "LeaseAgreements",
-                        principalColumns: new[] { "Id", "LeaseManagementId", "PortfolioId" },
-                        onDelete: ReferentialAction.Restrict);
-                    table.ForeignKey(
-                        name: "FK_LeaseAgreements_LeaseAgreements_ReissuesAgreementId_LeaseMa~",
-                        columns: x => new { x.ReissuesAgreementId, x.LeaseManagementId, x.PortfolioId },
                         principalTable: "LeaseAgreements",
                         principalColumns: new[] { "Id", "LeaseManagementId", "PortfolioId" },
                         onDelete: ReferentialAction.Restrict);
@@ -3218,45 +3163,6 @@ namespace RentalCommand.Data.Migrations
                         name: "FK_LeaseAgreementSigners_Tenants_TenantId_PortfolioId",
                         columns: x => new { x.TenantId, x.PortfolioId },
                         principalTable: "Tenants",
-                        principalColumns: new[] { "Id", "PortfolioId" },
-                        onDelete: ReferentialAction.Restrict);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "NoticeDeliveryEvidence",
-                columns: table => new
-                {
-                    Id = table.Column<long>(type: "bigint", nullable: false)
-                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
-                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
-                    RenderedNoticeId = table.Column<long>(type: "bigint", nullable: false),
-                    RecipientLeaseManagementPartyId = table.Column<int>(type: "integer", nullable: false),
-                    RecipientRole = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false),
-                    Channel = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false),
-                    Destination = table.Column<string>(type: "character varying(500)", maxLength: 500, nullable: false),
-                    OutboxMessageId = table.Column<long>(type: "bigint", nullable: false),
-                    IdempotencyKey = table.Column<string>(type: "character varying(300)", maxLength: 300, nullable: false),
-                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_NoticeDeliveryEvidence", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_NoticeDeliveryEvidence_LeaseManagementParties_RecipientLeas~",
-                        columns: x => new { x.RecipientLeaseManagementPartyId, x.PortfolioId },
-                        principalTable: "LeaseManagementParties",
-                        principalColumns: new[] { "Id", "PortfolioId" },
-                        onDelete: ReferentialAction.Restrict);
-                    table.ForeignKey(
-                        name: "FK_NoticeDeliveryEvidence_OutboxMessages_OutboxMessageId",
-                        column: x => x.OutboxMessageId,
-                        principalTable: "OutboxMessages",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Restrict);
-                    table.ForeignKey(
-                        name: "FK_NoticeDeliveryEvidence_RenderedNotices_RenderedNoticeId_Por~",
-                        columns: x => new { x.RenderedNoticeId, x.PortfolioId },
-                        principalTable: "RenderedNotices",
                         principalColumns: new[] { "Id", "PortfolioId" },
                         onDelete: ReferentialAction.Restrict);
                 });
@@ -4505,7 +4411,7 @@ namespace RentalCommand.Data.Migrations
                         .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
                     ConversationId = table.Column<int>(type: "integer", nullable: false),
                     SenderRole = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: false),
-                    Body = table.Column<string>(type: "character varying(4000)", maxLength: 4000, nullable: false),
+                    Body = table.Column<string>(type: "character varying(8000)", maxLength: 8000, nullable: false),
                     Channels = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: true),
                     CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
                 },
@@ -4995,6 +4901,52 @@ namespace RentalCommand.Data.Migrations
                         columns: x => new { x.DebitEntryId, x.TenantAccountId, x.PortfolioId },
                         principalTable: "TenantLedgerEntries",
                         principalColumns: new[] { "Id", "TenantAccountId", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "NoticeDeliveryEvidence",
+                columns: table => new
+                {
+                    Id = table.Column<long>(type: "bigint", nullable: false)
+                        .Annotation("Npgsql:ValueGenerationStrategy", NpgsqlValueGenerationStrategy.IdentityByDefaultColumn),
+                    PortfolioId = table.Column<int>(type: "integer", nullable: false),
+                    RenderedNoticeId = table.Column<long>(type: "bigint", nullable: false),
+                    RecipientLeaseManagementPartyId = table.Column<int>(type: "integer", nullable: false),
+                    RecipientRole = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false),
+                    Channel = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false),
+                    Destination = table.Column<string>(type: "character varying(500)", maxLength: 500, nullable: false),
+                    OutboxMessageId = table.Column<long>(type: "bigint", nullable: false),
+                    ConversationMessageId = table.Column<int>(type: "integer", nullable: true),
+                    IdempotencyKey = table.Column<string>(type: "character varying(300)", maxLength: 300, nullable: false),
+                    CreatedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_NoticeDeliveryEvidence", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_NoticeDeliveryEvidence_ConversationMessages_ConversationMes~",
+                        column: x => x.ConversationMessageId,
+                        principalTable: "ConversationMessages",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_NoticeDeliveryEvidence_LeaseManagementParties_RecipientLeas~",
+                        columns: x => new { x.RecipientLeaseManagementPartyId, x.PortfolioId },
+                        principalTable: "LeaseManagementParties",
+                        principalColumns: new[] { "Id", "PortfolioId" },
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_NoticeDeliveryEvidence_OutboxMessages_OutboxMessageId",
+                        column: x => x.OutboxMessageId,
+                        principalTable: "OutboxMessages",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_NoticeDeliveryEvidence_RenderedNotices_RenderedNoticeId_Por~",
+                        columns: x => new { x.RenderedNoticeId, x.PortfolioId },
+                        principalTable: "RenderedNotices",
+                        principalColumns: new[] { "Id", "PortfolioId" },
                         onDelete: ReferentialAction.Restrict);
                 });
 
@@ -5909,7 +5861,7 @@ namespace RentalCommand.Data.Migrations
                 columns: new[] { "DocumentTemplateId", "PortfolioId" });
 
             migrationBuilder.CreateIndex(
-                name: "IX_DocumentTemplateFields_PortfolioId_DocumentTemplateId_FieldKey",
+                name: "IX_DocumentTemplateFields_PortfolioId_DocumentTemplateId_Field~",
                 table: "DocumentTemplateFields",
                 columns: new[] { "PortfolioId", "DocumentTemplateId", "FieldKey" });
 
@@ -6338,6 +6290,11 @@ namespace RentalCommand.Data.Migrations
                 unique: true);
 
             migrationBuilder.CreateIndex(
+                name: "IX_LeaseAgreements_ReissuesAgreementId_LeaseManagementId_Portf~",
+                table: "LeaseAgreements",
+                columns: new[] { "ReissuesAgreementId", "LeaseManagementId", "PortfolioId" });
+
+            migrationBuilder.CreateIndex(
                 name: "IX_LeaseAgreements_RenewsAgreementId_LeaseManagementId_Portfol~",
                 table: "LeaseAgreements",
                 columns: new[] { "RenewsAgreementId", "LeaseManagementId", "PortfolioId" });
@@ -6346,11 +6303,6 @@ namespace RentalCommand.Data.Migrations
                 name: "IX_LeaseAgreements_ReplacesAgreementId_LeaseManagementId_Portf~",
                 table: "LeaseAgreements",
                 columns: new[] { "ReplacesAgreementId", "LeaseManagementId", "PortfolioId" });
-
-            migrationBuilder.CreateIndex(
-                name: "IX_LeaseAgreements_ReissuesAgreementId_LeaseManagementId_Portf~",
-                table: "LeaseAgreements",
-                columns: new[] { "ReissuesAgreementId", "LeaseManagementId", "PortfolioId" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_LeaseAgreements_SupersededByAgreementId_LeaseManagementId_P~",
@@ -6721,6 +6673,13 @@ namespace RentalCommand.Data.Migrations
                 unique: true);
 
             migrationBuilder.CreateIndex(
+                name: "IX_NoticeDeliveryEvidence_ConversationMessageId",
+                table: "NoticeDeliveryEvidence",
+                column: "ConversationMessageId",
+                unique: true,
+                filter: "\"ConversationMessageId\" IS NOT NULL");
+
+            migrationBuilder.CreateIndex(
                 name: "IX_NoticeDeliveryEvidence_OutboxMessageId",
                 table: "NoticeDeliveryEvidence",
                 column: "OutboxMessageId",
@@ -6853,21 +6812,6 @@ namespace RentalCommand.Data.Migrations
                 filter: "\"TenantLedgerEntryId\" IS NOT NULL AND \"Status\" IN ('Draft','Approved')");
 
             migrationBuilder.CreateIndex(
-                name: "IX_Notifications_CreatedAt",
-                table: "Notifications",
-                column: "CreatedAt");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_Notifications_PortfolioId",
-                table: "Notifications",
-                column: "PortfolioId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_Notifications_UserId",
-                table: "Notifications",
-                column: "UserId");
-
-            migrationBuilder.CreateIndex(
                 name: "IX_NotificationReadStates_NotificationId_PortfolioId",
                 table: "NotificationReadStates",
                 columns: new[] { "NotificationId", "PortfolioId" });
@@ -6880,6 +6824,21 @@ namespace RentalCommand.Data.Migrations
             migrationBuilder.CreateIndex(
                 name: "IX_NotificationReadStates_UserId",
                 table: "NotificationReadStates",
+                column: "UserId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Notifications_CreatedAt",
+                table: "Notifications",
+                column: "CreatedAt");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Notifications_PortfolioId",
+                table: "Notifications",
+                column: "PortfolioId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Notifications_UserId",
+                table: "Notifications",
                 column: "UserId");
 
             migrationBuilder.CreateIndex(
@@ -7038,41 +6997,6 @@ namespace RentalCommand.Data.Migrations
                 columns: new[] { "PortfolioId", "Status", "PreparedAtUtc" });
 
             migrationBuilder.CreateIndex(
-                name: "IX_PortalMessages_AuthorAccessContextId_PortfolioId",
-                table: "PortalMessages",
-                columns: new[] { "AuthorAccessContextId", "PortfolioId" });
-
-            migrationBuilder.CreateIndex(
-                name: "IX_PortalMessages_PortfolioId",
-                table: "PortalMessages",
-                column: "PortfolioId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_PortalMessages_PortfolioId_AuthorAccessContextId",
-                table: "PortalMessages",
-                columns: new[] { "PortfolioId", "AuthorAccessContextId" });
-
-            migrationBuilder.CreateIndex(
-                name: "IX_PortalMessages_PropertyId",
-                table: "PortalMessages",
-                column: "PropertyId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_PortalMessages_RecipientTenantId",
-                table: "PortalMessages",
-                column: "RecipientTenantId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_PortalMessages_Status",
-                table: "PortalMessages",
-                column: "Status");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_PortalMessages_UnitId",
-                table: "PortalMessages",
-                column: "UnitId");
-
-            migrationBuilder.CreateIndex(
                 name: "IX_Portfolios_PublicApplicationToken",
                 table: "Portfolios",
                 column: "PublicApplicationToken",
@@ -7224,14 +7148,6 @@ namespace RentalCommand.Data.Migrations
                 name: "IX_RentalApplications_PortfolioId",
                 table: "RentalApplications",
                 column: "PortfolioId");
-
-            migrationBuilder.Sql("""
-                CREATE UNIQUE INDEX "IX_RentalApplications_PortfolioId_Email_Open_CI"
-                ON "RentalApplications" ("PortfolioId", lower(trim("Email")))
-                WHERE "DeletedAt" IS NULL
-                  AND "Email" IS NOT NULL
-                  AND "Status" IN ('Submitted', 'UnderReview', 'Approved');
-                """);
 
             migrationBuilder.CreateIndex(
                 name: "IX_RentalApplications_PreparedLeaseManagementId_PortfolioId",
@@ -8098,12 +8014,6 @@ namespace RentalCommand.Data.Migrations
                 table: "Units",
                 columns: new[] { "PropertyId", "PortfolioId" });
 
-            migrationBuilder.Sql("""
-                CREATE UNIQUE INDEX "IX_Units_PropertyId_UnitNumber_CI"
-                ON "Units" ("PropertyId", lower(trim("UnitNumber")))
-                WHERE "DeletedAt" IS NULL;
-                """);
-
             migrationBuilder.CreateIndex(
                 name: "IX_UserAlertPreferences_PortfolioId_UserId",
                 table: "UserAlertPreferences",
@@ -8360,6 +8270,20 @@ namespace RentalCommand.Data.Migrations
                 principalColumn: "Id",
                 onDelete: ReferentialAction.SetNull);
 
+            migrationBuilder.Sql("""
+                CREATE UNIQUE INDEX "IX_RentalApplications_PortfolioId_Email_Open_CI"
+                ON "RentalApplications" ("PortfolioId", lower(trim("Email")))
+                WHERE "DeletedAt" IS NULL
+                  AND "Email" IS NOT NULL
+                  AND "Status" IN ('Submitted', 'UnderReview', 'Approved');
+                """);
+
+            migrationBuilder.Sql("""
+                CREATE UNIQUE INDEX "IX_Units_PropertyId_UnitNumber_CI"
+                ON "Units" ("PropertyId", lower(trim("UnitNumber")))
+                WHERE "DeletedAt" IS NULL;
+                """);
+
             // The effective clock is global and has one fixed row. Keep the seed idempotent so the
             // same clean baseline can be exercised repeatedly against disposable databases.
             migrationBuilder.Sql(
@@ -8554,9 +8478,6 @@ namespace RentalCommand.Data.Migrations
                 name: "BankTransactions");
 
             migrationBuilder.DropTable(
-                name: "ConversationMessages");
-
-            migrationBuilder.DropTable(
                 name: "DeviceTokens");
 
             migrationBuilder.DropTable(
@@ -8614,9 +8535,6 @@ namespace RentalCommand.Data.Migrations
                 name: "NotificationReadStates");
 
             migrationBuilder.DropTable(
-                name: "Notifications");
-
-            migrationBuilder.DropTable(
                 name: "OAuthStates");
 
             migrationBuilder.DropTable(
@@ -8630,9 +8548,6 @@ namespace RentalCommand.Data.Migrations
 
             migrationBuilder.DropTable(
                 name: "PlaidTokenExchangeAttempts");
-
-            migrationBuilder.DropTable(
-                name: "PortalMessages");
 
             migrationBuilder.DropTable(
                 name: "PropertyDispositions");
@@ -8728,13 +8643,16 @@ namespace RentalCommand.Data.Migrations
                 name: "Loans");
 
             migrationBuilder.DropTable(
+                name: "ConversationMessages");
+
+            migrationBuilder.DropTable(
                 name: "OutboxMessages");
 
             migrationBuilder.DropTable(
                 name: "RenderedNotices");
 
             migrationBuilder.DropTable(
-                name: "Conversations");
+                name: "Notifications");
 
             migrationBuilder.DropTable(
                 name: "BankConnections");
@@ -8774,6 +8692,9 @@ namespace RentalCommand.Data.Migrations
 
             migrationBuilder.DropTable(
                 name: "RentalListings");
+
+            migrationBuilder.DropTable(
+                name: "Conversations");
 
             migrationBuilder.DropTable(
                 name: "LeaseAddendumSigners");

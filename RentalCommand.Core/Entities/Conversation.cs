@@ -3,8 +3,7 @@ namespace RentalCommand.Core.Entities;
 /// <summary>
 /// A topic-scoped message thread between the landlord and a single tenant (e.g. "Rent", "Maintenance").
 /// A tenant can have multiple conversations, each carrying its own back-and-forth
-/// <see cref="ConversationMessage"/> history. Replaces the old flat "ticket" model
-/// (<see cref="PortalMessage"/>, now deprecated/backfill-only).
+/// <see cref="ConversationMessage"/> history. This is the canonical tenant inbox record.
 /// </summary>
 public class Conversation
 {

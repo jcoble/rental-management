@@ -20,7 +20,7 @@ export interface StartPortalConversationRequest {
 }
 
 /** Tenant replies to an existing thread. No channels (portal-only on the tenant side). */
-export interface SendPortalMessageRequest {
+export interface SendTenantConversationMessageRequest {
 	operationKey: string;
 	body: string;
 }
@@ -300,7 +300,7 @@ export const portal = {
 		/** Start a new thread to the landlord. */
 		start: (data: StartPortalConversationRequest) => api.post<Conversation>('/portal/conversations', data),
 		/** Reply to an existing thread. */
-		sendMessage: (id: number, data: SendPortalMessageRequest) =>
+		sendMessage: (id: number, data: SendTenantConversationMessageRequest) =>
 			api.post<Conversation>(`/portal/conversations/${id}/messages`, data)
 	}
 };

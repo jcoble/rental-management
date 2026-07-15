@@ -110,7 +110,6 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
     public DbSet<InspectionItem> InspectionItems => Set<InspectionItem>();
     public DbSet<InspectionTemplate> InspectionTemplates => Set<InspectionTemplate>();
     public DbSet<InspectionTemplateItem> InspectionTemplateItems => Set<InspectionTemplateItem>();
-    public DbSet<PortalMessage> PortalMessages => Set<PortalMessage>();
     public DbSet<Conversation> Conversations => Set<Conversation>();
     public DbSet<ConversationMessage> ConversationMessages => Set<ConversationMessage>();
     public DbSet<Notification> Notifications => Set<Notification>();
@@ -723,6 +722,8 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.Property(e => e.Destination).IsRequired().HasMaxLength(500);
             entity.Property(e => e.IdempotencyKey).IsRequired().HasMaxLength(300);
             entity.HasIndex(e => e.OutboxMessageId).IsUnique();
+            entity.HasIndex(e => e.ConversationMessageId).IsUnique()
+                .HasFilter("\"ConversationMessageId\" IS NOT NULL");
             entity.HasIndex(e => new { e.RenderedNoticeId, e.RecipientLeaseManagementPartyId, e.Channel }).IsUnique();
             entity.HasOne(e => e.RenderedNotice).WithMany()
                 .HasForeignKey(e => new { e.RenderedNoticeId, e.PortfolioId })
@@ -731,6 +732,8 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
                 .HasForeignKey(e => new { e.RecipientLeaseManagementPartyId, e.PortfolioId })
                 .HasPrincipalKey(e => new { e.Id, e.PortfolioId }).OnDelete(DeleteBehavior.Restrict);
             entity.HasOne(e => e.OutboxMessage).WithMany().HasForeignKey(e => e.OutboxMessageId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.ConversationMessage).WithMany()
+                .HasForeignKey(e => e.ConversationMessageId).OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<TenantNoticeWorkItem>(entity =>
@@ -2153,42 +2156,6 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-        modelBuilder.Entity<PortalMessage>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.Subject).IsRequired().HasMaxLength(200);
-            entity.Property(e => e.Body).IsRequired().HasMaxLength(5000);
-            entity.Property(e => e.Reply).HasMaxLength(5000);
-            entity.Property(e => e.Channels).HasMaxLength(100);
-            entity.Property(e => e.Status).HasConversion<int>();
-            entity.HasIndex(e => e.PortfolioId);
-            entity.HasIndex(e => new { e.PortfolioId, e.AuthorAccessContextId });
-            entity.HasIndex(e => e.RecipientTenantId);
-            entity.HasIndex(e => e.Status);
-            entity.HasOne(e => e.Portfolio)
-                .WithMany(p => p.PortalMessages)
-                .HasForeignKey(e => e.PortfolioId)
-                .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(e => e.AuthorAccessContext)
-                .WithMany()
-                .HasForeignKey(e => new { e.AuthorAccessContextId, e.PortfolioId })
-                .HasPrincipalKey(context => new { context.Id, context.PortfolioId })
-                .OnDelete(DeleteBehavior.Restrict);
-            // Recipient tenant of a landlord message — optional, no cascade (matches other optional FKs).
-            entity.HasOne(e => e.RecipientTenant)
-                .WithMany()
-                .HasForeignKey(e => e.RecipientTenantId)
-                .OnDelete(DeleteBehavior.SetNull);
-            entity.HasOne(e => e.Property)
-                .WithMany()
-                .HasForeignKey(e => e.PropertyId)
-                .OnDelete(DeleteBehavior.SetNull);
-            entity.HasOne(e => e.Unit)
-                .WithMany()
-                .HasForeignKey(e => e.UnitId)
-                .OnDelete(DeleteBehavior.SetNull);
-        });
-
         modelBuilder.Entity<Conversation>(entity =>
         {
             entity.HasKey(e => e.Id);
@@ -2222,7 +2189,7 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
         modelBuilder.Entity<ConversationMessage>(entity =>
         {
             entity.HasKey(e => e.Id);
-            entity.Property(e => e.Body).IsRequired().HasMaxLength(4000);
+            entity.Property(e => e.Body).IsRequired().HasMaxLength(8000);
             entity.Property(e => e.Channels).HasMaxLength(100);
             // Stored as the string enum name to match the app-wide convention.
             entity.Property(e => e.SenderRole).HasConversion<string>().HasMaxLength(20);
@@ -2305,7 +2272,6 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
         modelBuilder.Entity<AutomationSettings>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<MessagingProviderSettings>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<Owner>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
-        modelBuilder.Entity<PortalMessage>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<QueuedJob>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<ScanBatch>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<ScanDraft>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
