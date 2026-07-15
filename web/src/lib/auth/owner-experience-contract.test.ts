@@ -28,7 +28,8 @@ test('owner shell is a first-class relationship experience, not management navig
 	assert.match(ownerNav, /href: '\/settings\/notifications\/my-alerts'/);
 	assert.doesNotMatch(ownerNav, /admin\/users|banking|billing|team-routing|tenant-notices/);
 	assert.match(shell, /let relationshipUser = \$derived\(portalUser \|\| ownerUser\)/);
-	assert.match(shell, /const canOpenUserSecurity = \$derived\(!ownerUser\)/);
+	assert.match(shell, /ownerUser \? '\/owner\/security' : '\/settings\/security'/);
+	assert.match(shell, /const canOpenUserSecurity = \$derived\(true\)/);
 	assert.match(shell, /\{#if !ownerUser\}[\s\S]{0,120}<NotificationBell/);
 	assert.doesNotMatch(policy, /settings\/security'[\s\S]{0,100}'Owner'/);
 });

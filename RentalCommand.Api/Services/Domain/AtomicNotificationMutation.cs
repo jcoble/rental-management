@@ -243,6 +243,9 @@ public sealed class AtomicNotificationMutationHandler
                 || request.AutomationKey is "rent-reminder" or "late-rent-late-fee"))
             throw new InvalidOperationException(
                 "Occupants are not eligible for financial or legal notices merely because they reside at the property.");
+        if (request.IncludeEligibleGuarantor && request.Classification != NoticeClassification.Legal)
+            throw new InvalidOperationException(
+                "Guarantors receive only explicitly designated legally relevant notices.");
 
         var persistence = attempt.Persistence;
         var template = await TemplateResponseQuery(

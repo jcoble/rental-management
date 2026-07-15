@@ -67,7 +67,7 @@ class MobileAccountMenu extends ConsumerWidget {
     final managementMode =
         auth.activeExperience == WorkspaceExperience.management;
     final canOpenGettingStarted =
-        managementMode && capabilities.contains('rentals.manage');
+        managementMode && capabilities.contains('security.manage');
     final canOpenTeam =
         managementMode &&
         (capabilities.contains('team.read') ||

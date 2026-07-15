@@ -82,13 +82,39 @@ class PropertyListPage {
   }
 }
 
+class PropertySetupResult {
+  const PropertySetupResult({
+    required this.property,
+    required this.units,
+    required this.updated,
+  });
+
+  final Property property;
+  final List<Unit> units;
+  final bool updated;
+
+  factory PropertySetupResult.fromJson(Map<String, dynamic> json) {
+    final rawUnits = json['units'];
+    return PropertySetupResult(
+      property: Property.fromJson(
+        Map<String, dynamic>.from(json['property'] as Map),
+      ),
+      units: (rawUnits is List ? rawUnits : const [])
+          .whereType<Map<String, dynamic>>()
+          .map(Unit.fromJson)
+          .toList(growable: false),
+      updated: json['updated'] as bool? ?? false,
+    );
+  }
+}
+
 /// Repository for properties, units, and read-only rental relationships.
 ///
 /// Endpoints used:
 ///   GET    /properties/page                  — searchable, filtered property page
 ///   GET    /properties                       — bounded property selector list
 ///   GET    /properties/{id}                  — single property
-///   POST   /properties                       — create property
+///   POST   /properties/setup                 — atomically create property + rentals
 ///   PATCH  /properties/{id}                  — update property
 ///   DELETE /properties/{id}                  — delete property
 ///   GET    /units?propertyId={id}            — list units for a property
@@ -167,14 +193,26 @@ class PropertiesRepository {
     }
   }
 
-  /// Create body: { name, type, addressLine1, city, state, postalCode, ownerId? }
-  Future<Property> createProperty(Map<String, dynamic> data) async {
+  /// Creates the physical property and its initial rental units in one server
+  /// transaction. A SingleRental still owns one canonical Unit; the UI simply
+  /// presents the pair as one rental.
+  Future<PropertySetupResult> setupProperty({
+    int? propertyId,
+    required Map<String, dynamic> property,
+    required List<Map<String, dynamic>> units,
+  }) async {
+    final payload = <String, dynamic>{
+      if (propertyId != null) 'propertyId': propertyId,
+      'property': property,
+      'units': units,
+    };
+
     try {
       final response = await IdempotentMutation.run(
-        'properties:create:$data',
+        'properties:setup:$payload',
         (key) => _dio.post<Map<String, dynamic>>(
-          '/properties',
-          data: data,
+          '/properties/setup',
+          data: payload,
           options: Options(headers: {'Idempotency-Key': key}),
         ),
       );
@@ -185,7 +223,7 @@ class PropertiesRepository {
           message: 'Empty response from server.',
         );
       }
-      return Property.fromJson(responseData);
+      return PropertySetupResult.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

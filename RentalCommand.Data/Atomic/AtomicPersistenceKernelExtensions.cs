@@ -78,10 +78,10 @@ public static class AtomicPersistenceKernelExtensions
         this DbContextOptionsBuilder options,
         IServiceProvider services) =>
         options.AddInterceptors(
+            services.GetRequiredService<WorkspaceAuthorityOwnershipInterceptor>(),
             services.GetRequiredService<AtomicAuditSaveChangesInterceptor>(),
             services.GetRequiredService<AtomicTransactionLifecycleInterceptor>(),
-            services.GetRequiredService<AtomicSetBasedCommandGuardInterceptor>(),
-            services.GetRequiredService<WorkspaceAuthorityOwnershipInterceptor>());
+            services.GetRequiredService<AtomicSetBasedCommandGuardInterceptor>());
 
     public static DbContextOptionsBuilder<TContext> UseAtomicPersistenceKernel<TContext>(
         this DbContextOptionsBuilder<TContext> options,

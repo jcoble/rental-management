@@ -658,6 +658,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
                 PortfolioId = portfolio.Id,
                 TenantNoticePolicyId = policy.Id,
                 LeaseManagementId = management.Id,
+                RecipientLeaseManagementPartyId = party.Id,
                 DueAtUtc = now,
                 Status = TenantNoticeWorkStatus.Claimed,
                 BusinessKey = $"tenant-notice:test:{Guid.NewGuid():N}",

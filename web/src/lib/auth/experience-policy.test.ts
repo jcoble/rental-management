@@ -82,14 +82,13 @@ describe('experience route policy', () => {
 
 	it('keeps personal alerts available while capability-gating notification administration', () => {
 		const noCapabilities = new Set<string>();
-		const teamRoutingAdministrator = new Set([CAPABILITY.notificationsManage]);
-		const tenantNoticeAdministrator = new Set([CAPABILITY.tenantNoticesManage]);
+		const workspaceNotificationAdministrator = new Set([CAPABILITY.notificationsManage]);
+		const propertyNoticeOperator = new Set([CAPABILITY.tenantNoticesManage]);
 		const completeNotificationAdministrator = new Set([
 			CAPABILITY.notificationsManage,
 			CAPABILITY.tenantNoticesManage
 		]);
-		const staffExperiences = ['Management', 'Leasing', 'Maintenance'] as const;
-		const relationshipExperiences = ['Owner', 'Tenant'] as const;
+		const nonManagementExperiences = ['Leasing', 'Maintenance', 'Owner', 'Tenant'] as const;
 
 		for (const experience of ['Management', 'Leasing', 'Maintenance', 'Owner', 'Tenant'] as const) {
 			assert.equal(
@@ -106,14 +105,12 @@ describe('experience route policy', () => {
 			);
 		}
 
-		for (const experience of staffExperiences) {
-			assert.equal(canAccessRoute('/settings/notifications/team-routing', experience, teamRoutingAdministrator), true);
-			assert.equal(canAccessRoute('/settings/notifications/tenant-notices', experience, teamRoutingAdministrator), false);
-			assert.equal(canAccessRoute('/settings/notifications/team-routing', experience, tenantNoticeAdministrator), false);
-			assert.equal(canAccessRoute('/settings/notifications/tenant-notices', experience, tenantNoticeAdministrator), true);
-		}
+		assert.equal(canAccessRoute('/settings/notifications/team-routing', 'Management', workspaceNotificationAdministrator), true);
+		assert.equal(canAccessRoute('/settings/notifications/tenant-notices', 'Management', workspaceNotificationAdministrator), true);
+		assert.equal(canAccessRoute('/settings/notifications/team-routing', 'Management', propertyNoticeOperator), false);
+		assert.equal(canAccessRoute('/settings/notifications/tenant-notices', 'Management', propertyNoticeOperator), false);
 
-		for (const experience of relationshipExperiences) {
+		for (const experience of nonManagementExperiences) {
 			assert.equal(
 				canAccessRoute('/settings/notifications/team-routing', experience, completeNotificationAdministrator),
 				false
@@ -122,6 +119,24 @@ describe('experience route policy', () => {
 				canAccessRoute('/settings/notifications/tenant-notices', experience, completeNotificationAdministrator),
 				false
 			);
+		}
+
+		assert.equal(canAccessRoute('/notices', 'Management', propertyNoticeOperator), true);
+		assert.equal(canAccessRoute('/notices', 'Leasing', propertyNoticeOperator), true);
+		assert.equal(canAccessRoute('/notices', 'Maintenance', propertyNoticeOperator), false);
+	});
+
+	it('does not let stale capabilities cross experience shells', () => {
+		const everyCapability = new Set<string>(Object.values(CAPABILITY));
+
+		for (const experience of ['Leasing', 'Maintenance', 'Owner', 'Tenant'] as const) {
+			for (const route of ['/admin/users', '/settings', '/banking', '/reports', '/owners']) {
+				assert.equal(
+					canAccessRoute(route, experience, everyCapability),
+					false,
+					`${experience} must not enter the Management route ${route}`
+				);
+			}
 		}
 	});
 
@@ -158,6 +173,16 @@ describe('experience route policy', () => {
 			assert.equal(canAccessRoute(persona.allowed, persona.experience, capabilities), true, `${persona.name} expected ${persona.allowed}`);
 			assert.equal(canAccessRoute(persona.denied, persona.experience, capabilities), false, `${persona.name} must not open ${persona.denied}`);
 		}
+	});
+
+	it('keeps workspace setup with the Workspace Administrator', () => {
+		const administrator = new Set([CAPABILITY.securityManage, CAPABILITY.rentalsManage]);
+		const propertyManager = new Set([CAPABILITY.rentalsManage, CAPABILITY.rentalsRead]);
+
+		assert.equal(canAccessRoute('/onboarding', 'Management', administrator), true);
+		assert.equal(canAccessRoute('/get-started', 'Management', administrator), true);
+		assert.equal(canAccessRoute('/onboarding', 'Management', propertyManager), false);
+		assert.equal(canAccessRoute('/get-started', 'Management', propertyManager), false);
 	});
 
 	it('splits operational reconciliation from bank administration', () => {

@@ -158,6 +158,9 @@ const optionalNonNegative = (label: string) =>
 export const propertySchema = z.object({
 	name: required('Name').max(200, 'Name must be 200 characters or fewer'),
 	type: z.string(),
+	rentalStructure: z.enum(['SingleRental', 'MultiRental'], {
+		error: 'Choose whether this address is one rental or contains multiple rentals'
+	}),
 	status: z.string(),
 	addressLine1: required('Address').max(250, 'Address must be 250 characters or fewer'),
 	addressLine2: optionalTextMax('Apt / Suite / Unit #', 250),

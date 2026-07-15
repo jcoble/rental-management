@@ -38,6 +38,34 @@ public sealed class PrepareMoveInValidationTests
     }
 
     [Fact]
+    public void Supplied_lease_source_does_not_require_a_workspace_template()
+    {
+        var command = Command(null,
+        [
+            NewParty("Primary", "Tenant", "primary@example.com",
+                LeaseManagementPartyRole.PrimaryTenant, true, 1),
+        ], documentTemplateId: null);
+
+        var act = () => PrepareMoveInHandler.ValidateCommandShape(command);
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void Explicit_non_positive_template_id_is_not_treated_as_the_supplied_source()
+    {
+        var command = Command(null,
+        [
+            NewParty("Primary", "Tenant", "primary@example.com",
+                LeaseManagementPartyRole.PrimaryTenant, true, 1),
+        ], documentTemplateId: 0);
+
+        var act = () => PrepareMoveInHandler.ValidateCommandShape(command);
+
+        act.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
     public void Party_cannot_select_existing_and_new_tenant_at_the_same_time()
     {
         var command = Command(null,
@@ -70,7 +98,8 @@ public sealed class PrepareMoveInValidationTests
 
     private static PrepareMoveInCommand Command(
         int? applicationId,
-        IReadOnlyList<PrepareMoveInParty> parties) => new(
+        IReadOnlyList<PrepareMoveInParty> parties,
+        int? documentTemplateId = 5) => new(
             1,
             applicationId,
             2,
@@ -81,7 +110,7 @@ public sealed class PrepareMoveInValidationTests
             null,
             new DateOnly(2026, 8, 1),
             parties,
-            5,
+            documentTemplateId,
             LeaseAgreementTermType.FixedTerm,
             new DateOnly(2026, 8, 1),
             new DateOnly(2027, 7, 31),

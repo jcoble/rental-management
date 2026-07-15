@@ -302,6 +302,89 @@ public class TenantServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GuidedSetupBatch_CreatesEveryTenantOnceAndReplaysTheReceipt()
+    {
+        var request = new GuidedTenantSetupRequest
+        {
+            Tenants =
+            [
+                new CreateTenantRequest
+                {
+                    FirstName = " Avery ",
+                    LastName = " Ellis ",
+                    Email = " avery@example.test ",
+                },
+                new CreateTenantRequest
+                {
+                    FirstName = "Blair",
+                    LastName = "Kline",
+                    Phone = "555-0102",
+                },
+            ],
+        };
+
+        var first = await _sut.CreateGuidedSetupBatchAsync(
+            _scope, request, "guided-tenant-batch");
+        var replay = await _sut.CreateGuidedSetupBatchAsync(
+            _scope, request, "guided-tenant-batch");
+
+        first.Should().HaveCount(2);
+        replay.Should().BeEquivalentTo(first);
+        first[0].FirstName.Should().Be("Avery");
+        first[0].Email.Should().Be("avery@example.test");
+        (await _ctx.Db.Tenants.CountAsync()).Should().Be(2);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "rental.tenant.guided-setup")).Should().Be(1);
+        (await _ctx.Db.AtomicAuditLogs.CountAsync(audit =>
+            audit.EntityType == nameof(Tenant))).Should().Be(2);
+        (await _ctx.Db.OutboxMessages.CountAsync(message =>
+            message.PortfolioId == PortfolioId && message.MessageType == "data-update")).Should().Be(2);
+    }
+
+    [Fact]
+    public async Task GuidedSetupBatch_RollsBackEveryTenantWhenAnyReviewedRowIsInvalid()
+    {
+        var request = new GuidedTenantSetupRequest
+        {
+            Tenants =
+            [
+                new CreateTenantRequest { FirstName = "Avery", LastName = "Ellis" },
+                new CreateTenantRequest { FirstName = "Blair", LastName = new string('x', 101) },
+            ],
+        };
+
+        Func<Task> act = async () => await _sut.CreateGuidedSetupBatchAsync(
+            _scope, request, "guided-invalid-row");
+
+        await act.Should().ThrowAsync<DomainValidationException>();
+        (await _ctx.Db.Tenants.CountAsync()).Should().Be(0);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "rental.tenant.guided-setup")).Should().Be(0);
+        (await _ctx.Db.AtomicAuditLogs.CountAsync(audit =>
+            audit.EntityType == nameof(Tenant))).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GuidedSetupBatch_ReauthorizesTheCurrentSessionBeforeReceiptReplay()
+    {
+        var request = new GuidedTenantSetupRequest
+        {
+            Tenants = [new CreateTenantRequest { FirstName = "Avery", LastName = "Ellis" }],
+        };
+        await _sut.CreateGuidedSetupBatchAsync(_scope, request, "guided-replay-auth");
+        var session = await _ctx.Db.AuthSessions.SingleAsync(row => row.Id == _scope.SessionId);
+        session.Status = AuthSessionStatus.Revoked;
+        session.RevokedAtUtc = DateTime.UtcNow;
+        await _ctx.Db.SaveChangesAsync();
+
+        Func<Task> replay = async () => await _sut.CreateGuidedSetupBatchAsync(
+            _scope, request, "guided-replay-auth");
+
+        await replay.Should().ThrowAsync<UnauthorizedAccessException>();
+        (await _ctx.Db.Tenants.CountAsync()).Should().Be(1);
+    }
+
+    [Fact]
     public async Task DeleteAsync_ThrowsWhenTenantStillOccupiesAUnit()
     {
         var tenant = SeedTenantWithRelationship(occupying: true);

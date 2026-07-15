@@ -31,9 +31,12 @@
 	import {
 		formatPropertyStatus,
 		formatPropertyType,
+		formatRentalStructure,
 		propertyStatusOptions,
-		propertyTypeOptions
+		propertyTypeOptions,
+		rentalStructureOptions
 	} from '$lib/properties/property-labels';
+	import { propertyUpdateFields } from '$lib/properties/property-update-payload';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
@@ -101,7 +104,7 @@
 	});
 
 	// ── Inline property edit ──────────────────────────────────────────────────
-	const emptyProperty = { name: '', type: 'MultiFamily', status: 'Active', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', ownerEntityId: '', purchasePrice: '', landValue: '', inServiceDate: '', manualAnnualDepreciation: '' };
+	const emptyProperty = { name: '', type: 'MultiFamily', rentalStructure: '', status: 'Active', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', ownerEntityId: '', purchasePrice: '', landValue: '', inServiceDate: '', manualAnnualDepreciation: '' };
 	let editingProperty = $state(false);
 	let propertyForm = $state({ ...emptyProperty });
 	let propertyFormErrors = $state<Record<string, string>>({});
@@ -149,6 +152,7 @@
 		propertyForm = {
 			name: property.name,
 			type: property.type ?? 'MultiFamily',
+			rentalStructure: property.rentalStructure,
 			status: property.status ?? 'Active',
 			addressLine1: property.addressLine1,
 			addressLine2: property.addressLine2 ?? '',
@@ -183,11 +187,12 @@
 			return;
 		}
 		propertyFormErrors = {};
+		const mutableProperty = propertyUpdateFields(result.data);
 		savePropertyMutation.mutate({
 			id,
 			data: {
 				portfolioId,
-				...result.data,
+				...mutableProperty,
 				...basis.data,
 				clearOwnerEntity: result.data.ownerEntityId == null,
 			},
@@ -598,6 +603,7 @@
 			<DetailCard title="Identity" icon={Building2} accent="primary" testid="property-detail-card" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Name" bind:value={propertyForm.name} display={property.name} editing={editingProperty} error={propertyFormErrors.name} testid="property-detail-name-field" morphName="vt-prop-name" />
 				<InlineField label="Type" bind:value={propertyForm.type} display={formatPropertyType(property.type)} editing={editingProperty} type="select" options={propertyTypeOptions} error={propertyFormErrors.type} testid="property-detail-type" morphName="vt-prop-type" />
+				<InlineField label="Rental setup" bind:value={propertyForm.rentalStructure} display={formatRentalStructure(property.rentalStructure)} editing={false} type="select" options={rentalStructureOptions} error={propertyFormErrors.rentalStructure} testid="property-detail-rental-structure" morphName="vt-prop-rental-structure" />
 				<InlineField label="Status" bind:value={propertyForm.status} display={formatPropertyStatus(property.status)} editing={editingProperty} type="select" options={propertyStatusOptions} error={propertyFormErrors.status} testid="property-detail-status" morphName="vt-prop-status" />
 				<InlineField label="Owner" bind:value={propertyForm.ownerEntityId} display={property.ownerName ?? 'No owner assigned'} editing={editingProperty} type="select" options={ownerOptions} error={propertyFormErrors.ownerEntityId} testid="property-detail-owner" class="sm:col-span-2" morphName="vt-prop-owner" />
 			</DetailCard>

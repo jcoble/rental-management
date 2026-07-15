@@ -32,7 +32,11 @@ public sealed class PrepareMoveInRequest
     public DateTime? PlannedPossessionAtUtc { get; set; }
     public DateOnly PartyEffectiveFrom { get; set; }
     public List<PrepareMoveInPartyRequest> Parties { get; set; } = [];
-    public int DocumentTemplateId { get; set; }
+    /// <summary>
+    /// Optional active custom lease template. When omitted, the immutable Rental Command supplied
+    /// lease renderer is used; a workspace does not need to create a template before move-in.
+    /// </summary>
+    public int? DocumentTemplateId { get; set; }
     public LeaseAgreementTermType? TermType { get; set; }
     public DateOnly TermStartOn { get; set; }
     public DateOnly? TermEndOn { get; set; }

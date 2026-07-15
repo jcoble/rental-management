@@ -238,7 +238,8 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
                     party.Role == LeaseManagementPartyRole.PrimaryTenant && policy.IncludePrimaryTenant
                     || party.Role == LeaseManagementPartyRole.CoTenant && policy.IncludeCoTenant
                     || party.Role == LeaseManagementPartyRole.Guarantor && policy.IncludeEligibleGuarantor
-                        && (policy.Classification != NoticeClassification.Legal || party.GuarantorLegalNoticeEligible)
+                        && policy.Classification == NoticeClassification.Legal
+                        && party.GuarantorLegalNoticeEligible
                     || party.Role == LeaseManagementPartyRole.Occupant && policy.IncludeOccupant
                         && policy.Classification != NoticeClassification.Legal
                         && policy.AutomationKey != "rent-reminder"
@@ -279,6 +280,9 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
                         ? "Co-tenants are excluded by this automation policy." :
                     party.Role == LeaseManagementPartyRole.Guarantor && !policy.IncludeEligibleGuarantor
                         ? "Guarantors are excluded by this automation policy." :
+                    party.Role == LeaseManagementPartyRole.Guarantor
+                        && policy.Classification != NoticeClassification.Legal
+                        ? "Guarantors receive only explicitly designated legally relevant notices." :
                     party.Role == LeaseManagementPartyRole.Guarantor && policy.Classification == NoticeClassification.Legal
                         && !party.GuarantorLegalNoticeEligible
                         ? "This guarantor is not designated to receive this legal notice." :

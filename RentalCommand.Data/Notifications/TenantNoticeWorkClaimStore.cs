@@ -23,6 +23,7 @@ public sealed class ClaimedTenantNoticeWorkItem
     public int PortfolioId { get; init; }
     public int TenantNoticePolicyId { get; init; }
     public int LeaseManagementId { get; init; }
+    public int RecipientLeaseManagementPartyId { get; init; }
     public long? TenantLedgerEntryId { get; init; }
     public DateTime DueAtUtc { get; init; }
     public string BusinessKey { get; init; } = string.Empty;
@@ -98,6 +99,7 @@ public sealed class TenantNoticeWorkClaimStore : ITenantNoticeWorkClaimStore
                    claimed."PortfolioId",
                    claimed."TenantNoticePolicyId",
                    claimed."LeaseManagementId",
+                   claimed."RecipientLeaseManagementPartyId",
                    claimed."TenantLedgerEntryId",
                    claimed."DueAtUtc",
                    claimed."BusinessKey",

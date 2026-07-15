@@ -21,6 +21,7 @@ public sealed class PrepareMoveInHandler
     {
         var hasInvalidPartyRole = command.Parties.Any(party => !Enum.IsDefined(party.Role));
         var hasInvalidTermType = !Enum.IsDefined(command.TermType);
+        var customTemplateId = command.DocumentTemplateId.GetValueOrDefault();
         ValidateAuthorizationShape(command);
 
         // Every command taking both locks uses this order. The Unit id is explicit in the request
@@ -42,8 +43,9 @@ public sealed class PrepareMoveInHandler
                     candidate.PropertyId!.Value,
                     candidate.UnitId!.Value,
                     candidate.Portfolio!.Currency,
-                    attempt.Persistence.Query<DocumentTemplate>().Any(template =>
-                        template.Id == command.DocumentTemplateId
+                    command.DocumentTemplateId == null
+                    || attempt.Persistence.Query<DocumentTemplate>().Any(template =>
+                        template.Id == customTemplateId
                         && template.PortfolioId == command.PortfolioId
                         && template.Kind == DocumentTemplateKind.Lease
                         && template.Status == DocumentTemplateStatus.Active
@@ -73,8 +75,9 @@ public sealed class PrepareMoveInHandler
                     unit.PropertyId,
                     unit.Id,
                     unit.Property!.Portfolio!.Currency,
-                attempt.Persistence.Query<DocumentTemplate>().Any(template =>
-                    template.Id == command.DocumentTemplateId
+                command.DocumentTemplateId == null
+                || attempt.Persistence.Query<DocumentTemplate>().Any(template =>
+                    template.Id == customTemplateId
                     && template.PortfolioId == command.PortfolioId
                     && template.Kind == DocumentTemplateKind.Lease
                     && template.Status == DocumentTemplateStatus.Active
@@ -153,7 +156,7 @@ public sealed class PrepareMoveInHandler
                 "The unit has conflicting current possession or an open operational period.");
         }
 
-        if (!target.TemplateIsValid)
+        if (!target.DocumentSourceIsValid)
         {
             return Empty(
                 PrepareMoveInOutcome.InvalidTemplate,
@@ -161,13 +164,18 @@ public sealed class PrepareMoveInHandler
                 "The selected lease template is not active for this property.");
         }
 
-        var sourceVersion = await attempt.Leasing.ResolveAuthoredDocumentSourceVersionAsync(
-            command.PortfolioId, target.PropertyId, 0, command.DocumentTemplateId,
-            command.CreatedByUserId, wallClockUtc, ct);
+        var sourceVersion = command.DocumentTemplateId is { } documentTemplateId
+            ? await attempt.Leasing.ResolveAuthoredDocumentSourceVersionAsync(
+                command.PortfolioId, target.PropertyId, 0, documentTemplateId,
+                command.CreatedByUserId, wallClockUtc, ct)
+            : await attempt.Leasing.ResolveBuiltInDocumentSourceVersionAsync(
+                command.PortfolioId, command.CreatedByUserId, wallClockUtc, ct);
         if (!sourceVersion.Resolved)
         {
             return Empty(PrepareMoveInOutcome.InvalidTemplate, command,
-                "The selected lease template could not be frozen as immutable source provenance.");
+                command.DocumentTemplateId.HasValue
+                    ? "The selected lease template could not be frozen as immutable source provenance."
+                    : "The supplied lease source could not be frozen as immutable provenance.");
         }
 
         var requestedTenantIds = command.Parties
@@ -739,7 +747,7 @@ public sealed class PrepareMoveInHandler
         {
             throw new ArgumentException("Agreement signer order, required status, and party role are invalid.");
         }
-        if (command.DocumentTemplateId <= 0
+        if (command.DocumentTemplateId is <= 0
             || command.TermsSchemaVersion <= 0 || string.IsNullOrWhiteSpace(command.TermsPayload)
             || command.BaseRentAmount < 0 || command.SecurityDepositObligation < 0
             || command.LateFeeAmount < 0 || command.RentDueDay is < 1 or > 31
@@ -817,7 +825,7 @@ public sealed class PrepareMoveInHandler
         int PropertyId,
         int UnitId,
         string Currency,
-        bool TemplateIsValid,
+        bool DocumentSourceIsValid,
         bool HasConflictingCurrentPossession,
         bool HasOpenOperationalPeriod);
 

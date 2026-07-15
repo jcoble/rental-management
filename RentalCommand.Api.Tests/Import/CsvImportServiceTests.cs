@@ -194,9 +194,9 @@ public class CsvImportServiceTests : IDisposable
     public async Task PropertyImport_DefaultsTypeWhenBlank_AndParsesTypeName()
     {
         const string csv =
-            "name,addressLine1,city,state,postalCode,type\n" +
-            "House A,1 Main St,Springfield,IL,62701,singlefamily\n" +   // explicit type, lowercase
-            "House B,2 Main St,Springfield,IL,62701,\n";                 // blank type → default
+            "name,addressLine1,city,state,postalCode,type,rentalStructure,unitNumber\n" +
+            "House A,1 Main St,Springfield,IL,62701,singlefamily,SingleRental,Home\n" +
+            "House B,2 Main St,Springfield,IL,62701,,MultiRental,1\n";
 
         var result = await _sut.ImportAsync(
             _scope, "Property", Csv(csv), dryRun: false, commandContext: LiveCommandContext);
@@ -210,6 +210,9 @@ public class CsvImportServiceTests : IDisposable
             .Should().Be((int)PropertyType.SingleFamily);
         rows.RootElement[1].GetProperty("PropertyType").GetInt32()
             .Should().Be((int)PropertyType.MultiFamily); // CreatePropertyRequest default
+        rows.RootElement[0].GetProperty("RentalStructure").GetString()
+            .Should().Be(nameof(RentalStructure.SingleRental));
+        rows.RootElement[0].GetProperty("UnitNumber").GetString().Should().Be("Home");
     }
 
     // -------------------------------------------------------------------------

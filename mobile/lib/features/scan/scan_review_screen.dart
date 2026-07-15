@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
 import '../home/mobile_domain_navigation.dart';
+import '../leases/leases_repository.dart';
 import '../places/address_autocomplete_field.dart';
 import '../properties/properties_repository.dart';
 import '../tenants/tenants_repository.dart';
@@ -87,6 +88,22 @@ final _tenantsProvider = FutureProvider.autoDispose<List<Tenant>>((ref) async {
   ref.keepAlive();
   return ref.read(tenantsRepositoryProvider).listTenants();
 });
+
+typedef _LeaseTemplateQuery = ({int? propertyId, String search});
+
+/// Active lease templates remain server-filtered. The reviewer can search the
+/// workspace templates, with the selected property applied when one exists.
+final _leaseTemplateOptionsProvider = FutureProvider.autoDispose
+    .family<LeaseTemplateOptionPage, _LeaseTemplateQuery>((ref, query) async {
+      ref.keepAlive();
+      return ref
+          .read(leaseManagementsRepositoryProvider)
+          .leaseTemplatesPage(
+            take: 50,
+            search: query.search,
+            propertyId: query.propertyId,
+          );
+    });
 
 // ---------------------------------------------------------------------------
 // Field groups (mirrors web review page)
@@ -242,6 +259,15 @@ const _dateFields = {
   'desired_move_in_date',
 };
 
+enum LeaseScanReviewDisposition {
+  alreadyFullySigned('AlreadyFullySigned'),
+  needsSignatures('NeedsSignatures');
+
+  const LeaseScanReviewDisposition(this.wireValue);
+
+  final String wireValue;
+}
+
 // Whole-number fields use an integer keypad (e.g. the rent due day-of-month).
 const _intFields = {'rent_due_day', 'term_months', 'day_of_month_due'};
 
@@ -365,6 +391,9 @@ Map<String, dynamic> buildOverridesMap({
   required int? selectedUnitId,
   required int? selectedTenantId,
   required int? loanPropertyId,
+  RentalStructure? newPropertyRentalStructure,
+  LeaseScanReviewDisposition? leaseReviewDisposition,
+  int? documentTemplateId,
   // Create-new-property fields (only used when createNewProperty is true).
   String? newPropertyName,
   String? newPropertyAddress,
@@ -372,17 +401,28 @@ Map<String, dynamic> buildOverridesMap({
 }) {
   final overrides = <String, dynamic>{};
   for (final entry in editedFields.entries) {
-    if (entry.key == 'line_items') continue;
+    if (entry.key == 'line_items' ||
+        entry.key == 'rentalStructure' ||
+        entry.key == 'rental_structure') {
+      continue;
+    }
     final key = _keyMap[entry.key] ?? entry.key;
     overrides[key] = entry.value;
   }
   if (isLease) {
     if (createNewProperty) {
-      // Empty-portfolio bootstrap (C3): send no propertyId/unitId so the server
-      // resolves-or-CREATES the property from the (possibly edited) extracted
-      // leased-premises address, then creates the unit from the unit number.
-      // propertyId=0 forces "create new" even if the model had guessed an id.
+      // Empty-portfolio bootstrap (C3): propertyId=0 explicitly requests a new
+      // property; no unitId is sent, so the server creates its first unit from
+      // the reviewed document. Structure comes only from this user choice.
       overrides['propertyId'] = 0;
+      if (newPropertyRentalStructure == null) {
+        throw ArgumentError.value(
+          newPropertyRentalStructure,
+          'newPropertyRentalStructure',
+          'A new property requires an explicit rental structure.',
+        );
+      }
+      overrides['rentalStructure'] = newPropertyRentalStructure.wireValue;
       final name = newPropertyName?.trim() ?? '';
       final address = newPropertyAddress?.trim() ?? '';
       final city = newPropertyCity?.trim() ?? '';
@@ -400,6 +440,14 @@ Map<String, dynamic> buildOverridesMap({
     // Tenant: a chosen id links; null lets the server match/create from
     // tenant_name (same in both property modes).
     if (selectedTenantId != null) overrides['tenantId'] = selectedTenantId;
+    if (leaseReviewDisposition != null) {
+      overrides['reviewDisposition'] = leaseReviewDisposition.wireValue;
+      if (leaseReviewDisposition ==
+              LeaseScanReviewDisposition.needsSignatures &&
+          documentTemplateId != null) {
+        overrides['documentTemplateId'] = documentTemplateId;
+      }
+    }
   } else if (isApplication) {
     // The edited applicant scalar fields (first_name, last_name, email, …) are
     // already in `overrides` as snake_case keys, which the server's
@@ -465,6 +513,13 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
   // actually confirm. The address fields live in _editedFields under
   // property_name/property_address/property_city.
   bool _createNewProperty = false;
+  RentalStructure? _newPropertyRentalStructure;
+
+  // A scanned lease must be explicitly classified by the reviewer. An already
+  // signed artifact is preserved as executed; a lease that still needs
+  // signatures becomes a draft from the selected active template.
+  LeaseScanReviewDisposition? _leaseReviewDisposition;
+  int? _selectedDocumentTemplateId;
 
   // Loan scans launched from a property arrive with this preselected. Reopened
   // drafts choose here so a pending mortgage scan never dead-ends after restart.
@@ -622,6 +677,9 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
         selectedUnitId: _selectedUnitId,
         selectedTenantId: _selectedTenantId,
         loanPropertyId: _selectedLoanPropertyId,
+        newPropertyRentalStructure: _newPropertyRentalStructure,
+        leaseReviewDisposition: _leaseReviewDisposition,
+        documentTemplateId: _selectedDocumentTemplateId,
         newPropertyName: _editedFields['property_name'],
         newPropertyAddress: _editedFields['property_address'],
         newPropertyCity: _editedFields['property_city'],
@@ -638,7 +696,10 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
                 : draft.isWorkOrder
                 ? 'Work order created!'
                 : draft.isLease
-                ? 'Lease agreement imported!'
+                ? _leaseReviewDisposition ==
+                          LeaseScanReviewDisposition.alreadyFullySigned
+                      ? 'Signed lease imported!'
+                      : 'Lease draft prepared for signatures!'
                 : draft.isApplication
                 ? 'Application created!'
                 : draft.isLoan
@@ -798,18 +859,33 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
             // switching to create mode drops the linked unit too (it's recreated
             // from the document). Either way clear the unit selection.
             _selectedUnitId = null;
+            _selectedDocumentTemplateId = null;
           }),
+          newPropertyRentalStructure: _newPropertyRentalStructure,
+          onNewPropertyRentalStructureChanged: (value) =>
+              setState(() => _newPropertyRentalStructure = value),
           selectedPropertyId: _selectedPropertyId,
           onPropertySelected: (id) => setState(() {
             _selectedPropertyId = id;
             // Changing the property invalidates any unit chosen under the old
             // one, so clear it (the unit picker rescopes to the new property).
             _selectedUnitId = null;
+            _selectedDocumentTemplateId = null;
           }),
           selectedUnitId: _selectedUnitId,
           onUnitSelected: (id) => setState(() => _selectedUnitId = id),
           selectedTenantId: _selectedTenantId,
           onTenantSelected: (id) => setState(() => _selectedTenantId = id),
+          leaseReviewDisposition: _leaseReviewDisposition,
+          onLeaseReviewDispositionChanged: (value) => setState(() {
+            _leaseReviewDisposition = value;
+            if (value != LeaseScanReviewDisposition.needsSignatures) {
+              _selectedDocumentTemplateId = null;
+            }
+          }),
+          selectedDocumentTemplateId: _selectedDocumentTemplateId,
+          onDocumentTemplateSelected: (id) =>
+              setState(() => _selectedDocumentTemplateId = id),
           loanPropertyId: _selectedLoanPropertyId,
           onLoanPropertySelected: (id) =>
               setState(() => _selectedLoanPropertyId = id),
@@ -838,12 +914,18 @@ class _ReviewBody extends ConsumerWidget {
     required this.onTenantAccountSelected,
     required this.createNewProperty,
     required this.onCreateNewPropertyChanged,
+    required this.newPropertyRentalStructure,
+    required this.onNewPropertyRentalStructureChanged,
     required this.selectedPropertyId,
     required this.onPropertySelected,
     required this.selectedUnitId,
     required this.onUnitSelected,
     required this.selectedTenantId,
     required this.onTenantSelected,
+    required this.leaseReviewDisposition,
+    required this.onLeaseReviewDispositionChanged,
+    required this.selectedDocumentTemplateId,
+    required this.onDocumentTemplateSelected,
     required this.loanPropertyId,
     required this.onLoanPropertySelected,
     required this.confirming,
@@ -861,12 +943,19 @@ class _ReviewBody extends ConsumerWidget {
   final ValueChanged<int?> onTenantAccountSelected;
   final bool createNewProperty;
   final ValueChanged<bool> onCreateNewPropertyChanged;
+  final RentalStructure? newPropertyRentalStructure;
+  final ValueChanged<RentalStructure?> onNewPropertyRentalStructureChanged;
   final int? selectedPropertyId;
   final ValueChanged<int?> onPropertySelected;
   final int? selectedUnitId;
   final ValueChanged<int?> onUnitSelected;
   final int? selectedTenantId;
   final ValueChanged<int?> onTenantSelected;
+  final LeaseScanReviewDisposition? leaseReviewDisposition;
+  final ValueChanged<LeaseScanReviewDisposition?>
+  onLeaseReviewDispositionChanged;
+  final int? selectedDocumentTemplateId;
+  final ValueChanged<int?> onDocumentTemplateSelected;
   final int? loanPropertyId;
   final ValueChanged<int?> onLoanPropertySelected;
   final bool confirming;
@@ -902,9 +991,10 @@ class _ReviewBody extends ConsumerWidget {
         (editedFields['property_name']?.trim().isNotEmpty ?? false);
     final leaseReady =
         !draft.isLease ||
-        (createNewProperty
-            ? hasUsablePropertyText
-            : (selectedPropertyId != null && selectedUnitId != null));
+        ((createNewProperty
+                ? hasUsablePropertyText && newPropertyRentalStructure != null
+                : (selectedPropertyId != null && selectedUnitId != null)) &&
+            leaseReviewDisposition != null);
     // An Application needs a first + last name (both [Required] on the create),
     // mirroring the web review page's applicationInvalid guard.
     final applicationReady =
@@ -920,6 +1010,18 @@ class _ReviewBody extends ConsumerWidget {
         leaseReady &&
         applicationReady &&
         loanReady;
+    final leaseActionLabel = switch (leaseReviewDisposition) {
+      LeaseScanReviewDisposition.alreadyFullySigned => 'Import Signed Lease',
+      LeaseScanReviewDisposition.needsSignatures => 'Prepare for Signatures',
+      null => 'Choose Signing Status',
+    };
+    final leaseReadinessMessage = leaseReviewDisposition == null
+        ? 'Choose whether this lease is already signed or still needs signatures.'
+        : createNewProperty && newPropertyRentalStructure == null
+        ? 'Choose whether this address is one rental or multiple rentals.'
+        : createNewProperty
+        ? 'Enter a property name or address above to create this lease.'
+        : 'Choose a property and unit above to create this lease.';
     // Reject stays available on Failed so a bad scan can always be cleared, but
     // never while processing, mid-action, or already terminal.
     final rejectEnabled = (!actionsLocked || isFailed) && !busy && !isTerminal;
@@ -994,11 +1096,22 @@ class _ReviewBody extends ConsumerWidget {
                   if (draft.leaseProposal != null)
                     _LeaseProposalSummary(proposal: draft.leaseProposal!),
 
+                  _LeaseSignatureDispositionSection(
+                    selectedDisposition: leaseReviewDisposition,
+                    onDispositionChanged: onLeaseReviewDispositionChanged,
+                    selectedTemplateId: selectedDocumentTemplateId,
+                    onTemplateSelected: onDocumentTemplateSelected,
+                    propertyId: createNewProperty ? null : selectedPropertyId,
+                  ),
+
                   // ---- Property / Unit / Tenant pickers ----
                   _LeasePickers(
                     extractedTenantName: editedFields['tenant_name'],
                     createNewProperty: createNewProperty,
                     onCreateNewPropertyChanged: onCreateNewPropertyChanged,
+                    newPropertyRentalStructure: newPropertyRentalStructure,
+                    onNewPropertyRentalStructureChanged:
+                        onNewPropertyRentalStructureChanged,
                     editedFields: editedFields,
                     onFieldChanged: onFieldChanged,
                     selectedPropertyId: selectedPropertyId,
@@ -1102,9 +1215,7 @@ class _ReviewBody extends ConsumerWidget {
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
-                  createNewProperty
-                      ? 'Enter a property name or address above to create this lease.'
-                      : 'Choose a property and unit above to create this lease.',
+                  leaseReadinessMessage,
                   style: TextStyle(fontSize: 12, color: Colors.amber.shade700),
                   textAlign: TextAlign.center,
                 ),
@@ -1179,7 +1290,7 @@ class _ReviewBody extends ConsumerWidget {
                               : draft.isWorkOrder
                               ? 'Create Work Order'
                               : draft.isLease
-                              ? 'Create Lease'
+                              ? leaseActionLabel
                               : draft.isApplication
                               ? 'Create Application'
                               : draft.isLoan
@@ -1804,11 +1915,195 @@ class _ProposalLine extends StatelessWidget {
   }
 }
 
+class _LeaseSignatureDispositionSection extends ConsumerStatefulWidget {
+  const _LeaseSignatureDispositionSection({
+    required this.selectedDisposition,
+    required this.onDispositionChanged,
+    required this.selectedTemplateId,
+    required this.onTemplateSelected,
+    required this.propertyId,
+  });
+
+  final LeaseScanReviewDisposition? selectedDisposition;
+  final ValueChanged<LeaseScanReviewDisposition?> onDispositionChanged;
+  final int? selectedTemplateId;
+  final ValueChanged<int?> onTemplateSelected;
+  final int? propertyId;
+
+  @override
+  ConsumerState<_LeaseSignatureDispositionSection> createState() =>
+      _LeaseSignatureDispositionSectionState();
+}
+
+class _LeaseSignatureDispositionSectionState
+    extends ConsumerState<_LeaseSignatureDispositionSection> {
+  final _searchController = TextEditingController();
+  String _search = '';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _applySearch() {
+    widget.onTemplateSelected(null);
+    setState(() => _search = _searchController.text.trim());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+    final needsSignatures =
+        widget.selectedDisposition ==
+        LeaseScanReviewDisposition.needsSignatures;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Card.outlined(
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(8, 16, 8, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Text(
+                  'What signing state is this lease in?',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(8, 4, 8, 8),
+                child: Text(
+                  'This determines whether Rental Command preserves the upload as the signed agreement or prepares it for signatures.',
+                ),
+              ),
+              RadioListTile<LeaseScanReviewDisposition>(
+                value: LeaseScanReviewDisposition.alreadyFullySigned,
+                groupValue: widget.selectedDisposition,
+                onChanged: widget.onDispositionChanged,
+                title: const Text('Already fully signed'),
+                subtitle: const Text(
+                  'Everyone has signed. Save this uploaded document as the executed agreement.',
+                ),
+              ),
+              RadioListTile<LeaseScanReviewDisposition>(
+                value: LeaseScanReviewDisposition.needsSignatures,
+                groupValue: widget.selectedDisposition,
+                onChanged: widget.onDispositionChanged,
+                title: const Text('Still needs signatures'),
+                subtitle: const Text(
+                  'Prepare an editable agreement draft and send it through Rental Command signing.',
+                ),
+              ),
+              if (needsSignatures) ...[
+                const Divider(),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+                  child: ChoiceChip(
+                    key: const Key('lease-supplied-source-choice'),
+                    avatar: const Icon(Icons.description_outlined, size: 18),
+                    label: const Text('Rental Command supplied lease'),
+                    selected: widget.selectedTemplateId == null,
+                    onSelected: (_) => widget.onTemplateSelected(null),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                  child: Text(
+                    widget.selectedTemplateId == null
+                        ? 'Recommended. Rental Command builds the agreement from the reviewed lease terms; no template setup is required.'
+                        : 'A custom workspace template is selected below.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: colors.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: InputDecoration(
+                      labelText: 'Search active lease templates',
+                      helperText:
+                          'Optional: choose a custom workspace template instead.',
+                      suffixIcon: IconButton(
+                        tooltip: 'Search templates',
+                        onPressed: _applySearch,
+                        icon: const Icon(Icons.search),
+                      ),
+                    ),
+                    textInputAction: TextInputAction.search,
+                    onSubmitted: (_) => _applySearch(),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 12, 8, 4),
+                  child: ref
+                      .watch(
+                        _leaseTemplateOptionsProvider((
+                          propertyId: widget.propertyId,
+                          search: _search,
+                        )),
+                      )
+                      .when(
+                        loading: () => const LinearProgressIndicator(),
+                        error: (_, _) => Text(
+                          'Unable to load active lease templates.',
+                          style: TextStyle(color: colors.error),
+                        ),
+                        data: (page) {
+                          if (page.items.isEmpty) {
+                            return Text(
+                              _search.isEmpty
+                                  ? 'No custom templates are active. The Rental Command supplied lease is ready to use.'
+                                  : 'No active lease templates match this search.',
+                              style: TextStyle(color: colors.onSurfaceVariant),
+                            );
+                          }
+                          final selectedIsVisible = page.items.any(
+                            (item) => item.id == widget.selectedTemplateId,
+                          );
+                          return DropdownButtonFormField<int>(
+                            value: selectedIsVisible
+                                ? widget.selectedTemplateId
+                                : null,
+                            decoration: const InputDecoration(
+                              labelText: 'Lease template',
+                            ),
+                            items: [
+                              for (final template in page.items)
+                                DropdownMenuItem(
+                                  value: template.id,
+                                  child: Text(template.name),
+                                ),
+                            ],
+                            onChanged: widget.onTemplateSelected,
+                          );
+                        },
+                      ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _LeasePickers extends ConsumerWidget {
   const _LeasePickers({
     required this.extractedTenantName,
     required this.createNewProperty,
     required this.onCreateNewPropertyChanged,
+    required this.newPropertyRentalStructure,
+    required this.onNewPropertyRentalStructureChanged,
     required this.editedFields,
     required this.onFieldChanged,
     required this.selectedPropertyId,
@@ -1822,6 +2117,8 @@ class _LeasePickers extends ConsumerWidget {
   final String? extractedTenantName;
   final bool createNewProperty;
   final ValueChanged<bool> onCreateNewPropertyChanged;
+  final RentalStructure? newPropertyRentalStructure;
+  final ValueChanged<RentalStructure?> onNewPropertyRentalStructureChanged;
   final Map<String, String> editedFields;
   final void Function(String name, String value) onFieldChanged;
   final int? selectedPropertyId;
@@ -1891,6 +2188,8 @@ class _LeasePickers extends ConsumerWidget {
             _CreatePropertyFields(
               editedFields: editedFields,
               onFieldChanged: onFieldChanged,
+              rentalStructure: newPropertyRentalStructure,
+              onRentalStructureChanged: onNewPropertyRentalStructureChanged,
             )
           else
             _LinkPropertyFields(
@@ -2051,10 +2350,14 @@ class _CreatePropertyFields extends StatefulWidget {
   const _CreatePropertyFields({
     required this.editedFields,
     required this.onFieldChanged,
+    required this.rentalStructure,
+    required this.onRentalStructureChanged,
   });
 
   final Map<String, String> editedFields;
   final void Function(String name, String value) onFieldChanged;
+  final RentalStructure? rentalStructure;
+  final ValueChanged<RentalStructure?> onRentalStructureChanged;
 
   @override
   State<_CreatePropertyFields> createState() => _CreatePropertyFieldsState();
@@ -2097,6 +2400,39 @@ class _CreatePropertyFieldsState extends State<_CreatePropertyFields> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        _PickerLabel(text: 'How is this address rented?', required: true),
+        SegmentedButton<RentalStructure>(
+          segments: const [
+            ButtonSegment<RentalStructure>(
+              value: RentalStructure.singleRental,
+              label: Text('One rental'),
+              icon: Icon(Icons.home_outlined),
+            ),
+            ButtonSegment<RentalStructure>(
+              value: RentalStructure.multiRental,
+              label: Text('Multiple rentals'),
+              icon: Icon(Icons.apartment_outlined),
+            ),
+          ],
+          selected: widget.rentalStructure == null
+              ? const {}
+              : {widget.rentalStructure!},
+          emptySelectionAllowed: true,
+          showSelectedIcon: false,
+          onSelectionChanged: (selection) => widget.onRentalStructureChanged(
+            selection.isEmpty ? null : selection.first,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          widget.rentalStructure == RentalStructure.multiRental
+              ? 'Create the rental from this lease now; you can add the other units afterward.'
+              : 'Choose One rental for a house, condo, or other address rented as one space.',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 14),
         _PickerLabel(text: 'Property name or address', required: true),
         AddressAutocompleteField(
           controller: _addressCtrl,

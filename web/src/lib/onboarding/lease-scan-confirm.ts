@@ -9,6 +9,8 @@ export interface OnboardingLeaseConfirmInput {
 	securityDeposit: number;
 	lateFeeAmount: number;
 	rentDueDay: number;
+	reviewDisposition: 'AlreadyFullySigned' | 'NeedsSignatures';
+	documentTemplateId: number | null;
 }
 
 export function buildOnboardingLeaseScanOverrides(input: OnboardingLeaseConfirmInput): string {
@@ -22,6 +24,10 @@ export function buildOnboardingLeaseScanOverrides(input: OnboardingLeaseConfirmI
 		monthlyRent: input.monthlyRent,
 		securityDeposit: input.securityDeposit,
 		lateFee: input.lateFeeAmount,
-		rentDueDay: input.rentDueDay
+		rentDueDay: input.rentDueDay,
+		reviewDisposition: input.reviewDisposition,
+		...(input.reviewDisposition === 'NeedsSignatures' && input.documentTemplateId
+			? { documentTemplateId: input.documentTemplateId }
+			: {})
 	});
 }

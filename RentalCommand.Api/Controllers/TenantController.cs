@@ -64,6 +64,25 @@ public class TenantController : ManagementControllerBase
         return CreatedAtAction(nameof(Get), new { id = created.Id }, created);
     }
 
+    /// <summary>
+    /// Creates every reviewed Guided Setup tenant in one receipt-backed database transaction.
+    /// A failed row rolls back the complete batch; retrying the same key returns the same tenants.
+    /// </summary>
+    [HttpPost("guided-setup")]
+    [ProducesResponseType(typeof(IReadOnlyList<TenantResponse>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IReadOnlyList<TenantResponse>>> CreateGuidedSetupBatch(
+        [FromBody] GuidedTenantSetupRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+
+        var created = await _service.CreateGuidedSetupBatchAsync(
+            GetWorkspaceReadScope(), request, operationKey, ct);
+        return Ok(created);
+    }
+
     [HttpPatch("{id:int}")]
     [ProducesResponseType(typeof(TenantResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

@@ -57,6 +57,27 @@ internal sealed partial class AtomicLeaseMutationPersistence
         return await ResolveLegalDocumentSourceVersionAsync(ResolveImportedSql, parameters, ct);
     }
 
+    public async Task<AtomicLegalDocumentSourceVersionResult> ResolveBuiltInDocumentSourceVersionAsync(
+        int portfolioId,
+        int actorUserId,
+        DateTime createdAtUtc,
+        CancellationToken ct = default)
+    {
+        var parameters = new NpgsqlParameter[]
+        {
+            Integer("portfolioId", portfolioId),
+            Text("businessKey", BuiltInLeaseAgreementSource.BusinessKey),
+            Text("rendererKey", BuiltInLeaseAgreementSource.RendererKey),
+            Integer("rendererVersion", BuiltInLeaseAgreementSource.RendererVersion),
+            JsonParameter("snapshotPayload", BuiltInLeaseAgreementSource.SnapshotPayload),
+            Integer("actorUserId", actorUserId),
+            Timestamp("createdAtUtc", createdAtUtc),
+        };
+        using var lease = _auditScope.BeginInternalRawDmlBatch(
+            new AtomicRawDmlTarget("LegalDocumentSourceVersions", AtomicRawDmlOperation.Insert));
+        return await ResolveLegalDocumentSourceVersionAsync(ResolveBuiltInSql, parameters, ct);
+    }
+
     private async Task<AtomicLegalDocumentSourceVersionResult> ResolveLegalDocumentSourceVersionAsync(
         string sql,
         NpgsqlParameter[] parameters,
@@ -184,6 +205,29 @@ internal sealed partial class AtomicLeaseMutationPersistence
              JOIN candidate ON candidate.business_key = source."BusinessKey"
              WHERE source."PortfolioId" = @portfolioId
                AND source."SourceKind" = 'ImportedExternalDocument'),
+            0) AS "DocumentSourceVersionId"
+        """;
+
+    private const string ResolveBuiltInSql = """
+        WITH inserted AS (
+            INSERT INTO "LegalDocumentSourceVersions"
+                ("PublicId", "PortfolioId", "SourceKind", "BusinessKey",
+                 "RendererKey", "RendererVersion", "SnapshotPayload", "CreatedAtUtc", "CreatedByUserId")
+            VALUES (gen_random_uuid(), @portfolioId, 'BuiltInRenderer', @businessKey,
+                    @rendererKey, @rendererVersion, @snapshotPayload, @createdAtUtc, @actorUserId)
+            ON CONFLICT ("PortfolioId", "RendererKey", "RendererVersion")
+                WHERE "SourceKind" = 'BuiltInRenderer'
+            DO NOTHING
+            RETURNING "Id"
+        )
+        SELECT COALESCE(
+            (SELECT "Id" FROM inserted),
+            (SELECT source."Id"
+             FROM "LegalDocumentSourceVersions" AS source
+             WHERE source."PortfolioId" = @portfolioId
+               AND source."SourceKind" = 'BuiltInRenderer'
+               AND source."RendererKey" = @rendererKey
+               AND source."RendererVersion" = @rendererVersion),
             0) AS "DocumentSourceVersionId"
         """;
 }

@@ -18,6 +18,7 @@
 	import { Loader2, Plus, Search, UserRoundCheck } from '@lucide/svelte';
 
 	const PAGE_SIZE = 20;
+	const PROPERTY_PAGE_SIZE = 20;
 	const queryClient = useQueryClient();
 	const authState = getAuthState();
 	const currentUser = $derived(getCurrentUser());
@@ -25,6 +26,8 @@
 	const portfolioId = $derived(authState.accessEnvelope?.selectedContext.portfolioId ?? 0);
 	let skip = $state(0);
 	let search = $state('');
+	let propertySkip = $state(0);
+	let propertySearch = $state('');
 
 	const membersQuery = createQuery(() => ({
 		queryKey: ['team-members', skip, search.trim()],
@@ -37,13 +40,27 @@
 		queryFn: team.roleProfiles
 	}));
 	const propertiesQuery = createQuery(() => ({
-		queryKey: ['team-scope-properties', portfolioId],
+		queryKey: ['team-scope-properties', portfolioId, propertySkip, propertySearch.trim()],
 		enabled: authState.isAuthenticated && canManageTeam && portfolioId > 0,
-		queryFn: () => properties.list(portfolioId, { take: 250, sort: 'name' })
+		queryFn: () => properties.listPage(portfolioId, {
+			skip: propertySkip,
+			take: PROPERTY_PAGE_SIZE,
+			search: propertySearch,
+			sort: 'name'
+		})
 	}));
 
 	const members = $derived(membersQuery.data?.items ?? []);
 	const hasNext = $derived(skip + members.length < (membersQuery.data?.totalCount ?? 0));
+	const propertyChoices = $derived(propertiesQuery.data?.items ?? []);
+	const hasNextPropertyPage = $derived(
+		propertySkip + propertyChoices.length < (propertiesQuery.data?.totalCount ?? 0)
+	);
+
+	function resetPropertyPicker() {
+		propertySkip = 0;
+		propertySearch = '';
+	}
 
 	function invalidateMembers() {
 		void queryClient.invalidateQueries({ queryKey: ['team-members'] });
@@ -102,6 +119,7 @@
 		const role = roleProfilesQuery.data?.find((item) => item.key === key);
 		scopeKind = role?.defaultScopeKind ?? 'SelectedProperties';
 		selectedPropertyIds = [];
+		resetPropertyPicker();
 	}
 
 	function toggleProperty(ids: number[], id: number, checked: boolean) {
@@ -114,6 +132,7 @@
 		roleProfileKey = '';
 		scopeKind = 'SelectedProperties';
 		selectedPropertyIds = [];
+		resetPropertyPicker();
 	}
 
 	const inviteMutation = createMutation(() => ({
@@ -198,6 +217,7 @@
 		assignmentRoleProfileKey = '';
 		assignmentScopeKind = 'SelectedProperties';
 		assignmentPropertyIds = [];
+		resetPropertyPicker();
 	}
 
 	function beginAddAssignment() {
@@ -210,6 +230,7 @@
 		assignmentRoleProfileKey = assignment.roleProfileKey;
 		assignmentScopeKind = 'SelectedProperties';
 		assignmentPropertyIds = [];
+		resetPropertyPicker();
 		showAssignmentEditor = true;
 	}
 
@@ -218,6 +239,7 @@
 		const role = roleProfilesQuery.data?.find((item) => item.key === key);
 		assignmentScopeKind = role?.defaultScopeKind ?? 'SelectedProperties';
 		assignmentPropertyIds = [];
+		resetPropertyPicker();
 	}
 
 	const assignmentMutation = createMutation(() => ({
@@ -404,14 +426,23 @@
 				{#if scopeKind === 'SelectedProperties' && roleProfileKey}
 					<fieldset class="rounded-[var(--m3-shape-medium)] border border-border p-3">
 						<legend class="px-1 text-sm font-medium">Properties</legend>
+						<label class="relative mt-1 block">
+							<span class="sr-only">Search properties</span>
+							<Search class="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+							<Input class="pl-9" placeholder="Search properties" value={propertySearch} oninput={(event) => { propertySearch = (event.currentTarget as HTMLInputElement).value; propertySkip = 0; }} />
+						</label>
+						<p class="mt-2 text-xs text-muted-foreground">{selectedPropertyIds.length} selected</p>
 						<div class="mt-1 grid max-h-44 gap-2 overflow-y-auto sm:grid-cols-2">
-							{#each propertiesQuery.data ?? [] as property}
+							{#each propertyChoices as property}
 								<label class="flex items-center gap-2 text-sm">
 									<input type="checkbox" checked={selectedPropertyIds.includes(property.id)} onchange={(event) => (selectedPropertyIds = toggleProperty(selectedPropertyIds, property.id, event.currentTarget.checked))} />
 									<span class="truncate">{property.name}</span>
 								</label>
+							{:else}
+								<p class="text-sm text-muted-foreground">No matching properties.</p>
 							{/each}
 						</div>
+						<Pagination bind:skip={propertySkip} take={PROPERTY_PAGE_SIZE} count={propertyChoices.length} hasNext={hasNextPropertyPage} testid="invite-property-pagination" />
 					</fieldset>
 				{/if}
 			</div>
@@ -536,14 +567,23 @@
 				{#if assignmentScopeKind === 'SelectedProperties' && assignmentRoleProfileKey}
 					<fieldset class="rounded-[var(--m3-shape-medium)] border border-border p-3">
 						<legend class="px-1 text-sm font-medium">Complete property scope</legend>
+						<label class="relative mt-1 block">
+							<span class="sr-only">Search properties</span>
+							<Search class="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+							<Input class="pl-9" placeholder="Search properties" value={propertySearch} oninput={(event) => { propertySearch = (event.currentTarget as HTMLInputElement).value; propertySkip = 0; }} />
+						</label>
+						<p class="mt-2 text-xs text-muted-foreground">{assignmentPropertyIds.length} selected</p>
 						<div class="mt-1 grid max-h-52 gap-2 overflow-y-auto sm:grid-cols-2">
-							{#each propertiesQuery.data ?? [] as property}
+							{#each propertyChoices as property}
 								<label class="flex items-center gap-2 text-sm">
 									<input type="checkbox" checked={assignmentPropertyIds.includes(property.id)} onchange={(event) => (assignmentPropertyIds = toggleProperty(assignmentPropertyIds, property.id, event.currentTarget.checked))} />
 									<span class="truncate">{property.name}</span>
 								</label>
+							{:else}
+								<p class="text-sm text-muted-foreground">No matching properties.</p>
 							{/each}
 						</div>
+						<Pagination bind:skip={propertySkip} take={PROPERTY_PAGE_SIZE} count={propertyChoices.length} hasNext={hasNextPropertyPage} testid="assignment-property-pagination" />
 					</fieldset>
 				{/if}
 			</div>

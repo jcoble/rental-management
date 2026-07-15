@@ -141,69 +141,79 @@ export const ROUTE_ACCESS_RULES: readonly RouteAccessRule[] = [
 		experiences: ['Management'],
 		anyCapabilities: [CAPABILITY.rentalsRead, CAPABILITY.leasingOnboardingManage]
 	},
-	{ prefix: '/admin/users', anyCapabilities: [CAPABILITY.teamRead, CAPABILITY.teamManage] },
-	{ prefix: '/admin/audit', anyCapabilities: [CAPABILITY.reportsRead] },
-	// Personal alert destinations belong to the signed-in user in every experience. Administrative
-	// routing and tenant-delivery policy remain staff-only even if a stale relationship envelope
-	// happens to contain the workspace notification capability.
+	{
+		prefix: '/admin/users',
+		experiences: ['Management'],
+		anyCapabilities: [CAPABILITY.teamRead, CAPABILITY.teamManage]
+	},
+	{ prefix: '/admin/audit', experiences: ['Management'], anyCapabilities: [CAPABILITY.reportsRead] },
+	// Personal alert destinations belong to the signed-in user in every experience. Workspace
+	// routing plus tenant policy/template/delivery administration stay in Management even if a stale
+	// relationship or staff envelope happens to contain the workspace notification capability.
 	{
 		prefix: '/settings/notifications/my-alerts',
 		experiences: ['Management', 'Leasing', 'Maintenance', 'Owner', 'Tenant']
 	},
 	{
 		prefix: '/settings/notifications/team-routing',
-		experiences: ['Management', 'Leasing', 'Maintenance'],
+		experiences: ['Management'],
 		anyCapabilities: [CAPABILITY.notificationsManage]
 	},
 	{
 		prefix: '/settings/notifications/tenant-notices',
-		experiences: ['Management', 'Leasing', 'Maintenance'],
-		anyCapabilities: [CAPABILITY.tenantNoticesManage]
+		experiences: ['Management'],
+		anyCapabilities: [CAPABILITY.notificationsManage]
 	},
 	{
 		prefix: '/settings/security',
 		experiences: ['Management', 'Leasing', 'Maintenance']
 	},
-	{ prefix: '/settings/accounting', anyCapabilities: [CAPABILITY.integrationsManage] },
+	{ prefix: '/settings/accounting', experiences: ['Management'], anyCapabilities: [CAPABILITY.integrationsManage] },
 	{
 		prefix: '/settings',
+		experiences: ['Management'],
 		anyCapabilities: [
 			CAPABILITY.securityManage,
 			CAPABILITY.billingManage,
 			CAPABILITY.integrationsManage
 		]
 	},
-	{ prefix: '/onboarding', anyCapabilities: [CAPABILITY.rentalsManage] },
-	{ prefix: '/get-started', anyCapabilities: [CAPABILITY.rentalsManage] },
-	{ prefix: '/import', anyCapabilities: [CAPABILITY.rentalsManage] },
+	{ prefix: '/onboarding', experiences: ['Management'], anyCapabilities: [CAPABILITY.securityManage] },
+	{ prefix: '/get-started', experiences: ['Management'], anyCapabilities: [CAPABILITY.securityManage] },
+	{ prefix: '/import', experiences: ['Management'], anyCapabilities: [CAPABILITY.rentalsManage] },
 	{
 		prefix: '/banking',
+		experiences: ['Management'],
 		anyCapabilities: [CAPABILITY.moneyReconciliationOperate, CAPABILITY.bankConnectionsManage]
 	},
-	{ prefix: '/plaid', anyCapabilities: [CAPABILITY.bankConnectionsManage] },
-	{ prefix: '/accounting', anyCapabilities: [CAPABILITY.moneyBalancesRead] },
+	{ prefix: '/plaid', experiences: ['Management'], anyCapabilities: [CAPABILITY.bankConnectionsManage] },
+	{ prefix: '/accounting', experiences: ['Management'], anyCapabilities: [CAPABILITY.moneyBalancesRead] },
 	{
 		prefix: '/tenant-accounts',
+		experiences: ['Management'],
 		anyCapabilities: [CAPABILITY.moneyBalancesRead, CAPABILITY.leasingDepositsRead]
 	},
 	{
 		prefix: '/deposits',
+		experiences: ['Management'],
 		anyCapabilities: [CAPABILITY.moneyDepositsManage, CAPABILITY.leasingDepositsRead]
 	},
 	{
 		prefix: '/reports',
+		experiences: ['Management'],
 		anyCapabilities: [CAPABILITY.reportsRead, CAPABILITY.moneyOwnerReportsRead]
 	},
-	{ prefix: '/tax', anyCapabilities: [CAPABILITY.reportsRead] },
-	{ prefix: '/owners-report', anyCapabilities: [CAPABILITY.moneyOwnerReportsRead] },
-	{ prefix: '/audit', anyCapabilities: [CAPABILITY.reportsRead] },
-	{ prefix: '/activity', anyCapabilities: [CAPABILITY.reportsRead] },
-	{ prefix: '/analytics', anyCapabilities: [CAPABILITY.reportsRead] },
+	{ prefix: '/tax', experiences: ['Management'], anyCapabilities: [CAPABILITY.reportsRead] },
+	{ prefix: '/owners-report', experiences: ['Management'], anyCapabilities: [CAPABILITY.moneyOwnerReportsRead] },
+	{ prefix: '/audit', experiences: ['Management'], anyCapabilities: [CAPABILITY.reportsRead] },
+	{ prefix: '/activity', experiences: ['Management'], anyCapabilities: [CAPABILITY.reportsRead] },
+	{ prefix: '/analytics', experiences: ['Management'], anyCapabilities: [CAPABILITY.reportsRead] },
 	{
 		prefix: '/ai',
+		experiences: ['Management'],
 		anyCapabilities: [CAPABILITY.rentalsRead, CAPABILITY.workRead, CAPABILITY.leasingTermsRead]
 	},
-	{ prefix: '/owners', anyCapabilities: [CAPABILITY.moneyOwnerReportsRead] },
+	{ prefix: '/owners', experiences: ['Management'], anyCapabilities: [CAPABILITY.moneyOwnerReportsRead] },
 	{ prefix: '/properties', experiences: ['Management'], anyCapabilities: [CAPABILITY.rentalsRead] },
 	{ prefix: '/units', experiences: ['Management'], anyCapabilities: [CAPABILITY.rentalsRead] },
 	{
@@ -218,6 +228,7 @@ export const ROUTE_ACCESS_RULES: readonly RouteAccessRule[] = [
 	},
 	{
 		prefix: '/lease-templates',
+		experiences: ['Management', 'Leasing'],
 		anyCapabilities: [CAPABILITY.rentalsManage, CAPABILITY.leasingAgreementsPrepare]
 	},
 	{

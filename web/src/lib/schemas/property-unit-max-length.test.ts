@@ -18,6 +18,7 @@ import { propertySchema, unitSchema, parseForm } from './index.ts';
 const validProperty = {
 	name: 'Maple Court',
 	type: 'MultiFamily',
+	rentalStructure: 'MultiRental',
 	status: 'Active',
 	addressLine1: '100 Main St',
 	addressLine2: '',

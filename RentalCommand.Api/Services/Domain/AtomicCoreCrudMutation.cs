@@ -11,7 +11,7 @@ using RentalCommand.Data;
 namespace RentalCommand.Api.Services.Domain;
 
 public enum AtomicCoreCrudMutationDomain { Property, OwnerEntity, Tenant, Vendor }
-public enum AtomicCoreCrudMutationOperation { Create, Update, Delete }
+public enum AtomicCoreCrudMutationOperation { Create, Update, Delete, Setup }
 
 public sealed record AtomicCoreCrudMutationCommand(
     int PortfolioId,
@@ -77,7 +77,8 @@ public sealed class AtomicCoreCrudMutationHandler
         var now = await persistence.ReadDatabaseClockUtcAsync(ct);
         var authorized = command.Domain switch
         {
-            AtomicCoreCrudMutationDomain.Property when command.Operation == AtomicCoreCrudMutationOperation.Create =>
+            AtomicCoreCrudMutationDomain.Property when command.Operation == AtomicCoreCrudMutationOperation.Create ||
+                (command.Operation == AtomicCoreCrudMutationOperation.Setup && command.EntityId == 0) =>
                 await AuthorizeAllPropertiesAsync(command, persistence, now, CapabilityKeys.RentalsManage, ct),
             AtomicCoreCrudMutationDomain.Property =>
                 await AuthorizePropertyEntityAsync(command, persistence, now, CapabilityKeys.RentalsManage, ct),
@@ -106,66 +107,11 @@ public sealed class AtomicCoreCrudMutationHandler
     {
         const string entityType = nameof(Property);
         var persistence = attempt.Persistence;
+        if (command.Operation == AtomicCoreCrudMutationOperation.Setup)
+            return await SetupPropertyAsync(command, attempt, now, ct);
+
         if (command.Operation == AtomicCoreCrudMutationOperation.Create)
-        {
-            var request = Read<CreatePropertyRequest>(command);
-            if (!await AuthorizeAllPropertiesAsync(command, persistence, now, CapabilityKeys.RentalsManage, ct))
-                throw Denied();
-            if (request.OwnerId is > 0 && !await persistence.Query<Owner>().AnyAsync(owner =>
-                    owner.Id == request.OwnerId && owner.PortfolioId == command.PortfolioId, ct))
-                return Missing();
-            if (request.OwnerEntityId is > 0 && !await persistence.Query<OwnerEntity>().AnyAsync(owner =>
-                    owner.Id == request.OwnerEntityId && owner.PortfolioId == command.PortfolioId
-                    && owner.DeletedAt == null, ct))
-                return Missing();
-
-            var ownerEntityId = request.ClearOwnerEntity ? null : request.OwnerEntityId;
-            if (ownerEntityId is null && !request.ClearOwnerEntity)
-                ownerEntityId = await persistence.Query<OwnerEntity>().AsNoTracking()
-                    .Where(owner => owner.PortfolioId == command.PortfolioId && owner.IsPrimary
-                        && owner.DeletedAt == null)
-                    .Select(owner => (int?)owner.Id).FirstOrDefaultAsync(ct);
-
-            var entity = new Property
-            {
-                PortfolioId = command.PortfolioId,
-                OwnerId = request.OwnerId,
-                OwnerEntityId = ownerEntityId,
-                Name = request.Name,
-                PropertyType = request.PropertyType,
-                Status = request.Status,
-                AddressLine1 = request.AddressLine1,
-                AddressLine2 = request.AddressLine2,
-                City = request.City,
-                State = request.State,
-                PostalCode = request.PostalCode,
-                YearBuilt = request.YearBuilt,
-                ManagementFeePercent = request.ManagementFeePercent,
-                Notes = request.Notes,
-                PurchasePrice = request.PurchasePrice,
-                LandValue = request.LandValue,
-                InServiceDate = Utc(request.InServiceDate),
-                ManualAnnualDepreciation = request.ManualAnnualDepreciation,
-                CreatedAt = now,
-                UpdatedAt = now,
-            };
-            persistence.Add(entity);
-            attempt.BindSemanticAudit(entity, Audit(command, entityType,
-                AuditLogOperation.Created, $"Property {entity.Name} created", entityId: 0));
-            await attempt.FlushBusinessAsync(ct);
-
-            if (IsPropertyUnitType(entity.PropertyType))
-            {
-                var unit = NewCanonicalUnit(entity, now);
-                persistence.Add(unit);
-                attempt.BindSemanticAudit(unit, Audit(command, nameof(Unit),
-                    AuditLogOperation.Created, $"Canonical unit for property {entity.Name} created", entityId: 0));
-                await attempt.FlushBusinessAsync(ct);
-                StageDataUpdate(attempt, command, nameof(Unit), unit.Id, now, "unit");
-            }
-            StageDataUpdate(attempt, command, entityType, entity.Id, now, "property");
-            return Applied(entity.Id, await SnapshotPropertyAsync(entity, persistence, ct));
-        }
+            throw Conflict("Properties must be created with the atomic Property setup command so their Units are committed together.");
 
         var property = await persistence.Query<Property>().SingleOrDefaultAsync(entity =>
             entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId
@@ -186,37 +132,17 @@ public sealed class AtomicCoreCrudMutationHandler
                     FirstId = group.Min(unit => unit.Id),
                     FirstNumber = group.OrderBy(unit => unit.Id).Select(unit => unit.UnitNumber).First(),
                 }).SingleOrDefaultAsync(ct);
-            Unit? canonicalUnit = null;
             if (unitState is not null)
             {
-                if (unitState.Count == 1 && IsPropertyUnitType(property.PropertyType)
-                    && string.Equals(unitState.FirstNumber, CanonicalUnitNumber(property.Name), StringComparison.Ordinal))
-                {
-                    await EnsureUnitHasNoHistoryAsync(command.PortfolioId, unitState.FirstId, persistence, ct);
-                    canonicalUnit = await persistence.Query<Unit>().SingleAsync(unit =>
-                        unit.Id == unitState.FirstId && unit.PortfolioId == command.PortfolioId, ct);
-                }
-                else
-                {
-                    var noun = unitState.Count == 1 ? "unit" : "units";
-                    throw Conflict($"This property still has {unitState.Count} {noun}. Remove the {noun} before deleting this property.");
-                }
+                var noun = unitState.Count == 1 ? "unit" : "units";
+                throw Conflict($"This property still has {unitState.Count} {noun}. Remove the {noun} before deleting this property.");
             }
             await EnsurePropertyHasNoHistoryAsync(command.PortfolioId, property.Id, persistence, ct);
-            if (canonicalUnit is not null)
-            {
-                canonicalUnit.DeletedAt = now;
-                canonicalUnit.UpdatedAt = now;
-                attempt.BindSemanticAudit(canonicalUnit, Audit(command, nameof(Unit),
-                    AuditLogOperation.Deleted, "Canonical unit deleted with property", canonicalUnit.Id));
-            }
             property.DeletedAt = now;
             property.UpdatedAt = now;
             attempt.BindSemanticAudit(property, Audit(command, entityType,
                 AuditLogOperation.Deleted, $"Property {property.Name} deleted"));
             await attempt.FlushBusinessAsync(ct);
-            if (canonicalUnit is not null)
-                StageDataUpdate(attempt, command, nameof(Unit), canonicalUnit.Id, now, "unit", deleted: true);
             StageDataUpdate(attempt, command, entityType, property.Id, now, "property", deleted: true);
             return Applied(property.Id);
         }
@@ -233,7 +159,6 @@ public sealed class AtomicCoreCrudMutationHandler
         if (update.Status == PropertyStatus.Inactive && property.Status != PropertyStatus.Inactive)
             await EnsurePropertyHasNoCurrentOccupancyAsync(command.PortfolioId, property.Id, persistence, ct);
 
-        var previousCanonicalName = CanonicalUnitNumber(property.Name);
         if (update.OwnerId.HasValue) property.OwnerId = update.OwnerId;
         if (update.ClearOwnerEntity) property.OwnerEntityId = null;
         else if (update.OwnerEntityId.HasValue) property.OwnerEntityId = update.OwnerEntityId;
@@ -256,42 +181,214 @@ public sealed class AtomicCoreCrudMutationHandler
         attempt.BindSemanticAudit(property, Audit(command, entityType,
             AuditLogOperation.Updated, $"Property {property.Name} updated"));
 
-        Unit? touchedUnit = null;
-        if (IsPropertyUnitType(property.PropertyType))
-        {
-            var unitState = await persistence.Query<Unit>().AsNoTracking()
-                .Where(unit => unit.PortfolioId == command.PortfolioId
-                    && unit.PropertyId == property.Id && unit.DeletedAt == null)
-                .GroupBy(_ => 1)
-                .Select(group => new { Count = group.Count(), FirstId = group.Min(unit => unit.Id) })
-                .SingleOrDefaultAsync(ct);
-            if (unitState is null)
-            {
-                touchedUnit = NewCanonicalUnit(property, now);
-                persistence.Add(touchedUnit);
-                attempt.BindSemanticAudit(touchedUnit, Audit(command, nameof(Unit),
-                    AuditLogOperation.Created, "Canonical unit created", entityId: 0));
-            }
-            else if (unitState.Count == 1)
-            {
-                var candidate = await persistence.Query<Unit>().SingleAsync(unit =>
-                    unit.Id == unitState.FirstId && unit.PortfolioId == command.PortfolioId, ct);
-                if (string.Equals(candidate.UnitNumber, previousCanonicalName, StringComparison.Ordinal))
-                {
-                    candidate.UnitNumber = CanonicalUnitNumber(property.Name);
-                    candidate.UpdatedAt = now;
-                    touchedUnit = candidate;
-                    attempt.BindSemanticAudit(candidate, Audit(command, nameof(Unit),
-                        AuditLogOperation.Updated, "Canonical unit synchronized with property", candidate.Id));
-                }
-            }
-        }
         await attempt.FlushBusinessAsync(ct);
-        if (touchedUnit is not null)
-            StageDataUpdate(attempt, command, nameof(Unit), touchedUnit.Id, now, "unit");
         StageDataUpdate(attempt, command, entityType, property.Id, now, "property");
         return Applied(property.Id, await SnapshotPropertyAsync(property, persistence, ct));
     }
+
+    private static async Task<AtomicCoreCrudMutationResult> SetupPropertyAsync(
+        AtomicCoreCrudMutationCommand command,
+        IAtomicWriteAttempt attempt,
+        DateTime now,
+        CancellationToken ct)
+    {
+        var persistence = attempt.Persistence;
+        var setup = Read<SetupPropertyRequest>(command);
+        ValidateSetup(setup, command.EntityId);
+
+        var updated = command.EntityId > 0;
+        if (updated)
+        {
+            if (!await AuthorizePropertyEntityAsync(command, persistence, now, CapabilityKeys.RentalsManage, ct))
+                throw Denied();
+        }
+        else if (!await AuthorizeAllPropertiesAsync(
+                     command, persistence, now, CapabilityKeys.RentalsManage, ct))
+        {
+            throw Denied();
+        }
+
+        var request = setup.Property;
+        if (request.OwnerId is > 0 && !await persistence.Query<Owner>().AnyAsync(owner =>
+                owner.Id == request.OwnerId && owner.PortfolioId == command.PortfolioId, ct))
+            return Missing();
+        if (request.OwnerEntityId is > 0 && !await persistence.Query<OwnerEntity>().AnyAsync(owner =>
+                owner.Id == request.OwnerEntityId && owner.PortfolioId == command.PortfolioId
+                && owner.DeletedAt == null, ct))
+            return Missing();
+
+        var requestedUnitNumbers = setup.Units
+            .Select(unit => unit.UnitNumber.Trim().ToLowerInvariant())
+            .ToArray();
+
+        Property property;
+        var existingUnitCount = 0;
+        if (updated)
+        {
+            property = await persistence.Query<Property>().SingleOrDefaultAsync(entity =>
+                entity.Id == command.EntityId && entity.PortfolioId == command.PortfolioId
+                && entity.DeletedAt == null, ct) ?? throw Conflict("Property not found.");
+
+            existingUnitCount = await persistence.Query<Unit>().AsNoTracking().CountAsync(unit =>
+                unit.PortfolioId == command.PortfolioId && unit.PropertyId == property.Id
+                && unit.DeletedAt == null, ct);
+            if (requestedUnitNumbers.Length > 0 && await persistence.Query<Unit>().AsNoTracking().AnyAsync(unit =>
+                    unit.PortfolioId == command.PortfolioId && unit.PropertyId == property.Id
+                    && unit.DeletedAt == null
+                    && requestedUnitNumbers.Contains(unit.UnitNumber.ToLower()), ct))
+                throw Conflict("One or more Unit numbers already exist on this Property.");
+
+            if (property.RentalStructure == RentalStructure.MultiRental
+                && request.RentalStructure == RentalStructure.SingleRental)
+            {
+                var historicalUnitCount = await persistence.Query<Unit>().IgnoreQueryFilters().AsNoTracking()
+                    .CountAsync(unit => unit.PortfolioId == command.PortfolioId
+                        && unit.PropertyId == property.Id, ct);
+                if (historicalUnitCount != existingUnitCount
+                    || existingUnitCount + setup.Units.Count != 1)
+                    throw Conflict("A MultiRental Property with multiple Unit records or Unit history cannot be converted to SingleRental.");
+            }
+
+            ApplyPropertySetup(property, request, now);
+            attempt.BindSemanticAudit(property, Audit(command, nameof(Property),
+                AuditLogOperation.Updated, $"Property {property.Name} updated during Guided Setup", property.Id));
+        }
+        else
+        {
+            var ownerEntityId = request.ClearOwnerEntity ? null : request.OwnerEntityId;
+            if (ownerEntityId is null && !request.ClearOwnerEntity)
+            {
+                ownerEntityId = await persistence.Query<OwnerEntity>().AsNoTracking()
+                    .Where(owner => owner.PortfolioId == command.PortfolioId && owner.IsPrimary
+                        && owner.DeletedAt == null)
+                    .Select(owner => (int?)owner.Id)
+                    .FirstOrDefaultAsync(ct);
+            }
+
+            property = new Property
+            {
+                PortfolioId = command.PortfolioId,
+                OwnerEntityId = ownerEntityId,
+                CreatedAt = now,
+            };
+            ApplyPropertySetup(property, request, now);
+            persistence.Add(property);
+            attempt.BindSemanticAudit(property, Audit(command, nameof(Property),
+                AuditLogOperation.Created, $"Property {property.Name} created during Guided Setup", entityId: 0));
+        }
+
+        var totalUnitCount = existingUnitCount + setup.Units.Count;
+        if (request.RentalStructure == RentalStructure.SingleRental && totalUnitCount != 1)
+            throw Conflict("A SingleRental Property must contain exactly one Unit.");
+        if (request.RentalStructure == RentalStructure.MultiRental && totalUnitCount < 1)
+            throw Conflict("A MultiRental Property must contain at least one Unit.");
+
+        await attempt.FlushBusinessAsync(ct);
+
+        var units = setup.Units.Select(unit => new Unit
+        {
+            PortfolioId = command.PortfolioId,
+            PropertyId = property.Id,
+            Property = property,
+            UnitNumber = unit.UnitNumber.Trim(),
+            FloorPlan = unit.FloorPlan,
+            Bedrooms = unit.Bedrooms,
+            Bathrooms = unit.Bathrooms,
+            SquareFeet = unit.SquareFeet,
+            MarketRent = unit.MarketRent,
+            Notes = unit.Notes,
+            CreatedAt = now,
+            UpdatedAt = now,
+        }).ToList();
+
+        foreach (var unit in units)
+        {
+            persistence.Add(unit);
+            attempt.BindSemanticAudit(unit, Audit(command, nameof(Unit),
+                AuditLogOperation.Created, $"Unit {unit.UnitNumber} created during Guided Setup", entityId: 0));
+        }
+        await attempt.FlushBusinessAsync(ct);
+
+        StageDataUpdate(attempt, command, nameof(Property), property.Id, now, "property");
+        for (var index = 0; index < units.Count; index++)
+            StageDataUpdate(attempt, command, nameof(Unit), units[index].Id, now, $"unit-{index + 1}");
+
+        var currentUnits = await persistence.Query<Unit>().AsNoTracking()
+            .Where(unit => unit.PortfolioId == command.PortfolioId
+                && unit.PropertyId == property.Id && unit.DeletedAt == null)
+            .OrderBy(unit => unit.UnitNumber)
+            .ThenBy(unit => unit.Id)
+            .ToListAsync(ct);
+        var propertySnapshot = JsonSerializer.Deserialize<PropertyResponse>(
+            await SnapshotPropertyAsync(property, persistence, ct))
+            ?? throw new AtomicReceiptInvariantException("Property setup response could not be created.");
+        var response = new PropertySetupResponse
+        {
+            Property = propertySnapshot,
+            Updated = updated,
+            Units = currentUnits.Select(ToUnitResponse).ToList(),
+        };
+        return Applied(property.Id, JsonSerializer.Serialize(response));
+    }
+
+    private static void ValidateSetup(SetupPropertyRequest setup, int commandPropertyId)
+    {
+        if (setup.PropertyId.GetValueOrDefault() != commandPropertyId)
+            throw new ArgumentException("The setup Property id does not match the command target.");
+        if (!Enum.IsDefined(setup.Property.RentalStructure))
+            throw new ArgumentException("RentalStructure must be SingleRental or MultiRental.");
+        if (string.IsNullOrWhiteSpace(setup.Property.Name)
+            || string.IsNullOrWhiteSpace(setup.Property.AddressLine1)
+            || string.IsNullOrWhiteSpace(setup.Property.City)
+            || string.IsNullOrWhiteSpace(setup.Property.State)
+            || string.IsNullOrWhiteSpace(setup.Property.PostalCode))
+            throw new ArgumentException("Property name and address fields are required.");
+        if (setup.Units.Any(unit => string.IsNullOrWhiteSpace(unit.UnitNumber)))
+            throw new ArgumentException("Every setup Unit requires a Unit number.");
+        if (setup.Units.Select(unit => unit.UnitNumber.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count()
+            != setup.Units.Count)
+            throw Conflict("Unit numbers must be unique within the Property.");
+    }
+
+    private static void ApplyPropertySetup(Property property, CreatePropertyRequest request, DateTime now)
+    {
+        property.OwnerId = request.OwnerId;
+        if (request.ClearOwnerEntity) property.OwnerEntityId = null;
+        else if (request.OwnerEntityId.HasValue) property.OwnerEntityId = request.OwnerEntityId;
+        property.Name = request.Name.Trim();
+        property.PropertyType = request.PropertyType;
+        property.RentalStructure = request.RentalStructure;
+        property.Status = request.Status;
+        property.AddressLine1 = request.AddressLine1.Trim();
+        property.AddressLine2 = request.AddressLine2;
+        property.City = request.City.Trim();
+        property.State = request.State.Trim();
+        property.PostalCode = request.PostalCode.Trim();
+        property.YearBuilt = request.YearBuilt;
+        property.ManagementFeePercent = request.ManagementFeePercent;
+        property.Notes = request.Notes;
+        property.PurchasePrice = request.PurchasePrice;
+        property.LandValue = request.LandValue;
+        property.InServiceDate = Utc(request.InServiceDate);
+        property.ManualAnnualDepreciation = request.ManualAnnualDepreciation;
+        property.UpdatedAt = now;
+    }
+
+    private static UnitResponse ToUnitResponse(Unit unit) => new()
+    {
+        Id = unit.Id,
+        PropertyId = unit.PropertyId,
+        UnitNumber = unit.UnitNumber,
+        FloorPlan = unit.FloorPlan,
+        Bedrooms = unit.Bedrooms,
+        Bathrooms = unit.Bathrooms,
+        SquareFeet = unit.SquareFeet,
+        MarketRent = unit.MarketRent,
+        Status = DerivedUnitStatus.Vacant,
+        Notes = unit.Notes,
+        CreatedAt = unit.CreatedAt,
+        UpdatedAt = unit.UpdatedAt,
+    };
 
     private static async Task<AtomicCoreCrudMutationResult> MutateOwnerEntityAsync(
         AtomicCoreCrudMutationCommand command, IAtomicWriteAttempt attempt, DateTime now, CancellationToken ct)
@@ -633,27 +730,6 @@ public sealed class AtomicCoreCrudMutationHandler
                         && selected.PropertyId == property.Id))));
     }
 
-    private static bool IsPropertyUnitType(PropertyType type) =>
-        type is PropertyType.SingleFamily or PropertyType.Condo or PropertyType.Townhome;
-
-    private static string CanonicalUnitNumber(string propertyName)
-    {
-        const int maxLength = 50;
-        var value = propertyName.Trim();
-        if (value.Length == 0) return "Property";
-        return value.Length <= maxLength ? value : value[..maxLength];
-    }
-
-    private static Unit NewCanonicalUnit(Property property, DateTime now) => new()
-    {
-        PortfolioId = property.PortfolioId,
-        PropertyId = property.Id,
-        Property = property,
-        UnitNumber = CanonicalUnitNumber(property.Name),
-        CreatedAt = now,
-        UpdatedAt = now,
-    };
-
     private static async Task EnsurePropertyHasNoCurrentOccupancyAsync(
         int portfolioId, int propertyId, IAtomicPersistenceSession persistence, CancellationToken ct)
     {
@@ -871,7 +947,9 @@ public sealed class AtomicCoreCrudMutationHandler
             || command.ExpectedAccessRevision <= 0 || string.IsNullOrWhiteSpace(command.RequestJson)
             || string.IsNullOrWhiteSpace(command.DeliveryIdempotencyKey)
             || command.DeliveryIdempotencyKey.Length > 128
-            || (command.Operation != AtomicCoreCrudMutationOperation.Create && command.EntityId <= 0))
+            || (command.Operation == AtomicCoreCrudMutationOperation.Setup && command.EntityId < 0)
+            || (command.Operation is not AtomicCoreCrudMutationOperation.Create
+                    and not AtomicCoreCrudMutationOperation.Setup && command.EntityId <= 0))
             throw new ArgumentException("Portfolio, actor, access revision, operation, and delivery identifiers are required.");
     }
 

@@ -38,11 +38,18 @@ describe('new rental draft URL state', () => {
 });
 
 describe('createNewRentalPropertyForm', () => {
+	it('does not infer rental structure from the extracted property type', () => {
+		const form = createNewRentalPropertyForm();
+
+		assert.equal(form.rentalStructure, '');
+	});
+
 	it('includes hidden defaults required by the shared property schema', () => {
 		const form = createNewRentalPropertyForm();
 		Object.assign(form, {
 			name: 'Harbor View Apartments',
 			type: 'MultiFamily',
+			rentalStructure: 'MultiRental',
 			addressLine1: '1807 Harbor View Apartments',
 			city: 'Columbus',
 			state: 'OH',
@@ -101,6 +108,29 @@ describe('new rental lease prefill seeding', () => {
 
 		assert.doesNotMatch(source, /unitForm\.bedrooms\s*=\s*values\.unitBedrooms\s*\|\|\s*['"]0['"]/);
 		assert.doesNotMatch(source, /unitForm\.bathrooms\s*=\s*values\.unitBathrooms\s*\|\|\s*['"]0['"]/);
+	});
+
+	it('sends the explicit rental structure when the guided import creates a property', () => {
+		const source = readFileSync(
+			resolve(dirname(fileURLToPath(import.meta.url)), '../components/scan/LeaseFirstImport.svelte'),
+			'utf8'
+		);
+
+		assert.match(source, /if \(isCreatingProperty\) \{[\s\S]*?o\.propertyId = null;[\s\S]*?o\.rentalStructure = propertyForm\.rentalStructure;/);
+		assert.doesNotMatch(source, /rentalStructure\s*=\s*propertyForm\.type/);
+	});
+
+	it('requires and sends an explicit rental structure from the general lease scan', () => {
+		const source = readFileSync(
+			resolve(dirname(fileURLToPath(import.meta.url)), '../../routes/(protected)/scan/[draftId]/+page.svelte'),
+			'utf8'
+		);
+
+		assert.match(source, /data-testid="scan-new-property-single-rental"/);
+		assert.match(source, /data-testid="scan-new-property-multi-rental"/);
+		assert.match(source, /!newPropertyRentalStructure/);
+		assert.match(source, /if \(isCreatingLeaseProperty\) \{[\s\S]*?overrides\['propertyId'\] = null;[\s\S]*?overrides\['rentalStructure'\] = newPropertyRentalStructure;/);
+		assert.doesNotMatch(source, /newPropertyRentalStructure\s*=.*propertyType/);
 	});
 });
 

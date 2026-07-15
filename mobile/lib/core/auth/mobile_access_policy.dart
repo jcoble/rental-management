@@ -66,6 +66,7 @@ const scanCapabilityKeys = <String>[
 ];
 
 const notificationManagementCapability = 'notifications.manage';
+const tenantNoticeDraftCapability = 'notifications.tenant-notices.manage';
 
 bool hasAnyMobileCapability(Set<String> capabilities, Iterable<String> keys) =>
     keys.any(capabilities.contains);
@@ -103,12 +104,15 @@ bool canManageMobileNotificationFoundation({
     experience != WorkspaceExperience.tenant &&
     capabilities.contains(notificationManagementCapability);
 
+bool canManagePropertyTenantNoticeDrafts(Set<String> capabilities) =>
+    capabilities.contains(tenantNoticeDraftCapability);
+
 bool canUseManagementOnboarding({
   required WorkspaceExperience experience,
   required Set<String> capabilities,
 }) =>
     experience == WorkspaceExperience.management &&
-    capabilities.contains('rentals.manage');
+    capabilities.contains('security.manage');
 
 bool canOpenRentalsHub(Set<String> capabilities) => hasAnyMobileCapability(
   capabilities,

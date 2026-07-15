@@ -1181,6 +1181,7 @@ namespace RentalCommand.Data.Migrations
                     OwnerEntityId = table.Column<int>(type: "integer", nullable: true),
                     Name = table.Column<string>(type: "character varying(200)", maxLength: 200, nullable: false),
                     PropertyType = table.Column<int>(type: "integer", nullable: false),
+                    RentalStructure = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: false),
                     Status = table.Column<int>(type: "integer", nullable: false),
                     AddressLine1 = table.Column<string>(type: "character varying(250)", maxLength: 250, nullable: false),
                     AddressLine2 = table.Column<string>(type: "character varying(250)", maxLength: 250, nullable: true),
@@ -1874,6 +1875,7 @@ namespace RentalCommand.Data.Migrations
                     PortfolioId = table.Column<int>(type: "integer", nullable: false),
                     TenantNoticePolicyId = table.Column<int>(type: "integer", nullable: false),
                     LeaseManagementId = table.Column<int>(type: "integer", nullable: false),
+                    RecipientLeaseManagementPartyId = table.Column<int>(type: "integer", nullable: false),
                     TenantLedgerEntryId = table.Column<long>(type: "bigint", nullable: true),
                     DueAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
                     Status = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: false),
@@ -6800,14 +6802,14 @@ namespace RentalCommand.Data.Migrations
             migrationBuilder.CreateIndex(
                 name: "UX_NoticeDrafts_OpenAgreementNotice",
                 table: "NoticeDrafts",
-                columns: new[] { "PortfolioId", "LeaseManagementId", "LeaseAgreementId", "NoticeType" },
+                columns: new[] { "PortfolioId", "LeaseManagementId", "LeaseAgreementId", "RecipientLeaseManagementPartyId", "NoticeType" },
                 unique: true,
                 filter: "\"TenantLedgerEntryId\" IS NULL AND \"LeaseAgreementId\" IS NOT NULL AND \"Status\" IN ('Draft','Approved')");
 
             migrationBuilder.CreateIndex(
                 name: "UX_NoticeDrafts_OpenLedgerNotice",
                 table: "NoticeDrafts",
-                columns: new[] { "PortfolioId", "TenantLedgerEntryId", "NoticeType" },
+                columns: new[] { "PortfolioId", "TenantLedgerEntryId", "RecipientLeaseManagementPartyId", "NoticeType" },
                 unique: true,
                 filter: "\"TenantLedgerEntryId\" IS NOT NULL AND \"Status\" IN ('Draft','Approved')");
 
@@ -7874,6 +7876,11 @@ namespace RentalCommand.Data.Migrations
                 filter: "\"TenantLedgerEntryId\" IS NOT NULL");
 
             migrationBuilder.CreateIndex(
+                name: "IX_TenantNoticeWorkItems_RecipientLeaseManagementPartyId_Lease~",
+                table: "TenantNoticeWorkItems",
+                columns: new[] { "RecipientLeaseManagementPartyId", "LeaseManagementId", "PortfolioId" });
+
+            migrationBuilder.CreateIndex(
                 name: "IX_TenantNoticeWorkItems_Status_DueAtUtc_ClaimExpiresAtUtc_Id",
                 table: "TenantNoticeWorkItems",
                 columns: new[] { "Status", "DueAtUtc", "ClaimExpiresAtUtc", "Id" });
@@ -8269,6 +8276,14 @@ namespace RentalCommand.Data.Migrations
                 principalTable: "Expenses",
                 principalColumn: "Id",
                 onDelete: ReferentialAction.SetNull);
+
+            migrationBuilder.AddForeignKey(
+                name: "FK_TenantNoticeWorkItems_LeaseManagementParties_RecipientLease~",
+                table: "TenantNoticeWorkItems",
+                columns: new[] { "RecipientLeaseManagementPartyId", "LeaseManagementId", "PortfolioId" },
+                principalTable: "LeaseManagementParties",
+                principalColumns: new[] { "Id", "LeaseManagementId", "PortfolioId" },
+                onDelete: ReferentialAction.Restrict);
 
             migrationBuilder.Sql("""
                 CREATE UNIQUE INDEX "IX_RentalApplications_PortfolioId_Email_Open_CI"

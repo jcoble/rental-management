@@ -1,6 +1,8 @@
+using RentalCommand.Core.Interfaces;
+
 namespace RentalCommand.Core.Entities;
 
-public class NoticeDraft
+public class NoticeDraft : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }

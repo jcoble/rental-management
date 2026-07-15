@@ -31,6 +31,14 @@ export const tenants = {
 		idempotentMutation(`tenants:create:${JSON.stringify(data)}`, (key) =>
 			api.post<Tenant>('/tenants', data, { headers: { 'Idempotency-Key': key } })
 		),
+	createGuidedSetupBatch: (reviewedTenants: Record<string, unknown>[]) =>
+		idempotentMutation(`tenants:guided-setup:${JSON.stringify(reviewedTenants)}`, (key) =>
+			api.post<Tenant[]>(
+				'/tenants/guided-setup',
+				{ tenants: reviewedTenants },
+				{ headers: { 'Idempotency-Key': key } }
+			)
+		),
 	update: (id: number, data: Record<string, unknown>) =>
 		idempotentMutation(`tenants:update:${id}:${JSON.stringify(data)}`, (key) =>
 			api.patch<Tenant>(`/tenants/${id}`, data, { headers: { 'Idempotency-Key': key } })

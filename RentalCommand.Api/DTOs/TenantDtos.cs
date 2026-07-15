@@ -102,6 +102,18 @@ public class CreateTenantRequest
     public string? Notes { get; set; }
 }
 
+/// <summary>
+/// One reviewed Guided Setup action. The complete collection is committed or rolled back as one
+/// receipt-backed command; it is deliberately separate from ordinary one-tenant CRUD.
+/// </summary>
+public sealed class GuidedTenantSetupRequest
+{
+    [Required]
+    [MinLength(1)]
+    [MaxLength(25)]
+    public List<CreateTenantRequest> Tenants { get; set; } = [];
+}
+
 public class UpdateTenantRequest
 {
     [MaxLength(100)]

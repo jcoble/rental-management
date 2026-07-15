@@ -196,7 +196,7 @@ void main() {
     );
     expect(
       shellActionsSource,
-      contains("managementMode && capabilities.contains('rentals.manage')"),
+      contains("managementMode && capabilities.contains('security.manage')"),
     );
   });
 
@@ -220,6 +220,11 @@ void main() {
       expect(leasingSource, contains("label: '$label'"));
     }
     expect(leasingSource, contains('openAuthorizedMobileScan(context, ref)'));
+    expect(
+      leasingSource,
+      contains('canManagePropertyTenantNoticeDrafts(auth.capabilities)'),
+    );
+    expect(leasingSource, contains("title: const Text('Tenant notices')"));
     expect(leasingSource, isNot(contains('MoneyHubScreen')));
     expect(leasingSource, isNot(contains('OwnerLandingScreen')));
     expect(leasingSource, isNot(contains('UnitCommandCenterLoaderScreen')));
@@ -252,4 +257,30 @@ void main() {
     );
     expect(technicianSource, isNot(contains('openMobileScan(')));
   });
+
+  test(
+    'live property setup keeps the atomic rental context for next steps',
+    () {
+      final setupSource = File(
+        'lib/features/onboarding/onboarding_live_setup_screen.dart',
+      ).readAsStringSync();
+      final propertyFormSource = File(
+        'lib/features/properties/property_form_sheet.dart',
+      ).readAsStringSync();
+
+      expect(propertyFormSource, contains('onSetupSaved?.call(setup)'));
+      expect(setupSource, contains("title: 'Scan an existing lease'"));
+      expect(
+        setupSource,
+        contains("initialTargetEntityType: 'LeaseAgreement'"),
+      );
+      expect(
+        setupSource,
+        contains("title: 'Set up tenants and lease manually'"),
+      );
+      expect(setupSource, contains('propertyId: setup.property.id'));
+      expect(setupSource, contains('unitId: setup.units.length == 1'));
+      expect(setupSource, contains('UnitCommandCenterTab.tenantLease'));
+    },
+  );
 }

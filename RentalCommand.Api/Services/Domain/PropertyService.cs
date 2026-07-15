@@ -18,7 +18,6 @@ public class PropertyService : IPropertyService
 {
     private const string EntityType = "Property";
     private const string UnitEntityType = "Unit";
-    private const int UnitNumberMaxLength = 50;
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
@@ -37,19 +36,6 @@ public class PropertyService : IPropertyService
         _atomic = atomic;
     }
 
-    public async Task<PropertyResponse?> CreateAsync(
-        WorkspaceReadScope scope,
-        CreatePropertyRequest request,
-        string operationKey,
-        CancellationToken ct = default)
-    {
-        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Property,
-            AtomicCoreCrudMutationOperation.Create, 0, operationKey, request);
-        var outcome = await Atomic.ExecuteAsync(
-            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
-        return DeserializeSnapshot<PropertyResponse>(outcome.Value);
-    }
-
     public async Task<PropertyResponse?> UpdateAsync(
         WorkspaceReadScope scope,
         int id,
@@ -62,6 +48,19 @@ public class PropertyService : IPropertyService
         var outcome = await Atomic.ExecuteAsync(
             AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
         return DeserializeSnapshot<PropertyResponse>(outcome.Value);
+    }
+
+    public async Task<PropertySetupResponse?> SetupAsync(
+        WorkspaceReadScope scope,
+        SetupPropertyRequest request,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Property,
+            AtomicCoreCrudMutationOperation.Setup, request.PropertyId.GetValueOrDefault(), operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
+        return DeserializeSnapshot<PropertySetupResponse>(outcome.Value);
     }
 
     public async Task<bool> DeleteAsync(
@@ -224,93 +223,6 @@ public class PropertyService : IPropertyService
         var response = PropertyResponse.FromEntity(row.Property, row.UnitCount, row.OccupiedUnits);
         response.OwnerName = row.OwnerName;
         return response;
-    }
-
-    private async Task<Unit?> EnsureCanonicalUnitAsync(
-        Property property,
-        string previousCanonicalUnitNumber,
-        DateTime now,
-        CancellationToken ct)
-    {
-        if (!IsPropertyUnitType(property.PropertyType))
-        {
-            return null;
-        }
-
-        var liveUnits = await _db.Units
-            .Where(u => u.PropertyId == property.Id)
-            .OrderBy(u => u.Id)
-            .Take(2)
-            .ToListAsync(ct);
-
-        if (liveUnits.Count == 0)
-        {
-            // The authorized update query already owns the tracked Property aggregate. Build the
-            // new child from its persisted keys so adding the Unit cannot attach another Property
-            // instance with the same alternate key to the change tracker.
-            var created = NewCanonicalUnit(
-                property.PortfolioId,
-                property.Id,
-                property.Name,
-                now);
-            _db.Units.Add(created);
-            return created;
-        }
-
-        if (liveUnits.Count != 1)
-        {
-            return null;
-        }
-
-        var unit = liveUnits[0];
-        if (!string.Equals(unit.UnitNumber, previousCanonicalUnitNumber, StringComparison.Ordinal))
-        {
-            return null;
-        }
-
-        var nextUnitNumber = CanonicalUnitNumber(property.Name);
-        if (string.Equals(unit.UnitNumber, nextUnitNumber, StringComparison.Ordinal))
-        {
-            return null;
-        }
-
-        unit.UnitNumber = nextUnitNumber;
-        unit.UpdatedAt = now;
-        return unit;
-    }
-
-    private static Unit NewCanonicalUnit(Property property, DateTime now)
-    {
-        var unit = NewCanonicalUnit(property.PortfolioId, property.Id, property.Name, now);
-        unit.Property = property;
-        return unit;
-    }
-
-    private static Unit NewCanonicalUnit(
-        int portfolioId,
-        int propertyId,
-        string propertyName,
-        DateTime now) => new()
-    {
-        PortfolioId = portfolioId,
-        PropertyId = propertyId,
-        UnitNumber = CanonicalUnitNumber(propertyName),
-        CreatedAt = now,
-        UpdatedAt = now,
-    };
-
-    private static bool IsPropertyUnitType(PropertyType type) =>
-        type is PropertyType.SingleFamily or PropertyType.Condo or PropertyType.Townhome;
-
-    private static string CanonicalUnitNumber(string propertyName)
-    {
-        var value = propertyName.Trim();
-        if (value.Length == 0)
-        {
-            return "Property";
-        }
-
-        return value.Length <= UnitNumberMaxLength ? value : value[..UnitNumberMaxLength];
     }
 
     private async Task EnsurePropertyHasNoHistoryAsync(int portfolioId, int propertyId, CancellationToken ct)

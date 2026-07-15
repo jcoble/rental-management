@@ -57,9 +57,9 @@ const _monthNames = [
 
 String _formatDate(DateTime d) => '${_monthNames[d.month]} ${d.day}, ${d.year}';
 
-String _unitTitle(Unit unit, {required bool propertyIsUnit}) {
+String _unitTitle(Unit unit, {required bool singleRental}) {
   final number = unit.unitNumber.trim();
-  if (propertyIsUnit) return number.isEmpty ? 'Rental space' : number;
+  if (singleRental) return 'Rental overview';
   return number.isEmpty ? 'Unit' : 'Unit $number';
 }
 
@@ -214,11 +214,12 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
   Future<void> _confirmDeleteProperty(BuildContext context) async {
     final property = _property;
     final unitCount = property.unitCount ?? 0;
-    final propertyIsUnit = isPropertyUnitType(property.type);
-    final message = propertyIsUnit && unitCount == 1
-        ? 'This will also remove the generated rental space if it is still empty. If it has leases, work orders, expenses, inspections, applications, appointments, or documents, the server will stop the delete.'
+    final isSingleRental =
+        property.rentalStructure == RentalStructure.singleRental;
+    final message = isSingleRental && unitCount == 1
+        ? 'This also removes the rental’s underlying Unit if it is still empty. If it has leases, work orders, expenses, inspections, applications, appointments, or documents, the server will stop the delete.'
         : unitCount > 0
-        ? 'This property still has $unitCount ${unitCount == 1 ? 'unit' : 'units'}. Remove units first unless this is an empty generated rental space.'
+        ? 'This property still has $unitCount ${unitCount == 1 ? 'unit' : 'units'}. Remove the units before deleting the property.'
         : 'This cannot be undone.';
 
     final confirmed = await showDialog<bool>(
@@ -557,7 +558,8 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
     final dispositionsAsync = ref.watch(
       propertyDispositionsProvider(property.id),
     );
-    final propertyIsUnit = isPropertyUnitType(property.type);
+    final isSingleRental =
+        property.rentalStructure == RentalStructure.singleRental;
     final auth = ref.watch(authControllerProvider);
     final canManageRentals =
         auth is AuthStateAuthenticated &&
@@ -617,17 +619,17 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
               children: [
                 Expanded(
                   child: Text(
-                    propertyIsUnit ? 'Rental space' : 'Units',
+                    isSingleRental ? 'Rental' : 'Units',
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),
-                if (canManageRentals)
+                if (canManageRentals && !isSingleRental)
                   TextButton.icon(
                     onPressed: () => _showAddUnitSheet(context),
                     icon: const Icon(Icons.add, size: 18),
-                    label: Text(propertyIsUnit ? 'Add another' : 'Add unit'),
+                    label: const Text('Add unit'),
                   ),
               ],
             ),
@@ -643,8 +645,8 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     child: Text(
-                      propertyIsUnit
-                          ? 'No rental space yet. Standalone homes get one automatically when the property is created.'
+                      isSingleRental
+                          ? 'This rental is missing its underlying Unit. Return to Guided Setup to finish creating it.'
                           : 'No units yet. Tap "Add unit" to create one.',
                       style: TextStyle(color: colorScheme.onSurfaceVariant),
                     ),
@@ -661,7 +663,7 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
                         (u) => _UnitTile(
                           unit: u,
                           activeLease: _activeLeaseForUnit(leases, u.id),
-                          propertyIsUnit: propertyIsUnit,
+                          singleRental: isSingleRental,
                           onEdit: canManageRentals
                               ? () => _showEditUnitSheet(context, u)
                               : null,
@@ -1166,13 +1168,13 @@ class _KeyValue extends StatelessWidget {
 class _UnitTile extends StatelessWidget {
   const _UnitTile({
     required this.unit,
-    required this.propertyIsUnit,
+    required this.singleRental,
     required this.onEdit,
     this.activeLease,
   });
 
   final Unit unit;
-  final bool propertyIsUnit;
+  final bool singleRental;
   final VoidCallback? onEdit;
 
   /// The unit's active lease, when occupied — enables drill-through to it.
@@ -1205,7 +1207,7 @@ class _UnitTile extends StatelessWidget {
           ),
         ),
         title: Text(
-          _unitTitle(unit, propertyIsUnit: propertyIsUnit),
+          _unitTitle(unit, singleRental: singleRental),
           style: theme.textTheme.bodyMedium?.copyWith(
             fontWeight: FontWeight.w600,
           ),

@@ -176,8 +176,8 @@ public sealed class AtomicNoticeDeliveryHandler
                     || (party.Role == LeaseManagementPartyRole.CoTenant && foundation.IncludeCoTenant)
                     || (party.Role == LeaseManagementPartyRole.Guarantor
                         && foundation.IncludeEligibleGuarantor
-                        && (foundation.Classification != NoticeClassification.Legal
-                            || party.GuarantorLegalNoticeEligible))
+                        && foundation.Classification == NoticeClassification.Legal
+                        && party.GuarantorLegalNoticeEligible)
                     || (party.Role == LeaseManagementPartyRole.Occupant
                         && foundation.IncludeOccupant
                         && foundation.Classification != NoticeClassification.Legal

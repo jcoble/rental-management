@@ -43,6 +43,9 @@
 	import * as Table from '$lib/components/ui/table';
 	import * as Select from '$lib/components/ui/select';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
+	import LeaseScanSignatureChoice, {
+		type LeaseScanReviewDisposition
+	} from '$lib/components/scan/LeaseScanSignatureChoice.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { AlertTriangle, CheckCircle2, X } from '@lucide/svelte';
 
@@ -236,8 +239,11 @@
 	let newPropertyCity = $state('');
 	let newPropertyState = $state('');
 	let newPropertyPostal = $state('');
+	let newPropertyRentalStructure = $state<'SingleRental' | 'MultiRental' | ''>('');
 	let newUnitNumber = $state('');
 	let newPropertyFieldsSeeded = $state(false);
+	let leaseReviewDisposition = $state<LeaseScanReviewDisposition | ''>('');
+	let leaseDocumentTemplateId = $state('');
 
 	function resetLeaseReviewState() {
 		selectedLeasePropertyId = '';
@@ -250,8 +256,11 @@
 		newPropertyCity = '';
 		newPropertyState = '';
 		newPropertyPostal = '';
+		newPropertyRentalStructure = '';
 		newUnitNumber = '';
 		newPropertyFieldsSeeded = false;
+		leaseReviewDisposition = '';
+		leaseDocumentTemplateId = '';
 	}
 
 	// Units scoped to the chosen EXISTING property (required pick). Skipped in create-new mode (the
@@ -514,10 +523,14 @@
 		if (!isLease) return false;
 		if (isCreatingLeaseProperty) {
 			const hasPropertyAnchor = !!(newPropertyAddress.trim() || newPropertyName.trim());
-			return !hasPropertyAnchor || !newUnitNumber.trim();
+			return !hasPropertyAnchor || !newPropertyRentalStructure || !newUnitNumber.trim();
 		}
 		return !selectedLeasePropertyId || !selectedLeaseUnitId;
 	});
+	const leaseSignatureChoiceInvalid = $derived(
+		isLease &&
+			!leaseReviewDisposition
+	);
 
 	// Paid / Unpaid toggle — true = already paid (receipt), false = unpaid bill
 	let isPaid = $state(true);
@@ -982,6 +995,7 @@
 				// so the unit is created under the new property.
 				overrides['propertyId'] = null;
 				overrides['unitId'] = null;
+				overrides['rentalStructure'] = newPropertyRentalStructure;
 				if (newPropertyName.trim()) overrides['propertyName'] = newPropertyName.trim();
 				if (newPropertyAddress.trim()) overrides['propertyAddress'] = newPropertyAddress.trim();
 				if (newPropertyCity.trim()) overrides['propertyCity'] = newPropertyCity.trim();
@@ -994,6 +1008,10 @@
 			}
 			if (selectedTenantId && selectedTenantId !== NO_TENANT) {
 				overrides['tenantId'] = Number(selectedTenantId);
+			}
+			overrides['reviewDisposition'] = leaseReviewDisposition;
+			if (leaseReviewDisposition === 'NeedsSignatures' && leaseDocumentTemplateId) {
+				overrides['documentTemplateId'] = Number(leaseDocumentTemplateId);
 			}
 			return JSON.stringify(overrides);
 		}
@@ -1461,6 +1479,23 @@
 									     reviewer can correct it before the property is created. -->
 									<div class="space-y-2 rounded-md border border-dashed border-border p-2.5" data-testid="scan-lease-new-property">
 										<p class="text-xs font-medium text-muted-foreground">New property details (from the document — edit if needed)</p>
+										<fieldset>
+											<legend class="mb-1 text-xs font-medium text-muted-foreground">
+												How many rentals are at this address? <span class="text-[var(--m3c-error)]">*</span>
+											</legend>
+											<div class="grid gap-2 sm:grid-cols-2">
+												<label class="cursor-pointer rounded-lg border p-3 transition-colors {newPropertyRentalStructure === 'SingleRental' ? 'border-primary bg-primary/10' : 'border-border hover:bg-muted/40'}">
+													<input class="sr-only" type="radio" name="scan-new-property-rental-structure" value="SingleRental" bind:group={newPropertyRentalStructure} data-testid="scan-new-property-single-rental" disabled={reviewControlsDisabled} />
+													<span class="block text-sm font-semibold">One rental</span>
+													<span class="mt-1 block text-xs text-muted-foreground">One house, condo, townhome, or other rentable space.</span>
+												</label>
+												<label class="cursor-pointer rounded-lg border p-3 transition-colors {newPropertyRentalStructure === 'MultiRental' ? 'border-primary bg-primary/10' : 'border-border hover:bg-muted/40'}">
+													<input class="sr-only" type="radio" name="scan-new-property-rental-structure" value="MultiRental" bind:group={newPropertyRentalStructure} data-testid="scan-new-property-multi-rental" disabled={reviewControlsDisabled} />
+													<span class="block text-sm font-semibold">Multiple rentals</span>
+													<span class="mt-1 block text-xs text-muted-foreground">A duplex, apartment building, or other address with separate rentals.</span>
+												</label>
+											</div>
+										</fieldset>
 										<Input data-testid="scan-new-property-name" placeholder="Property name (optional)" bind:value={newPropertyName} disabled={reviewControlsDisabled} />
 										<Input data-testid="scan-new-property-address" placeholder="Street address" bind:value={newPropertyAddress} disabled={reviewControlsDisabled} />
 										<div class="grid grid-cols-3 gap-2">
@@ -1587,6 +1622,17 @@
 									{/if}
 								</div>
 							</div>
+							{/if}
+
+							{#if !isTerminal}
+								<div class="mb-5 rounded-md border border-border bg-muted/20 p-3">
+									<LeaseScanSignatureChoice
+										bind:reviewDisposition={leaseReviewDisposition}
+										bind:documentTemplateId={leaseDocumentTemplateId}
+										propertyId={isCreatingLeaseProperty ? 0 : Number(selectedLeasePropertyId) || 0}
+										disabled={reviewControlsDisabled}
+									/>
+								</div>
 							{/if}
 
 						<!-- Lease terms — editable, mapped from the extracted fields -->
@@ -2087,10 +2133,10 @@
 							<Button
 								data-testid="scan-confirm"
 								onclick={() => confirmMutation.mutate()}
-								disabled={confirmMutation.isPending || isProcessing || data.status === 'Failed' || isTerminal || (isPayment && !selectedTenantAccountId) || (isWorkOrder && selectedPropertyId === NO_PROPERTY) || leaseSelectionInvalid || applicationInvalid || loanInvalid || amountInvalid}
+								disabled={confirmMutation.isPending || isProcessing || data.status === 'Failed' || isTerminal || (isPayment && !selectedTenantAccountId) || (isWorkOrder && selectedPropertyId === NO_PROPERTY) || leaseSelectionInvalid || leaseSignatureChoiceInvalid || applicationInvalid || loanInvalid || amountInvalid}
 								class="flex-1"
 							>
-								{confirmMutation.isPending ? 'Confirming…' : isPayment ? 'Create Payment' : isWorkOrder ? 'Create Work Order' : isLease ? 'Create Lease' : isApplication ? 'Create Applicant' : isLoan ? 'Add Loan' : 'Confirm & Create Expense'}
+								{confirmMutation.isPending ? 'Confirming…' : isPayment ? 'Create Payment' : isWorkOrder ? 'Create Work Order' : isLease ? leaseReviewDisposition === 'NeedsSignatures' ? 'Create Agreement Draft' : leaseReviewDisposition === 'AlreadyFullySigned' ? 'Import Signed Lease' : 'Create Lease' : isApplication ? 'Create Applicant' : isLoan ? 'Add Loan' : 'Confirm & Create Expense'}
 							</Button>
 							<Button
 								data-testid="scan-reject"
@@ -2116,10 +2162,15 @@
 						{#if leaseSelectionInvalid && !isTerminal && !isProcessing}
 							<p class="text-center text-xs text-[var(--warning)]" data-testid="scan-lease-selection-error">
 								{#if isCreatingLeaseProperty}
-									Enter a property address (or name) and a unit number above to create this lease.
+									Choose one or multiple rentals, then enter a property address (or name) and unit number above to create this lease.
 								{:else}
 									Pick a property and a unit above to create this lease.
 								{/if}
+							</p>
+						{/if}
+						{#if leaseSignatureChoiceInvalid && !isTerminal && !isProcessing}
+							<p class="text-center text-xs text-[var(--warning)]" data-testid="scan-lease-signature-choice-error">
+								Tell us whether everyone has already signed this lease.
 							</p>
 						{/if}
 						{#if applicationInvalid && !isTerminal && !isProcessing}

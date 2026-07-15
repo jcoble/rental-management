@@ -11,6 +11,7 @@ public class Property : IAuditable, IPortfolioScoped
     public int? OwnerEntityId { get; set; }
     public string Name { get; set; } = string.Empty;
     public PropertyType PropertyType { get; set; } = PropertyType.MultiFamily;
+    public RentalStructure RentalStructure { get; set; } = RentalStructure.MultiRental;
     public PropertyStatus Status { get; set; } = PropertyStatus.Active;
     public string AddressLine1 { get; set; } = string.Empty;
     public string? AddressLine2 { get; set; }

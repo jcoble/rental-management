@@ -18,7 +18,7 @@ public sealed class CsvImportService : ICsvImportService
 
     // Defined column sets per entity type (the order doubles as the downloadable template header).
     private static readonly string[] TenantColumns = ["firstName", "lastName", "email", "phone"];
-    private static readonly string[] PropertyColumns = ["name", "addressLine1", "addressLine2", "city", "state", "postalCode", "type"];
+    private static readonly string[] PropertyColumns = ["name", "addressLine1", "addressLine2", "city", "state", "postalCode", "type", "rentalStructure", "unitNumber"];
     private static readonly string[] UnitColumns = ["propertyName", "propertyId", "unitNumber", "bedrooms", "bathrooms", "marketRent"];
     private static readonly string[] PaymentColumns = ["relationshipNumber", "propertyName", "unitNumber", "paymentType", "amount", "paidDate", "method", "externalReference", "notes"];
     private static readonly string[] ExpenseColumns = ["propertyName", "category", "description", "amount", "incurredAt", "paidAt", "notes"];
@@ -198,10 +198,29 @@ public sealed class CsvImportService : ICsvImportService
                 else
                     errors.Add($"type '{typeRaw}' is not a valid property type. Allowed: {string.Join(", ", Enum.GetNames<PropertyType>())}.");
             }
+            var structureRaw = NullIfEmpty(Cell("rentalStructure"));
+            if (structureRaw is null)
+            {
+                errors.Add("rentalStructure is required.");
+            }
+            else if (Enum.TryParse<RentalStructure>(structureRaw, true, out var rentalStructure))
+            {
+                request.RentalStructure = rentalStructure;
+            }
+            else
+            {
+                errors.Add($"rentalStructure '{structureRaw}' is invalid. Allowed: {string.Join(", ", Enum.GetNames<RentalStructure>())}.");
+            }
+            var unitNumber = NullIfEmpty(Cell("unitNumber"));
+            if (unitNumber is null)
+                errors.Add("unitNumber is required so the Property and its first explicit Unit are imported together.");
+            else if (unitNumber.Length > 50)
+                errors.Add("unitNumber cannot exceed 50 characters.");
             TryValidate(request, errors);
             return new AtomicPropertyImportRow(
                 row.RowNumber, request.Name, request.AddressLine1, request.AddressLine2,
                 request.City, request.State, request.PostalCode, (int)request.PropertyType,
+                request.RentalStructure.ToString(), unitNumber ?? string.Empty,
                 errors.ToArray());
         }).ToArray();
 
@@ -523,6 +542,8 @@ public sealed class CsvImportService : ICsvImportService
         string State,
         string PostalCode,
         int PropertyType,
+        string RentalStructure,
+        string UnitNumber,
         string[] Errors);
     private sealed record AtomicTenantImportRow(
         int RowNumber,

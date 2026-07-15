@@ -11,6 +11,7 @@ export interface NewRentalUnitOption {
 export interface NewRentalPropertyForm {
 	name: string;
 	type: string;
+	rentalStructure: string;
 	status: string;
 	addressLine1: string;
 	addressLine2: string;
@@ -48,6 +49,7 @@ export function createNewRentalPropertyForm(): NewRentalPropertyForm {
 	return {
 		name: '',
 		type: 'SingleFamily',
+		rentalStructure: '',
 		status: 'Active',
 		addressLine1: '',
 		addressLine2: '',

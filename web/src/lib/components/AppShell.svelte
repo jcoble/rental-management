@@ -25,7 +25,6 @@
 		History,
 		BarChart3,
 		MessageSquare,
-		CreditCard,
 		ClipboardList,
 		Home,
 		BellRing,
@@ -122,7 +121,7 @@
 			icon: Wallet,
 			items: [
 				{ href: '/accounting', label: 'Money', icon: Calculator },
-				{ href: '/banking', label: 'Banking', icon: Landmark },
+				{ href: '/banking', label: 'Reconciliation & banking', icon: Landmark },
 				{ href: '/deposits', label: 'Security Deposits', icon: PiggyBank },
 				{ href: '/reports', label: 'Reports', icon: BarChart3 }
 			]
@@ -261,8 +260,10 @@
 	let leasingUser = $derived(activeExperience === 'Leasing');
 	let technicianUser = $derived(activeExperience === 'Maintenance');
 	let relationshipUser = $derived(portalUser || ownerUser);
-	const userSecurityHref = $derived(portalUser ? '/portal/security' : '/settings/security');
-	const canOpenUserSecurity = $derived(!ownerUser);
+	const userSecurityHref = $derived(
+		portalUser ? '/portal/security' : ownerUser ? '/owner/security' : '/settings/security'
+	);
+	const canOpenUserSecurity = $derived(true);
 	const homeHref = $derived(currentAccess ? (safeLandingForAccess(currentAccess) ?? '/logout') : '/');
 	const canOpenGuidedSetup = $derived(
 		canAccessRoute('/onboarding', activeExperience, activeCapabilities)
@@ -287,18 +288,23 @@
 	);
 
 	const portalNavItems: NavItem[] = [
-		{ href: '/portal', label: 'Dashboard', icon: Home },
-		{ href: '/portal/messages', label: 'Messages', icon: MessageSquare },
-		{ href: '/portal/notifications', label: 'Notifications', icon: BellRing },
-		{ href: '/settings/notifications/my-alerts', label: 'My alerts', icon: BellRing },
+		{ href: '/portal', label: 'Home', icon: Home },
+		{ href: '/portal/account', label: 'Account & lease', icon: FileText },
 		{ href: '/portal/maintenance', label: 'Maintenance', icon: Wrench },
-		{ href: '/portal/payments', label: 'Payments', icon: CreditCard },
-		{ href: '/portal/lease', label: 'Lease', icon: FileText },
-		{ href: '/portal/appointments', label: 'Appointments', icon: Calendar }
+		{ href: '/portal/messages', label: 'Messages', icon: MessageSquare },
+		{ href: '/portal/profile', label: 'Profile', icon: UserRound }
 	];
 
 	const portalUtilityItems: NavItem[] = [
-		{ href: '/portal/security', label: 'Security', icon: Shield }
+		{ href: '/portal/payments', label: 'Account & lease', icon: FileText },
+		{ href: '/portal/lease', label: 'Account & lease', icon: FileText },
+		{ href: '/portal/notifications', label: 'Notifications', icon: BellRing },
+		{ href: '/portal/appointments', label: 'Appointments', icon: Calendar },
+		{ href: '/portal/security', label: 'Profile', icon: Shield },
+		{ href: '/settings/notifications/my-alerts', label: 'Profile', icon: BellRing }
+	];
+	const ownerUtilityItems: NavItem[] = [
+		{ href: '/owner/security', label: 'Security', icon: Shield }
 	];
 	const ownerNavItems: NavItem[] = [
 		{ href: '/owner', label: 'Overview', icon: LayoutDashboard },
@@ -314,17 +320,14 @@
 		{ href: '/leasing/rentals', label: 'Properties, units & listings', icon: Home },
 		{ href: '/leasing/calendar', label: 'Showings', icon: Calendar },
 		{ href: '/leasing/inbox', label: 'Inbox', icon: MessageSquare },
-		{ href: '/settings/notifications/my-alerts', label: 'My alerts', icon: BellRing },
-		{ href: '/settings/notifications/team-routing', label: 'Team routing', icon: Users },
-		{ href: '/settings/notifications/tenant-notices', label: 'Tenant notices', icon: BellRing }
+		{ href: '/notices', label: 'Tenant notices', icon: BellRing },
+		{ href: '/settings/notifications/my-alerts', label: 'My alerts', icon: BellRing }
 	];
 	const technicianNavItems: NavItem[] = [
 		{ href: '/my-work', label: 'My work', icon: Wrench },
 		{ href: '/my-schedule', label: 'Schedule', icon: Clock3 },
 		{ href: '/assignment-inbox', label: 'Inbox', icon: MessageSquare },
-		{ href: '/settings/notifications/my-alerts', label: 'My alerts', icon: BellRing },
-		{ href: '/settings/notifications/team-routing', label: 'Team routing', icon: Users },
-		{ href: '/settings/notifications/tenant-notices', label: 'Tenant notices', icon: BellRing }
+		{ href: '/settings/notifications/my-alerts', label: 'My alerts', icon: BellRing }
 	];
 	const commandCenterTitleItem: NavItem = { href: '/units/', label: 'Command Center', icon: Home };
 
@@ -364,7 +367,7 @@
 		portalUser
 				? [...visiblePortalNavItems, ...portalUtilityItems]
 				: ownerUser
-					? visibleOwnerNavItems
+					? [...visibleOwnerNavItems, ...ownerUtilityItems]
 					: leasingUser
 						? [...visibleLeasingNavItems, { href: '/profile', label: 'Profile', icon: UserRound }]
 						: technicianUser

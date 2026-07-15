@@ -4,6 +4,8 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:rental_command/core/auth/auth_controller.dart';
+import 'package:rental_command/core/auth/auth_models.dart';
 import 'package:rental_command/core/models/models.dart';
 import 'package:rental_command/features/maintenance/work_orders_repository.dart';
 import 'package:rental_command/features/properties/properties_repository.dart';
@@ -23,6 +25,10 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
+            authControllerProvider.overrideWith(
+              () =>
+                  _StaticAuthController(_managementAuthority({'work.manage'})),
+            ),
             workOrdersRepositoryProvider.overrideWithValue(workOrdersRepo),
             propertiesRepositoryProvider.overrideWithValue(
               _FakePropertiesRepository(),
@@ -43,7 +49,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byTooltip('Open quick actions'));
+      await tester.tap(find.byTooltip('Scan / Add'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('New work order'));
       await tester.pumpAndSettle();
@@ -87,6 +93,47 @@ void main() {
   );
 }
 
+AuthStateAuthenticated _managementAuthority(Set<String> capabilities) {
+  const experience = WorkspaceExperience.management;
+  return AuthStateAuthenticated(
+    const AuthUser(
+      id: 1,
+      email: 'manager@example.test',
+      displayName: 'Test manager',
+      emailVerified: true,
+    ),
+    AccessEnvelope(
+      identity: const AccessIdentity(userId: 1, displayName: 'Test manager'),
+      selectedContext: const SelectedAccessContext(
+        accessContextId: 1,
+        portfolioId: 1,
+        workspaceName: 'Test workspace',
+        accessRevision: 1,
+        activeExperience: experience,
+      ),
+      defaultExperience: experience,
+      availableExperiences: const [experience],
+      assignments: const [],
+      navigation: [
+        NavigationCapabilities(
+          experience: experience,
+          capabilityKeys: capabilities.toList(growable: false),
+        ),
+      ],
+    ),
+    activeExperience: experience,
+  );
+}
+
+class _StaticAuthController extends AuthController {
+  _StaticAuthController(this.initialState);
+
+  final AuthState initialState;
+
+  @override
+  AuthState build() => initialState;
+}
+
 UnitDashboard _unitDashboard() {
   return UnitDashboard(
     unit: Unit(
@@ -124,6 +171,7 @@ Property _property() {
     portfolioId: 1,
     name: 'Maple Ridge',
     type: 'MultiFamily',
+    rentalStructure: RentalStructure.multiRental,
     status: 'Active',
     addressLine1: '123 Main St',
     city: 'Akron',

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { CAPABILITY } from '$lib/auth/experience-policy';
+import { CAPABILITY } from '../auth/experience-policy.ts';
 import { canUseUnstructuredVoiceCapture, scanDocumentTypesForCapabilities } from './scan-access.ts';
 
 describe('role-aware scanning', () => {

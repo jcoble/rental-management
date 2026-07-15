@@ -1,10 +1,12 @@
 import { ownerEntityIdForOnboarding } from './owner-selection.ts';
+import type { RentalStructure } from '../types/index.ts';
 
 type OwnerLike = { id: number | string };
 type PropertyLike = {
 	id?: number | string;
 	name?: string | null;
 	type?: string | null;
+	rentalStructure?: RentalStructure | null;
 	ownerEntityId?: number | string | null;
 	addressLine1?: string | null;
 	addressLine2?: string | null;
@@ -18,6 +20,7 @@ export const NEW_ONBOARDING_PROPERTY_VALUE = '__new_property__';
 export type OnboardingPropertyForm = {
 	name: string;
 	type: string;
+	rentalStructure: RentalStructure | '';
 	addressLine1: string;
 	addressLine2: string;
 	city: string;
@@ -53,6 +56,7 @@ export function buildOnboardingPropertyPayload(input: {
 	return {
 		name: propertyForm.name,
 		type: propertyForm.type,
+		rentalStructure: propertyForm.rentalStructure,
 		addressLine1: propertyForm.addressLine1,
 		addressLine2: propertyForm.addressLine2,
 		city: propertyForm.city,
@@ -86,6 +90,7 @@ export function onboardingPropertyFormFromProperty(property: PropertyLike): Onbo
 	return {
 		name: property.name ?? '',
 		type: property.type ?? 'SingleFamily',
+		rentalStructure: property.rentalStructure ?? '',
 		addressLine1: property.addressLine1 ?? '',
 		addressLine2: property.addressLine2 ?? '',
 		city: property.city ?? '',

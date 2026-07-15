@@ -21,7 +21,7 @@ This specification replaces those shapes with the following boundaries:
 - **TenantAccount** owns all resident charges, receipts, credits, adjustments, refunds, and account history for the LeaseManagement episode.
 - **Tenant** remains the person/contact record. Its role in a household is effective-dated on `LeaseManagementParty`; it is not copied onto an agreement as mutable membership.
 - A legal agreement's state and Unit occupancy are database read models calculated from durable facts. Neither is a writable `Status` column.
-- `SingleRental` and `MultiRental` never appear in this schema. They remain presentation/onboarding choices over the same Property, Unit, and lease tables.
+- **Property.RentalStructure** persists `SingleRental` or `MultiRental` as a presentation/onboarding setting over the same Property, Unit, and lease tables. It never selects a different business entity, calculation, API, or lease model. A `SingleRental` still owns exactly one explicit Unit row.
 
 All identifiers below use the existing integer domain-key convention unless explicitly marked `bigint`. All instants are `timestamp with time zone` and UTC in .NET. Legal/calendar dates are PostgreSQL `date`. Money is `numeric(18,2)`. Currency is uppercase ISO-4217 `varchar(3)`. Enums are stored as readable strings with database `CHECK` constraints and map through EF string conversions.
 
