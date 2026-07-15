@@ -11,6 +11,7 @@
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	let submitting = $state(false);
+	let submissionError = $state('');
 
 	// Field values are bound so the dev quick-fill button below can populate them.
 	let email = $state('');
@@ -24,6 +25,7 @@
 	let resendingVerification = $state(false);
 	let resendSuccess = $state(false);
 	const emailNotVerified = $derived(form?.emailNotVerified === true);
+	const visibleLoginError = $derived(submissionError || form?.error || '');
 
 	// Repopulate the email after a failed submit (the action echoes it back).
 	$effect(() => {
@@ -83,9 +85,21 @@
 				data-testid="login-form"
 				use:enhance={() => {
 					submitting = true;
-					return async ({ update }) => {
-						await update();
-						submitting = false;
+					submissionError = '';
+					return async ({ result, update }) => {
+						try {
+							if (result.type === 'error') {
+								submissionError =
+									'Rental Command could not complete sign-in. Please try again or contact support.';
+								return;
+							}
+							await update();
+						} catch {
+							submissionError =
+								'Rental Command could not complete sign-in. Please try again or contact support.';
+						} finally {
+							submitting = false;
+						}
 					};
 				}}
 				class="space-y-4"
@@ -155,7 +169,7 @@
 					/>
 				</div>
 
-				{#if form?.error}
+				{#if visibleLoginError}
 					{#if emailNotVerified}
 						<div
 							class="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-3 text-sm"
@@ -194,9 +208,10 @@
 						<div
 							class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
 							role="alert"
+							aria-live="polite"
 							data-testid="login-error"
 						>
-							{form.error}
+							{visibleLoginError}
 						</div>
 					{/if}
 				{/if}

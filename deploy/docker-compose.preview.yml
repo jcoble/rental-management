@@ -46,11 +46,13 @@ services:
       App__WebBaseUrl: ${WEB_ORIGIN}
       Upload__BasePath: /var/lib/rentalcommand/uploads
       DataProtection__KeysPath: /var/lib/rentalcommand/dataprotection-keys
-      Assistant__ApiKey: ""
-      GooglePlaces__ApiKey: ""
+      Assistant__Provider: ${ASSISTANT_PROVIDER:-openai}
+      Assistant__ModelId: ${ASSISTANT_MODEL_ID:-gpt-4o}
+      Assistant__ApiKey: ${ASSISTANT_API_KEY:-}
+      GooglePlaces__ApiKey: ${GOOGLE_PLACES_API_KEY:-}
       Stripe__SecretKey: ""
-      Authentication__Google__ClientId: ""
-      Authentication__Google__ClientSecret: ""
+      Authentication__Google__ClientId: ${GOOGLE_CLIENT_ID:-}
+      Authentication__Google__ClientSecret: ${GOOGLE_CLIENT_SECRET:-}
       Notifications__NotifyTenants: "false"
     volumes:
       - uploads:/var/lib/rentalcommand/uploads
@@ -75,7 +77,9 @@ services:
       ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=rentalcommand;Username=rentalcommand_engine;Password=${ENGINE_DB_PASSWORD:?ENGINE_DB_PASSWORD is required}
       Upload__BasePath: /var/lib/rentalcommand/uploads
       DataProtection__KeysPath: /var/lib/rentalcommand/dataprotection-keys
-      Assistant__ApiKey: ""
+      Assistant__Provider: ${ASSISTANT_PROVIDER:-openai}
+      Assistant__ModelId: ${ASSISTANT_MODEL_ID:-gpt-4o}
+      Assistant__ApiKey: ${ASSISTANT_API_KEY:-}
       Stripe__SecretKey: ""
       Notifications__NotifyTenants: "false"
       Notifications__EnableRentCharges: "false"
@@ -100,7 +104,7 @@ services:
       PORT: "3000"
       ORIGIN: ${WEB_ORIGIN}
       API_URL: http://api:8080
-      PUBLIC_GOOGLE_CLIENT_ID: ""
+      PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
     depends_on: [api]
     networks: [edge]
     mem_limit: 512m
