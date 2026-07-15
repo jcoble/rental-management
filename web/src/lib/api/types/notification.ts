@@ -88,6 +88,11 @@ export interface TeamRoutingRuleRecipientResponse {
 
 export interface TeamRoutingRecipientPreview
   extends TeamRoutingRuleRecipientResponse {
+  phoneNumber: string | null;
+  enableInApp: boolean;
+  enableMobilePush: boolean;
+  enableEmail: boolean;
+  enableSms: boolean;
   propertyId: number | null;
   scope: string;
   isAdministratorFallback: boolean;
@@ -188,6 +193,33 @@ export interface CreateWorkspaceNoticeTemplateVersionRequest {
   confirmJurisdictionReviewed: boolean;
 }
 
+export interface NoticeMergeFieldHelpResponse {
+  key: string;
+  token: string;
+  label: string;
+  description: string;
+  example: string;
+}
+
+export interface TenantNoticeRecipientPreviewResponse {
+  leaseManagementPartyId: number;
+  tenantId: number;
+  displayName: string;
+  role: "PrimaryTenant" | "CoTenant" | "Guarantor" | "Occupant";
+  eligible: boolean;
+  availableChannels: NoticeDeliveryChannel[];
+  email: string | null;
+  phone: string | null;
+  reason: string;
+}
+
+export type NoticeDeliveryStatus =
+  | "Queued"
+  | "Accepted"
+  | "Retrying"
+  | "Sent"
+  | "PermanentlyFailed";
+
 export interface NoticeDeliveryStatusResponse {
   evidenceId: number;
   renderedNoticeId: number;
@@ -197,7 +229,7 @@ export interface NoticeDeliveryStatusResponse {
   recipientRole: "PrimaryTenant" | "CoTenant" | "Guarantor" | "Occupant";
   channel: NoticeDeliveryChannel;
   destination: string;
-  status: "Queued" | "Retrying" | "Accepted" | "Delivered" | "Failed";
+  status: NoticeDeliveryStatus;
   attemptCount: number;
   createdAtUtc: string;
   lastAttemptAtUtc: string | null;

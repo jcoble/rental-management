@@ -341,15 +341,15 @@ class WorkOrdersRepository {
     }
   }
 
-  Future<void> updateAssignedWorkOrder(
+  Future<void> updateTechnicianAssignment(
     int id,
     Map<String, dynamic> data,
   ) async {
     try {
       await IdempotentMutation.run(
-        'work-order:assigned-update:$id:${jsonEncode(data)}',
+        'technician:assignment-update:$id:${jsonEncode(data)}',
         (key) => _dio.patch<Map<String, dynamic>>(
-          '/work-orders/$id/assigned-update',
+          '/technician/assignments/$id',
           data: data,
           options: Options(headers: {'Idempotency-Key': key}),
         ),
@@ -579,7 +579,7 @@ class WorkOrderDetailNotifier extends Notifier<AsyncValue<WorkOrderDetail>> {
       if (auth is AuthStateAuthenticated &&
           auth.capabilities.contains('maintenance.assigned-work.update') &&
           !auth.capabilities.contains('work.manage')) {
-        await _repo.updateAssignedWorkOrder(_id, {
+        await _repo.updateTechnicianAssignment(_id, {
           'status': status,
           'expectedUpdatedAtUtc': state.value?.workOrder.updatedAt
               .toUtc()

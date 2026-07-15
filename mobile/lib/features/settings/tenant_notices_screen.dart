@@ -510,6 +510,7 @@ class _TenantTemplateEditorSheetState
   late final TextEditingController _body;
   late final TextEditingController _jurisdiction;
   late bool _confirmed;
+  late Future<List<NoticeMergeFieldHelp>> _mergeFields;
   bool _saving = false;
   bool _restoring = false;
 
@@ -523,6 +524,9 @@ class _TenantTemplateEditorSheetState
       text: policy.templateJurisdictionCode ?? '',
     );
     _confirmed = policy.templateJurisdictionReviewedAtUtc != null;
+    _mergeFields = ref
+        .read(notificationFoundationRepositoryProvider)
+        .listTenantNoticeMergeFields(policy.templateSystemKey);
   }
 
   @override
@@ -633,10 +637,65 @@ class _TenantTemplateEditorSheetState
             ),
           ),
           const SizedBox(height: 8),
-          Text(
-            'Merge fields such as {{tenant_name}} and {{property_address}} '
-            'fill from the notice\'s Lease Management context.',
-            style: Theme.of(context).textTheme.bodySmall,
+          FutureBuilder<List<NoticeMergeFieldHelp>>(
+            future: _mergeFields,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  title: Text('Loading available merge fields…'),
+                );
+              }
+              if (snapshot.hasError) {
+                return ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Merge-field help is unavailable.'),
+                  trailing: TextButton(
+                    onPressed: () => setState(() {
+                      _mergeFields = ref
+                          .read(notificationFoundationRepositoryProvider)
+                          .listTenantNoticeMergeFields(
+                            policy.templateSystemKey,
+                          );
+                    }),
+                    child: const Text('Retry'),
+                  ),
+                );
+              }
+              return Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Available merge fields',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 8),
+                      for (final field in snapshot.data ?? const [])
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('${field.label}  ${field.token}'),
+                              Text(
+                                '${field.description} Example: ${field.example}',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              );
+            },
           ),
           if (legal) ...[
             const SizedBox(height: 16),
@@ -757,7 +816,10 @@ class _DeliveryCard extends StatelessWidget {
                     style: theme.textTheme.titleSmall,
                   ),
                 ),
-                _StatusChip(label: delivery.status),
+                _StatusChip(
+                  label: _deliveryStatusLabel(delivery.status),
+                  status: delivery.status,
+                ),
               ],
             ),
             const SizedBox(height: 8),
@@ -916,19 +978,48 @@ class _NoticeError extends StatelessWidget {
 }
 
 class _StatusChip extends StatelessWidget {
-  const _StatusChip({required this.label});
+  const _StatusChip({required this.label, required this.status});
 
   final String label;
+  final String status;
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-    decoration: BoxDecoration(
-      color: Theme.of(context).colorScheme.secondaryContainer,
-      borderRadius: BorderRadius.circular(999),
-    ),
-    child: Text(label, style: Theme.of(context).textTheme.labelSmall),
-  );
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = switch (status) {
+      'Sent' => (
+        theme.colorScheme.primaryContainer,
+        theme.colorScheme.onPrimaryContainer,
+      ),
+      'Accepted' => (
+        theme.colorScheme.secondaryContainer,
+        theme.colorScheme.onSecondaryContainer,
+      ),
+      'Retrying' => (
+        theme.colorScheme.tertiaryContainer,
+        theme.colorScheme.onTertiaryContainer,
+      ),
+      'PermanentlyFailed' => (
+        theme.colorScheme.errorContainer,
+        theme.colorScheme.onErrorContainer,
+      ),
+      _ => (
+        theme.colorScheme.surfaceContainerHighest,
+        theme.colorScheme.onSurfaceVariant,
+      ),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: colors.$1,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: theme.textTheme.labelSmall?.copyWith(color: colors.$2),
+      ),
+    );
+  }
 }
 
 String _automationLabel(String key) => switch (key) {
@@ -983,14 +1074,21 @@ String _channelLabel(String channel) => switch (channel) {
   _ => channel,
 };
 
+String _deliveryStatusLabel(String status) => switch (status) {
+  'PermanentlyFailed' => 'Permanently failed',
+  _ => status,
+};
+
 String _deliveryStatusExplanation(String status) => switch (status) {
   'Queued' => 'Waiting for the delivery worker to make the first attempt.',
   'Accepted' =>
     'The provider accepted the message; final delivery is not confirmed yet.',
   'Retrying' =>
-    'A provider attempt failed temporarily and another attempt is scheduled.',
-  'Delivered' => 'The provider confirmed delivery.',
-  'Failed' => 'Delivery retries ended. Review the error and recipient details.',
+    'A temporary provider error occurred. Rental Command will try again automatically.',
+  'Sent' => 'Delivery completed successfully.',
+  'PermanentlyFailed' =>
+    'No more retries will run. Review the error and recipient contact details, '
+        'correct the issue, then resend the notice.',
   _ => 'Current status reported by the delivery provider.',
 };
 

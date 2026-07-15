@@ -66,12 +66,6 @@ export const workOrders = {
 				{ headers: { 'Idempotency-Key': key } }
 			)
 		),
-	updateAssigned: (id: number, data: Record<string, unknown>) =>
-		idempotentMutation(`work-order:assigned-update:${id}:${JSON.stringify(data)}`, (key) =>
-			api.patch(`/work-orders/${id}/assigned-update`, data, {
-				headers: { 'Idempotency-Key': key }
-			})
-		),
 	responsibilities: (id: number) =>
 		api.get<WorkOrderResponsibility[]>(`/work-orders/${id}/responsibilities`),
 	responsibilityCandidates: (id: number, search = '') =>

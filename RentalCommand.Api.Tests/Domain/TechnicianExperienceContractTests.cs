@@ -63,15 +63,17 @@ public sealed class TechnicianExperienceContractTests
     }
 
     [Fact]
-    public void AssignmentDetailDto_OmitsManagementIdentityFinancialVendorAndScanFields()
+    public void AssignmentDetailDto_IncludesScanRoutingContext_ButOmitsManagementFinancialAndVendorFields()
     {
         var names = typeof(TechnicianAssignmentDetail).GetProperties()
             .Select(property => property.Name)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        names.Should().Contain(["Address", "Unit", "AccessInstructions", "Timeline", "Entries", "Messages"]);
+        names.Should().Contain([
+            "PropertyId", "UnitId", "Address", "Unit", "AccessInstructions", "Timeline", "Entries", "Messages",
+        ], "property and unit identity are contextual scan-routing metadata, not management authority");
         names.Should().NotContain([
-            "PortfolioId", "PropertyId", "UnitId", "TenantId", "LeaseId", "LeaseManagementId",
+            "PortfolioId", "TenantId", "LeaseId", "LeaseManagementId",
             "VendorId", "VendorName", "OwnerId", "EstimatedCost", "ActualCost", "Expenses",
             "ScanFileId", "ScanText", "HasScan",
         ]);
@@ -87,11 +89,32 @@ public sealed class TechnicianExperienceContractTests
             .Where(method => method.DeclaringType == typeof(TechnicianController))
             .ToArray();
         actions.Select(method => method.Name).Should().BeEquivalentTo(
-            "List", "Schedule", "Inbox", "Detail", "RecordEntry", "SendMessage", "MarkConversationRead");
+            "List", "Schedule", "Inbox", "Detail", "UpdateAssignment", "RecordEntry", "SendMessage",
+            "MarkConversationRead");
         actions.SelectMany(method => method.GetParameters()).Select(parameter => parameter.ParameterType)
             .Should().NotContain([typeof(CreateWorkOrderRequest), typeof(UpdateWorkOrderRequest)]);
         actions.SelectMany(method => method.GetCustomAttributes(typeof(HttpDeleteAttribute), inherit: true))
             .Should().BeEmpty();
+    }
+
+    [Fact]
+    public void TechnicianUpdate_UsesCanonicalAssignmentRouteAndAtomicAssignedWorkCommand()
+    {
+        var action = typeof(TechnicianController).GetMethod(nameof(TechnicianController.UpdateAssignment));
+        action.Should().NotBeNull();
+        action!.GetCustomAttributes(typeof(HttpPatchAttribute), inherit: true)
+            .Cast<HttpPatchAttribute>()
+            .Should().ContainSingle(attribute =>
+                attribute.Template == "assignments/{workOrderId:int}");
+
+        var repositoryRoot = FindRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(repositoryRoot, "RentalCommand.Api",
+            "Controllers", "TechnicianController.cs"));
+        source.Should().Contain("new UpdateAssignedWorkOrderCommand(");
+        source.Should().Contain("new AtomicCommandIdentity(");
+        source.Should().Contain("\"assigned-work-order.update\"");
+        source.Should().Contain("UpdateAssignedWorkOrderOutcome.Stale");
+        source.Should().NotContain("assigned-update");
     }
 
     [Fact]

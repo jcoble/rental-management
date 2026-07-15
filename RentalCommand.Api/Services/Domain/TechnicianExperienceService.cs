@@ -98,7 +98,7 @@ public sealed class TechnicianExperienceService : ITechnicianExperienceService
         return ordered.ThenBy(work => work.Id)
             .Skip(query.NormalizedSkip).Take(query.NormalizedTake)
             .Select(work => new TechnicianAssignmentReadRow(
-                work.Id, work.Title, work.Category, work.Status,
+                work.Id, work.PropertyId, work.UnitId, work.Title, work.Category, work.Status,
                 work.Property!.AddressLine1, work.Property.AddressLine2, work.Property.City,
                 work.Property.State, work.Property.PostalCode,
                 work.Unit != null ? work.Unit.UnitNumber : null,
@@ -114,7 +114,7 @@ public sealed class TechnicianExperienceService : ITechnicianExperienceService
         var seed = await AuthorizedAssignments(scope, CapabilityKeys.AssignedWorkRead)
             .Where(work => work.Id == workOrderId)
             .Select(work => new AssignmentDetailSeed(
-                work.Id, work.Title, work.Description, work.Category, work.Status, work.RequestedAt,
+                work.Id, work.PropertyId, work.UnitId, work.Title, work.Description, work.Category, work.Status, work.RequestedAt,
                 work.ScheduledFor, work.ScheduledWindowEnd, work.CompletedAt, work.UpdatedAt,
                 work.Property!.AddressLine1, work.Property.AddressLine2, work.Property.City,
                 work.Property.State, work.Property.PostalCode,
@@ -162,7 +162,8 @@ public sealed class TechnicianExperienceService : ITechnicianExperienceService
                 statusEvent.ChangedByLabel, statusEvent.CreatedAtUtc))
             .ToListAsync(ct);
 
-        return new TechnicianAssignmentDetail(seed.Id, seed.Title, seed.Description, seed.Category,
+        return new TechnicianAssignmentDetail(seed.Id, seed.PropertyId, seed.UnitId,
+            seed.Title, seed.Description, seed.Category,
             seed.Status, seed.RequestedAt, seed.ScheduledFor, seed.ScheduledWindowEnd, seed.CompletedAt,
             seed.UpdatedAt, Address(seed.Address1, seed.Address2, seed.City, seed.State, seed.PostalCode),
             seed.Unit, seed.AccessInstructions, seed.ContactName, seed.ContactPhone, seed.ContactEmail,
@@ -175,7 +176,7 @@ public sealed class TechnicianExperienceService : ITechnicianExperienceService
             _db, scope, [capability], now ?? _timeProvider.GetUtcNow().UtcDateTime);
 
     private static TechnicianAssignmentListItem ToListItem(TechnicianAssignmentReadRow row) => new(
-        row.Id, row.Title, row.Category, row.Status,
+        row.Id, row.PropertyId, row.UnitId, row.Title, row.Category, row.Status,
         Address(row.Address1, row.Address2, row.City, row.State, row.PostalCode), row.Unit,
         row.ScheduledFor, row.ScheduledWindowEnd, row.UpdatedAt, row.UnreadMessageCount);
 
@@ -184,11 +185,12 @@ public sealed class TechnicianExperienceService : ITechnicianExperienceService
             .Where(value => !string.IsNullOrWhiteSpace(value)));
 
     internal sealed record TechnicianAssignmentReadRow(
-        int Id, string Title, string Category, WorkOrderStatus Status,
+        int Id, int PropertyId, int? UnitId, string Title, string Category, WorkOrderStatus Status,
         string Address1, string? Address2, string City, string State, string PostalCode, string? Unit,
         DateTime? ScheduledFor, DateTime? ScheduledWindowEnd, DateTime UpdatedAt, int UnreadMessageCount);
 
-    private sealed record AssignmentDetailSeed(int Id, string Title, string Description, string Category,
+    private sealed record AssignmentDetailSeed(int Id, int PropertyId, int? UnitId,
+        string Title, string Description, string Category,
         WorkOrderStatus Status, DateTime RequestedAt, DateTime? ScheduledFor, DateTime? ScheduledWindowEnd,
         DateTime? CompletedAt, DateTime UpdatedAt, string Address1, string? Address2, string City,
         string State, string PostalCode, string? Unit, string? AccessInstructions, string? ContactName,

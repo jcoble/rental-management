@@ -238,10 +238,11 @@ export const ROUTE_ACCESS_RULES: readonly RouteAccessRule[] = [
 	{ prefix: '/vendors', experiences: ['Management'], anyCapabilities: [CAPABILITY.workManage] },
 	{
 		prefix: '/messages',
-		experiences: ['Management'],
+		experiences: ['Management', 'Leasing', 'Maintenance'],
 		anyCapabilities: [
 			CAPABILITY.rentalsRead,
-			CAPABILITY.leasingOnboardingManage
+			CAPABILITY.leasingOnboardingManage,
+			CAPABILITY.assignedWorkConverse
 		]
 	},
 	{

@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { createMutation, useQueryClient } from '@tanstack/svelte-query';
 	import { notices } from '$lib/api/endpoints/notices';
+	import { notifications } from '$lib/api/endpoints/notifications';
+	import type { TenantNoticeRecipientPreviewResponse } from '$lib/api/types/notification';
 	import type { NoticeDraft } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
@@ -9,7 +11,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { AlertCircle, BellRing, Send, Trash2 } from '@lucide/svelte';
+	import { AlertCircle, BellRing, Eye, Send, Trash2 } from '@lucide/svelte';
 
 	let {
 		open = $bindable(false),
@@ -32,6 +34,8 @@
 	let forcedNoticeLabel = $state<string | null>(null);
 	let noticeChannels = $state<Record<number, { portal: boolean; email: boolean; sms: boolean }>>({});
 	let noticeEdits = $state<Record<number, { subject: string; body: string }>>({});
+	let recipientPreviews = $state<Record<number, TenantNoticeRecipientPreviewResponse[]>>({});
+	let previewingDraftId = $state<number | null>(null);
 	let lastOpenKey: string | null = null;
 
 	const hasNoticeScope = $derived(recipientTenantId > 0);
@@ -109,7 +113,26 @@
 		noticeDrafts = [];
 		noticeChannels = {};
 		noticeEdits = {};
+		recipientPreviews = {};
+		previewingDraftId = null;
 		forcedNoticeLabel = null;
+	}
+
+	async function previewRecipients(draft: NoticeDraft) {
+		previewingDraftId = draft.id;
+		try {
+			recipientPreviews = {
+				...recipientPreviews,
+				[draft.id]: await notifications.tenantNotices.previewRecipients(
+					draft.noticeType,
+					draft.leaseManagementId
+				)
+			};
+		} catch (error) {
+			showError(apiErrorMessage(error));
+		} finally {
+			previewingDraftId = null;
+		}
 	}
 
 	function generateRequest(noticeType?: string) {
@@ -294,6 +317,19 @@
 						</div>
 
 						{#if editable}
+							<div class="mt-3 rounded-md border border-border/70 bg-muted/30 p-3">
+								<div class="flex flex-wrap items-center justify-between gap-2">
+									<div><p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Effective recipients</p><p class="mt-1 text-xs text-muted-foreground">Preview who is currently eligible and which destinations are actually available.</p></div>
+									<Button variant="outline" size="sm" disabled={previewingDraftId === draft.id} onclick={() => previewRecipients(draft)}><Eye class="h-4 w-4" />{previewingDraftId === draft.id ? 'Loading…' : 'Preview recipients'}</Button>
+								</div>
+								{#if recipientPreviews[draft.id]}
+									<div class="mt-3 space-y-2">
+										{#each recipientPreviews[draft.id] as recipient (recipient.leaseManagementPartyId)}
+											<div class="rounded-md bg-background p-3"><div class="flex flex-wrap items-center justify-between gap-2"><p class="text-sm font-medium">{recipient.displayName} · {recipient.role}</p><span class={`text-xs font-medium ${recipient.eligible ? 'text-emerald-700 dark:text-emerald-300' : 'text-muted-foreground'}`}>{recipient.eligible ? 'Eligible' : 'Excluded'}</span></div><p class="mt-1 text-xs">Available channels: {recipient.availableChannels.length > 0 ? recipient.availableChannels.join(', ') : 'None'}</p><p class="mt-1 text-xs text-muted-foreground">Email: {recipient.email || 'Not available'} · Phone: {recipient.phone || 'Not available'}</p><p class="mt-1 text-xs text-muted-foreground">{recipient.reason}</p></div>
+										{/each}
+									</div>
+								{/if}
+							</div>
 							<div class="mt-3 flex flex-wrap items-center gap-4">
 								<span class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Send via</span>
 								<label class="flex items-center gap-2 text-sm" data-testid="tenant-notice-channel-portal-{draft.id}">

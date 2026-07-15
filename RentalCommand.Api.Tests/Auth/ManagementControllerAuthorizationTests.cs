@@ -37,9 +37,9 @@ public sealed class ManagementControllerAuthorizationTests
     [Fact]
     public void AssignedWorkUpdate_IsNotBlockedByTheManagementShellPolicy()
     {
-        typeof(AssignedWorkOrderUpdateController).Should()
+        typeof(TechnicianController).Should()
             .BeDerivedFrom<AuthenticatedPortfolioControllerBase>();
-        typeof(AssignedWorkOrderUpdateController).Should()
+        typeof(TechnicianController).Should()
             .NotBeDerivedFrom<ManagementControllerBase>(
                 "assigned-work-only technicians are intentionally denied the general Management shell");
     }

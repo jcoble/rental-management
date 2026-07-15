@@ -29,6 +29,16 @@ public enum NoticeDeliveryChannel
     Sms,
 }
 
+/// <summary>The durable lifecycle of one attempted notice delivery.</summary>
+public enum NoticeDeliveryState
+{
+    Queued,
+    Accepted,
+    Retrying,
+    Sent,
+    PermanentlyFailed,
+}
+
 public enum NoticeRecipientRole
 {
     PrimaryTenant,

@@ -31,13 +31,15 @@ void main() {
   });
 
   test('role-specific canonical detail routes remain addressable', () {
+    expect(resolveNotificationRoute('/messages/19'), '/messages/19');
+    expect(resolveNotificationRoute('/maintenance/18'), '/maintenance/18');
     expect(
       resolveNotificationRoute('/leasing/conversations/42'),
       '/leasing/conversations/42',
     );
     expect(
-      resolveNotificationRoute('/technician/assignments/17'),
-      '/technician/assignments/17',
+      resolveNotificationRoute('/maintenance/work/17'),
+      '/maintenance/work/17',
     );
   });
 
@@ -53,6 +55,7 @@ void main() {
       resolveNotificationRoute('/work-orders?workOrderId=17'),
       '/notifications',
     );
+    expect(resolveNotificationRoute('/work-orders/17'), '/notifications');
     expect(
       resolveNotificationRoute('/messages?conversationId=0'),
       '/notifications',

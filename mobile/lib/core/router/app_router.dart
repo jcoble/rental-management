@@ -199,7 +199,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
 
       // ── Addressable detail / section routes ───────────────────────────────
       // These render on top of the shell so push notifications and in-app
-      // deep links (`context.go('/work-orders/142')`) resolve to the right
+      // deep links (`context.go('/maintenance/142')`) resolve to the right
       // screen by id. The bottom-nav shell itself stays an IndexedStack.
       GoRoute(
         path: '/rentals',
@@ -214,12 +214,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const WorkHubScreen(),
       ),
       GoRoute(
-        path: '/work-orders/:id',
+        path: '/maintenance/:id',
         builder: (context, state) =>
             WorkOrderShellTargetLoaderScreen(workOrderId: _idParam(state)),
       ),
       GoRoute(
-        path: '/technician/assignments/:id',
+        path: '/maintenance/work/:id',
         builder: (context, state) =>
             TechnicianAssignmentDetailScreen(workOrderId: _idParam(state)),
       ),

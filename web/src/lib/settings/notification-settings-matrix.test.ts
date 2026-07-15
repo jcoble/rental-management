@@ -51,8 +51,10 @@ test('Team routing and Tenant notices use separate canonical persistence', () =>
 	assert.match(tenantSource, /templateProvenance/);
 	assert.match(tenantSource, /Restore and use current supplied default/);
 	assert.doesNotMatch(tenantSource, /seedTemplates/);
-	for (const status of ['Queued', 'Accepted', 'Retrying', 'Delivered', 'Failed'])
+	for (const status of ['Queued', 'Accepted', 'Retrying', 'Sent', 'PermanentlyFailed'])
 		assert.match(tenantSource, new RegExp(status));
+	assert.doesNotMatch(tenantSource, /'Delivered'/);
+	assert.doesNotMatch(tenantSource, /'Failed'/);
 });
 
 test('notification API clients do not preserve the broad legacy settings path', () => {

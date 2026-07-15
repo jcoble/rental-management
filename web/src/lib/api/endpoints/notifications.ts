@@ -16,6 +16,8 @@ import type {
   UpsertTenantNoticePolicyRequest,
   WorkspaceNoticeTemplateResponse,
   CreateWorkspaceNoticeTemplateVersionRequest,
+  NoticeMergeFieldHelpResponse,
+  TenantNoticeRecipientPreviewResponse,
   NoticeDeliveryStatusResponse,
 } from "$lib/api/types/notification";
 
@@ -131,6 +133,14 @@ export const notifications = {
     listDeliveries: (take = 50) =>
       api.get<NoticeDeliveryStatusResponse[]>(
         `/tenant-notices/deliveries?take=${encodeURIComponent(String(take))}`
+      ),
+    previewRecipients: (automationKey: string, leaseManagementId: number) =>
+      api.get<TenantNoticeRecipientPreviewResponse[]>(
+        `/tenant-notices/${encodeURIComponent(automationKey)}/recipients?leaseManagementId=${encodeURIComponent(String(leaseManagementId))}`
+      ),
+    mergeFields: (systemKey: string) =>
+      api.get<NoticeMergeFieldHelpResponse[]>(
+        `/tenant-notices/templates/${encodeURIComponent(systemKey)}/merge-fields`
       ),
     createTemplateVersion: (
       systemKey: string,

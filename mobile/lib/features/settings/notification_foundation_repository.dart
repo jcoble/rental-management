@@ -117,11 +117,21 @@ class TeamRoutingRecipientPreview extends TeamRoutingRecipient {
     required super.displayName,
     required super.email,
     required super.reason,
+    required this.phoneNumber,
+    required this.enableInApp,
+    required this.enableMobilePush,
+    required this.enableEmail,
+    required this.enableSms,
     required this.propertyId,
     required this.scope,
     required this.isAdministratorFallback,
   });
 
+  final String? phoneNumber;
+  final bool enableInApp;
+  final bool enableMobilePush;
+  final bool enableEmail;
+  final bool enableSms;
   final int? propertyId;
   final String scope;
   final bool isAdministratorFallback;
@@ -132,6 +142,11 @@ class TeamRoutingRecipientPreview extends TeamRoutingRecipient {
         displayName: json['displayName'] as String? ?? '',
         email: json['email'] as String?,
         reason: json['reason'] as String? ?? '',
+        phoneNumber: json['phoneNumber'] as String?,
+        enableInApp: json['enableInApp'] as bool? ?? false,
+        enableMobilePush: json['enableMobilePush'] as bool? ?? false,
+        enableEmail: json['enableEmail'] as bool? ?? false,
+        enableSms: json['enableSms'] as bool? ?? false,
         propertyId: (json['propertyId'] as num?)?.toInt(),
         scope: json['scope'] as String? ?? '',
         isAdministratorFallback:
@@ -339,6 +354,79 @@ class TenantNoticePolicy {
   };
 }
 
+class NoticeMergeFieldHelp {
+  const NoticeMergeFieldHelp({
+    required this.key,
+    required this.token,
+    required this.label,
+    required this.description,
+    required this.example,
+  });
+
+  final String key;
+  final String token;
+  final String label;
+  final String description;
+  final String example;
+
+  factory NoticeMergeFieldHelp.fromJson(Map<String, dynamic> json) =>
+      NoticeMergeFieldHelp(
+        key: json['key'] as String? ?? '',
+        token: json['token'] as String? ?? '',
+        label: json['label'] as String? ?? '',
+        description: json['description'] as String? ?? '',
+        example: json['example'] as String? ?? '',
+      );
+}
+
+class TenantNoticeRecipientPreview {
+  const TenantNoticeRecipientPreview({
+    required this.leaseManagementPartyId,
+    required this.tenantId,
+    required this.displayName,
+    required this.role,
+    required this.eligible,
+    required this.availableChannels,
+    required this.email,
+    required this.phone,
+    required this.reason,
+  });
+
+  final int leaseManagementPartyId;
+  final int tenantId;
+  final String displayName;
+  final String role;
+  final bool eligible;
+  final List<String> availableChannels;
+  final String? email;
+  final String? phone;
+  final String reason;
+
+  factory TenantNoticeRecipientPreview.fromJson(Map<String, dynamic> json) =>
+      TenantNoticeRecipientPreview(
+        leaseManagementPartyId: (json['leaseManagementPartyId'] as num).toInt(),
+        tenantId: (json['tenantId'] as num).toInt(),
+        displayName: json['displayName'] as String? ?? '',
+        role: json['role'] as String? ?? '',
+        eligible: json['eligible'] as bool? ?? false,
+        availableChannels:
+            (json['availableChannels'] as List<dynamic>? ?? const [])
+                .map((channel) => channel.toString())
+                .toList(growable: false),
+        email: json['email'] as String?,
+        phone: json['phone'] as String?,
+        reason: json['reason'] as String? ?? '',
+      );
+}
+
+const noticeDeliveryStatusValues = <String>{
+  'Queued',
+  'Accepted',
+  'Retrying',
+  'Sent',
+  'PermanentlyFailed',
+};
+
 class NoticeDeliveryStatus {
   const NoticeDeliveryStatus({
     required this.evidenceId,
@@ -392,7 +480,7 @@ class NoticeDeliveryStatus {
         recipientRole: json['recipientRole'] as String? ?? '',
         channel: json['channel'] as String? ?? '',
         destination: json['destination'] as String? ?? '',
-        status: json['status'] as String? ?? 'Queued',
+        status: _noticeDeliveryStatus(json['status']),
         attemptCount: (json['attemptCount'] as num?)?.toInt() ?? 0,
         createdAtUtc: _date(json['createdAtUtc']),
         lastAttemptAtUtc: _nullableDate(json['lastAttemptAtUtc']),
@@ -404,6 +492,13 @@ class NoticeDeliveryStatus {
         providerMessageId: json['providerMessageId'] as String?,
         lastError: json['lastError'] as String?,
       );
+}
+
+String _noticeDeliveryStatus(Object? value) {
+  if (value is String && noticeDeliveryStatusValues.contains(value)) {
+    return value;
+  }
+  throw FormatException('Unsupported tenant notice delivery status: $value');
 }
 
 class NotificationFoundationRepository {
@@ -562,6 +657,26 @@ class NotificationFoundationRepository {
       queryParameters: {'take': take},
     ),
     (data) => _list(data, NoticeDeliveryStatus.fromJson),
+  );
+
+  Future<List<TenantNoticeRecipientPreview>> previewTenantNoticeRecipients({
+    required String automationKey,
+    required int leaseManagementId,
+  }) => _request(
+    () => _dio.get<List<dynamic>>(
+      '/tenant-notices/${Uri.encodeComponent(automationKey)}/recipients',
+      queryParameters: {'leaseManagementId': leaseManagementId},
+    ),
+    (data) => _list(data, TenantNoticeRecipientPreview.fromJson),
+  );
+
+  Future<List<NoticeMergeFieldHelp>> listTenantNoticeMergeFields(
+    String systemKey,
+  ) => _request(
+    () => _dio.get<List<dynamic>>(
+      '/tenant-notices/templates/${Uri.encodeComponent(systemKey)}/merge-fields',
+    ),
+    (data) => _list(data, NoticeMergeFieldHelp.fromJson),
   );
 
   Future<T> _request<T, R>(

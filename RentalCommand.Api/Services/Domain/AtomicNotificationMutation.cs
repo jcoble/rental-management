@@ -239,9 +239,10 @@ public sealed class AtomicNotificationMutationHandler
             && (!request.ConfirmJurisdictionReviewed || reviewedJurisdiction is null))
             throw new InvalidOperationException(
                 "Legal notices require explicit jurisdiction and template review before Auto is allowed.");
-        if (request.IncludeOccupant && request.Classification == NoticeClassification.Legal)
+        if (request.IncludeOccupant && (request.Classification == NoticeClassification.Legal
+                || request.AutomationKey is "rent-reminder" or "late-rent-late-fee"))
             throw new InvalidOperationException(
-                "Occupants are not eligible for legal notices merely because they reside at the property.");
+                "Occupants are not eligible for financial or legal notices merely because they reside at the property.");
 
         var persistence = attempt.Persistence;
         var template = await TemplateResponseQuery(

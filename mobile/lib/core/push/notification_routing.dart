@@ -1,7 +1,7 @@
 /// Maps a server-emitted `actionUrl` to a safe in-app route.
 ///
 /// The server usually emits paths that match mobile go_router routes directly
-/// (`/tenant-accounts/{accountId}/entries/{entryId}`, `/work-orders/{id}`,
+/// (`/tenant-accounts/{accountId}/entries/{entryId}`, `/maintenance/{id}`,
 /// `/expenses/{id}`, `/scan/{id}`,
 /// `/messages/{id}`, plus section roots). Anything outside the canonical
 /// allowlist resolves to `/notifications` so a stale or future action type
@@ -14,17 +14,14 @@ library;
 /// Known route prefixes that an `actionUrl` may target. Order doesn't matter;
 /// these are membership tests, not a switch.
 const _allowedPrefixes = <String>[
-  '/work-orders/',
   '/expenses/',
   '/scan/',
-  '/messages/',
   '/units/',
   '/leasing/rentals/',
   '/leasing/applications/',
   '/leasing/appointments/',
   '/leasing/conversations/',
   '/leasing/move-ins/',
-  '/technician/assignments/',
   '/notifications/',
 ];
 
@@ -57,6 +54,12 @@ String resolveNotificationRoute(String? actionUrl) {
   if (RegExp(r'^/tenant-accounts/[1-9]\d*/entries/[1-9]\d*$').hasMatch(path)) {
     return path;
   }
+
+  if (RegExp(r'^/maintenance/(?:work/)?[1-9]\d*$').hasMatch(path)) {
+    return path;
+  }
+
+  if (RegExp(r'^/messages/[1-9]\d*$').hasMatch(path)) return path;
 
   for (final prefix in _allowedPrefixes) {
     if (path.startsWith(prefix) && path.length > prefix.length) {

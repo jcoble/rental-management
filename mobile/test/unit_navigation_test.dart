@@ -126,7 +126,7 @@ void main() {
       }
 
       expect(parseUnitCommandCenterRoute('/units/0?tab=tenant-lease'), isNull);
-      expect(parseUnitCommandCenterRoute('/work-orders/42'), isNull);
+      expect(parseUnitCommandCenterRoute('/maintenance/42'), isNull);
     },
   );
 

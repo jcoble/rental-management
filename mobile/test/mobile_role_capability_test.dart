@@ -267,13 +267,13 @@ void main() {
       canOpenMobilePath(
         experience: WorkspaceExperience.maintenance,
         capabilities: capabilities,
-        path: '/technician/assignments/42',
+        path: '/maintenance/work/42',
       ),
       isTrue,
     );
     for (final path in [
       '/work',
-      '/work-orders/42',
+      '/maintenance/42',
       '/inbox',
       '/messages/2',
       '/rentals',

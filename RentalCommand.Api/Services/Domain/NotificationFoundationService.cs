@@ -110,6 +110,7 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
                 equals new { assignment.WorkspaceMembershipId, assignment.PortfolioId }
             where rule.Id == ruleId && rule.PortfolioId == portfolioId
                 && context.Status == WorkspaceAccessContextStatus.Active
+                && context.AccessRevision > 0
                 && context.SuspendedAtUtc == null && context.RevokedAtUtc == null
                 && membership.Status == WorkspaceMembershipStatus.Active
                 && membership.SuspendedAtUtc == null && membership.RevokedAtUtc == null
@@ -153,7 +154,15 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
                             || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
                                 && assignment.SelectedProperties.Any(scope => scope.PortfolioId == portfolioId
                                     && scope.PropertyId == rule.PropertyId)))))
-            select new TeamRoutingRecipientPreview(user.Id, user.DisplayName, user.Email, rule.PropertyId,
+            select new TeamRoutingRecipientPreview(user.Id, user.DisplayName, user.Email, user.PhoneNumber,
+                !_db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id)
+                    || _db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id && preference.EnableInApp),
+                !_db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id)
+                    || _db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id && preference.EnableMobilePush),
+                !_db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id)
+                    || _db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id && preference.EnableEmail),
+                _db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id && preference.EnableSms),
+                rule.PropertyId,
                 rule.Topic == TeamRoutingTopic.AccountAndSecurity ? "Workspace" :
                 rule.PropertyId == null ? "All in-scope properties" : "Selected property", recipient.Reason, false);
 
@@ -168,13 +177,22 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
                 && !explicitRecipients.Any()
                 && assignment.PortfolioId == portfolioId
                 && context.Status == WorkspaceAccessContextStatus.Active && context.SuspendedAtUtc == null && context.RevokedAtUtc == null
+                && context.AccessRevision > 0
                 && membership.Status == WorkspaceMembershipStatus.Active && membership.SuspendedAtUtc == null && membership.RevokedAtUtc == null
                 && membership.EffectiveFromUtc <= now && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > now)
                 && assignment.Status == MembershipRoleAssignmentStatus.Active
                 && assignment.RevokedAtUtc == null && assignment.SuspendedAtUtc == null
                 && assignment.EffectiveFromUtc <= now && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now)
                 && assignment.RoleProfile!.Key == RoleProfileKeys.WorkspaceAdministrator
-            select new TeamRoutingRecipientPreview(user.Id, user.DisplayName, user.Email, rule.PropertyId,
+            select new TeamRoutingRecipientPreview(user.Id, user.DisplayName, user.Email, user.PhoneNumber,
+                !_db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id)
+                    || _db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id && preference.EnableInApp),
+                !_db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id)
+                    || _db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id && preference.EnableMobilePush),
+                !_db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id)
+                    || _db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id && preference.EnableEmail),
+                _db.UserAlertPreferences.Any(preference => preference.PortfolioId == portfolioId && preference.UserId == user.Id && preference.EnableSms),
+                rule.PropertyId,
                 "Workspace", "No named recipient is assigned; active Workspace Administrators receive this topic.", true);
 
         return await explicitRecipients.Concat(administratorFallback)
@@ -188,6 +206,109 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
         await TenantNoticePolicyResponses(portfolioId)
             .TagWith("TSK-668 tenant notice policies with bound immutable template versions")
             .ToListAsync(ct);
+
+    public async Task<IReadOnlyList<TenantNoticeRecipientPreviewResponse>> PreviewTenantNoticeRecipientsAsync(
+        int portfolioId,
+        string automationKey,
+        int leaseManagementId,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(automationKey) || leaseManagementId <= 0)
+            throw new ArgumentException("An automation key and lease-management relationship are required.");
+
+        var rows = await (
+                from policy in _db.TenantNoticePolicies.AsNoTracking()
+                join party in _db.LeaseManagementParties.AsNoTracking()
+                    on policy.PortfolioId equals party.PortfolioId
+                join tenant in _db.Tenants.AsNoTracking()
+                    on new { party.TenantId, party.PortfolioId }
+                    equals new { TenantId = tenant.Id, tenant.PortfolioId }
+                join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                    on new { party.LeaseManagementId, party.PortfolioId }
+                    equals new { lifecycle.LeaseManagementId, lifecycle.PortfolioId }
+                where policy.PortfolioId == portfolioId
+                    && policy.AutomationKey == automationKey
+                    && party.LeaseManagementId == leaseManagementId
+                let effective = tenant.DeletedAt == null
+                    && lifecycle.TenantAccountId != null
+                    && !lifecycle.HasReconciliationException
+                    && party.EffectiveFrom <= lifecycle.BusinessDate
+                    && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)
+                let roleIncluded =
+                    party.Role == LeaseManagementPartyRole.PrimaryTenant && policy.IncludePrimaryTenant
+                    || party.Role == LeaseManagementPartyRole.CoTenant && policy.IncludeCoTenant
+                    || party.Role == LeaseManagementPartyRole.Guarantor && policy.IncludeEligibleGuarantor
+                        && (policy.Classification != NoticeClassification.Legal || party.GuarantorLegalNoticeEligible)
+                    || party.Role == LeaseManagementPartyRole.Occupant && policy.IncludeOccupant
+                        && policy.Classification != NoticeClassification.Legal
+                        && policy.AutomationKey != "rent-reminder"
+                        && policy.AutomationKey != "late-rent-late-fee"
+                let hasPortal = policy.SendTenantPortal && _db.EffectiveTenantAccess.Any(access =>
+                    access.PortfolioId == portfolioId && access.LeaseManagementPartyId == party.Id)
+                let hasPush = policy.SendMobilePush && (
+                    from access in _db.EffectiveTenantAccess
+                    join device in _db.DeviceTokens on access.UserId equals device.UserId
+                    where access.PortfolioId == portfolioId
+                        && access.LeaseManagementPartyId == party.Id
+                        && device.PortfolioId == portfolioId
+                    select device.Id).Any()
+                let hasEmail = policy.SendEmail && tenant.Email != null && tenant.Email != ""
+                let hasSms = policy.SendSms && tenant.Phone != null && tenant.Phone != ""
+                select new TenantRecipientPreviewRow(
+                    party.Id,
+                    tenant.Id,
+                    (tenant.FirstName + " " + tenant.LastName).Trim(),
+                    party.Role == LeaseManagementPartyRole.PrimaryTenant ? NoticeRecipientRole.PrimaryTenant :
+                    party.Role == LeaseManagementPartyRole.CoTenant ? NoticeRecipientRole.CoTenant :
+                    party.Role == LeaseManagementPartyRole.Guarantor ? NoticeRecipientRole.Guarantor :
+                    NoticeRecipientRole.Occupant,
+                    effective && roleIncluded && (hasPortal || hasPush || hasEmail || hasSms),
+                    hasPortal,
+                    hasPush,
+                    hasEmail,
+                    hasSms,
+                    tenant.Email,
+                    tenant.Phone,
+                    tenant.DeletedAt != null ? "The tenant record is inactive." :
+                    lifecycle.TenantAccountId == null || lifecycle.HasReconciliationException
+                        ? "The lease relationship must be reconciled before a notice can be delivered." :
+                    !effective ? "This person is not effective in the relationship on the current business date." :
+                    party.Role == LeaseManagementPartyRole.PrimaryTenant && !policy.IncludePrimaryTenant
+                        ? "Primary tenants are excluded by this automation policy." :
+                    party.Role == LeaseManagementPartyRole.CoTenant && !policy.IncludeCoTenant
+                        ? "Co-tenants are excluded by this automation policy." :
+                    party.Role == LeaseManagementPartyRole.Guarantor && !policy.IncludeEligibleGuarantor
+                        ? "Guarantors are excluded by this automation policy." :
+                    party.Role == LeaseManagementPartyRole.Guarantor && policy.Classification == NoticeClassification.Legal
+                        && !party.GuarantorLegalNoticeEligible
+                        ? "This guarantor is not designated to receive this legal notice." :
+                    party.Role == LeaseManagementPartyRole.Occupant
+                        && (policy.Classification == NoticeClassification.Legal
+                            || policy.AutomationKey == "rent-reminder"
+                            || policy.AutomationKey == "late-rent-late-fee")
+                        ? "Occupants never receive financial or legal notices merely because they reside here." :
+                    party.Role == LeaseManagementPartyRole.Occupant && !policy.IncludeOccupant
+                        ? "Occupants are excluded by this automation policy." :
+                    !(hasPortal || hasPush || hasEmail || hasSms)
+                        ? "No enabled channel has a valid destination for this person." :
+                    "Eligible under the saved relationship role, channel, and automation policy."))
+            .OrderBy(row => row.Role)
+            .ThenBy(row => row.DisplayName)
+            .ThenBy(row => row.LeaseManagementPartyId)
+            .TagWith("TSK-668 exact tenant notice recipient eligibility, destinations, and exclusions")
+            .ToListAsync(ct);
+
+        return rows.Select(row => new TenantNoticeRecipientPreviewResponse(
+            row.LeaseManagementPartyId,
+            row.TenantId,
+            row.DisplayName,
+            row.Role,
+            row.Eligible,
+            Channels(row),
+            row.Email,
+            row.Phone,
+            row.Reason)).ToArray();
+    }
 
     public async Task<TenantNoticePolicyResponse> UpsertTenantNoticePolicyAsync(
         WorkspaceReadScope scope,
@@ -205,6 +326,9 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
 
     public async Task<IReadOnlyList<WorkspaceNoticeTemplateResponse>> ListTemplatesAsync(int portfolioId, CancellationToken ct) =>
         await TemplateResponses(portfolioId).ToListAsync(ct);
+
+    public IReadOnlyList<NoticeMergeFieldHelpResponse> ListMergeFields(string systemKey) =>
+        NoticeMergeFields.HelpForType(systemKey);
 
     public async Task SeedSuppliedTemplatesAsync(
         WorkspaceReadScope scope,
@@ -283,11 +407,13 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
                     rendered.LeaseManagementId,
                     evidence.RecipientRole,
                     evidence.Channel,
+                    evidence.Channel == NoticeDeliveryChannel.MobilePush ? "Registered mobile device" :
+                    evidence.Channel == NoticeDeliveryChannel.TenantPortal ? "Tenant portal" :
                     evidence.Destination,
-                    outbox.DeliveredAtUtc != null ? "Delivered" :
-                    outbox.DeadLetteredAtUtc != null ? "Failed" :
-                    outbox.AcceptedAtUtc != null ? "Accepted" :
-                    outbox.AttemptCount > 0 ? "Retrying" : "Queued",
+                    outbox.DeliveredAtUtc != null ? NoticeDeliveryState.Sent :
+                    outbox.DeadLetteredAtUtc != null ? NoticeDeliveryState.PermanentlyFailed :
+                    outbox.AcceptedAtUtc != null ? NoticeDeliveryState.Accepted :
+                    outbox.AttemptCount > 0 ? NoticeDeliveryState.Retrying : NoticeDeliveryState.Queued,
                     outbox.AttemptCount,
                     evidence.CreatedAtUtc,
                     outbox.LastAttemptAtUtc,
@@ -438,5 +564,29 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
             ? JsonSerializer.Deserialize<TResponse>(result.ResponseJson)
                 ?? throw new InvalidOperationException("Atomic notification result snapshot is invalid.")
             : throw new InvalidOperationException("Atomic notification result did not contain a response snapshot.");
+
+    private static IReadOnlyList<NoticeDeliveryChannel> Channels(TenantRecipientPreviewRow row)
+    {
+        var channels = new List<NoticeDeliveryChannel>(4);
+        if (row.HasPortal) channels.Add(NoticeDeliveryChannel.TenantPortal);
+        if (row.HasPush) channels.Add(NoticeDeliveryChannel.MobilePush);
+        if (row.HasEmail) channels.Add(NoticeDeliveryChannel.Email);
+        if (row.HasSms) channels.Add(NoticeDeliveryChannel.Sms);
+        return channels;
+    }
+
+    private sealed record TenantRecipientPreviewRow(
+        int LeaseManagementPartyId,
+        int TenantId,
+        string DisplayName,
+        NoticeRecipientRole Role,
+        bool Eligible,
+        bool HasPortal,
+        bool HasPush,
+        bool HasEmail,
+        bool HasSms,
+        string? Email,
+        string? Phone,
+        string Reason);
 
 }

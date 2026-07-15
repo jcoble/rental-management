@@ -18,9 +18,12 @@ public interface INotificationFoundationService
     Task<IReadOnlyList<TeamRoutingRuleRecipientResponse>> ListTeamRoutingRuleRecipientsAsync(int portfolioId, int ruleId, CancellationToken ct);
     Task<IReadOnlyList<TeamRoutingRecipientPreview>> PreviewTeamRoutingAsync(int portfolioId, int ruleId, CancellationToken ct);
     Task<IReadOnlyList<TenantNoticePolicyResponse>> ListTenantNoticePoliciesAsync(int portfolioId, CancellationToken ct);
+    Task<IReadOnlyList<TenantNoticeRecipientPreviewResponse>> PreviewTenantNoticeRecipientsAsync(
+        int portfolioId, string automationKey, int leaseManagementId, CancellationToken ct);
     Task<TenantNoticePolicyResponse> UpsertTenantNoticePolicyAsync(WorkspaceReadScope scope,
         UpsertTenantNoticePolicyRequest request, string operationKey, CancellationToken ct);
     Task<IReadOnlyList<WorkspaceNoticeTemplateResponse>> ListTemplatesAsync(int portfolioId, CancellationToken ct);
+    IReadOnlyList<NoticeMergeFieldHelpResponse> ListMergeFields(string systemKey);
     Task SeedSuppliedTemplatesAsync(WorkspaceReadScope scope, string operationKey, CancellationToken ct);
     Task<TenantNoticePolicyResponse> CreateTemplateVersionAsync(WorkspaceReadScope scope, string systemKey,
         CreateWorkspaceNoticeTemplateVersionRequest request, string operationKey, CancellationToken ct);

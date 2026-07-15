@@ -18,6 +18,8 @@ public sealed class TechnicianController : AuthenticatedPortfolioControllerBase
         new("technician-assignment-message.v1");
     private static readonly AtomicJsonResultCodec<MarkTechnicianAssignmentConversationReadResult> ReadCodec =
         new("technician-assignment-conversation-read.v1");
+    private static readonly AtomicJsonResultCodec<UpdateAssignedWorkOrderResult> UpdateCodec =
+        new("assigned-work-order.update.v1");
     private readonly ITechnicianExperienceService _service;
     private readonly IAtomicUnitOfWork _atomic;
 
@@ -57,6 +59,58 @@ public sealed class TechnicianController : AuthenticatedPortfolioControllerBase
         if (!TryScope(out var scope)) return Forbid();
         var detail = await _service.GetAssignmentAsync(scope, workOrderId, ct);
         return detail is null ? NotFound() : Ok(detail);
+    }
+
+    [HttpPatch("assignments/{workOrderId:int}")]
+    public async Task<IActionResult> UpdateAssignment(
+        int workOrderId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        [FromBody] UpdateAssignedWorkOrderRequest request,
+        CancellationToken ct)
+    {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var key)) return BadRequest();
+        if (!TryEnvelope(out var envelope)) return Forbid();
+        var digest = Digest(key);
+        var command = new UpdateAssignedWorkOrderCommand(
+            envelope.PortfolioId,
+            envelope.UserId,
+            envelope.SessionId,
+            envelope.AccessContextId,
+            envelope.AccessRevision,
+            workOrderId,
+            request.ExpectedUpdatedAtUtc.ToUniversalTime(),
+            request.Status,
+            request.TechnicianNote,
+            request.ScheduledFor?.UtcDateTime,
+            request.ScheduledWindowEnd?.UtcDateTime,
+            request.CompletedAt?.UtcDateTime,
+            digest);
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "assigned-work-order.update",
+                    $"{envelope.PortfolioId}:{workOrderId}:{digest}"),
+                command,
+                UpdateCodec,
+                ct);
+            return outcome.Value.Outcome == UpdateAssignedWorkOrderOutcome.Stale
+                ? Conflict(new
+                {
+                    error = "The work order changed; refresh before retrying.",
+                    outcome.Value,
+                    replayed = outcome.Disposition == AtomicCommandDisposition.Replayed,
+                })
+                : Ok(new
+                {
+                    outcome.Value,
+                    replayed = outcome.Disposition == AtomicCommandDisposition.Replayed,
+                });
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
+        }
     }
 
     [HttpPost("assignments/{workOrderId:int}/entries")]

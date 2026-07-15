@@ -18,8 +18,33 @@ public sealed record TeamRoutingRuleResponse(int Id, TeamRoutingTopic Topic, int
     string Scope, bool UseWorkspaceAdministratorFallback, int NamedRecipientCount,
     string NamedRecipientSummary, string RoutingExplanation, DateTime UpdatedAtUtc);
 public sealed record TeamRoutingRuleRecipientResponse(int UserId, string DisplayName, string? Email, string Reason);
-public sealed record TeamRoutingRecipientPreview(int UserId, string DisplayName, string? Email, int? PropertyId,
-    string Scope, string Reason, bool IsAdministratorFallback);
+public sealed record TeamRoutingRecipientPreview(
+    int UserId,
+    string DisplayName,
+    string? Email,
+    string? PhoneNumber,
+    bool EnableInApp,
+    bool EnableMobilePush,
+    bool EnableEmail,
+    bool EnableSms,
+    int? PropertyId,
+    string Scope,
+    string Reason,
+    bool IsAdministratorFallback);
+
+public sealed record NoticeMergeFieldHelpResponse(string Key, string Token, string Label, string Description,
+    string Example);
+
+public sealed record TenantNoticeRecipientPreviewResponse(
+    int LeaseManagementPartyId,
+    int TenantId,
+    string DisplayName,
+    NoticeRecipientRole Role,
+    bool Eligible,
+    IReadOnlyList<NoticeDeliveryChannel> AvailableChannels,
+    string? Email,
+    string? Phone,
+    string Reason);
 
 public sealed record UpsertTenantNoticePolicyRequest(
     string AutomationKey, TenantNoticeMode Mode, NoticeClassification Classification, int LeadDays,
@@ -57,7 +82,7 @@ public sealed record NoticeDeliveryStatusResponse(
     NoticeRecipientRole RecipientRole,
     NoticeDeliveryChannel Channel,
     string Destination,
-    string Status,
+    NoticeDeliveryState Status,
     int AttemptCount,
     DateTime CreatedAtUtc,
     DateTime? LastAttemptAtUtc,

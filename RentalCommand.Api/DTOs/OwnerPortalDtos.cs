@@ -1,4 +1,5 @@
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Owners;
 
 namespace RentalCommand.Api.DTOs;
 
@@ -51,6 +52,28 @@ public sealed class OwnerPortalItemPageResponse
     public int Skip { get; init; }
     public int Take { get; init; }
 }
+
+public sealed class DecideOwnerApprovalRequest
+{
+    public OwnerApprovalDecision Decision { get; set; }
+
+    [System.ComponentModel.DataAnnotations.MaxLength(1000)]
+    public string? Note { get; set; }
+}
+
+public sealed class ReplyToOwnerMessageRequest
+{
+    [System.ComponentModel.DataAnnotations.Required]
+    [System.ComponentModel.DataAnnotations.MaxLength(4000)]
+    public string Body { get; set; } = string.Empty;
+}
+
+public sealed record OwnerPortalCommandResponse(
+    int SourceNotificationId,
+    int OwnerEntityId,
+    IReadOnlyList<int> StaffNotificationIds,
+    DateTime RecordedAtUtc,
+    bool Replayed);
 
 public sealed class OwnerPortalDistributionResponse
 {

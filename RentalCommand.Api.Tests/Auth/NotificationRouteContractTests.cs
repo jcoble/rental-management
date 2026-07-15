@@ -53,6 +53,18 @@ public sealed class NotificationRouteContractTests
                 "templates/{systemKey}/restore-default");
     }
 
+    [Fact]
+    public void TenantNoticeController_ExposesRecipientPreviewAndMergeFieldHelp()
+    {
+        var getRoutes = typeof(TenantNoticePoliciesController)
+            .GetMethods()
+            .Select(method => method.GetCustomAttribute<HttpGetAttribute>()?.Template)
+            .Where(template => template is not null);
+
+        getRoutes.Should().Contain("{automationKey}/recipients");
+        getRoutes.Should().Contain("templates/{systemKey}/merge-fields");
+    }
+
     private static string? RouteOf<T>() =>
         typeof(T).GetCustomAttribute<RouteAttribute>()?.Template;
 }

@@ -36,7 +36,13 @@ public class NotificationService : INotificationService
 
         var query = _db.Notifications
             .AsNoTracking()
-            .Where(n => n.PortfolioId == portfolioId && (n.UserId == null || n.UserId == userId));
+            .Where(n => n.PortfolioId == portfolioId
+                && (n.UserId == null || n.UserId == userId)
+                && (!_db.UserAlertPreferences.Any(preference =>
+                        preference.PortfolioId == portfolioId && preference.UserId == userId)
+                    || _db.UserAlertPreferences.Any(preference =>
+                        preference.PortfolioId == portfolioId && preference.UserId == userId
+                        && preference.EnableInApp)));
         if (!await IsStaffUserAsync(portfolioId, userId, ct))
         {
             query = query.Where(n => n.Type != "TenantMessage");
@@ -79,6 +85,11 @@ public class NotificationService : INotificationService
             .AsNoTracking()
             .Where(n => n.PortfolioId == portfolioId &&
                 (n.UserId == null || n.UserId == userId) &&
+                (!_db.UserAlertPreferences.Any(preference =>
+                        preference.PortfolioId == portfolioId && preference.UserId == userId)
+                    || _db.UserAlertPreferences.Any(preference =>
+                        preference.PortfolioId == portfolioId && preference.UserId == userId
+                        && preference.EnableInApp)) &&
                 !_db.NotificationReadStates.Any(readState =>
                     readState.PortfolioId == portfolioId &&
                     readState.NotificationId == n.Id &&

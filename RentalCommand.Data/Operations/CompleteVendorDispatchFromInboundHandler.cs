@@ -223,15 +223,17 @@ public sealed class CompleteVendorDispatchFromInboundHandler
         DateTime now,
         CancellationToken ct)
     {
-        // Exact work-order property + work.read capability on the same effective assignment. There
-        // is deliberately no legacy Admin/Manager/Agent/Owner fanout and no technician fallback:
-        // assigned-work responsibility has not landed yet, so a technician recipient would leak.
+        // The final recipients come from the saved work-order topic rule plus the current direct
+        // work responsibility. Both branches are revalidated against one effective assignment's
+        // work.read capability and property scope; only an explicitly configured admin fallback
+        // applies when neither branch resolves anybody.
         var staffUserIds = await ScopedNotificationRecipientQuery
-            .ForProperty(
+            .ForTeamTopic(
                 attempt,
                 portfolioId,
+                TeamRoutingTopic.WorkOrders,
                 workOrder.PropertyId,
-                CapabilityKeys.WorkRead,
+                workOrder.Id,
                 now)
             .OrderBy(userId => userId)
             .ToListAsync(ct);
@@ -244,7 +246,7 @@ public sealed class CompleteVendorDispatchFromInboundHandler
             Title = "Job completed by vendor",
             Message = $"{vendorName} marked \"{workOrder.Title}\" complete by SMS.",
             Severity = "Success",
-            ActionUrl = $"/work-orders?workOrderId={workOrder.Id}",
+            ActionUrl = $"/maintenance/{workOrder.Id}",
             RelatedEntityType = nameof(WorkOrder),
             RelatedEntityId = workOrder.Id,
             CreatedAt = now,
