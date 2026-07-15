@@ -92,8 +92,11 @@ void main() {
     expect(repositorySource, contains("'/tenant-notices/deliveries'"));
     expect(repositorySource, isNot(contains("'/notification-settings/")));
     expect(settingsSource, contains("title: 'My alerts'"));
+    expect(settingsSource, contains('icon: Icons.notifications_outlined'));
     expect(settingsSource, contains("title: 'Team routing'"));
     expect(settingsSource, contains("title: 'Tenant notices'"));
+    expect(settingsSource, contains('canManageMobileNotificationFoundation('));
+    expect(settingsSource, contains('experience: auth.activeExperience'));
     expect(routerSource, contains("path: '/settings/notifications/my-alerts'"));
     expect(
       routerSource,

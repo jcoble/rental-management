@@ -77,51 +77,56 @@ void main() {
     expect(loader.initialView, UnitCommandCenterView.agreements);
   });
 
-  test('unit href parser maps tab aliases to command center tabs', () {
-    final lease = parseUnitCommandCenterRoute('/units/42?tab=lease');
-    expect(lease?.unitId, 42);
-    expect(lease?.initialTab, UnitCommandCenterTab.tenantLease);
-    expect(lease?.initialView, UnitCommandCenterView.agreements);
+  test(
+    'unit href parser accepts only canonical command center destinations',
+    () {
+      final lease = parseUnitCommandCenterRoute(
+        '/units/42?tab=tenant-lease&view=agreements',
+      );
+      expect(lease?.unitId, 42);
+      expect(lease?.initialTab, UnitCommandCenterTab.tenantLease);
+      expect(lease?.initialView, UnitCommandCenterView.agreements);
 
-    final maintenance = parseUnitCommandCenterRoute(
-      '/units/42?tab=maintenance',
-    );
-    expect(maintenance?.unitId, 42);
-    expect(maintenance?.initialTab, UnitCommandCenterTab.maintenance);
-    expect(maintenance?.initialView, UnitCommandCenterView.workOrders);
+      final maintenance = parseUnitCommandCenterRoute(
+        '/units/42?tab=maintenance',
+      );
+      expect(maintenance?.unitId, 42);
+      expect(maintenance?.initialTab, UnitCommandCenterTab.maintenance);
+      expect(maintenance?.initialView, UnitCommandCenterView.workOrders);
 
-    final turnover = parseUnitCommandCenterRoute('/units/42?tab=turnover');
-    expect(turnover?.initialTab, UnitCommandCenterTab.maintenance);
-    expect(turnover?.initialView, UnitCommandCenterView.turnover);
+      final turnover = parseUnitCommandCenterRoute(
+        '/units/42?tab=maintenance&view=turnover',
+      );
+      expect(turnover?.initialTab, UnitCommandCenterTab.maintenance);
+      expect(turnover?.initialView, UnitCommandCenterView.turnover);
 
-    final makeReady = parseUnitCommandCenterRoute('/units/42?tab=make-ready');
-    expect(makeReady?.initialTab, UnitCommandCenterTab.maintenance);
-    expect(makeReady?.initialView, UnitCommandCenterView.turnover);
+      final apps = parseUnitCommandCenterRoute(
+        '/units/42?tab=leasing&view=applications',
+      );
+      expect(apps?.initialTab, UnitCommandCenterTab.leasing);
+      expect(apps?.initialView, UnitCommandCenterView.applications);
 
-    final moveOut = parseUnitCommandCenterRoute('/units/42?tab=move-out');
-    expect(moveOut?.initialTab, UnitCommandCenterTab.maintenance);
-    expect(moveOut?.initialView, UnitCommandCenterView.turnover);
+      final listing = parseUnitCommandCenterRoute(
+        '/units/42?tab=leasing&view=listing',
+      );
+      expect(listing?.initialTab, UnitCommandCenterTab.leasing);
+      expect(listing?.initialView, UnitCommandCenterView.listing);
 
-    final apps = parseUnitCommandCenterRoute('/units/42?tab=apps');
-    expect(apps?.initialTab, UnitCommandCenterTab.leasing);
-    expect(apps?.initialView, UnitCommandCenterView.applications);
+      final ledger = parseUnitCommandCenterRoute('/units/42?tab=money');
+      expect(ledger?.initialTab, UnitCommandCenterTab.money);
 
-    final listing = parseUnitCommandCenterRoute('/units/42?tab=listing');
-    expect(listing?.initialTab, UnitCommandCenterTab.leasing);
-    expect(listing?.initialView, UnitCommandCenterView.listing);
+      for (final removedAlias in ['lease', 'apps', 'rent', 'make-ready']) {
+        final fallback = parseUnitCommandCenterRoute(
+          '/units/42?tab=$removedAlias',
+        );
+        expect(fallback?.initialTab, UnitCommandCenterTab.summary);
+        expect(fallback?.initialView, isNull);
+      }
 
-    final ledger = parseUnitCommandCenterRoute('/units/42?tab=ledger');
-    expect(ledger?.initialTab, UnitCommandCenterTab.money);
-
-    final oldRent = parseUnitCommandCenterRoute('/units/42?tab=rent');
-    expect(oldRent?.initialTab, UnitCommandCenterTab.money);
-
-    final oldExpenses = parseUnitCommandCenterRoute('/units/42?tab=expenses');
-    expect(oldExpenses?.initialTab, UnitCommandCenterTab.money);
-
-    expect(parseUnitCommandCenterRoute('/units/0?tab=lease'), isNull);
-    expect(parseUnitCommandCenterRoute('/work-orders/42'), isNull);
-  });
+      expect(parseUnitCommandCenterRoute('/units/0?tab=tenant-lease'), isNull);
+      expect(parseUnitCommandCenterRoute('/work-orders/42'), isNull);
+    },
+  );
 
   test(
     'unit dashboard parses turnover summary and defaults missing summary',
@@ -185,7 +190,7 @@ void main() {
                   dashboard: _unitDashboard(
                     nextBestAction: const UnitNextBestAction(
                       label: 'Review lease',
-                      href: '/units/42?tab=lease',
+                      href: '/units/42?tab=tenant-lease&view=agreements',
                     ),
                   ),
                 );
@@ -219,7 +224,7 @@ void main() {
             dashboard: _unitDashboard(
               nextBestAction: const UnitNextBestAction(
                 label: 'Review turnover',
-                href: '/units/42?tab=turnover',
+                href: '/units/42?tab=maintenance&view=turnover',
               ),
               turnover: UnitTurnoverSummary(
                 status: 'InProgress',
@@ -309,7 +314,7 @@ Map<String, dynamic> _unitDashboardJson() {
     'lifecycleStage': 'Turnover',
     'nextBestAction': {
       'label': 'Review turnover',
-      'href': '/units/42?tab=turnover',
+      'href': '/units/42?tab=maintenance&view=turnover',
     },
     'header': {
       'rentState': 'Current',

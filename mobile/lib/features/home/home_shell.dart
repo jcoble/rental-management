@@ -18,6 +18,7 @@ import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
 import '../../core/models/models.dart';
 import '../../core/push/push_service.dart';
+import '../../core/push/mobile_navigation_intent.dart';
 import '../../core/realtime/realtime_providers.dart';
 import '../../core/voice/voice_command.dart';
 import '../../core/voice/voice_command_controller.dart';
@@ -61,6 +62,7 @@ import 'mobile_domain_hub.dart';
 import 'mobile_domain_navigation.dart';
 import 'mobile_quick_action_fab.dart';
 import 'mobile_quick_action_helpers.dart';
+import 'mobile_role_shell.dart';
 import 'mobile_shell_actions.dart';
 import 'owner_landing_screen.dart';
 
@@ -254,6 +256,10 @@ class _HomeShellState extends ConsumerState<HomeShell>
       _showAccessDenied();
       return true;
     }
+    // Dedicated Leasing, Maintenance, Owner and Tenant shells own independent
+    // tab stacks. Their typed routes must be pushed by go_router instead of
+    // being translated into the Management domain hubs below.
+    if (auth.activeExperience != WorkspaceExperience.management) return false;
     final segments = uri.pathSegments;
     final id = segments.length >= 2 ? int.tryParse(segments[1]) : null;
 
@@ -435,10 +441,15 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
   /// Navigates to a notification-tap deep link once the shell is mounted and
   /// the user is authenticated, then clears the one-slot bus.
-  void _handlePushLink(String route) {
+  void _handlePushLink(MobileNavigationIntent intent) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      if (ref.read(authControllerProvider) is AuthStateAuthenticated) {
+      final authority = ref.read(authControllerProvider);
+      if (authority is AuthStateAuthenticated) {
+        final route = intent.resolveFor(
+          authority,
+          nowUtc: DateTime.now().toUtc(),
+        );
         // A14: PUSH the deep-linked target on top of the shell (not `go`,
         // which REPLACES the stack) so a detail screen opened from a
         // notification tap keeps a working back button to the dashboard
@@ -594,7 +605,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
     });
 
     // React to notification taps (warm app) that stashed a deep link.
-    ref.listen<String?>(pendingPushLinkProvider, (_, next) {
+    ref.listen<MobileNavigationIntent?>(pendingPushLinkProvider, (_, next) {
       if (next != null) _handlePushLink(next);
     });
 
@@ -632,6 +643,42 @@ class _HomeShellState extends ConsumerState<HomeShell>
       return MobileShellNavigation(
         controller: _shellNavigator,
         child: const TechnicianLandingScreen(),
+      );
+    }
+
+    if (authState.activeExperience == WorkspaceExperience.tenant) {
+      final user = authState.user;
+      return MobileShellNavigation(
+        controller: _shellNavigator,
+        child: MobileRoleShell(
+          actions: const [MobileNotificationBell(), MobileAccountMenu()],
+          destinations: [
+            MobileRoleDestination(
+              label: 'Home',
+              icon: Symbols.home_rounded,
+              ownsScaffold: true,
+              builder: (_) => _TenantHomeTab(user: user),
+            ),
+            MobileRoleDestination(
+              label: 'Messages',
+              icon: Symbols.forum_rounded,
+              ownsScaffold: true,
+              builder: (_) => const MessagesListScreen(),
+            ),
+            MobileRoleDestination(
+              label: 'Maintenance',
+              icon: Symbols.build_rounded,
+              ownsScaffold: true,
+              builder: (_) => const _TenantMaintenanceTab(),
+            ),
+            MobileRoleDestination(
+              label: 'More',
+              icon: Symbols.more_horiz_rounded,
+              ownsScaffold: true,
+              builder: (_) => const _TenantMoreTab(),
+            ),
+          ],
+        ),
       );
     }
 
@@ -1101,7 +1148,7 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Tenant Dashboard'),
-        actions: const [MobileAccountMenu()],
+        actions: const [MobileNotificationBell(), MobileAccountMenu()],
       ),
       body: RefreshIndicator(
         onRefresh: () async {
@@ -1680,7 +1727,10 @@ class _TenantMaintenanceTabState extends ConsumerState<_TenantMaintenanceTab> {
     );
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Maintenance')),
+      appBar: AppBar(
+        title: const Text('Maintenance'),
+        actions: const [MobileNotificationBell(), MobileAccountMenu()],
+      ),
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
@@ -1880,7 +1930,10 @@ class _TenantMoreTab extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
-      appBar: AppBar(title: const Text('More')),
+      appBar: AppBar(
+        title: const Text('More'),
+        actions: const [MobileNotificationBell(), MobileAccountMenu()],
+      ),
       body: ListView(
         children: [
           ListTile(

@@ -5,6 +5,7 @@ import 'package:material_symbols_icons/symbols.dart';
 import '../../core/api/api_exception.dart';
 import '../owner_portal/owner_portal_repository.dart';
 import '../owner_reports/owner_reports_repository.dart';
+import 'mobile_role_shell.dart';
 import 'mobile_shell_actions.dart';
 
 String _ownerMoney(double amount) => '\$${amount.toStringAsFixed(2)}';
@@ -27,63 +28,50 @@ class OwnerLandingScreen extends ConsumerStatefulWidget {
 }
 
 class _OwnerLandingScreenState extends ConsumerState<OwnerLandingScreen> {
-  int _selectedIndex = 0;
-
-  static const _titles = [
-    'Overview',
-    'Properties',
-    'Statements',
-    'Approvals',
-    'Messages',
-  ];
-
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_titles[_selectedIndex]),
-        actions: const [MobileAccountMenu()],
-      ),
-      body: IndexedStack(
-        index: _selectedIndex,
-        children: const [
-          _OwnerOverviewTab(),
-          _OwnerPropertiesTab(),
-          _OwnerStatementsTab(),
-          _OwnerItemsTab(kind: _OwnerItemKind.approvals),
-          _OwnerItemsTab(kind: _OwnerItemKind.messages),
-        ],
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _selectedIndex,
-        onDestinationSelected: (index) =>
-            setState(() => _selectedIndex = index),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Symbols.home_rounded),
-            label: 'Overview',
-          ),
-          NavigationDestination(
-            icon: Icon(Symbols.apartment_rounded),
-            label: 'Properties',
-          ),
-          NavigationDestination(
-            icon: Icon(Symbols.description_rounded),
-            label: 'Statements',
-          ),
-          NavigationDestination(
-            icon: Icon(Symbols.task_alt_rounded),
-            label: 'Approvals',
-          ),
-          NavigationDestination(
-            icon: Icon(Symbols.forum_rounded),
-            label: 'Messages',
-          ),
-        ],
-      ),
+    return const MobileRoleShell(
+      actions: [MobileNotificationBell(), MobileAccountMenu()],
+      destinations: [
+        MobileRoleDestination(
+          label: 'Overview',
+          icon: Symbols.home_rounded,
+          builder: _ownerOverviewBuilder,
+        ),
+        MobileRoleDestination(
+          label: 'Properties',
+          icon: Symbols.apartment_rounded,
+          builder: _ownerPropertiesBuilder,
+        ),
+        MobileRoleDestination(
+          label: 'Statements',
+          icon: Symbols.description_rounded,
+          builder: _ownerStatementsBuilder,
+        ),
+        MobileRoleDestination(
+          label: 'Approvals',
+          icon: Symbols.task_alt_rounded,
+          builder: _ownerApprovalsBuilder,
+        ),
+        MobileRoleDestination(
+          label: 'Messages',
+          icon: Symbols.forum_rounded,
+          builder: _ownerMessagesBuilder,
+        ),
+      ],
     );
   }
 }
+
+Widget _ownerOverviewBuilder(BuildContext context) => const _OwnerOverviewTab();
+Widget _ownerPropertiesBuilder(BuildContext context) =>
+    const _OwnerPropertiesTab();
+Widget _ownerStatementsBuilder(BuildContext context) =>
+    const _OwnerStatementsTab();
+Widget _ownerApprovalsBuilder(BuildContext context) =>
+    const _OwnerItemsTab(kind: _OwnerItemKind.approvals);
+Widget _ownerMessagesBuilder(BuildContext context) =>
+    const _OwnerItemsTab(kind: _OwnerItemKind.messages);
 
 class _OwnerOverviewTab extends ConsumerStatefulWidget {
   const _OwnerOverviewTab();
@@ -192,6 +180,8 @@ class _OwnerPropertiesTab extends ConsumerStatefulWidget {
 
 class _OwnerPropertiesTabState extends ConsumerState<_OwnerPropertiesTab> {
   static const _pageSize = 20;
+  final _searchController = TextEditingController();
+  String? _search;
   int _skip = 0;
   late Future<OwnerPortalPage<OwnerPortalProperty>> _future;
 
@@ -203,7 +193,22 @@ class _OwnerPropertiesTabState extends ConsumerState<_OwnerPropertiesTab> {
 
   Future<OwnerPortalPage<OwnerPortalProperty>> _load() => ref
       .read(ownerPortalRepositoryProvider)
-      .propertiesPage(skip: _skip, take: _pageSize);
+      .propertiesPage(skip: _skip, take: _pageSize, search: _search);
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _submitSearch(String value) {
+    final normalized = value.trim();
+    setState(() {
+      _search = normalized.isEmpty ? null : normalized;
+      _skip = 0;
+      _future = _load();
+    });
+  }
 
   Future<void> _refresh() async {
     final next = _load();
@@ -240,9 +245,28 @@ class _OwnerPropertiesTabState extends ConsumerState<_OwnerPropertiesTab> {
           child: ListView.separated(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-            itemCount: page.items.isEmpty ? 1 : page.items.length + 1,
+            itemCount: page.items.isEmpty ? 2 : page.items.length + 2,
             separatorBuilder: (_, _) => const SizedBox(height: 10),
             itemBuilder: (context, index) {
+              if (index == 0) {
+                return SearchBar(
+                  controller: _searchController,
+                  leading: const Icon(Symbols.search_rounded),
+                  hintText: 'Search your properties',
+                  onSubmitted: _submitSearch,
+                  trailing: [
+                    if (_search != null)
+                      IconButton(
+                        tooltip: 'Clear search',
+                        icon: const Icon(Symbols.close_rounded),
+                        onPressed: () {
+                          _searchController.clear();
+                          _submitSearch('');
+                        },
+                      ),
+                  ],
+                );
+              }
               if (page.items.isEmpty) {
                 return const _OwnerEmptyBody(
                   icon: Symbols.apartment_rounded,
@@ -250,25 +274,26 @@ class _OwnerPropertiesTabState extends ConsumerState<_OwnerPropertiesTab> {
                   message: 'No properties are connected to this owner account.',
                 );
               }
-              if (index == page.items.length && page.totalCount > page.take) {
-                return _OwnerPager(
-                  skip: page.skip,
-                  take: page.take,
-                  totalCount: page.totalCount,
-                  onPrevious: page.skip > 0
-                      ? () => _page(
-                          (page.skip - page.take)
-                              .clamp(0, page.totalCount)
-                              .toInt(),
-                        )
-                      : null,
-                  onNext: page.skip + page.items.length < page.totalCount
-                      ? () => _page(page.skip + page.take)
-                      : null,
-                );
+              if (index == page.items.length + 1) {
+                return page.totalCount > page.take
+                    ? _OwnerPager(
+                        skip: page.skip,
+                        take: page.take,
+                        totalCount: page.totalCount,
+                        onPrevious: page.skip > 0
+                            ? () => _page(
+                                (page.skip - page.take)
+                                    .clamp(0, page.totalCount)
+                                    .toInt(),
+                              )
+                            : null,
+                        onNext: page.skip + page.items.length < page.totalCount
+                            ? () => _page(page.skip + page.take)
+                            : null,
+                      )
+                    : const SizedBox.shrink();
               }
-              if (index == page.items.length) return const SizedBox.shrink();
-              final property = page.items[index];
+              final property = page.items[index - 1];
               return Card(
                 child: ListTile(
                   leading: const Icon(Symbols.apartment_rounded),
@@ -297,6 +322,8 @@ class _OwnerStatementsTab extends ConsumerStatefulWidget {
 
 class _OwnerStatementsTabState extends ConsumerState<_OwnerStatementsTab> {
   static const _pageSize = 20;
+  final _statementSearchController = TextEditingController();
+  String? _statementSearch;
   int _year = DateTime.now().year;
   int _statementSkip = 0;
   int _distributionSkip = 0;
@@ -314,6 +341,12 @@ class _OwnerStatementsTabState extends ConsumerState<_OwnerStatementsTab> {
     _future = _load();
   }
 
+  @override
+  void dispose() {
+    _statementSearchController.dispose();
+    super.dispose();
+  }
+
   Future<
     ({
       OwnerPortalPage<OwnerSummary> summaries,
@@ -327,6 +360,7 @@ class _OwnerStatementsTabState extends ConsumerState<_OwnerStatementsTab> {
         year: _year,
         skip: _statementSkip,
         take: _pageSize,
+        search: _statementSearch,
       ),
       repository.distributionsPage(
         year: _year,
@@ -351,6 +385,15 @@ class _OwnerStatementsTabState extends ConsumerState<_OwnerStatementsTab> {
       _year = year;
       _statementSkip = 0;
       _distributionSkip = 0;
+      _future = _load();
+    });
+  }
+
+  void _searchStatements(String value) {
+    final normalized = value.trim();
+    setState(() {
+      _statementSearch = normalized.isEmpty ? null : normalized;
+      _statementSkip = 0;
       _future = _load();
     });
   }
@@ -446,6 +489,25 @@ class _OwnerStatementsTabState extends ConsumerState<_OwnerStatementsTab> {
                   },
                 ),
               ),
+              const SizedBox(height: 8),
+              SearchBar(
+                controller: _statementSearchController,
+                leading: const Icon(Symbols.search_rounded),
+                hintText: 'Search owner statements',
+                onSubmitted: _searchStatements,
+                trailing: [
+                  if (_statementSearch != null)
+                    IconButton(
+                      tooltip: 'Clear statement search',
+                      icon: const Icon(Symbols.close_rounded),
+                      onPressed: () {
+                        _statementSearchController.clear();
+                        _searchStatements('');
+                      },
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
               if (data.summaries.items.isEmpty)
                 _OwnerEmptyBody(
                   icon: Symbols.description_rounded,
@@ -627,24 +689,25 @@ class _OwnerItemsTabState extends ConsumerState<_OwnerItemsTab> {
                       : 'Only messages approved for your owner account will appear here.',
                 );
               }
-              if (index == items.length && page.totalCount > page.take) {
-                return _OwnerPager(
-                  skip: page.skip,
-                  take: page.take,
-                  totalCount: page.totalCount,
-                  onPrevious: page.skip > 0
-                      ? () => _page(
-                          (page.skip - page.take)
-                              .clamp(0, page.totalCount)
-                              .toInt(),
-                        )
-                      : null,
-                  onNext: page.skip + items.length < page.totalCount
-                      ? () => _page(page.skip + page.take)
-                      : null,
-                );
+              if (index == items.length) {
+                return page.totalCount > page.take
+                    ? _OwnerPager(
+                        skip: page.skip,
+                        take: page.take,
+                        totalCount: page.totalCount,
+                        onPrevious: page.skip > 0
+                            ? () => _page(
+                                (page.skip - page.take)
+                                    .clamp(0, page.totalCount)
+                                    .toInt(),
+                              )
+                            : null,
+                        onNext: page.skip + items.length < page.totalCount
+                            ? () => _page(page.skip + page.take)
+                            : null,
+                      )
+                    : const SizedBox.shrink();
               }
-              if (index == items.length) return const SizedBox.shrink();
               final item = items[index];
               return Card(
                 child: Padding(

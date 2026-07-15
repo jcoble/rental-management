@@ -3,11 +3,9 @@
 /// The server usually emits paths that match mobile go_router routes directly
 /// (`/tenant-accounts/{accountId}/entries/{entryId}`, `/work-orders/{id}`,
 /// `/expenses/{id}`, `/scan/{id}`,
-/// `/messages/{id}`, plus section roots), but older notification emitters still
-/// use query ids such as `/messages?conversationId=...`. Those are normalized
-/// here before allowlist checks. Anything outside the allowlist resolves to
-/// `/notifications` so a stray or future action type lands on the inbox rather
-/// than a 404 / arbitrary navigation.
+/// `/messages/{id}`, plus section roots). Anything outside the canonical
+/// allowlist resolves to `/notifications` so a stale or future action type
+/// lands on the inbox rather than creating a second route contract.
 ///
 /// Centralized here so the push tap handler and the inbox tap handler share one
 /// allowlist.
@@ -21,6 +19,12 @@ const _allowedPrefixes = <String>[
   '/scan/',
   '/messages/',
   '/units/',
+  '/leasing/rentals/',
+  '/leasing/applications/',
+  '/leasing/appointments/',
+  '/leasing/conversations/',
+  '/leasing/move-ins/',
+  '/technician/assignments/',
   '/notifications/',
 ];
 
@@ -46,9 +50,6 @@ String resolveNotificationRoute(String? actionUrl) {
   final uri = Uri.tryParse(url);
   if (uri == null) return '/notifications';
 
-  final normalized = _normalizeQueryRoute(uri);
-  if (normalized != null) return normalized;
-
   final path = uri.path;
 
   if (_allowedExact.contains(path)) return path;
@@ -64,23 +65,4 @@ String resolveNotificationRoute(String? actionUrl) {
   }
 
   return '/notifications';
-}
-
-String? _normalizeQueryRoute(Uri uri) {
-  switch (uri.path) {
-    case '/messages':
-      return _detailRoute('/messages', uri.queryParameters['conversationId']);
-    case '/work-orders':
-      return _detailRoute('/work-orders', uri.queryParameters['workOrderId']);
-    default:
-      return null;
-  }
-}
-
-String? _detailRoute(String prefix, String? rawId) {
-  final id = rawId?.trim();
-  if (id == null || !RegExp(r'^[1-9]\d*$').hasMatch(id)) {
-    return null;
-  }
-  return '$prefix/$id';
 }

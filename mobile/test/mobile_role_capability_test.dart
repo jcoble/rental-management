@@ -244,7 +244,7 @@ void main() {
         capabilities: const {},
         path: '/settings',
       ),
-      isFalse,
+      isTrue,
     );
     expect(
       canOpenMobilePath(
@@ -252,7 +252,7 @@ void main() {
         capabilities: const {},
         path: '/settings/notifications/my-alerts',
       ),
-      isFalse,
+      isTrue,
     );
   });
 
@@ -278,7 +278,6 @@ void main() {
       '/messages/2',
       '/rentals',
       '/money',
-      '/scan/capture',
     ]) {
       expect(
         canOpenMobilePath(
@@ -290,13 +289,28 @@ void main() {
         reason: 'Technicians must not open the management route $path.',
       );
     }
+    expect(
+      canOpenMobilePath(
+        experience: WorkspaceExperience.maintenance,
+        capabilities: capabilities,
+        path: '/scan/capture',
+      ),
+      isTrue,
+    );
   });
 
   test('notification settings separate personal and administrator access', () {
-    for (final experience in [
+    const staffExperiences = [
       WorkspaceExperience.management,
       WorkspaceExperience.leasing,
-    ]) {
+      WorkspaceExperience.maintenance,
+    ];
+    const relationshipExperiences = [
+      WorkspaceExperience.owner,
+      WorkspaceExperience.tenant,
+    ];
+
+    for (final experience in WorkspaceExperience.values) {
       expect(
         canOpenMobilePath(
           experience: experience,
@@ -304,50 +318,57 @@ void main() {
           path: '/settings/notifications/my-alerts',
         ),
         isTrue,
+        reason: 'Every signed-in persona can manage its own alerts.',
       );
-      expect(
-        canOpenMobilePath(
-          experience: experience,
-          capabilities: const {},
-          path: '/settings/notifications/team-routing',
-        ),
-        isFalse,
-      );
-      expect(
-        canOpenMobilePath(
-          experience: experience,
-          capabilities: const {'notifications.manage'},
-          path: '/settings/notifications/tenant-notices',
-        ),
-        isTrue,
-      );
+      for (final path in [
+        '/settings/notifications/team-routing',
+        '/settings/notifications/tenant-notices',
+      ]) {
+        expect(
+          canOpenMobilePath(
+            experience: experience,
+            capabilities: const {},
+            path: path,
+          ),
+          isFalse,
+          reason: '$experience needs notifications.manage to open $path.',
+        );
+      }
     }
 
-    expect(
-      canOpenMobilePath(
-        experience: WorkspaceExperience.maintenance,
-        capabilities: const {'notifications.manage'},
-        path: '/settings/notifications/tenant-notices',
-      ),
-      isFalse,
-    );
+    for (final experience in staffExperiences) {
+      for (final path in [
+        '/settings/notifications/team-routing',
+        '/settings/notifications/tenant-notices',
+      ]) {
+        expect(
+          canOpenMobilePath(
+            experience: experience,
+            capabilities: const {'notifications.manage'},
+            path: path,
+          ),
+          isTrue,
+          reason: '$experience should administer notifications via $path.',
+        );
+      }
+    }
 
-    expect(
-      canOpenMobilePath(
-        experience: WorkspaceExperience.tenant,
-        capabilities: const {'notifications.manage'},
-        path: '/settings/notifications/my-alerts',
-      ),
-      isFalse,
-    );
-    expect(
-      canOpenMobilePath(
-        experience: WorkspaceExperience.owner,
-        capabilities: const {'notifications.manage'},
-        path: '/settings/notifications/team-routing',
-      ),
-      isFalse,
-    );
+    for (final experience in relationshipExperiences) {
+      for (final path in [
+        '/settings/notifications/team-routing',
+        '/settings/notifications/tenant-notices',
+      ]) {
+        expect(
+          canOpenMobilePath(
+            experience: experience,
+            capabilities: const {'notifications.manage'},
+            path: path,
+          ),
+          isFalse,
+          reason: 'Relationship experiences must never administer $path.',
+        );
+      }
+    }
   });
 
   test('workspace setup is management-only and capability-gated', () {

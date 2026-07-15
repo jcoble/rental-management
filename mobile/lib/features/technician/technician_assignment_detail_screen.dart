@@ -8,6 +8,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
 import '../../core/api/api_exception.dart';
+import '../home/mobile_quick_action_helpers.dart';
 import 'technician_repository.dart';
 
 class TechnicianAssignmentDetailScreen extends ConsumerStatefulWidget {
@@ -162,9 +163,10 @@ class _TechnicianAssignmentDetailScreenState
     body: FutureBuilder<TechnicianAssignmentDetail>(
       future: _future,
       builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done)
+        if (snapshot.connectionState != ConnectionState.done) {
           return const Center(child: CircularProgressIndicator());
-        if (snapshot.hasError || !snapshot.hasData)
+        }
+        if (snapshot.hasError || !snapshot.hasData) {
           return Center(
             child: Padding(
               padding: const EdgeInsets.all(24),
@@ -185,6 +187,7 @@ class _TechnicianAssignmentDetailScreenState
               ),
             ),
           );
+        }
         final work = snapshot.data!;
         return RefreshIndicator(
           onRefresh: _refresh,
@@ -212,6 +215,18 @@ class _TechnicianAssignmentDetailScreenState
                     ],
                   ),
                 ),
+              ),
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: () => openMobileScan(
+                  context,
+                  initialTargetEntityType: 'WorkOrder',
+                  lockTargetEntityType: true,
+                  workOrderId: work.id,
+                  sourceLabel: work.title,
+                ),
+                icon: const Icon(Symbols.document_scanner_rounded),
+                label: const Text('Scan receipt or work document'),
               ),
               const SizedBox(height: 12),
               _InfoCard(

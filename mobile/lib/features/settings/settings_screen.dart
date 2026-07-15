@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/auth/auth_controller.dart';
-import '../../core/auth/auth_models.dart';
+import '../../core/auth/mobile_access_policy.dart';
 import 'change_password_screen.dart';
 import 'my_alerts_screen.dart';
 import 'team_routing_screen.dart';
@@ -19,9 +19,12 @@ class SettingsScreen extends ConsumerWidget {
     final capabilities = auth is AuthStateAuthenticated
         ? auth.capabilities
         : const <String>{};
-    final canManageNotifications = capabilities.contains(
-      'notifications.manage',
-    );
+    final canManageNotifications =
+        auth is AuthStateAuthenticated &&
+        canManageMobileNotificationFoundation(
+          experience: auth.activeExperience,
+          capabilities: capabilities,
+        );
     final canManageMessagingProvider = capabilities.contains(
       'integrations.manage',
     );

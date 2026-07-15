@@ -6,6 +6,140 @@ import '../../core/api/api_exception.dart';
 import '../home/mobile_quick_action_helpers.dart';
 import 'leasing_workspace_repository.dart';
 
+class LeasingApplicationDetailScreen extends ConsumerStatefulWidget {
+  const LeasingApplicationDetailScreen({
+    super.key,
+    required this.applicationId,
+  });
+
+  final int applicationId;
+
+  @override
+  ConsumerState<LeasingApplicationDetailScreen> createState() =>
+      _LeasingApplicationDetailScreenState();
+}
+
+class _LeasingApplicationDetailScreenState
+    extends ConsumerState<LeasingApplicationDetailScreen> {
+  late Future<LeasingApplicationDetail> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  Future<LeasingApplicationDetail> _load() => ref
+      .read(leasingWorkspaceRepositoryProvider)
+      .application(widget.applicationId);
+
+  Future<void> _refresh() async {
+    final next = _load();
+    setState(() => _future = next);
+    await next;
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Application')),
+    body: FutureBuilder<LeasingApplicationDetail>(
+      future: _future,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError || snapshot.data == null) {
+          return _LeasingDetailError(
+            message: _leasingError(snapshot.error),
+            onRetry: _refresh,
+          );
+        }
+
+        final application = snapshot.data!;
+        return RefreshIndicator(
+          onRefresh: _refresh,
+          child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+            children: [
+              Text(
+                application.applicantName,
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                [
+                  application.propertyName,
+                  if (application.unitNumber != null)
+                    'Unit ${application.unitNumber}',
+                ].whereType<String>().join(' · '),
+              ),
+              const SizedBox(height: 16),
+              _LeasingDetailCard(
+                title: 'Application details',
+                children: [
+                  _LeasingDetailRow(label: 'Status', value: application.status),
+                  if (application.email?.isNotEmpty == true)
+                    _LeasingDetailRow(
+                      label: 'Email',
+                      value: application.email!,
+                    ),
+                  if (application.phone?.isNotEmpty == true)
+                    _LeasingDetailRow(
+                      label: 'Phone',
+                      value: application.phone!,
+                    ),
+                  if (application.monthlyIncome != null)
+                    _LeasingDetailRow(
+                      label: 'Monthly income',
+                      value: _money(application.monthlyIncome!),
+                    ),
+                  if (application.desiredMoveInDate != null)
+                    _LeasingDetailRow(
+                      label: 'Desired move-in',
+                      value: _date(application.desiredMoveInDate!),
+                    ),
+                  _LeasingDetailRow(
+                    label: 'Screening consent',
+                    value: application.consentGiven
+                        ? 'Recorded'
+                        : 'Not recorded',
+                  ),
+                  _LeasingDetailRow(
+                    label: 'Submitted',
+                    value: _dateTime(application.submittedAtUtc),
+                  ),
+                  if (application.notes?.isNotEmpty == true)
+                    _LeasingDetailRow(
+                      label: 'Notes',
+                      value: application.notes!,
+                    ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                onPressed: () => openMobileScan(
+                  context,
+                  initialTargetEntityType: 'Application',
+                  lockTargetEntityType: true,
+                  propertyId: application.propertyId,
+                  unitId: application.unitId,
+                  applicationId: application.id,
+                  sourceLabel: application.applicantName,
+                ),
+                icon: const Icon(Symbols.document_scanner_rounded),
+                label: const Text('Scan application document'),
+              ),
+            ],
+          ),
+        );
+      },
+    ),
+  );
+}
+
 class LeasingRentalDetailScreen extends ConsumerStatefulWidget {
   const LeasingRentalDetailScreen({super.key, required this.unitId});
 
@@ -282,6 +416,180 @@ class LeasingMoveInDetailScreen extends ConsumerStatefulWidget {
   @override
   ConsumerState<LeasingMoveInDetailScreen> createState() =>
       _LeasingMoveInDetailScreenState();
+}
+
+class LeasingConversationDetailScreen extends ConsumerStatefulWidget {
+  const LeasingConversationDetailScreen({
+    super.key,
+    required this.conversationId,
+  });
+
+  final int conversationId;
+
+  @override
+  ConsumerState<LeasingConversationDetailScreen> createState() =>
+      _LeasingConversationDetailScreenState();
+}
+
+class _LeasingConversationDetailScreenState
+    extends ConsumerState<LeasingConversationDetailScreen> {
+  final _replyController = TextEditingController();
+  late Future<LeasingConversationDetail> _future;
+  bool _sending = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  @override
+  void dispose() {
+    _replyController.dispose();
+    super.dispose();
+  }
+
+  Future<LeasingConversationDetail> _load() => ref
+      .read(leasingWorkspaceRepositoryProvider)
+      .conversation(widget.conversationId);
+
+  Future<void> _refresh() async {
+    final next = _load();
+    setState(() => _future = next);
+    await next;
+  }
+
+  Future<void> _send() async {
+    final body = _replyController.text.trim();
+    if (body.isEmpty || _sending) return;
+    setState(() => _sending = true);
+    try {
+      await ref
+          .read(leasingWorkspaceRepositoryProvider)
+          .replyToConversation(widget.conversationId, body);
+      _replyController.clear();
+      await _refresh();
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('Leasing conversation')),
+    body: FutureBuilder<LeasingConversationDetail>(
+      future: _future,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError || snapshot.data == null) {
+          return _LeasingDetailError(
+            message: _leasingError(snapshot.error),
+            onRetry: _refresh,
+          );
+        }
+        final conversation = snapshot.data!;
+        return Column(
+          children: [
+            Material(
+              color: Theme.of(context).colorScheme.surfaceContainerLow,
+              child: ListTile(
+                title: Text(conversation.tenantName),
+                subtitle: Text(
+                  [
+                    conversation.subject,
+                    conversation.propertyName,
+                  ].whereType<String>().join(' · '),
+                ),
+              ),
+            ),
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: _refresh,
+                child: ListView.builder(
+                  reverse: true,
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.all(16),
+                  itemCount: conversation.messages.length,
+                  itemBuilder: (context, index) {
+                    final message = conversation
+                        .messages[conversation.messages.length - index - 1];
+                    final fromTenant =
+                        message.senderRole.toLowerCase() == 'tenant';
+                    return Align(
+                      alignment: fromTenant
+                          ? Alignment.centerLeft
+                          : Alignment.centerRight,
+                      child: Card(
+                        color: fromTenant
+                            ? null
+                            : Theme.of(context).colorScheme.primaryContainer,
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 320),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(message.body),
+                                const SizedBox(height: 4),
+                                Text(
+                                  _dateTime(message.createdAt),
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+            SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _replyController,
+                        enabled: !_sending,
+                        minLines: 1,
+                        maxLines: 4,
+                        textInputAction: TextInputAction.newline,
+                        decoration: const InputDecoration(
+                          hintText: 'Reply in the tenant portal',
+                        ),
+                      ),
+                    ),
+                    IconButton.filled(
+                      tooltip: 'Send reply',
+                      onPressed: _sending ? null : _send,
+                      icon: _sending
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Symbols.send_rounded),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    ),
+  );
 }
 
 class _LeasingMoveInDetailScreenState

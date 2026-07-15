@@ -5,6 +5,7 @@ import 'package:material_symbols_icons/symbols.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/auth/auth_controller.dart';
 import '../home/mobile_quick_action_helpers.dart';
+import '../home/mobile_role_shell.dart';
 import '../home/mobile_shell_actions.dart';
 import 'technician_assignment_detail_screen.dart';
 import 'technician_repository.dart';
@@ -19,54 +20,48 @@ class TechnicianLandingScreen extends ConsumerStatefulWidget {
 
 class _TechnicianLandingScreenState
     extends ConsumerState<TechnicianLandingScreen> {
-  int _selectedIndex = 0;
-  static const _titles = ['My work', 'Schedule', 'Inbox', 'Profile'];
-
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: Text(_titles[_selectedIndex]),
-      actions: const [MobileAccountMenu()],
-    ),
-    body: IndexedStack(
-      index: _selectedIndex,
-      children: const [
-        TechnicianAssignmentList(area: 'assignments'),
-        TechnicianAssignmentList(area: 'schedule'),
-        TechnicianAssignmentList(area: 'inbox'),
-        _TechnicianProfile(),
-      ],
-    ),
+  Widget build(BuildContext context) => MobileRoleShell(
+    actions: const [MobileNotificationBell(), MobileAccountMenu()],
+    destinations: const [
+      MobileRoleDestination(
+        label: 'My work',
+        icon: Symbols.build_rounded,
+        builder: _technicianAssignmentsBuilder,
+      ),
+      MobileRoleDestination(
+        label: 'Schedule',
+        icon: Symbols.schedule_rounded,
+        builder: _technicianScheduleBuilder,
+      ),
+      MobileRoleDestination(
+        label: 'Inbox',
+        icon: Symbols.forum_rounded,
+        builder: _technicianInboxBuilder,
+      ),
+      MobileRoleDestination(
+        label: 'Profile',
+        icon: Symbols.person_rounded,
+        builder: _technicianProfileBuilder,
+      ),
+    ],
     floatingActionButton: FloatingActionButton.extended(
       heroTag: 'technician-assigned-work-scan',
       onPressed: () => openAuthorizedMobileScan(context, ref),
       icon: const Icon(Symbols.document_scanner_rounded),
       label: const Text('Scan / Add'),
     ),
-    bottomNavigationBar: NavigationBar(
-      selectedIndex: _selectedIndex,
-      onDestinationSelected: (index) => setState(() => _selectedIndex = index),
-      destinations: const [
-        NavigationDestination(
-          icon: Icon(Symbols.build_rounded),
-          label: 'My work',
-        ),
-        NavigationDestination(
-          icon: Icon(Symbols.schedule_rounded),
-          label: 'Schedule',
-        ),
-        NavigationDestination(
-          icon: Icon(Symbols.forum_rounded),
-          label: 'Inbox',
-        ),
-        NavigationDestination(
-          icon: Icon(Symbols.person_rounded),
-          label: 'Profile',
-        ),
-      ],
-    ),
   );
 }
+
+Widget _technicianAssignmentsBuilder(BuildContext context) =>
+    const TechnicianAssignmentList(area: 'assignments');
+Widget _technicianScheduleBuilder(BuildContext context) =>
+    const TechnicianAssignmentList(area: 'schedule');
+Widget _technicianInboxBuilder(BuildContext context) =>
+    const TechnicianAssignmentList(area: 'inbox');
+Widget _technicianProfileBuilder(BuildContext context) =>
+    const _TechnicianProfile();
 
 class TechnicianAssignmentList extends ConsumerStatefulWidget {
   const TechnicianAssignmentList({super.key, required this.area});
@@ -79,8 +74,10 @@ class TechnicianAssignmentList extends ConsumerStatefulWidget {
 
 class _TechnicianAssignmentListState
     extends ConsumerState<TechnicianAssignmentList> {
+  static const _take = 20;
   final _searchController = TextEditingController();
   String? _status;
+  int _skip = 0;
   late Future<TechnicianAssignmentPage> _future;
 
   @override
@@ -96,6 +93,8 @@ class _TechnicianAssignmentListState
           area: widget.area,
           search: _searchController.text.trim(),
           status: _status,
+          skip: _skip,
+          take: _take,
         );
   }
 
@@ -128,11 +127,15 @@ class _TechnicianAssignmentListState
                       icon: const Icon(Symbols.close_rounded),
                       onPressed: () {
                         _searchController.clear();
+                        _skip = 0;
                         setState(_load);
                       },
                     ),
                 ],
-                onSubmitted: (_) => setState(_load),
+                onSubmitted: (_) {
+                  _skip = 0;
+                  setState(_load);
+                },
               ),
             ),
             const SizedBox(width: 8),
@@ -141,6 +144,7 @@ class _TechnicianAssignmentListState
               tooltip: 'Filter by status',
               onSelected: (value) {
                 _status = value;
+                _skip = 0;
                 setState(_load);
               },
               itemBuilder: (_) => const [
@@ -162,16 +166,24 @@ class _TechnicianAssignmentListState
         child: FutureBuilder<TechnicianAssignmentPage>(
           future: _future,
           builder: (context, snapshot) {
-            if (snapshot.connectionState != ConnectionState.done)
+            if (snapshot.connectionState != ConnectionState.done) {
               return const Center(child: CircularProgressIndicator());
-            if (snapshot.hasError)
+            }
+            if (snapshot.hasError) {
               return _ErrorState(
                 error: snapshot.error!,
                 onRetry: () => setState(_load),
               );
-            final items =
-                snapshot.data?.items ?? const <TechnicianAssignmentSummary>[];
-            if (items.isEmpty)
+            }
+            final page = snapshot.data;
+            if (page == null) {
+              return _ErrorState(
+                error: StateError('Assigned work is unavailable.'),
+                onRetry: () => setState(_load),
+              );
+            }
+            final items = page.items;
+            if (items.isEmpty) {
               return RefreshIndicator(
                 onRefresh: _refresh,
                 child: ListView(
@@ -183,25 +195,57 @@ class _TechnicianAssignmentListState
                   ],
                 ),
               );
+            }
             return RefreshIndicator(
               onRefresh: _refresh,
               child: ListView.separated(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
-                itemCount: items.length,
+                itemCount: items.length + (page.totalCount > page.take ? 1 : 0),
                 separatorBuilder: (_, _) => const SizedBox(height: 10),
-                itemBuilder: (context, index) => _AssignmentCard(
-                  assignment: items[index],
-                  onTap: () async {
-                    await Navigator.of(context).push<void>(
-                      MaterialPageRoute(
-                        builder: (_) => TechnicianAssignmentDetailScreen(
-                          workOrderId: items[index].id,
+                itemBuilder: (context, index) {
+                  if (index == items.length) {
+                    return Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        OutlinedButton(
+                          onPressed: page.skip == 0
+                              ? null
+                              : () {
+                                  _skip = page.skip > page.take
+                                      ? page.skip - page.take
+                                      : 0;
+                                  setState(_load);
+                                },
+                          child: const Text('Previous'),
                         ),
-                      ),
+                        const SizedBox(width: 8),
+                        OutlinedButton(
+                          onPressed:
+                              page.skip + page.items.length >= page.totalCount
+                              ? null
+                              : () {
+                                  _skip = page.skip + page.take;
+                                  setState(_load);
+                                },
+                          child: const Text('Next'),
+                        ),
+                      ],
                     );
-                    if (mounted) setState(_load);
-                  },
-                ),
+                  }
+                  return _AssignmentCard(
+                    assignment: items[index],
+                    onTap: () async {
+                      await Navigator.of(context).push<void>(
+                        MaterialPageRoute(
+                          builder: (_) => TechnicianAssignmentDetailScreen(
+                            workOrderId: items[index].id,
+                          ),
+                        ),
+                      );
+                      if (mounted) setState(_load);
+                    },
+                  );
+                },
               ),
             );
           },

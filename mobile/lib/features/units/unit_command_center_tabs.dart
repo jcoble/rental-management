@@ -90,15 +90,12 @@ UnitCommandCenterDestination unitCommandCenterDestinationFromName(
         },
       );
     case 'tenant-lease':
-    case 'tenantlease':
       return canonical(
         UnitCommandCenterTab.tenantLease,
         UnitCommandCenterView.agreements,
         {
           'agreements': UnitCommandCenterView.agreements,
-          'lease': UnitCommandCenterView.agreements,
           'residents': UnitCommandCenterView.residents,
-          'tenants': UnitCommandCenterView.residents,
         },
       );
     case 'money':
@@ -111,87 +108,19 @@ UnitCommandCenterDestination unitCommandCenterDestinationFromName(
         UnitCommandCenterView.workOrders,
         {
           'work-orders': UnitCommandCenterView.workOrders,
-          'work': UnitCommandCenterView.workOrders,
           'turnover': UnitCommandCenterView.turnover,
         },
       );
     case 'documents-history':
-    case 'documentshistory':
       return canonical(
         UnitCommandCenterTab.documentsHistory,
         UnitCommandCenterView.documents,
         {
           'documents': UnitCommandCenterView.documents,
           'history': UnitCommandCenterView.history,
-          'timeline': UnitCommandCenterView.history,
         },
       );
-    case 'listing':
-    case 'listings':
-    case 'zillow':
-      return const UnitCommandCenterDestination(
-        tab: UnitCommandCenterTab.leasing,
-        view: UnitCommandCenterView.listing,
-      );
-    case 'app':
-    case 'apps':
-    case 'application':
-    case 'applications':
-      return const UnitCommandCenterDestination(
-        tab: UnitCommandCenterTab.leasing,
-        view: UnitCommandCenterView.applications,
-      );
-    case 'lease':
-    case 'leases':
-      return const UnitCommandCenterDestination(
-        tab: UnitCommandCenterTab.tenantLease,
-        view: UnitCommandCenterView.agreements,
-      );
-    case 'tenant':
-    case 'tenants':
-      return const UnitCommandCenterDestination(
-        tab: UnitCommandCenterTab.tenantLease,
-        view: UnitCommandCenterView.residents,
-      );
-    case 'ledger':
-    case 'rent':
-    case 'rents':
-    case 'payment':
-    case 'payments':
-    case 'expense':
-    case 'expenses':
-      return const UnitCommandCenterDestination(
-        tab: UnitCommandCenterTab.money,
-      );
-    case 'work':
-    case 'work-orders':
-    case 'workorders':
-      return const UnitCommandCenterDestination(
-        tab: UnitCommandCenterTab.maintenance,
-        view: UnitCommandCenterView.workOrders,
-      );
-    case 'turnover':
-    case 'make-ready':
-    case 'makeready':
-    case 'move-out':
-    case 'moveout':
-      return const UnitCommandCenterDestination(
-        tab: UnitCommandCenterTab.maintenance,
-        view: UnitCommandCenterView.turnover,
-      );
-    case 'documents':
-      return const UnitCommandCenterDestination(
-        tab: UnitCommandCenterTab.documentsHistory,
-        view: UnitCommandCenterView.documents,
-      );
-    case 'timeline':
-    case 'history':
-      return const UnitCommandCenterDestination(
-        tab: UnitCommandCenterTab.documentsHistory,
-        view: UnitCommandCenterView.history,
-      );
     case 'summary':
-    case 'overview':
     default:
       return const UnitCommandCenterDestination(
         tab: UnitCommandCenterTab.summary,

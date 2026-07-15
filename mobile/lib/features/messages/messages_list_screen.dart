@@ -13,6 +13,7 @@ import '../home/mobile_domain_chrome.dart';
 import '../home/mobile_domain_navigation.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
+import '../home/mobile_shell_actions.dart';
 import '../tenants/tenants_repository.dart';
 import 'message_models.dart';
 import 'message_detail_screen.dart';
@@ -219,7 +220,13 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
     final routeIsCurrent = ModalRoute.isCurrentOf(context) ?? true;
 
     return Scaffold(
-      appBar: mobileDomainRootAppBar(context, title: const Text('Messages')),
+      appBar: mobileDomainRootAppBar(
+        context,
+        title: const Text('Messages'),
+        actions: tenantMode
+            ? const [MobileNotificationBell(), MobileAccountMenu()]
+            : null,
+      ),
       floatingActionButton: tenantMode || !routeIsCurrent
           ? null
           : MobileQuickActionFab(

@@ -3,9 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/auth/auth_controller.dart';
 import '../ai/ai_tab.dart';
-import '../maintenance/work_orders_repository.dart';
 import '../scan/scan_capture.dart';
 import '../scan/scan_review_screen.dart';
+import '../technician/technician_assignment_picker_sheet.dart';
 import '../voice/tell_me_screen.dart';
 
 void openMobileAssistant(BuildContext context) {
@@ -22,40 +22,22 @@ void openMobileRecord(BuildContext context) {
 
 /// Keeps the global Scan / Add action for technicians without granting a context-free scan.
 /// The work-order list is already filtered by the canonical assigned-work SQL authorization.
-Future<void> openAuthorizedMobileScan(BuildContext context, WidgetRef ref) async {
+Future<void> openAuthorizedMobileScan(
+  BuildContext context,
+  WidgetRef ref,
+) async {
   final auth = ref.read(authControllerProvider);
   if (auth is AuthStateAuthenticated &&
       auth.capabilities.contains('maintenance.assigned-work.update') &&
       !auth.capabilities.contains('work.manage')) {
-    final assigned = await ref
-        .read(workOrdersRepositoryProvider)
-        .listWorkOrders(openOnly: true, take: 100);
-    if (!context.mounted) return;
-    final selected = await showDialog<int>(
-      context: context,
-      builder: (dialogContext) => SimpleDialog(
-        title: const Text('Scan for assigned work order'),
-        children: [
-          if (assigned.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(24),
-              child: Text('No current assigned work orders.'),
-            ),
-          for (final workOrder in assigned)
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(dialogContext, workOrder.id),
-              child: Text(workOrder.title),
-            ),
-        ],
-      ),
-    );
+    final selected = await showTechnicianAssignmentPicker(context);
     if (selected == null || !context.mounted) return;
     return openMobileScan(
       context,
       initialTargetEntityType: 'WorkOrder',
       lockTargetEntityType: true,
-      workOrderId: selected,
-      sourceLabel: 'Assigned work order',
+      workOrderId: selected.id,
+      sourceLabel: selected.title,
     );
   }
   return openMobileScan(context);

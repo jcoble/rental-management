@@ -12,8 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../api/dio_client.dart';
 import '../api/idempotent_mutation.dart';
 import '../auth/auth_controller.dart';
-import '../router/app_router.dart';
-import 'notification_routing.dart';
+import 'mobile_navigation_intent.dart';
 
 /// Android notification channel the foreground/local notifications post to. Its
 /// id is also referenced from `AndroidManifest.xml`
@@ -28,16 +27,18 @@ const String _androidChannelDescription =
 /// before the app was authenticated (cold start). [HomeShell] / the auth flow
 /// drains it once authenticated so the link isn't lost. Mirrors the one-slot
 /// `pendingVoiceCommandProvider` bus.
-class PendingPushLink extends Notifier<String?> {
+class PendingPushLink extends Notifier<MobileNavigationIntent?> {
   @override
-  String? build() => null;
+  MobileNavigationIntent? build() => null;
 
-  void set(String route) => state = route;
+  void set(MobileNavigationIntent intent) => state = intent;
   void consume() => state = null;
 }
 
 final pendingPushLinkProvider =
-    NotifierProvider<PendingPushLink, String?>(PendingPushLink.new);
+    NotifierProvider<PendingPushLink, MobileNavigationIntent?>(
+      PendingPushLink.new,
+    );
 
 /// Coordinates Firebase Cloud Messaging + local notifications.
 ///
@@ -96,16 +97,13 @@ class PushService {
 
     // Register with the backend now if already authenticated, and re-register
     // whenever auth transitions to authenticated.
-    _authSub = _ref.listen<AuthState>(
-      authControllerProvider,
-      (previous, next) {
-        if (next is AuthStateAuthenticated) {
-          unawaited(_registerDevice());
-        } else if (next is AuthStateUnauthenticated) {
-          _registered = false;
-        }
-      },
-    );
+    _authSub = _ref.listen<AuthState>(authControllerProvider, (previous, next) {
+      if (next is AuthStateAuthenticated) {
+        unawaited(_registerDevice());
+      } else if (next is AuthStateUnauthenticated) {
+        _registered = false;
+      }
+    });
     if (_ref.read(authControllerProvider) is AuthStateAuthenticated) {
       unawaited(_registerDevice());
     }
@@ -114,15 +112,13 @@ class PushService {
   // ── Local notifications ──────────────────────────────────────────────────
 
   Future<void> _initLocalNotifications() async {
-    const androidInit =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
     const iosInit = DarwinInitializationSettings(
       requestAlertPermission: false,
       requestBadgePermission: false,
       requestSoundPermission: false,
     );
-    const settings =
-        InitializationSettings(android: androidInit, iOS: iosInit);
+    const settings = InitializationSettings(android: androidInit, iOS: iosInit);
 
     await _localNotifications.initialize(
       settings,
@@ -133,9 +129,10 @@ class PushService {
 
     // Create the Android channel up front so background FCM notifications and
     // our foreground local notifications share it.
-    final androidPlugin =
-        _localNotifications.resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
+    final androidPlugin = _localNotifications
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
     await androidPlugin?.createNotificationChannel(
       const AndroidNotificationChannel(
         kAndroidNotificationChannelId,
@@ -166,8 +163,9 @@ class PushService {
     _onMessageSub = FirebaseMessaging.onMessage.listen(_showLocalNotification);
 
     // Background → tapped (app was alive in the background).
-    _onMessageOpenedSub =
-        FirebaseMessaging.onMessageOpenedApp.listen((message) {
+    _onMessageOpenedSub = FirebaseMessaging.onMessageOpenedApp.listen((
+      message,
+    ) {
       _routeFromData(message.data);
     });
 
@@ -184,10 +182,12 @@ class PushService {
     // no access to the original RemoteMessage).
     final payload = jsonEncode(message.data);
 
-    final title = notification?.title ??
+    final title =
+        notification?.title ??
         (message.data['title'] as String?) ??
         'Rental Command';
-    final body = notification?.body ?? (message.data['message'] as String?) ?? '';
+    final body =
+        notification?.body ?? (message.data['message'] as String?) ?? '';
 
     const androidDetails = AndroidNotificationDetails(
       kAndroidNotificationChannelId,
@@ -198,8 +198,10 @@ class PushService {
       icon: '@mipmap/ic_launcher',
     );
     const iosDetails = DarwinNotificationDetails();
-    const details =
-        NotificationDetails(android: androidDetails, iOS: iosDetails);
+    const details = NotificationDetails(
+      android: androidDetails,
+      iOS: iosDetails,
+    );
 
     await _localNotifications.show(
       // Use the message hashCode for a stable-enough id within a session.
@@ -224,8 +226,9 @@ class PushService {
       _registered = true;
 
       // Re-register on token rotation.
-      _tokenRefreshSub ??=
-          FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
+      _tokenRefreshSub ??= FirebaseMessaging.instance.onTokenRefresh.listen((
+        newToken,
+      ) {
         _currentToken = newToken;
         unawaited(_postToken(newToken));
       });
@@ -269,7 +272,7 @@ class PushService {
 
   void _routeFromPayload(String? payload) {
     if (payload == null || payload.isEmpty) {
-      _navigate(resolveNotificationRoute(null));
+      _navigate(null);
       return;
     }
     try {
@@ -281,23 +284,27 @@ class PushService {
     } catch (_) {
       // fall through
     }
-    _navigate(resolveNotificationRoute(null));
+    _navigate(null);
   }
 
   void _routeFromData(Map<String, dynamic> data) {
-    final actionUrl = data['actionUrl'] as String?;
-    _navigate(resolveNotificationRoute(actionUrl));
+    _navigate(data['actionUrl'] as String?);
   }
 
-  /// Navigates to [route] if authenticated; otherwise stashes it so it runs
-  /// once the user signs in (mirrors the pending-voice-command bus).
-  void _navigate(String route) {
+  /// Hands the intent to the mounted role shell, or leaves it queued until the
+  /// shell mounts after authentication. The shell performs capability gating
+  /// and pushes onto the correct independent tab stack, preserving Back.
+  void _navigate(String? actionUrl) {
     final authState = _ref.read(authControllerProvider);
-    if (authState is AuthStateAuthenticated) {
-      _ref.read(appRouterProvider).go(route);
-    } else {
-      _ref.read(pendingPushLinkProvider.notifier).set(route);
-    }
+    final authenticated = authState is AuthStateAuthenticated
+        ? authState
+        : null;
+    final intent = MobileNavigationIntent.fromNotification(
+      actionUrl: actionUrl,
+      nowUtc: DateTime.now().toUtc(),
+      authority: authenticated,
+    );
+    _ref.read(pendingPushLinkProvider.notifier).set(intent);
   }
 
   void dispose() {

@@ -14,8 +14,8 @@ void main() {
 
   test('unit command center action urls keep tab query state', () {
     expect(
-      resolveNotificationRoute('/units/42?tab=lease'),
-      '/units/42?tab=lease',
+      resolveNotificationRoute('/units/42?tab=tenant-lease&view=agreements'),
+      '/units/42?tab=tenant-lease&view=agreements',
     );
     expect(
       resolveNotificationRoute('/units/42?tab=maintenance'),
@@ -30,22 +30,29 @@ void main() {
     );
   });
 
-  test('server query action urls normalize to mobile detail routes', () {
+  test('role-specific canonical detail routes remain addressable', () {
     expect(
-      resolveNotificationRoute('/messages?conversationId=42'),
-      '/messages/42',
+      resolveNotificationRoute('/leasing/conversations/42'),
+      '/leasing/conversations/42',
     );
     expect(
-      resolveNotificationRoute('/work-orders?workOrderId=17'),
-      '/work-orders/17',
+      resolveNotificationRoute('/technician/assignments/17'),
+      '/technician/assignments/17',
     );
-    expect(resolveNotificationRoute('/payments?paymentId=8'), '/notifications');
   });
 
   test('unknown notification targets fall back to notifications inbox', () {
     expect(resolveNotificationRoute(null), '/notifications');
     expect(resolveNotificationRoute(''), '/notifications');
     expect(resolveNotificationRoute('/admin'), '/notifications');
+    expect(
+      resolveNotificationRoute('/messages?conversationId=42'),
+      '/notifications',
+    );
+    expect(
+      resolveNotificationRoute('/work-orders?workOrderId=17'),
+      '/notifications',
+    );
     expect(
       resolveNotificationRoute('/messages?conversationId=0'),
       '/notifications',

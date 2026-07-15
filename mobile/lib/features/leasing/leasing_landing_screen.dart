@@ -3,10 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
 import '../../core/api/api_exception.dart';
-import '../applications/application_detail_screen.dart';
 import '../home/mobile_quick_action_helpers.dart';
+import '../home/mobile_role_shell.dart';
 import '../home/mobile_shell_actions.dart';
-import '../messages/message_detail_screen.dart';
 import 'leasing_detail_screens.dart';
 import 'leasing_workspace_repository.dart';
 
@@ -24,69 +23,56 @@ class LeasingLandingScreen extends ConsumerStatefulWidget {
 }
 
 class _LeasingLandingScreenState extends ConsumerState<LeasingLandingScreen> {
-  int _selectedIndex = 0;
-
-  static const _titles = [
-    'Today',
-    'Pipeline',
-    'Rentals & listings',
-    'Calendar',
-    'Inbox',
-  ];
-
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_titles[_selectedIndex]),
-        actions: const [MobileNotificationBell(), MobileAccountMenu()],
-      ),
-      body: IndexedStack(
-        index: _selectedIndex,
-        children: const [
-          _LeasingTodayTab(),
-          _LeasingListTab(area: LeasingArea.pipeline),
-          _LeasingListTab(area: LeasingArea.rentals),
-          _LeasingListTab(area: LeasingArea.calendar),
-          _LeasingListTab(area: LeasingArea.inbox),
-        ],
-      ),
+    return MobileRoleShell(
+      actions: const [MobileNotificationBell(), MobileAccountMenu()],
+      destinations: const [
+        MobileRoleDestination(
+          label: 'Today',
+          icon: Symbols.today_rounded,
+          builder: _leasingTodayBuilder,
+        ),
+        MobileRoleDestination(
+          label: 'Pipeline',
+          icon: Symbols.assignment_rounded,
+          builder: _leasingPipelineBuilder,
+        ),
+        MobileRoleDestination(
+          label: 'Rentals',
+          icon: Symbols.home_rounded,
+          builder: _leasingRentalsBuilder,
+        ),
+        MobileRoleDestination(
+          label: 'Calendar',
+          icon: Symbols.event_rounded,
+          builder: _leasingCalendarBuilder,
+        ),
+        MobileRoleDestination(
+          label: 'Inbox',
+          icon: Symbols.forum_rounded,
+          builder: _leasingInboxBuilder,
+        ),
+      ],
       floatingActionButton: FloatingActionButton.extended(
         heroTag: 'leasing-scan',
         onPressed: () => openAuthorizedMobileScan(context, ref),
         icon: const Icon(Symbols.document_scanner_rounded),
         label: const Text('Scan'),
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _selectedIndex,
-        onDestinationSelected: (index) =>
-            setState(() => _selectedIndex = index),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Symbols.today_rounded),
-            label: 'Today',
-          ),
-          NavigationDestination(
-            icon: Icon(Symbols.assignment_rounded),
-            label: 'Pipeline',
-          ),
-          NavigationDestination(
-            icon: Icon(Symbols.home_rounded),
-            label: 'Rentals',
-          ),
-          NavigationDestination(
-            icon: Icon(Symbols.event_rounded),
-            label: 'Calendar',
-          ),
-          NavigationDestination(
-            icon: Icon(Symbols.forum_rounded),
-            label: 'Inbox',
-          ),
-        ],
-      ),
     );
   }
 }
+
+Widget _leasingTodayBuilder(BuildContext context) => const _LeasingTodayTab();
+Widget _leasingPipelineBuilder(BuildContext context) =>
+    const _LeasingListTab(area: LeasingArea.pipeline);
+Widget _leasingRentalsBuilder(BuildContext context) =>
+    const _LeasingListTab(area: LeasingArea.rentals);
+Widget _leasingCalendarBuilder(BuildContext context) =>
+    const _LeasingListTab(area: LeasingArea.calendar);
+Widget _leasingInboxBuilder(BuildContext context) =>
+    const _LeasingListTab(area: LeasingArea.inbox);
 
 class _LeasingTodayTab extends ConsumerStatefulWidget {
   const _LeasingTodayTab();
@@ -382,8 +368,9 @@ class _LeasingListTabState extends ConsumerState<_LeasingListTab> {
         onTap: item.kind == 'Application'
             ? () => Navigator.of(context).push<void>(
                 MaterialPageRoute<void>(
-                  builder: (_) =>
-                      ApplicationDetailScreen(applicationId: item.recordId),
+                  builder: (_) => LeasingApplicationDetailScreen(
+                    applicationId: item.recordId,
+                  ),
                 ),
               )
             : item.kind == 'MoveIn'
@@ -454,11 +441,8 @@ class _LeasingListTabState extends ConsumerState<_LeasingListTab> {
       trailing: const Icon(Symbols.chevron_right_rounded),
       onTap: () => Navigator.of(context).push<void>(
         MaterialPageRoute<void>(
-          builder: (_) => MessageDetailScreen(
-            conversationId: message.id,
-            title: message.tenantName,
-            subtitle: message.subject,
-          ),
+          builder: (_) =>
+              LeasingConversationDetailScreen(conversationId: message.id),
         ),
       ),
     );
