@@ -219,8 +219,8 @@
 </script>
 
 <svelte:head>
-	<title>{relationshipQuery.data?.primaryTenantName
-		? `${relationshipQuery.data.primaryTenantName} - Lease - Rental Command`
+	<title>{relationshipQuery.data?.summary.primaryTenantName
+		? `${relationshipQuery.data.summary.primaryTenantName} - Lease - Rental Command`
 		: 'Lease - Rental Command'}</title>
 </svelte:head>
 
