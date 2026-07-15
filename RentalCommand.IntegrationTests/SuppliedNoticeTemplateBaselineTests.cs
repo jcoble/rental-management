@@ -274,7 +274,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             };
             setup.AddRange(actor, portfolio);
             await setup.SaveChangesAsync();
-            scope = await SeedAdministratorScopeAsync(setup, portfolio, actor, now);
+            scope = await SeedAdministratorScopeAsync(setup, portfolio, actor, DateTime.UtcNow);
             setup.SimulationClocks.Add(new SimulationClock
             {
                 Id = 1,
@@ -473,6 +473,7 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         int portfolioId;
         int draftId;
         long workItemId;
+        int baselineOutboxCount;
         WorkspaceReadScope scope = default;
         var claimToken = Guid.NewGuid();
         await using (var setup = NewContext())
@@ -618,6 +619,8 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             portfolioId = portfolio.Id;
             draftId = draft.Id;
             workItemId = workItem.Id;
+            baselineOutboxCount = await setup.OutboxMessages.CountAsync(row =>
+                row.PortfolioId == portfolio.Id);
         }
 
         await using (var stale = NewContext())
@@ -640,7 +643,8 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
         await using (var rolledBack = NewContext())
         {
             (await rolledBack.RenderedNotices.CountAsync(row => row.PortfolioId == portfolioId)).Should().Be(0);
-            (await rolledBack.OutboxMessages.CountAsync(row => row.PortfolioId == portfolioId)).Should().Be(0);
+            (await rolledBack.OutboxMessages.CountAsync(row => row.PortfolioId == portfolioId))
+                .Should().Be(baselineOutboxCount);
             (await rolledBack.NoticeDeliveryEvidence.CountAsync(row => row.PortfolioId == portfolioId)).Should().Be(0);
             (await rolledBack.PortalMessages.CountAsync(row => row.PortfolioId == portfolioId)).Should().Be(0);
             (await rolledBack.NoticeDrafts.SingleAsync(row => row.Id == draftId)).Status.Should().Be("Draft");
