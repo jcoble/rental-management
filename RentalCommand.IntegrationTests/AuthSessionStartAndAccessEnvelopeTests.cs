@@ -1,6 +1,7 @@
 using System.Data.Common;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -34,6 +35,8 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         new("login-context-selection-challenge-result.v1");
     private static readonly AtomicJsonResultCodec<StartAuthSessionResult> StartCodec =
         new("start-auth-session-result.v1");
+    private static readonly AtomicJsonResultCodec<AuthEmailOutboxResult> AuthEmailCodec =
+        new("auth-email-outbox-result:v1");
 
     private readonly DateTime _now = CurrentTestTimeUtc();
     private PostgreSqlContainer? _postgres;
@@ -50,6 +53,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
     private int _otherUserContextId;
     private int _firstMembershipId;
     private int _secondAssignmentId;
+    private string _securityStamp = string.Empty;
 
     public async Task InitializeAsync()
     {
@@ -107,6 +111,10 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             StartAuthSessionCommand,
             StartAuthSessionResult,
             StartAuthSessionHandler>();
+        services.AddAtomicCommandHandler<
+            AuthEmailOutboxCommand,
+            AuthEmailOutboxResult,
+            AuthEmailOutboxHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
             options.UseNpgsql(connectionString)
                 .UseAtomicPersistenceKernel(provider)
@@ -187,6 +195,52 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         (await verify.AtomicAuditLogs.CountAsync(row =>
             row.AttemptId == started.AttemptId &&
             row.ChangeReason == "Authentication session started")).Should().Be(1);
+    }
+
+    [SkippableTheory]
+    [InlineData("email-confirmation")]
+    [InlineData("password-reset")]
+    public async Task RuntimeApiRole_WithBlankScope_EnqueuesAndReplaysPreAuthAccountEmail(
+        string emailKind)
+    {
+        SkipIfNoDocker();
+        var operationDigest = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(Guid.NewGuid().ToString("N"))))
+            .ToLowerInvariant();
+        var deliveryKey = $"auth:{emailKind}:{_userId}:{operationDigest}";
+        var command = new AuthEmailOutboxCommand(
+            _userId,
+            null,
+            _securityStamp,
+            emailKind,
+            JsonSerializer.Serialize(new
+            {
+                to = "auth-start@example.test",
+                subject = "Confirm your account",
+                body = "Confirmation body",
+                htmlBody = "<p>Confirmation body</p>",
+            }),
+            Hash($"{_userId}\0{emailKind}\0{_securityStamp}"),
+            deliveryKey);
+        var identity = new AtomicCommandIdentity(
+            $"auth.email.{emailKind}",
+            $"{_userId}:{operationDigest}");
+
+        var enqueued = await RuntimeAtomic.ExecuteAsync(identity, command, AuthEmailCodec);
+        var replayed = await RuntimeAtomic.ExecuteAsync(identity, command, AuthEmailCodec);
+
+        enqueued.Value.Enqueued.Should().BeTrue();
+        enqueued.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        replayed.Disposition.Should().Be(AtomicCommandDisposition.Replayed);
+        replayed.Value.Should().Be(enqueued.Value);
+
+        await using var verify = NewPlainContext();
+        (await verify.AtomicAuditLogs.CountAsync(row =>
+            row.AttemptId == enqueued.AttemptId &&
+            row.ChangeReason == "Transactional account email enqueued")).Should().Be(1);
+        (await verify.OutboxMessages.CountAsync(row =>
+            row.PortfolioId == enqueued.Value.PortfolioId &&
+            row.IdempotencyKey == deliveryKey)).Should().Be(1);
     }
 
     [SkippableFact]
@@ -738,6 +792,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         _otherUserContextId = other.Context.Id;
         _firstMembershipId = first.Membership.Id;
         _secondAssignmentId = second.Assignment.Id;
+        _securityStamp = user.SecurityStamp!;
     }
 
     private AccessRoot CreateAccessRoot(int userId, int portfolioId, WorkspaceExperience experience)
