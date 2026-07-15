@@ -128,7 +128,11 @@ public sealed class ConfirmAccountEmailHandler
         user.EmailConfirmed = true;
         user.ConcurrencyStamp = Guid.NewGuid().ToString("N");
         attempt.StageSemanticEvent(SecurityAudit(
-            root.PortfolioId, user.Id, "EmailConfirmed", "Account email confirmed"), now);
+            root,
+            user.Id,
+            "EmailConfirmed",
+            command.ConfirmationIntentHash,
+            "Account email confirmed"), now);
         return new ConfirmAccountEmailResult(ConfirmAccountEmailOutcome.Confirmed, user.Id);
     }
 
@@ -165,17 +169,24 @@ public sealed class ConfirmAccountEmailHandler
         ?? throw new UnauthorizedAccessException("The account has no current workspace authority.");
 
     internal static AtomicSemanticAudit SecurityAudit(
-        int portfolioId,
+        AtomicEffectiveLoginContext root,
         int userId,
         string securityEvent,
+        string securityIntentHash,
         string reason) => new(
-        portfolioId,
+        root.PortfolioId,
         nameof(ApplicationUser),
         userId,
         AuditLogOperation.Updated,
         userId,
         ActorLabel: "authentication:account-security",
-        NewValues: JsonSerializer.Serialize(new { SecurityEvent = securityEvent, TargetUserId = userId }),
+        NewValues: JsonSerializer.Serialize(new
+        {
+            SecurityEvent = securityEvent,
+            SecurityIntentHash = securityIntentHash,
+            TargetUserId = userId,
+            AuditRootAccessContextId = root.AccessContextId,
+        }),
         ChangeReason: reason);
 }
 
@@ -211,7 +222,11 @@ public sealed class ResetAccountPasswordHandler
         user.LockoutEnd = null;
         user.EmailConfirmed = true;
         attempt.StageSemanticEvent(ConfirmAccountEmailHandler.SecurityAudit(
-            root.PortfolioId, user.Id, "PasswordReset", "Password reset completed"), now);
+            root,
+            user.Id,
+            "PasswordReset",
+            command.PasswordIntentHash,
+            "Password reset completed"), now);
         return new ResetAccountPasswordResult(ResetAccountPasswordOutcome.Reset, user.Id);
     }
 
@@ -234,7 +249,8 @@ public sealed class ResetAccountPasswordHandler
 }
 
 public sealed class ConfirmGoogleAccountEmailHandler
-    : IAtomicCommandHandler<ConfirmGoogleAccountEmailCommand, ConfirmAccountEmailResult>
+    : IAtomicCommandHandler<ConfirmGoogleAccountEmailCommand, ConfirmAccountEmailResult>,
+      IAtomicReplayAuthorizer<ConfirmGoogleAccountEmailCommand>
 {
     public async Task<ConfirmAccountEmailResult> HandleAsync(
         ConfirmGoogleAccountEmailCommand command,
@@ -254,8 +270,23 @@ public sealed class ConfirmGoogleAccountEmailHandler
         user.EmailConfirmed = true;
         user.ConcurrencyStamp = Guid.NewGuid().ToString("N");
         attempt.StageSemanticEvent(ConfirmAccountEmailHandler.SecurityAudit(
-            root.PortfolioId, user.Id, "GoogleEmailConfirmed", "Google-verified account email confirmed"), now);
+            root,
+            user.Id,
+            "GoogleEmailConfirmed",
+            command.GoogleSubjectHash,
+            "Google-verified account email confirmed"), now);
         return new ConfirmAccountEmailResult(ConfirmAccountEmailOutcome.Confirmed, user.Id);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        ConfirmGoogleAccountEmailCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        if (command.UserId <= 0) throw new ArgumentOutOfRangeException(nameof(command.UserId));
+        BootstrapAccountHandler.ValidateDigest(command.GoogleSubjectHash, nameof(command.GoogleSubjectHash));
+        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        _ = await ConfirmAccountEmailHandler.RequireAuditRootAsync(command.UserId, persistence, now, ct);
     }
 }
 
