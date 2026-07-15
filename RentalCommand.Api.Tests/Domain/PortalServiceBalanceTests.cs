@@ -144,6 +144,24 @@ public sealed class PortalServiceBalanceTests
     }
 
     [Fact]
+    public void ExecutedAgreementDownload_BindsCurrentTenantRelationshipAndArtifactInOneStatement()
+    {
+        using var db = NewContext();
+        var sql = NewService(db)
+            .BuildExecutedAgreementArtifactQuery(Scope, 91, 108)
+            .ToQueryString();
+
+        AssertCurrentTenantAccess(sql);
+        sql.Should().Contain("LeaseManagementId");
+        sql.Should().Contain("LeaseAgreements");
+        sql.Should().Contain("LegalDocumentArtifacts");
+        sql.Should().Contain("StoredFiles");
+        sql.Should().Contain("FullyExecutedAtUtc");
+        sql.Should().Contain("ExecutedArtifactId");
+        sql.Should().Contain("DeletedAt");
+    }
+
+    [Fact]
     public void WorkOrderPage_AuthorizesRelationshipFiltersSortsAndPagesInSql()
     {
         using var db = NewContext();

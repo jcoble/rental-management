@@ -22,6 +22,14 @@ public interface IPortalService
 
     Task<IReadOnlyList<PortalLeaseRelationshipResponse>> GetLeasesAsync(
         int portfolioId, int accessContextId, int tenantId, CancellationToken ct = default);
+    /// <summary>
+    /// Resolves an executed Agreement file only when the current tenant access context has an
+    /// effective relationship to the same LeaseManagement. The ownership gate and artifact lookup
+    /// are one translated database query.
+    /// </summary>
+    Task<LegalArtifactFileReference?> GetExecutedAgreementArtifactAsync(
+        PortalTenantReadScope scope, int leaseManagementId, int leaseAgreementId,
+        CancellationToken ct = default);
     Task<PortalTenantAccountPageResponse> ListTenantAccountsPageAsync(
         PortalTenantReadScope scope,
         PortalTenantAccountListQuery query,

@@ -260,11 +260,72 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             DocumentSourceVersionId = row.DocumentSourceVersionId,
             DocumentTemplateId = row.DocumentTemplateId,
             DocumentTemplateVersion = row.DocumentTemplateVersion,
+            SourceAgreement = row.SourceAgreement,
             Signers = row.Signers,
             CreatedAtUtc = row.CreatedAtUtc,
             UpdatedAtUtc = row.UpdatedAtUtc,
         };
     }
+
+    public async Task<LeasePartyLegalBasisPageResponse?> ListEligiblePartyLegalBasisPageAsync(
+        LeaseManagementReadContext access,
+        int leaseManagementId,
+        ListQuery query,
+        CancellationToken ct = default)
+    {
+        if (!await BuildAgreementPreparationManagementQuery(access)
+                .AnyAsync(management => management.Id == leaseManagementId, ct))
+        {
+            return null;
+        }
+
+        var rows = BuildEligiblePartyLegalBasisQuery(access, leaseManagementId, query);
+
+        var totalCount = await rows.CountAsync(ct);
+        var ordered = query.SortDescending
+            ? rows.OrderBy(item => item.FullyExecutedAtUtc).ThenBy(item => item.LeaseAgreementId)
+            : rows.OrderByDescending(item => item.FullyExecutedAtUtc).ThenByDescending(item => item.LeaseAgreementId);
+        var items = await ordered
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake)
+            .ToListAsync(ct);
+        return new LeasePartyLegalBasisPageResponse
+        {
+            Items = items,
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
+    }
+
+    internal IQueryable<LeasePartyLegalBasisResponse> BuildEligiblePartyLegalBasisQuery(
+        LeaseManagementReadContext access,
+        int leaseManagementId,
+        ListQuery query) =>
+            from management in BuildAgreementPreparationManagementQuery(access)
+            join agreement in _db.LeaseAgreements.AsNoTracking()
+                on new { management.PortfolioId, LeaseManagementId = management.Id }
+                equals new { agreement.PortfolioId, agreement.LeaseManagementId }
+            where management.Id == leaseManagementId
+                && (agreement.ChangeType == LeaseAgreementChangeType.Correction
+                    || agreement.ChangeType == LeaseAgreementChangeType.Restatement)
+            where agreement.FullyExecutedAtUtc != null
+                && agreement.ExecutedArtifactId != null
+                && agreement.VoidedAtUtc == null
+                && agreement.DraftCanceledAtUtc == null
+                && (string.IsNullOrWhiteSpace(query.Search)
+                    || EF.Functions.ILike(agreement.AgreementNumber, $"%{query.Search.Trim()}%")
+                    || (agreement.CorrectionReason != null
+                        && EF.Functions.ILike(agreement.CorrectionReason, $"%{query.Search.Trim()}%")))
+            select new LeasePartyLegalBasisResponse
+            {
+                LeaseAgreementId = agreement.Id,
+                AgreementNumber = agreement.AgreementNumber,
+                VersionNumber = agreement.VersionNumber,
+                ChangeType = agreement.ChangeType,
+                CorrectionReason = agreement.CorrectionReason,
+                FullyExecutedAtUtc = agreement.FullyExecutedAtUtc!.Value,
+            };
 
     public Task<LeaseAgreementSignatureProgressResponse?> GetAgreementSignatureProgressAsync(
         LeaseManagementReadContext access,
@@ -674,6 +735,15 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         join sourceVersion in _db.LegalDocumentSourceVersions.AsNoTracking()
             on new { agreement.PortfolioId, SourceVersionId = agreement.DocumentSourceVersionId }
             equals new { sourceVersion.PortfolioId, SourceVersionId = sourceVersion.Id }
+        let sourceAgreementId = agreement.ReplacesAgreementId
+            ?? agreement.RenewsAgreementId
+            ?? agreement.ReissuesAgreementId
+            ?? agreement.TransferredFromAgreementId
+        from sourceAgreement in _db.LeaseAgreements.AsNoTracking()
+            .Where(candidate => candidate.PortfolioId == agreement.PortfolioId
+                && candidate.LeaseManagementId == agreement.LeaseManagementId
+                && candidate.Id == sourceAgreementId)
+            .DefaultIfEmpty()
         where management.Id == leaseManagementId
             && agreement.Id == leaseAgreementId
             && agreement.IssuedAtUtc == null
@@ -707,6 +777,25 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
             DocumentSourceVersionId = agreement.DocumentSourceVersionId,
             DocumentTemplateId = sourceVersion.DocumentTemplateId,
             DocumentTemplateVersion = sourceVersion.DocumentTemplateVersion,
+            SourceAgreement = sourceAgreement == null
+                ? null
+                : new LeaseAgreementSourceComparisonResponse
+                {
+                    LeaseAgreementId = sourceAgreement.Id,
+                    AgreementNumber = sourceAgreement.AgreementNumber,
+                    VersionNumber = sourceAgreement.VersionNumber,
+                    ChangeType = sourceAgreement.ChangeType,
+                    TermType = sourceAgreement.TermType,
+                    TermStartOn = sourceAgreement.TermStartOn,
+                    TermEndOn = sourceAgreement.TermEndOn,
+                    GoverningFromOn = sourceAgreement.GoverningFromOn,
+                    BaseRentAmount = sourceAgreement.BaseRentAmount,
+                    RentDueDay = sourceAgreement.RentDueDay,
+                    SecurityDepositObligation = sourceAgreement.SecurityDepositObligation,
+                    LateFeeAmount = sourceAgreement.LateFeeAmount,
+                    GracePeriodDays = sourceAgreement.GracePeriodDays,
+                    Currency = sourceAgreement.Currency,
+                },
             Signers = agreement.Signers
                 .Where(signer => signer.PortfolioId == access.PortfolioId)
                 .OrderBy(signer => signer.SigningOrder)
@@ -1559,6 +1648,7 @@ public sealed class LeaseManagementQueryService : ILeaseManagementQueryService
         public int DocumentSourceVersionId { get; init; }
         public int? DocumentTemplateId { get; init; }
         public int? DocumentTemplateVersion { get; init; }
+        public LeaseAgreementSourceComparisonResponse? SourceAgreement { get; init; }
         public IReadOnlyList<LeaseAgreementDraftSignerResponse> Signers { get; init; } = [];
         public DateTime CreatedAtUtc { get; init; }
         public DateTime UpdatedAtUtc { get; init; }

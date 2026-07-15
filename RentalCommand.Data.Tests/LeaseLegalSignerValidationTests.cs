@@ -94,6 +94,7 @@ public sealed class LeaseLegalSignerValidationTests
         changeType == LeaseAgreementChangeType.MonthToMonth ? null : new DateOnly(2027, 12, 31),
         new DateOnly(2027, 1, 1),
         correctionReason,
+        null,
         [],
         5,
         Guid.NewGuid(),

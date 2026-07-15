@@ -21,7 +21,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
     private static readonly AtomicJsonResultCodec<LeaseAgreementDraftMutationResult> EditCodec =
         new("lease-agreement.draft.edit.v1");
     private static readonly AtomicJsonResultCodec<LeaseAgreementDraftMutationResult> SuccessorCodec =
-        new("lease-agreement.successor-draft.create.v1");
+        new("lease-agreement.successor-draft.create.v2");
     private static readonly AtomicJsonResultCodec<CancelLeaseAgreementSuccessorDraftResult> CancelDraftCodec =
         new("lease-agreement.successor-draft.cancel.v1");
     private static readonly AtomicJsonResultCodec<IssueLeaseAgreementResult> IssueCodec =
@@ -253,6 +253,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
         var command = new CreateLeaseAgreementSuccessorDraftCommand(
             envelope.PortfolioId, leaseManagementId, sourceAgreementId, request.ChangeType.Value,
             request.TermStartOn, request.TermEndOn, request.GoverningFromOn, request.CorrectionReason,
+            request.DocumentTemplateId,
             request.AddendumDecisions.Select(item => new LeaseRenewalAddendumDecisionInput(
                 item.SourceAddendumSeriesPublicId, item.Decision!.Value)).ToArray(),
             envelope.UserId, envelope.SessionId,
@@ -492,6 +493,7 @@ public sealed class LeaseAgreementController : ManagementControllerBase
                     Conflict(new { error = outcome.Value.Error }),
                 LeaseAgreementDraftMutationOutcome.InvalidTerms
                     or LeaseAgreementDraftMutationOutcome.InvalidSigners
+                    or LeaseAgreementDraftMutationOutcome.InvalidTemplate
                     or LeaseAgreementDraftMutationOutcome.InvalidSuccessorType
                     or LeaseAgreementDraftMutationOutcome.InvalidAddendumDecisions =>
                     UnprocessableEntity(new { error = outcome.Value.Error }),

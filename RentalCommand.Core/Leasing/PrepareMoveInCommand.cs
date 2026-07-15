@@ -4,8 +4,16 @@ using RentalCommand.Core.Enums;
 namespace RentalCommand.Core.Leasing;
 
 /// <summary>A chosen person and effective role in the relationship being prepared.</summary>
+public sealed record PrepareMoveInNewTenant(
+    string FirstName,
+    string LastName,
+    string? Email,
+    string? Phone,
+    string? EmergencyContact) : IAtomicCommandData;
+
 public sealed record PrepareMoveInParty(
-    int TenantId,
+    int? TenantId,
+    PrepareMoveInNewTenant? NewTenant,
     LeaseManagementPartyRole Role,
     bool GuarantorLegalNoticeEligible,
     string ChangeReason,
@@ -14,12 +22,13 @@ public sealed record PrepareMoveInParty(
     bool IsRequiredSigner) : IAtomicCommandData;
 
 /// <summary>
-/// Creates the complete pre-possession relationship root from one approved application. It does
+/// Creates the complete pre-possession relationship root from an approved application or an
+/// explicitly selected Unit and household. It does
 /// not grant possession/access, post money, issue a legal artifact, or write legacy lease rows.
 /// </summary>
 public sealed record PrepareMoveInCommand(
     int PortfolioId,
-    int ApplicationId,
+    int? ApplicationId,
     int UnitId,
     int CreatedByUserId,
     Guid AuthSessionId,
@@ -59,12 +68,13 @@ public enum PrepareMoveInOutcome
 /// <summary>Receipt-safe identifiers for every root created by Prepare move-in.</summary>
 public sealed record PrepareMoveInResult(
     PrepareMoveInOutcome Outcome,
-    int ApplicationId,
+    int? ApplicationId,
     int LeaseManagementId,
     int TenantAccountId,
     int LeaseAgreementId,
     long? OpeningBalanceLedgerEntryId,
     int? SecurityDepositAccountId,
+    IReadOnlyList<int> TenantIds,
     IReadOnlyList<int> LeaseManagementPartyIds,
     IReadOnlyList<int> LeaseAgreementSignerIds,
     string? Error) : IAtomicResultData;

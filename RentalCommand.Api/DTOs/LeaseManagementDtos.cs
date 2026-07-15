@@ -138,6 +138,25 @@ public sealed class LeaseAgreementHistoryResponse
     public DateTime UpdatedAtUtc { get; init; }
 }
 
+public sealed class LeasePartyLegalBasisPageResponse
+{
+    public IReadOnlyList<LeasePartyLegalBasisResponse> Items { get; init; } = [];
+    public int TotalCount { get; init; }
+    public int Skip { get; init; }
+    public int Take { get; init; }
+}
+
+/// <summary>An executed correction/restatement that can legally support a party mutation.</summary>
+public sealed class LeasePartyLegalBasisResponse
+{
+    public int LeaseAgreementId { get; init; }
+    public string AgreementNumber { get; init; } = string.Empty;
+    public int VersionNumber { get; init; }
+    public LeaseAgreementChangeType ChangeType { get; init; }
+    public string? CorrectionReason { get; init; }
+    public DateTime FullyExecutedAtUtc { get; init; }
+}
+
 public sealed class LeaseAddendumHistoryPageResponse
 {
     public IReadOnlyList<LeaseAddendumHistoryResponse> Items { get; init; } = [];

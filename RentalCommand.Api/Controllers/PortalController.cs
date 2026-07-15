@@ -3,6 +3,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Payments;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -20,15 +21,18 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     private readonly IPortalService _service;
     private readonly IConversationService _conversations;
     private readonly IStripePaymentService _stripe;
+    private readonly IFileStorage _files;
 
     public PortalController(
         IPortalService service,
         IConversationService conversations,
-        IStripePaymentService stripe)
+        IStripePaymentService stripe,
+        IFileStorage files)
     {
         _service = service;
         _conversations = conversations;
         _stripe = stripe;
+        _files = files;
     }
 
     private Task<int?> GetTenantIdAsync(CancellationToken ct) =>
@@ -58,6 +62,39 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         var items = await _service.GetLeasesAsync(
             GetPortfolioId(), GetAccessContextId(), tenantId.Value, ct);
         return Ok(items);
+    }
+
+    [HttpGet("leases/{leaseManagementId:int}/agreements/{leaseAgreementId:int}/executed-document")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DownloadExecutedAgreement(
+        int leaseManagementId,
+        int leaseAgreementId,
+        CancellationToken ct)
+    {
+        var reference = await _service.GetExecutedAgreementArtifactAsync(
+            GetTenantReadScope(), leaseManagementId, leaseAgreementId, ct);
+        if (reference is null)
+        {
+            return NotFound(new { error = "Executed Agreement not found" });
+        }
+
+        Stream stream;
+        try
+        {
+            stream = await _files.DownloadAsync(reference.StorageKey, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return NotFound(new { error = "Executed Agreement file not found on storage" });
+        }
+
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        return File(stream, reference.ContentType, reference.FileName, enableRangeProcessing: true);
     }
 
     [HttpGet("tenant-accounts/page")]

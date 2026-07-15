@@ -40,6 +40,9 @@ public interface ILeaseManagementQueryService
     Task<LeaseAgreementDraftDetailResponse?> GetAgreementDraftAsync(
         LeaseManagementReadContext access, int leaseManagementId, int leaseAgreementId,
         CancellationToken ct = default);
+    Task<LeasePartyLegalBasisPageResponse?> ListEligiblePartyLegalBasisPageAsync(
+        LeaseManagementReadContext access, int leaseManagementId, ListQuery query,
+        CancellationToken ct = default);
     Task<LeaseAgreementSignatureProgressResponse?> GetAgreementSignatureProgressAsync(
         LeaseManagementReadContext access, int leaseManagementId, int leaseAgreementId,
         CancellationToken ct = default);
