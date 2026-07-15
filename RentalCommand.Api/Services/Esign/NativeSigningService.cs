@@ -18,7 +18,6 @@ public sealed class NativeSigningService : INativeSigningService
     private readonly RentalCommandDbContext _db;
     private readonly IAtomicUnitOfWork _atomic;
     private readonly IFileStorage _storage;
-    private readonly INativeEsignExecutionService _execution;
     private readonly ILogger<NativeSigningService> _logger;
     private readonly IPendingFileUploadStore _pendingUploads;
 
@@ -26,14 +25,12 @@ public sealed class NativeSigningService : INativeSigningService
         RentalCommandDbContext db,
         IAtomicUnitOfWork atomic,
         IFileStorage storage,
-        INativeEsignExecutionService execution,
         IPendingFileUploadStore pendingUploads,
         ILogger<NativeSigningService> logger)
     {
         _db = db;
         _atomic = atomic;
         _storage = storage;
-        _execution = execution;
         _pendingUploads = pendingUploads;
         _logger = logger;
     }
@@ -226,19 +223,15 @@ public sealed class NativeSigningService : INativeSigningService
             return MapSignerActionError(outcome.Value);
         }
 
-        var completed = outcome.Value.RequestStatus == SignatureRequestStatus.Completed;
-        var responseStatus = outcome.Value.RequestStatus;
-        if (outcome.Value.ExecutionRequired)
-        {
-            completed = await _execution.FinalizePendingAsync(outcome.Value.SignatureRequestId, ct);
-            responseStatus = completed ? SignatureRequestStatus.Completed : SignatureRequestStatus.ExecutionPending;
-        }
-
         return SignTokenResult<SignActionResponse>.Ok(new SignActionResponse
         {
             SignerStatus = outcome.Value.SignerStatus.ToString(),
-            RequestStatus = responseStatus.ToString(),
-            RequestCompleted = completed,
+            RequestStatus = outcome.Value.RequestStatus.ToString(),
+            // Executed-PDF generation is deliberately reconciled by the Engine after the signer
+            // transaction commits. The signature page can safely report success immediately while
+            // the durable ExecutionPending packet is finalized without widening anonymous RLS to
+            // the complete lease graph.
+            RequestCompleted = outcome.Value.RequestStatus == SignatureRequestStatus.Completed,
         });
     }
 
