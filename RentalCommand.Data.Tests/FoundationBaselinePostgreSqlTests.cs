@@ -92,6 +92,15 @@ public sealed class FoundationBaselinePostgreSqlTests
     }
 
     [Fact]
+    public void DebtServiceWorker_HasOnlyTheLoanPermissionsItsClaimAndAppendFlowRequires()
+    {
+        CreateSql.Should().Contain(
+            "GRANT SELECT, UPDATE ON TABLE \"Loans\" TO rentalcommand_engine;");
+        CreateSql.Should().Contain(
+            "GRANT SELECT, INSERT ON TABLE \"LoanPayments\" TO rentalcommand_engine;");
+    }
+
+    [Fact]
     public void SandboxGraduation_AddsDeleteWithoutWeakeningAppendOnlyRows()
     {
         CreateSql.Should().Contain(
