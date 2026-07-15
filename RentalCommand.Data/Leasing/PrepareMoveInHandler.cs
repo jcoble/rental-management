@@ -37,37 +37,42 @@ public sealed class PrepareMoveInHandler
         var wallClockUtc = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
         attempt.UseDatabaseWallClockForAudit(wallClockUtc);
         var target = command.ApplicationId.HasValue
-            ? await AuthorizedApplications(command, attempt.Persistence, wallClockUtc)
-                .Select(candidate => new PreparationTarget(
-                    candidate,
-                    candidate.PropertyId!.Value,
-                    candidate.UnitId!.Value,
-                    candidate.Portfolio!.Currency,
-                    command.DocumentTemplateId == null
-                    || attempt.Persistence.Query<DocumentTemplate>().Any(template =>
-                        template.Id == customTemplateId
-                        && template.PortfolioId == command.PortfolioId
-                        && template.Kind == DocumentTemplateKind.Lease
-                        && template.Status == DocumentTemplateStatus.Active
-                        && template.ArchivedAtUtc == null
-                        && (template.PropertyId == null || template.PropertyId == candidate.PropertyId)),
-                    attempt.Persistence.Query<LeaseManagement>().Any(relationship =>
-                        relationship.PortfolioId == command.PortfolioId
-                        && relationship.PropertyId == candidate.PropertyId
-                        && relationship.UnitId == command.UnitId
-                        && relationship.CanceledAtUtc == null
-                        && relationship.PossessionGivenAtUtc != null
-                        && relationship.PossessionGivenAtUtc <= wallClockUtc
-                        && (relationship.PossessionReturnedAtUtc == null
-                            || relationship.PossessionReturnedAtUtc > wallClockUtc)
-                        && (command.PlannedPossessionAtUtc == null
-                            || command.PlannedPossessionAtUtc <= wallClockUtc)),
-                    attempt.Persistence.Query<UnitOperationalPeriod>().Any(period =>
-                        period.PortfolioId == command.PortfolioId
-                        && period.PropertyId == candidate.PropertyId
-                        && period.UnitId == command.UnitId
-                        && period.StartedAtUtc <= wallClockUtc
-                        && (period.EndedAtUtc == null || period.EndedAtUtc > wallClockUtc))))
+            ? await AuthorizedApplications(command, attempt.Persistence)
+                .SelectMany(candidate =>
+                    AuthorizedUnits(command, attempt.Persistence, wallClockUtc)
+                        .Where(unit =>
+                            (candidate.PropertyId == null || candidate.PropertyId == unit.PropertyId)
+                            && (candidate.UnitId == null || candidate.UnitId == unit.Id))
+                        .Select(unit => new PreparationTarget(
+                            candidate,
+                            unit.PropertyId,
+                            unit.Id,
+                            unit.Property!.Portfolio!.Currency,
+                            command.DocumentTemplateId == null
+                            || attempt.Persistence.Query<DocumentTemplate>().Any(template =>
+                                template.Id == customTemplateId
+                                && template.PortfolioId == command.PortfolioId
+                                && template.Kind == DocumentTemplateKind.Lease
+                                && template.Status == DocumentTemplateStatus.Active
+                                && template.ArchivedAtUtc == null
+                                && (template.PropertyId == null || template.PropertyId == unit.PropertyId)),
+                            attempt.Persistence.Query<LeaseManagement>().Any(relationship =>
+                                relationship.PortfolioId == command.PortfolioId
+                                && relationship.PropertyId == unit.PropertyId
+                                && relationship.UnitId == unit.Id
+                                && relationship.CanceledAtUtc == null
+                                && relationship.PossessionGivenAtUtc != null
+                                && relationship.PossessionGivenAtUtc <= wallClockUtc
+                                && (relationship.PossessionReturnedAtUtc == null
+                                    || relationship.PossessionReturnedAtUtc > wallClockUtc)
+                                && (command.PlannedPossessionAtUtc == null
+                                    || command.PlannedPossessionAtUtc <= wallClockUtc)),
+                            attempt.Persistence.Query<UnitOperationalPeriod>().Any(period =>
+                                period.PortfolioId == command.PortfolioId
+                                && period.PropertyId == unit.PropertyId
+                                && period.UnitId == unit.Id
+                                && period.StartedAtUtc <= wallClockUtc
+                                && (period.EndedAtUtc == null || period.EndedAtUtc > wallClockUtc)))))
                 .SingleOrDefaultAsync(ct)
             : await AuthorizedUnits(command, attempt.Persistence, wallClockUtc)
                 .Select(unit => new PreparationTarget(
@@ -436,6 +441,8 @@ public sealed class PrepareMoveInHandler
 
         if (target.Application is { } trackedApplication)
         {
+            trackedApplication.PropertyId = target.PropertyId;
+            trackedApplication.UnitId = target.UnitId;
             trackedApplication.PreparedLeaseManagement = relationship;
             trackedApplication.UpdatedAt = wallClockUtc;
             attempt.BindSemanticAudit(trackedApplication, new AtomicSemanticAudit(
@@ -558,7 +565,12 @@ public sealed class PrepareMoveInHandler
         ValidateAuthorizationShape(command);
         var securityNowUtc = await persistence.ReadDatabaseClockUtcAsync(ct);
         var authorized = command.ApplicationId.HasValue
-            ? await AuthorizedApplications(command, persistence, securityNowUtc).AnyAsync(ct)
+            ? await AuthorizedApplications(command, persistence)
+                .SelectMany(candidate => AuthorizedUnits(command, persistence, securityNowUtc)
+                    .Where(unit =>
+                        (candidate.PropertyId == null || candidate.PropertyId == unit.PropertyId)
+                        && (candidate.UnitId == null || candidate.UnitId == unit.Id)))
+                .AnyAsync(ct)
             : await AuthorizedUnits(command, persistence, securityNowUtc).AnyAsync(ct);
         if (!authorized)
         {
@@ -569,67 +581,13 @@ public sealed class PrepareMoveInHandler
 
     private static IQueryable<RentalApplication> AuthorizedApplications(
         PrepareMoveInCommand command,
-        IAtomicPersistenceSession persistence,
-        DateTime securityNowUtc)
+        IAtomicPersistenceSession persistence)
     {
-        var effectiveAssignments = persistence.Query<MembershipRoleAssignment>()
-            .Where(assignment =>
-                assignment.Status == MembershipRoleAssignmentStatus.Active
-                && assignment.SuspendedAtUtc == null
-                && assignment.RevokedAtUtc == null
-                && assignment.EffectiveFromUtc <= securityNowUtc
-                && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > securityNowUtc));
-
         return persistence.Query<RentalApplication>()
             .Where(candidate =>
                 candidate.Id == command.ApplicationId
                 && candidate.PortfolioId == command.PortfolioId
-                && candidate.PropertyId != null
-                && candidate.UnitId == command.UnitId
-                && candidate.Unit != null
-                && candidate.Unit.PortfolioId == command.PortfolioId
-                && candidate.Unit.PropertyId == candidate.PropertyId
-                && candidate.Property != null
-                && candidate.Property.PortfolioId == command.PortfolioId
-                && persistence.Query<AuthSession>().Any(session =>
-                    session.Id == command.AuthSessionId
-                    && session.UserId == command.CreatedByUserId
-                    && session.ActiveAccessContextId == command.AccessContextId
-                    && session.Status == AuthSessionStatus.Active
-                    && session.RevokedAtUtc == null
-                    && session.ExpiresAtUtc > securityNowUtc)
-                && persistence.Query<WorkspaceAccessContext>().Any(context =>
-                    context.Id == command.AccessContextId
-                    && context.UserId == command.CreatedByUserId
-                    && context.PortfolioId == command.PortfolioId
-                    && context.AccessRevision == command.ExpectedAccessRevision
-                    && context.Status == WorkspaceAccessContextStatus.Active
-                    && context.SuspendedAtUtc == null
-                    && context.RevokedAtUtc == null)
-                && persistence.Query<WorkspaceMembership>().Any(membership =>
-                    membership.AccessContextId == command.AccessContextId
-                    && membership.PortfolioId == command.PortfolioId
-                    && membership.Status == WorkspaceMembershipStatus.Active
-                    && membership.SuspendedAtUtc == null
-                    && membership.RevokedAtUtc == null
-                    && membership.EffectiveFromUtc <= securityNowUtc
-                    && (membership.EffectiveToUtc == null || membership.EffectiveToUtc > securityNowUtc)
-                    && effectiveAssignments.Any(assignment =>
-                        assignment.WorkspaceMembershipId == membership.Id
-                        && assignment.PortfolioId == command.PortfolioId
-                        && (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
-                            || (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties
-                                && assignment.SelectedProperties.Any(scope =>
-                                    scope.PropertyId == candidate.PropertyId
-                                    && scope.PortfolioId == command.PortfolioId)))
-                        && (assignment.RoleProfile!.Capabilities.Any(capability =>
-                                capability.CapabilityDefinition!.Key == CapabilityKeys.RentalsManage
-                                && capability.CapabilityDefinition.AuthorizationTargetKind
-                                    == CapabilityAuthorizationTargetKind.Property)
-                            || assignment.RoleProfile.Capabilities.Any(capability =>
-                                    capability.CapabilityDefinition!.Key == CapabilityKeys.LeasingAgreementsPrepare
-                                    && capability.CapabilityDefinition.AuthorizationTargetKind
-                                        == CapabilityAuthorizationTargetKind.Property)))));
+                && (candidate.UnitId == null || candidate.UnitId == command.UnitId));
     }
 
     private static IQueryable<Unit> AuthorizedUnits(

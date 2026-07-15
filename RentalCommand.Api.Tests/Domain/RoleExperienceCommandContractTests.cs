@@ -40,6 +40,10 @@ public sealed class RoleExperienceCommandContractTests
 
         var moveIn = Source("RentalCommand.Data", "Leasing", "PrepareMoveInHandler.cs");
         moveIn.Should().Contain("CapabilityKeys.LeasingAgreementsPrepare");
+        moveIn.Should().Contain("candidate.PropertyId == null || candidate.PropertyId == unit.PropertyId");
+        moveIn.Should().Contain("candidate.UnitId == null || candidate.UnitId == unit.Id");
+        moveIn.Should().Contain("trackedApplication.PropertyId = target.PropertyId");
+        moveIn.Should().Contain("trackedApplication.UnitId = target.UnitId");
         var agreements = Source(
             "RentalCommand.Data", "Leasing", "LeaseAgreementDraftCommandHandlers.cs");
         agreements.Should().Contain("CapabilityKeys.LeasingAgreementsPrepare");
