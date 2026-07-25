@@ -226,6 +226,13 @@
 		data-testid="applications-header"
 	/>
 
+	{#if applicationsQuery.isError}
+		<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="applications-list-error">
+			<p class="font-medium text-destructive">Could not load applications.</p>
+			<p class="mt-1 text-sm text-muted-foreground">Try again. An unavailable list is not an empty application queue.</p>
+			<Button class="mt-4" variant="outline" onclick={() => applicationsQuery.refetch()}>Try again</Button>
+		</div>
+	{:else}
 	<DataGrid
 		data={list}
 		{columns}
@@ -268,6 +275,7 @@
 			</Button>
 		{/snippet}
 	</DataGrid>
+	{/if}
 </div>
 
 <!-- Application link dialog -->

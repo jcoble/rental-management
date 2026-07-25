@@ -297,6 +297,53 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         dashboard.Header.OutstandingRentBalance.Should().Be(0m);
     }
 
+    [Fact]
+    public async Task GetDashboardAsync_ReturnsRelationshipAndAccountWithoutGoverningAgreement()
+    {
+        var now = DateTime.UtcNow;
+        var (property, unit) = SeedPropertyUnit("Hilliard Duplex", "Left", 1250m, now);
+        var tenant = Tenant("Darius", "Clark", now);
+        _db.Tenants.Add(tenant);
+        _db.SaveChanges();
+
+        var relationship = Relationship(
+            property, unit, now, plannedPossessionAtUtc: null, possessionGivenAtUtc: now.AddMonths(-2));
+        relationship.RelationshipNumber = "DEMO-LM-ACTIVE-017";
+        relationship.PossessionAgreementExceptionReason = "Verified imported possession without a governing Agreement.";
+        relationship.PossessionAgreementExceptionAuthorizedByUserId = ActorUserId;
+        _db.LeaseManagements.Add(relationship);
+        _db.SaveChanges();
+
+        var account = Account(relationship, now);
+        account.AccountNumber = "DEMO-TA-ACTIVE-017";
+        _db.AddRange(Party(relationship, tenant, DateOnly.FromDateTime(now.AddMonths(-2)), now), account);
+        _db.SaveChanges();
+
+        _executedSql.Clear();
+        var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        dashboard!.LeaseManagementId.Should().Be(relationship.Id);
+        dashboard.TenantAccountId.Should().Be(account.Id);
+        dashboard.CurrentLease.Should().BeNull();
+        dashboard.CurrentTenant!.Name.Should().Be("Darius Clark");
+        dashboard.Header.RentState.Should().NotBe("NoLease");
+        dashboard.OccupancyPossession.Status.Should().Be("Occupied");
+        dashboard.OccupancyPossession.LeaseManagementId.Should().Be(relationship.Id);
+        dashboard.MarketingAvailability.Status.Should().Be("NotAvailable");
+        dashboard.TenantAccountCondition.Status.Should().Be("Current");
+        dashboard.TenantAccountCondition.TenantAccountId.Should().Be(account.Id);
+        dashboard.LegalNoticeCondition.Status.Should().Be("NoGoverningAgreement");
+        dashboard.MaintenanceTurnover.Status.Should().NotBeNullOrWhiteSpace();
+
+        var canonicalSql = _executedSql.First(command =>
+            command.Contains("vw_unit_occupancy", StringComparison.OrdinalIgnoreCase));
+        canonicalSql.Should().Contain("vw_lease_management_lifecycle");
+        canonicalSql.Should().Contain("TenantAccountId");
+        canonicalSql.Should().Contain("NoticeDrafts");
+        canonicalSql.Should().Contain("WHERE");
+    }
+
     private CanonicalGraph SeedCanonicalRelationship(
         string propertyName,
         string unitNumber,
@@ -721,6 +768,9 @@ public class UnitDashboardServiceTests : IAsyncLifetime
         WorkOrder? workOrder = null) => new()
     {
         PortfolioId = PortfolioId,
+        OperationalScope = workOrder is null
+            ? ExpenseOperationalScope.Unit
+            : ExpenseOperationalScope.WorkOrder,
         PropertyId = property.Id,
         UnitId = unit.Id,
         WorkOrder = workOrder,

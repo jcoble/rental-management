@@ -21,6 +21,31 @@ import type {
   NoticeDeliveryStatusResponse,
 } from "$lib/api/types/notification";
 
+export type NoticePreviewRequest = {
+  systemKey: string;
+  subject: string;
+  body: string;
+};
+
+export type NoticePreviewResponse = {
+  systemKey: string;
+  subject: string;
+  body: string;
+  exampleValues: Record<string, string>;
+};
+
+export type NoticeTestSendRequest = NoticePreviewRequest & {
+  destination: string;
+};
+
+export type NoticeTestSendResponse = {
+  state: "Accepted" | "Suppressed" | "ProviderError";
+  message: string;
+  destination: string;
+  provider: string | null;
+  providerMessageId: string | null;
+};
+
 export const notifications = {
   list: (params: NotificationListParams = {}) => {
     const search = new URLSearchParams();
@@ -59,7 +84,6 @@ export const notifications = {
     title: string;
     message: string;
     severity?: string;
-    actionUrl?: string | null;
   }) =>
     idempotentMutation(
       `notifications:broadcast:${JSON.stringify(data)}`,
@@ -141,6 +165,21 @@ export const notifications = {
     mergeFields: (systemKey: string) =>
       api.get<NoticeMergeFieldHelpResponse[]>(
         `/tenant-notices/templates/${encodeURIComponent(systemKey)}/merge-fields`
+      ),
+    previewNotice: (request: NoticePreviewRequest) =>
+      api.post<NoticePreviewResponse>(
+        `/tenant-notices/templates/${encodeURIComponent(request.systemKey)}/preview`,
+        request
+      ),
+    sendTest: (request: NoticeTestSendRequest) =>
+      idempotentMutation(
+        `tenant-notices:test:${request.systemKey}:${request.destination}:${JSON.stringify(request)}`,
+        (operationKey) =>
+          api.post<NoticeTestSendResponse>(
+            `/tenant-notices/templates/${encodeURIComponent(request.systemKey)}/test-send`,
+            request,
+            { headers: { "Idempotency-Key": operationKey } }
+          )
       ),
     createTemplateVersion: (
       systemKey: string,

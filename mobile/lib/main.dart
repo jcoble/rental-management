@@ -144,6 +144,7 @@ class _AppStartupState extends ConsumerState<_AppStartup> {
     if (authState is AuthStateUnknown) {
       // Minimal splash while checking stored tokens.
       return MaterialApp(
+        restorationScopeId: 'rental-command',
         theme: AppTheme.light,
         darkTheme: AppTheme.dark,
         // Dark by default, matching the EdiPlatform web app (ModeWatcher
@@ -177,6 +178,7 @@ class RentalCommandApp extends ConsumerWidget {
     });
     return MaterialApp.router(
       title: 'Rental Command',
+      restorationScopeId: 'rental-command',
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
       // Dark by default, matching the EdiPlatform web app (ModeWatcher

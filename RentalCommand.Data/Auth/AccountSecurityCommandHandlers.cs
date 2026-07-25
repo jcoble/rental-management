@@ -4,6 +4,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Data.Auth;
 
@@ -49,6 +50,152 @@ public sealed class BootstrapAccountHandler
             command.Email,
             now,
             ct);
+
+        var legalReplacementQuery =
+                from latest in attempt.Persistence.Query<SystemNoticeTemplateVersion>()
+                where latest.Version > SuppliedNoticeTemplateBaseline.Version
+                    && !attempt.Persistence.Query<SystemNoticeTemplateVersion>().Any(candidate =>
+                        candidate.SystemKey == latest.SystemKey && candidate.Version > latest.Version)
+                join current in attempt.Persistence.Query<WorkspaceNoticeTemplateVersion>()
+                    on new { latest.SystemKey, PortfolioId = workspace.PortfolioId }
+                    equals new { current.SystemKey, current.PortfolioId }
+                join policy in attempt.Persistence.Query<TenantNoticePolicy>()
+                    on new
+                    {
+                        current.PortfolioId,
+                        AutomationKey = current.SystemKey,
+                        WorkspaceNoticeTemplateVersionId = current.Id,
+                    }
+                    equals new
+                    {
+                        policy.PortfolioId,
+                        policy.AutomationKey,
+                        policy.WorkspaceNoticeTemplateVersionId,
+                    }
+                where latest.Classification == NoticeClassification.Legal
+                    && current.Version == SuppliedNoticeTemplateBaseline.Version
+                    && !current.IsCustomized
+                    && policy.Mode == TenantNoticeMode.Draft
+                    && policy.Classification == NoticeClassification.Legal
+                orderby latest.SystemKey
+                select new { Latest = latest, Current = current, Policy = policy };
+
+        legalReplacementQuery = legalReplacementQuery
+            .TagWith("TSK-733 fresh-workspace latest legal notice template selection");
+
+        var legalReplacementCount = await legalReplacementQuery.CountAsync(ct);
+        if (legalReplacementCount != SuppliedNoticeTemplateBaseline.V2Legal.Count)
+        {
+            throw new InvalidOperationException(
+                "Fresh workspace notice bootstrap did not resolve both legal supplied-template replacements.");
+        }
+
+        var legalReplacements = await legalReplacementQuery.ToListAsync(ct);
+        var replacementRows = legalReplacements.Select(row => new WorkspaceNoticeTemplateVersion
+        {
+            PortfolioId = workspace.PortfolioId,
+            SystemKey = row.Latest.SystemKey,
+            Version = row.Latest.Version,
+            BasedOnSystemTemplateVersionId = row.Latest.Id,
+            IsCustomized = false,
+            Subject = row.Latest.Subject,
+            Body = row.Latest.Body,
+            JurisdictionCode = row.Latest.JurisdictionCode,
+            JurisdictionReviewedAtUtc = null,
+            JurisdictionReviewedByUserId = null,
+            CreatedByUserId = user.Id,
+            CreatedAtUtc = now,
+        }).ToArray();
+        attempt.Persistence.AddRange(replacementRows);
+        await attempt.FlushBusinessAsync(ct);
+
+        for (var index = 0; index < legalReplacements.Count; index++)
+        {
+            var selected = legalReplacements[index];
+            var replacement = replacementRows[index];
+            selected.Policy.WorkspaceNoticeTemplateVersionId = replacement.Id;
+            selected.Policy.UpdatedAtUtc = now;
+
+            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+                workspace.PortfolioId,
+                nameof(WorkspaceNoticeTemplateVersion),
+                replacement.Id,
+                AuditLogOperation.Created,
+                user.Id,
+                ActorLabel: "authentication:registration",
+                NewValues: JsonSerializer.Serialize(new
+                {
+                    replacement.SystemKey,
+                    ReplacedWorkspaceTemplateVersionId = selected.Current.Id,
+                    ReplacementWorkspaceTemplateVersionId = replacement.Id,
+                    replacement.BasedOnSystemTemplateVersionId,
+                    replacement.Version,
+                }),
+                ChangeReason: "Fresh workspace supplied legal template replaced with latest immutable version"), now);
+            attempt.StageSemanticEvent(new AtomicSemanticAudit(
+                workspace.PortfolioId,
+                nameof(TenantNoticePolicy),
+                selected.Policy.Id,
+                AuditLogOperation.Updated,
+                user.Id,
+                ActorLabel: "authentication:registration",
+                NewValues: JsonSerializer.Serialize(new
+                {
+                    selected.Policy.AutomationKey,
+                    PreviousWorkspaceTemplateVersionId = selected.Current.Id,
+                    WorkspaceTemplateVersionId = replacement.Id,
+                    Mode = TenantNoticeMode.Draft,
+                }),
+                ChangeReason: "Fresh workspace Draft policy rebound to latest supplied legal template"), now);
+        }
+
+        await attempt.FlushBusinessAsync(ct);
+        var deletedTemplateCount =
+            await attempt.AccountSecurity.DeleteFreshWorkspaceSuppliedNoticeTemplateVersionsAsync(
+                user.Id,
+                workspace.PortfolioId,
+                legalReplacements.Select(row => row.Current.Id).ToArray(),
+                ct);
+        if (deletedTemplateCount != SuppliedNoticeTemplateBaseline.V2Legal.Count)
+        {
+            throw new InvalidOperationException(
+                "Fresh workspace notice bootstrap did not remove both replaced v1 templates.");
+        }
+
+        var finalNoticeBootstrap = await attempt.Persistence.Query<Portfolio>()
+            .Where(portfolio => portfolio.Id == workspace.PortfolioId)
+            .Select(portfolio => new
+            {
+                TemplateCount = attempt.Persistence.Query<WorkspaceNoticeTemplateVersion>()
+                    .Count(template => template.PortfolioId == portfolio.Id),
+                PolicyCount = attempt.Persistence.Query<TenantNoticePolicy>()
+                    .Count(policy => policy.PortfolioId == portfolio.Id),
+                NonLatestTemplateCount = attempt.Persistence.Query<WorkspaceNoticeTemplateVersion>()
+                    .Count(template => template.PortfolioId == portfolio.Id &&
+                        attempt.Persistence.Query<SystemNoticeTemplateVersion>().Any(system =>
+                            system.SystemKey == template.SystemKey && system.Version > template.Version)),
+                IncorrectPolicyBindingCount = attempt.Persistence.Query<TenantNoticePolicy>()
+                    .Count(policy => policy.PortfolioId == portfolio.Id &&
+                        (policy.Mode != TenantNoticeMode.Draft ||
+                         !attempt.Persistence.Query<WorkspaceNoticeTemplateVersion>().Any(template =>
+                             template.Id == policy.WorkspaceNoticeTemplateVersionId &&
+                             template.PortfolioId == policy.PortfolioId &&
+                             !attempt.Persistence.Query<SystemNoticeTemplateVersion>().Any(system =>
+                                 system.SystemKey == template.SystemKey &&
+                                 system.Version > template.Version)))),
+            })
+            .TagWith("TSK-733 exact fresh-workspace latest notice bootstrap assertion")
+            .SingleAsync(ct);
+
+        if (finalNoticeBootstrap.TemplateCount != 5 ||
+            finalNoticeBootstrap.PolicyCount != 5 ||
+            finalNoticeBootstrap.NonLatestTemplateCount != 0 ||
+            finalNoticeBootstrap.IncorrectPolicyBindingCount != 0)
+        {
+            throw new InvalidOperationException(
+                "Fresh workspace notice bootstrap must contain exactly five latest templates and five Draft policies.");
+        }
+
         attempt.StageSemanticEvent(new AtomicSemanticAudit(
             workspace.PortfolioId,
             nameof(ApplicationUser),

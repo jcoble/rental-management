@@ -113,6 +113,41 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
             sql.Contains("RecurringMaintenanceTaskId", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task ListPageAsync_UnitQueryFiltersSortsAndPagesInTwoSqlCommands()
+    {
+        var property = SeedProperty();
+        var firstUnit = SeedUnit(property.Id, "1A");
+        var secondUnit = SeedUnit(property.Id, "1B");
+        SeedTask(property.Id, title: "Alpha First Unit", unitId: firstUnit.Id);
+        SeedTask(property.Id, title: "Bravo First Unit", unitId: firstUnit.Id);
+        SeedTask(property.Id, title: "Aardvark Second Unit", unitId: secondUnit.Id);
+
+        _commands.Clear();
+        var result = await _sut.ListPageAsync(
+            PortfolioId,
+            propertyId: null,
+            activeOnly: null,
+            new RecurringMaintenanceTaskListQuery
+            {
+                UnitId = firstUnit.Id,
+                Sort = "title",
+                Skip = 1,
+                Take = 1,
+            });
+
+        result.TotalCount.Should().Be(2);
+        result.Skip.Should().Be(1);
+        result.Take.Should().Be(1);
+        result.Items.Should().ContainSingle(item =>
+            item.UnitId == firstUnit.Id && item.Title == "Bravo First Unit");
+        var listCommands = _commands.Where(sql =>
+            sql.Contains("FROM \"RecurringMaintenanceTasks\"", StringComparison.OrdinalIgnoreCase)).ToList();
+        listCommands.Should().HaveCount(2);
+        listCommands.Should().OnlyContain(sql =>
+            sql.Contains("UnitId", StringComparison.OrdinalIgnoreCase));
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
 
@@ -141,13 +176,15 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
         string title = "Recurring chore",
         RecurrenceInterval interval = RecurrenceInterval.Monthly,
         TimeOnly? scheduledTime = null,
-        decimal? estimatedCost = null)
+        decimal? estimatedCost = null,
+        int? unitId = null)
     {
         var now = DateTime.UtcNow;
         var task = new RecurringMaintenanceTask
         {
             PortfolioId = PortfolioId,
             PropertyId = propertyId,
+            UnitId = unitId,
             Title = title,
             RecurrenceInterval = interval,
             NextDueDate = DateTime.SpecifyKind(now.Date, DateTimeKind.Utc),
@@ -161,6 +198,25 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
         _ctx.Db.RecurringMaintenanceTasks.Add(task);
         _ctx.Db.SaveChanges();
         return task;
+    }
+
+    private Unit SeedUnit(int propertyId, string unitNumber)
+    {
+        var now = DateTime.UtcNow;
+        var unit = new Unit
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = propertyId,
+            UnitNumber = unitNumber,
+            Bedrooms = 1,
+            Bathrooms = 1,
+            MarketRent = 1000m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Units.Add(unit);
+        _ctx.Db.SaveChanges();
+        return unit;
     }
 
     private WorkOrder SeedGeneratedWorkOrder(RecurringMaintenanceTask task, string title)

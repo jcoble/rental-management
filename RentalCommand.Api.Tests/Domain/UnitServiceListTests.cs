@@ -1,5 +1,6 @@
 using System.Data.Common;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
@@ -87,6 +88,7 @@ public class UnitServiceListTests : IAsyncLifetime
 
         _ctx.Db.AddRange(assignment, session);
         _ctx.Db.SaveChanges();
+        _ctx.Db.Entry(accessContext).Reload();
 
         return new WorkspaceReadScope(
             PortfolioId, user.Id, session.Id, accessContext.Id, accessContext.AccessRevision);
@@ -190,10 +192,11 @@ public class UnitServiceListTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ListAsync_AvailableForLeaseReturnsOnlyVacantUnitsWithoutOccupyingLeasesInSql()
+    public async Task ListPageAsync_AvailableForLeaseFiltersCountsAndPagesInSql()
     {
         var now = DateTime.UtcNow;
         var (_, availableUnit) = SeedUnitShell("101", "Available Property", now);
+        var (_, excludedAvailableUnit) = SeedUnitShell("104", "Excluded Available Property", now);
         var (occupiedProperty, occupiedUnit) = SeedUnitShell("102", "Occupied Property", now);
         var (leasedProperty, leasedUnit) = SeedUnitShell("103", "Leased Property", now);
         var tenant = SeedTenant(now);
@@ -201,17 +204,42 @@ public class UnitServiceListTests : IAsyncLifetime
         SeedRelationship(leasedProperty, leasedUnit, tenant, now, now.AddYears(1), noticeGiven: true);
         _ctx.Db.SaveChanges();
 
+        var availability = await _ctx.Db.UnitOccupancyProjections
+            .AsNoTracking()
+            .Where(row => row.UnitId == availableUnit.Id)
+            .SingleAsync();
+        availability.PortfolioId.Should().Be(PortfolioId);
+        availability.IsOccupied.Should().BeFalse();
+        availability.HasScheduledMoveIn.Should().BeFalse();
+        availability.IsInTurnover.Should().BeFalse();
+        availability.IsOutOfService.Should().BeFalse();
+        availability.IsOnManagementHold.Should().BeFalse();
+        await ActivateApiScopeAsync();
+
         _commands.Clear();
-        var result = await _sut.ListAsync(_scope, null, new UnitListQuery
+        var result = await _sut.ListPageAsync(_scope, null, new UnitListQuery
         {
             AvailableForLease = true,
+            ExcludeUnitId = excludedAvailableUnit.Id,
             Sort = "unitNumber",
+            Skip = 0,
+            Take = 1,
         });
 
-        result.Select(u => u.Id).Should().Equal(availableUnit.Id);
-        _commands.Should().ContainSingle(sql =>
+        result.TotalCount.Should().Be(1);
+        result.Skip.Should().Be(0);
+        result.Take.Should().Be(1);
+        result.Items.Select(u => u.Id).Should().Equal(availableUnit.Id);
+        _commands.Should().HaveCount(2);
+        _commands.Should().Contain(sql =>
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("Units", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("vw_unit_occupancy", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(sql =>
+            sql.Contains("Units", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("vw_unit_occupancy", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -499,6 +527,7 @@ public class UnitServiceListTests : IAsyncLifetime
         };
         var unit = new Unit
         {
+            PortfolioId = PortfolioId,
             Property = property,
             UnitNumber = unitNumber,
             MarketRent = 1250m,
@@ -510,6 +539,19 @@ public class UnitServiceListTests : IAsyncLifetime
         _ctx.Db.SaveChanges();
 
         return (property, unit);
+    }
+
+    private async Task ActivateApiScopeAsync()
+    {
+        await _ctx.Db.Database.OpenConnectionAsync();
+        await _ctx.Db.Database.ExecuteSqlInterpolatedAsync($"""
+            SET SESSION AUTHORIZATION rentalcommand_api;
+            SELECT set_config('app.current_portfolio_id', {PortfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {_scope.SessionId.ToString()}, false),
+                   set_config('app.current_user_id', {_scope.UserId.ToString()}, false),
+                   set_config('app.current_access_context_id', {_scope.AccessContextId.ToString()}, false),
+                   set_config('app.access_revision', {_scope.AccessRevision.ToString()}, false);
+            """);
     }
 
     private Tenant SeedTenant(DateTime now)

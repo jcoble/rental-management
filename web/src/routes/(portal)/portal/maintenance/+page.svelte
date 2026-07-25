@@ -7,6 +7,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import WorkOrderTimeline from '$lib/components/shared/WorkOrderTimeline.svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
@@ -144,7 +145,7 @@
 			</form>
 			<div class="space-y-3">
 				{#if workOrdersQuery.isLoading}
-					<p class="text-sm text-muted-foreground">Loading requests…</p>
+					<LoadingState label="Loading maintenance requests" testid="portal-work-orders-loading" />
 				{:else if workOrdersQuery.isError}
 					<div class="rounded-md border border-destructive/40 bg-destructive/5 p-3">
 						<p class="text-sm font-medium text-destructive">Requests could not be loaded.</p>
@@ -284,9 +285,14 @@
 		</Dialog.Header>
 
 		{#if detailQuery.isLoading}
-			<p class="py-6 text-center text-sm text-muted-foreground" data-testid="portal-work-order-detail-loading">Loading…</p>
+			<LoadingState label="Loading request details" variant="spinner" testid="portal-work-order-detail-loading" />
 		{:else if detailQuery.isError || !detail}
-			<p class="py-6 text-center text-sm text-destructive" data-testid="portal-work-order-detail-error">Couldn't load this request.</p>
+			<div class="py-6 text-center" data-testid="portal-work-order-detail-error">
+				<p class="text-sm font-medium text-destructive">Couldn't load this request.</p>
+				{#if detailQuery.isError}
+					<Button type="button" variant="outline" size="sm" class="mt-3" onclick={() => detailQuery.refetch()}>Try again</Button>
+				{/if}
+			</div>
 		{:else}
 			<div class="space-y-4">
 				<div class="flex flex-wrap items-center gap-2">

@@ -161,10 +161,10 @@ public class OutboxDispatchWorker : EngineWorkerBase
             {
                 var token = Required(root, "deviceToken");
                 var data = new Dictionary<string, string>();
-                foreach (var key in new[] { "actionUrl", "type", "relatedEntityType", "relatedEntityId" })
+                if (root.TryGetProperty("navigationIntent", out var navigationIntent)
+                    && navigationIntent.ValueKind == JsonValueKind.Object)
                 {
-                    var value = Optional(root, key);
-                    if (!string.IsNullOrWhiteSpace(value)) data[key] = value;
+                    data["navigationIntent"] = navigationIntent.GetRawText();
                 }
 
                 var result = await pushSender.SendAsync(

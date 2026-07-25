@@ -8,10 +8,8 @@ namespace RentalCommand.Core.Interfaces;
 public interface IPushSender : RentalCommand.Core.Atomic.IAtomicRemoteDependency
 {
     /// <summary>
-    /// Delivers a push to one registered device. <paramref name="data"/> carries the deep-link
-    /// payload (for example
-    /// <c>{"actionUrl":"/tenant-accounts/42/entries/123","type":"RentConfirmation"}</c>) the mobile
-    /// client routes on when the user taps the notification.
+    /// Delivers a push to one registered device. <paramref name="data"/> may carry a serialized,
+    /// access-bound <c>navigationIntent</c>. It never carries a URL or route string.
     /// </summary>
     /// <returns>
     /// True if the message was accepted by the provider. False on a fail-soft suppression

@@ -36,10 +36,12 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
     super.key,
     required this.leaseManagementId,
     this.leadingContent,
+    this.trailingContent,
   });
 
   final int leaseManagementId;
   final Widget? leadingContent;
+  final Widget? trailingContent;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -152,6 +154,10 @@ class LeaseManagementDetailScreen extends ConsumerWidget {
                   ? () => _recordEndingDisposition(context, ref, management)
                   : null,
             ),
+            if (trailingContent != null) ...[
+              const SizedBox(height: 12),
+              trailingContent!,
+            ],
           ],
         ),
       ),

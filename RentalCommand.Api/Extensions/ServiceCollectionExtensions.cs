@@ -142,6 +142,11 @@ public static class ServiceCollectionExtensions
         // --- scan upload pipeline ---
         services.AddScoped<IScanUploadService, ScanUploadService>();
         services.AddScoped<IScanService, ScanService>();
+        services.AddScoped<IWorkspaceLlmCredentialService, WorkspaceLlmCredentialService>();
+        services.AddScoped<IWorkspaceLlmCredentialResolver>(sp =>
+            sp.GetRequiredService<IWorkspaceLlmCredentialService>());
+        services.AddScoped<ILlmUsageEvidenceRecorder>(sp =>
+            sp.GetRequiredService<IWorkspaceLlmCredentialService>());
         services.AddScoped<IAuditTrailService, AuditTrailService>();
         services.AddScoped<IVoiceIntakeService, VoiceIntakeService>();
 

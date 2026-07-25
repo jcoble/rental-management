@@ -125,10 +125,12 @@ public sealed class RoleExperienceCommandContractTests
         var vendorDispatch = Source(
             "RentalCommand.Data", "Operations", "CompleteVendorDispatchFromInboundHandler.cs");
 
-        conversation.Should().Contain("ActionUrl = $\"/messages/{conversation.Id}\"");
-        conversation.Should().NotContain("/messages?conversationId=");
-        vendorDispatch.Should().Contain("ActionUrl = $\"/maintenance/{workOrder.Id}\"");
-        vendorDispatch.Should().NotContain("/work-orders?workOrderId=");
+        conversation.Should().Contain("NavigationDestination = NavigationDestination.Message");
+        conversation.Should().Contain("NavigationResourceKind = nameof(Conversation)");
+        conversation.Should().NotContain("ActionUrl");
+        vendorDispatch.Should().Contain("NavigationDestination.TechnicianWork");
+        vendorDispatch.Should().Contain("NavigationDestination.WorkOrder");
+        vendorDispatch.Should().NotContain("ActionUrl");
     }
 
     private static string Route(string actionName, Type attributeType)

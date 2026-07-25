@@ -95,12 +95,13 @@ export const recurringMaintenance = {
 		);
 	},
 	listPage: (
-		params?: ListParams & { propertyId?: number; activeOnly?: boolean }
+		params?: ListParams & { propertyId?: number; unitId?: number; activeOnly?: boolean }
 	) => {
-		const { propertyId, activeOnly, ...list } = params ?? {};
+		const { propertyId, unitId, activeOnly, ...list } = params ?? {};
 		return api.get<RecurringMaintenanceTaskListResponse>(
 			`/recurring-maintenance/page${buildListQuery(list, {
 				propertyId,
+				unitId,
 				activeOnly: activeOnly == null ? undefined : String(activeOnly),
 			})}`
 		);

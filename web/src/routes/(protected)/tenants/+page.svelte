@@ -305,6 +305,13 @@
 		data-testid="tenants-header"
 	/>
 
+	{#if tenantsQuery.isError}
+		<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="tenants-list-error">
+			<p class="font-medium text-destructive">Could not load tenants.</p>
+			<p class="mt-1 text-sm text-muted-foreground">Try again. An unavailable list is not an empty tenant directory.</p>
+			<Button class="mt-4" variant="outline" onclick={() => tenantsQuery.refetch()}>Try again</Button>
+		</div>
+	{:else}
 	<DataGrid
 		data={list}
 		{columns}
@@ -337,6 +344,7 @@
 			</Button>
 		{/snippet}
 	</DataGrid>
+	{/if}
 </div>
 
 <!-- Edit/Create dialog — actions column kept inside the row via the edit button -->

@@ -80,7 +80,7 @@ describe('unit lifecycle next action handoff', () => {
 			'utf8'
 		);
 
-		assert.match(pageSource, /<Tabs\.Trigger value="turnover">Turnover<\/Tabs\.Trigger>/);
+		assert.match(pageSource, /data-testid="unit-turnover-section"/);
 		assert.match(pageSource, /<TurnoverTab \{dashboard\} onScan=\{goScan\} \/>/);
 	});
 });

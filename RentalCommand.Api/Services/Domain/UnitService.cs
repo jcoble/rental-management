@@ -37,7 +37,36 @@ public class UnitService : IUnitService
     public async Task<IReadOnlyList<UnitResponse>> ListAsync(
         WorkspaceReadScope scope, int? propertyId, ListQuery query, CancellationToken ct = default)
     {
-        var portfolioId = scope.PortfolioId;
+        var q = BuildListQuery(scope, propertyId, query);
+
+        return await q
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake)
+            .ToListAsync(ct);
+    }
+
+    public async Task<UnitListResponse> ListPageAsync(
+        WorkspaceReadScope scope, int? propertyId, UnitListQuery query, CancellationToken ct = default)
+    {
+        var q = BuildListQuery(scope, propertyId, query);
+        var totalCount = await q.CountAsync(ct);
+        var items = await q
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake)
+            .ToListAsync(ct);
+
+        return new UnitListResponse
+        {
+            Items = items,
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
+    }
+
+    private IQueryable<UnitResponse> BuildListQuery(
+        WorkspaceReadScope scope, int? propertyId, ListQuery query)
+    {
         var q = BuildCanonicalResponseQuery(scope);
 
         if (propertyId.HasValue)
@@ -45,16 +74,14 @@ public class UnitService : IUnitService
             q = q.Where(unit => unit.PropertyId == propertyId.Value);
         }
 
+        if (query is UnitListQuery { ExcludeUnitId: > 0 } unitQuery)
+        {
+            q = q.Where(unit => unit.Id != unitQuery.ExcludeUnitId.Value);
+        }
+
         if (query is UnitListQuery { AvailableForLease: true })
         {
-            q = q.Where(unit => _db.UnitOccupancyProjections.Any(occupancy =>
-                occupancy.PortfolioId == portfolioId
-                && occupancy.UnitId == unit.Id
-                && !occupancy.IsOccupied
-                && !occupancy.HasScheduledMoveIn
-                && !occupancy.IsInTurnover
-                && !occupancy.IsOutOfService
-                && !occupancy.IsOnManagementHold));
+            q = q.Where(unit => unit.Status == DerivedUnitStatus.Vacant);
         }
 
         if (!string.IsNullOrWhiteSpace(query.Search))
@@ -74,10 +101,7 @@ public class UnitService : IUnitService
             _ => query.SortDescending ? q.OrderByDescending(unit => unit.CreatedAt) : q.OrderBy(unit => unit.CreatedAt),
         };
 
-        return await q
-            .Skip(query.NormalizedSkip)
-            .Take(query.NormalizedTake)
-            .ToListAsync(ct);
+        return q;
     }
 
     /// <summary>

@@ -379,6 +379,64 @@ class NoticeMergeFieldHelp {
       );
 }
 
+class NoticePreview {
+  const NoticePreview({
+    required this.systemKey,
+    required this.subject,
+    required this.body,
+    required this.exampleValues,
+  });
+
+  final String systemKey;
+  final String subject;
+  final String body;
+  final Map<String, String> exampleValues;
+
+  factory NoticePreview.fromJson(Map<String, dynamic> json) => NoticePreview(
+    systemKey: json['systemKey'] as String? ?? '',
+    subject: json['subject'] as String? ?? '',
+    body: json['body'] as String? ?? '',
+    exampleValues: (json['exampleValues'] as Map<String, dynamic>? ?? const {})
+        .map((key, value) => MapEntry(key, value.toString())),
+  );
+}
+
+const noticeTestSendStates = <String>{
+  'Accepted',
+  'Suppressed',
+  'ProviderError',
+};
+
+class NoticeTestSendResult {
+  const NoticeTestSendResult({
+    required this.state,
+    required this.message,
+    required this.destination,
+    required this.provider,
+    required this.providerMessageId,
+  });
+
+  final String state;
+  final String message;
+  final String destination;
+  final String? provider;
+  final String? providerMessageId;
+
+  factory NoticeTestSendResult.fromJson(Map<String, dynamic> json) {
+    final state = json['state'] as String? ?? '';
+    if (!noticeTestSendStates.contains(state)) {
+      throw FormatException('Unsupported notice test-send state: $state');
+    }
+    return NoticeTestSendResult(
+      state: state,
+      message: json['message'] as String? ?? '',
+      destination: json['destination'] as String? ?? '',
+      provider: json['provider'] as String?,
+      providerMessageId: json['providerMessageId'] as String?,
+    );
+  }
+}
+
 class TenantNoticeRecipientPreview {
   const TenantNoticeRecipientPreview({
     required this.leaseManagementPartyId,
@@ -678,6 +736,46 @@ class NotificationFoundationRepository {
     ),
     (data) => _list(data, NoticeMergeFieldHelp.fromJson),
   );
+
+  Future<NoticePreview> previewTenantNotice({
+    required String systemKey,
+    required String subject,
+    required String body,
+  }) {
+    final request = {'systemKey': systemKey, 'subject': subject, 'body': body};
+    return _request(
+      () => _dio.post<Map<String, dynamic>>(
+        '/tenant-notices/templates/${Uri.encodeComponent(systemKey)}/preview',
+        data: request,
+      ),
+      (data) => NoticePreview.fromJson(_map(data)),
+    );
+  }
+
+  Future<NoticeTestSendResult> sendTenantNoticeTest({
+    required String systemKey,
+    required String subject,
+    required String body,
+    required String destination,
+  }) {
+    final request = {
+      'systemKey': systemKey,
+      'subject': subject,
+      'body': body,
+      'destination': destination,
+    };
+    return IdempotentMutation.run(
+      'tenant-notices:test:$systemKey:$destination:$request',
+      (operationKey) => _request(
+        () => _dio.post<Map<String, dynamic>>(
+          '/tenant-notices/templates/${Uri.encodeComponent(systemKey)}/test-send',
+          data: request,
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        ),
+        (data) => NoticeTestSendResult.fromJson(_map(data)),
+      ),
+    );
+  }
 
   Future<T> _request<T, R>(
     Future<Response<R>> Function() request,

@@ -125,6 +125,40 @@ public class AuthControllerCookieTests
     }
 
     [Fact]
+    public async Task Google_web_sign_in_uses_canonical_result_and_sets_refresh_cookie()
+    {
+        var tokens = CreateTokens("google-refresh-token");
+        var googleAuthService = new Mock<IGoogleAuthService>();
+        googleAuthService
+            .Setup(service => service.AuthenticateAsync(
+                "authorization-code",
+                "https://rental-command.example/auth/google/callback",
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(GoogleAuthResult.Ok(CreateLoginResponse(tokens), tokens))
+            .Verifiable();
+
+        var controller = CreateController(
+            Mock.Of<IAuthService>(),
+            googleAuthService.Object,
+            new GoogleAuthOptions
+            {
+                ClientId = "configured-client",
+                ClientSecret = "configured-secret"
+            });
+
+        var result = await controller.GoogleSignIn(new GoogleAuthRequest
+        {
+            Code = "authorization-code",
+            RedirectUri = "https://rental-command.example/auth/google/callback"
+        });
+
+        result.Result.Should().BeOfType<OkObjectResult>();
+        googleAuthService.Verify();
+        controller.Response.Headers.SetCookie.ToString()
+            .Should().Contain("rc_refresh_token=google-refresh-token");
+    }
+
+    [Fact]
     public async Task Logout_clears_the_namespaced_refresh_cookie()
     {
         var controller = CreateController(Mock.Of<IAuthService>());
@@ -136,18 +170,19 @@ public class AuthControllerCookieTests
         controller.Response.Headers.SetCookie.ToString().Should().Contain("rc_refresh_token=");
     }
 
-    private static AuthController CreateController(IAuthService authService)
+    private static AuthController CreateController(
+        IAuthService authService,
+        IGoogleAuthService? googleAuthService = null,
+        GoogleAuthOptions? googleOptions = null)
     {
-        var googleAuthService = new Mock<IGoogleAuthService>();
-        var googleOptions = Options.Create(new GoogleAuthOptions());
         var environment = new Mock<IWebHostEnvironment>();
         environment.SetupGet(env => env.EnvironmentName).Returns(Environments.Development);
         var configuration = new ConfigurationBuilder().Build();
 
         return new AuthController(
             authService,
-            googleAuthService.Object,
-            googleOptions,
+            googleAuthService ?? Mock.Of<IGoogleAuthService>(),
+            Options.Create(googleOptions ?? new GoogleAuthOptions()),
             environment.Object,
             configuration,
             Mock.Of<IAtomicAuthSessionCredentialService>(),

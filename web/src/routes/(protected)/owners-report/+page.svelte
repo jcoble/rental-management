@@ -16,6 +16,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { FileBarChart, Mail, Plus, Trash2 } from '@lucide/svelte';
 
 	const CURRENT_YEAR = new Date().getFullYear();
@@ -251,13 +252,12 @@
 	</div>
 
 	{#if ownersQuery.isLoading}
-		<p class="py-12 text-center text-sm text-muted-foreground" data-testid="owners-report-loading">
-			Loading owners…
-		</p>
+		<LoadingState label="Loading owner reports" variant="page" testid="owners-report-loading" />
 	{:else if ownersQuery.isError}
-		<p class="py-12 text-center text-sm text-destructive" data-testid="owners-report-error">
-			Could not load owner data. Please try again.
-		</p>
+		<div class="flex flex-wrap items-center justify-center gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="owners-report-error">
+			<p class="text-sm text-destructive">Could not load owner data.</p>
+			<Button size="sm" variant="outline" onclick={() => ownersQuery.refetch()}>Retry owner reports</Button>
+		</div>
 	{:else if owners.length === 0}
 		<p class="py-12 text-center text-sm text-muted-foreground" data-testid="owners-report-empty">
 			No owner data for {selectedYear}.
@@ -294,13 +294,12 @@
 						Select an owner to view their statement.
 					</p>
 				{:else if reportQuery.isLoading}
-					<p class="py-12 text-center text-sm text-muted-foreground" data-testid="owners-report-detail-loading">
-						Loading statement…
-					</p>
+					<LoadingState label="Loading owner statement" testid="owners-report-detail-loading" />
 				{:else if reportQuery.isError}
-					<p class="py-12 text-center text-sm text-destructive" data-testid="owners-report-detail-error">
-						Could not load statement. Please try again.
-					</p>
+					<div class="flex flex-wrap items-center justify-center gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="owners-report-detail-error">
+						<p class="text-sm text-destructive">Could not load this owner statement.</p>
+						<Button size="sm" variant="outline" onclick={() => reportQuery.refetch()}>Retry statement</Button>
+					</div>
 				{:else if report}
 					<!-- Header + download -->
 					<div class="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -454,9 +453,12 @@
 							</Card.Header>
 							<Card.Content class="p-0">
 								{#if distributionQuery.isLoading}
-									<p class="p-4 text-sm text-muted-foreground" data-testid="owner-distributions-loading">Loading distributions…</p>
+									<LoadingState label="Loading owner distributions" variant="spinner" testid="owner-distributions-loading" />
 								{:else if distributionQuery.isError}
-									<p class="p-4 text-sm text-destructive" data-testid="owner-distributions-error">Could not load distributions.</p>
+									<div class="flex flex-wrap items-center gap-3 p-4" role="alert" data-testid="owner-distributions-error">
+										<p class="text-sm text-destructive">Could not load distributions.</p>
+										<Button size="sm" variant="outline" onclick={() => distributionQuery.refetch()}>Retry distributions</Button>
+									</div>
 								{:else if distributions.length === 0}
 									<p class="p-4 text-sm text-muted-foreground" data-testid="owner-distributions-empty">No distributions recorded for {selectedYear}.</p>
 								{:else}

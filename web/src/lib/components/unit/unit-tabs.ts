@@ -7,7 +7,11 @@ export type UnitView =
 	| 'applications'
 	| 'agreements'
 	| 'residents'
+	| 'tenant-account'
+	| 'operating-costs'
 	| 'work-orders'
+	| 'inspections'
+	| 'recurring'
 	| 'turnover'
 	| 'documents'
 	| 'history';
@@ -20,6 +24,7 @@ export interface UnitDestination {
 const DEFAULT_VIEWS: Partial<Record<UnitTab, UnitView>> = {
 	leasing: 'listing',
 	'tenant-lease': 'agreements',
+	money: 'tenant-account',
 	maintenance: 'work-orders',
 	'documents-history': 'documents',
 };
@@ -27,7 +32,8 @@ const DEFAULT_VIEWS: Partial<Record<UnitTab, UnitView>> = {
 const VALID_VIEWS: Partial<Record<UnitTab, readonly UnitView[]>> = {
 	leasing: ['listing', 'applications'],
 	'tenant-lease': ['agreements', 'residents'],
-	maintenance: ['work-orders', 'turnover'],
+	money: ['tenant-account', 'operating-costs'],
+	maintenance: ['work-orders', 'inspections', 'recurring', 'turnover'],
 	'documents-history': ['documents', 'history'],
 };
 

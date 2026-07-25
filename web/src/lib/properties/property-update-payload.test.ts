@@ -3,11 +3,12 @@ import { describe, it } from 'node:test';
 import { propertyUpdateFields } from './property-update-payload.ts';
 
 describe('propertyUpdateFields', () => {
-	it('omits RentalStructure from an ordinary property PATCH payload', () => {
+	it('omits structural and ownership-selection fields from an ordinary property PATCH payload', () => {
 		const payload = propertyUpdateFields({
 			name: 'Rimview',
 			type: 'SingleFamily',
 			rentalStructure: 'SingleRental',
+			ownerEntityId: 42,
 			status: 'Active'
 		});
 
@@ -17,5 +18,6 @@ describe('propertyUpdateFields', () => {
 			status: 'Active'
 		});
 		assert.equal('rentalStructure' in payload, false);
+		assert.equal('ownerEntityId' in payload, false);
 	});
 });

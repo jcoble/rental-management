@@ -23,13 +23,12 @@ public sealed class ActiveAccessContextResolver : IActiveAccessContextResolver
         DateTime utcNow,
         CancellationToken cancellationToken = default)
     {
-        var effectiveContexts = _db.WorkspaceAccessContexts.AsNoTracking().WhereEffectiveAccess(
-            _db.WorkspaceMemberships.AsNoTracking(),
-            _db.MembershipRoleAssignments.AsNoTracking(),
-            _db.OwnerUserAccesses.AsNoTracking(),
-            _db.EffectiveTenantAccess.AsNoTracking(),
-            userId,
-            utcNow);
+        var effectiveContexts = _db.WorkspaceAccessContexts
+            .AsNoTracking()
+            .WhereEffective()
+            .Where(context =>
+                context.UserId == userId &&
+                AccessAuthorityDbFunctions.IsEffective(context.Id, userId, utcNow));
         var effectiveMemberships = _db.WorkspaceMemberships.AsNoTracking().WhereEffective(utcNow);
 
         var context = await (

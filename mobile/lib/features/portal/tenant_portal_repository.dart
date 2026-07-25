@@ -388,6 +388,18 @@ class TenantPortalSnapshot {
   final List<TenantNotification> notifications;
 }
 
+class PortalLeaseDocumentDownload {
+  const PortalLeaseDocumentDownload({
+    required this.bytes,
+    required this.fileName,
+    required this.contentType,
+  });
+
+  final Uint8List bytes;
+  final String fileName;
+  final String contentType;
+}
+
 class TenantPortalRepository {
   TenantPortalRepository(this._dio);
 
@@ -430,6 +442,28 @@ class TenantPortalRepository {
             .whereType<Map<String, dynamic>>()
             .map(TenantNotification.fromJson)
             .toList(),
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<PortalLeaseDocumentDownload> executedAgreementDocument({
+    required int leaseManagementId,
+    required int leaseAgreementId,
+    required String fileName,
+    required String contentType,
+  }) async {
+    try {
+      final response = await _dio.get<List<int>>(
+        '/portal/leases/$leaseManagementId/agreements/'
+        '$leaseAgreementId/executed-document',
+        options: Options(responseType: ResponseType.bytes),
+      );
+      return PortalLeaseDocumentDownload(
+        bytes: Uint8List.fromList(response.data ?? const []),
+        fileName: fileName,
+        contentType: contentType,
       );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
@@ -516,6 +550,9 @@ class TenantPortalRepository {
     bool openOnly = false,
     String search = '',
     String? status,
+    String sort = '-requestedAt',
+    String? requestedFrom,
+    String? requestedTo,
   }) async {
     try {
       final response = await _dio.get<Map<String, dynamic>>(
@@ -523,10 +560,12 @@ class TenantPortalRepository {
         queryParameters: {
           'skip': skip,
           'take': take,
-          'sort': '-requestedAt',
-          if (openOnly) 'openOnly': true,
+          'sort': sort,
+          'openOnly': openOnly,
           if (search.trim().isNotEmpty) 'search': search.trim(),
           if (status != null && status.isNotEmpty) 'status': status,
+          if (requestedFrom != null) 'from': requestedFrom,
+          if (requestedTo != null) 'to': requestedTo,
         },
       );
       return PortalTenantWorkOrderPage.fromJson(response.data ?? const {});
@@ -692,8 +731,12 @@ final tenantPortalSnapshotProvider =
 typedef TenantWorkOrderPageRequest = ({
   int skip,
   int take,
+  bool openOnly,
   String search,
   String? status,
+  String sort,
+  String? from,
+  String? to,
 });
 
 final tenantPortalWorkOrdersPageProvider = FutureProvider.autoDispose
@@ -706,9 +749,12 @@ final tenantPortalWorkOrdersPageProvider = FutureProvider.autoDispose
           .workOrdersPage(
             skip: request.skip,
             take: request.take,
-            openOnly: request.status == null,
+            openOnly: request.openOnly,
             search: request.search,
             status: request.status,
+            sort: request.sort,
+            requestedFrom: request.from,
+            requestedTo: request.to,
           );
     });
 

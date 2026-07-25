@@ -34,6 +34,29 @@ public sealed record TeamRoutingRecipientPreview(
 
 public sealed record NoticeMergeFieldHelpResponse(string Key, string Token, string Label, string Description,
     string Example);
+public sealed record NoticePreviewRequest(string SystemKey, string Subject, string Body);
+public sealed record NoticePreviewResponse(
+    string SystemKey,
+    string Subject,
+    string Body,
+    IReadOnlyDictionary<string, string> ExampleValues);
+public sealed record NoticeTestSendRequest(
+    string SystemKey,
+    string Subject,
+    string Body,
+    string Destination);
+public enum NoticeTestSendState
+{
+    Accepted,
+    Suppressed,
+    ProviderError,
+}
+public sealed record NoticeTestSendResponse(
+    NoticeTestSendState State,
+    string Message,
+    string Destination,
+    string? Provider,
+    string? ProviderMessageId);
 
 public sealed record TenantNoticeRecipientPreviewResponse(
     int LeaseManagementPartyId,

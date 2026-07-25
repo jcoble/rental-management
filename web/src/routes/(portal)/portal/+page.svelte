@@ -5,14 +5,15 @@
 	import { notifications } from '$lib/api/endpoints/notifications';
 	import type { NotificationItem } from '$lib/api/types/notification';
 	import type { Appointment } from '$lib/types';
-	import { getCurrentUser } from '$lib/stores/auth.svelte';
+	import { getAuthState, getCurrentUser } from '$lib/stores/auth.svelte';
 	import { notificationStore } from '$lib/stores/notifications.svelte';
-	import { portalActionUrl } from '$lib/utils/portalLinks';
+	import { notificationIntentUrl } from '$lib/utils/portalLinks';
 	import { formatDateOnly } from '$lib/utils/date';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import * as Select from '$lib/components/ui/select';
 	import {
@@ -29,6 +30,7 @@
 	} from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
+	const authState = getAuthState();
 	const currentUser = $derived(getCurrentUser());
 
 	const leasesQuery = createQuery(() => ({
@@ -159,7 +161,10 @@
 				queryClient.invalidateQueries({ queryKey: ['notifications-unread-count'] })
 			]);
 		}
-		await goto(portalActionUrl(item.actionUrl), { invalidateAll: true });
+		await goto(
+			notificationIntentUrl(item.navigationIntent, authState.accessEnvelope?.selectedContext),
+			{ invalidateAll: true }
+		);
 	}
 
 	function money(value: number | string | null | undefined, currency = 'USD') {
@@ -323,7 +328,16 @@
 					<FileText class="h-5 w-5 text-primary" />
 					<h2 class="font-semibold">Lease</h2>
 				</div>
-				{#if activeLease}
+				{#if leasesQuery.isLoading}
+					<LoadingState label="Loading lease" variant="spinner" />
+				{:else if leasesQuery.isError}
+					<div role="alert">
+						<p class="text-sm text-destructive">Your lease could not be loaded.</p>
+						<Button type="button" variant="outline" size="sm" class="mt-2" onclick={() => leasesQuery.refetch()}>
+							Try again
+						</Button>
+					</div>
+				{:else if activeLease}
 					<div class="space-y-3 text-sm">
 						<p class="font-medium">{activeLease.agreement?.agreementNumber ?? activeLease.relationshipNumber}</p>
 						<p class="text-muted-foreground">{activeLease.propertyName} {activeLease.unitNumber ? `Unit ${activeLease.unitNumber}` : ''}</p>
@@ -421,9 +435,12 @@
 					<h2 class="font-semibold">Appointments</h2>
 				</div>
 				{#if appointmentsQuery.isLoading}
-					<p class="text-sm text-muted-foreground">Loading appointments...</p>
+					<LoadingState label="Loading upcoming appointments" testid="tenant-dashboard-appointments-loading" />
 				{:else if appointmentsQuery.isError}
-					<p class="text-sm text-destructive">Couldn't load appointments.</p>
+					<div class="rounded-md border border-destructive/40 bg-destructive/5 p-3">
+						<p class="text-sm font-medium text-destructive">Couldn't load appointments.</p>
+						<Button type="button" variant="outline" size="sm" class="mt-2" onclick={() => appointmentsQuery.refetch()}>Try again</Button>
+					</div>
 				{:else if upcomingAppointments.length === 0}
 					<p class="text-sm text-muted-foreground">No appointments scheduled.</p>
 				{:else}

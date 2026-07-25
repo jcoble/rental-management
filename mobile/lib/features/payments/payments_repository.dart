@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 
 // ── Inline model: accounting summary ─────────────────────────────────────────
 
@@ -312,6 +313,59 @@ class RecordTenantReceiptResult {
   }
 }
 
+class CorrectTenantPaymentInput {
+  const CorrectTenantPaymentInput({
+    required this.paymentEntryId,
+    required this.effectiveOn,
+    required this.reason,
+    required this.paymentMethodSummary,
+    required this.externalReference,
+    this.sourceStoredFileId,
+  });
+
+  final int paymentEntryId;
+  final DateTime effectiveOn;
+  final String reason;
+  final String paymentMethodSummary;
+  final String externalReference;
+  final int? sourceStoredFileId;
+}
+
+class CorrectTenantPaymentResult {
+  const CorrectTenantPaymentResult({
+    required this.applied,
+    required this.outcome,
+    required this.paymentEntryId,
+    required this.refundEntryId,
+    required this.compensatedAllocationAmount,
+    required this.compensatedAllocationCount,
+    required this.replayed,
+  });
+
+  final bool applied;
+  final String outcome;
+  final int paymentEntryId;
+  final int? refundEntryId;
+  final double compensatedAllocationAmount;
+  final int compensatedAllocationCount;
+  final bool replayed;
+
+  factory CorrectTenantPaymentResult.fromJson(Map<String, dynamic> json) {
+    final value = json['value'] as Map<String, dynamic>? ?? const {};
+    return CorrectTenantPaymentResult(
+      applied: value['applied'] as bool? ?? false,
+      outcome: value['outcome'] as String? ?? '',
+      paymentEntryId: (value['paymentEntryId'] as num).toInt(),
+      refundEntryId: (value['refundEntryId'] as num?)?.toInt(),
+      compensatedAllocationAmount:
+          (value['compensatedAllocationAmount'] as num?)?.toDouble() ?? 0,
+      compensatedAllocationCount:
+          (value['compensatedAllocationCount'] as num?)?.toInt() ?? 0,
+      replayed: json['replayed'] as bool? ?? false,
+    );
+  }
+}
+
 class MoneySnapshot {
   const MoneySnapshot({
     required this.title,
@@ -459,6 +513,44 @@ class PaymentsRepository {
         );
       }
       return RecordTenantReceiptResult.fromJson(responseData);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<CorrectTenantPaymentResult> correctPayment(
+    int tenantAccountId,
+    CorrectTenantPaymentInput input,
+  ) async {
+    final scope =
+        'tenant-payment-refund:$tenantAccountId:${input.paymentEntryId}:'
+        '${input.effectiveOn.toIso8601String().split('T').first}:'
+        '${input.reason.trim()}:${input.externalReference.trim()}';
+    try {
+      final response = await IdempotentMutation.run(
+        scope,
+        (operationKey) => _dio.post<Map<String, dynamic>>(
+          '/tenant-accounts/$tenantAccountId/refunds',
+          data: <String, dynamic>{
+            'paymentEntryId': input.paymentEntryId,
+            'effectiveOn': _dateOnly(input.effectiveOn),
+            'reason': input.reason.trim(),
+            'paymentMethodSummary': input.paymentMethodSummary.trim(),
+            'externalReference': input.externalReference.trim(),
+            if (input.sourceStoredFileId != null)
+              'sourceStoredFileId': input.sourceStoredFileId,
+          },
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        ),
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return CorrectTenantPaymentResult.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

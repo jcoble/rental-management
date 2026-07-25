@@ -134,6 +134,29 @@ public sealed class TenantAccountMoneyRouteContractTests
     }
 
     [Fact]
+    public void Payment_correction_uses_authorized_idempotent_immutable_refund_contract()
+    {
+        var refund = typeof(TenantAccountMoneyController).GetMethod(
+            nameof(TenantAccountMoneyController.RefundPayment))!;
+
+        refund.GetCustomAttribute<HttpPostAttribute>()!.Template.Should().Be("refunds");
+        refund.GetParameters().Should().Contain(parameter =>
+            parameter.GetCustomAttribute<FromHeaderAttribute>() != null &&
+            parameter.GetCustomAttribute<FromHeaderAttribute>()!.Name == "Idempotency-Key");
+        refund.GetParameters().Should().Contain(parameter =>
+            parameter.ParameterType == typeof(RefundTenantPaymentRequest));
+        typeof(RefundTenantPaymentCommand).GetProperty(
+            nameof(RefundTenantPaymentCommand.RequiredCapability)).Should().NotBeNull();
+        typeof(RefundTenantPaymentHandler).Should()
+            .Implement<IAtomicReplayAuthorizer<RefundTenantPaymentCommand>>();
+        typeof(TenantPaymentRefundResult).GetProperty(
+            nameof(TenantPaymentRefundResult.RefundEntryId)).Should().NotBeNull();
+        typeof(TenantPaymentRefundResult).GetProperty(
+            nameof(TenantPaymentRefundResult.CompensatedAllocationCount)).Should().NotBeNull();
+        typeof(RefundTenantPaymentRequest).GetProperty("ReversesEntryId").Should().BeNull();
+    }
+
+    [Fact]
     public void Charge_reversal_is_typed_to_charge_routes_and_has_no_client_amount()
     {
         typeof(PostTenantChargeRequest).GetProperty("EntryType").Should().BeNull();

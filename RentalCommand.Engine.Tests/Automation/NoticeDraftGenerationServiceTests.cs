@@ -4,6 +4,7 @@ using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Automation;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data.Notifications;
 using RentalCommand.Engine.Services;
@@ -18,9 +19,14 @@ public sealed class NoticeDraftGenerationServiceTests
         var token = Guid.Empty;
         var work = Work(isAuto: true);
         var claims = Claims(work, claimedToken => token = claimedToken);
-        var drafts = new Mock<ITenantNoticeDraftSetStore>(MockBehavior.Strict);
-        drafts.Setup(store => store.GenerateClaimedBatchAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync([
+        var atomic = new Mock<IAtomicUnitOfWork>(MockBehavior.Strict);
+        atomic.Setup(unit => unit.ExecuteAsync(
+                It.IsAny<AtomicCommandIdentity>(),
+                It.Is<ApplyClaimedTenantNoticeDraftBatchCommand>(command =>
+                    command.ClaimToken == token && command.ClaimToken != Guid.Empty),
+                TenantNoticeDraftAutomation.Codec,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => AtomicOutcome(token, [
                 new AtomicGeneratedTenantNoticeDraft
                 {
                     WorkItemId = work.Id,
@@ -32,7 +38,7 @@ public sealed class NoticeDraftGenerationServiceTests
                     NoticeType = work.AutomationKey,
                     Status = "Draft",
                 },
-            ]);
+            ]));
         var foundation = new Mock<INotificationFoundationService>(MockBehavior.Strict);
         foundation.Setup(service => service.ApproveAndQueueAsync(
                 It.Is<NoticeApprovalExecutionContext>(context =>
@@ -52,7 +58,7 @@ public sealed class NoticeDraftGenerationServiceTests
 
         var service = new NoticeDraftGenerationService(
             claims.Object,
-            drafts.Object,
+            atomic.Object,
             foundation.Object,
             NullLogger<NoticeDraftGenerationService>.Instance,
             TimeProvider.System);
@@ -74,9 +80,14 @@ public sealed class NoticeDraftGenerationServiceTests
                 It.Is<Guid>(claimedToken => claimedToken == token),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
-        var drafts = new Mock<ITenantNoticeDraftSetStore>(MockBehavior.Strict);
-        drafts.Setup(store => store.GenerateClaimedBatchAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync([
+        var atomic = new Mock<IAtomicUnitOfWork>(MockBehavior.Strict);
+        atomic.Setup(unit => unit.ExecuteAsync(
+                It.IsAny<AtomicCommandIdentity>(),
+                It.Is<ApplyClaimedTenantNoticeDraftBatchCommand>(command =>
+                    command.ClaimToken == token && command.ClaimToken != Guid.Empty),
+                TenantNoticeDraftAutomation.Codec,
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => AtomicOutcome(token, [
                 new AtomicGeneratedTenantNoticeDraft
                 {
                     WorkItemId = work.Id,
@@ -88,17 +99,30 @@ public sealed class NoticeDraftGenerationServiceTests
                     NoticeType = work.AutomationKey,
                     Status = "Draft",
                 },
-            ]);
+            ]));
 
         var service = new NoticeDraftGenerationService(
             claims.Object,
-            drafts.Object,
+            atomic.Object,
             Mock.Of<INotificationFoundationService>(),
             NullLogger<NoticeDraftGenerationService>.Instance,
             TimeProvider.System);
 
         (await service.GenerateAllAsync()).Should().Be(1);
         claims.VerifyAll();
+    }
+
+    private static AtomicCommandOutcome<ApplyClaimedTenantNoticeDraftBatchResult> AtomicOutcome(
+        Guid expectedToken,
+        AtomicGeneratedTenantNoticeDraft[] drafts)
+    {
+        expectedToken.Should().NotBeEmpty();
+        return new AtomicCommandOutcome<ApplyClaimedTenantNoticeDraftBatchResult>(
+            new ApplyClaimedTenantNoticeDraftBatchResult(
+                drafts.FirstOrDefault()?.CreatedCount ?? 0,
+                drafts),
+            AtomicCommandDisposition.Executed,
+            Guid.NewGuid());
     }
 
     private static Mock<ITenantNoticeWorkClaimStore> Claims(

@@ -6,6 +6,7 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Reporting;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -1192,55 +1193,98 @@ public class AccountingService : IAccountingService
         var yearStart = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var yearEndExclusive = yearStart.AddYears(1);
 
-        var paidExpenseQuery = _db.Expenses
-            .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId &&
-                        e.Status == ExpenseStatus.Paid &&
-                        (e.PaidAt ?? e.IncurredAt) >= yearStart &&
-                        (e.PaidAt ?? e.IncurredAt) < yearEndExclusive &&
-                        e.PropertyId != null &&
-                        authorizedProperties.Any(property => property.Id == e.PropertyId));
-        var expenseCategoryTotalsQuery = paidExpenseQuery
-            .GroupBy(e => new { PropertyId = e.PropertyId!.Value, e.Category })
-            .Select(group => new YearEndExpenseCategorySqlRow
-            {
-                PropertyId = group.Key.PropertyId,
-                Category = group.Key.Category,
-                Amount = group.Sum(expense => expense.Amount),
-            });
-
+        var paidExpenseQuery = FinancialReportProjections.BuildExpenseAllocationProjection(_db, portfolioId)
+            .Where(expense =>
+                expense.Status == ExpenseStatus.Paid &&
+                expense.EffectiveAt >= yearStart &&
+                expense.EffectiveAt < yearEndExclusive &&
+                ((expense.PropertyId != null &&
+                    authorizedProperties.Any(property => property.Id == expense.PropertyId.Value)) ||
+                 (expense.PropertyId == null &&
+                    BuildAllPropertiesAuthorityQuery(workspaceScope, CapabilityKeys.ReportsRead).Any())));
         var yearStartOn = new DateOnly(year, 1, 1);
         var yearEndOn = yearStartOn.AddYears(1);
         var tenantIncomeForYear = TenantIncomeQuery(portfolioId, authorizedProperties)
             .Where(income => income.EffectiveOn >= yearStartOn && income.EffectiveOn < yearEndOn);
 
-        var properties = await authorizedProperties
-            .AsSingleQuery()
-            .Where(p =>
-                (tenantIncomeForYear.Any(income => income.PropertyId == p.Id) ||
-                 paidExpenseQuery.Any(expense => expense.PropertyId == p.Id)))
-            .OrderBy(p => p.Name)
-            .Select(p => new
+        var propertyFinancialTotalsQuery = tenantIncomeForYear
+            .Select(income => new
             {
-                p.Id,
-                p.Name,
-                Income = tenantIncomeForYear
-                    .Where(income => income.PropertyId == p.Id)
-                    .Sum(income => (decimal?)income.Amount) ?? 0m,
-                TotalExpenses = expenseCategoryTotalsQuery
-                    .Where(category => category.PropertyId == p.Id)
-                    .Sum(category => (decimal?)category.Amount) ?? 0m,
-                Categories = expenseCategoryTotalsQuery
-                    .Where(category => category.PropertyId == p.Id && category.Amount != 0m)
-                    .OrderBy(category => category.Category)
-                    .Select(category => new YearEndExpenseCategorySqlRow
-                    {
-                        PropertyId = category.PropertyId,
-                        Category = category.Category,
-                        Amount = category.Amount,
-                    })
-                    .ToList(),
+                income.PropertyId,
+                Income = income.Amount,
+                Expense = 0m,
+                ExpenseCategory = (ScheduleECategory?)null,
             })
+            .Concat(paidExpenseQuery
+                .Where(expense => expense.PropertyId != null)
+                .Select(expense => new
+                {
+                    PropertyId = expense.PropertyId!.Value,
+                    Income = 0m,
+                    Expense = expense.Amount,
+                    ExpenseCategory = (ScheduleECategory?)expense.Category,
+                }))
+            .GroupBy(component => component.PropertyId)
+            .Select(group => new
+            {
+                PropertyId = group.Key,
+                Income = group.Sum(component => component.Income),
+                TotalExpenses = group.Sum(component => component.Expense),
+                Advertising = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.Advertising ? component.Expense : 0m),
+                AutoTravel = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.AutoTravel ? component.Expense : 0m),
+                CleaningMaintenance = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.CleaningMaintenance ? component.Expense : 0m),
+                Commissions = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.Commissions ? component.Expense : 0m),
+                Insurance = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.Insurance ? component.Expense : 0m),
+                LegalProfessional = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.LegalProfessional ? component.Expense : 0m),
+                ManagementFees = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.ManagementFees ? component.Expense : 0m),
+                MortgageInterest = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.MortgageInterest ? component.Expense : 0m),
+                Repairs = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.Repairs ? component.Expense : 0m),
+                Supplies = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.Supplies ? component.Expense : 0m),
+                Taxes = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.Taxes ? component.Expense : 0m),
+                Utilities = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.Utilities ? component.Expense : 0m),
+                Depreciation = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.Depreciation ? component.Expense : 0m),
+                Other = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.Other ? component.Expense : 0m),
+            });
+
+        var properties = await (
+                from property in authorizedProperties
+                join totals in propertyFinancialTotalsQuery on property.Id equals totals.PropertyId
+                orderby property.Name
+                select new
+                {
+                    property.Id,
+                    property.Name,
+                    totals.Income,
+                    totals.TotalExpenses,
+                    totals.Advertising,
+                    totals.AutoTravel,
+                    totals.CleaningMaintenance,
+                    totals.Commissions,
+                    totals.Insurance,
+                    totals.LegalProfessional,
+                    totals.ManagementFees,
+                    totals.MortgageInterest,
+                    totals.Repairs,
+                    totals.Supplies,
+                    totals.Taxes,
+                    totals.Utilities,
+                    totals.Depreciation,
+                    totals.Other,
+                })
             .ToListAsync(ct);
 
         var propertyPnL = properties
@@ -1249,9 +1293,21 @@ public class AccountingService : IAccountingService
                 PropertyId = property.Id,
                 PropertyName = property.Name,
                 Income = property.Income,
-                ExpensesByCategory = property.Categories
-                    .Select(category => new ScheduleECategoryAmount(category.Category.ToString(), category.Amount))
-                    .ToList(),
+                ExpensesByCategory = BuildYearEndExpenseCategories(
+                    property.Advertising,
+                    property.AutoTravel,
+                    property.CleaningMaintenance,
+                    property.Commissions,
+                    property.Insurance,
+                    property.LegalProfessional,
+                    property.ManagementFees,
+                    property.MortgageInterest,
+                    property.Repairs,
+                    property.Supplies,
+                    property.Taxes,
+                    property.Utilities,
+                    property.Depreciation,
+                    property.Other),
                 TotalExpenses = property.TotalExpenses,
                 Net = property.Income - property.TotalExpenses,
             })
@@ -1285,7 +1341,7 @@ public class AccountingService : IAccountingService
                     .Where(income => income.EffectiveOn.Month == month)
                     .Sum(income => (decimal?)income.Amount) ?? 0m,
                 MoneyOut = paidExpenseQuery
-                    .Where(expense => (expense.PaidAt ?? expense.IncurredAt).Month == month)
+                    .Where(expense => expense.EffectiveAt.Month == month)
                     .Sum(expense => (decimal?)expense.Amount) ?? 0m,
                 TotalMoneyIn = tenantIncomeForYear.Sum(income => (decimal?)income.Amount) ?? 0m,
                 TotalMoneyOut = paidExpenseQuery.Sum(expense => (decimal?)expense.Amount) ?? 0m,
@@ -1433,6 +1489,61 @@ public class AccountingService : IAccountingService
                 capabilityKey,
                 _timeProvider.UtcNow());
 
+    private IQueryable<int> BuildAllPropertiesAuthorityQuery(
+        WorkspaceReadScope scope,
+        string capabilityKey) =>
+        _db.AuthorizedWorkspaceAssignments(
+                scope,
+                [capabilityKey],
+                CapabilityAuthorizationTargetKind.Property,
+                _timeProvider.GetUtcNow().UtcDateTime)
+            .Select(_ => 1);
+
+    private static IReadOnlyList<ScheduleECategoryAmount> BuildYearEndExpenseCategories(
+        decimal advertising,
+        decimal autoTravel,
+        decimal cleaningMaintenance,
+        decimal commissions,
+        decimal insurance,
+        decimal legalProfessional,
+        decimal managementFees,
+        decimal mortgageInterest,
+        decimal repairs,
+        decimal supplies,
+        decimal taxes,
+        decimal utilities,
+        decimal depreciation,
+        decimal other)
+    {
+        var categories = new List<ScheduleECategoryAmount>(14);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.Advertising, advertising);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.AutoTravel, autoTravel);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.CleaningMaintenance, cleaningMaintenance);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.Commissions, commissions);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.Insurance, insurance);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.LegalProfessional, legalProfessional);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.ManagementFees, managementFees);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.MortgageInterest, mortgageInterest);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.Repairs, repairs);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.Supplies, supplies);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.Taxes, taxes);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.Utilities, utilities);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.Depreciation, depreciation);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.Other, other);
+        return categories;
+    }
+
+    private static void AddYearEndExpenseCategory(
+        ICollection<ScheduleECategoryAmount> categories,
+        ScheduleECategory category,
+        decimal amount)
+    {
+        if (amount != 0m)
+        {
+            categories.Add(new ScheduleECategoryAmount(category.ToString(), amount));
+        }
+    }
+
     private sealed class TenantIncomeRow
     {
         public long ReceiptId { get; set; }
@@ -1459,13 +1570,6 @@ public class AccountingService : IAccountingService
         public int? CurrentAgreementId { get; set; }
         public int? CurrentPrimaryPartyId { get; set; }
         public string? CurrentPrimaryTenantName { get; set; }
-    }
-
-    private sealed class YearEndExpenseCategorySqlRow
-    {
-        public int PropertyId { get; set; }
-        public ScheduleECategory Category { get; set; }
-        public decimal Amount { get; set; }
     }
 
     private sealed class YearEndCashFlowSqlRow

@@ -98,6 +98,38 @@ public class ScanControllerTests : IDisposable
         uploads.VerifyAll();
     }
 
+    [Fact]
+    public async Task Upload_WithoutTarget_CreatesAutoClassificationDraft()
+    {
+        var scan = new Mock<IScanService>(MockBehavior.Strict);
+        var uploads = new Mock<IScanUploadService>(MockBehavior.Strict);
+        uploads.Setup(service => service.UploadAsync(
+                It.Is<WorkspaceReadScope>(scope => scope.PortfolioId == 42 && scope.UserId == 7),
+                "scan-auto",
+                string.Empty,
+                false,
+                null,
+                It.IsAny<ScanCaptureContextData>(),
+                It.Is<IReadOnlyList<ScanUploadFilePayload>>(payloads =>
+                    payloads.Count == 1 && payloads[0].FileName == "document.pdf"),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FinalizeScanUploadResult(
+                null, null, string.Empty, [new FinalizedScanDraft(18, "Pending", "uploads/document.pdf")]));
+
+        var controller = CreateController(scan.Object, uploads: uploads.Object);
+        var file = new FormFile(new MemoryStream([1, 2, 3]), 0, 3, "file", "document.pdf")
+        {
+            Headers = new HeaderDictionary(),
+            ContentType = "application/pdf",
+        };
+
+        var result = await controller.Upload(file, null, "scan-auto", CancellationToken.None);
+
+        var created = result.Result.Should().BeOfType<CreatedAtActionResult>().Subject;
+        created.Value.Should().BeOfType<ScanCreatedResponse>().Which.DraftId.Should().Be(18);
+        uploads.VerifyAll();
+    }
+
     [Theory]
     [InlineData("1", false)]      // ?full=1    → original (the bug: a bool param 400'd on "1")
     [InlineData("true", false)]   // ?full=true → original

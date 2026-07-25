@@ -7,10 +7,12 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Core.Accounting;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Models.Accounting;
+using RentalCommand.Core.Navigation;
 using RentalCommand.Data;
 using RentalCommand.Data.Accounting;
 using RentalCommand.Data.Atomic;
@@ -134,12 +136,24 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
         (await db.AtomicAuditLogs.CountAsync(audit =>
             audit.CommandType == identity.CommandType
             && audit.CommandIdempotencyKey == identity.IdempotencyKey)).Should().BeGreaterThanOrEqualTo(5);
-        (await db.Notifications.CountAsync(notification =>
+        var confirmationNotification = await db.Notifications.SingleAsync(notification =>
             notification.PortfolioId == _portfolioId
-            && notification.Type == "AccountingMappingConfirmed")).Should().Be(1);
-        (await db.OutboxMessages.CountAsync(message =>
+            && notification.Type == "AccountingMappingConfirmed");
+        confirmationNotification.NavigationExperience.Should().Be(NavigationExperience.Management);
+        confirmationNotification.NavigationDestination.Should().Be(NavigationDestination.Money);
+        confirmationNotification.NavigationAccessContextId.Should().BePositive();
+        confirmationNotification.NavigationAccessRevision.Should().BePositive();
+        var push = await db.OutboxMessages.SingleAsync(message =>
             message.PortfolioId == _portfolioId
-            && message.MessageType == "push")).Should().Be(1);
+            && message.MessageType == "push");
+        using (var payload = JsonDocument.Parse(push.Payload))
+        {
+            payload.RootElement.TryGetProperty("actionUrl", out _).Should().BeFalse();
+            var intent = payload.RootElement.GetProperty("navigationIntent");
+            intent.GetProperty("destination").GetString().Should().Be("Money");
+            intent.GetProperty("accessContextId").GetInt32().Should().BePositive();
+            intent.GetProperty("accessRevision").GetInt64().Should().BePositive();
+        }
 
         var promotionReads = Recorder.Commands
             .Where(sql => sql.Contains("AccountingSyncMaps", StringComparison.Ordinal)
@@ -473,6 +487,39 @@ public sealed class AccountingMappingAtomicCommandTests : IAsyncLifetime
             SecurityStamp = Guid.NewGuid().ToString("N"),
             ConcurrencyStamp = Guid.NewGuid().ToString("N"),
             CreatedAt = _now,
+        });
+        await db.SaveChangesAsync();
+
+        var accessContext = new WorkspaceAccessContext
+        {
+            UserId = 701,
+            PortfolioId = _portfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Management,
+            CreatedAtUtc = _now,
+            UpdatedAtUtc = _now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = accessContext,
+            PortfolioId = _portfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = _now.AddDays(-1),
+            CreatedAtUtc = _now,
+            UpdatedAtUtc = _now,
+        };
+        db.MembershipRoleAssignments.Add(new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = _portfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = _now.AddDays(-1),
+            CreatedAtUtc = _now,
+            UpdatedAtUtc = _now,
         });
         await db.SaveChangesAsync();
 

@@ -67,7 +67,7 @@ public class PropertyController : ManagementControllerBase
 
         var result = await _service.SetupAsync(scope, request, operationKey, ct);
         if (result is null)
-            return NotFound(new { error = "Property, owner, or owner entity not found in this portfolio" });
+            return NotFound(new { error = "Property or OwnerEntity not found in this workspace" });
         return result.Updated
             ? Ok(result)
             : CreatedAtAction(nameof(Get), new { id = result.Property.Id }, result);

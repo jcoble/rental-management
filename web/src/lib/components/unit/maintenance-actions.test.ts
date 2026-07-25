@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
 	defaultWorkOrderReceiptScanContext,
+	UNIT_MAINTENANCE_SUBJECTS,
 	unitMaintenanceReturnTo,
 	workOrderReceiptScanContext,
 } from './maintenance-actions.ts';
@@ -30,5 +31,12 @@ describe('unit maintenance actions', () => {
 
 	it('returns the unit maintenance tab return target', () => {
 		assert.equal(unitMaintenanceReturnTo(7), '/units/7?tab=maintenance&view=work-orders');
+		assert.equal(unitMaintenanceReturnTo(7, 'inspections'), '/units/7?tab=maintenance&view=inspections');
+		assert.equal(unitMaintenanceReturnTo(7, 'recurring'), '/units/7?tab=maintenance&view=recurring');
+		assert.equal(unitMaintenanceReturnTo(7, 'turnover'), '/units/7?tab=maintenance&view=turnover');
+		assert.deepEqual(
+			UNIT_MAINTENANCE_SUBJECTS.map(({ label }) => label),
+			['Work orders', 'Inspections', 'Recurring maintenance', 'Turnover/make-ready'],
+		);
 	});
 });

@@ -17,6 +17,16 @@ describe('unit tab routing', () => {
 			tab: 'maintenance',
 			view: 'turnover',
 		});
+		for (const view of ['work-orders', 'inspections', 'recurring', 'turnover'] as const) {
+			assert.deepEqual(resolveUnitDestination('maintenance', view), {
+				tab: 'maintenance',
+				view,
+			});
+		}
+		assert.deepEqual(resolveUnitDestination('maintenance', 'invalid'), {
+			tab: 'maintenance',
+			view: 'work-orders',
+		});
 	});
 
 	it('does not preserve retired tab aliases', () => {

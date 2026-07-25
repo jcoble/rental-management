@@ -69,7 +69,7 @@
 		data-testid={testid}
 	>
 		<ScanLine class="h-4 w-4" />
-		<span>{triggerLabel ?? title}</span>
+		<span>{triggerLabel ?? 'Scan / Add'}</span>
 	</Button>
 {/if}
 

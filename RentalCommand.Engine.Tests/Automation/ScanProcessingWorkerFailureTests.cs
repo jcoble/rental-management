@@ -28,6 +28,8 @@ public class ScanProcessingWorkerFailureTests : IDisposable
     private readonly SqliteConnection _conn;
     private readonly ServiceProvider _provider;
     private readonly StubLlmProvider _llm = new();
+    private readonly StubUsageEvidenceRecorder _usage = new();
+    private readonly StubWorkspaceCredentialResolver _credentials = new();
 
     public ScanProcessingWorkerFailureTests()
     {
@@ -47,6 +49,9 @@ public class ScanProcessingWorkerFailureTests : IDisposable
         services.AddScoped<RentalCommandDbContext>(_ => new ScanTestDbContext(options));
         services.AddScoped<IScanProcessingClaimStore, TestScanProcessingClaimStore>();
         services.AddSingleton<ILlmProvider>(_llm);
+        services.AddSingleton<IWorkspaceLlmExtractionProvider>(_llm);
+        services.AddSingleton<IWorkspaceLlmCredentialResolver>(_credentials);
+        services.AddSingleton<ILlmUsageEvidenceRecorder>(_usage);
         services.AddSingleton<IFileStorage, StubFileStorage>();
         services.AddSingleton<IDataUpdateService, StubDataUpdateService>();
         services.AddSingleton(TimeProvider.System);
@@ -211,6 +216,9 @@ public class ScanProcessingWorkerFailureTests : IDisposable
     {
         var draftId = SeedPendingDraft();
         _llm.Result = Extracted(("vendor_name", "Apex Plumbing"), ("total", "84.20"));
+        _llm.Result.InputTokens = 120;
+        _llm.Result.OutputTokens = 30;
+        _llm.Result.TokensUsed = 150;
 
         await RunCycleAsync();
 
@@ -219,6 +227,33 @@ public class ScanProcessingWorkerFailureTests : IDisposable
         draft.FailureReason.Should().BeNull();
         draft.ExtractedFields.Should().NotBeNull();
         draft.ExtractedFields!.Should().Contain("Apex Plumbing");
+        _llm.LastCredential.Should().NotBeNull();
+        _llm.LastCredential!.PortfolioId.Should().Be(1);
+        _llm.LastCredential.ApiKey.Should().Be("workspace-test-key");
+        _usage.Receipts.Should().ContainSingle(receipt =>
+            receipt.PortfolioId == 1 &&
+            receipt.Provider == "test" &&
+            receipt.ModelId == "test-model" &&
+            receipt.Feature == "scan.extraction" &&
+            receipt.InputUnits == 120 &&
+            receipt.OutputUnits == 30 &&
+            receipt.LatencyMilliseconds >= 0 &&
+            receipt.EstimatedCostUsd > 0);
+    }
+
+    [Fact]
+    public async Task Cycle_MissingWorkspaceCredential_MarksFailedWithoutSharedFallback()
+    {
+        var draftId = SeedPendingDraft();
+        _credentials.Credential = null;
+
+        await RunCycleAsync();
+
+        var draft = await ReloadAsync(draftId);
+        draft.Status.Should().Be("Failed");
+        draft.FailureReason.Should().Contain("configure a workspace OpenAI or Anthropic credential");
+        _llm.ExtractCalls.Should().Be(0);
+        _usage.Receipts.Should().BeEmpty();
     }
 
     [Fact]
@@ -249,6 +284,7 @@ public class ScanProcessingWorkerFailureTests : IDisposable
             lineItemsJson.Should().Contain("\"amount\":250.00");
         }
         _llm.ExtractCalls.Should().Be(2);
+        _usage.Receipts.Should().HaveCount(2);
         _llm.Instructions.Should().HaveCount(2);
         _llm.Instructions[1].Should().Contain("line item");
         _llm.Instructions[1].Should().Contain("amount");
@@ -272,6 +308,10 @@ public class ScanProcessingWorkerFailureTests : IDisposable
         draft.FailureReason.Should().BeNull();
         draft.ExtractedFields.Should().Contain("Washer hose");
         _llm.ExtractCalls.Should().Be(2);
+        _usage.Receipts.Should().HaveCount(2);
+        _usage.Receipts[1].Feature.Should().Be("scan.quality-repair");
+        _usage.Receipts[1].InputUnits.Should().Be(0);
+        _usage.Receipts[1].OutputUnits.Should().Be(0);
     }
 
     [Fact]
@@ -487,10 +527,14 @@ public class ScanProcessingWorkerFailureTests : IDisposable
             => ExecuteCycleAsync(scoped, ct);
     }
 
-    private sealed class StubLlmProvider : ILlmProvider
+    private sealed class StubLlmProvider :
+        ILlmProvider,
+        IWorkspaceLlmExtractionProvider
     {
+        public string ProviderKey => "test";
         public ExtractedFields Result { get; set; } = new();
         public Queue<object> Results { get; } = new();
+        public WorkspaceLlmRuntimeCredential? LastCredential { get; private set; }
         public string? LastGroundingContext { get; private set; }
         public List<string> Instructions { get; } = new();
         public int ExtractCalls { get; private set; }
@@ -513,6 +557,25 @@ public class ScanProcessingWorkerFailureTests : IDisposable
             return Task.FromResult((ExtractedFields)next);
         }
 
+        public Task<ExtractedFields> ExtractWorkspaceAsync(
+            WorkspaceLlmRuntimeCredential credential,
+            byte[] documentBytes,
+            string contentType,
+            string instructions,
+            IReadOnlyList<ExtractionFieldSpec> fields,
+            string? groundingContext = null,
+            CancellationToken ct = default)
+        {
+            LastCredential = credential;
+            return ExtractAsync(
+                documentBytes,
+                contentType,
+                instructions,
+                fields,
+                groundingContext,
+                ct);
+        }
+
         public Task<string> ChatAsync(string prompt, CancellationToken ct = default)
             => Task.FromResult(string.Empty);
 
@@ -521,6 +584,58 @@ public class ScanProcessingWorkerFailureTests : IDisposable
             IReadOnlyList<LlmToolSpec> tools, CancellationToken ct = default)
             => Task.FromResult(new LlmToolResult("end", null, Array.Empty<LlmToolCall>(), 0, 0, "test-model"));
     }
+
+    private sealed class StubWorkspaceCredentialResolver : IWorkspaceLlmCredentialResolver
+    {
+        public WorkspaceLlmRuntimeCredential? Credential { get; set; } =
+            new(1, "test", "test-model", "workspace-test-key");
+
+        public Task<WorkspaceLlmRuntimeCredential?> ResolveActiveAsync(
+            int portfolioId,
+            CancellationToken ct = default) =>
+            Task.FromResult<WorkspaceLlmRuntimeCredential?>(
+                Credential is null
+                    ? null
+                    : Credential with { PortfolioId = portfolioId });
+    }
+
+    private sealed class StubUsageEvidenceRecorder : ILlmUsageEvidenceRecorder
+    {
+        public List<UsageReceipt> Receipts { get; } = [];
+
+        public Task RecordUsageAsync(
+            int portfolioId,
+            string provider,
+            string modelId,
+            string feature,
+            int latencyMilliseconds,
+            int inputUnits,
+            int outputUnits,
+            decimal estimatedCostUsd,
+            CancellationToken ct = default)
+        {
+            Receipts.Add(new UsageReceipt(
+                portfolioId,
+                provider,
+                modelId,
+                feature,
+                latencyMilliseconds,
+                inputUnits,
+                outputUnits,
+                estimatedCostUsd));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed record UsageReceipt(
+        int PortfolioId,
+        string Provider,
+        string ModelId,
+        string Feature,
+        int LatencyMilliseconds,
+        int InputUnits,
+        int OutputUnits,
+        decimal EstimatedCostUsd);
 
     private sealed class StubFileStorage : IFileStorage
     {

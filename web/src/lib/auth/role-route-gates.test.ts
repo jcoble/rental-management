@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import { canAccessRoute } from './experience-policy.ts';
 
 const protectedLayout = readFileSync(
 	new URL('../../routes/(protected)/+layout.server.ts', import.meta.url),
@@ -52,9 +53,13 @@ const teamPage = readFileSync(
 test('direct staff routes use the same role-capability gates as navigation', () => {
 	assert.match(
 		protectedLayout,
-		/import \{ canAccessRoute, CAPABILITY \} from '\$lib\/auth\/experience-policy'/
+		/import \{ canAccessRoute, CAPABILITY, safeLandingForAccess \} from '\$lib\/auth\/experience-policy'/
 	);
 	assert.match(protectedLayout, /canAccessRoute\(url\.pathname, activeExperience, effectiveCapabilities\)/);
+	assert.match(
+		protectedLayout,
+		/throw redirect\(303, safeLandingForAccess\(locals\.access\) \?\? '\/logout'\)/
+	);
 	assert.match(
 		appShell,
 		/import \{ canAccessRoute, CAPABILITY, safeLandingForAccess \} from '\$lib\/auth\/experience-policy'/
@@ -120,7 +125,12 @@ test('technician commands stay on the canonical assignment-scoped mutation', () 
 	assert.match(technicianDetail, /activeCapabilities\.has\(CAPABILITY\.assignedWorkConverse\)/);
 	assert.match(technicianDetail, /\{#if allowedEntryKinds\.length > 0\}/);
 	assert.match(technicianDetail, /\{#if canConverse\}<section id="conversation"/);
-	assert.match(scanPage, /technician\.assignments\(\{ openOnly: true, sort: 'scheduledForUtc', take: 50 \}\)/);
+	assert.match(scanPage, /technician\.assignments\(\{/);
+	assert.match(scanPage, /openOnly: true/);
+	assert.match(scanPage, /search: assignedSearch\.trim\(\) \|\| undefined/);
+	assert.match(scanPage, /sort: 'scheduledForUtc'/);
+	assert.match(scanPage, /skip: \(assignedPage - 1\) \* PAGE_SIZE/);
+	assert.match(scanPage, /take: PAGE_SIZE/);
 	assert.doesNotMatch(scanPage, /workOrders\.listPage/);
 });
 
@@ -147,4 +157,31 @@ test('team property-scope pickers search and page on the server', () => {
 	assert.match(teamPage, /take: PROPERTY_PAGE_SIZE/);
 	assert.doesNotMatch(teamPage, /properties\.list\(portfolioId/);
 	assert.doesNotMatch(teamPage, /take: 250/);
+});
+
+test('Management keeps Rentals list and Unit deep links under one route gate', () => {
+	const capabilities = new Set(['rentals.read']);
+
+	assert.equal(canAccessRoute('/units', 'Management', capabilities), true);
+	assert.equal(canAccessRoute('/units/42', 'Management', capabilities), true);
+	assert.equal(canAccessRoute('/units/42/money', 'Management', capabilities), true);
+	assert.equal(canAccessRoute('/units/42', 'Management', new Set()), false);
+});
+
+test('Tenant keeps relationship projections while management routes fail closed', () => {
+	const leakedManagementCapabilities = new Set([
+		'rentals.read',
+		'money.balances.read',
+		'work.read'
+	]);
+
+	assert.equal(canAccessRoute('/portal', 'Tenant', leakedManagementCapabilities), true);
+	assert.equal(canAccessRoute('/portal/account', 'Tenant', leakedManagementCapabilities), true);
+	assert.equal(canAccessRoute('/portal/maintenance', 'Tenant', leakedManagementCapabilities), true);
+	assert.equal(canAccessRoute('/units', 'Tenant', leakedManagementCapabilities), false);
+	assert.equal(canAccessRoute('/units/42', 'Tenant', leakedManagementCapabilities), false);
+	assert.equal(
+		canAccessRoute('/tenant-accounts/7/entries/9', 'Tenant', leakedManagementCapabilities),
+		false
+	);
 });

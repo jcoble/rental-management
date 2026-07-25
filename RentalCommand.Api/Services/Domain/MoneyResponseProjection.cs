@@ -18,6 +18,7 @@ internal static class MoneyResponseProjection
         {
             Id = expense.Id,
             PortfolioId = expense.PortfolioId,
+            OperationalScope = expense.OperationalScope,
             PropertyId = expense.PropertyId,
             UnitId = expense.UnitId,
             VendorId = expense.VendorId,
@@ -43,6 +44,21 @@ internal static class MoneyResponseProjection
             PropertyName = expense.Property == null ? null : expense.Property.Name,
             UnitNumber = expense.Unit == null ? null : expense.Unit.UnitNumber,
             VendorName = expense.Vendor == null ? null : expense.Vendor.Name,
+            AllocationTotal = expense.Allocations
+                .Select(allocation => (decimal?)allocation.Amount)
+                .Sum() ?? 0m,
+            Allocations = expense.Allocations
+                .OrderBy(allocation => allocation.Id)
+                .Select(allocation => new ExpenseAllocationResponse
+                {
+                    Id = allocation.Id,
+                    TargetKind = allocation.TargetKind,
+                    PropertyId = allocation.PropertyId,
+                    UnitId = allocation.UnitId,
+                    OwnerEntityId = allocation.OwnerEntityId,
+                    Amount = allocation.Amount,
+                })
+                .ToList(),
             HasReceipt = files.Any(file =>
                 file.PortfolioId == expense.PortfolioId &&
                 file.EntityType == nameof(Expense) &&
@@ -81,6 +97,7 @@ internal static class MoneyResponseProjection
         {
             Id = expense.Id,
             PortfolioId = expense.PortfolioId,
+            OperationalScope = expense.OperationalScope,
             PropertyId = expense.PropertyId,
             UnitId = expense.UnitId,
             VendorId = expense.VendorId,
@@ -106,6 +123,9 @@ internal static class MoneyResponseProjection
             PropertyName = expense.Property == null ? null : expense.Property.Name,
             UnitNumber = expense.Unit == null ? null : expense.Unit.UnitNumber,
             VendorName = expense.Vendor == null ? null : expense.Vendor.Name,
+            AllocationTotal = expense.Allocations
+                .Select(allocation => (decimal?)allocation.Amount)
+                .Sum() ?? 0m,
             HasReceipt = files.Any(file =>
                 file.PortfolioId == expense.PortfolioId &&
                 file.EntityType == nameof(Expense) &&

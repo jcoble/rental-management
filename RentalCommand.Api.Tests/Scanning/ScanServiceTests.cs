@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -72,6 +73,296 @@ public class ScanServiceTests : IDisposable
     {
         _db.Dispose();
         _conn.Dispose();
+    }
+
+    [Fact]
+    public void CandidateQueries_KeepAuthorizationSearchSortAndPagingInSql()
+    {
+        ScanService.TechnicianCandidateCapabilityKeys.Should().BeEquivalentTo([
+            CapabilityKeys.AssignedWorkUpdate,
+            CapabilityKeys.WorkManage,
+        ]);
+        ScanService.TargetCandidateCapabilityKeys.Should().BeEquivalentTo([
+            CapabilityKeys.RentalsManage,
+            CapabilityKeys.WorkManage,
+            CapabilityKeys.MoneyPaymentsManage,
+            CapabilityKeys.MoneyExpensesManage,
+            CapabilityKeys.LeasingApplicationsManage,
+            CapabilityKeys.LeasingAgreementsPrepare,
+        ]);
+
+        using var translationDb = new RentalCommandDbContext(
+            new DbContextOptionsBuilder<RentalCommandDbContext>()
+                .UseNpgsql(
+                    "Host=localhost;Database=translation_only;Username=translation_only;Password=translation_only")
+                .Options);
+        var translationService = new ScanService(
+            translationDb,
+            new ScanRejectAtomicUnitOfWork(translationDb),
+            NullLogger<ScanService>.Instance,
+            TimeProvider.System);
+
+        var technicianSql = NormalizeSql(translationService.BuildTechnicianCandidateQuery(
+                _scope,
+                "plumbing",
+                skip: 20,
+                take: 20)
+            .ToQueryString());
+        var targetSql = NormalizeSql(translationService.BuildTargetCandidateQuery(
+                _scope,
+                "main",
+                skip: 20,
+                take: 20)
+            .ToQueryString());
+
+        AssertPropertyAuthorizationShape(technicianSql, "w1");
+        AssertSqlContains(
+            technicianSql,
+            """
+            ) AS s8 ON m2."WorkspaceMembershipId" = s8."Id"
+                AND m2."PortfolioId" = s8."PortfolioId"
+            INNER JOIN "RoleProfiles" AS r1 ON m2."RoleProfileId" = r1."Id"
+            """);
+        AssertSqlContains(
+            technicianSql,
+            """
+            m2."ScopeKind" = 'AssignedWorkOrders'
+                AND m2."Status" = 'Active'
+                AND m2."SuspendedAtUtc" IS NULL
+                AND m2."RevokedAtUtc" IS NULL
+                AND m2."EffectiveFromUtc" <= @utcNow
+                AND (m2."EffectiveToUtc" IS NULL OR m2."EffectiveToUtc" > @utcNow)
+                AND s8."AccessContextId" = @scope_AccessContextId
+                AND s8."PortfolioId" = @scope_PortfolioId
+                AND s8."Status" = 'Active'
+                AND s8."SuspendedAtUtc" IS NULL
+                AND s8."RevokedAtUtc" IS NULL
+                AND s8."EffectiveFromUtc" <= @utcNow
+                AND (s8."EffectiveToUtc" IS NULL OR s8."EffectiveToUtc" > @utcNow)
+                AND s8."UserId" = @scope_UserId
+                AND s8."AccessRevision" = @scope_AccessRevision
+                AND s8."Status0" = 'Active'
+                AND s8."SuspendedAtUtc0" IS NULL
+                AND s8."RevokedAtUtc0" IS NULL
+            """);
+        AssertSqlContains(
+            technicianSql,
+            """
+            ) AS s9 ON a0."ActiveAccessContextId" = s9."Id" AND a0."UserId" = s9."UserId"
+            WHERE s9."DeletedAt" IS NULL
+                AND a0."Id" = @scope_SessionId
+                AND a0."UserId" = @scope_UserId
+                AND a0."ActiveAccessContextId" = @scope_AccessContextId
+                AND a0."Status" = 'Active'
+                AND a0."RevokedAtUtc" IS NULL
+                AND a0."ExpiresAtUtc" > @utcNow
+            """);
+        AssertSqlContains(
+            technicianSql,
+            """
+            FROM "RoleProfileCapabilities" AS r2
+            INNER JOIN "CapabilityDefinitions" AS c0
+                ON r2."CapabilityDefinitionId" = c0."Id"
+            WHERE r1."Id" = r2."RoleProfileId"
+                AND c0."Key" = ANY (@keys)
+                AND c0."AuthorizationTargetKind" = 'WorkOrder'
+            """);
+        AssertSqlContains(
+            technicianSql,
+            """
+            FROM "WorkOrderResponsibilities" AS w10
+            INNER JOIN (
+                SELECT w11."Id", w11."DeletedAt", w11."PortfolioId", w11."PropertyId"
+                FROM "WorkOrders" AS w11
+                WHERE w11."DeletedAt" IS NULL
+            ) AS w12 ON w10."WorkOrderId" = w12."Id"
+                AND w10."PropertyId" = w12."PropertyId"
+                AND w10."PortfolioId" = w12."PortfolioId"
+            """);
+        AssertSqlContains(
+            technicianSql,
+            """
+            w."Id" = w10."WorkOrderId"
+                AND w."PropertyId" = w10."PropertyId"
+                AND w."PortfolioId" = w10."PortfolioId"
+                AND w10."PortfolioId" = w."PortfolioId"
+                AND w10."WorkspaceMembershipId" = m2."WorkspaceMembershipId"
+                AND w10."MembershipRoleAssignmentId" = m2."Id"
+                AND w10."EffectiveFromUtc" <= @utcNow
+                AND (w10."EffectiveToUtc" IS NULL OR w10."EffectiveToUtc" > @utcNow)
+            """);
+        AssertSqlContains(
+            technicianSql,
+            """
+            p."Id" = w."PropertyId" AND p."PortfolioId" = w."PortfolioId"
+            """);
+        AssertSqlContains(
+            technicianSql,
+            """
+            w."Title" ILIKE @pattern ESCAPE ''
+                OR p17."Name" ILIKE @pattern ESCAPE ''
+                OR (u0."Id" IS NOT NULL AND u0."UnitNumber" ILIKE @pattern ESCAPE '')
+            """);
+        AssertSqlContains(
+            technicianSql,
+            """
+            ORDER BY COALESCE(w."ScheduledFor", TIMESTAMPTZ 'infinity'), w."Title", w."Id"
+            LIMIT @p OFFSET @p
+            """);
+
+        AssertPropertyAuthorizationShape(targetSql, "w0");
+        AssertSqlContains(
+            targetSql,
+            """
+            FROM "Properties" AS p
+            INNER JOIN (
+                SELECT u."Id", u."PortfolioId", u."PropertyId", u."UnitNumber"
+                FROM "Units" AS u
+                WHERE u."DeletedAt" IS NULL
+            ) AS u0 ON p."Id" = u0."PropertyId" AND p."PortfolioId" = u0."PortfolioId"
+            """);
+        AssertSqlContains(
+            targetSql,
+            """
+            p."Name" ILIKE @pattern ESCAPE ''
+                OR p."AddressLine1" ILIKE @pattern ESCAPE ''
+                OR u0."UnitNumber" ILIKE @pattern ESCAPE ''
+            """);
+        AssertSqlContains(
+            targetSql,
+            """
+            ORDER BY p."Name", u0."UnitNumber", u0."Id"
+            LIMIT @p OFFSET @p
+            """);
+    }
+
+    private static void AssertPropertyAuthorizationShape(string sql, string membershipAlias)
+    {
+        AssertSqlContains(
+            sql,
+            """
+            FROM "AuthSessions" AS a
+            INNER JOIN (
+            """);
+        AssertSqlContains(
+            sql,
+            """
+            ) AS s ON a."ActiveAccessContextId" = s."Id" AND a."UserId" = s."UserId"
+            LEFT JOIN (
+            """);
+        AssertSqlContains(
+            sql,
+            $"""
+            FROM "WorkspaceMemberships" AS {membershipAlias}
+            INNER JOIN (
+            """);
+        AssertSqlContains(
+            sql,
+            """
+            ) AS s1 ON s."Id" = s1."AccessContextId"
+                AND s."PortfolioId" = s1."PortfolioId"
+            """);
+        AssertSqlContains(
+            sql,
+            """
+            a."Id" = @scope_SessionId
+                AND a."UserId" = @scope_UserId
+                AND a."ActiveAccessContextId" = @scope_AccessContextId
+                AND a."Status" = 'Active'
+                AND a."RevokedAtUtc" IS NULL
+                AND a."ExpiresAtUtc" > @utcNow
+                AND s."Id" = @scope_AccessContextId
+                AND s."UserId" = @scope_UserId
+                AND s."PortfolioId" = @scope_PortfolioId
+                AND s."AccessRevision" = @scope_AccessRevision
+                AND s."Status" = 'Active'
+                AND s."SuspendedAtUtc" IS NULL
+                AND s."RevokedAtUtc" IS NULL
+                AND s1."Id" IS NOT NULL
+                AND s1."PortfolioId" = p."PortfolioId"
+                AND s1."Status" = 'Active'
+                AND s1."SuspendedAtUtc" IS NULL
+                AND s1."RevokedAtUtc" IS NULL
+                AND s1."EffectiveFromUtc" <= @utcNow
+                AND (s1."EffectiveToUtc" IS NULL OR s1."EffectiveToUtc" > @utcNow)
+            """);
+        AssertSqlContains(
+            sql,
+            """
+            FROM "MembershipRoleAssignments" AS m
+            INNER JOIN (
+            """);
+        AssertSqlContains(
+            sql,
+            """
+            ) AS s3 ON m."WorkspaceMembershipId" = s3."Id"
+                AND m."PortfolioId" = s3."PortfolioId"
+            INNER JOIN "RoleProfiles" AS r ON m."RoleProfileId" = r."Id"
+            """);
+        AssertSqlContains(
+            sql,
+            """
+            s1."Id" = m."WorkspaceMembershipId"
+                AND s1."PortfolioId" = m."PortfolioId"
+                AND m."PortfolioId" = p."PortfolioId"
+                AND m."Status" = 'Active'
+                AND m."SuspendedAtUtc" IS NULL
+                AND m."RevokedAtUtc" IS NULL
+                AND m."EffectiveFromUtc" <= @utcNow
+                AND (m."EffectiveToUtc" IS NULL OR m."EffectiveToUtc" > @utcNow)
+            """);
+        AssertSqlContains(
+            sql,
+            """
+            FROM "RoleProfileCapabilities" AS r0
+            INNER JOIN "CapabilityDefinitions" AS c
+                ON r0."CapabilityDefinitionId" = c."Id"
+            WHERE r."Id" = r0."RoleProfileId"
+                AND c."Key" = ANY (@keys)
+                AND c."AuthorizationTargetKind" = 'Property'
+            """);
+        AssertSqlContains(
+            sql,
+            """
+            m."ScopeKind" = 'AllProperties'
+                OR (m."ScopeKind" = 'SelectedProperties' AND EXISTS (
+                SELECT 1
+                FROM "MembershipRoleAssignmentProperties" AS m0
+            """);
+        AssertSqlContains(
+            sql,
+            """
+            ) AS p7 ON m0."PropertyId" = p7."Id"
+                AND m0."PortfolioId" = p7."PortfolioId"
+            """);
+        AssertSqlContains(
+            sql,
+            """
+            m."Id" = m0."MembershipRoleAssignmentId"
+                AND m."PortfolioId" = m0."PortfolioId"
+                AND m0."PortfolioId" = p."PortfolioId"
+                AND m0."PropertyId" = p."Id"
+            """);
+    }
+
+    private static void AssertSqlContains(string sql, string expected) =>
+        sql.Should().Contain(NormalizeSql(expected));
+
+    private static string NormalizeSql(string sql)
+    {
+        var normalizedParameters = Regex.Replace(
+            sql,
+            @"@([A-Za-z_]+)\d+\b",
+            "@$1",
+            RegexOptions.CultureInvariant,
+            TimeSpan.FromSeconds(1));
+        return Regex.Replace(
+                normalizedParameters,
+                @"\s+",
+                " ",
+                RegexOptions.CultureInvariant,
+                TimeSpan.FromSeconds(1))
+            .Trim();
     }
 
     [Fact]

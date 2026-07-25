@@ -621,6 +621,107 @@ public class AccountingServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetYearEndPacketDataAsync_UsesExpenseAllocationsExactlyOnce()
+    {
+        var now = new DateTime(2026, 01, 15, 12, 0, 0, DateTimeKind.Utc);
+        var (maple, _) = SeedPropertyAndLease(now);
+        var oak = SeedProperty("Oak", now);
+        var expense = SeedExpense(
+            description: "Shared insurance",
+            amount: 300m,
+            incurredAt: now,
+            category: ScheduleECategory.Insurance,
+            status: ExpenseStatus.Paid,
+            propertyId: null);
+        expense.PaidAt = now;
+        _db.ExpenseAllocations.AddRange(
+            new ExpenseAllocation
+            {
+                PortfolioId = PortfolioId,
+                ExpenseId = expense.Id,
+                TargetKind = ExpenseAllocationTargetKind.Property,
+                PropertyId = maple.Id,
+                Amount = 125m,
+                CreatedAt = now,
+            },
+            new ExpenseAllocation
+            {
+                PortfolioId = PortfolioId,
+                ExpenseId = expense.Id,
+                TargetKind = ExpenseAllocationTargetKind.Property,
+                PropertyId = oak.Id,
+                Amount = 175m,
+                CreatedAt = now,
+            });
+        _db.SaveChanges();
+
+        _commands.Clear();
+
+        var packet = await _sut.GetYearEndPacketDataAsync(_scope, 2026, CancellationToken.None);
+
+        packet.Properties.Single(property => property.PropertyId == maple.Id).TotalExpenses.Should().Be(125m);
+        packet.Properties.Single(property => property.PropertyId == oak.Id).TotalExpenses.Should().Be(175m);
+        packet.CashFlowMoneyOut.Should().Be(300m);
+        packet.CashFlow.Single(month => month.Month == 1).MoneyOut.Should().Be(300m);
+
+        var sql = string.Join("\n---\n", _commands);
+        sql.Should().Contain("\"ExpenseAllocations\"",
+            "year-end packet expenses must use the financial report allocation projection");
+        var hasServerSideSum =
+            sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase) ||
+            sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase);
+        hasServerSideSum.Should().BeTrue("allocation amounts must be aggregated in SQL");
+    }
+
+    [Fact]
+    public async Task GetYearEndPacketDataAsync_UnassignedPortfolioExpensesRequireAllPropertiesReportsReadAuthority()
+    {
+        var now = new DateTime(2026, 01, 15, 12, 0, 0, DateTimeKind.Utc);
+        var (maple, _) = SeedPropertyAndLease(now);
+        SeedExpense(
+            description: "Maple repair",
+            amount: 100m,
+            incurredAt: now,
+            category: ScheduleECategory.Repairs,
+            status: ExpenseStatus.Paid,
+            propertyId: maple.Id);
+        SeedExpense(
+            description: "Portfolio bookkeeping",
+            amount: 75m,
+            incurredAt: now,
+            category: ScheduleECategory.Other,
+            status: ExpenseStatus.Paid,
+            propertyId: null);
+        var selectedScope = _db.SeedPropertyManagerScope(
+            PortfolioId,
+            maple.Id,
+            "year-end-selected-portfolio-expense");
+
+        _commands.Clear();
+
+        var allProperties = await _sut.GetYearEndPacketDataAsync(_scope, 2026, CancellationToken.None);
+
+        allProperties.CashFlowMoneyOut.Should().Be(175m);
+        allProperties.CashFlow.Single(month => month.Month == 1).MoneyOut.Should().Be(175m);
+        allProperties.Properties.Single(property => property.PropertyId == maple.Id)
+            .TotalExpenses.Should().Be(100m, "unassigned portfolio expenses do not appear on a property row");
+        _commands.Should().Contain(sql =>
+            sql.Contains("\"MembershipRoleAssignments\"", StringComparison.Ordinal) &&
+            sql.Contains("\"ScopeKind\"", StringComparison.Ordinal) &&
+            sql.Contains("IS NULL", StringComparison.OrdinalIgnoreCase),
+            "unassigned year-end packet expenses require effective AllProperties reports.read authority in SQL");
+
+        _commands.Clear();
+
+        var selectedProperties = await _sut.GetYearEndPacketDataAsync(selectedScope, 2026, CancellationToken.None);
+
+        selectedProperties.CashFlowMoneyOut.Should().Be(100m);
+        selectedProperties.CashFlow.Single(month => month.Month == 1).MoneyOut.Should().Be(100m);
+        selectedProperties.Properties.Should().ContainSingle();
+        selectedProperties.Properties[0].TotalExpenses.Should().Be(100m);
+    }
+
+    [Fact]
     public async Task GetSummaryAndReports_ExcludeUnassignedBankActivity()
     {
         SeedPropertyLeaseAndPayment(new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc));
@@ -774,6 +875,24 @@ public class AccountingServiceTests : IDisposable
     {
         var (property, agreement) = SeedPropertyAndLease(now);
         SeedPayment(agreement, 1200m, dueDate: now.AddDays(-1), paidInFull: false);
+        return property;
+    }
+
+    private Property SeedProperty(string name, DateTime now)
+    {
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = name,
+            AddressLine1 = $"{name} Main",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43219",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Properties.Add(property);
+        _db.SaveChanges();
         return property;
     }
 

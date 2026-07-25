@@ -3,7 +3,7 @@
 	import { Info, CheckCircle2, AlertTriangle, XCircle } from '@lucide/svelte';
 	import type { NotificationItem, NotificationSeverity } from '$lib/api/types/notification';
 	import { getAuthState } from '$lib/stores/auth.svelte';
-	import { portalActionUrl } from '$lib/utils/portalLinks';
+	import { notificationIntentUrl } from '$lib/utils/portalLinks';
 
 	type Props = {
 		notification: NotificationItem;
@@ -13,7 +13,6 @@
 
 	let { notification, truncate = true, onRead }: Props = $props();
 	const authState = getAuthState();
-	const portalUser = $derived(authState.activeExperience === 'Tenant');
 
 	const severityConfig: Record<
 		NotificationSeverity,
@@ -43,11 +42,13 @@
 
 	async function handleClick() {
 		if (!notification.isRead) onRead?.(notification.id);
-		if (notification.actionUrl) {
-			await goto(portalUser ? portalActionUrl(notification.actionUrl) : notification.actionUrl, {
-				invalidateAll: true
-			});
-		}
+		await goto(
+			notificationIntentUrl(
+				notification.navigationIntent,
+				authState.accessEnvelope?.selectedContext
+			),
+			{ invalidateAll: true }
+		);
 	}
 </script>
 

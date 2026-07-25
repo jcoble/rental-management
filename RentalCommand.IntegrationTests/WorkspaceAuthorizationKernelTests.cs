@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
 using RentalCommand.Core;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
@@ -24,6 +25,7 @@ namespace RentalCommand.IntegrationTests;
 /// </summary>
 public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
 {
+    private const string ApiPassword = "workspace-authorization-api-test-password";
     private static readonly AtomicJsonResultCodec<WorkspaceAccessMutationResult> MutationCodec =
         new("workspace-access-mutation-result.v1");
     private static readonly AtomicJsonResultCodec<CreateWorkspaceMembershipResult> TeamCreateCodec =
@@ -34,6 +36,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     private ServiceProvider? _services;
     private bool _dockerAvailable;
     private string _connectionString = string.Empty;
+    private string _apiConnectionString = string.Empty;
     private readonly DateTime _now = new(2026, 7, 10, 16, 0, 0, DateTimeKind.Utc);
 
     private int _userId;
@@ -73,7 +76,15 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         _connectionString = _postgres.GetConnectionString();
         await using var db = NewContext();
         await db.Database.MigrateAsync();
+        await db.Database.ExecuteSqlRawAsync(
+            $"ALTER ROLE rentalcommand_api PASSWORD '{ApiPassword}';");
         await SeedKernelAsync(db);
+        _apiConnectionString = new NpgsqlConnectionStringBuilder(_connectionString)
+        {
+            Username = "rentalcommand_api",
+            Password = ApiPassword,
+            Pooling = false,
+        }.ConnectionString;
 
         var services = new ServiceCollection();
         services.AddSingleton(TimeProvider.System);
@@ -139,7 +150,7 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
     public async Task SameAssignmentMustSupplyCapabilityAndScope_DecoyDoesNotLeak()
     {
         SkipIfNoDocker();
-        await using var db = NewContext();
+        await using var db = await NewAuthorizationQueryContextAsync();
         var active = await ResolveAsync(db, presentedRevision: 7);
 
         var visible = await db.Properties
@@ -441,12 +452,34 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         await using var db = NewContext();
         var active = await ResolveAsync(db, presentedRevision: 7);
         var evaluator = new WorkspaceAuthorizationEvaluator(db);
+        var technicianAssignmentId = await db.MembershipRoleAssignments
+            .Where(item => item.WorkspaceMembershipId == _membershipId && item.RoleProfileId == 4)
+            .Select(item => item.Id)
+            .SingleAsync();
+
+        db.WorkOrderResponsibilities.Add(new WorkOrderResponsibility
+        {
+            Id = Guid.NewGuid(),
+            PortfolioId = _portfolioId,
+            PropertyId = _managerPropertyId,
+            WorkOrderId = _managerWorkOrderId,
+            WorkspaceMembershipId = _membershipId,
+            MembershipRoleAssignmentId = technicianAssignmentId,
+            Kind = WorkOrderResponsibilityKind.Primary,
+            EffectiveFromUtc = _now.AddHours(1),
+            AssignedByUserId = _userId,
+            AssignedByAccessContextId = _accessContextId,
+            AssignedReason = "Clock boundary proof",
+            AssignedAtUtc = _now.AddHours(1),
+        });
+        await db.SaveChangesAsync();
 
         (await evaluator.HasCapabilityAsync(
             active,
             CapabilityKeys.AssignedWorkRead,
             new WorkOrderCapabilityAuthorizationTarget(_portfolioId, _managerWorkOrderId),
             _now)).Should().BeFalse();
+
     }
 
     [SkippableFact]
@@ -529,8 +562,10 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         var limitAt = sql.IndexOf("LIMIT", StringComparison.OrdinalIgnoreCase);
 
         existsAt.Should().BeGreaterThanOrEqualTo(0);
-        sql.Should().Contain("RoleProfileCapabilities");
-        sql.Should().Contain("MembershipRoleAssignmentProperties");
+        sql.Should().Contain("rc_api_effective_capability_scopes");
+        sql.Should().NotContain("AuthSessions");
+        sql.Should().NotContain("RoleProfileCapabilities");
+        sql.Should().NotContain("MembershipRoleAssignmentProperties");
         existsAt.Should().BeLessThan(orderAt,
             "authorization must be in the SQL WHERE clause before sort");
         orderAt.Should().BeLessThan(limitAt,
@@ -568,7 +603,10 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             var limitAt = sql.IndexOf("LIMIT", StringComparison.OrdinalIgnoreCase);
 
             existsAt.Should().BeGreaterThanOrEqualTo(0);
-            sql.Should().Contain("RoleProfileCapabilities");
+            sql.Should().Contain("rc_api_effective_capability_scopes");
+            sql.Should().NotContain("AuthSessions");
+            sql.Should().NotContain("RoleProfileCapabilities");
+            sql.Should().NotContain("MembershipRoleAssignmentProperties");
             existsAt.Should().BeLessThan(orderAt,
                 "money authorization must remain in the SQL WHERE clause before sort");
             orderAt.Should().BeLessThan(limitAt,
@@ -2009,6 +2047,23 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         new DbContextOptionsBuilder<RentalCommandDbContext>()
             .UseNpgsql(_connectionString)
             .Options);
+
+    private async Task<RentalCommandDbContext> NewAuthorizationQueryContextAsync()
+    {
+        var db = new RentalCommandDbContext(
+            new DbContextOptionsBuilder<RentalCommandDbContext>()
+                .UseNpgsql(_apiConnectionString)
+                .Options);
+        await db.Database.OpenConnectionAsync();
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            SELECT set_config('app.current_portfolio_id', {_portfolioId.ToString()}, false),
+                   set_config('app.auth_session_id', {_sessionId.ToString()}, false),
+                   set_config('app.current_user_id', {_userId.ToString()}, false),
+                   set_config('app.current_access_context_id', {_accessContextId.ToString()}, false),
+                   set_config('app.access_revision', {"7"}, false)
+            """);
+        return db;
+    }
 
     private void SkipIfNoDocker() =>
         Skip.IfNot(_dockerAvailable, "Docker is unavailable; workspace authorization kernel test skipped.");

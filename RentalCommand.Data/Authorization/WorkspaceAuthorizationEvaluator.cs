@@ -90,16 +90,17 @@ public sealed class WorkspaceAuthorizationEvaluator : IWorkspaceAuthorizationEva
         IReadOnlyCollection<string> capabilityKeys,
         WorkspaceCapabilityAuthorizationTarget target,
         DateTime utcNow,
-        CancellationToken cancellationToken) =>
-        EffectiveAssignments(
+        CancellationToken cancellationToken)
+    {
+        _ = utcNow;
+        return _db.EffectiveCapabilityScopes(
                 accessContext,
                 capabilityKeys,
-                CapabilityAuthorizationTargetKind.Workspace,
-                utcNow)
-            .AnyAsync(assignment =>
-                assignment.PortfolioId == target.PortfolioId &&
-                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties,
+                CapabilityAuthorizationTargetKind.Workspace)
+            .AnyAsync(scope =>
+                scope.ScopeKind == EffectiveCapabilityScopeQuery.AllPropertiesScope,
                 cancellationToken);
+    }
 
     private Task<bool> HasPropertyCapabilityAsync(
         ActiveAccessContext accessContext,
@@ -108,23 +109,21 @@ public sealed class WorkspaceAuthorizationEvaluator : IWorkspaceAuthorizationEva
         DateTime utcNow,
         CancellationToken cancellationToken)
     {
-        var assignments = EffectiveAssignments(
+        _ = utcNow;
+        var scopes = _db.EffectiveCapabilityScopes(
             accessContext,
             capabilityKeys,
-            CapabilityAuthorizationTargetKind.Property,
-            utcNow);
+            CapabilityAuthorizationTargetKind.Property);
 
         return _db.Properties.AsNoTracking().AnyAsync(property =>
                 property.Id == target.PropertyId &&
                 property.PortfolioId == target.PortfolioId &&
                 property.PortfolioId == accessContext.PortfolioId &&
-                assignments.Any(assignment =>
-                    assignment.PortfolioId == property.PortfolioId &&
-                    (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
-                     (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
-                      assignment.SelectedProperties.Any(scope =>
-                          scope.PropertyId == property.Id &&
-                          scope.PortfolioId == property.PortfolioId)))),
+                (scopes.Any(scope =>
+                     scope.ScopeKind == EffectiveCapabilityScopeQuery.AllPropertiesScope) ||
+                 scopes.Any(scope =>
+                     scope.ScopeKind == EffectiveCapabilityScopeQuery.SelectedPropertiesScope &&
+                     scope.PropertyId == property.Id)),
             cancellationToken);
     }
 
@@ -133,16 +132,17 @@ public sealed class WorkspaceAuthorizationEvaluator : IWorkspaceAuthorizationEva
         IReadOnlyCollection<string> capabilityKeys,
         PortfolioWidePropertyCapabilityAuthorizationTarget target,
         DateTime utcNow,
-        CancellationToken cancellationToken) =>
-        EffectiveAssignments(
+        CancellationToken cancellationToken)
+    {
+        _ = utcNow;
+        return _db.EffectiveCapabilityScopes(
                 accessContext,
                 capabilityKeys,
-                CapabilityAuthorizationTargetKind.Property,
-                utcNow)
-            .AnyAsync(assignment =>
-                assignment.PortfolioId == target.PortfolioId &&
-                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties,
+                CapabilityAuthorizationTargetKind.Property)
+            .AnyAsync(scope =>
+                scope.ScopeKind == EffectiveCapabilityScopeQuery.AllPropertiesScope,
                 cancellationToken);
+    }
 
     private Task<bool> HasUnitCapabilityAsync(
         ActiveAccessContext accessContext,
@@ -151,11 +151,11 @@ public sealed class WorkspaceAuthorizationEvaluator : IWorkspaceAuthorizationEva
         DateTime utcNow,
         CancellationToken cancellationToken)
     {
-        var assignments = EffectiveAssignments(
+        _ = utcNow;
+        var scopes = _db.EffectiveCapabilityScopes(
             accessContext,
             capabilityKeys,
-            CapabilityAuthorizationTargetKind.Property,
-            utcNow);
+            CapabilityAuthorizationTargetKind.Property);
 
         return _db.Units.AsNoTracking().AnyAsync(unit =>
                 unit.Id == target.UnitId &&
@@ -164,13 +164,11 @@ public sealed class WorkspaceAuthorizationEvaluator : IWorkspaceAuthorizationEva
                 _db.Properties.AsNoTracking().Any(property =>
                     property.Id == unit.PropertyId &&
                     property.PortfolioId == unit.PortfolioId &&
-                    assignments.Any(assignment =>
-                        assignment.PortfolioId == property.PortfolioId &&
-                        (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
-                         (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
-                          assignment.SelectedProperties.Any(scope =>
-                              scope.PropertyId == property.Id &&
-                              scope.PortfolioId == property.PortfolioId))))),
+                    (scopes.Any(scope =>
+                         scope.ScopeKind == EffectiveCapabilityScopeQuery.AllPropertiesScope) ||
+                     scopes.Any(scope =>
+                         scope.ScopeKind == EffectiveCapabilityScopeQuery.SelectedPropertiesScope &&
+                         scope.PropertyId == property.Id))),
             cancellationToken);
     }
 
@@ -181,24 +179,22 @@ public sealed class WorkspaceAuthorizationEvaluator : IWorkspaceAuthorizationEva
         DateTime utcNow,
         CancellationToken cancellationToken)
     {
-        var assignments = EffectiveAssignments(
+        _ = utcNow;
+        var scopes = _db.EffectiveCapabilityScopes(
             accessContext,
             capabilityKeys,
-            CapabilityAuthorizationTargetKind.Property,
-            utcNow);
+            CapabilityAuthorizationTargetKind.Property);
 
         return _db.RentalApplications.AsNoTracking().AnyAsync(application =>
                 application.Id == target.ApplicationId &&
                 application.PortfolioId == target.PortfolioId &&
                 application.PortfolioId == accessContext.PortfolioId &&
-                assignments.Any(assignment =>
-                    assignment.PortfolioId == application.PortfolioId &&
-                    (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
-                     (application.PropertyId != null &&
-                      assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
-                      assignment.SelectedProperties.Any(scope =>
-                          scope.PropertyId == application.PropertyId.Value &&
-                          scope.PortfolioId == application.PortfolioId)))),
+                (scopes.Any(scope =>
+                     scope.ScopeKind == EffectiveCapabilityScopeQuery.AllPropertiesScope) ||
+                 application.PropertyId != null &&
+                 scopes.Any(scope =>
+                     scope.ScopeKind == EffectiveCapabilityScopeQuery.SelectedPropertiesScope &&
+                     scope.PropertyId == application.PropertyId.Value)),
             cancellationToken);
     }
 
@@ -209,26 +205,24 @@ public sealed class WorkspaceAuthorizationEvaluator : IWorkspaceAuthorizationEva
         DateTime utcNow,
         CancellationToken cancellationToken)
     {
-        var assignments = EffectiveAssignments(
+        _ = utcNow;
+        var scopes = _db.EffectiveCapabilityScopes(
             accessContext,
             capabilityKeys,
-            CapabilityAuthorizationTargetKind.Property,
-            utcNow);
+            CapabilityAuthorizationTargetKind.Property);
 
         return _db.Tenants.AsNoTracking().AnyAsync(tenant =>
                 tenant.Id == target.TenantId &&
                 tenant.PortfolioId == target.PortfolioId &&
                 tenant.PortfolioId == accessContext.PortfolioId &&
-                assignments.Any(assignment =>
-                    assignment.PortfolioId == tenant.PortfolioId &&
-                    (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
-                     (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
-                      tenant.LeaseManagementParties.Any(party =>
-                          party.PortfolioId == tenant.PortfolioId &&
-                          party.LeaseManagement != null &&
-                          assignment.SelectedProperties.Any(scope =>
-                              scope.PortfolioId == tenant.PortfolioId &&
-                              scope.PropertyId == party.LeaseManagement.PropertyId))))),
+                (scopes.Any(scope =>
+                     scope.ScopeKind == EffectiveCapabilityScopeQuery.AllPropertiesScope) ||
+                 tenant.LeaseManagementParties.Any(party =>
+                     party.PortfolioId == tenant.PortfolioId &&
+                     party.LeaseManagement != null &&
+                     scopes.Any(scope =>
+                         scope.ScopeKind == EffectiveCapabilityScopeQuery.SelectedPropertiesScope &&
+                         scope.PropertyId == party.LeaseManagement.PropertyId))),
             cancellationToken);
     }
 
@@ -239,38 +233,33 @@ public sealed class WorkspaceAuthorizationEvaluator : IWorkspaceAuthorizationEva
         DateTime utcNow,
         CancellationToken cancellationToken)
     {
-        var propertyAssignments = EffectiveAssignments(
+        var propertyScopes = _db.EffectiveCapabilityScopes(
             accessContext,
             capabilityKeys,
-            CapabilityAuthorizationTargetKind.Property,
-            utcNow);
-        var assignedWorkAssignments = EffectiveAssignments(
+            CapabilityAuthorizationTargetKind.Property);
+        var assignedWorkScopes = _db.EffectiveCapabilityScopes(
             accessContext,
             capabilityKeys,
-            CapabilityAuthorizationTargetKind.WorkOrder,
-            utcNow);
+            CapabilityAuthorizationTargetKind.WorkOrder);
 
         return _db.WorkOrders.AsNoTracking().AnyAsync(
             workOrder =>
                 workOrder.Id == target.WorkOrderId &&
                 workOrder.PortfolioId == target.PortfolioId &&
                 workOrder.PortfolioId == accessContext.PortfolioId &&
-                (propertyAssignments.Any(assignment =>
-                     assignment.PortfolioId == workOrder.PortfolioId &&
-                     (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
-                      (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
-                       assignment.SelectedProperties.Any(scope =>
-                           scope.PortfolioId == workOrder.PortfolioId &&
-                           scope.PropertyId == workOrder.PropertyId)))) ||
-                 assignedWorkAssignments.Any(assignment =>
-                     assignment.PortfolioId == workOrder.PortfolioId &&
-                     assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AssignedWorkOrders &&
+                (propertyScopes.Any(scope =>
+                     scope.ScopeKind == EffectiveCapabilityScopeQuery.AllPropertiesScope ||
+                     scope.ScopeKind == EffectiveCapabilityScopeQuery.SelectedPropertiesScope &&
+                     scope.PropertyId == workOrder.PropertyId) ||
+                 assignedWorkScopes.Any(scope =>
+                     scope.ScopeKind == EffectiveCapabilityScopeQuery.AssignedWorkOrdersScope &&
                      workOrder.Responsibilities.Any(responsibility =>
                          responsibility.PortfolioId == workOrder.PortfolioId &&
-                         responsibility.WorkspaceMembershipId == assignment.WorkspaceMembershipId &&
-                         responsibility.MembershipRoleAssignmentId == assignment.Id &&
+                         responsibility.WorkspaceMembershipId == scope.WorkspaceMembershipId &&
+                         responsibility.MembershipRoleAssignmentId == scope.AssignmentId &&
                          responsibility.EffectiveFromUtc <= utcNow &&
-                         (responsibility.EffectiveToUtc == null || responsibility.EffectiveToUtc > utcNow)))),
+                         (responsibility.EffectiveToUtc == null ||
+                          responsibility.EffectiveToUtc > utcNow)))),
             cancellationToken);
     }
 
@@ -329,32 +318,4 @@ public sealed class WorkspaceAuthorizationEvaluator : IWorkspaceAuthorizationEva
         accessContext.AccessContextId,
         accessContext.AccessRevision);
 
-    private IQueryable<MembershipRoleAssignment> EffectiveAssignments(
-        ActiveAccessContext accessContext,
-        IReadOnlyCollection<string> capabilityKeys,
-        CapabilityAuthorizationTargetKind targetKind,
-        DateTime utcNow)
-    {
-        var effectiveContexts = _db.WorkspaceAccessContexts.AsNoTracking().WhereEffective();
-        var effectiveMemberships = _db.WorkspaceMemberships.AsNoTracking().WhereEffective(utcNow);
-
-        return _db.MembershipRoleAssignments
-            .AsNoTracking()
-            .WhereEffective(utcNow)
-            .Where(assignment =>
-                assignment.WorkspaceMembershipId == accessContext.WorkspaceMembershipId &&
-                assignment.PortfolioId == accessContext.PortfolioId &&
-                effectiveMemberships.Any(membership =>
-                    membership.Id == assignment.WorkspaceMembershipId &&
-                    membership.AccessContextId == accessContext.AccessContextId &&
-                    membership.PortfolioId == assignment.PortfolioId) &&
-                effectiveContexts.Any(context =>
-                    context.Id == accessContext.AccessContextId &&
-                    context.UserId == accessContext.UserId &&
-                    context.PortfolioId == assignment.PortfolioId &&
-                    context.AccessRevision == accessContext.AccessRevision) &&
-                assignment.RoleProfile!.Capabilities.Any(profileCapability =>
-                    capabilityKeys.Contains(profileCapability.CapabilityDefinition!.Key) &&
-                    profileCapability.CapabilityDefinition.AuthorizationTargetKind == targetKind));
-    }
 }

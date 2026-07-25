@@ -23,8 +23,9 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
-	import { AlertTriangle, CheckCircle2, MessageSquare, ChevronLeft, ChevronRight, Loader2, CircleCheckBig } from '@lucide/svelte';
+	import { AlertTriangle, CheckCircle2, MessageSquare, ChevronLeft, ChevronRight, CircleCheckBig, Loader2 } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -214,13 +215,11 @@
 	/>
 
 	{#if pastDueQuery.isLoading}
-		<div class="flex h-48 items-center justify-center gap-2 text-sm text-muted-foreground" data-testid="past-due-loading">
-			<Loader2 class="h-4 w-4 animate-spin" />
-			Loading…
-		</div>
+		<LoadingState label="Loading past-due accounts" variant="page" testid="past-due-loading" />
 	{:else if pastDueQuery.isError}
-		<div class="flex h-48 items-center justify-center text-sm text-destructive" data-testid="past-due-error">
-			Couldn't load who's behind.
+		<div class="flex min-h-48 flex-wrap items-center justify-center gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="past-due-error">
+			<p class="text-sm text-destructive">Couldn't load who's behind.</p>
+			<Button size="sm" variant="outline" onclick={() => pastDueQuery.refetch()}>Retry past-due accounts</Button>
 		</div>
 	{:else if (result?.totalCount ?? 0) === 0}
 		<Card.Root data-testid="past-due-empty">

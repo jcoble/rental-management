@@ -60,7 +60,8 @@ public sealed class FcmPushSender : IPushSender
         {
             Token = deviceToken,
             Notification = new Notification { Title = title, Body = body },
-            // String-only data map: the mobile client routes on data["actionUrl"] / data["type"].
+            // FCM data is string-only. navigationIntent is a serialized closed typed contract;
+            // neither this map nor any producer includes a URL/route compatibility key.
             Data = data?.ToDictionary(kv => kv.Key, kv => kv.Value),
             Android = new AndroidConfig
             {

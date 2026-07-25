@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -81,7 +82,10 @@ public class ScanProcessingWorker : EngineWorkerBase
     protected override async Task<int> ExecuteCycleAsync(IServiceProvider scoped, CancellationToken ct)
     {
         var db = scoped.GetRequiredService<RentalCommandDbContext>();
-        var llm = scoped.GetRequiredService<ILlmProvider>();
+        var credentialResolver = scoped.GetRequiredService<IWorkspaceLlmCredentialResolver>();
+        var usageRecorder = scoped.GetRequiredService<ILlmUsageEvidenceRecorder>();
+        var workspaceProviders = scoped.GetServices<IWorkspaceLlmExtractionProvider>()
+            .ToDictionary(provider => provider.ProviderKey, StringComparer.OrdinalIgnoreCase);
         var storage = scoped.GetRequiredService<IFileStorage>();
         var dataUpdate = scoped.GetRequiredService<IDataUpdateService>();
         var timeProvider = scoped.GetRequiredService<TimeProvider>();
@@ -99,6 +103,28 @@ public class ScanProcessingWorker : EngineWorkerBase
 
             try
             {
+                var credential = await credentialResolver.ResolveActiveAsync(
+                    draft.PortfolioId, ct);
+                if (credential is null)
+                {
+                    await MarkFailedAsync(
+                        scoped, dataUpdate, draft.PortfolioId, draft.Id,
+                        draft.ClaimOwner, draft.ClaimToken, logger,
+                        "AI extraction unavailable: configure a workspace OpenAI or Anthropic credential in Settings");
+                    continue;
+                }
+
+                if (!workspaceProviders.TryGetValue(
+                        credential.Provider,
+                        out var workspaceProvider))
+                {
+                    await MarkFailedAsync(
+                        scoped, dataUpdate, draft.PortfolioId, draft.Id,
+                        draft.ClaimOwner, draft.ClaimToken, logger,
+                        "AI extraction unavailable: the configured workspace provider is not supported");
+                    continue;
+                }
+
                 // Read the stored bytes back from the blob store.
                 await using var stream = await storage.DownloadAsync(draft.FilePath, ct);
                 using var ms = new MemoryStream();
@@ -131,7 +157,18 @@ public class ScanProcessingWorker : EngineWorkerBase
                         DocumentClassificationExtractionSchema.Instructions,
                         DocumentClassificationExtractionSchema.Fields);
                     classification = await ExtractWithRetryAsync(
-                        llm, bytes, contentType, classificationSchema, groundingContext, draft.Id, logger, ct);
+                        workspaceProvider,
+                        credential,
+                        usageRecorder,
+                        draft.PortfolioId,
+                        "scan.classification",
+                        bytes,
+                        contentType,
+                        classificationSchema,
+                        groundingContext,
+                        draft.Id,
+                        logger,
+                        ct);
                     var classificationFailure = GetExtractionFailureReason(
                         classification, classificationSchema.Fields);
                     if (classificationFailure is not null
@@ -154,7 +191,18 @@ public class ScanProcessingWorker : EngineWorkerBase
 
                 var schema = ChooseExtractionSchema(resolvedTargetEntityType);
                 var extracted = await ExtractWithRetryAsync(
-                    llm, bytes, contentType, schema, groundingContext, draft.Id, logger, ct);
+                    workspaceProvider,
+                    credential,
+                    usageRecorder,
+                    draft.PortfolioId,
+                    "scan.extraction",
+                    bytes,
+                    contentType,
+                    schema,
+                    groundingContext,
+                    draft.Id,
+                    logger,
+                    ct);
 
                 // Preserve classification evidence in the review proposal, but never treat it as
                 // authority. Confirmation still validates current session, capability, and scope.
@@ -186,8 +234,17 @@ public class ScanProcessingWorker : EngineWorkerBase
                                 " Return the full extraction schema again. Keep previously correct fields unchanged; " +
                                 "only improve fields you can read from the document.",
                                 schema.Fields);
-                            var repaired = await llm.ExtractAsync(
-                                bytes, contentType, repairSchema.Instructions, repairSchema.Fields, groundingContext, ct);
+                            var repaired = await InvokeWorkspaceExtractionAsync(
+                                workspaceProvider,
+                                credential,
+                                usageRecorder,
+                                draft.PortfolioId,
+                                "scan.quality-repair",
+                                bytes,
+                                contentType,
+                                repairSchema,
+                                groundingContext,
+                                ct);
                             ApplyQualityRepair(resolvedTargetEntityType, extracted, repaired);
                         }
                         catch (Exception ex) when (!ct.IsCancellationRequested)
@@ -695,7 +752,11 @@ public class ScanProcessingWorker : EngineWorkerBase
     /// a reason. Honours the cycle token (a real cancellation/timeout propagates as before).
     /// </summary>
     private static async Task<ExtractedFields> ExtractWithRetryAsync(
-        ILlmProvider llm,
+        IWorkspaceLlmExtractionProvider provider,
+        WorkspaceLlmRuntimeCredential credential,
+        ILlmUsageEvidenceRecorder usageRecorder,
+        int portfolioId,
+        string feature,
         byte[] bytes,
         string contentType,
         ExtractionSchema schema,
@@ -706,8 +767,17 @@ public class ScanProcessingWorker : EngineWorkerBase
     {
         try
         {
-            return await llm.ExtractAsync(
-                bytes, contentType, schema.Instructions, schema.Fields, groundingContext, ct);
+            return await InvokeWorkspaceExtractionAsync(
+                provider,
+                credential,
+                usageRecorder,
+                portfolioId,
+                feature,
+                bytes,
+                contentType,
+                schema,
+                groundingContext,
+                ct);
         }
         catch (HttpRequestException ex) when (!ct.IsCancellationRequested)
         {
@@ -716,8 +786,67 @@ public class ScanProcessingWorker : EngineWorkerBase
             logger.LogWarning(ex,
                 "Transient extraction error for draft {DraftId}; retrying once", draftId);
             await Task.Delay(TimeSpan.FromMilliseconds(750), ct);
-            return await llm.ExtractAsync(
-                bytes, contentType, schema.Instructions, schema.Fields, groundingContext, ct);
+            return await InvokeWorkspaceExtractionAsync(
+                provider,
+                credential,
+                usageRecorder,
+                portfolioId,
+                feature,
+                bytes,
+                contentType,
+                schema,
+                groundingContext,
+                ct);
+        }
+    }
+
+    private static async Task<ExtractedFields> InvokeWorkspaceExtractionAsync(
+        IWorkspaceLlmExtractionProvider provider,
+        WorkspaceLlmRuntimeCredential credential,
+        ILlmUsageEvidenceRecorder usageRecorder,
+        int portfolioId,
+        string feature,
+        byte[] bytes,
+        string contentType,
+        ExtractionSchema schema,
+        string? groundingContext,
+        CancellationToken ct)
+    {
+        var startedAt = Stopwatch.GetTimestamp();
+        ExtractedFields? result = null;
+        try
+        {
+            result = await provider.ExtractWorkspaceAsync(
+                credential,
+                bytes,
+                contentType,
+                schema.Instructions,
+                schema.Fields,
+                groundingContext,
+                ct);
+            return result;
+        }
+        finally
+        {
+            var modelId = string.IsNullOrWhiteSpace(result?.ModelId)
+                ? credential.ModelId
+                : result.ModelId;
+            var inputUnits = Math.Max(0, result?.InputTokens ?? 0);
+            var outputUnits = Math.Max(0, result?.OutputTokens ?? 0);
+            var latency = (int)Math.Clamp(
+                Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+                0,
+                int.MaxValue);
+            await usageRecorder.RecordUsageAsync(
+                portfolioId,
+                provider.ProviderKey,
+                modelId,
+                feature,
+                latency,
+                inputUnits,
+                outputUnits,
+                EstimateCost(modelId, inputUnits, outputUnits),
+                ct.IsCancellationRequested ? CancellationToken.None : ct);
         }
     }
 

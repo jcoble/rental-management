@@ -7,7 +7,7 @@ type PropertyLike = {
 	name?: string | null;
 	type?: string | null;
 	rentalStructure?: RentalStructure | null;
-	ownerEntityId?: number | string | null;
+	ownerships?: readonly { ownerEntityId: number | string }[] | null;
 	addressLine1?: string | null;
 	addressLine2?: string | null;
 	city?: string | null;
@@ -37,8 +37,8 @@ export function buildOnboardingPropertyPayload(input: {
 	existingOwners: readonly OwnerLike[] | null | undefined;
 }): Omit<OnboardingPropertyForm, 'ownerEntityId'> & {
 	status: string;
-	ownerEntityId: number | null;
-	clearOwnerEntity: boolean;
+	ownerships: Array<{ ownerEntityId: number; ownershipSharePercent: number }>;
+	clearOwnership: boolean;
 } {
 	const { propertyForm, selectedOwnerId, createdOwner, existingOwners } = input;
 	const selectedOwnerEntityId = propertyForm.ownerEntityId?.trim();
@@ -63,8 +63,10 @@ export function buildOnboardingPropertyPayload(input: {
 		state: propertyForm.state,
 		postalCode: propertyForm.postalCode,
 		status: propertyForm.status?.trim() || 'Active',
-		ownerEntityId: hasOwnerEntity ? ownerEntityId : null,
-		clearOwnerEntity: !hasOwnerEntity
+		ownerships: hasOwnerEntity
+			? [{ ownerEntityId, ownershipSharePercent: 100 }]
+			: [],
+		clearOwnership: !hasOwnerEntity
 	};
 }
 
@@ -96,6 +98,9 @@ export function onboardingPropertyFormFromProperty(property: PropertyLike): Onbo
 		city: property.city ?? '',
 		state: property.state ?? '',
 		postalCode: property.postalCode ?? '',
-		ownerEntityId: property.ownerEntityId == null ? '' : String(property.ownerEntityId),
+		ownerEntityId:
+			property.ownerships?.length === 1
+				? String(property.ownerships[0].ownerEntityId)
+				: '',
 	};
 }

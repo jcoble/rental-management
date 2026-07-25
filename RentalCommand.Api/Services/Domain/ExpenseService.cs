@@ -160,6 +160,35 @@ public class ExpenseService : IExpenseService
 
         if (query is ExpenseListQuery expenseQuery)
         {
+            if (expenseQuery.OperationalScope.HasValue)
+            {
+                var operationalScope = expenseQuery.OperationalScope.Value;
+                q = q.Where(e => e.OperationalScope == operationalScope);
+            }
+
+            if (expenseQuery.AllocationTargetKind.HasValue)
+            {
+                var targetKind = expenseQuery.AllocationTargetKind.Value;
+                var targetId = expenseQuery.AllocationTargetId;
+                q = q.Where(e => e.Allocations.Any(allocation =>
+                    allocation.TargetKind == targetKind &&
+                    (targetId == null ||
+                     (targetKind == ExpenseAllocationTargetKind.Property &&
+                      allocation.PropertyId == targetId) ||
+                     (targetKind == ExpenseAllocationTargetKind.Unit &&
+                      allocation.UnitId == targetId) ||
+                     (targetKind == ExpenseAllocationTargetKind.OwnerEntity &&
+                      allocation.OwnerEntityId == targetId))));
+            }
+            else if (expenseQuery.AllocationTargetId.HasValue)
+            {
+                var targetId = expenseQuery.AllocationTargetId.Value;
+                q = q.Where(e => e.Allocations.Any(allocation =>
+                    allocation.PropertyId == targetId ||
+                    allocation.UnitId == targetId ||
+                    allocation.OwnerEntityId == targetId));
+            }
+
             if (expenseQuery.IncurredFrom.HasValue)
             {
                 var incurredFrom = expenseQuery.IncurredFrom.Value.ToUtc();
@@ -206,19 +235,28 @@ public class ExpenseService : IExpenseService
         return value.TimeOfDay == TimeSpan.Zero ? utc.AddDays(1) : utc;
     }
 
-    private static IQueryable<Expense> ApplySort(IQueryable<Expense> q, ListQuery query) =>
-        query.SortField switch
+    private static IQueryable<Expense> ApplySort(IQueryable<Expense> q, ListQuery query)
+    {
+        IOrderedQueryable<Expense> ordered = query.SortField switch
         {
             "description" => query.SortDescending ? q.OrderByDescending(e => e.Description) : q.OrderBy(e => e.Description),
             "category" => query.SortDescending ? q.OrderByDescending(e => e.Category) : q.OrderBy(e => e.Category),
             "status" => query.SortDescending ? q.OrderByDescending(e => e.Status) : q.OrderBy(e => e.Status),
             "amount" => query.SortDescending ? q.OrderByDescending(e => e.Amount) : q.OrderBy(e => e.Amount),
+            "allocationtotal" => query.SortDescending
+                ? q.OrderByDescending(e => e.Allocations.Select(a => (decimal?)a.Amount).Sum() ?? 0m)
+                : q.OrderBy(e => e.Allocations.Select(a => (decimal?)a.Amount).Sum() ?? 0m),
+            "operationalscope" => query.SortDescending
+                ? q.OrderByDescending(e => e.OperationalScope)
+                : q.OrderBy(e => e.OperationalScope),
             "incurredat" => query.SortDescending ? q.OrderByDescending(e => e.IncurredAt) : q.OrderBy(e => e.IncurredAt),
             "duedate" => query.SortDescending ? q.OrderByDescending(e => e.DueDate) : q.OrderBy(e => e.DueDate),
             "paidat" or "paiddate" => query.SortDescending ? q.OrderByDescending(e => e.PaidAt) : q.OrderBy(e => e.PaidAt),
             "updatedat" => query.SortDescending ? q.OrderByDescending(e => e.UpdatedAt) : q.OrderBy(e => e.UpdatedAt),
             _ => query.SortDescending ? q.OrderByDescending(e => e.CreatedAt) : q.OrderBy(e => e.CreatedAt),
         };
+        return ordered.ThenBy(e => e.Id);
+    }
 
     public Task<ExpenseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default) =>
         GetAsync(_db.Expenses.AsNoTracking(), portfolioId, id, ct);

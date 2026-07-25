@@ -12,6 +12,7 @@
 	} from '$lib/applications/application-link';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ApplicationDetail from '$lib/components/records/ApplicationDetail.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -30,43 +31,33 @@
 	const selectedApp = $derived(Number(page.url.searchParams.get('app')) || null);
 
 	const TAB_PAGE_SIZE = 20;
-	let appPage = $state(1);
-	let appItems = $state<ApplicationResponse[]>([]);
+	const appPage = $derived(Math.max(1, Number(page.url.searchParams.get('applicationPage')) || 1));
+	const appSearch = $derived(page.url.searchParams.get('applicationSearch') ?? '');
+	const appSort = $derived(page.url.searchParams.get('applicationSort') ?? '-submittedAt');
+	let searchDraft = $state('');
+
+	$effect(() => {
+		if (untrack(() => searchDraft) !== appSearch) searchDraft = appSearch;
+	});
 
 	// Applications tied to THIS unit only — filtered DB-side via the API's ?unitId= filter.
 	const applicationsQuery = createQuery(() => ({
-		queryKey: ['unit-applications', portfolioId, unitId, appPage, TAB_PAGE_SIZE],
+		queryKey: ['unit-applications', portfolioId, unitId, appSearch, appSort, appPage, TAB_PAGE_SIZE],
 		enabled: portfolioId > 0 && unitId > 0,
+		retry: false,
 		queryFn: () => applications.listPage({
 			unitId,
+			search: appSearch || undefined,
+			sort: appSort,
 			skip: (appPage - 1) * TAB_PAGE_SIZE,
 			take: TAB_PAGE_SIZE,
 		}),
 	}));
 
-	// Reset accumulation when the unit changes.
-	$effect(() => {
-		void unitId;
-		appPage = 1;
-		appItems = [];
-	});
-
-	// Accumulate pages (first page replaces; later pages append de-duped) so "Load more" grows the list.
-	$effect(() => {
-		const data = applicationsQuery.data;
-		if (!data) return;
-		if (data.skip === 0) {
-			appItems = data.items;
-			return;
-		}
-		const current = untrack(() => appItems);
-		const seen = new Set(current.map((a) => a.id));
-		appItems = [...current, ...data.items.filter((a) => !seen.has(a.id))];
-	});
-
-	const appList = $derived(appItems);
-	const totalApps = $derived(applicationsQuery.data?.totalCount ?? appItems.length);
-	const hasMore = $derived(appItems.length < totalApps);
+	const appList = $derived<ApplicationResponse[]>(applicationsQuery.data?.items ?? []);
+	const totalApps = $derived(applicationsQuery.data?.totalCount ?? 0);
+	const hasPrevious = $derived(appPage > 1);
+	const hasNext = $derived(appPage * TAB_PAGE_SIZE < totalApps);
 
 	// ── Unit-scoped public application link ─────────────────────────────────────
 	let showLinkDialog = $state(false);
@@ -102,9 +93,43 @@
 		return isNaN(d.getTime()) ? '—' : d.toLocaleDateString(undefined, { timeZone: 'UTC' });
 	}
 
-	function loadMore() {
-		if (applicationsQuery.isFetching || !hasMore) return;
-		appPage += 1;
+	function listUrl(overrides: { search?: string; sort?: string; page?: number; app?: number | null } = {}) {
+		const params = new URLSearchParams();
+		params.set('tab', 'leasing');
+		params.set('view', 'applications');
+		const search = overrides.search ?? appSearch;
+		const sort = overrides.sort ?? appSort;
+		const pageNumber = overrides.page ?? appPage;
+		const app = overrides.app === undefined ? selectedApp : overrides.app;
+		if (search) params.set('applicationSearch', search);
+		if (sort !== '-submittedAt') params.set('applicationSort', sort);
+		if (pageNumber > 1) params.set('applicationPage', String(pageNumber));
+		if (app) params.set('app', String(app));
+		return `/units/${unitId}?${params.toString()}`;
+	}
+
+	function submitSearch() {
+		goto(listUrl({ search: searchDraft.trim(), page: 1, app: null }), {
+			replaceState: true,
+			keepFocus: true,
+			noScroll: true,
+		});
+	}
+
+	function changeSort(event: Event) {
+		goto(listUrl({
+			sort: (event.currentTarget as HTMLSelectElement).value,
+			page: 1,
+			app: null,
+		}), { replaceState: true, keepFocus: true, noScroll: true });
+	}
+
+	function changePage(nextPage: number) {
+		goto(listUrl({ page: nextPage, app: null }), {
+			replaceState: true,
+			keepFocus: true,
+			noScroll: true,
+		});
 	}
 
 	function createApplicationLink() {
@@ -125,12 +150,12 @@
 
 	// Selecting a row is a real navigation step (no replaceState) so Back returns to the list.
 	function openApp(id: number) {
-		goto('/units/' + unitId + '?tab=leasing&view=applications&app=' + id, { keepFocus: true, noScroll: true });
+		goto(listUrl({ app: id }), { keepFocus: true, noScroll: true });
 	}
 
 	// Clearing the selection drops ?app= (replaceState — it's a peer of the list, not a new history step).
 	function clearSelection() {
-		goto('/units/' + unitId + '?tab=leasing&view=applications', { replaceState: true, keepFocus: true, noScroll: true });
+		goto(listUrl({ app: null }), { replaceState: true, keepFocus: true, noScroll: true });
 	}
 </script>
 
@@ -159,6 +184,23 @@
 		onUnitMismatch={clearSelection}
 	/>
 {:else}
+	<form class="flex flex-wrap items-end gap-2" onsubmit={(event) => { event.preventDefault(); submitSearch(); }} data-testid="unit-applications-controls">
+		<label class="min-w-56 flex-1 space-y-1 text-sm">
+			<span class="font-medium">Search applications</span>
+			<input bind:value={searchDraft} class="h-10 w-full rounded-md border bg-background px-3" placeholder="Name, email, or phone" data-testid="unit-applications-search" />
+		</label>
+		<label class="space-y-1 text-sm">
+			<span class="font-medium">Sort</span>
+			<select value={appSort} onchange={changeSort} class="h-10 rounded-md border bg-background px-3" data-testid="unit-applications-sort">
+				<option value="-submittedAt">Newest submitted</option>
+				<option value="submittedAt">Oldest submitted</option>
+				<option value="name">Applicant name</option>
+				<option value="status">Status</option>
+			</select>
+		</label>
+		<Button type="submit" variant="outline">Search</Button>
+	</form>
+
 	{#if !applicationsQuery.isLoading && appList.length > 0}
 		<div class="flex flex-wrap justify-end gap-2">
 			<Button
@@ -174,11 +216,16 @@
 	{/if}
 
 	{#if applicationsQuery.isLoading}
-		<p class="rounded-xl border bg-card p-6 text-center text-sm text-muted-foreground">Loading applications…</p>
+		<LoadingState label="Loading applications" testid="unit-applications-loading" />
+	{:else if applicationsQuery.isError}
+		<div class="rounded-xl border bg-card p-6 text-center" data-testid="unit-applications-error">
+			<p class="text-sm text-destructive">Could not load applications.</p>
+			<Button class="mt-3" variant="outline" size="sm" onclick={() => applicationsQuery.refetch()}>Retry</Button>
+		</div>
 	{:else if appList.length === 0}
 		<DetailCard title="No applications" icon={ClipboardList} accent="muted" testid="unit-applications-empty">
 			<div class="space-y-3">
-				<p class="text-sm text-muted-foreground">No applications tied to this unit yet.</p>
+				<p class="text-sm text-muted-foreground">{appSearch ? `No applications match “${appSearch}”.` : 'No applications tied to this unit yet.'}</p>
 				<Button
 					variant="outline"
 					size="sm"
@@ -211,13 +258,11 @@
 				</li>
 			{/each}
 		</ul>
-		{#if hasMore}
-			<div class="flex justify-center">
-				<Button variant="outline" size="sm" onclick={loadMore} disabled={applicationsQuery.isFetching} data-testid="unit-applications-load-more">
-					{applicationsQuery.isFetching ? 'Loading…' : 'Load more'}
-				</Button>
-			</div>
-		{/if}
+		<div class="flex items-center justify-between gap-3" data-testid="unit-applications-paging">
+			<Button variant="outline" size="sm" onclick={() => changePage(appPage - 1)} disabled={!hasPrevious || applicationsQuery.isFetching}>Previous</Button>
+			<span class="text-sm text-muted-foreground">Page {appPage} · {totalApps} total</span>
+			<Button variant="outline" size="sm" onclick={() => changePage(appPage + 1)} disabled={!hasNext || applicationsQuery.isFetching}>Next</Button>
+		</div>
 	{/if}
 {/if}
 </div>

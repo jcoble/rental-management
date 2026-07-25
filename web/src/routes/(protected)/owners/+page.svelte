@@ -193,6 +193,13 @@
 
 	const ownersList = $derived(ownersQuery.data?.items ?? []);
 	const ownersTotalCount = $derived(ownersQuery.data?.totalCount ?? 0);
+	const hasOwnerSearch = $derived(ownerSearch.trim().length > 0);
+	const ownerEmptyMessage = $derived(hasOwnerSearch ? 'No owners match this search.' : 'No owners yet.');
+	const ownerEmptyDescription = $derived(
+		hasOwnerSearch
+			? 'Try a different name, email, phone number, or tax ID.'
+			: 'Add the people or organizations that own your rentals.'
+	);
 
 	// --- Owner columns ---
 	const ownerColumns: ColumnDef<Owner>[] = [
@@ -277,11 +284,19 @@
 		data-testid="owners-header"
 	/>
 
+	{#if ownersQuery.isError}
+		<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="owners-list-error">
+			<p class="font-medium text-destructive">Could not load owners.</p>
+			<p class="mt-1 text-sm text-muted-foreground">Try again. No owner records have been changed.</p>
+			<Button class="mt-4" variant="outline" onclick={() => ownersQuery.refetch()}>Try again</Button>
+		</div>
+	{:else}
 	<DataGrid
 		data={ownersList}
 		columns={ownerColumns}
 		loading={ownersQuery.isLoading || ownersQuery.isFetching}
-		emptyMessage="No owners found."
+		emptyMessage={ownerEmptyMessage}
+		emptyDescription={ownerEmptyDescription}
 		getRowKey={(o) => o.id}
 		getRowTestId={() => 'owner-row'}
 		onRowClick={(o) => goto(`/owners/${o.id}`)}
@@ -304,6 +319,7 @@
 			</Button>
 		{/snippet}
 	</DataGrid>
+	{/if}
 </div>
 
 <Dialog.Root open={showOwnerForm} onOpenChange={(v) => { if (!v) closeOwnerForm(); }}>

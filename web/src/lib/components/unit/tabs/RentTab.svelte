@@ -6,9 +6,10 @@
 	import { tenantAccounts } from '$lib/api/endpoints/tenant-accounts';
 	import { payments } from '$lib/api/endpoints/payments';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
-	import { money } from '../money';
+	import { money, unitMoneyIdentity } from '../money';
 	import { formatDateOnly } from '$lib/utils/date';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import PaymentDetail from '$lib/components/records/PaymentDetail.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -25,7 +26,11 @@
 	} = $props();
 
 	const queryClient = useQueryClient();
-	const tenantAccountId = $derived(dashboard.currentLease?.tenantAccountId ?? null);
+	const moneyIdentity = $derived(unitMoneyIdentity({
+		tenantAccountId: dashboard.tenantAccountId,
+		leaseManagementId: dashboard.leaseManagementId
+	}));
+	const tenantAccountId = $derived(moneyIdentity.tenantAccountId);
 	const selectedReceipt = $derived(Number(page.url.searchParams.get('payment')) || null);
 	const PAGE_SIZE = 20;
 	const today = () => new Date().toISOString().slice(0, 10);
@@ -46,6 +51,37 @@
 	}
 
 	let receiptPage = $state(1);
+	let activityPage = $state(1);
+	let chargePage = $state(1);
+	let depositPage = $state(1);
+	const activityQuery = createQuery(() => ({
+		queryKey: ['tenant-account-entries', tenantAccountId, 'activity', activityPage, PAGE_SIZE],
+		enabled: !!tenantAccountId,
+		queryFn: () => tenantAccounts.accountEntriesPage(tenantAccountId as number, {
+			skip: (activityPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+			sort: '-postedAtUtc'
+		})
+	}));
+	const chargesQuery = createQuery(() => ({
+		queryKey: ['tenant-account-charges', tenantAccountId, chargePage, PAGE_SIZE],
+		enabled: !!tenantAccountId,
+		queryFn: () => tenantAccounts.chargesPage(tenantAccountId as number, {
+			skip: (chargePage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+			sort: '-effectiveOn'
+		})
+	}));
+	const depositsQuery = createQuery(() => ({
+		queryKey: ['tenant-account-deposits', tenantAccountId, depositPage, PAGE_SIZE],
+		enabled: !!tenantAccountId,
+		queryFn: () => tenantAccounts.depositsPage({
+			tenantAccountId: tenantAccountId as number,
+			skip: (depositPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+			sort: '-createdAtUtc'
+		})
+	}));
 	const receiptsQuery = createQuery(() => ({
 		queryKey: ['tenant-account-entries', tenantAccountId, 'receipts', receiptPage, PAGE_SIZE],
 		enabled: !!tenantAccountId,
@@ -60,6 +96,9 @@
 	$effect(() => {
 		void tenantAccountId;
 		receiptPage = 1;
+		activityPage = 1;
+		chargePage = 1;
+		depositPage = 1;
 	});
 
 	const receiptItems = $derived(receiptsQuery.data?.items ?? []);
@@ -67,6 +106,8 @@
 	function invalidateMoney() {
 		receiptPage = 1;
 		queryClient.invalidateQueries({ queryKey: ['tenant-account-entries', tenantAccountId] });
+		queryClient.invalidateQueries({ queryKey: ['tenant-account-charges', tenantAccountId] });
+		queryClient.invalidateQueries({ queryKey: ['tenant-account-deposits', tenantAccountId] });
 		queryClient.invalidateQueries({ queryKey: ['unit-dashboard', dashboard.unit.id] });
 		queryClient.invalidateQueries({ queryKey: ['unit-timeline', dashboard.unit.id] });
 		queryClient.invalidateQueries({ queryKey: ['accounting'] });
@@ -217,17 +258,99 @@
 
 	{#if !tenantAccountId}
 		<p class="rounded-xl border bg-card p-6 text-center text-sm text-muted-foreground">No tenant account exists for this rental yet. Receipts and charges begin when the tenancy is created.</p>
-	{:else if receiptsQuery.isLoading}
-		<p class="rounded-xl border bg-card p-6 text-center text-sm text-muted-foreground">Loading receipts…</p>
-	{:else if receiptItems.length === 0}
-		<p class="rounded-xl border bg-card p-6 text-center text-sm text-muted-foreground">No receipts yet. Record one manually or scan a payment.</p>
 	{:else}
-		<ul class="space-y-2" data-testid="rent-payments">
-			{#each receiptItems as receipt (receipt.tenantLedgerEntryId)}
-				<li class="rounded-xl border bg-card"><button type="button" class="flex w-full items-center justify-between gap-2 p-3 text-left" onclick={() => openReceipt(receipt.tenantLedgerEntryId)}><span><span class="font-medium">{formatDateOnly(receipt.effectiveOn)}</span><span class="ml-2 text-muted-foreground">{receipt.description}</span></span><span class="font-semibold">{money(receipt.amount)}</span></button></li>
-			{/each}
-		</ul>
-		{#if receiptsQuery.data && receiptsQuery.data.totalCount > PAGE_SIZE}<div class="flex items-center justify-between"><Button variant="outline" size="sm" onclick={() => (receiptPage -= 1)} disabled={receiptPage === 1 || receiptsQuery.isFetching}>Previous</Button><span class="text-sm text-muted-foreground">{receiptsQuery.data.totalCount} receipts</span><Button variant="outline" size="sm" onclick={() => (receiptPage += 1)} disabled={receiptPage * PAGE_SIZE >= receiptsQuery.data.totalCount || receiptsQuery.isFetching}>Next</Button></div>{/if}
+		<section class="space-y-2" data-testid="account-activity-section">
+			<h3 class="text-sm font-semibold">Account activity</h3>
+			{#if activityQuery.isLoading}
+				<LoadingState label="Loading account activity" testid="account-activity-loading" />
+			{:else if activityQuery.isError}
+				<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="account-activity-error">
+					<p class="text-sm font-medium text-destructive">Account activity could not be loaded.</p>
+					<Button class="mt-3" variant="outline" size="sm" onclick={() => activityQuery.refetch()}>Try again</Button>
+				</div>
+			{:else if (activityQuery.data?.items.length ?? 0) === 0}
+				<p class="rounded-xl border bg-card p-4 text-sm text-muted-foreground">No account activity.</p>
+			{:else}
+				<ul class="space-y-2">
+					{#each activityQuery.data?.items ?? [] as entry (entry.tenantLedgerEntryId)}
+						<li class="flex items-center justify-between gap-3 rounded-xl border bg-card p-3 text-sm">
+							<span><span class="font-medium">{entry.entryType}</span><span class="ml-2 text-muted-foreground">{entry.description}</span></span>
+							<span class="font-semibold">{money(entry.amount)}</span>
+						</li>
+					{/each}
+				</ul>
+				{#if activityQuery.data && activityQuery.data.totalCount > PAGE_SIZE}<div class="flex items-center justify-between"><Button variant="outline" size="sm" onclick={() => (activityPage -= 1)} disabled={activityPage === 1 || activityQuery.isFetching}>Previous</Button><span class="text-sm text-muted-foreground">{activityQuery.data.totalCount} entries</span><Button variant="outline" size="sm" onclick={() => (activityPage += 1)} disabled={activityPage * PAGE_SIZE >= activityQuery.data.totalCount || activityQuery.isFetching}>Next</Button></div>{/if}
+			{/if}
+		</section>
+
+		<section class="space-y-2 border-t pt-4" data-testid="charge-allocation-section">
+			<h3 class="text-sm font-semibold">Charge allocation and open amount</h3>
+			{#if chargesQuery.isLoading}
+				<LoadingState label="Loading charges" testid="charges-loading" />
+			{:else if chargesQuery.isError}
+				<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="charges-error">
+					<p class="text-sm font-medium text-destructive">Charges could not be loaded.</p>
+					<Button class="mt-3" variant="outline" size="sm" onclick={() => chargesQuery.refetch()}>Try again</Button>
+				</div>
+			{:else if (chargesQuery.data?.items.length ?? 0) === 0}
+				<p class="rounded-xl border bg-card p-4 text-sm text-muted-foreground">No charges.</p>
+			{:else}
+				<ul class="space-y-2">
+					{#each chargesQuery.data?.items ?? [] as charge (charge.tenantLedgerEntryId)}
+						<li class="rounded-xl border bg-card p-3 text-sm">
+							<div class="flex items-center justify-between gap-3"><span class="font-medium">{charge.description}</span><span class="font-semibold">{money(charge.openAmount)} open</span></div>
+							<p class="text-xs text-muted-foreground">{money(charge.netAllocations)} allocated of {money(charge.originalAmount)}</p>
+						</li>
+					{/each}
+				</ul>
+				{#if chargesQuery.data && chargesQuery.data.totalCount > PAGE_SIZE}<div class="flex items-center justify-between"><Button variant="outline" size="sm" onclick={() => (chargePage -= 1)} disabled={chargePage === 1 || chargesQuery.isFetching}>Previous</Button><span class="text-sm text-muted-foreground">{chargesQuery.data.totalCount} charges</span><Button variant="outline" size="sm" onclick={() => (chargePage += 1)} disabled={chargePage * PAGE_SIZE >= chargesQuery.data.totalCount || chargesQuery.isFetching}>Next</Button></div>{/if}
+			{/if}
+		</section>
+
+		<section class="space-y-2 border-t pt-4" data-testid="deposits-section">
+			<h3 class="text-sm font-semibold">Deposits</h3>
+			{#if depositsQuery.isLoading}
+				<LoadingState label="Loading deposits" testid="deposits-loading" />
+			{:else if depositsQuery.isError}
+				<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="deposits-error">
+					<p class="text-sm font-medium text-destructive">Deposits could not be loaded.</p>
+					<Button class="mt-3" variant="outline" size="sm" onclick={() => depositsQuery.refetch()}>Try again</Button>
+				</div>
+			{:else if (depositsQuery.data?.items.length ?? 0) === 0}
+				<p class="rounded-xl border bg-card p-4 text-sm text-muted-foreground">No deposits.</p>
+			{:else}
+				<ul class="space-y-2">
+					{#each depositsQuery.data?.items ?? [] as deposit (deposit.securityDepositAccountId)}
+						<li class="flex items-center justify-between gap-3 rounded-xl border bg-card p-3 text-sm">
+							<span><span class="font-medium">{deposit.status}</span><span class="ml-2 text-muted-foreground">{deposit.accountNumber}</span></span>
+							<span class="font-semibold">{money(deposit.heldBalance)} held</span>
+						</li>
+					{/each}
+				</ul>
+				{#if depositsQuery.data && depositsQuery.data.totalCount > PAGE_SIZE}<div class="flex items-center justify-between"><Button variant="outline" size="sm" onclick={() => (depositPage -= 1)} disabled={depositPage === 1 || depositsQuery.isFetching}>Previous</Button><span class="text-sm text-muted-foreground">{depositsQuery.data.totalCount} deposits</span><Button variant="outline" size="sm" onclick={() => (depositPage += 1)} disabled={depositPage * PAGE_SIZE >= depositsQuery.data.totalCount || depositsQuery.isFetching}>Next</Button></div>{/if}
+			{/if}
+		</section>
+
+		<section class="space-y-2 border-t pt-4" data-testid="rent-payments">
+			<h3 class="text-sm font-semibold">Payment receipts</h3>
+			{#if receiptsQuery.isLoading}
+				<LoadingState label="Loading payment receipts" testid="rent-receipts-loading" />
+			{:else if receiptsQuery.isError}
+				<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="rent-receipts-error">
+					<p class="text-sm font-medium text-destructive">Could not load payment receipts.</p>
+					<Button class="mt-3" variant="outline" size="sm" onclick={() => receiptsQuery.refetch()}>Try again</Button>
+				</div>
+			{:else if receiptItems.length === 0}
+				<p class="rounded-xl border bg-card p-4 text-sm text-muted-foreground">No receipts yet. Record one manually or scan a payment.</p>
+			{:else}
+				<ul class="space-y-2">
+					{#each receiptItems as receipt (receipt.tenantLedgerEntryId)}
+						<li class="rounded-xl border bg-card"><button type="button" class="flex w-full items-center justify-between gap-2 p-3 text-left" onclick={() => openReceipt(receipt.tenantLedgerEntryId)}><span><span class="font-medium">{formatDateOnly(receipt.effectiveOn)}</span><span class="ml-2 text-muted-foreground">{receipt.description}</span></span><span class="font-semibold">{money(receipt.amount)}</span></button></li>
+					{/each}
+				</ul>
+				{#if receiptsQuery.data && receiptsQuery.data.totalCount > PAGE_SIZE}<div class="flex items-center justify-between"><Button variant="outline" size="sm" onclick={() => (receiptPage -= 1)} disabled={receiptPage === 1 || receiptsQuery.isFetching}>Previous</Button><span class="text-sm text-muted-foreground">{receiptsQuery.data.totalCount} receipts</span><Button variant="outline" size="sm" onclick={() => (receiptPage += 1)} disabled={receiptPage * PAGE_SIZE >= receiptsQuery.data.totalCount || receiptsQuery.isFetching}>Next</Button></div>{/if}
+			{/if}
+		</section>
 	{/if}
 {/if}
 </div>

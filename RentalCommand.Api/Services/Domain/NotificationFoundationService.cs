@@ -1,10 +1,14 @@
 using System.Text.Json;
+using System.Net.Mail;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Outbox;
 using RentalCommand.Data;
 using RentalCommand.Data.Notifications;
 
@@ -15,15 +19,18 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _clock;
     private readonly IAtomicUnitOfWork _atomic;
+    private readonly IServiceProvider? _services;
 
     public NotificationFoundationService(
         RentalCommandDbContext db,
         TimeProvider clock,
-        IAtomicUnitOfWork atomic)
+        IAtomicUnitOfWork atomic,
+        IServiceProvider? services = null)
     {
         _db = db;
         _clock = clock;
         _atomic = atomic;
+        _services = services;
     }
 
     public async Task<MyAlertsResponse> GetMyAlertsAsync(int portfolioId, int userId, CancellationToken ct) =>
@@ -353,6 +360,102 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
     public IReadOnlyList<NoticeMergeFieldHelpResponse> ListMergeFields(string systemKey) =>
         NoticeMergeFields.HelpForType(systemKey);
 
+    public async Task<NoticePreviewResponse> PreviewNoticeAsync(
+        int portfolioId,
+        NoticePreviewRequest request,
+        CancellationToken ct)
+    {
+        ValidateUnsavedNotice(request.SystemKey, request.Subject, request.Body);
+        var templateExists = await _db.WorkspaceNoticeTemplateVersions.AsNoTracking()
+            .AnyAsync(template =>
+                template.PortfolioId == portfolioId &&
+                template.SystemKey == request.SystemKey,
+                ct);
+        if (!templateExists)
+            throw new KeyNotFoundException($"Unknown workspace notice template '{request.SystemKey}'.");
+
+        var examples = NoticeMergeFields.HelpForType(request.SystemKey)
+            .ToDictionary(field => field.Key, field => field.Example, StringComparer.OrdinalIgnoreCase);
+        var rendered = NoticeTemplateRenderer.Render(request.Subject, request.Body, examples);
+        return new NoticePreviewResponse(
+            request.SystemKey,
+            rendered.Subject,
+            rendered.Body,
+            examples);
+    }
+
+    public async Task<NoticeTestSendResponse> SendNoticeTestAsync(
+        int portfolioId,
+        NoticeTestSendRequest request,
+        string operationKey,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationKey);
+        var preview = await PreviewNoticeAsync(
+            portfolioId,
+            new NoticePreviewRequest(request.SystemKey, request.Subject, request.Body),
+            ct);
+        var destination = ValidateTestEmail(request.Destination);
+
+        var isTenantDestination = await _db.Tenants.AsNoTracking()
+            .AnyAsync(tenant =>
+                tenant.PortfolioId == portfolioId &&
+                tenant.DeletedAt == null &&
+                tenant.Email != null &&
+                tenant.Email.ToLower() == destination.ToLower(),
+                ct);
+        if (isTenantDestination)
+        {
+            throw new InvalidOperationException(
+                "Enter a controlled non-tenant email address. Tenant destinations cannot be used for a test send.");
+        }
+
+        var channel = _services?.GetService<INotificationChannel>();
+        if (channel is null)
+        {
+            return new NoticeTestSendResponse(
+                NoticeTestSendState.Suppressed,
+                "No test email provider is configured for this API environment.",
+                destination,
+                null,
+                null);
+        }
+
+        try
+        {
+            var receipt = await channel.SendEmailAsync(
+                destination,
+                "[TEST] " + preview.Subject,
+                preview.Body,
+                new NotificationDeliveryContext(0, $"notice-test:{operationKey}", 1),
+                ct: ct);
+            return new NoticeTestSendResponse(
+                NoticeTestSendState.Accepted,
+                "The provider accepted this isolated test message.",
+                destination,
+                receipt.Provider,
+                receipt.ProviderMessageId);
+        }
+        catch (NotificationDeliverySuppressedException exception)
+        {
+            return new NoticeTestSendResponse(
+                NoticeTestSendState.Suppressed,
+                exception.Message,
+                destination,
+                null,
+                null);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return new NoticeTestSendResponse(
+                NoticeTestSendState.ProviderError,
+                $"The test provider rejected or failed the message: {exception.Message}",
+                destination,
+                null,
+                null);
+        }
+    }
+
     public async Task SeedSuppliedTemplatesAsync(
         WorkspaceReadScope scope,
         string operationKey,
@@ -587,6 +690,26 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
             ? JsonSerializer.Deserialize<TResponse>(result.ResponseJson)
                 ?? throw new InvalidOperationException("Atomic notification result snapshot is invalid.")
             : throw new InvalidOperationException("Atomic notification result did not contain a response snapshot.");
+
+    private static void ValidateUnsavedNotice(string systemKey, string subject, string body)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(systemKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(subject);
+        ArgumentException.ThrowIfNullOrWhiteSpace(body);
+        if (!NoticeMergeFields.SupportedNoticeTypes.Contains(systemKey))
+            throw new KeyNotFoundException($"Unknown supplied notice template '{systemKey}'.");
+        if (subject.Length > 200 || body.Length > 8000)
+            throw new ArgumentException("The notice subject or body exceeds the supported template length.");
+    }
+
+    private static string ValidateTestEmail(string destination)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(destination);
+        var parsed = new MailAddress(destination.Trim());
+        if (!string.Equals(parsed.Address, destination.Trim(), StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Enter one complete test email address.", nameof(destination));
+        return parsed.Address;
+    }
 
     private static IReadOnlyList<NoticeDeliveryChannel> Channels(TenantRecipientPreviewRow row)
     {

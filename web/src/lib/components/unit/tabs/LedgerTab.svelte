@@ -1,15 +1,12 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
+	import { tick } from 'svelte';
 	import type { UnitDashboard } from '$lib/types';
 	import type { ScanContext } from '$lib/scan/scan-context';
-	import * as Tabs from '$lib/components/ui/tabs';
 	import { money } from '../money';
 	import RentTab from './RentTab.svelte';
 	import ExpensesTab from './ExpensesTab.svelte';
 	import { Banknote, ReceiptText } from '@lucide/svelte';
-
-	type LedgerView = 'rent' | 'expenses';
 
 	let {
 		dashboard,
@@ -21,38 +18,32 @@
 
 	const unitId = $derived(dashboard.unit.id);
 	const lease = $derived(dashboard.currentLease);
+	const tenantAccountId = $derived(dashboard.tenantAccountId ?? null);
 
-	function resolveLedgerView(tab: string | null, ledger: string | null): LedgerView {
-		if (tab === 'expenses' || ledger === 'expenses') return 'expenses';
-		return 'rent';
-	}
-
-	let activeLedgerView = $state(resolveLedgerView(page.url.searchParams.get('tab'), page.url.searchParams.get('ledger')));
+	let tenantAccountSection = $state<HTMLElement>();
+	let operatingCostsSection = $state<HTMLElement>();
+	let handledLanding = $state('');
 
 	$effect(() => {
-		const next = resolveLedgerView(page.url.searchParams.get('tab'), page.url.searchParams.get('ledger'));
-		if (next !== activeLedgerView) activeLedgerView = next;
+		if (page.url.searchParams.get('tab') !== 'money') return;
+		const view = page.url.searchParams.get('view') === 'operating-costs' ? 'operating-costs' : 'tenant-account';
+		const section = view === 'operating-costs' ? operatingCostsSection : tenantAccountSection;
+		if (!section || handledLanding === view) return;
+		handledLanding = view;
+		void landOnSection(section);
 	});
 
-	function ledgerUrl(view: LedgerView) {
-		const url = new URL(`/units/${unitId}`, page.url.origin);
-		url.searchParams.set('tab', 'money');
-		url.searchParams.set('ledger', view);
-		return `${url.pathname}${url.search}`;
+	async function landOnSection(section: HTMLElement) {
+		await tick();
+		section.scrollIntoView({ behavior: 'auto', block: 'start' });
+		section.focus({ preventScroll: true });
 	}
 
-	function setLedgerView(value: string) {
-		const next: LedgerView = value === 'expenses' ? 'expenses' : 'rent';
-		activeLedgerView = next;
-		const url = new URL(page.url);
+	function ledgerUrl(view: 'tenant-account' | 'operating-costs') {
+		const url = new URL(`/units/${unitId}`, page.url.origin);
 		url.searchParams.set('tab', 'money');
-		url.searchParams.set('ledger', next);
-		if (next === 'rent') {
-			url.searchParams.delete('expense');
-		} else {
-			url.searchParams.delete('payment');
-		}
-		goto(url, { replaceState: true, keepFocus: true, noScroll: true });
+		url.searchParams.set('view', view);
+		return `${url.pathname}${url.search}`;
 	}
 </script>
 
@@ -85,28 +76,24 @@
 						Repairs, supplies, bills, and receipts attached to this unit or its work orders.
 					</p>
 					<p class="mt-3 text-sm font-medium">
-						{lease ? `${lease.leaseNumber} is the active tenant account` : 'No active tenant account'}
+						{tenantAccountId ? (lease ? `${lease.leaseNumber} governs tenant account #${tenantAccountId}` : `Tenant account #${tenantAccountId} is open without a governing Agreement`) : 'No active tenant account'}
 					</p>
 				</div>
 			</div>
 		</section>
 	</div>
 
-	<Tabs.Root value={activeLedgerView} onValueChange={setLedgerView}>
-		<Tabs.List class="w-full sm:w-auto" data-testid="unit-ledger-tabs">
-			<Tabs.Trigger value="rent" data-testid="ledger-tab-rent">Tenant account</Tabs.Trigger>
-			<Tabs.Trigger value="expenses" data-testid="ledger-tab-expenses">Operating costs</Tabs.Trigger>
-		</Tabs.List>
-		<Tabs.Content value="rent" class="mt-4" data-testid="ledger-rent-panel">
+	<div class="space-y-8" data-testid="unit-money-surface">
+		<section bind:this={tenantAccountSection} tabindex="-1" class="scroll-mt-4 outline-none" data-testid="ledger-rent-panel">
 			<RentTab
 				{dashboard}
 				tabQuery="money"
 				ledgerQuery="rent"
-				onScan={() => onScan({ type: 'Payment', propertyId: dashboard.unit.propertyId, unitId: dashboard.unit.id, leaseManagementId: dashboard.currentLease?.leaseManagementId ?? undefined, tenantAccountId: dashboard.currentLease?.tenantAccountId ?? undefined, returnTo: ledgerUrl('rent') })}
+				onScan={() => onScan({ type: 'Payment', propertyId: dashboard.unit.propertyId, unitId: dashboard.unit.id, leaseManagementId: dashboard.leaseManagementId ?? undefined, tenantAccountId: dashboard.tenantAccountId ?? undefined, returnTo: ledgerUrl('tenant-account') })}
 			/>
-		</Tabs.Content>
-		<Tabs.Content value="expenses" class="mt-4" data-testid="ledger-expenses-panel">
+		</section>
+		<section bind:this={operatingCostsSection} tabindex="-1" class="scroll-mt-4 border-t pt-8 outline-none" data-testid="ledger-expenses-panel">
 			<ExpensesTab {dashboard} tabQuery="money" ledgerQuery="expenses" {onScan} />
-		</Tabs.Content>
-	</Tabs.Root>
+		</section>
+	</div>
 </div>

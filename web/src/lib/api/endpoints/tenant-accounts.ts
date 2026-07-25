@@ -91,6 +91,44 @@ export interface EntryPage<T> extends Page<T> {
 	leaseManagementId?: number;
 }
 
+export interface TenantCharge {
+	tenantAccountId: number;
+	leaseManagementId: number;
+	tenantLedgerEntryId: number;
+	entryType: string;
+	direction: string;
+	currency: string;
+	effectiveOn: string;
+	dueOn?: string | null;
+	description: string;
+	originalAmount: number;
+	reversedAmount: number;
+	netAllocations: number;
+	openAmount: number;
+	isPastDue: boolean;
+}
+
+export interface TenantAccountDeposit {
+	securityDepositAccountId: number;
+	tenantAccountId: number;
+	leaseManagementId: number;
+	propertyId: number;
+	unitId: number;
+	accountNumber: string;
+	relationshipNumber: string;
+	currency: string;
+	totalReceived: number;
+	totalDeductions: number;
+	totalRefunded: number;
+	heldBalance: number;
+	status: string;
+}
+
+export interface TenantChargePage extends Page<TenantCharge> {
+	tenantAccountId: number;
+	leaseManagementId: number;
+}
+
 export interface ListParams {
 	skip?: number;
 	take?: number;
@@ -115,6 +153,26 @@ function queryString(params: object): string {
 	return text ? `?${text}` : '';
 }
 
+export function buildTenantAccountEntriesPagePath(
+	tenantAccountId: number,
+	params: EntryListParams = {}
+): string {
+	return `/tenant-accounts/${tenantAccountId}/entries/page${queryString(params)}`;
+}
+
+export function buildTenantAccountChargesPagePath(
+	tenantAccountId: number,
+	params: ListParams = {}
+): string {
+	return `/tenant-accounts/${tenantAccountId}/charges/page${queryString(params)}`;
+}
+
+export function buildTenantAccountDepositsPagePath(
+	params: ListParams & { tenantAccountId?: number } = {}
+): string {
+	return `/tenant-accounts/deposits/page${queryString(params)}`;
+}
+
 export const tenantAccounts = {
 	listPage: (params: ListParams = {}) =>
 		api.get<Page<TenantAccountListItem>>(`/tenant-accounts/page${queryString(params)}`),
@@ -123,7 +181,11 @@ export const tenantAccounts = {
 	entriesPage: (params: EntryListParams = {}) =>
 		api.get<EntryPage<TenantLedgerEntryGlobal>>(`/tenant-accounts/entries/page${queryString(params)}`),
 	accountEntriesPage: (tenantAccountId: number, params: EntryListParams = {}) =>
-		api.get<EntryPage<TenantLedgerEntry>>(`/tenant-accounts/${tenantAccountId}/entries/page${queryString(params)}`),
+		api.get<EntryPage<TenantLedgerEntry>>(buildTenantAccountEntriesPagePath(tenantAccountId, params)),
+	chargesPage: (tenantAccountId: number, params: ListParams = {}) =>
+		api.get<TenantChargePage>(buildTenantAccountChargesPagePath(tenantAccountId, params)),
+	depositsPage: (params: ListParams & { tenantAccountId?: number } = {}) =>
+		api.get<Page<TenantAccountDeposit>>(buildTenantAccountDepositsPagePath(params)),
 	entry: (tenantAccountId: number, tenantLedgerEntryId: number) =>
 		api.get<TenantLedgerEntryDetail>(`/tenant-accounts/${tenantAccountId}/entries/${tenantLedgerEntryId}`),
 };

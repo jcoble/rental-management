@@ -412,7 +412,6 @@ public sealed class OwnerPortalRelationshipBoundaryPostgreSqlTests : IAsyncLifet
     private static Property Property(int portfolioId, int ownerId, string name, string city, DateTime now) => new()
     {
         PortfolioId = portfolioId,
-        OwnerEntityId = ownerId,
         Name = name,
         AddressLine1 = $"1 {name} Way",
         City = city,
@@ -421,6 +420,18 @@ public sealed class OwnerPortalRelationshipBoundaryPostgreSqlTests : IAsyncLifet
         ManagementFeePercent = 10m,
         CreatedAt = now,
         UpdatedAt = now,
+        Ownerships =
+        [
+            new PropertyOwnership
+            {
+                PortfolioId = portfolioId,
+                OwnerEntityId = ownerId,
+                OwnershipSharePercent = 100m,
+                EffectiveFromUtc = now,
+                StatementRecipientName = name,
+                PayeeName = name,
+            },
+        ],
     };
 
     private static Unit Unit(int portfolioId, int propertyId, string number, DateTime now) => new()

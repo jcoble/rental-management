@@ -12,13 +12,19 @@ import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
 import '../../core/auth/mobile_access_policy.dart';
 import '../../core/models/work_order.dart';
+import '../../core/models/property.dart';
+import '../../core/navigation/mobile_restoration_state.dart';
 import '../activity/activity_history_screen.dart';
 import '../applications/application_detail_screen.dart';
 import '../applications/applications_models.dart';
+import '../applications/applications_repository.dart';
+import '../applications/applications_shared.dart';
 import '../home/mobile_domain_navigation.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
 import '../leases/lease_detail_screen.dart';
+import '../inspections/inspections_repository.dart';
+import '../recurring_maintenance/recurring_maintenance_repository.dart';
 import '../maintenance/create_work_order_sheet.dart';
 import '../maintenance/work_order_detail_screen.dart';
 import '../money/expense_detail_screen.dart';
@@ -122,11 +128,19 @@ class UnitCommandCenterScreen extends StatefulWidget {
 
 class _UnitCommandCenterScreenState extends State<UnitCommandCenterScreen> {
   late final ValueNotifier<UnitCommandCenterView?> _activeView;
+  late UnitCommandCenterTab _activeTab;
+  final Map<UnitCommandCenterTab, UnitCommandCenterView?>
+  _activeViewsByDestination = {};
+  RestorableMobileRestorationState? _restoration;
+  TabController? _topController;
 
   @override
   void initState() {
     super.initState();
+    _activeTab = widget.initialTab;
     _activeView = ValueNotifier(_startingView);
+    _activeViewsByDestination[_activeTab] = _activeView.value;
+    _activeView.addListener(_saveRestoration);
   }
 
   UnitCommandCenterView? get _startingView {
@@ -143,6 +157,7 @@ class _UnitCommandCenterScreenState extends State<UnitCommandCenterScreen> {
     return switch (widget.initialTab) {
       UnitCommandCenterTab.leasing => UnitCommandCenterView.listing,
       UnitCommandCenterTab.tenantLease => UnitCommandCenterView.agreements,
+      UnitCommandCenterTab.money => UnitCommandCenterView.tenantAccount,
       UnitCommandCenterTab.maintenance => UnitCommandCenterView.workOrders,
       UnitCommandCenterTab.documentsHistory => UnitCommandCenterView.documents,
       _ => null,
@@ -151,8 +166,72 @@ class _UnitCommandCenterScreenState extends State<UnitCommandCenterScreen> {
 
   @override
   void dispose() {
+    _topController?.removeListener(_handleTopTabChanged);
+    _activeView.removeListener(_saveRestoration);
     _activeView.dispose();
     super.dispose();
+  }
+
+  void _bindTopController(TabController controller) {
+    if (identical(controller, _topController)) return;
+    _topController?.removeListener(_handleTopTabChanged);
+    _topController = controller..addListener(_handleTopTabChanged);
+    _restoration ??= MobileRestorationScope.maybeOf(context);
+    _saveRestoration();
+  }
+
+  void _handleTopTabChanged() {
+    final controller = _topController;
+    if (controller == null || controller.indexIsChanging) return;
+    final tab = UnitCommandCenterTab.values[controller.index];
+    _activeViewsByDestination[_activeTab] = _activeView.value;
+    final allowed = switch (tab) {
+      UnitCommandCenterTab.leasing => const {
+        UnitCommandCenterView.listing,
+        UnitCommandCenterView.applications,
+      },
+      UnitCommandCenterTab.tenantLease => const {
+        UnitCommandCenterView.agreements,
+        UnitCommandCenterView.residents,
+      },
+      UnitCommandCenterTab.money => const {
+        UnitCommandCenterView.tenantAccount,
+        UnitCommandCenterView.operatingCosts,
+      },
+      UnitCommandCenterTab.maintenance => const {
+        UnitCommandCenterView.workOrders,
+        UnitCommandCenterView.inspections,
+        UnitCommandCenterView.recurring,
+        UnitCommandCenterView.turnover,
+      },
+      UnitCommandCenterTab.documentsHistory => const {
+        UnitCommandCenterView.documents,
+        UnitCommandCenterView.history,
+      },
+      UnitCommandCenterTab.summary => const <UnitCommandCenterView>{},
+    };
+    final requested = _activeViewsByDestination[tab];
+    final next = allowed.isEmpty
+        ? null
+        : allowed.contains(requested)
+        ? requested
+        : allowed.first;
+    _activeTab = tab;
+    if (_activeView.value != next) _activeView.value = next;
+    _saveRestoration();
+  }
+
+  void _saveRestoration() {
+    _activeViewsByDestination[_activeTab] = _activeView.value;
+    final restoration = _restoration;
+    if (restoration == null) return;
+    final tab = UnitCommandCenterTab
+        .values[_topController?.index ?? widget.initialTab.index];
+    restoration.value = restoration.value.updateUnit(
+      unitId: widget.dashboard.unit.id,
+      destination: tab.name,
+      anchor: _activeView.value?.name,
+    );
   }
 
   @override
@@ -177,7 +256,7 @@ class _UnitCommandCenterScreenState extends State<UnitCommandCenterScreen> {
     final tabView = TabBarView(
       children: [
         _UnitOverviewTab(dashboard: widget.dashboard),
-        _UnitAreaTabs(
+        _UnitAreaSurface(
           area: UnitCommandCenterTab.leasing,
           labels: const ['Listing', 'Applications'],
           views: const [
@@ -188,55 +267,53 @@ class _UnitCommandCenterScreenState extends State<UnitCommandCenterScreen> {
           activeView: _activeView,
           children: [
             _UnitListingTab(dashboard: widget.dashboard),
-            _UnitApplicationsTab(application: widget.initialApplication),
+            _UnitApplicationsTab(
+              unitId: widget.dashboard.unit.id,
+              application: widget.initialApplication,
+            ),
           ],
         ),
-        _UnitAreaTabs(
-          area: UnitCommandCenterTab.tenantLease,
-          labels: const ['Agreement', 'Residents'],
-          views: const [
-            UnitCommandCenterView.agreements,
-            UnitCommandCenterView.residents,
-          ],
-          initialView: _startingView,
+        _UnitTenantLeaseSurface(
+          dashboard: widget.dashboard,
+          selectedLeaseManagementId: widget.initialLeaseManagementId,
+          selectedTenantId: widget.selectedTenantId,
           activeView: _activeView,
-          children: [
-            _UnitLeaseTab(
-              dashboard: widget.dashboard,
-              selectedLeaseManagementId: widget.initialLeaseManagementId,
-            ),
-            _UnitTenantsTab(
-              dashboard: widget.dashboard,
-              selectedTenantId: widget.selectedTenantId,
-            ),
-          ],
         ),
-        _UnitLedgerTab(dashboard: widget.dashboard),
-        _UnitAreaTabs(
+        _UnitLedgerTab(dashboard: widget.dashboard, activeView: _activeView),
+        _UnitAreaSurface(
           area: UnitCommandCenterTab.maintenance,
-          labels: const ['Work orders', 'Turnover'],
+          labels: const [
+            'Work orders',
+            'Inspections',
+            'Recurring maintenance',
+            'Turnover/make-ready',
+          ],
           views: const [
             UnitCommandCenterView.workOrders,
+            UnitCommandCenterView.inspections,
+            UnitCommandCenterView.recurring,
             UnitCommandCenterView.turnover,
           ],
           initialView: _startingView,
           activeView: _activeView,
-          header: const _UnitMaintenanceShortcuts(),
           children: [
             _UnitWorkTab(
               dashboard: widget.dashboard,
               selectedWorkOrder: widget.initialWorkOrder,
             ),
+            _UnitInspectionsTab(unitId: widget.dashboard.unit.id),
+            _UnitRecurringMaintenanceTab(unitId: widget.dashboard.unit.id),
             _UnitTurnoverTab(dashboard: widget.dashboard),
           ],
         ),
-        _UnitAreaTabs(
+        _UnitAreaSurface(
           area: UnitCommandCenterTab.documentsHistory,
           labels: const ['Documents', 'History'],
           views: const [
             UnitCommandCenterView.documents,
             UnitCommandCenterView.history,
           ],
+          fillViewport: const [false, true],
           initialView: _startingView,
           activeView: _activeView,
           children: [
@@ -256,50 +333,59 @@ class _UnitCommandCenterScreenState extends State<UnitCommandCenterScreen> {
     return DefaultTabController(
       length: UnitCommandCenterTab.values.length,
       initialIndex: widget.initialTab.index,
-      child: _UnitViewScope(
-        activeView: _activeView,
-        child: Scaffold(
-          appBar: usesDomainHeader
-              ? null
-              : AppBar(
-                  title: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(_unitLabel(unit.unitNumber)),
-                      Text(
-                        property,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
-                  bottom: unitTabs,
-                ),
-          body: usesDomainHeader
-              ? Column(
-                  children: [
-                    Material(
-                      color: Theme.of(context).colorScheme.surface,
-                      child: const Align(
-                        alignment: Alignment.centerLeft,
-                        child: unitTabs,
-                      ),
-                    ),
-                    Expanded(child: tabView),
-                  ],
-                )
-              : tabView,
-          floatingActionButton: _UnitWorkOrderQuickActionFab(
-            dashboard: widget.dashboard,
-            selectedWorkOrder: widget.initialWorkOrder,
+      child: Builder(
+        builder: (tabContext) {
+          _bindTopController(DefaultTabController.of(tabContext));
+          return _UnitViewScope(
             activeView: _activeView,
-          ),
-          floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
-        ),
+            child: Scaffold(
+              appBar: usesDomainHeader
+                  ? null
+                  : AppBar(
+                      title: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(_unitLabel(unit.unitNumber)),
+                          Text(
+                            property,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
+                                ),
+                          ),
+                        ],
+                      ),
+                      bottom: unitTabs,
+                    ),
+              body: usesDomainHeader
+                  ? Column(
+                      children: [
+                        Material(
+                          color: Theme.of(context).colorScheme.surface,
+                          child: const Align(
+                            alignment: Alignment.centerLeft,
+                            child: unitTabs,
+                          ),
+                        ),
+                        Expanded(child: tabView),
+                      ],
+                    )
+                  : tabView,
+              floatingActionButton: _UnitWorkOrderQuickActionFab(
+                dashboard: widget.dashboard,
+                selectedWorkOrder: widget.initialWorkOrder,
+                activeView: _activeView,
+              ),
+              floatingActionButtonLocation:
+                  FloatingActionButtonLocation.endFloat,
+            ),
+          );
+        },
       ),
     );
   }
@@ -318,8 +404,8 @@ class _UnitViewScope extends InheritedWidget {
       !identical(activeView, oldWidget.activeView);
 }
 
-class _UnitAreaTabs extends StatefulWidget {
-  const _UnitAreaTabs({
+class _UnitAreaSurface extends StatefulWidget {
+  const _UnitAreaSurface({
     required this.area,
     required this.labels,
     required this.views,
@@ -327,8 +413,10 @@ class _UnitAreaTabs extends StatefulWidget {
     required this.activeView,
     this.initialView,
     this.header,
+    this.fillViewport,
   }) : assert(labels.length == views.length),
-       assert(views.length == children.length);
+       assert(views.length == children.length),
+       assert(fillViewport == null || fillViewport.length == children.length);
 
   final UnitCommandCenterTab area;
   final List<String> labels;
@@ -337,34 +425,36 @@ class _UnitAreaTabs extends StatefulWidget {
   final ValueNotifier<UnitCommandCenterView?> activeView;
   final UnitCommandCenterView? initialView;
   final Widget? header;
+  final List<bool>? fillViewport;
 
   @override
-  State<_UnitAreaTabs> createState() => _UnitAreaTabsState();
+  State<_UnitAreaSurface> createState() => _UnitAreaSurfaceState();
 }
 
-class _UnitAreaTabsState extends State<_UnitAreaTabs>
-    with SingleTickerProviderStateMixin {
-  late final TabController _controller;
+class _UnitAreaSurfaceState extends State<_UnitAreaSurface> {
+  ScrollController? _scrollController;
+  late final List<GlobalKey> _sectionKeys;
   TabController? _outerController;
 
   @override
   void initState() {
     super.initState();
-    final initialView = widget.initialView;
-    final requested = initialView == null
-        ? -1
-        : widget.views.indexOf(initialView);
-    _controller = TabController(
-      length: widget.views.length,
-      initialIndex: requested < 0 ? 0 : requested,
-      vsync: this,
-    )..addListener(_syncActiveView);
+    _sectionKeys = List.generate(widget.views.length, (_) => GlobalKey());
     widget.activeView.addListener(_applyRequestedView);
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    final requestedView = widget.activeView.value;
+    final requestedIndex = requestedView == null
+        ? -1
+        : widget.views.indexOf(requestedView);
+    _scrollController ??= ScrollController(
+      initialScrollOffset: requestedIndex > 0
+          ? MediaQuery.sizeOf(context).height * requestedIndex
+          : 0,
+    );
     final outer = DefaultTabController.maybeOf(context);
     if (identical(outer, _outerController)) return;
     _outerController?.removeListener(_syncActiveView);
@@ -377,77 +467,70 @@ class _UnitAreaTabsState extends State<_UnitAreaTabs>
   void dispose() {
     _outerController?.removeListener(_syncActiveView);
     widget.activeView.removeListener(_applyRequestedView);
-    _controller
-      ..removeListener(_syncActiveView)
-      ..dispose();
+    _scrollController?.dispose();
     super.dispose();
   }
 
   void _syncActiveView() {
     if (_outerController?.index != widget.area.index) return;
-    final next = widget.views[_controller.index];
+    final requested = widget.activeView.value;
+    final next = requested != null && widget.views.contains(requested)
+        ? requested
+        : widget.views.first;
     if (widget.activeView.value != next) widget.activeView.value = next;
+    _applyRequestedView();
   }
 
   void _applyRequestedView() {
     final activeView = widget.activeView.value;
     if (activeView == null) return;
     final requested = widget.views.indexOf(activeView);
-    if (requested >= 0 && requested != _controller.index) {
-      _controller.animateTo(requested);
-    }
+    if (requested < 0 || _outerController?.index != widget.area.index) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final sectionContext = _sectionKeys[requested].currentContext;
+      if (sectionContext != null) {
+        Scrollable.ensureVisible(
+          sectionContext,
+          duration: Duration.zero,
+          alignment: 0,
+        );
+      }
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        if (widget.header != null) widget.header!,
-        Material(
-          color: Theme.of(context).colorScheme.surfaceContainerLow,
-          child: TabBar(
-            controller: _controller,
-            tabs: [for (final label in widget.labels) Tab(text: label)],
-          ),
-        ),
-        Expanded(
-          child: TabBarView(controller: _controller, children: widget.children),
-        ),
-      ],
-    );
-  }
-}
-
-class _UnitMaintenanceShortcuts extends StatelessWidget {
-  const _UnitMaintenanceShortcuts();
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-      child: Row(
+    return LayoutBuilder(
+      builder: (context, constraints) => ListView(
+        controller: _scrollController,
+        cacheExtent: constraints.maxHeight * widget.children.length,
+        padding: const EdgeInsets.only(bottom: 32),
         children: [
-          Expanded(
-            child: OutlinedButton.icon(
-              icon: const Icon(Symbols.fact_check_rounded),
-              label: const Text('Inspections'),
-              onPressed: () => mobileShellNavigatorOf(context)?.openTab(
-                MobileShellTabId.work,
-                destination: MobileDestinationId.inspections,
-              ),
+          for (var index = 0; index < widget.children.length; index++)
+            Column(
+              key: _sectionKeys[index],
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (index == 0 && widget.header != null) widget.header!,
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Text(
+                    widget.labels[index],
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                ),
+                if (widget.fillViewport?[index] ?? true)
+                  SizedBox(
+                    height: constraints.maxHeight,
+                    child: widget.children[index],
+                  )
+                else
+                  widget.children[index],
+                if (index < widget.children.length - 1)
+                  const Divider(height: 32),
+              ],
             ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: OutlinedButton.icon(
-              icon: const Icon(Symbols.event_repeat_rounded),
-              label: const Text('Recurring'),
-              onPressed: () => mobileShellNavigatorOf(context)?.openTab(
-                MobileShellTabId.work,
-                destination: MobileDestinationId.automations,
-              ),
-            ),
-          ),
         ],
       ),
     );
@@ -543,9 +626,8 @@ class _UnitWorkOrderQuickActionFabState
       );
     }
 
-    final lease = widget.dashboard.currentLease;
     if (index == UnitCommandCenterTab.money.index &&
-        lease?.tenantAccountId != null &&
+        widget.dashboard.tenantAccountId != null &&
         canRecordReceipts) {
       return MobileQuickAction(
         label: 'Record receipt',
@@ -571,14 +653,14 @@ class _UnitWorkOrderQuickActionFabState
   }
 
   Future<void> _showReceiptSheet() async {
-    final lease = widget.dashboard.currentLease;
-    final tenantAccountId = lease?.tenantAccountId;
-    if (lease == null || tenantAccountId == null) return;
+    final tenantAccountId = widget.dashboard.tenantAccountId;
+    final leaseManagementId = widget.dashboard.leaseManagementId;
+    if (tenantAccountId == null || leaseManagementId == null) return;
     final result = await showRecordTenantReceiptSheet(
       context,
       ref,
       tenantAccountId: tenantAccountId,
-      leaseManagementId: lease.leaseManagementId,
+      leaseManagementId: leaseManagementId,
       tenantName: widget.dashboard.header.currentTenantName,
       rentalLabel:
           '$_propertyLabel · ${_unitLabel(widget.dashboard.unit.unitNumber)}',
@@ -589,13 +671,13 @@ class _UnitWorkOrderQuickActionFabState
   }
 
   Future<void> _openUnitScan() {
-    final lease = widget.dashboard.currentLease;
     return openMobileScan(
       context,
       propertyId: widget.dashboard.unit.propertyId,
       unitId: widget.dashboard.unit.id,
-      leaseManagementId: lease?.leaseManagementId,
-      tenantAccountId: lease?.tenantAccountId,
+      leaseManagementId: widget.dashboard.leaseManagementId,
+      leaseAgreementId: widget.dashboard.currentLease?.id,
+      tenantAccountId: widget.dashboard.tenantAccountId,
       sourceLabel: 'Unit command center',
     );
   }
@@ -635,6 +717,44 @@ class _UnitOverviewTab extends ConsumerWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
       children: [
+        if (dashboard.nextBestAction.label.trim().isNotEmpty) ...[
+          _ActionPanel(
+            label: dashboard.nextBestAction.label.trim(),
+            href: dashboard.nextBestAction.href,
+            currentUnitId: dashboard.unit.id,
+          ),
+          const SizedBox(height: 14),
+        ],
+        _SurfacePanel(
+          children: [
+            _MetricRow(
+              icon: Symbols.home_work_rounded,
+              label: 'Occupancy / possession',
+              value: dashboard.occupancyPossession.status,
+            ),
+            _MetricRow(
+              icon: Symbols.campaign_rounded,
+              label: 'Marketing availability',
+              value: dashboard.marketingAvailability.status,
+            ),
+            _MetricRow(
+              icon: Symbols.account_balance_wallet_rounded,
+              label: 'TenantAccount',
+              value: dashboard.tenantAccountCondition.status,
+            ),
+            _MetricRow(
+              icon: Symbols.gavel_rounded,
+              label: 'Legal / notice',
+              value: dashboard.legalNoticeCondition.status,
+            ),
+            _MetricRow(
+              icon: Symbols.build_rounded,
+              label: 'Maintenance / turnover',
+              value: dashboard.maintenanceTurnover.status,
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
         _SurfacePanel(
           children: [
             _MetricRow(
@@ -706,14 +826,6 @@ class _UnitOverviewTab extends ConsumerWidget {
               ),
           ],
         ),
-        if (dashboard.nextBestAction.label.trim().isNotEmpty) ...[
-          const SizedBox(height: 14),
-          _ActionPanel(
-            label: dashboard.nextBestAction.label.trim(),
-            href: dashboard.nextBestAction.href,
-            currentUnitId: dashboard.unit.id,
-          ),
-        ],
         const SizedBox(height: 18),
         _PaymentsSection(items: dashboard.overview.recentPayments),
         const SizedBox(height: 14),
@@ -1912,18 +2024,90 @@ class _ListingSignalsSection extends StatelessWidget {
   }
 }
 
-class _UnitLeaseTab extends ConsumerWidget {
-  const _UnitLeaseTab({
+class _UnitTenantLeaseSurface extends StatelessWidget {
+  const _UnitTenantLeaseSurface({
     required this.dashboard,
+    required this.activeView,
     this.selectedLeaseManagementId,
+    this.selectedTenantId,
   });
 
   final UnitDashboard dashboard;
+  final ValueListenable<UnitCommandCenterView?> activeView;
   final int? selectedLeaseManagementId;
+  final int? selectedTenantId;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<UnitCommandCenterView?>(
+      valueListenable: activeView,
+      builder: (context, requestedView, _) =>
+          _buildSurface(context, requestedView),
+    );
+  }
+
+  Widget _buildSurface(
+    BuildContext context,
+    UnitCommandCenterView? requestedView,
+  ) {
+    final summary = dashboard.currentLease;
+    final managementId =
+        selectedLeaseManagementId ??
+        dashboard.leaseManagementId ??
+        (summary == null || summary.leaseManagementId <= 0
+            ? null
+            : summary.leaseManagementId);
+
+    final residentsFirst = requestedView == UnitCommandCenterView.residents;
+    final agreementSection = _UnitAgreementSection(dashboard: dashboard);
+    final residentsSection = _UnitResidentsSection(
+      dashboard: dashboard,
+      selectedTenantId: selectedTenantId,
+    );
+
+    if (managementId == null) {
+      return ListView(
+        key: ValueKey('unit-tenant-lease-${dashboard.unit.id}-$requestedView'),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+        children: residentsFirst
+            ? [residentsSection, const SizedBox(height: 20), agreementSection]
+            : [agreementSection, const SizedBox(height: 20), residentsSection],
+      );
+    }
+
+    const agreementHeading = _UnitTenantLeaseSectionHeading(
+      key: ValueKey('unit-agreement-section'),
+      title: 'Agreement',
+    );
+    final residentsContent = KeyedSubtree(
+      key: const ValueKey('unit-residents-section'),
+      child: residentsSection,
+    );
+    return LeaseManagementDetailScreen(
+      key: ValueKey('unit-tenant-lease-$managementId-$requestedView'),
+      leaseManagementId: managementId,
+      leadingContent: residentsFirst
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                residentsContent,
+                const SizedBox(height: 20),
+                agreementHeading,
+              ],
+            )
+          : agreementHeading,
+      trailingContent: residentsFirst ? null : residentsContent,
+    );
+  }
+}
+
+class _UnitAgreementSection extends ConsumerWidget {
+  const _UnitAgreementSection({required this.dashboard});
+
+  final UnitDashboard dashboard;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final summary = dashboard.currentLease;
     final auth = ref.watch(authControllerProvider);
     final canPrepareAgreement =
         auth is AuthStateAuthenticated &&
@@ -1936,34 +2120,63 @@ class _UnitLeaseTab extends ConsumerWidget {
             WorkspaceExperience.leasing,
           },
         );
-    final managementId =
-        selectedLeaseManagementId ??
-        (summary == null || summary.leaseManagementId <= 0
-            ? null
-            : summary.leaseManagementId);
 
-    if (managementId == null) {
-      return _EmptyTab(
-        icon: Symbols.description_rounded,
-        title: 'No tenant relationship',
-        body:
-            'Approve an application and prepare move-in, or scan an existing signed agreement.',
-        action: _UnitLeaseAddAction(
-          onPressed: canPrepareAgreement
-              ? () => openMobileScan(
-                  context,
-                  initialTargetEntityType: 'LeaseAgreement',
-                  lockTargetEntityType: true,
-                  propertyId: dashboard.unit.propertyId,
-                  unitId: dashboard.unit.id,
-                  sourceLabel: 'Unit · Tenant & lease',
-                )
-              : null,
+    return Column(
+      key: const ValueKey('unit-agreement-section'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _UnitTenantLeaseSectionHeading(title: 'Agreement'),
+        const SizedBox(height: 10),
+        _SurfacePanel(
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Text(
+                'No tenant relationship',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Text(
+                'Approve an application and prepare move-in, or scan an existing signed agreement.',
+              ),
+            ),
+            if (canPrepareAgreement)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: _UnitLeaseAddAction(
+                    onPressed: () => openMobileScan(
+                      context,
+                      initialTargetEntityType: 'LeaseAgreement',
+                      lockTargetEntityType: true,
+                      propertyId: dashboard.unit.propertyId,
+                      unitId: dashboard.unit.id,
+                      leaseManagementId: dashboard.leaseManagementId,
+                      leaseAgreementId: dashboard.currentLease?.id,
+                      tenantAccountId: dashboard.tenantAccountId,
+                      sourceLabel: 'Unit · Tenant & lease',
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
-      );
-    }
+      ],
+    );
+  }
+}
 
-    return LeaseManagementDetailScreen(leaseManagementId: managementId);
+class _UnitTenantLeaseSectionHeading extends StatelessWidget {
+  const _UnitTenantLeaseSectionHeading({super.key, required this.title});
+
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(title, style: Theme.of(context).textTheme.titleLarge);
   }
 }
 
@@ -1988,86 +2201,573 @@ class _UnitLeaseAddAction extends StatelessWidget {
   }
 }
 
-class _UnitApplicationsTab extends StatelessWidget {
-  const _UnitApplicationsTab({this.application});
+class _UnitApplicationsTab extends ConsumerStatefulWidget {
+  const _UnitApplicationsTab({required this.unitId, this.application});
 
+  final int unitId;
   final RentalApplication? application;
 
   @override
+  ConsumerState<_UnitApplicationsTab> createState() =>
+      _UnitApplicationsTabState();
+}
+
+class _UnitApplicationsTabState extends ConsumerState<_UnitApplicationsTab> {
+  static const _pageSize = 20;
+  final _searchController = TextEditingController();
+  String? _search;
+  String _sort = '-submittedAt';
+  int _skip = 0;
+  int? _selectedApplicationId;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedApplicationId = widget.application?.id;
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  ApplicationListQuery get _query => ApplicationListQuery(
+    skip: _skip,
+    take: _pageSize,
+    unitId: widget.unitId,
+    search: _search,
+    sort: _sort,
+  );
+
+  void _submitSearch([String? value]) {
+    final next = (value ?? _searchController.text).trim();
+    setState(() {
+      _search = next.isEmpty ? null : next;
+      _skip = 0;
+    });
+  }
+
+  void _openDetail(int applicationId) {
+    setState(() => _selectedApplicationId = applicationId);
+  }
+
+  Future<void> _retry() async {
+    ref.invalidate(applicationsPageProvider(_query));
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final app = application;
-    if (app == null) {
-      return const _EmptyTab(
-        icon: Symbols.assignment_ind_rounded,
-        title: 'No application selected',
-        body: 'Open-ended applications stay in the Applications list.',
+    final selectedApplicationId = _selectedApplicationId;
+    if (selectedApplicationId != null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              key: const ValueKey('unit-applications-back'),
+              onPressed: () => setState(() => _selectedApplicationId = null),
+              icon: const Icon(Icons.arrow_back),
+              label: const Text('Back to applications'),
+            ),
+          ),
+          Expanded(
+            child: ApplicationDetailScreen(
+              applicationId: selectedApplicationId,
+            ),
+          ),
+        ],
       );
     }
 
-    return ApplicationDetailScreen(applicationId: app.id);
-  }
-}
-
-class _UnitLedgerTab extends ConsumerWidget {
-  const _UnitLedgerTab({required this.dashboard});
-
-  final UnitDashboard dashboard;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final lease = dashboard.currentLease;
-    final expensesAsync = ref.watch(unitExpensesProvider(dashboard.unit.id));
-
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+    final pageAsync = ref.watch(applicationsPageProvider(_query));
+    return Column(
       children: [
-        _SurfacePanel(
-          children: [
-            _MetricRow(
-              icon: Symbols.account_balance_wallet_rounded,
-              label: 'Tenant balance',
-              value: _formatCurrency(dashboard.header.outstandingRentBalance),
-            ),
-            _MetricRow(
-              icon: Symbols.payments_rounded,
-              label: 'Market rent',
-              value: '${_formatCurrency(dashboard.unit.marketRent)}/mo',
-            ),
-            if (lease != null)
-              _MetricRow(
-                icon: Symbols.description_rounded,
-                label: 'Tenant account',
-                value: lease.leaseNumber,
-              ),
-          ],
-        ),
-        const SizedBox(height: 14),
-        _PaymentsSection(items: dashboard.overview.recentPayments),
-        const SizedBox(height: 14),
-        expensesAsync.when(
-          loading: () => const _LoadingSection(title: 'Operating costs'),
-          error: (e, _) => _RetrySection(
-            title: 'Operating costs',
-            message: e is ApiException ? e.message : e.toString(),
-            onRetry: () =>
-                ref.invalidate(unitExpensesProvider(dashboard.unit.id)),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final searchField = TextField(
+                key: const ValueKey('unit-applications-search'),
+                controller: _searchController,
+                decoration: InputDecoration(
+                  labelText: 'Search applications',
+                  suffixIcon: IconButton(
+                    tooltip: 'Search',
+                    onPressed: _submitSearch,
+                    icon: const Icon(Icons.search),
+                  ),
+                ),
+                textInputAction: TextInputAction.search,
+                onSubmitted: _submitSearch,
+              );
+              final sortControl = DropdownButton<String>(
+                key: const ValueKey('unit-applications-sort'),
+                value: _sort,
+                items: const [
+                  DropdownMenuItem(
+                    value: '-submittedAt',
+                    child: Text('Newest'),
+                  ),
+                  DropdownMenuItem(value: 'submittedAt', child: Text('Oldest')),
+                  DropdownMenuItem(value: 'name', child: Text('Name')),
+                  DropdownMenuItem(value: 'status', child: Text('Status')),
+                ],
+                onChanged: (value) {
+                  if (value == null) return;
+                  setState(() {
+                    _sort = value;
+                    _skip = 0;
+                  });
+                },
+              );
+
+              if (constraints.maxWidth < 360) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    searchField,
+                    const SizedBox(height: 8),
+                    Align(alignment: Alignment.centerRight, child: sortControl),
+                  ],
+                );
+              }
+
+              return Row(
+                children: [
+                  Expanded(child: searchField),
+                  const SizedBox(width: 12),
+                  sortControl,
+                ],
+              );
+            },
           ),
-          data: (expenses) => _UnitExpensesSection(items: expenses),
+        ),
+        Expanded(
+          child: pageAsync.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (error, _) => _UnitErrorBody(
+              message: error is ApiException ? error.message : error.toString(),
+              onRetry: _retry,
+            ),
+            data: (page) {
+              if (page.items.isEmpty) {
+                return _EmptyTab(
+                  icon: Symbols.assignment_ind_rounded,
+                  title: 'No applications',
+                  body: _search == null
+                      ? 'No applications are tied to this Unit.'
+                      : 'No applications match "$_search".',
+                );
+              }
+              return ListView(
+                key: const PageStorageKey('unit-applications-page'),
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                children: [
+                  for (final app in page.items)
+                    Card(
+                      child: ListTile(
+                        key: ValueKey('unit-application-${app.id}'),
+                        leading: const Icon(Symbols.assignment_ind_rounded),
+                        title: Text(app.fullName),
+                        subtitle: Text(
+                          app.submittedAtUtc == null
+                              ? 'Not yet submitted'
+                              : 'Submitted ${formatApplicationDate(app.submittedAtUtc!.toLocal())}',
+                        ),
+                        trailing: ApplicationStatusChip(status: app.status),
+                        onTap: () => _openDetail(app.id),
+                      ),
+                    ),
+                  Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton(
+                        onPressed: page.hasPrevious
+                            ? () => setState(() {
+                                _skip = _skip <= _pageSize
+                                    ? 0
+                                    : _skip - _pageSize;
+                              })
+                            : null,
+                        child: const Text('Previous'),
+                      ),
+                      Text(
+                        'Page ${page.skip ~/ _pageSize + 1} · ${page.totalCount} total',
+                      ),
+                      OutlinedButton(
+                        onPressed: page.hasNext
+                            ? () => setState(() => _skip += _pageSize)
+                            : null,
+                        child: const Text('Next'),
+                      ),
+                    ],
+                  ),
+                ],
+              );
+            },
+          ),
         ),
       ],
     );
   }
 }
 
-class _UnitExpensesSection extends StatelessWidget {
-  const _UnitExpensesSection({required this.items});
+class _UnitLedgerTab extends ConsumerStatefulWidget {
+  const _UnitLedgerTab({required this.dashboard, required this.activeView});
 
+  final UnitDashboard dashboard;
+  final ValueListenable<UnitCommandCenterView?> activeView;
+
+  @override
+  ConsumerState<_UnitLedgerTab> createState() => _UnitLedgerTabState();
+}
+
+class _UnitLedgerTabState extends ConsumerState<_UnitLedgerTab> {
+  static const _pageSize = 10;
+  final _tenantAccountKey = GlobalKey();
+  final _operatingCostsKey = GlobalKey();
+  int _activityPage = 0;
+  int _chargePage = 0;
+  int _depositPage = 0;
+  int _unitExpensePage = 0;
+  int _propertyExpensePage = 0;
+  int _financingPage = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.activeView.addListener(_landOnAnchor);
+  }
+
+  @override
+  void dispose() {
+    widget.activeView.removeListener(_landOnAnchor);
+    super.dispose();
+  }
+
+  void _landOnAnchor() {
+    final key = widget.activeView.value == UnitCommandCenterView.operatingCosts
+        ? _operatingCostsKey
+        : _tenantAccountKey;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final target = key.currentContext;
+      if (mounted && target != null) {
+        Scrollable.ensureVisible(target, duration: Duration.zero, alignment: 0);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dashboard = widget.dashboard;
+    final lease = dashboard.currentLease;
+    final accountId = dashboard.tenantAccountId;
+    final propertyAsync = ref.watch(
+      propertyDetailProvider(dashboard.unit.propertyId),
+    );
+    final isSingleRental =
+        propertyAsync.value?.rentalStructure == RentalStructure.singleRental;
+    final key = accountId == null
+        ? null
+        : (
+            tenantAccountId: accountId,
+            propertyId: dashboard.unit.propertyId,
+            unitId: dashboard.unit.id,
+            skip: _activityPage * _pageSize,
+            take: _pageSize,
+          );
+    final activityAsync = key == null
+        ? null
+        : ref.watch(unitMoneyActivityPageProvider(key));
+    final chargesAsync = key == null
+        ? null
+        : ref.watch(
+            unitMoneyChargesPageProvider((
+              tenantAccountId: accountId!,
+              propertyId: dashboard.unit.propertyId,
+              unitId: dashboard.unit.id,
+              skip: _chargePage * _pageSize,
+              take: _pageSize,
+            )),
+          );
+    final depositsAsync = key == null
+        ? null
+        : ref.watch(
+            unitMoneyDepositsPageProvider((
+              tenantAccountId: accountId!,
+              propertyId: dashboard.unit.propertyId,
+              unitId: dashboard.unit.id,
+              skip: _depositPage * _pageSize,
+              take: _pageSize,
+            )),
+          );
+    final unitExpensesAsync = ref.watch(
+      expensesPageProvider(
+        ExpenseListQuery(
+          unitId: dashboard.unit.id,
+          skip: _unitExpensePage * _pageSize,
+          take: _pageSize,
+        ),
+      ),
+    );
+    final propertyExpensesAsync = isSingleRental
+        ? ref.watch(
+            expensesPageProvider(
+              ExpenseListQuery(
+                operationalScope: 'Property',
+                propertyId: dashboard.unit.propertyId,
+                skip: _propertyExpensePage * _pageSize,
+                take: _pageSize,
+              ),
+            ),
+          )
+        : null;
+    final financingAsync = isSingleRental
+        ? ref.watch(
+            unitMoneyFinancingPageProvider((
+              propertyId: dashboard.unit.propertyId,
+              skip: _financingPage * _pageSize,
+              take: _pageSize,
+            )),
+          )
+        : null;
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+      children: [
+        KeyedSubtree(
+          key: _tenantAccountKey,
+          child: _SurfacePanel(
+            children: [
+              _MetricRow(
+                icon: Symbols.account_balance_wallet_rounded,
+                label: 'Tenant balance',
+                value: _formatCurrency(dashboard.header.outstandingRentBalance),
+              ),
+              _MetricRow(
+                icon: Symbols.payments_rounded,
+                label: 'Market rent',
+                value: '${_formatCurrency(dashboard.unit.marketRent)}/mo',
+              ),
+              if (lease != null)
+                _MetricRow(
+                  icon: Symbols.description_rounded,
+                  label: 'Tenant account',
+                  value: lease.leaseNumber,
+                ),
+              if (lease == null && dashboard.tenantAccountId != null)
+                _MetricRow(
+                  icon: Symbols.description_rounded,
+                  label: 'Tenant account',
+                  value: '#${dashboard.tenantAccountId}',
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        _PaymentsSection(items: dashboard.overview.recentPayments),
+        const SizedBox(height: 14),
+        if (activityAsync == null)
+          const _Section(
+            title: 'Account activity',
+            empty: 'No tenant account exists for this rental.',
+            children: [],
+          )
+        else
+          activityAsync.when(
+            loading: () => const _LoadingSection(title: 'Account activity'),
+            error: (e, _) => _RetrySection(
+              title: 'Account activity',
+              message: e is ApiException ? e.message : e.toString(),
+              onRetry: () => ref.invalidate(unitMoneyActivityPageProvider(key!)),
+            ),
+            data: (page) => _Section(
+              title: 'Account activity',
+              empty: 'No account activity',
+              children: [
+                for (final entry in page.items)
+                  _CompactRow(
+                    icon: Symbols.receipt_long_rounded,
+                    title: entry.description,
+                    subtitle:
+                        '${entry.entryType} · ${_formatDate(entry.effectiveOn)} · ${_formatCurrency(entry.amount)}',
+                  ),
+                _MoneyPager(
+                  page: _activityPage,
+                  hasPrevious: page.hasPrevious,
+                  hasNext: page.hasNext,
+                  onPrevious: () => setState(() => _activityPage--),
+                  onNext: () => setState(() => _activityPage++),
+                ),
+              ],
+            ),
+          ),
+        const SizedBox(height: 14),
+        if (chargesAsync != null)
+          chargesAsync.when(
+            loading: () => const _LoadingSection(
+              title: 'Charge allocation and open amount',
+            ),
+            error: (e, _) => _RetrySection(
+              title: 'Charge allocation and open amount',
+              message: e is ApiException ? e.message : e.toString(),
+              onRetry: () => setState(() {}),
+            ),
+            data: (page) => _Section(
+              title: 'Charge allocation and open amount',
+              empty: 'No charges',
+              children: [
+                for (final charge in page.items)
+                  _CompactRow(
+                    icon: Symbols.request_quote_rounded,
+                    title: charge.description,
+                    subtitle:
+                        '${_formatCurrency(charge.netAllocations)} allocated of '
+                        '${_formatCurrency(charge.originalAmount)} · '
+                        '${_formatCurrency(charge.openAmount)} open',
+                  ),
+                _MoneyPager(
+                  page: _chargePage,
+                  hasPrevious: page.hasPrevious,
+                  hasNext: page.hasNext,
+                  onPrevious: () => setState(() => _chargePage--),
+                  onNext: () => setState(() => _chargePage++),
+                ),
+              ],
+            ),
+          ),
+        const SizedBox(height: 14),
+        if (depositsAsync != null)
+          depositsAsync.when(
+            loading: () => const _LoadingSection(title: 'Deposits'),
+            error: (e, _) => _RetrySection(
+              title: 'Deposits',
+              message: e is ApiException ? e.message : e.toString(),
+              onRetry: () => setState(() {}),
+            ),
+            data: (page) => _Section(
+              title: 'Deposits',
+              empty: 'No deposits',
+              children: [
+                for (final deposit in page.items)
+                  _CompactRow(
+                    icon: Symbols.savings_rounded,
+                    title: deposit.accountNumber,
+                    subtitle:
+                        '${deposit.status} · ${_formatCurrency(deposit.heldBalance)} held',
+                  ),
+                _MoneyPager(
+                  page: _depositPage,
+                  hasPrevious: page.hasPrevious,
+                  hasNext: page.hasNext,
+                  onPrevious: () => setState(() => _depositPage--),
+                  onNext: () => setState(() => _depositPage++),
+                ),
+              ],
+            ),
+          ),
+        const SizedBox(height: 14),
+        KeyedSubtree(
+          key: _operatingCostsKey,
+          child: unitExpensesAsync.when(
+            loading: () => const _LoadingSection(title: 'Operating costs'),
+            error: (e, _) => _RetrySection(
+              title: 'Operating costs',
+              message: e is ApiException ? e.message : e.toString(),
+              onRetry: () => setState(() {}),
+            ),
+            data: (page) => _UnitExpensesSection(
+              title: 'Operating costs',
+              items: page.items,
+              pager: _MoneyPager(
+                page: _unitExpensePage,
+                hasPrevious: page.hasPrevious,
+                hasNext: page.hasNext,
+                onPrevious: () => setState(() => _unitExpensePage--),
+                onNext: () => setState(() => _unitExpensePage++),
+              ),
+            ),
+          ),
+        ),
+        if (isSingleRental && propertyExpensesAsync != null) ...[
+          const SizedBox(height: 14),
+          propertyExpensesAsync.when(
+            loading: () => const _LoadingSection(title: 'Property expenses'),
+            error: (e, _) => _RetrySection(
+              title: 'Property expenses',
+              message: e is ApiException ? e.message : e.toString(),
+              onRetry: () => setState(() {}),
+            ),
+            data: (page) => _UnitExpensesSection(
+              title: 'Property expenses',
+              items: page.items,
+              pager: _MoneyPager(
+                page: _propertyExpensePage,
+                hasPrevious: page.hasPrevious,
+                hasNext: page.hasNext,
+                onPrevious: () => setState(() => _propertyExpensePage--),
+                onNext: () => setState(() => _propertyExpensePage++),
+              ),
+            ),
+          ),
+        ],
+        if (isSingleRental && financingAsync != null) ...[
+          const SizedBox(height: 14),
+          financingAsync.when(
+            loading: () => const _LoadingSection(title: 'Financing'),
+            error: (e, _) => _RetrySection(
+              title: 'Financing',
+              message: e is ApiException ? e.message : e.toString(),
+              onRetry: () => setState(() {}),
+            ),
+            data: (page) => _Section(
+              title: 'Financing',
+              empty: 'No financing recorded',
+              children: [
+                for (final loan in page.items)
+                  _CompactRow(
+                    icon: Symbols.account_balance_rounded,
+                    title: loan.lender,
+                    subtitle:
+                        '${_formatCurrency(loan.currentBalance)} balance · '
+                        '${_formatCurrency(loan.monthlyPrincipalInterest + loan.monthlyEscrow)}/month',
+                  ),
+                _MoneyPager(
+                  page: _financingPage,
+                  hasPrevious: page.hasPrevious,
+                  hasNext: page.hasNext,
+                  onPrevious: () => setState(() => _financingPage--),
+                  onNext: () => setState(() => _financingPage++),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _UnitExpensesSection extends StatelessWidget {
+  const _UnitExpensesSection({
+    required this.title,
+    required this.items,
+    required this.pager,
+  });
+
+  final String title;
   final List<Expense> items;
+  final Widget pager;
 
   @override
   Widget build(BuildContext context) {
     return _Section(
-      title: 'Operating costs',
+      title: title,
       empty: 'No unit expenses',
       children: [
         for (final item in items)
@@ -2084,13 +2784,51 @@ class _UnitExpensesSection extends StatelessWidget {
               ),
             ),
           ),
+        pager,
       ],
     );
   }
 }
 
-class _UnitTenantsTab extends StatelessWidget {
-  const _UnitTenantsTab({required this.dashboard, this.selectedTenantId});
+class _MoneyPager extends StatelessWidget {
+  const _MoneyPager({
+    required this.page,
+    required this.hasPrevious,
+    required this.hasNext,
+    required this.onPrevious,
+    required this.onNext,
+  });
+
+  final int page;
+  final bool hasPrevious;
+  final bool hasNext;
+  final VoidCallback onPrevious;
+  final VoidCallback onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!hasPrevious && !hasNext) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: Row(
+        children: [
+          OutlinedButton(
+            onPressed: hasPrevious ? onPrevious : null,
+            child: const Text('Previous'),
+          ),
+          Expanded(child: Text('Page ${page + 1}', textAlign: TextAlign.center)),
+          OutlinedButton(
+            onPressed: hasNext ? onNext : null,
+            child: const Text('Next'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _UnitResidentsSection extends StatelessWidget {
+  const _UnitResidentsSection({required this.dashboard, this.selectedTenantId});
 
   final UnitDashboard dashboard;
   final int? selectedTenantId;
@@ -2102,55 +2840,272 @@ class _UnitTenantsTab extends StatelessWidget {
         : <UnitTenantSummary>[
             if (dashboard.currentTenant != null) dashboard.currentTenant!,
           ];
-    final tenantId = selectedTenantId;
-    if (tenantId != null && tenantId > 0) {
-      return TenantDetailLoaderScreen(tenantId: tenantId);
-    }
+    final selected = selectedTenantId;
+    final orderedTenants = [...currentTenants]
+      ..sort((left, right) {
+        if (left.id == selected) return -1;
+        if (right.id == selected) return 1;
+        return left.name.compareTo(right.name);
+      });
+    final selectedIsMissing =
+        selected != null &&
+        selected > 0 &&
+        !orderedTenants.any((tenant) => tenant.id == selected);
 
-    if (currentTenants.length > 1) {
-      return ListView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-        children: [
-          _Section(
-            title: 'Tenants',
-            empty: 'This unit is currently vacant.',
-            children: [
-              for (final tenant in currentTenants)
-                _CompactRow(
-                  icon: Symbols.person_rounded,
-                  title: tenant.name.isEmpty
-                      ? 'Tenant #${tenant.id}'
-                      : tenant.name,
-                  subtitle: tenant.email?.trim().isNotEmpty == true
-                      ? tenant.email!.trim()
-                      : (tenant.phone?.trim().isNotEmpty == true
-                            ? tenant.phone!.trim()
-                            : 'Tenant'),
-                  onTap: () => Navigator.of(context).push<void>(
-                    MaterialPageRoute<void>(
-                      builder: (_) =>
-                          TenantDetailLoaderScreen(tenantId: tenant.id),
-                    ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _UnitTenantLeaseSectionHeading(title: 'Residents'),
+        const SizedBox(height: 10),
+        _Section(
+          title: 'Tenants',
+          empty: 'This unit is currently vacant.',
+          children: [
+            for (final tenant in orderedTenants)
+              _CompactRow(
+                icon: Symbols.person_rounded,
+                title: tenant.name.isEmpty
+                    ? 'Tenant #${tenant.id}'
+                    : tenant.name,
+                subtitle: tenant.email?.trim().isNotEmpty == true
+                    ? tenant.email!.trim()
+                    : (tenant.phone?.trim().isNotEmpty == true
+                          ? tenant.phone!.trim()
+                          : 'Tenant'),
+                onTap: () => Navigator.of(context).push<void>(
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        TenantDetailLoaderScreen(tenantId: tenant.id),
                   ),
                 ),
+              ),
+            if (selectedIsMissing)
+              _CompactRow(
+                icon: Symbols.person_rounded,
+                title: 'Tenant #$selected',
+                subtitle: 'Tenant',
+                onTap: () => Navigator.of(context).push<void>(
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        TenantDetailLoaderScreen(tenantId: selected!),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _UnitInspectionsTab extends ConsumerStatefulWidget {
+  const _UnitInspectionsTab({required this.unitId});
+  final int unitId;
+
+  @override
+  ConsumerState<_UnitInspectionsTab> createState() =>
+      _UnitInspectionsTabState();
+}
+
+class _UnitInspectionsTabState extends ConsumerState<_UnitInspectionsTab> {
+  static const _take = 20;
+  var _skip = 0;
+  var _search = '';
+  var _sort = '-scheduledFor';
+
+  @override
+  Widget build(BuildContext context) {
+    final query = InspectionListQuery(
+      unitId: widget.unitId,
+      skip: _skip,
+      take: _take,
+      search: _search,
+      sort: _sort,
+    );
+    final page = ref.watch(inspectionsPageProvider(query));
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        TextField(
+          decoration: const InputDecoration(
+            labelText: 'Search Unit inspections',
+            prefixIcon: Icon(Icons.search),
+          ),
+          onChanged: (value) => setState(() {
+            _search = value.trim();
+            _skip = 0;
+          }),
+        ),
+        const SizedBox(height: 8),
+        DropdownButtonFormField<String>(
+          initialValue: _sort,
+          decoration: const InputDecoration(labelText: 'Sort'),
+          items: const [
+            DropdownMenuItem(
+              value: '-scheduledFor',
+              child: Text('Newest scheduled'),
+            ),
+            DropdownMenuItem(
+              value: 'scheduledFor',
+              child: Text('Oldest scheduled'),
+            ),
+            DropdownMenuItem(value: 'status', child: Text('Status')),
+          ],
+          onChanged: (value) => setState(() {
+            _sort = value ?? '-scheduledFor';
+            _skip = 0;
+          }),
+        ),
+        const SizedBox(height: 12),
+        page.when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (error, _) => Text('Inspections could not be loaded: $error'),
+          data: (result) => Column(
+            children: [
+              if (result.items.isEmpty)
+                const ListTile(title: Text('No inspections for this Unit.'))
+              else
+                for (final inspection in result.items)
+                  ListTile(
+                    key: ValueKey('unit-inspection-${inspection.id}'),
+                    title: Text(inspection.type),
+                    subtitle: Text(
+                      '${inspection.status} · ${_formatDate(inspection.scheduledFor)}',
+                    ),
+                  ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  OutlinedButton(
+                    onPressed: _skip == 0
+                        ? null
+                        : () => setState(
+                            () => _skip = (_skip - _take)
+                                .clamp(0, 100000)
+                                .toInt(),
+                          ),
+                    child: const Text('Previous'),
+                  ),
+                  Text('${result.totalCount} total'),
+                  OutlinedButton(
+                    onPressed: _skip + result.items.length >= result.totalCount
+                        ? null
+                        : () => setState(() => _skip += _take),
+                    child: const Text('Next'),
+                  ),
+                ],
+              ),
             ],
           ),
-        ],
-      );
-    }
+        ),
+      ],
+    );
+  }
+}
 
-    final singleTenantId = currentTenants.isNotEmpty
-        ? currentTenants.first.id
-        : null;
-    if (singleTenantId == null || singleTenantId <= 0) {
-      return const _EmptyTab(
-        icon: Symbols.group_rounded,
-        title: 'No tenant',
-        body: 'This unit is currently vacant.',
-      );
-    }
+class _UnitRecurringMaintenanceTab extends ConsumerStatefulWidget {
+  const _UnitRecurringMaintenanceTab({required this.unitId});
+  final int unitId;
 
-    return TenantDetailLoaderScreen(tenantId: singleTenantId);
+  @override
+  ConsumerState<_UnitRecurringMaintenanceTab> createState() =>
+      _UnitRecurringMaintenanceTabState();
+}
+
+class _UnitRecurringMaintenanceTabState
+    extends ConsumerState<_UnitRecurringMaintenanceTab> {
+  static const _take = 20;
+  var _skip = 0;
+  var _search = '';
+  var _sort = 'nextDueDate';
+
+  @override
+  Widget build(BuildContext context) {
+    final query = RecurringMaintenanceListQuery(
+      unitId: widget.unitId,
+      skip: _skip,
+      take: _take,
+      search: _search,
+      sort: _sort,
+    );
+    final page = ref.watch(unitRecurringMaintenancePageProvider(query));
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        TextField(
+          decoration: const InputDecoration(
+            labelText: 'Search Unit recurring maintenance',
+            prefixIcon: Icon(Icons.search),
+          ),
+          onChanged: (value) => setState(() {
+            _search = value.trim();
+            _skip = 0;
+          }),
+        ),
+        const SizedBox(height: 8),
+        DropdownButtonFormField<String>(
+          initialValue: _sort,
+          decoration: const InputDecoration(labelText: 'Sort'),
+          items: const [
+            DropdownMenuItem(value: 'nextDueDate', child: Text('Next due')),
+            DropdownMenuItem(
+              value: '-nextDueDate',
+              child: Text('Latest due'),
+            ),
+            DropdownMenuItem(value: 'title', child: Text('Title')),
+          ],
+          onChanged: (value) => setState(() {
+            _sort = value ?? 'nextDueDate';
+            _skip = 0;
+          }),
+        ),
+        const SizedBox(height: 12),
+        page.when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (error, _) =>
+              Text('Recurring maintenance could not be loaded: $error'),
+          data: (result) => Column(
+            children: [
+              if (result.items.isEmpty)
+                const ListTile(
+                  title: Text('No recurring maintenance for this Unit.'),
+                )
+              else
+                for (final task in result.items)
+                  ListTile(
+                    key: ValueKey('unit-recurring-${task.id}'),
+                    title: Text(task.title),
+                    subtitle: Text(
+                      '${task.recurrenceInterval} · Due ${_formatDate(task.nextDueDate)}',
+                    ),
+                  ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  OutlinedButton(
+                    onPressed: _skip == 0
+                        ? null
+                        : () => setState(
+                            () => _skip = (_skip - _take)
+                                .clamp(0, 100000)
+                                .toInt(),
+                          ),
+                    child: const Text('Previous'),
+                  ),
+                  Text('${result.totalCount} total'),
+                  OutlinedButton(
+                    onPressed: _skip + result.items.length >= result.totalCount
+                        ? null
+                        : () => setState(() => _skip += _take),
+                    child: const Text('Next'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 }
 
@@ -2163,77 +3118,82 @@ class _UnitTurnoverTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final turnover = dashboard.turnover;
 
-    return ListView(
+    return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-      children: [
-        _SurfacePanel(
-          children: [
-            _MetricRow(
-              icon: Symbols.construction_rounded,
-              label: 'Status',
-              value: _turnoverStatusLabel(turnover.status),
-            ),
-            _MetricRow(
-              icon: Symbols.task_alt_rounded,
-              label: 'Punch list',
-              value:
-                  '${turnover.openTaskCount} open / ${turnover.completedTaskCount} done',
-            ),
-            _MetricRow(
-              icon: Symbols.schedule_rounded,
-              label: 'Turn time',
-              value: turnover.daysInTurnover == null
-                  ? 'Not started'
-                  : '${turnover.daysInTurnover}d',
-            ),
-            _MetricRow(
-              icon: Symbols.event_available_rounded,
-              label: 'Target ready',
-              value: turnover.targetReadyDate == null
-                  ? 'Not set'
-                  : _formatDate(turnover.targetReadyDate!),
-            ),
-            _MetricRow(
-              icon: Symbols.receipt_long_rounded,
-              label: 'Budget / actual',
-              value:
-                  '${_formatCurrency(turnover.estimatedCost)} / ${_formatCurrency(turnover.actualCost)}',
-            ),
-            _MetricRow(
-              icon: Symbols.folder_open_rounded,
-              label: 'Receipts',
-              value: '${turnover.receiptCount}',
-            ),
-          ],
-        ),
-        const SizedBox(height: 14),
-        _Section(
-          title: 'Make-ready plan',
-          empty: '',
-          children: const [
-            _CompactRow(
-              icon: Symbols.logout_rounded,
-              title: 'Move-out',
-              subtitle: 'Walkthrough, photos, keys, and vacancy handoff',
-            ),
-            _CompactRow(
-              icon: Symbols.format_list_bulleted_rounded,
-              title: 'Punch list',
-              subtitle: 'Cleanout, paint, repairs, re-key, appliances',
-            ),
-            _CompactRow(
-              icon: Symbols.verified_rounded,
-              title: 'Rent-ready',
-              subtitle: 'Close jobs, attach receipts, then list the unit',
-            ),
-          ],
-        ),
-        const SizedBox(height: 14),
-        _WorkOrdersSection(
-          items: dashboard.overview.openWorkOrders,
-          openFullDetail: true,
-        ),
-      ],
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Turnover', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 12),
+          _SurfacePanel(
+            children: [
+              _MetricRow(
+                icon: Symbols.construction_rounded,
+                label: 'Status',
+                value: _turnoverStatusLabel(turnover.status),
+              ),
+              _MetricRow(
+                icon: Symbols.task_alt_rounded,
+                label: 'Punch list',
+                value:
+                    '${turnover.openTaskCount} open / ${turnover.completedTaskCount} done',
+              ),
+              _MetricRow(
+                icon: Symbols.schedule_rounded,
+                label: 'Turn time',
+                value: turnover.daysInTurnover == null
+                    ? 'Not started'
+                    : '${turnover.daysInTurnover}d',
+              ),
+              _MetricRow(
+                icon: Symbols.event_available_rounded,
+                label: 'Target ready',
+                value: turnover.targetReadyDate == null
+                    ? 'Not set'
+                    : _formatDate(turnover.targetReadyDate!),
+              ),
+              _MetricRow(
+                icon: Symbols.receipt_long_rounded,
+                label: 'Budget / actual',
+                value:
+                    '${_formatCurrency(turnover.estimatedCost)} / ${_formatCurrency(turnover.actualCost)}',
+              ),
+              _MetricRow(
+                icon: Symbols.folder_open_rounded,
+                label: 'Receipts',
+                value: '${turnover.receiptCount}',
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          _Section(
+            title: 'Make-ready plan',
+            empty: '',
+            children: const [
+              _CompactRow(
+                icon: Symbols.logout_rounded,
+                title: 'Move-out',
+                subtitle: 'Walkthrough, photos, keys, and vacancy handoff',
+              ),
+              _CompactRow(
+                icon: Symbols.format_list_bulleted_rounded,
+                title: 'Punch list',
+                subtitle: 'Cleanout, paint, repairs, re-key, appliances',
+              ),
+              _CompactRow(
+                icon: Symbols.verified_rounded,
+                title: 'Rent-ready',
+                subtitle: 'Close jobs, attach receipts, then list the unit',
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          _WorkOrdersSection(
+            items: dashboard.overview.openWorkOrders,
+            openFullDetail: true,
+          ),
+        ],
+      ),
     );
   }
 }
@@ -2252,14 +3212,16 @@ class _UnitWorkTab extends StatelessWidget {
       return WorkOrderDetailScreen(workOrderId: selected.id);
     }
 
-    return ListView(
+    return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-      children: [
-        _WorkOrdersSection(
-          items: dashboard.overview.openWorkOrders,
-          openFullDetail: true,
-        ),
-      ],
+      child: Column(
+        children: [
+          _WorkOrdersSection(
+            items: dashboard.overview.openWorkOrders,
+            openFullDetail: true,
+          ),
+        ],
+      ),
     );
   }
 }
@@ -2271,27 +3233,31 @@ class _UnitDocumentsTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
+    return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-      children: [
-        Align(
-          alignment: Alignment.centerLeft,
-          child: FilledButton.icon(
-            icon: const Icon(Symbols.document_scanner_rounded),
-            label: const Text('Scan document'),
-            onPressed: () => openMobileScan(
-              context,
-              propertyId: dashboard.unit.propertyId,
-              unitId: dashboard.unit.id,
-              leaseManagementId: dashboard.currentLease?.leaseManagementId,
-              tenantAccountId: dashboard.currentLease?.tenantAccountId,
-              sourceLabel: 'Unit · Documents',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FilledButton.icon(
+              icon: const Icon(Symbols.document_scanner_rounded),
+              label: const Text('Scan document'),
+              onPressed: () => openMobileScan(
+                context,
+                propertyId: dashboard.unit.propertyId,
+                unitId: dashboard.unit.id,
+                leaseManagementId: dashboard.leaseManagementId,
+                leaseAgreementId: dashboard.currentLease?.id,
+                tenantAccountId: dashboard.tenantAccountId,
+                sourceLabel: 'Unit · Documents',
+              ),
             ),
           ),
-        ),
-        const SizedBox(height: 14),
-        _DocumentsSection(items: dashboard.overview.pendingDocs),
-      ],
+          const SizedBox(height: 14),
+          _DocumentsSection(items: dashboard.overview.pendingDocs),
+        ],
+      ),
     );
   }
 }

@@ -36,6 +36,60 @@ public class OpenAiLlmProviderTests
     // ----- No-op fallback -----
 
     [Fact]
+    public async Task TestCredentialAsync_UsesSuppliedWorkspaceKeyWithoutReturningIt()
+    {
+        var handler = new FixedResponseHandler(HttpStatusCode.OK, """{"choices":[]}""");
+        var provider = BuildProvider(null, handler);
+
+        var result = await provider.TestCredentialAsync(
+            "sk-workspace-secret",
+            "gpt-4o");
+
+        result.Succeeded.Should().BeTrue();
+        result.Provider.Should().Be("openai");
+        result.ModelId.Should().Be("gpt-4o");
+        result.ToString().Should().NotContain("sk-workspace-secret");
+    }
+
+    [Fact]
+    public async Task ExtractWorkspaceAsync_UsesOnlySuppliedWorkspaceKeyAndModel()
+    {
+        var response = """
+            {
+              "model": "workspace-response-model",
+              "choices": [{
+                "message": {
+                  "tool_calls": [{
+                    "function": {
+                      "arguments": "{\"vendor_name\":\"ACME\",\"vendor_name_confidence\":0.9,\"amount\":\"10\",\"amount_confidence\":0.8}"
+                    }
+                  }]
+                },
+                "finish_reason": "tool_calls"
+              }],
+              "usage": { "prompt_tokens": 12, "completion_tokens": 4 }
+            }
+            """;
+        var handler = new CaptureRequestHandler(HttpStatusCode.OK, response);
+        var provider = BuildProvider(
+            null,
+            handler,
+            new AssistantConfig { ApiKey = null, ModelId = "shared-model-must-not-run" });
+
+        await provider.ExtractWorkspaceAsync(
+            new WorkspaceLlmRuntimeCredential(
+                42, "openai", "workspace-request-model", "sk-workspace-only"),
+            new byte[] { 0xFF, 0xD8, 0xFF },
+            "image/jpeg",
+            "Extract fields",
+            TwoFields());
+
+        handler.Authorization.Should().Be("Bearer sk-workspace-only");
+        handler.RequestBody.Should().Contain("\"model\":\"workspace-request-model\"");
+        handler.RequestBody.Should().NotContain("shared-model-must-not-run");
+    }
+
+    [Fact]
     public async Task ExtractAsync_WhenApiKeyEmpty_ReturnsAllFieldsWithZeroConfidenceAndNoHttpCall()
     {
         var throwingHandler = new ThrowIfCalledHandler();
@@ -230,10 +284,12 @@ public class OpenAiLlmProviderTests
     private sealed class CaptureRequestHandler(HttpStatusCode status, string body) : HttpMessageHandler
     {
         public string? RequestBody { get; private set; }
+        public string? Authorization { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            Authorization = request.Headers.Authorization?.ToString();
             RequestBody = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);

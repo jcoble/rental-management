@@ -14,6 +14,8 @@ import '../home/mobile_quick_action_helpers.dart';
 import 'property_form_sheet.dart';
 import 'properties_repository.dart';
 import 'property_detail_screen.dart';
+import 'property_workspace_sections.dart';
+import '../units/unit_navigation.dart';
 
 /// Opens the "New property" bottom sheet and returns the atomic Property + Unit
 /// setup result. A dismissed sheet returns `null`.
@@ -110,7 +112,33 @@ class _PropertiesListScreenState extends ConsumerState<PropertiesListScreen> {
     await ref.read(propertiesPageProvider(_query).future);
   }
 
-  void _openDetail(BuildContext context, Property property) {
+  void _openDetail(
+    BuildContext context,
+    Property property,
+    PropertyWorkspaceEntry? serverEntry,
+  ) {
+    final entry = resolvePropertyWorkspaceEntry(
+      propertyId: property.id,
+      rentalStructure: property.rentalStructure.wireValue,
+      serverEntry: serverEntry,
+    );
+    if (entry.destination == PropertyWorkspaceDestination.unit) {
+      final unitId = entry.unitId;
+      if (unitId == null || unitId <= 0) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text(
+                'This one-rental property is missing its canonical rental. Finish Guided Setup before opening it.',
+              ),
+            ),
+          );
+        return;
+      }
+      openUnitCommandCenter(context, unitId: unitId);
+      return;
+    }
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => PropertyDetailScreen(property: property),
@@ -284,7 +312,11 @@ class _PropertiesListScreenState extends ConsumerState<PropertiesListScreen> {
                           index,
                           page.items.length,
                         ),
-                        onTap: () => _openDetail(context, property),
+                        onTap: () => _openDetail(
+                          context,
+                          property,
+                          page.workspaceEntries[property.id],
+                        ),
                       );
                     },
                   );

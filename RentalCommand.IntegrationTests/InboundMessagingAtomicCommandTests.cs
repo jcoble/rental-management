@@ -10,6 +10,7 @@ using RentalCommand.Core.Conversations;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Navigation;
 using RentalCommand.Core.Operations;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
@@ -176,11 +177,37 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             status.WorkOrderId == _facts.WorkOrderId && status.ToStatus == WorkOrderStatus.Completed))
             .Should().Be(2); // one before reset, one after reset; never one per duplicate event
         (await verify.Vendors.SingleAsync(vendor => vendor.Id == _facts.VendorId)).JobsCompleted.Should().Be(2);
-        (await verify.Notifications
-            .Where(notification => notification.Type == "VendorJobCompleted")
-            .Select(notification => notification.UserId)
-            .Distinct()
-            .ToListAsync()).Should().Equal((int?)_facts.AuthorizedUserId);
+        var notifications = await verify.Notifications
+            .Where(row => row.Type == "VendorJobCompleted")
+            .OrderBy(row => row.CreatedAt)
+            .Select(row => new
+            {
+                row.CreatedAt,
+                row.UserId,
+                row.RelatedEntityType,
+                row.RelatedEntityId,
+                row.NavigationExperience,
+                row.NavigationDestination,
+                row.NavigationResourceKind,
+                row.NavigationResourceId,
+                row.NavigationAccessContextId,
+                row.NavigationAccessRevision,
+            })
+            .ToListAsync();
+        notifications.Should().HaveCount(2,
+            "each distinct completed transition emits once while replay and the losing concurrent event emit nothing");
+        notifications.Select(notification => notification.CreatedAt)
+            .Should().Equal(_now, _now.AddMinutes(1));
+        notifications.Should().OnlyContain(notification =>
+            notification.UserId == _facts.AuthorizedUserId
+            && notification.RelatedEntityType == nameof(WorkOrder)
+            && notification.RelatedEntityId == _facts.WorkOrderId
+            && notification.NavigationExperience == NavigationExperience.Management
+            && notification.NavigationDestination == NavigationDestination.WorkOrder
+            && notification.NavigationResourceKind == nameof(WorkOrder)
+            && notification.NavigationResourceId == _facts.WorkOrderId
+            && notification.NavigationAccessContextId == _facts.AuthorizedAccessContextId
+            && notification.NavigationAccessRevision == _facts.AuthorizedAccessRevision);
         _probe.Commands.Count(sql => sql.Contains(
             "TSK-668 event-time team routing with direct responsibility and visible administrator fallback",
             StringComparison.Ordinal)).Should().Be(2);
@@ -710,7 +737,9 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
             dispatch.Id,
             conversation.Id,
             admin.Id,
-            decoyUser.Id);
+            decoyUser.Id,
+            authorizedContext.Id,
+            authorizedContext.AccessRevision);
     }
 
     private TeamRoutingRule NewRoutingRule(
@@ -899,7 +928,9 @@ public sealed class InboundMessagingAtomicCommandTests : IAsyncLifetime
         int DispatchId,
         int ConversationId,
         int AuthorizedUserId,
-        int DecoyUserId);
+        int DecoyUserId,
+        int AuthorizedAccessContextId,
+        long AuthorizedAccessRevision);
 
     private sealed class TestActor : ICurrentActor
     {

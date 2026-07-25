@@ -66,6 +66,7 @@ internal sealed partial class AtomicLeaseMutationPersistence
             new("SecurityDepositEntries", AtomicRawDmlOperation.Insert),
             new("TenantUserAccesses", AtomicRawDmlOperation.Update),
             new("TenantUserAccesses", AtomicRawDmlOperation.Insert),
+            new("WorkspaceAccessContexts", AtomicRawDmlOperation.Update),
             new("UnitOperationalPeriods", AtomicRawDmlOperation.Insert));
 
         var row = await _db.Database.SingleTopLevelResultAsync<TransferLeaseManagementRow>(

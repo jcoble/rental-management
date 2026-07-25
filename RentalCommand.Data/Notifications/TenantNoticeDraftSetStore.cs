@@ -619,6 +619,7 @@ public sealed class TenantNoticeDraftSetStore : ITenantNoticeDraftSetStore
                resolved."WasCreated",
                sum(CASE WHEN resolved."WasCreated" THEN 1 ELSE 0 END) OVER ()::integer AS "CreatedCount",
                resolved."Id" AS "DraftId",
+               resolved."PortfolioId",
                resolved."LeaseManagementId",
                resolved."TenantAccountId",
                resolved."RecipientLeaseManagementPartyId",

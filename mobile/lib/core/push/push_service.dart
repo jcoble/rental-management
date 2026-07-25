@@ -272,7 +272,7 @@ class PushService {
 
   void _routeFromPayload(String? payload) {
     if (payload == null || payload.isEmpty) {
-      _navigate(null);
+      _navigateTypedIntent(null);
       return;
     }
     try {
@@ -284,27 +284,52 @@ class PushService {
     } catch (_) {
       // fall through
     }
-    _navigate(null);
+    _navigateTypedIntent(null);
   }
 
   void _routeFromData(Map<String, dynamic> data) {
-    _navigate(data['actionUrl'] as String?);
+    final encodedIntent = data['navigationIntent'];
+    if (encodedIntent is String) {
+      try {
+        _navigateTypedIntent(jsonDecode(encodedIntent));
+        return;
+      } catch (_) {
+        _navigateTypedIntent(null);
+        return;
+      }
+    }
+    _navigateTypedIntent(encodedIntent);
   }
 
   /// Hands the intent to the mounted role shell, or leaves it queued until the
   /// shell mounts after authentication. The shell performs capability gating
   /// and pushes onto the correct independent tab stack, preserving Back.
-  void _navigate(String? actionUrl) {
+  void _navigateTypedIntent(Object? payload) {
     final authState = _ref.read(authControllerProvider);
     final authenticated = authState is AuthStateAuthenticated
         ? authState
         : null;
-    final intent = MobileNavigationIntent.fromNotification(
-      actionUrl: actionUrl,
-      nowUtc: DateTime.now().toUtc(),
-      authority: authenticated,
-    );
-    _ref.read(pendingPushLinkProvider.notifier).set(intent);
+    final intent = MobileNavigationIntent.tryParse(payload);
+    if (intent == null && authenticated == null) return;
+    final selected = authenticated?.access.selectedContext;
+    final fallbackIntent =
+        authenticated == null || selected == null
+        ? null
+        : MobileNavigationIntent(
+            experience: authenticated.activeExperience,
+            destination: MobileNavigationDestination.home,
+            accessContextId: selected.accessContextId,
+            accessRevision: selected.accessRevision,
+            action: MobileNavigationAction.open,
+            expiresAtUtc: DateTime.now().toUtc().add(
+              const Duration(minutes: 1),
+            ),
+            fallbackDestination: MobileNavigationDestination.home,
+          );
+    final routedIntent = intent ?? fallbackIntent;
+    if (routedIntent != null) {
+      _ref.read(pendingPushLinkProvider.notifier).set(routedIntent);
+    }
   }
 
   void dispose() {

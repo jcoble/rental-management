@@ -3,6 +3,8 @@
 	import { Building2, MapPin } from '@lucide/svelte';
 	import { ownerPortal } from '$lib/api/endpoints/owner-portal';
 	import { Input } from '$lib/components/ui/input';
+	import { Button } from '$lib/components/ui/button';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import Pagination from '$lib/components/shared/Pagination.svelte';
 	import * as Card from '$lib/components/ui/card';
 
@@ -41,9 +43,12 @@
 		<Input id="owner-property-search" bind:value={search} placeholder="Name, address, or city" data-testid="owner-properties-search" />
 	</div>
 	{#if propertiesQuery.isLoading}
-		<p class="py-12 text-center text-sm text-muted-foreground" data-testid="owner-properties-loading">Loading properties…</p>
+		<LoadingState label="Loading owner properties" variant="page" testid="owner-properties-loading" />
 	{:else if propertiesQuery.isError}
-		<p class="py-12 text-center text-sm text-destructive" data-testid="owner-properties-error">Could not load your properties.</p>
+		<div class="rounded-xl border border-destructive/40 px-6 py-10 text-center" data-testid="owner-properties-error">
+			<p class="text-sm font-medium text-destructive">Could not load your properties.</p>
+			<Button type="button" variant="outline" size="sm" class="mt-3" onclick={() => propertiesQuery.refetch()}>Try again</Button>
+		</div>
 	{:else if properties.length === 0}
 		<p class="py-12 text-center text-sm text-muted-foreground" data-testid="owner-properties-empty">{search.trim() ? 'No properties match your search.' : 'No properties are connected to this owner account.'}</p>
 	{:else}

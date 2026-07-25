@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { scan, type ScanDraftResponse } from '$lib/api/scan';
 	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 	import * as Tabs from '$lib/components/ui/tabs';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
@@ -60,11 +61,22 @@
 	const assignedTechnicianOnly = $derived(
 		activeCapabilities.has('maintenance.assigned-work.update') && !activeCapabilities.has('work.manage')
 	);
+	let assignedSearch = $state('');
+	let assignedPage = $state(1);
 	const assignedWorkOrdersQuery = createQuery(() => ({
-		queryKey: ['assigned-work-order-scan-picker'],
-		queryFn: () => technician.assignments({ openOnly: true, sort: 'scheduledForUtc', take: 50 }),
+		queryKey: ['assigned-work-order-scan-picker', assignedSearch, assignedPage, PAGE_SIZE],
+		queryFn: () => technician.assignments({
+			openOnly: true,
+			search: assignedSearch.trim() || undefined,
+			sort: 'scheduledForUtc',
+			skip: (assignedPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE
+		}),
 		enabled: assignedTechnicianOnly && !scanContext.workOrderId
 	}));
+	const assignedPageCount = $derived(
+		Math.max(1, Math.ceil((assignedWorkOrdersQuery.data?.totalCount ?? 0) / PAGE_SIZE))
+	);
 
 	const scansQuery = createQuery(() => ({
 		queryKey: ['scans', activeFilter, 'page', gridSort, gridPage, PAGE_SIZE],
@@ -198,13 +210,43 @@
 		{#if assignedTechnicianOnly && !scanContext.workOrderId}
 			<h2 class="mb-2 text-base font-semibold">Choose an assigned work order</h2>
 			<p class="mb-4 text-sm text-muted-foreground">Your scan will be attached to the work order you choose.</p>
+			<Input
+				class="mb-3 max-w-md"
+				bind:value={assignedSearch}
+				oninput={() => assignedPage = 1}
+				placeholder="Search assigned work"
+				aria-label="Search assigned work orders"
+			/>
 			<div class="grid gap-2">
 				{#each assignedWorkOrdersQuery.data?.items ?? [] as workOrder}
 					<Button variant="outline" class="justify-start" onclick={() => goto(`/scan?type=WorkOrder&workOrderId=${workOrder.id}`)}>{workOrder.title}</Button>
 				{:else}
-					<p class="text-sm text-muted-foreground">No current assigned work orders.</p>
+					<p class="text-sm text-muted-foreground">
+						{assignedWorkOrdersQuery.isPending ? 'Loading assigned work…' : 'No matching assigned work orders.'}
+					</p>
 				{/each}
 			</div>
+			{#if (assignedWorkOrdersQuery.data?.totalCount ?? 0) > PAGE_SIZE}
+				<div class="mt-3 flex items-center justify-end gap-2">
+					<span class="mr-2 text-xs text-muted-foreground">Page {assignedPage} of {assignedPageCount}</span>
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={assignedPage <= 1}
+						onclick={() => assignedPage = Math.max(1, assignedPage - 1)}
+					>
+						Previous
+					</Button>
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={assignedPage >= assignedPageCount}
+						onclick={() => assignedPage = Math.min(assignedPageCount, assignedPage + 1)}
+					>
+						Next
+					</Button>
+				</div>
+			{/if}
 		{:else}
 			<ScanCapturePanel
 				context={scanContext}

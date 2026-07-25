@@ -418,7 +418,8 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
             access.AccessContextId == accessContextId && access.PortfolioId == portfolioId &&
             _db.WorkOrders.Any(workOrder =>
                 workOrder.Id == entityId.Value && workOrder.PortfolioId == portfolioId &&
-                workOrder.TenantId == access.TenantId), ct);
+                workOrder.TenantId == access.TenantId &&
+                workOrder.LeaseManagementId == access.LeaseManagementId), ct);
     }
 
     private Task<int?> ResolveTenantIdAsync(int portfolioId, CancellationToken ct)
@@ -555,7 +556,12 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
                         leaseManagements.Any(management => management.Id == account.LeaseManagementId)), ct),
             StoredDocumentTarget.OwnerEntity => _db.OwnerEntities.AsNoTracking().AnyAsync(owner =>
                 owner.Id == entityId && owner.PortfolioId == scope.PortfolioId &&
-                properties.Any(property => property.OwnerEntityId == owner.Id), ct),
+                _db.PropertyOwnerships.Any(ownership =>
+                    ownership.PortfolioId == scope.PortfolioId
+                    && ownership.OwnerEntityId == owner.Id
+                    && ownership.EffectiveFromUtc <= DateTime.UtcNow
+                    && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > DateTime.UtcNow)
+                    && properties.Any(property => property.Id == ownership.PropertyId)), ct),
             _ => Task.FromResult(false),
         };
     }

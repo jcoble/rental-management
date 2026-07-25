@@ -1054,7 +1054,10 @@ class PortalLeaseAgreement {
     required this.securityDepositObligation,
     required this.lateFeeAmount,
     required this.rentDueDay,
+    required this.executedDocumentAvailable,
     this.termEndOn,
+    this.executedDocumentFileName,
+    this.executedDocumentContentType,
   });
 
   final int id;
@@ -1066,6 +1069,9 @@ class PortalLeaseAgreement {
   final double securityDepositObligation;
   final double lateFeeAmount;
   final int rentDueDay;
+  final bool executedDocumentAvailable;
+  final String? executedDocumentFileName;
+  final String? executedDocumentContentType;
 
   factory PortalLeaseAgreement.fromJson(Map<String, dynamic> json) =>
       PortalLeaseAgreement(
@@ -1079,5 +1085,10 @@ class PortalLeaseAgreement {
             (json['securityDepositObligation'] as num?)?.toDouble() ?? 0,
         lateFeeAmount: (json['lateFeeAmount'] as num?)?.toDouble() ?? 0,
         rentDueDay: (json['rentDueDay'] as num?)?.toInt() ?? 1,
+        executedDocumentAvailable:
+            json['executedDocumentAvailable'] as bool? ?? false,
+        executedDocumentFileName: json['executedDocumentFileName'] as String?,
+        executedDocumentContentType:
+            json['executedDocumentContentType'] as String?,
       );
 }

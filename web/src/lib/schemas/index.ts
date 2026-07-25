@@ -167,8 +167,8 @@ export const propertySchema = z.object({
 	city: required('City').max(100, 'City must be 100 characters or fewer'),
 	state: required('State').max(100, 'State must be 100 characters or fewer'),
 	postalCode: required('ZIP').max(20, 'ZIP must be 20 characters or fewer'),
-	// The property's owner is an OwnerEntity (the API validates ownerEntityId against OwnerEntities;
-	// ownerId is the legacy Owners table). owners.list() returns OwnerEntities, so this is their id.
+	// Form-only selection used to construct a canonical PropertyOwnership mutation. It is never
+	// emitted as a direct Property field.
 	ownerEntityId: idString,
 });
 

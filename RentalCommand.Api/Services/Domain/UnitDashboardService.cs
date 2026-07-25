@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auditing;
@@ -221,12 +222,64 @@ public class UnitDashboardService : IUnitDashboardService
             ? Math.Max(0, end.DayNumber - unitRow.BusinessDate.DayNumber)
             : null;
 
+        var turnover = await BuildTurnoverSummaryAsync(portfolioId, unitId, stage, now, ct);
+
         return new UnitDashboardResponse
         {
             Unit = unitRow.Unit,
             PropertyName = unitRow.PropertyName,
             LifecycleStage = stage.ToString(),
             NextBestAction = nextBestAction,
+            LeaseManagementId = unitRow.LeaseManagementId,
+            TenantAccountId = unitRow.TenantAccountId,
+            OccupancyPossession = new UnitOccupancyPossessionCondition
+            {
+                Status = unitRow.IsOccupied
+                    ? "Occupied"
+                    : unitRow.HasScheduledMoveIn ? "PossessionScheduled" : "Vacant",
+                IsOccupied = unitRow.IsOccupied,
+                HasScheduledMoveIn = unitRow.HasScheduledMoveIn,
+                LeaseManagementId = unitRow.LeaseManagementId,
+            },
+            MarketingAvailability = new UnitMarketingAvailabilityCondition
+            {
+                Status = unitRow.IsOccupied || unitRow.HasScheduledMoveIn
+                    ? "NotAvailable"
+                    : unitRow.IsInTurnover || unitRow.IsOutOfService || unitRow.IsOnManagementHold
+                        ? "Unavailable"
+                        : "Available",
+                IsAvailable = !unitRow.IsOccupied
+                    && !unitRow.HasScheduledMoveIn
+                    && !unitRow.IsInTurnover
+                    && !unitRow.IsOutOfService
+                    && !unitRow.IsOnManagementHold,
+            },
+            TenantAccountCondition = new UnitTenantAccountCondition
+            {
+                Status = unitRow.TenantAccountId is null
+                    ? "NoAccount"
+                    : unitRow.PastDueAmount > 0m ? "PastDue" : "Current",
+                TenantAccountId = unitRow.TenantAccountId,
+                ReceivableBalance = unitRow.ReceivableBalance,
+                PastDueAmount = unitRow.PastDueAmount,
+            },
+            LegalNoticeCondition = new UnitLegalNoticeCondition
+            {
+                Status = unitRow.OpenNoticeCount > 0
+                    ? "NoticeOpen"
+                    : unitRow.AgreementId is null ? "NoGoverningAgreement" : unitRow.AgreementStatus ?? "AgreementOnFile",
+                AgreementId = unitRow.AgreementId,
+                AgreementStatus = unitRow.AgreementStatus,
+                OpenNoticeCount = unitRow.OpenNoticeCount,
+            },
+            MaintenanceTurnover = new UnitMaintenanceTurnoverCondition
+            {
+                Status = turnover.Status,
+                OpenWorkOrderCount = openWorkOrderCount,
+                IsInTurnover = unitRow.IsInTurnover,
+                IsOutOfService = unitRow.IsOutOfService,
+                IsOnManagementHold = unitRow.IsOnManagementHold,
+            },
             Header = new UnitDashboardHeader
             {
                 RentState = rentState,
@@ -257,7 +310,7 @@ public class UnitDashboardService : IUnitDashboardService
                 PendingDocs = docs,
                 UpcomingAppointments = upcomingAppointments,
             },
-            Turnover = await BuildTurnoverSummaryAsync(portfolioId, unitId, stage, now, ct),
+            Turnover = turnover,
             RecentTimeline = await GetTimelineAsync(portfolioId, unitId, 0, RecentTimelineTake, ct),
         };
     }
@@ -296,6 +349,11 @@ public class UnitDashboardService : IUnitDashboardService
             .Where(row => row.PortfolioId == unit.PortfolioId
                 && row.TenantAccountId == lifecycle!.TenantAccountId)
             .DefaultIfEmpty()
+        let openNoticeCount = _db.NoticeDrafts.AsNoTracking().Count(notice =>
+            notice.PortfolioId == unit.PortfolioId
+            && notice.LeaseManagementId == selectedRelationshipId
+            && notice.DismissedAt == null
+            && notice.Status != "Sent")
         select new UnitDashboardReadRow
         {
             Unit = new UnitResponse
@@ -344,6 +402,7 @@ public class UnitDashboardService : IUnitDashboardService
             PastDueAmount = (decimal?)balance.PastDueAmount ?? 0m,
             NextDueOn = balance.NextDueOn,
             HeldDepositBalance = (decimal?)deposit.HeldBalance ?? 0m,
+            OpenNoticeCount = openNoticeCount,
         };
 
     private static UnitDashboardStage ResolveCanonicalStage(
@@ -408,7 +467,8 @@ public class UnitDashboardService : IUnitDashboardService
             UnitDashboardStage.Applicant => "Screen & decide on the applicant",
             UnitDashboardStage.Lease => "Finish and send the agreement",
             UnitDashboardStage.MoveIn => "Confirm possession / collect deposit",
-            UnitDashboardStage.Active when outstanding > 0m => $"Collect {outstanding:C}",
+            UnitDashboardStage.Active when outstanding > 0m =>
+                $"Collect {outstanding.ToString("$#,##0.00", CultureInfo.InvariantCulture)}",
             UnitDashboardStage.Active => "Rent on track",
             UnitDashboardStage.Renewal when agreementEndOn is { } end =>
                 $"Prepare renewal — agreement ends in {Math.Max(0, end.DayNumber - businessDate.DayNumber)} days",
@@ -751,6 +811,7 @@ public class UnitDashboardService : IUnitDashboardService
         public decimal PastDueAmount { get; init; }
         public DateOnly? NextDueOn { get; init; }
         public decimal HeldDepositBalance { get; init; }
+        public int OpenNoticeCount { get; init; }
     }
 
     private sealed class RecentPaymentReadRow

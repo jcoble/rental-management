@@ -7,6 +7,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Navigation;
 using RentalCommand.Core.Operations;
 using RentalCommand.Data.Notifications;
 
@@ -227,29 +228,63 @@ public sealed class CompleteVendorDispatchFromInboundHandler
         // work responsibility. Both branches are revalidated against one effective assignment's
         // work.read capability and property scope; only an explicitly configured admin fallback
         // applies when neither branch resolves anybody.
-        var staffUserIds = await ScopedNotificationRecipientQuery
+        var staffUserIds = ScopedNotificationRecipientQuery
             .ForTeamTopic(
                 attempt,
                 portfolioId,
                 TeamRoutingTopic.WorkOrders,
                 workOrder.PropertyId,
                 workOrder.Id,
-                now)
-            .OrderBy(userId => userId)
+                now);
+        var recipients = await (
+                from context in attempt.Persistence.Query<WorkspaceAccessContext>()
+                join membership in attempt.Persistence.Query<WorkspaceMembership>()
+                    on new { AccessContextId = context.Id, context.PortfolioId }
+                    equals new { membership.AccessContextId, membership.PortfolioId }
+                where context.PortfolioId == portfolioId
+                    && staffUserIds.Contains(context.UserId)
+                select new
+                {
+                    context.UserId,
+                    AccessContextId = context.Id,
+                    context.AccessRevision,
+                    Experience = context.LastAuthorizedExperience ?? membership.DefaultExperience,
+                })
+            .Distinct()
+            .OrderBy(recipient => recipient.UserId)
             .ToListAsync(ct);
 
-        return staffUserIds.Select(userId => new Notification
+        return recipients.Select(recipient =>
         {
-            PortfolioId = portfolioId,
-            UserId = userId,
-            Type = "VendorJobCompleted",
-            Title = "Job completed by vendor",
-            Message = $"{vendorName} marked \"{workOrder.Title}\" complete by SMS.",
-            Severity = "Success",
-            ActionUrl = $"/maintenance/{workOrder.Id}",
-            RelatedEntityType = nameof(WorkOrder),
-            RelatedEntityId = workOrder.Id,
-            CreatedAt = now,
+            var notification = new Notification
+            {
+                PortfolioId = portfolioId,
+                UserId = recipient.UserId,
+                Type = "VendorJobCompleted",
+                Title = "Job completed by vendor",
+                Message = $"{vendorName} marked \"{workOrder.Title}\" complete by SMS.",
+                Severity = "Success",
+                RelatedEntityType = nameof(WorkOrder),
+                RelatedEntityId = workOrder.Id,
+                CreatedAt = now,
+            };
+            if (recipient.Experience is WorkspaceExperience.Management or WorkspaceExperience.Maintenance)
+            {
+                notification.NavigationExperience =
+                    (NavigationExperience)(int)recipient.Experience;
+                notification.NavigationDestination =
+                    recipient.Experience == WorkspaceExperience.Maintenance
+                        ? NavigationDestination.TechnicianWork
+                        : NavigationDestination.WorkOrder;
+                notification.NavigationAccessContextId = recipient.AccessContextId;
+                notification.NavigationAccessRevision = recipient.AccessRevision;
+                notification.NavigationResourceKind = nameof(WorkOrder);
+                notification.NavigationResourceId = workOrder.Id;
+                notification.NavigationAction = NavigationAction.Open;
+                notification.NavigationExpiresAtUtc = now.AddDays(7);
+                notification.NavigationFallbackDestination = NavigationDestination.Home;
+            }
+            return notification;
         }).ToList();
     }
 

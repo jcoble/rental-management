@@ -90,6 +90,13 @@ public class RecurringMaintenanceTaskListResponse
     public int Take { get; set; }
 }
 
+/// <summary>Server-paged recurring-maintenance query with an optional Unit-local scope.</summary>
+public sealed class RecurringMaintenanceTaskListQuery : ListQuery
+{
+    [Range(1, int.MaxValue)]
+    public int? UnitId { get; set; }
+}
+
 public class CreateRecurringMaintenanceTaskRequest
 {
     [Required]

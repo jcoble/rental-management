@@ -7,6 +7,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Models.Accounting;
+using RentalCommand.Core.Navigation;
 
 namespace RentalCommand.Data.Accounting;
 
@@ -491,6 +492,16 @@ public sealed class ConfirmAccountingMappingHandler
         bool hasMore,
         CancellationToken ct)
     {
+        var accessContext = await attempt.Persistence.Query<WorkspaceAccessContext>()
+            .AsNoTracking()
+            .Where(context => context.PortfolioId == command.PortfolioId
+                && context.UserId == command.ConfirmedByUserId
+                && context.Status == WorkspaceAccessContextStatus.Active
+                && context.SuspendedAtUtc == null
+                && context.RevokedAtUtc == null)
+            .OrderByDescending(context => context.UpdatedAtUtc)
+            .Select(context => new { AccessContextId = context.Id, context.AccessRevision })
+            .FirstOrDefaultAsync(ct);
         var notification = new Notification
         {
             PortfolioId = command.PortfolioId,
@@ -501,11 +512,20 @@ public sealed class ConfirmAccountingMappingHandler
                 ? $"{promotedCount} parked transactions were imported; more are queued."
                 : promotedCount == 1 ? "1 parked transaction was imported." : $"{promotedCount} parked transactions were imported.",
             Severity = "Info",
-            ActionUrl = "/settings/accounting",
             RelatedEntityType = nameof(AccountingEntityMapping),
             RelatedEntityId = mappingId,
             CreatedAt = command.ConfirmedAtUtc,
         };
+        if (accessContext is not null)
+        {
+            notification.NavigationExperience = NavigationExperience.Management;
+            notification.NavigationDestination = NavigationDestination.Money;
+            notification.NavigationAccessContextId = accessContext.AccessContextId;
+            notification.NavigationAccessRevision = accessContext.AccessRevision;
+            notification.NavigationAction = NavigationAction.Review;
+            notification.NavigationExpiresAtUtc = command.ConfirmedAtUtc.AddDays(7);
+            notification.NavigationFallbackDestination = NavigationDestination.Home;
+        }
         attempt.Persistence.Add(notification);
         await attempt.FlushBusinessAsync(ct);
         var devices = await attempt.Persistence.Query<DeviceToken>()
@@ -525,10 +545,19 @@ public sealed class ConfirmAccountingMappingHandler
                     deviceToken = device.Token,
                     title = notification.Title,
                     body = notification.Message,
-                    actionUrl = notification.ActionUrl,
-                    type = notification.Type,
-                    relatedEntityType = notification.RelatedEntityType,
-                    relatedEntityId = mappingId.ToString(),
+                    navigationIntent = accessContext is null ? null : new
+                    {
+                        experience = NavigationExperience.Management.ToString(),
+                        destination = NavigationDestination.Money.ToString(),
+                        accessContextId = accessContext.AccessContextId,
+                        accessRevision = accessContext.AccessRevision,
+                        resource = (object?)null,
+                        parentResource = (object?)null,
+                        childResource = (object?)null,
+                        action = NavigationAction.Review.ToString(),
+                        expiresAtUtc = command.ConfirmedAtUtc.AddDays(7),
+                        fallbackDestination = NavigationDestination.Home.ToString(),
+                    },
                 }),
                 IdempotencyKey = $"accounting-mapping:{mappingId}:{command.ClientOperationId}:push:{device.Id}",
                 CreatedAtUtc = command.ConfirmedAtUtc,

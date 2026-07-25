@@ -139,10 +139,9 @@ public class OwnerEntityServiceListTests : IDisposable
     private void SeedProperty(OwnerEntity owner, string name)
     {
         var now = DateTime.UtcNow;
-        _ctx.Db.Properties.Add(new Property
+        var property = new Property
         {
             PortfolioId = PortfolioId,
-            OwnerEntityId = owner.Id,
             Name = name,
             AddressLine1 = "1 Main St",
             City = "Columbus",
@@ -150,6 +149,19 @@ public class OwnerEntityServiceListTests : IDisposable
             PostalCode = "43215",
             CreatedAt = now,
             UpdatedAt = now,
+        };
+        _ctx.Db.Properties.Add(property);
+        _ctx.Db.SaveChanges();
+        _ctx.Db.PropertyOwnerships.Add(new PropertyOwnership
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            OwnerEntityId = owner.Id,
+            OwnershipSharePercent = 100m,
+            EffectiveFromUtc = now,
+            StatementRecipientName = owner.Name,
+            StatementRecipientEmail = owner.Email,
+            PayeeName = owner.Name,
         });
         _ctx.Db.SaveChanges();
     }

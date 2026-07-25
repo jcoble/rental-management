@@ -24,10 +24,9 @@ void main() {
           ),
         ),
       );
-
       expect(find.text('Assistant'), findsNothing);
       expect(find.text('Record'), findsNothing);
-      expect(find.text('Scan / Add'), findsNothing);
+      expect(find.text('Scan / Add'), findsOneWidget);
 
       await tester.tap(find.byTooltip('Scan / Add'));
       await tester.pumpAndSettle();
@@ -45,6 +44,37 @@ void main() {
       expect(find.text('Record'), findsNothing);
     },
   );
+
+  testWidgets('disabled animations preserve the exact Scan / Add action', (
+    tester,
+  ) async {
+    var scanCount = 0;
+
+    await tester.pumpWidget(
+      _authenticatedApp(
+        disableAnimations: true,
+        home: Scaffold(
+          floatingActionButton: MobileQuickActionFab(
+            onChat: () {},
+            onRecord: () {},
+            onScan: () => scanCount++,
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byTooltip('Scan / Add'));
+    await tester.pump();
+
+    expect(find.text('Scan / Add'), findsOneWidget);
+    expect(find.byType(AnimatedSize), findsNothing);
+    expect(find.byType(AnimatedSwitcher), findsNothing);
+    expect(find.byType(TweenAnimationBuilder<double>), findsNothing);
+
+    await tester.tap(find.text('Scan / Add'));
+    await tester.pump();
+    expect(scanCount, 1);
+  });
 
   testWidgets('quick action FAB keeps an existing page action in the menu', (
     tester,
@@ -404,6 +434,7 @@ const _fullActionCapabilities = <String>{
 Widget _authenticatedApp({
   required Widget home,
   Set<String> capabilities = _fullActionCapabilities,
+  bool disableAnimations = false,
 }) {
   return ProviderScope(
     overrides: [
@@ -411,7 +442,15 @@ Widget _authenticatedApp({
         () => _StaticAuthController(_authenticatedState(capabilities)),
       ),
     ],
-    child: MaterialApp(home: home),
+    child: MaterialApp(
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(
+          context,
+        ).copyWith(disableAnimations: disableAnimations),
+        child: child!,
+      ),
+      home: home,
+    ),
   );
 }
 

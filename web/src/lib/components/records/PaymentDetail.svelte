@@ -1,11 +1,27 @@
 <script lang="ts">
-	import { createQuery } from '@tanstack/svelte-query';
+	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { Receipt, CircleCheck, FileText } from '@lucide/svelte';
 	import { tenantAccounts } from '$lib/api/endpoints/tenant-accounts';
+	import {
+		isTenantPaymentRefundConflict,
+		linkedTenantPaymentRefund,
+		payments
+	} from '$lib/api/endpoints/payments';
+	import { ApiError } from '$lib/api/client';
+	import { currentCapabilities } from '$lib/stores/auth.svelte';
+	import {
+		canCorrectPayment,
+		paymentCorrectionContext
+	} from '$lib/components/unit/money';
 	import { formatDateOnly } from '$lib/utils/date';
+	import { apiErrorMessage } from '$lib/utils/toast';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
 	import HeroCard from '$lib/components/shared/HeroCard.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
 
 	let {
@@ -20,12 +36,21 @@
 		onUnitMismatch?: () => void;
 	} = $props();
 
+	const queryClient = useQueryClient();
 	const paymentQuery = createQuery(() => ({
 		queryKey: ['tenant-ledger-entry', tenantAccountId, tenantLedgerEntryId],
 		queryFn: () => tenantAccounts.entry(tenantAccountId, tenantLedgerEntryId),
 		enabled: tenantAccountId > 0 && tenantLedgerEntryId > 0
 	}));
 	const receipt = $derived(paymentQuery.data);
+	const correctionAllowed = $derived(
+		canCorrectPayment(currentCapabilities(), receipt?.entryType)
+	);
+	let showCorrection = $state(false);
+	let correctionKey = $state<string | null>(null);
+	let correction = $state<ReturnType<typeof paymentCorrectionContext> | null>(null);
+	let correctionResult = $state<NonNullable<ReturnType<typeof linkedTenantPaymentRefund>> | null>(null);
+	let correctionError = $state('');
 
 	$effect(() => {
 		if (isMismatchedUnitSelection(receipt, expectedUnitId)) onUnitMismatch?.();
@@ -39,6 +64,51 @@
 		const date = new Date(value);
 		return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 	}
+
+	function openCorrection() {
+		if (!receipt || !correctionAllowed) return;
+		correction = paymentCorrectionContext(receipt);
+		correctionKey = crypto.randomUUID();
+		correctionResult = null;
+		correctionError = '';
+		showCorrection = true;
+	}
+
+	function closeCorrection() {
+		showCorrection = false;
+		correction = null;
+		correctionKey = null;
+		correctionError = '';
+	}
+
+	const correctionMutation = createMutation(() => ({
+		mutationFn: async () => {
+			if (!correctionAllowed || !correction || !correctionKey) {
+				throw new Error('Payment correction is not authorized.');
+			}
+			return payments.refundPayment(tenantAccountId, correctionKey, {
+				paymentEntryId: tenantLedgerEntryId,
+				effectiveOn: correction.effectiveOn,
+				reason: correction.reason.trim(),
+				paymentMethodSummary: correction.paymentMethodSummary.trim() || undefined,
+				externalReference: correction.externalReference.trim() || undefined,
+				sourceStoredFileId: correction.sourceStoredFileId
+			});
+		},
+		onSuccess: (response) => {
+			correctionResult = linkedTenantPaymentRefund(response);
+			correctionError = correctionResult ? '' : 'The correction was not written.';
+			queryClient.invalidateQueries({ queryKey: ['tenant-account-entries', tenantAccountId] });
+			queryClient.invalidateQueries({ queryKey: ['tenant-ledger-entry', tenantAccountId, tenantLedgerEntryId] });
+		},
+		onError: (error) => {
+			correctionResult = null;
+			const conflict = error instanceof ApiError ? error.extensions : error;
+			correctionError = isTenantPaymentRefundConflict(conflict)
+				? conflict.error?.trim() || 'This payment cannot be corrected again.'
+				: apiErrorMessage(error, 'The correction was not written.');
+		}
+	}));
 </script>
 
 <svelte:head>
@@ -52,9 +122,15 @@
 	</div>
 
 	{#if paymentQuery.isLoading}
-		<div class="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">Loading receipt...</div>
+		<LoadingState label="Loading payment receipt" testid="payment-detail-loading" />
+	{:else if paymentQuery.isError}
+		<div class="rounded-lg border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="payment-detail-error">
+			<p class="font-medium text-destructive">Could not load this receipt.</p>
+			<p class="mt-1 text-sm text-muted-foreground">Try again. The receipt has not been reported as missing.</p>
+			<Button class="mt-4" variant="outline" onclick={() => paymentQuery.refetch()}>Try again</Button>
+		</div>
 	{:else if !receipt}
-		<div class="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">Receipt not found.</div>
+		<div class="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground" data-testid="payment-detail-not-found">Receipt not found.</div>
 	{:else}
 		<HeroCard tone="success" testid="payment-hero" contentClass="flex flex-wrap items-end justify-between gap-6" class="mb-6">
 			<div>
@@ -62,8 +138,54 @@
 				<p class="mt-1 font-mono text-4xl font-bold tabular-nums tracking-tight" data-testid="payment-hero-amount">{money(receipt.amount, receipt.currency)}</p>
 				<p class="mt-2 text-sm text-muted-foreground">{formatDateOnly(receipt.effectiveOn)} · {receipt.tenantName || receipt.relationshipNumber}</p>
 			</div>
-			<p class="text-sm text-muted-foreground">Ledger entry #{receipt.tenantLedgerEntryId}</p>
+			<div class="flex flex-col items-end gap-3">
+				<p class="text-sm text-muted-foreground">Ledger entry #{receipt.tenantLedgerEntryId}</p>
+				{#if correctionAllowed}
+					<Button variant="outline" onclick={openCorrection} data-testid="correct-payment-action">Correct payment</Button>
+				{/if}
+			</div>
 		</HeroCard>
+
+		{#if showCorrection && correction}
+			<div class="mb-6 rounded-lg border border-border bg-card p-4" data-testid="payment-correction-form">
+				<div class="flex items-start justify-between gap-4">
+					<div>
+						<h2 class="font-semibold">Correct payment</h2>
+						<p class="text-sm text-muted-foreground">The original posting stays permanent. This appends a linked refund and compensating allocations.</p>
+					</div>
+					<Button variant="ghost" size="sm" onclick={closeCorrection}>Cancel</Button>
+				</div>
+				<dl class="mt-4 grid gap-3 rounded-md bg-muted/30 p-3 text-sm sm:grid-cols-2">
+					<div><dt class="text-xs text-muted-foreground">Account</dt><dd class="font-medium">{correction.accountNumber}</dd></div>
+					<div><dt class="text-xs text-muted-foreground">Unit</dt><dd class="font-medium">{correction.propertyName} · {correction.unitNumber}</dd></div>
+					<div><dt class="text-xs text-muted-foreground">Tenant</dt><dd class="font-medium">{correction.tenantName}</dd></div>
+					<div><dt class="text-xs text-muted-foreground">Original payment</dt><dd class="font-medium">{money(correction.amount, receipt.currency)} · entry #{correction.tenantLedgerEntryId}</dd></div>
+				</dl>
+				<div class="mt-4 grid gap-3 sm:grid-cols-2">
+					<label class="text-xs font-medium text-muted-foreground">Correction date<DatePicker bind:value={correction.effectiveOn} /></label>
+					<label class="text-xs font-medium text-muted-foreground">Payment method<Input bind:value={correction.paymentMethodSummary} /></label>
+					<label class="text-xs font-medium text-muted-foreground sm:col-span-2">Reason<Input bind:value={correction.reason} /></label>
+					<label class="text-xs font-medium text-muted-foreground sm:col-span-2">Payout provenance<Input bind:value={correction.externalReference} placeholder="Check or external payout reference" /></label>
+				</div>
+				{#if correctionError}
+					<p class="mt-3 text-sm text-destructive" data-testid="payment-correction-conflict">{correctionError} No financial write was made.</p>
+				{/if}
+				{#if correctionResult}
+					<p class="mt-3 text-sm text-success" data-testid="payment-correction-result">
+						Linked refund entry #{correctionResult.refundEntryId}; {correctionResult.compensatedAllocationCount} allocation(s) compensated.
+					</p>
+				{/if}
+				<div class="mt-4 flex justify-end">
+					<Button
+						onclick={() => correctionMutation.mutate()}
+						disabled={correctionMutation.isPending || !correction.reason.trim() || !correction.paymentMethodSummary.trim() || !correction.externalReference.trim()}
+						data-testid="payment-correction-submit"
+					>
+						{correctionMutation.isPending ? 'Correcting…' : 'Append correction'}
+					</Button>
+				</div>
+			</div>
+		{/if}
 
 		<div class="grid gap-6 lg:grid-cols-2">
 			<DetailCard title="Receipt" icon={Receipt} accent="success" testid="payment-card-receipt">

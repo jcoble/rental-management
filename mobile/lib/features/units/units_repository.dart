@@ -87,6 +87,13 @@ class UnitDashboard {
     required this.nextBestAction,
     required this.header,
     required this.overview,
+    this.occupancyPossession = const UnitOccupancyPossessionCondition(),
+    this.marketingAvailability = const UnitMarketingAvailabilityCondition(),
+    this.tenantAccountCondition = const UnitTenantAccountCondition(),
+    this.legalNoticeCondition = const UnitLegalNoticeCondition(),
+    this.maintenanceTurnover = const UnitMaintenanceTurnoverCondition(),
+    this.leaseManagementId,
+    this.tenantAccountId,
     this.currentLease,
     this.currentTenant,
     this.currentTenants = const [],
@@ -98,10 +105,17 @@ class UnitDashboard {
   final String lifecycleStage;
   final UnitNextBestAction nextBestAction;
   final UnitDashboardHeader header;
+  final int? leaseManagementId;
+  final int? tenantAccountId;
   final UnitLeaseSummary? currentLease;
   final UnitTenantSummary? currentTenant;
   final List<UnitTenantSummary> currentTenants;
   final UnitDashboardOverview overview;
+  final UnitOccupancyPossessionCondition occupancyPossession;
+  final UnitMarketingAvailabilityCondition marketingAvailability;
+  final UnitTenantAccountCondition tenantAccountCondition;
+  final UnitLegalNoticeCondition legalNoticeCondition;
+  final UnitMaintenanceTurnoverCondition maintenanceTurnover;
   final UnitTurnoverSummary turnover;
 
   factory UnitDashboard.fromJson(Map<String, dynamic> json) {
@@ -119,6 +133,8 @@ class UnitDashboard {
         _jsonObject(json['nextBestAction']),
       ),
       header: UnitDashboardHeader.fromJson(_jsonObject(json['header'])),
+      leaseManagementId: (json['leaseManagementId'] as num?)?.toInt(),
+      tenantAccountId: (json['tenantAccountId'] as num?)?.toInt(),
       currentLease: leaseJson == null
           ? null
           : UnitLeaseSummary.fromJson(leaseJson),
@@ -127,9 +143,123 @@ class UnitDashboard {
           : UnitTenantSummary.fromJson(tenantJson),
       currentTenants: tenants,
       overview: UnitDashboardOverview.fromJson(_jsonObject(json['overview'])),
+      occupancyPossession: UnitOccupancyPossessionCondition.fromJson(
+        _jsonObject(json['occupancyPossession']),
+      ),
+      marketingAvailability: UnitMarketingAvailabilityCondition.fromJson(
+        _jsonObject(json['marketingAvailability']),
+      ),
+      tenantAccountCondition: UnitTenantAccountCondition.fromJson(
+        _jsonObject(json['tenantAccountCondition']),
+      ),
+      legalNoticeCondition: UnitLegalNoticeCondition.fromJson(
+        _jsonObject(json['legalNoticeCondition']),
+      ),
+      maintenanceTurnover: UnitMaintenanceTurnoverCondition.fromJson(
+        _jsonObject(json['maintenanceTurnover']),
+      ),
       turnover: UnitTurnoverSummary.fromJson(_jsonObject(json['turnover'])),
     );
   }
+}
+
+class UnitOccupancyPossessionCondition {
+  const UnitOccupancyPossessionCondition({
+    this.status = 'Vacant',
+    this.isOccupied = false,
+    this.hasScheduledMoveIn = false,
+    this.leaseManagementId,
+  });
+  final String status;
+  final bool isOccupied;
+  final bool hasScheduledMoveIn;
+  final int? leaseManagementId;
+  factory UnitOccupancyPossessionCondition.fromJson(Map<String, dynamic> json) =>
+      UnitOccupancyPossessionCondition(
+        status: json['status'] as String? ?? 'Vacant',
+        isOccupied: json['isOccupied'] as bool? ?? false,
+        hasScheduledMoveIn: json['hasScheduledMoveIn'] as bool? ?? false,
+        leaseManagementId: (json['leaseManagementId'] as num?)?.toInt(),
+      );
+}
+
+class UnitMarketingAvailabilityCondition {
+  const UnitMarketingAvailabilityCondition({
+    this.status = 'Available',
+    this.isAvailable = true,
+  });
+  final String status;
+  final bool isAvailable;
+  factory UnitMarketingAvailabilityCondition.fromJson(Map<String, dynamic> json) =>
+      UnitMarketingAvailabilityCondition(
+        status: json['status'] as String? ?? 'Available',
+        isAvailable: json['isAvailable'] as bool? ?? false,
+      );
+}
+
+class UnitTenantAccountCondition {
+  const UnitTenantAccountCondition({
+    this.status = 'NoAccount',
+    this.tenantAccountId,
+    this.receivableBalance = 0,
+    this.pastDueAmount = 0,
+  });
+  final String status;
+  final int? tenantAccountId;
+  final double receivableBalance;
+  final double pastDueAmount;
+  factory UnitTenantAccountCondition.fromJson(Map<String, dynamic> json) =>
+      UnitTenantAccountCondition(
+        status: json['status'] as String? ?? 'NoAccount',
+        tenantAccountId: (json['tenantAccountId'] as num?)?.toInt(),
+        receivableBalance:
+            (json['receivableBalance'] as num?)?.toDouble() ?? 0,
+        pastDueAmount: (json['pastDueAmount'] as num?)?.toDouble() ?? 0,
+      );
+}
+
+class UnitLegalNoticeCondition {
+  const UnitLegalNoticeCondition({
+    this.status = 'NoGoverningAgreement',
+    this.agreementId,
+    this.agreementStatus,
+    this.openNoticeCount = 0,
+  });
+  final String status;
+  final int? agreementId;
+  final String? agreementStatus;
+  final int openNoticeCount;
+  factory UnitLegalNoticeCondition.fromJson(Map<String, dynamic> json) =>
+      UnitLegalNoticeCondition(
+        status: json['status'] as String? ?? 'NoGoverningAgreement',
+        agreementId: (json['agreementId'] as num?)?.toInt(),
+        agreementStatus: json['agreementStatus'] as String?,
+        openNoticeCount: (json['openNoticeCount'] as num?)?.toInt() ?? 0,
+      );
+}
+
+class UnitMaintenanceTurnoverCondition {
+  const UnitMaintenanceTurnoverCondition({
+    this.status = 'Clear',
+    this.openWorkOrderCount = 0,
+    this.isInTurnover = false,
+    this.isOutOfService = false,
+    this.isOnManagementHold = false,
+  });
+  final String status;
+  final int openWorkOrderCount;
+  final bool isInTurnover;
+  final bool isOutOfService;
+  final bool isOnManagementHold;
+  factory UnitMaintenanceTurnoverCondition.fromJson(
+    Map<String, dynamic> json,
+  ) => UnitMaintenanceTurnoverCondition(
+    status: json['status'] as String? ?? 'Clear',
+    openWorkOrderCount: (json['openWorkOrderCount'] as num?)?.toInt() ?? 0,
+    isInTurnover: json['isInTurnover'] as bool? ?? false,
+    isOutOfService: json['isOutOfService'] as bool? ?? false,
+    isOnManagementHold: json['isOnManagementHold'] as bool? ?? false,
+  );
 }
 
 class UnitTurnoverSummary {

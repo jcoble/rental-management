@@ -7,6 +7,7 @@ public class Expense : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
+    public ExpenseOperationalScope OperationalScope { get; set; } = ExpenseOperationalScope.Portfolio;
     public int? PropertyId { get; set; }
     public int? UnitId { get; set; }
     public int? VendorId { get; set; }
@@ -61,4 +62,7 @@ public class Expense : IAuditable, IPortfolioScoped
 
     /// <summary>Itemized lines from the scanned receipt, promoted to a queryable child table.</summary>
     public ICollection<ExpenseLineItem> LineItems { get; set; } = new List<ExpenseLineItem>();
+
+    /// <summary>Optional positive typed shares whose nonempty total equals <see cref="Amount"/>.</summary>
+    public ICollection<ExpenseAllocation> Allocations { get; set; } = new List<ExpenseAllocation>();
 }

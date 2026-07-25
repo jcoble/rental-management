@@ -15,15 +15,19 @@ import '../scan/scan_review_screen.dart';
 import '../units/unit_command_center_screen.dart';
 import '../units/unit_form_sheet.dart';
 import '../units/unit_navigation.dart';
+import '../maintenance/work_order_detail_screen.dart';
+import '../maintenance/work_orders_repository.dart';
 import 'capital_assets_repository.dart';
 import 'properties_repository.dart';
 import 'property_capital_asset_form_sheet.dart';
 import 'property_disposition_form_sheet.dart';
 import 'property_dispositions_repository.dart';
+import 'property_documents_section.dart';
 import 'property_form_sheet.dart';
 import 'property_labels.dart';
 import 'property_loan_form_sheet.dart';
 import 'property_loans_repository.dart';
+import 'property_workspace_sections.dart';
 
 String _formatCurrency(double amount) {
   final rounded = amount.round();
@@ -57,10 +61,17 @@ const _monthNames = [
 
 String _formatDate(DateTime d) => '${_monthNames[d.month]} ${d.day}, ${d.year}';
 
-String _unitTitle(Unit unit, {required bool singleRental}) {
-  final number = unit.unitNumber.trim();
-  if (singleRental) return 'Rental overview';
-  return number.isEmpty ? 'Unit' : 'Unit $number';
+String _formatOwnerships(Property property) {
+  if (property.ownerships.isEmpty) return 'No owner assigned';
+  return property.ownerships
+      .map(
+        (ownership) =>
+            property.ownerships.length == 1 &&
+                ownership.ownershipSharePercent == 100
+            ? ownership.ownerName
+            : '${ownership.ownerName} (${ownership.ownershipSharePercent.toStringAsFixed(ownership.ownershipSharePercent.truncateToDouble() == ownership.ownershipSharePercent ? 0 : 2)}%)',
+      )
+      .join(', ');
 }
 
 void _openLeaseDetail(BuildContext context, LeaseManagementSummary management) {
@@ -70,14 +81,6 @@ void _openLeaseDetail(BuildContext context, LeaseManagementSummary management) {
     initialTab: UnitCommandCenterTab.tenantLease,
     initialView: UnitCommandCenterView.agreements,
     leaseManagementId: management.id,
-  );
-}
-
-void _openUnitOverview(BuildContext context, Unit unit) {
-  openUnitCommandCenter(
-    context,
-    unitId: unit.id,
-    initialTab: UnitCommandCenterTab.summary,
   );
 }
 
@@ -91,7 +94,7 @@ class PropertyDetailLoaderScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final async = ref.watch(propertyDetailProvider(propertyId));
+    final async = ref.watch(propertyWorkspaceDetailProvider(propertyId));
     return async.when(
       loading: () =>
           const Scaffold(body: Center(child: CircularProgressIndicator())),
@@ -108,7 +111,33 @@ class PropertyDetailLoaderScreen extends ConsumerWidget {
           ),
         ),
       ),
-      data: (property) => PropertyDetailScreen(property: property),
+      data: (detail) {
+        final property = detail.property;
+        final entry = resolvePropertyWorkspaceEntry(
+          propertyId: property.id,
+          rentalStructure: property.rentalStructure.wireValue,
+          serverEntry: detail.workspaceEntry,
+        );
+        if (entry.destination == PropertyWorkspaceDestination.unit) {
+          final unitId = entry.unitId;
+          if (unitId == null || unitId <= 0) {
+            return Scaffold(
+              appBar: AppBar(title: const Text('Rental')),
+              body: const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text(
+                    'This one-rental property is missing its canonical rental. Finish Guided Setup before opening it.',
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+            );
+          }
+          return UnitCommandCenterLoaderScreen(unitId: unitId);
+        }
+        return PropertyDetailScreen(property: property);
+      },
     );
   }
 }
@@ -128,7 +157,13 @@ class PropertyDetailScreen extends ConsumerStatefulWidget {
 }
 
 class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
+  static const _pageSize = 20;
+
   late Property _property;
+  PropertyWorkspaceSection _section = PropertyWorkspaceSection.summary;
+  int _rentalsSkip = 0;
+  int _leaseSkip = 0;
+  int _workSkip = 0;
 
   @override
   void initState() {
@@ -151,47 +186,44 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
 
   Future<void> _refresh() async {
     final propertyId = _property.id;
-    await Future.wait<void>([
-      ref.read(unitsProvider(propertyId).notifier).refresh(),
-      ref.read(propertyLeaseManagementsProvider(propertyId).notifier).refresh(),
+    final refreshes = <Future<void>>[
       ref.read(propertiesRepositoryProvider).getProperty(propertyId).then((
         property,
       ) {
         if (mounted) setState(() => _property = property);
       }),
-      ref.read(propertyLoansProvider(propertyId).notifier).refresh(),
-      ref.read(propertyCapitalAssetsProvider(propertyId).notifier).refresh(),
-      ref.read(propertyDispositionsProvider(propertyId).notifier).refresh(),
-    ]);
-  }
-
-  /// The active lease for [unitId] from the property's leases, or null. Used to
-  /// drill from an occupied unit to its current lease.
-  LeaseManagementSummary? _activeLeaseForUnit(
-    List<LeaseManagementSummary> relationships,
-    int unitId,
-  ) {
-    for (final relationship in relationships) {
-      if (relationship.unitId == unitId && relationship.isOpen) {
-        return relationship;
-      }
+    ];
+    switch (_section) {
+      case PropertyWorkspaceSection.rentals:
+        ref.invalidate(propertyWorkspaceUnitsPageProvider);
+        ref.invalidate(propertyWorkspaceLeasesPageProvider);
+        break;
+      case PropertyWorkspaceSection.propertyWork:
+        ref.invalidate(workOrdersPageProvider);
+        break;
+      case PropertyWorkspaceSection.propertyFinances:
+        refreshes.addAll([
+          ref.read(propertyLoansProvider(propertyId).notifier).refresh(),
+          ref
+              .read(propertyCapitalAssetsProvider(propertyId).notifier)
+              .refresh(),
+          ref.read(propertyDispositionsProvider(propertyId).notifier).refresh(),
+        ]);
+        break;
+      case PropertyWorkspaceSection.summary:
+      case PropertyWorkspaceSection.ownershipManagement:
+        break;
+      case PropertyWorkspaceSection.documentsHistory:
+        ref.invalidate(propertyDocumentsProvider(propertyId));
+        break;
     }
-    return null;
+    await Future.wait(refreshes);
   }
 
   void _showAddUnitSheet(BuildContext context) {
     showUnitFormSheet(
       context,
       propertyId: _property.id,
-      onSaved: (_) => ref.read(unitsProvider(_property.id).notifier).refresh(),
-    );
-  }
-
-  void _showEditUnitSheet(BuildContext context, Unit unit) {
-    showUnitFormSheet(
-      context,
-      propertyId: _property.id,
-      unit: unit,
       onSaved: (_) => ref.read(unitsProvider(_property.id).notifier).refresh(),
     );
   }
@@ -542,24 +574,129 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
     );
   }
 
+  List<Widget> _propertyWorkWidgets(
+    BuildContext context,
+    AsyncValue<WorkOrderListPage> workOrdersAsync,
+    ColorScheme colorScheme,
+  ) {
+    return [
+      Text(
+        'Property work',
+        style: Theme.of(
+          context,
+        ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+      ),
+      const SizedBox(height: 8),
+      workOrdersAsync.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (error, _) => _InlineError(
+          message: error is ApiException ? error.message : error.toString(),
+        ),
+        data: (page) {
+          if (page.items.isEmpty) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              child: Text(
+                'No property-wide or Unit work orders.',
+                style: TextStyle(color: colorScheme.onSurfaceVariant),
+              ),
+            );
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ...page.items.map(
+                (workOrder) => Card(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  child: ListTile(
+                    title: Text(workOrder.title),
+                    subtitle: Text(
+                      '${workOrder.unitNumber ?? 'Property-wide'} · ${workOrder.priority}',
+                    ),
+                    trailing: Text(workOrder.status),
+                    onTap: () => Navigator.of(context).push<void>(
+                      MaterialPageRoute<void>(
+                        builder: (_) =>
+                            WorkOrderDetailScreen(workOrderId: workOrder.id),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              _PropertyPagingBar(
+                label: 'work orders',
+                pageStart: page.skip,
+                itemCount: page.items.length,
+                totalCount: page.totalCount,
+                onPrevious: page.hasPrevious
+                    ? () => setState(
+                        () => _workSkip = (_workSkip - _pageSize).clamp(
+                          0,
+                          _workSkip,
+                        ),
+                      )
+                    : null,
+                onNext: page.hasNext
+                    ? () => setState(() => _workSkip += _pageSize)
+                    : null,
+              ),
+            ],
+          );
+        },
+      ),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final property = _property;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final unitsAsync = ref.watch(unitsProvider(property.id));
-    final leasesAsync = ref.watch(
-      propertyLeaseManagementsProvider(property.id),
-    );
-    final loansAsync = ref.watch(propertyLoansProvider(property.id));
-    final capitalAssetsAsync = ref.watch(
-      propertyCapitalAssetsProvider(property.id),
-    );
-    final dispositionsAsync = ref.watch(
-      propertyDispositionsProvider(property.id),
-    );
-    final isSingleRental =
-        property.rentalStructure == RentalStructure.singleRental;
+    final unitsAsync = _section == PropertyWorkspaceSection.rentals
+        ? ref.watch(
+            propertyWorkspaceUnitsPageProvider(
+              PropertyWorkspacePageQuery(
+                propertyId: property.id,
+                skip: _rentalsSkip,
+                take: _pageSize,
+              ),
+            ),
+          )
+        : null;
+    final leasesAsync = _section == PropertyWorkspaceSection.rentals
+        ? ref.watch(
+            propertyWorkspaceLeasesPageProvider(
+              PropertyWorkspacePageQuery(
+                propertyId: property.id,
+                skip: _leaseSkip,
+                take: _pageSize,
+              ),
+            ),
+          )
+        : null;
+    final workOrdersAsync = _section == PropertyWorkspaceSection.propertyWork
+        ? ref.watch(
+            workOrdersPageProvider(
+              WorkOrderListQuery(
+                propertyId: property.id,
+                skip: _workSkip,
+                take: _pageSize,
+                sort: '-updatedAt',
+              ),
+            ),
+          )
+        : null;
+    final loansAsync = _section == PropertyWorkspaceSection.propertyFinances
+        ? ref.watch(propertyLoansProvider(property.id))
+        : null;
+    final capitalAssetsAsync =
+        _section == PropertyWorkspaceSection.propertyFinances
+        ? ref.watch(propertyCapitalAssetsProvider(property.id))
+        : null;
+    final dispositionsAsync =
+        _section == PropertyWorkspaceSection.propertyFinances
+        ? ref.watch(propertyDispositionsProvider(property.id))
+        : null;
     final auth = ref.watch(authControllerProvider);
     final canManageRentals =
         auth is AuthStateAuthenticated &&
@@ -612,420 +749,677 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
               theme: theme,
               colorScheme: colorScheme,
             ),
-            const SizedBox(height: 24),
-
-            // ── Units section ──────────────────────────────────────────────
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    isSingleRental ? 'Rental' : 'Units',
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-                if (canManageRentals && !isSingleRental)
-                  TextButton.icon(
-                    onPressed: () => _showAddUnitSheet(context),
-                    icon: const Icon(Icons.add, size: 18),
-                    label: const Text('Add unit'),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 8),
-
-            unitsAsync.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, _) => _InlineError(
-                message: e is ApiException ? e.message : e.toString(),
-              ),
-              data: (units) {
-                if (units.isEmpty) {
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    child: Text(
-                      isSingleRental
-                          ? 'This rental is missing its underlying Unit. Return to Guided Setup to finish creating it.'
-                          : 'No units yet. Tap "Add unit" to create one.',
-                      style: TextStyle(color: colorScheme.onSurfaceVariant),
-                    ),
-                  );
-                }
-                // The property's leases (when loaded) let an occupied unit drill
-                // through to its active lease.
-                final leases =
-                    leasesAsync.asData?.value ??
-                    const <LeaseManagementSummary>[];
-                return Column(
-                  children: units
-                      .map(
-                        (u) => _UnitTile(
-                          unit: u,
-                          activeLease: _activeLeaseForUnit(leases, u.id),
-                          singleRental: isSingleRental,
-                          onEdit: canManageRentals
-                              ? () => _showEditUnitSheet(context, u)
-                              : null,
-                        ),
-                      )
-                      .toList(),
-                );
+            const SizedBox(height: 12),
+            _PropertyWorkspaceSectionBar(
+              selected: _section,
+              onSelected: (section) {
+                setState(() {
+                  _section = section;
+                  if (section == PropertyWorkspaceSection.rentals) {
+                    _rentalsSkip = 0;
+                    _leaseSkip = 0;
+                  }
+                  if (section == PropertyWorkspaceSection.propertyWork) {
+                    _workSkip = 0;
+                  }
+                });
               },
             ),
-
             const SizedBox(height: 24),
 
-            // ── Mortgage / Loans section ──────────────────────────────────
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Mortgage / Loans',
+            if (_section == PropertyWorkspaceSection.summary)
+              _PropertySummaryCard(property: property),
+            if (_section == PropertyWorkspaceSection.ownershipManagement)
+              _PropertyOwnershipCard(property: property),
+            if (_section == PropertyWorkspaceSection.propertyWork)
+              ..._propertyWorkWidgets(context, workOrdersAsync!, colorScheme),
+            if (_section == PropertyWorkspaceSection.documentsHistory)
+              Column(
+                key: const ValueKey('property-documents-history-surface'),
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  PropertyDocumentsSection(
+                    propertyId: property.id,
+                    canUpload: canManageRentals,
+                  ),
+                  const SizedBox(height: 24),
+                  Text(
+                    'History',
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w700,
                     ),
                   ),
-                ),
-                if (canManageMoneyExpenses) ...[
-                  IconButton(
-                    tooltip: 'Scan mortgage statement',
-                    icon: const Icon(Icons.document_scanner_outlined),
-                    onPressed: () => _startLoanScan(context),
-                  ),
-                  IconButton(
-                    tooltip: 'Add loan',
-                    icon: const Icon(Icons.add),
-                    onPressed: () => _showAddLoanSheet(context),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    height: MediaQuery.sizeOf(context).height * 0.55,
+                    child: ActivityHistoryScreen(
+                      entityType: 'Property',
+                      entityId: property.id,
+                      title: 'History',
+                      subtitle: property.name,
+                      embedded: true,
+                    ),
                   ),
                 ],
-              ],
-            ),
-            const SizedBox(height: 8),
-
-            loansAsync.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, _) => _InlineError(
-                message: e is ApiException ? e.message : e.toString(),
               ),
-              data: (page) {
-                final loans = page.loans;
-                if (loans.isEmpty) {
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
+
+            // ── Units section ──────────────────────────────────────────────
+            if (_section == PropertyWorkspaceSection.rentals) ...[
+              Row(
+                children: [
+                  Expanded(
                     child: Text(
-                      'No mortgage or loan records on this property yet.',
-                      style: TextStyle(color: colorScheme.onSurfaceVariant),
-                    ),
-                  );
-                }
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    ...loans.map(
-                      (loan) => _LoanTile(
-                        loan: loan,
-                        onEdit: canManageMoneyExpenses
-                            ? () => _showEditLoanSheet(context, loan)
-                            : null,
-                        onDelete: canManageMoneyExpenses
-                            ? () => _confirmDeleteLoan(context, loan)
-                            : null,
+                      'Units',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
                       ),
-                    ),
-                    if (page.loadMoreError != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4, bottom: 8),
-                        child: Text(
-                          page.loadMoreError is ApiException
-                              ? (page.loadMoreError! as ApiException).message
-                              : 'Could not load more loans.',
-                          style: TextStyle(
-                            color: colorScheme.error,
-                            fontSize: 12,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    if (page.hasMore || page.isLoadingMore)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: OutlinedButton.icon(
-                          icon: page.isLoadingMore
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Icon(Icons.expand_more),
-                          label: Text(
-                            page.isLoadingMore
-                                ? 'Loading loans...'
-                                : 'Load more loans',
-                          ),
-                          onPressed: page.isLoadingMore
-                              ? null
-                              : () => ref
-                                    .read(
-                                      propertyLoansProvider(
-                                        property.id,
-                                      ).notifier,
-                                    )
-                                    .loadMore(),
-                        ),
-                      ),
-                  ],
-                );
-              },
-            ),
-
-            const SizedBox(height: 24),
-
-            // ── Capital assets section ───────────────────────────────────
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Capital Assets',
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
                     ),
                   ),
+                  if (canManageRentals)
+                    TextButton.icon(
+                      onPressed: () => _showAddUnitSheet(context),
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('Add unit'),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+
+              unitsAsync!.when(
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (e, _) => _InlineError(
+                  message: e is ApiException ? e.message : e.toString(),
                 ),
-                if (canManageMoneyExpenses)
-                  IconButton(
-                    tooltip: 'Add capital asset',
-                    icon: const Icon(Icons.add),
-                    onPressed: () => _showAddCapitalAssetSheet(context),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 8),
-
-            capitalAssetsAsync.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, _) => _InlineError(
-                message: e is ApiException ? e.message : e.toString(),
-              ),
-              data: (page) {
-                final assets = page.assets;
-                if (assets.isEmpty) {
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    child: Text(
-                      'No capital assets recorded for this property yet.',
-                      style: TextStyle(color: colorScheme.onSurfaceVariant),
-                    ),
-                  );
-                }
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    ...assets.map(
-                      (asset) => _CapitalAssetTile(
-                        asset: asset,
-                        onEdit: canManageMoneyExpenses
-                            ? () => _showEditCapitalAssetSheet(context, asset)
-                            : null,
-                        onDelete: canManageMoneyExpenses
-                            ? () => _confirmDeleteCapitalAsset(context, asset)
-                            : null,
+                data: (page) {
+                  if (page.items.isEmpty) {
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Text(
+                        'No units yet. Tap "Add unit" to create one.',
+                        style: TextStyle(color: colorScheme.onSurfaceVariant),
                       ),
-                    ),
-                    if (page.loadMoreError != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4, bottom: 8),
-                        child: Text(
-                          page.loadMoreError is ApiException
-                              ? (page.loadMoreError! as ApiException).message
-                              : 'Could not load more capital assets.',
-                          style: TextStyle(
-                            color: colorScheme.error,
-                            fontSize: 12,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    if (page.hasMore || page.isLoadingMore)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: OutlinedButton.icon(
-                          icon: page.isLoadingMore
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Icon(Icons.expand_more),
-                          label: Text(
-                            page.isLoadingMore
-                                ? 'Loading assets...'
-                                : 'Load more assets',
-                          ),
-                          onPressed: page.isLoadingMore
-                              ? null
-                              : () => ref
-                                    .read(
-                                      propertyCapitalAssetsProvider(
-                                        property.id,
-                                      ).notifier,
-                                    )
-                                    .loadMore(),
-                        ),
-                      ),
-                  ],
-                );
-              },
-            ),
-
-            const SizedBox(height: 24),
-
-            // ── Property disposition section ─────────────────────────────
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Property Sale / Disposition',
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-                if (canManageRentals)
-                  IconButton(
-                    tooltip: 'Record property sale',
-                    icon: const Icon(Icons.add),
-                    onPressed: () => _showAddDispositionSheet(context),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 8),
-
-            dispositionsAsync.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, _) => _InlineError(
-                message: e is ApiException ? e.message : e.toString(),
-              ),
-              data: (page) {
-                final dispositions = page.dispositions;
-                if (dispositions.isEmpty) {
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    child: Text(
-                      'No sale or disposition recorded for this property.',
-                      style: TextStyle(color: colorScheme.onSurfaceVariant),
-                    ),
-                  );
-                }
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    ...dispositions.map(
-                      (disposition) => _DispositionTile(
-                        disposition: disposition,
-                        onEdit: canManageRentals
-                            ? () => _showEditDispositionSheet(
-                                context,
-                                disposition,
+                    );
+                  }
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      ...page.items.map((u) => _WorkspaceUnitTile(unit: u)),
+                      _PropertyPagingBar(
+                        label: 'units',
+                        pageStart: page.skip,
+                        itemCount: page.items.length,
+                        totalCount: page.totalCount,
+                        onPrevious: page.hasPrevious
+                            ? () => setState(
+                                () => _rentalsSkip = (_rentalsSkip - _pageSize)
+                                    .clamp(0, _rentalsSkip),
                               )
                             : null,
-                        onDelete: canManageRentals
-                            ? () => _confirmDeleteDisposition(
-                                context,
-                                disposition,
-                              )
+                        onNext: page.hasNext
+                            ? () => setState(() => _rentalsSkip += _pageSize)
                             : null,
                       ),
-                    ),
-                    if (page.loadMoreError != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4, bottom: 8),
-                        child: Text(
-                          page.loadMoreError is ApiException
-                              ? (page.loadMoreError! as ApiException).message
-                              : 'Could not load more property sales.',
-                          style: TextStyle(
-                            color: colorScheme.error,
-                            fontSize: 12,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      ),
-                    if (page.hasMore || page.isLoadingMore)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: OutlinedButton.icon(
-                          icon: page.isLoadingMore
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Icon(Icons.expand_more),
-                          label: Text(
-                            page.isLoadingMore
-                                ? 'Loading property sales...'
-                                : 'Load more property sales',
-                          ),
-                          onPressed: page.isLoadingMore
-                              ? null
-                              : () => ref
-                                    .read(
-                                      propertyDispositionsProvider(
-                                        property.id,
-                                      ).notifier,
-                                    )
-                                    .loadMore(),
-                        ),
-                      ),
-                  ],
-                );
-              },
-            ),
+                    ],
+                  );
+                },
+              ),
 
-            const SizedBox(height: 24),
+              const SizedBox(height: 24),
+            ],
+
+            // ── Mortgage / Loans section ──────────────────────────────────
+            if (_section == PropertyWorkspaceSection.propertyFinances) ...[
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Mortgage / Loans',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  if (canManageMoneyExpenses) ...[
+                    IconButton(
+                      tooltip: 'Scan mortgage statement',
+                      icon: const Icon(Icons.document_scanner_outlined),
+                      onPressed: () => _startLoanScan(context),
+                    ),
+                    IconButton(
+                      tooltip: 'Add loan',
+                      icon: const Icon(Icons.add),
+                      onPressed: () => _showAddLoanSheet(context),
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 8),
+
+              loansAsync!.when(
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (e, _) => _InlineError(
+                  message: e is ApiException ? e.message : e.toString(),
+                ),
+                data: (page) {
+                  final loans = page.loans;
+                  if (loans.isEmpty) {
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Text(
+                        'No mortgage or loan records on this property yet.',
+                        style: TextStyle(color: colorScheme.onSurfaceVariant),
+                      ),
+                    );
+                  }
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      ...loans.map(
+                        (loan) => _LoanTile(
+                          loan: loan,
+                          onEdit: canManageMoneyExpenses
+                              ? () => _showEditLoanSheet(context, loan)
+                              : null,
+                          onDelete: canManageMoneyExpenses
+                              ? () => _confirmDeleteLoan(context, loan)
+                              : null,
+                        ),
+                      ),
+                      if (page.loadMoreError != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4, bottom: 8),
+                          child: Text(
+                            page.loadMoreError is ApiException
+                                ? (page.loadMoreError! as ApiException).message
+                                : 'Could not load more loans.',
+                            style: TextStyle(
+                              color: colorScheme.error,
+                              fontSize: 12,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      if (page.hasMore || page.isLoadingMore)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: OutlinedButton.icon(
+                            icon: page.isLoadingMore
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.expand_more),
+                            label: Text(
+                              page.isLoadingMore
+                                  ? 'Loading loans...'
+                                  : 'Load more loans',
+                            ),
+                            onPressed: page.isLoadingMore
+                                ? null
+                                : () => ref
+                                      .read(
+                                        propertyLoansProvider(
+                                          property.id,
+                                        ).notifier,
+                                      )
+                                      .loadMore(),
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
+
+              const SizedBox(height: 24),
+
+              // ── Capital assets section ───────────────────────────────────
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Capital Assets',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  if (canManageMoneyExpenses)
+                    IconButton(
+                      tooltip: 'Add capital asset',
+                      icon: const Icon(Icons.add),
+                      onPressed: () => _showAddCapitalAssetSheet(context),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+
+              capitalAssetsAsync!.when(
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (e, _) => _InlineError(
+                  message: e is ApiException ? e.message : e.toString(),
+                ),
+                data: (page) {
+                  final assets = page.assets;
+                  if (assets.isEmpty) {
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Text(
+                        'No capital assets recorded for this property yet.',
+                        style: TextStyle(color: colorScheme.onSurfaceVariant),
+                      ),
+                    );
+                  }
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      ...assets.map(
+                        (asset) => _CapitalAssetTile(
+                          asset: asset,
+                          onEdit: canManageMoneyExpenses
+                              ? () => _showEditCapitalAssetSheet(context, asset)
+                              : null,
+                          onDelete: canManageMoneyExpenses
+                              ? () => _confirmDeleteCapitalAsset(context, asset)
+                              : null,
+                        ),
+                      ),
+                      if (page.loadMoreError != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4, bottom: 8),
+                          child: Text(
+                            page.loadMoreError is ApiException
+                                ? (page.loadMoreError! as ApiException).message
+                                : 'Could not load more capital assets.',
+                            style: TextStyle(
+                              color: colorScheme.error,
+                              fontSize: 12,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      if (page.hasMore || page.isLoadingMore)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: OutlinedButton.icon(
+                            icon: page.isLoadingMore
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.expand_more),
+                            label: Text(
+                              page.isLoadingMore
+                                  ? 'Loading assets...'
+                                  : 'Load more assets',
+                            ),
+                            onPressed: page.isLoadingMore
+                                ? null
+                                : () => ref
+                                      .read(
+                                        propertyCapitalAssetsProvider(
+                                          property.id,
+                                        ).notifier,
+                                      )
+                                      .loadMore(),
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
+
+              const SizedBox(height: 24),
+
+              // ── Property disposition section ─────────────────────────────
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Property Sale / Disposition',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  if (canManageRentals)
+                    IconButton(
+                      tooltip: 'Record property sale',
+                      icon: const Icon(Icons.add),
+                      onPressed: () => _showAddDispositionSheet(context),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+
+              dispositionsAsync!.when(
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (e, _) => _InlineError(
+                  message: e is ApiException ? e.message : e.toString(),
+                ),
+                data: (page) {
+                  final dispositions = page.dispositions;
+                  if (dispositions.isEmpty) {
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Text(
+                        'No sale or disposition recorded for this property.',
+                        style: TextStyle(color: colorScheme.onSurfaceVariant),
+                      ),
+                    );
+                  }
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      ...dispositions.map(
+                        (disposition) => _DispositionTile(
+                          disposition: disposition,
+                          onEdit: canManageRentals
+                              ? () => _showEditDispositionSheet(
+                                  context,
+                                  disposition,
+                                )
+                              : null,
+                          onDelete: canManageRentals
+                              ? () => _confirmDeleteDisposition(
+                                  context,
+                                  disposition,
+                                )
+                              : null,
+                        ),
+                      ),
+                      if (page.loadMoreError != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4, bottom: 8),
+                          child: Text(
+                            page.loadMoreError is ApiException
+                                ? (page.loadMoreError! as ApiException).message
+                                : 'Could not load more property sales.',
+                            style: TextStyle(
+                              color: colorScheme.error,
+                              fontSize: 12,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      if (page.hasMore || page.isLoadingMore)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: OutlinedButton.icon(
+                            icon: page.isLoadingMore
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.expand_more),
+                            label: Text(
+                              page.isLoadingMore
+                                  ? 'Loading property sales...'
+                                  : 'Load more property sales',
+                            ),
+                            onPressed: page.isLoadingMore
+                                ? null
+                                : () => ref
+                                      .read(
+                                        propertyDispositionsProvider(
+                                          property.id,
+                                        ).notifier,
+                                      )
+                                      .loadMore(),
+                          ),
+                        ),
+                    ],
+                  );
+                },
+              ),
+
+              const SizedBox(height: 24),
+            ],
 
             // ── Leases section ─────────────────────────────────────────────
-            Text(
-              'Active Leases',
-              style: theme.textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w700,
+            if (_section == PropertyWorkspaceSection.rentals) ...[
+              Text(
+                'Rental relationships',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
+              const SizedBox(height: 8),
 
-            leasesAsync.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, _) => _InlineError(
-                message: e is ApiException ? e.message : e.toString(),
-              ),
-              data: (leases) {
-                final active = leases.where((item) => item.isOpen).toList();
-                if (active.isEmpty) {
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    child: Text(
-                      'No active leases on this property.',
-                      style: TextStyle(color: colorScheme.onSurfaceVariant),
-                    ),
+              leasesAsync!.when(
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (e, _) => _InlineError(
+                  message: e is ApiException ? e.message : e.toString(),
+                ),
+                data: (page) {
+                  if (page.items.isEmpty) {
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: Text(
+                        'No rental relationships on this property.',
+                        style: TextStyle(color: colorScheme.onSurfaceVariant),
+                      ),
+                    );
+                  }
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      ...page.items.map((l) => _LeaseTile(lease: l)),
+                      _PropertyPagingBar(
+                        label: 'rental relationships',
+                        pageStart: page.skip,
+                        itemCount: page.items.length,
+                        totalCount: page.totalCount,
+                        onPrevious: page.hasPrevious
+                            ? () => setState(
+                                () => _leaseSkip = (_leaseSkip - _pageSize)
+                                    .clamp(0, _leaseSkip),
+                              )
+                            : null,
+                        onNext: page.hasNext
+                            ? () => setState(() => _leaseSkip += _pageSize)
+                            : null,
+                      ),
+                    ],
                   );
-                }
-                return Column(
-                  children: active.map((l) => _LeaseTile(lease: l)).toList(),
-                );
-              },
-            ),
+                },
+              ),
+            ],
 
             const SizedBox(height: 32),
           ],
         ),
       ),
+    );
+  }
+}
+
+class _PropertyWorkspaceSectionBar extends StatelessWidget {
+  const _PropertyWorkspaceSectionBar({
+    required this.selected,
+    required this.onSelected,
+  });
+
+  final PropertyWorkspaceSection selected;
+  final ValueChanged<PropertyWorkspaceSection> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          for (final section in propertyWorkspaceSections)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ChoiceChip(
+                key: Key('property-area-${section.name}'),
+                label: Text(section.label),
+                selected: selected == section,
+                onSelected: (_) => onSelected(section),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PropertySummaryCard extends StatelessWidget {
+  const _PropertySummaryCard({required this.property});
+
+  final Property property;
+
+  @override
+  Widget build(BuildContext context) {
+    final occupied = property.occupiedUnits ?? 0;
+    final total = property.unitCount ?? 0;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Summary',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 24,
+              runSpacing: 12,
+              children: [
+                _KeyValue(label: 'Units', value: '$total'),
+                _KeyValue(label: 'Occupied', value: '$occupied'),
+                _KeyValue(label: 'Owner', value: _formatOwnerships(property)),
+                _KeyValue(label: 'Status', value: property.status),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PropertyOwnershipCard extends StatelessWidget {
+  const _PropertyOwnershipCard({required this.property});
+
+  final Property property;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Ownership & management',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 24,
+              runSpacing: 12,
+              children: [
+                _KeyValue(label: 'Owner', value: _formatOwnerships(property)),
+                _KeyValue(
+                  label: 'Management fee',
+                  value: property.managementFeePercent == null
+                      ? 'Not set'
+                      : '${property.managementFeePercent}%',
+                ),
+                _KeyValue(
+                  label: 'Address',
+                  value:
+                      '${property.addressLine1}, ${property.city}, ${property.state} ${property.postalCode}',
+                ),
+                _KeyValue(
+                  label: 'Rental setup',
+                  value: property.rentalStructure.wireValue,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _WorkspaceUnitTile extends StatelessWidget {
+  const _WorkspaceUnitTile({required this.unit});
+
+  final PropertyWorkspaceUnit unit;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: ListTile(
+        title: Text(
+          unit.unitNumber.isEmpty ? 'Unit' : 'Unit ${unit.unitNumber}',
+        ),
+        subtitle: Text(
+          '${_formatCurrency(unit.marketRent)}/mo · ${unit.openWorkOrderCount} open ${unit.openWorkOrderCount == 1 ? 'work order' : 'work orders'}',
+        ),
+        trailing: Text(unit.status),
+        onTap: () => openUnitCommandCenter(context, unitId: unit.id),
+      ),
+    );
+  }
+}
+
+class _PropertyPagingBar extends StatelessWidget {
+  const _PropertyPagingBar({
+    required this.label,
+    required this.pageStart,
+    required this.itemCount,
+    required this.totalCount,
+    required this.onPrevious,
+    required this.onNext,
+  });
+
+  final String label;
+  final int pageStart;
+  final int itemCount;
+  final int totalCount;
+  final VoidCallback? onPrevious;
+  final VoidCallback? onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    final first = totalCount == 0 ? 0 : pageStart + 1;
+    final last = pageStart + itemCount;
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        IconButton(
+          tooltip: 'Previous $label page',
+          onPressed: onPrevious,
+          icon: const Icon(Icons.chevron_left),
+        ),
+        Text('$first–$last of $totalCount'),
+        IconButton(
+          tooltip: 'Next $label page',
+          onPressed: onNext,
+          icon: const Icon(Icons.chevron_right),
+        ),
+      ],
     );
   }
 }
@@ -1093,8 +1487,8 @@ class _PropertyHeader extends StatelessWidget {
                   label: 'Occupied',
                   value: '${property.occupiedUnits ?? 0}',
                 ),
-                if (property.ownerName != null)
-                  _KeyValue(label: 'Owner', value: property.ownerName!),
+                if (property.ownerships.isNotEmpty)
+                  _KeyValue(label: 'Owner', value: _formatOwnerships(property)),
               ],
             ),
           ],
@@ -1159,98 +1553,6 @@ class _KeyValue extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-// ── Unit tile ─────────────────────────────────────────────────────────────────
-
-class _UnitTile extends StatelessWidget {
-  const _UnitTile({
-    required this.unit,
-    required this.singleRental,
-    required this.onEdit,
-    this.activeLease,
-  });
-
-  final Unit unit;
-  final bool singleRental;
-  final VoidCallback? onEdit;
-
-  /// The unit's active lease, when occupied — enables drill-through to it.
-  final LeaseManagementSummary? activeLease;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final isOccupied = unit.status.toLowerCase() == 'occupied';
-    final lease = activeLease;
-
-    return Card(
-      margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        onTap: () => lease == null
-            ? _openUnitOverview(context, unit)
-            : _openLeaseDetail(context, lease),
-        leading: CircleAvatar(
-          radius: 20,
-          backgroundColor: isOccupied
-              ? colorScheme.primaryContainer
-              : colorScheme.surfaceContainerHighest,
-          child: Icon(
-            isOccupied ? Icons.person : Icons.home_outlined,
-            size: 18,
-            color: isOccupied
-                ? colorScheme.onPrimaryContainer
-                : colorScheme.onSurfaceVariant,
-          ),
-        ),
-        title: Text(
-          _unitTitle(unit, singleRental: singleRental),
-          style: theme.textTheme.bodyMedium?.copyWith(
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        subtitle: Text(
-          lease != null && lease.primaryTenantName != null
-              ? '${unit.bedrooms} bd / ${unit.bathrooms} ba  ·  '
-                    '${lease.primaryTenantName} · tap for tenant & lease'
-              : '${unit.bedrooms} bd / ${unit.bathrooms} ba  ·  '
-                    '${_formatCurrency(unit.marketRent)}/mo',
-          style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-              decoration: BoxDecoration(
-                color: isOccupied
-                    ? colorScheme.primaryContainer
-                    : colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Text(
-                unit.status,
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w600,
-                  color: isOccupied
-                      ? colorScheme.onPrimaryContainer
-                      : colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ),
-            if (onEdit != null)
-              IconButton(
-                icon: const Icon(Icons.edit_outlined, size: 18),
-                onPressed: onEdit,
-                tooltip: 'Edit unit',
-              ),
-          ],
-        ),
-      ),
     );
   }
 }

@@ -21,16 +21,24 @@ public class SandboxServiceTests : IDisposable
 
     public void Dispose() => _ctx.Dispose();
 
-    private SandboxService BuildService()
+    private SandboxService BuildService() => BuildService(out _);
+
+    private SandboxService BuildService(out DemoLegalTestDependencies legalDocuments)
     {
         var infrastructure = new TestAtomicInfrastructureUnitOfWork(_ctx.Db);
+        legalDocuments = new DemoLegalTestDependencies(_ctx.Db, infrastructure);
         var seeder = new RentalCommand.Api.Services.Auth.DemoDataSeeder(
             _ctx.Db,
             NullLogger<RentalCommand.Api.Services.Auth.DemoDataSeeder>.Instance,
             TimeProvider.System,
             new LegalDocumentSourceVersionTestResolver(_ctx.Db),
             infrastructure,
-            infrastructure);
+            infrastructure,
+            legalDocuments,
+            legalDocuments,
+            legalDocuments,
+            legalDocuments,
+            legalDocuments);
         return new SandboxService(
             _ctx.Db, seeder, NullLogger<SandboxService>.Instance, TimeProvider.System, infrastructure);
     }
@@ -403,6 +411,43 @@ public class SandboxServiceTests : IDisposable
 
         var portfolio = await _ctx.Db.Portfolios.SingleAsync(p => p.Id == 1);
         portfolio.IsSandbox.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task OnboardingChoice_SandboxRetry_ReusesPreparingOperationAndCompletesOnce()
+    {
+        SeedAdministeringUser(portfolioId: 1);
+        var service = BuildService(out var legalDocuments);
+        legalDocuments.FailUploadAttempt = 1;
+
+        Func<Task> firstAttempt = () => service.ApplyOnboardingChoiceAsync(
+            1, OnboardingChoice.Sandbox, CancellationToken.None);
+        await firstAttempt.Should().ThrowAsync<IOException>();
+
+        _ctx.Db.ChangeTracker.Clear();
+        var preparingPortfolio = await _ctx.Db.Portfolios.SingleAsync(portfolio => portfolio.Id == 1);
+        var preparing = PortfolioOnboarding.ReadSandboxOperation(preparingPortfolio.Settings);
+        preparing.Should().NotBeNull();
+        preparing!.State.Should().Be(PortfolioOnboarding.SandboxPreparingState);
+        preparingPortfolio.IsSandbox.Should().BeFalse();
+        PortfolioOnboarding.IsPending(preparingPortfolio.Settings).Should().BeTrue();
+        (await _ctx.Db.Properties.CountAsync()).Should().BeGreaterThan(0);
+
+        legalDocuments.FailUploadAttempt = null;
+        var state = await service.ApplyOnboardingChoiceAsync(
+            1, OnboardingChoice.Sandbox, CancellationToken.None);
+
+        state.Should().NotBeNull();
+        state!.IsSandbox.Should().BeTrue();
+        state.OnboardingChoicePending.Should().BeFalse();
+        _ctx.Db.ChangeTracker.Clear();
+        var completedPortfolio = await _ctx.Db.Portfolios.SingleAsync(portfolio => portfolio.Id == 1);
+        var completed = PortfolioOnboarding.ReadSandboxOperation(completedPortfolio.Settings);
+        completed.Should().NotBeNull();
+        completed!.Key.Should().Be(preparing.Key);
+        completed.State.Should().Be(PortfolioOnboarding.SandboxCompletedState);
+        (await _ctx.Db.LegalDocumentArtifacts.CountAsync()).Should().Be(2);
+        (await _ctx.Db.PendingFileUploads.CountAsync()).Should().Be(2);
     }
 
     [Fact]

@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -5,6 +7,7 @@ import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
 import '../../core/api/idempotent_mutation.dart';
 import '../../core/models/models.dart';
+import 'property_workspace_sections.dart';
 
 class PropertyOwnerOption {
   const PropertyOwnerOption({required this.id, required this.name});
@@ -58,9 +61,99 @@ class PropertyListPage {
     required this.totalCount,
     required this.skip,
     required this.take,
+    required this.workspaceEntries,
   });
 
   final List<Property> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+  final Map<int, PropertyWorkspaceEntry> workspaceEntries;
+
+  bool get hasPrevious => skip > 0;
+  bool get hasNext => skip + items.length < totalCount;
+
+  factory PropertyListPage.fromJson(Map<String, dynamic> json) {
+    final rawItems = json['items'];
+    final itemMaps = (rawItems is List ? rawItems : const [])
+        .whereType<Map<String, dynamic>>()
+        .toList(growable: false);
+    final items = itemMaps.map(Property.fromJson).toList(growable: false);
+    return PropertyListPage(
+      items: items,
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? 0,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? 20,
+      workspaceEntries: {
+        for (final item in itemMaps)
+          if (item['workspaceEntry'] case final Map<dynamic, dynamic> entry)
+            (item['id'] as num).toInt(): PropertyWorkspaceEntry.fromJson(
+              Map<String, dynamic>.from(entry),
+            ),
+      },
+    );
+  }
+}
+
+class PropertyWorkspaceDetail {
+  const PropertyWorkspaceDetail({
+    required this.property,
+    required this.workspaceEntry,
+  });
+
+  final Property property;
+  final PropertyWorkspaceEntry workspaceEntry;
+
+  factory PropertyWorkspaceDetail.fromJson(Map<String, dynamic> json) {
+    final rawEntry = json['workspaceEntry'];
+    return PropertyWorkspaceDetail(
+      property: Property.fromJson(json),
+      workspaceEntry: rawEntry is Map
+          ? PropertyWorkspaceEntry.fromJson(Map<String, dynamic>.from(rawEntry))
+          : PropertyWorkspaceEntry(
+              destination: PropertyWorkspaceDestination.property,
+              propertyId: (json['id'] as num).toInt(),
+              areas: const [],
+            ),
+    );
+  }
+}
+
+class PropertyWorkspaceUnit {
+  const PropertyWorkspaceUnit({
+    required this.id,
+    required this.unitNumber,
+    required this.status,
+    required this.marketRent,
+    required this.openWorkOrderCount,
+  });
+
+  final int id;
+  final String unitNumber;
+  final String status;
+  final double marketRent;
+  final int openWorkOrderCount;
+
+  factory PropertyWorkspaceUnit.fromJson(Map<String, dynamic> json) {
+    return PropertyWorkspaceUnit(
+      id: (json['id'] as num).toInt(),
+      unitNumber: json['unitNumber'] as String? ?? '',
+      status: json['status'] as String? ?? '',
+      marketRent: (json['marketRent'] as num?)?.toDouble() ?? 0,
+      openWorkOrderCount: (json['openWorkOrderCount'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
+class PropertyWorkspaceUnitPage {
+  const PropertyWorkspaceUnitPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<PropertyWorkspaceUnit> items;
   final int totalCount;
   final int skip;
   final int take;
@@ -68,14 +161,66 @@ class PropertyListPage {
   bool get hasPrevious => skip > 0;
   bool get hasNext => skip + items.length < totalCount;
 
-  factory PropertyListPage.fromJson(Map<String, dynamic> json) {
-    final rawItems = json['items'];
-    return PropertyListPage(
-      items: (rawItems is List ? rawItems : const [])
-          .whereType<Map<String, dynamic>>()
-          .map(Property.fromJson)
-          .toList(growable: false),
-      totalCount: (json['totalCount'] as num?)?.toInt() ?? 0,
+  factory PropertyWorkspaceUnitPage.fromJson(Map<String, dynamic> json) {
+    final items = (json['items'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(PropertyWorkspaceUnit.fromJson)
+        .toList(growable: false);
+    return PropertyWorkspaceUnitPage(
+      items: items,
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? items.length,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? 20,
+    );
+  }
+}
+
+class PropertyWorkspacePageQuery {
+  const PropertyWorkspacePageQuery({
+    required this.propertyId,
+    this.skip = 0,
+    this.take = 20,
+  });
+
+  final int propertyId;
+  final int skip;
+  final int take;
+
+  @override
+  bool operator ==(Object other) =>
+      other is PropertyWorkspacePageQuery &&
+      other.propertyId == propertyId &&
+      other.skip == skip &&
+      other.take == take;
+
+  @override
+  int get hashCode => Object.hash(propertyId, skip, take);
+}
+
+class PropertyWorkspaceLeasePage {
+  const PropertyWorkspaceLeasePage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<LeaseManagementSummary> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+
+  bool get hasPrevious => skip > 0;
+  bool get hasNext => skip + items.length < totalCount;
+
+  factory PropertyWorkspaceLeasePage.fromJson(Map<String, dynamic> json) {
+    final items = (json['items'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(LeaseManagementSummary.fromJson)
+        .toList(growable: false);
+    return PropertyWorkspaceLeasePage(
+      items: items,
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? items.length,
       skip: (json['skip'] as num?)?.toInt() ?? 0,
       take: (json['take'] as num?)?.toInt() ?? 20,
     );
@@ -178,6 +323,10 @@ class PropertiesRepository {
   }
 
   Future<Property> getProperty(int id) async {
+    return (await getPropertyWorkspaceDetail(id)).property;
+  }
+
+  Future<PropertyWorkspaceDetail> getPropertyWorkspaceDetail(int id) async {
     try {
       final response = await _dio.get<Map<String, dynamic>>('/properties/$id');
       final data = response.data;
@@ -187,7 +336,121 @@ class PropertiesRepository {
           message: 'Empty response from server.',
         );
       }
-      return Property.fromJson(data);
+      return PropertyWorkspaceDetail.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<List<Document>> listPropertyDocuments(int propertyId) async {
+    try {
+      final response = await _dio.get<List<dynamic>>(
+        '/documents',
+        queryParameters: {'entityType': 'Property', 'entityId': propertyId},
+      );
+      return (response.data ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(Document.fromJson)
+          .toList(growable: false);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<Document> uploadPropertyDocument({
+    required int propertyId,
+    required Uint8List bytes,
+    required String fileName,
+    required String contentType,
+    required String clientOperationId,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/documents',
+        data: FormData.fromMap({
+          'file': MultipartFile.fromBytes(
+            bytes,
+            filename: fileName,
+            contentType: DioMediaType.parse(contentType),
+          ),
+          'entityType': 'Property',
+          'entityId': propertyId,
+          'category': 'Property document',
+          'clientOperationId': clientOperationId,
+        }),
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Document.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<Uint8List> downloadPropertyDocument(int documentId) async {
+    try {
+      final response = await _dio.get<List<int>>(
+        '/documents/$documentId/file',
+        options: Options(responseType: ResponseType.bytes),
+      );
+      return Uint8List.fromList(response.data ?? const []);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<PropertyWorkspaceUnitPage> listWorkspaceUnitsPage(
+    PropertyWorkspacePageQuery query,
+  ) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/units/list-with-health/page',
+        queryParameters: {
+          'propertyId': query.propertyId,
+          'skip': query.skip,
+          'take': query.take,
+          'sort': 'unitNumber',
+        },
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return PropertyWorkspaceUnitPage.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<PropertyWorkspaceLeasePage> listWorkspaceLeasesPage(
+    PropertyWorkspacePageQuery query,
+  ) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/lease-managements/page',
+        queryParameters: {
+          'propertyId': query.propertyId,
+          'skip': query.skip,
+          'take': query.take,
+          'sort': '-updatedAtUtc',
+        },
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return PropertyWorkspaceLeasePage.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -415,6 +678,33 @@ final propertiesPageProvider = FutureProvider.autoDispose
       return ref.watch(propertiesRepositoryProvider).listPropertiesPage(query);
     });
 
+final propertyWorkspaceUnitsPageProvider = FutureProvider.autoDispose
+    .family<PropertyWorkspaceUnitPage, PropertyWorkspacePageQuery>((
+      ref,
+      query,
+    ) {
+      return ref
+          .watch(propertiesRepositoryProvider)
+          .listWorkspaceUnitsPage(query);
+    });
+
+final propertyWorkspaceLeasesPageProvider = FutureProvider.autoDispose
+    .family<PropertyWorkspaceLeasePage, PropertyWorkspacePageQuery>((
+      ref,
+      query,
+    ) {
+      return ref
+          .watch(propertiesRepositoryProvider)
+          .listWorkspaceLeasesPage(query);
+    });
+
+final propertyDocumentsProvider = FutureProvider.autoDispose
+    .family<List<Document>, int>((ref, propertyId) {
+      return ref
+          .watch(propertiesRepositoryProvider)
+          .listPropertyDocuments(propertyId);
+    });
+
 final availableForLeasePropertiesProvider =
     FutureProvider.autoDispose<List<Property>>((ref) {
       return ref
@@ -508,3 +798,10 @@ final propertyDetailProvider = FutureProvider.autoDispose.family<Property, int>(
     return ref.watch(propertiesRepositoryProvider).getProperty(id);
   },
 );
+
+final propertyWorkspaceDetailProvider = FutureProvider.autoDispose
+    .family<PropertyWorkspaceDetail, int>((ref, id) {
+      return ref
+          .watch(propertiesRepositoryProvider)
+          .getPropertyWorkspaceDetail(id);
+    });

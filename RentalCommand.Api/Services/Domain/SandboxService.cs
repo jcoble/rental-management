@@ -72,12 +72,84 @@ public sealed class SandboxService : ISandboxService
         return ToState(portfolio);
     }
 
-    public Task<SandboxStateResponse?> ApplyOnboardingChoiceAsync(
-        int portfolioId, OnboardingChoice choice, CancellationToken ct = default) =>
-        _infrastructure.ExecuteAsync(
+    public async Task<SandboxStateResponse?> ApplyOnboardingChoiceAsync(
+        int portfolioId, OnboardingChoice choice, CancellationToken ct = default)
+    {
+        if (choice != OnboardingChoice.Sandbox)
+        {
+            return await _infrastructure.ExecuteAsync(
+                AtomicInfrastructureOperation.SandboxTransition,
+                innerCt => ApplyOnboardingChoiceCoreAsync(portfolioId, choice, innerCt),
+                ct);
+        }
+
+        var preparation = await _infrastructure.ExecuteAsync(
             AtomicInfrastructureOperation.SandboxTransition,
-            innerCt => ApplyOnboardingChoiceCoreAsync(portfolioId, choice, innerCt),
+            innerCt => PrepareSandboxChoiceAsync(portfolioId, innerCt),
             ct);
+        if (preparation is null || !preparation.ShouldSeed)
+        {
+            return preparation?.ExistingState;
+        }
+
+        await _demoSeeder.SeedPortfolioAsync(portfolioId, ct);
+        return await _infrastructure.ExecuteAsync(
+            AtomicInfrastructureOperation.SandboxTransition,
+            innerCt => FinalizeSandboxChoiceAsync(portfolioId, preparation.OperationKey, innerCt),
+            ct);
+    }
+
+    private async Task<SandboxPreparation?> PrepareSandboxChoiceAsync(int portfolioId, CancellationToken ct)
+    {
+        var portfolio = await LoadPortfolioForUpdateAsync(portfolioId, ct);
+        if (portfolio is null) return null;
+        if (!PortfolioOnboarding.IsPending(portfolio.Settings))
+        {
+            return new SandboxPreparation(false, string.Empty, ToState(portfolio));
+        }
+
+        var existing = PortfolioOnboarding.ReadSandboxOperation(portfolio.Settings);
+        var operationKey = existing is { State: PortfolioOnboarding.SandboxPreparingState }
+            ? existing.Key
+            : $"sandbox/{portfolioId}/choice/v1";
+        portfolio.Settings = PortfolioOnboarding.WriteSandboxOperation(
+            portfolio.Settings,
+            operationKey,
+            PortfolioOnboarding.SandboxPreparingState);
+        portfolio.UpdatedAt = _timeProvider.UtcNow();
+        return new SandboxPreparation(true, operationKey, null);
+    }
+
+    private async Task<SandboxStateResponse?> FinalizeSandboxChoiceAsync(
+        int portfolioId,
+        string operationKey,
+        CancellationToken ct)
+    {
+        var portfolio = await LoadPortfolioForUpdateAsync(portfolioId, ct);
+        if (portfolio is null) return null;
+        if (!PortfolioOnboarding.IsPending(portfolio.Settings)) return ToState(portfolio);
+
+        var operation = PortfolioOnboarding.ReadSandboxOperation(portfolio.Settings);
+        if (operation is null
+            || operation.Key != operationKey
+            || operation.State != PortfolioOnboarding.SandboxPreparingState)
+        {
+            throw new InvalidOperationException("The Sandbox seeding operation changed before finalization.");
+        }
+
+        var now = _timeProvider.UtcNow();
+        portfolio.IsSandbox = true;
+        portfolio.SandboxSeededAtUtc = now;
+        portfolio.Settings = PortfolioOnboarding.WriteChoice(portfolio.Settings, OnboardingChoice.Sandbox);
+        portfolio.Settings = PortfolioOnboarding.WriteSandboxOperation(
+            portfolio.Settings,
+            operationKey,
+            PortfolioOnboarding.SandboxCompletedState);
+        portfolio.UpdatedAt = now;
+        _logger.LogInformation(
+            "Portfolio {PortfolioId} completed resumable first-login Sandbox setup.", portfolioId);
+        return ToState(portfolio);
+    }
 
     private async Task<SandboxStateResponse?> ApplyOnboardingChoiceCoreAsync(
         int portfolioId, OnboardingChoice choice, CancellationToken ct)
@@ -126,6 +198,11 @@ public sealed class SandboxService : ISandboxService
         return ToState(portfolio);
     }
 
+    private sealed record SandboxPreparation(
+        bool ShouldSeed,
+        string OperationKey,
+        SandboxStateResponse? ExistingState);
+
     private async Task<Core.Entities.Portfolio?> LoadPortfolioForUpdateAsync(
         int portfolioId,
         CancellationToken ct)
@@ -152,11 +229,11 @@ public sealed class SandboxService : ISandboxService
     // PostgreSQL grant/RLS contract classify exactly the same inventory. Order is child-to-parent.
     internal static IReadOnlyList<string> SandboxGraduationDeleteOrder { get; } =
     [
-        "AtomicCommandReceipts", "SignatureAuditEvents", "NoticeDeliveryEvidence",
+        "AtomicCommandReceipts", "SignatureAuditEvents", "NoticeDeliveryEvidence", "LlmUsageEvidence",
         "ExternalListingSignals", "ListingPhotos", "ListingPublications",
         "ApplicantScreeningMilestones", "ApplicantScreenings", "AdverseActionNotices",
         "ApplicationFinancialEntries",
-        "EvictionCaseEvents", "EvictionCaseRespondents", "ExpenseLineItems", "InspectionItems",
+        "EvictionCaseEvents", "EvictionCaseRespondents", "ExpenseAllocations", "ExpenseLineItems", "InspectionItems",
         "DocumentTemplateFields", "ConversationMessages", "TechnicianWorkEntries",
         "WorkOrderResponsibilities", "WorkOrderStatusEvents",
         "TeamRoutingRuleRecipients", "TeamRoutingRules", "MembershipRoleAssignmentProperties",
@@ -177,9 +254,9 @@ public sealed class SandboxService : ISandboxService
         "TenantUserAccesses",
         "LeaseManagementParties", "UnitOperationalPeriods", "LeaseAddenda", "LeaseAgreements",
         "LeaseManagements", "LegalDocumentArtifacts", "DocumentTemplates", "ScanDrafts",
-        "ScanBatches", "Conversations", "Loans", "StoredFiles", "Units",
+        "ScanBatches", "Conversations", "Loans", "StoredFiles", "Units", "PropertyOwnerships",
         "Properties", "Tenants", "Vendors", "OwnerEntities",
-        "Owners", "OAuthStates", "AtomicAuditLogs",
+        "OAuthStates", "AtomicAuditLogs",
     ];
 
     /// <summary>
@@ -203,6 +280,8 @@ public sealed class SandboxService : ISandboxService
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.NoticeDeliveryEvidence.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.LlmUsageEvidence.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.ExternalListingSignals.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.ListingPhotos.IgnoreQueryFilters()
@@ -221,6 +300,9 @@ public sealed class SandboxService : ISandboxService
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.EvictionCaseRespondents.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.ExpenseAllocations.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId)
+            .ExecuteDeleteAsync(ct);
         await _db.ExpenseLineItems.IgnoreQueryFilters()
             .Where(e => _db.Expenses.IgnoreQueryFilters()
                 .Any(parent => parent.Id == e.ExpenseId && parent.PortfolioId == portfolioId))
@@ -402,6 +484,8 @@ public sealed class SandboxService : ISandboxService
             .ExecuteDeleteAsync(ct);
         await _db.Units.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.PropertyOwnerships.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.Properties.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.Tenants.IgnoreQueryFilters()
@@ -410,8 +494,6 @@ public sealed class SandboxService : ISandboxService
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.OwnerEntities.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId && !e.IsPrimary).ExecuteDeleteAsync(ct);
-        await _db.Owners.IgnoreQueryFilters()
-            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.OAuthStates.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.AtomicAuditLogs.IgnoreQueryFilters()

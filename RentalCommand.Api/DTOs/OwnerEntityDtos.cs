@@ -18,7 +18,6 @@ public class OwnerEntityResponse
     public string? City { get; set; }
     public string? State { get; set; }
     public string? PostalCode { get; set; }
-    public string? Address { get; set; }
     public string? Phone { get; set; }
     public string? Email { get; set; }
 
@@ -46,7 +45,6 @@ public class OwnerEntityResponse
         City = e.City,
         State = e.State,
         PostalCode = e.PostalCode,
-        Address = e.Address,
         Phone = e.Phone,
         Email = e.Email,
         AssignedPropertyCount = assignedPropertyCount,
@@ -96,9 +94,6 @@ public class CreateOwnerEntityRequest
     [MaxLength(20)]
     public string? PostalCode { get; set; }
 
-    [MaxLength(500)]
-    public string? Address { get; set; }
-
     [MaxLength(50)]
     public string? Phone { get; set; }
 
@@ -131,9 +126,6 @@ public class UpdateOwnerEntityRequest
 
     [MaxLength(20)]
     public string? PostalCode { get; set; }
-
-    [MaxLength(500)]
-    public string? Address { get; set; }
 
     [MaxLength(50)]
     public string? Phone { get; set; }

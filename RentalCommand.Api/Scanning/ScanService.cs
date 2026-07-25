@@ -26,6 +26,20 @@ namespace RentalCommand.Api.Scanning;
 /// </summary>
 public sealed class ScanService : IScanService
 {
+    internal static readonly string[] TechnicianCandidateCapabilityKeys =
+    [
+        CapabilityKeys.AssignedWorkUpdate,
+        CapabilityKeys.WorkManage,
+    ];
+    internal static readonly string[] TargetCandidateCapabilityKeys =
+    [
+        CapabilityKeys.RentalsManage,
+        CapabilityKeys.WorkManage,
+        CapabilityKeys.MoneyPaymentsManage,
+        CapabilityKeys.MoneyExpensesManage,
+        CapabilityKeys.LeasingApplicationsManage,
+        CapabilityKeys.LeasingAgreementsPrepare,
+    ];
     private static readonly AtomicJsonResultCodec<RejectScanDraftResult> RejectResultCodec =
         new("scan-draft-reject-result:v1");
     private readonly RentalCommandDbContext _db;
@@ -51,6 +65,94 @@ public sealed class ScanService : IScanService
         _atomic = atomic;
         _logger = logger;
         _timeProvider = timeProvider;
+    }
+
+    /// <summary>
+    /// Builds the remotely searched/sorted/paged technician candidate query. Authorization,
+    /// filtering, ordering, and paging remain in one translated PostgreSQL statement.
+    /// </summary>
+    public IQueryable<ScanTechnicianCandidate> BuildTechnicianCandidateQuery(
+        WorkspaceReadScope scope,
+        string? search,
+        int skip,
+        int take)
+    {
+        var normalizedSearch = search?.Trim();
+        var query = _db.WorkOrders
+            .AsNoTracking()
+            .WhereAuthorized(
+                _db,
+                scope,
+                TechnicianCandidateCapabilityKeys,
+                _timeProvider.GetUtcNow().UtcDateTime)
+            .Where(work => work.Status != WorkOrderStatus.Completed &&
+                           work.Status != WorkOrderStatus.Cancelled);
+        if (!string.IsNullOrWhiteSpace(normalizedSearch))
+        {
+            var pattern = $"%{normalizedSearch}%";
+            query = query.Where(work =>
+                EF.Functions.ILike(work.Title, pattern) ||
+                EF.Functions.ILike(work.Property!.Name, pattern) ||
+                (work.Unit != null && EF.Functions.ILike(work.Unit.UnitNumber, pattern)));
+        }
+
+        return query
+            .OrderBy(work => work.ScheduledFor ?? DateTime.MaxValue)
+            .ThenBy(work => work.Title)
+            .ThenBy(work => work.Id)
+            .Skip(Math.Max(0, skip))
+            .Take(Math.Clamp(take, 1, 100))
+            .Select(work => new ScanTechnicianCandidate(
+                work.Id,
+                work.Title,
+                work.Property!.Name,
+                work.Unit == null ? null : work.Unit.UnitNumber));
+    }
+
+    /// <summary>
+    /// Builds the remotely searched/sorted/paged Property/Unit target query used when a global
+    /// capture still needs context. No allowed-id list or partial client-side catalog is created.
+    /// </summary>
+    public IQueryable<ScanTargetCandidate> BuildTargetCandidateQuery(
+        WorkspaceReadScope scope,
+        string? search,
+        int skip,
+        int take)
+    {
+        var normalizedSearch = search?.Trim();
+        var authorizedProperties = _db.Properties
+            .AsNoTracking()
+            .WhereAuthorized(
+                _db,
+                scope,
+                TargetCandidateCapabilityKeys,
+                _timeProvider.GetUtcNow().UtcDateTime);
+        var query =
+            from property in authorizedProperties
+            join unit in _db.Units.AsNoTracking()
+                on new { property.Id, property.PortfolioId }
+                equals new { Id = unit.PropertyId, unit.PortfolioId }
+            select new { property, unit };
+        if (!string.IsNullOrWhiteSpace(normalizedSearch))
+        {
+            var pattern = $"%{normalizedSearch}%";
+            query = query.Where(candidate =>
+                EF.Functions.ILike(candidate.property.Name, pattern) ||
+                EF.Functions.ILike(candidate.property.AddressLine1, pattern) ||
+                EF.Functions.ILike(candidate.unit.UnitNumber, pattern));
+        }
+
+        return query
+            .OrderBy(candidate => candidate.property.Name)
+            .ThenBy(candidate => candidate.unit.UnitNumber)
+            .ThenBy(candidate => candidate.unit.Id)
+            .Skip(Math.Max(0, skip))
+            .Take(Math.Clamp(take, 1, 100))
+            .Select(candidate => new ScanTargetCandidate(
+                candidate.property.Id,
+                candidate.unit.Id,
+                candidate.property.Name,
+                candidate.unit.UnitNumber));
     }
 
     // -------------------------------------------------------------------------
@@ -1804,3 +1906,15 @@ public sealed class ScanService : IScanService
         public string? Notes { get; set; }
     }
 }
+
+public sealed record ScanTechnicianCandidate(
+    int WorkOrderId,
+    string Title,
+    string PropertyName,
+    string? UnitNumber);
+
+public sealed record ScanTargetCandidate(
+    int PropertyId,
+    int UnitId,
+    string PropertyName,
+    string UnitNumber);

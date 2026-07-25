@@ -2,8 +2,10 @@ using System.Reflection;
 using FluentAssertions;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.Controllers;
+using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Entities;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -55,6 +57,34 @@ public sealed class CoreCrudAtomicContractTests
         source.Should().Contain("SetupPropertyAsync");
         source.Should().NotContain("NewCanonicalUnit");
         source.Should().NotContain("Canonical unit created");
+    }
+
+    [Fact]
+    public void PropertyOwnershipUsesOnlyCanonicalEffectiveDatedRelationshipFacts()
+    {
+        typeof(Property).GetProperty("OwnerId").Should().BeNull();
+        typeof(Property).GetProperty("OwnerEntityId").Should().BeNull();
+        typeof(Property).GetProperty("Owner").Should().BeNull();
+        typeof(Property).GetProperty("OwnerEntity").Should().BeNull();
+        typeof(PropertyResponse).GetProperty("OwnerEntityId").Should().BeNull();
+        typeof(PropertyResponse).GetProperty("OwnerName").Should().BeNull();
+        typeof(CreatePropertyRequest).GetProperty("OwnerEntityId").Should().BeNull();
+        typeof(UpdatePropertyRequest).GetProperty("OwnerEntityId").Should().BeNull();
+        typeof(CreatePropertyRequest).GetProperty(nameof(CreatePropertyRequest.Ownerships))
+            .Should().NotBeNull();
+        typeof(UpdatePropertyRequest).GetProperty(nameof(UpdatePropertyRequest.Ownerships))
+            .Should().NotBeNull();
+
+        var source = ReadSource("RentalCommand.Api", "Services", "Domain", "AtomicCoreCrudMutation.cs");
+        source.Should().Contain("new PropertyOwnership");
+        source.Should().Contain("OwnershipSharePercent = request.OwnershipSharePercent");
+        source.Should().Contain("StatementRecipientName =");
+        source.Should().Contain("StatementRecipientEmail =");
+        source.Should().Contain("PayeeName =");
+        source.Should().Contain("ownership.EffectiveToUtc = now");
+        source.Should().Contain("ReplaceCurrentOwnershipsAsync");
+        source.Should().NotContain("property.OwnerId");
+        source.Should().NotContain("property.OwnerEntityId");
     }
 
     [Fact]

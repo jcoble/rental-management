@@ -5,6 +5,7 @@
 	import { showSuccess, showInfo, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatDateOnly } from '$lib/utils/date';
 	import { Button } from '$lib/components/ui/button';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { CreditCard, Repeat } from '@lucide/svelte';
 	import HelpTooltip from '$lib/components/ui/HelpTooltip.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -173,9 +174,12 @@
 	{/if}
 
 	{#if accountsQuery.isLoading}
-		<p class="text-sm text-muted-foreground">Loading accounts…</p>
+		<LoadingState label="Loading tenant accounts" variant="page" testid="portal-payment-accounts-loading" />
 	{:else if accountsQuery.isError}
-		<p class="text-sm text-destructive">Couldn't load tenant accounts.</p>
+		<div class="rounded-lg border border-destructive/40 p-6 text-center">
+			<p class="text-sm font-medium text-destructive">Couldn't load tenant accounts.</p>
+			<Button type="button" variant="outline" size="sm" class="mt-3" onclick={() => accountsQuery.refetch()}>Try again</Button>
+		</div>
 	{:else if accountsQuery.data?.totalCount === 0}
 		<p class="text-sm text-muted-foreground">No tenant account is available.</p>
 	{:else if selectedAccountId == null}
@@ -190,7 +194,12 @@
 		<section class="mb-5 rounded-lg border border-border bg-card p-4" data-testid="portal-autopay-card">
 			<div class="flex items-center gap-2"><Repeat class="h-4 w-4 text-primary" /><h2 class="font-semibold">Autopay</h2></div>
 			{#if autopayQuery.isLoading}
-				<p class="mt-2 text-sm text-muted-foreground">Loading…</p>
+				<LoadingState label="Loading autopay settings" variant="spinner" testid="portal-autopay-loading" />
+			{:else if autopayQuery.isError}
+				<div class="mt-3 rounded-md border border-destructive/40 bg-destructive/5 p-3">
+					<p class="text-sm font-medium text-destructive">Couldn't load autopay settings.</p>
+					<Button type="button" variant="outline" size="sm" class="mt-2" onclick={() => autopayQuery.refetch()}>Try again</Button>
+				</div>
 			{:else if autopayQuery.data?.active}
 				<p class="mt-1.5 text-sm text-muted-foreground">Autopay is on for this account.</p>
 				<Button variant="outline" class="mt-3" disabled={cancelMutation.isPending} onclick={() => cancelMutation.mutate()} data-testid="portal-autopay-cancel">
@@ -208,9 +217,12 @@
 		</section>
 
 		{#if chargesQuery.isLoading}
-			<p class="text-sm text-muted-foreground">Loading charges…</p>
+			<LoadingState label="Loading charges" testid="portal-charges-loading" />
 		{:else if chargesQuery.isError}
-			<p class="text-sm text-destructive">Couldn't load charges for this account.</p>
+			<div class="rounded-lg border border-destructive/40 p-6 text-center">
+				<p class="text-sm font-medium text-destructive">Couldn't load charges for this account.</p>
+				<Button type="button" variant="outline" size="sm" class="mt-3" onclick={() => chargesQuery.refetch()}>Try again</Button>
+			</div>
 		{:else}
 			<Tooltip.Provider delayDuration={150}>
 				<div class="space-y-3">

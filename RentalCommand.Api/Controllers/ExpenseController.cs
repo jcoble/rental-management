@@ -71,6 +71,7 @@ public class ExpenseController : ManagementControllerBase
 
     [HttpPost]
     [ProducesResponseType(typeof(ExpenseResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<ExpenseResponse>> Create(
         [FromBody] CreateExpenseRequest request,
@@ -83,14 +84,16 @@ public class ExpenseController : ManagementControllerBase
         {
             var created = await _service.CreateAsync(GetWorkspaceReadScope(), request, operationKey, ct);
             return created == null
-                ? NotFound(new { error = "Referenced property, unit, vendor, or work order not found in this portfolio" })
+                ? NotFound(new { error = "Referenced property, unit, vendor, work order, or allocation target not found in this portfolio" })
                 : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
         }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, new { error = ex.Message }); }
     }
 
     [HttpPatch("{id:int}")]
     [ProducesResponseType(typeof(ExpenseResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<ExpenseResponse>> Update(
         int id, [FromBody] UpdateExpenseRequest request,
@@ -104,6 +107,7 @@ public class ExpenseController : ManagementControllerBase
             var updated = await _service.UpdateAsync(GetWorkspaceReadScope(), id, request, operationKey, ct);
             return updated == null ? NotFound(new { error = "Expense not found" }) : Ok(updated);
         }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
         catch (UnauthorizedAccessException ex) { return StatusCode(403, new { error = ex.Message }); }
     }
 

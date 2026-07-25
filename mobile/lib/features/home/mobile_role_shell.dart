@@ -7,10 +7,12 @@ class MobileRoleDestination {
     required this.label,
     required this.icon,
     required this.builder,
+    this.bottomNavigationLabel,
     this.ownsScaffold = false,
   });
 
   final String label;
+  final String? bottomNavigationLabel;
   final IconData icon;
   final WidgetBuilder builder;
   final bool ownsScaffold;
@@ -95,6 +97,34 @@ class _MobileRoleShellState extends State<MobileRoleShell> {
     });
   }
 
+  Widget _buildNavigationDestination(
+    int index,
+    MobileRoleDestination destination,
+  ) {
+    final bottomNavigationLabel =
+        destination.bottomNavigationLabel ?? destination.label;
+    final navigationDestination = NavigationDestination(
+      icon: Icon(destination.icon),
+      label: bottomNavigationLabel,
+      tooltip: bottomNavigationLabel == destination.label
+          ? null
+          : destination.label,
+    );
+
+    if (bottomNavigationLabel == destination.label) {
+      return navigationDestination;
+    }
+
+    return Semantics(
+      label: destination.label,
+      button: true,
+      selected: index == _selectedIndex,
+      onTap: () => _select(index),
+      excludeSemantics: true,
+      child: navigationDestination,
+    );
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     body: IndexedStack(
@@ -104,7 +134,10 @@ class _MobileRoleShellState extends State<MobileRoleShell> {
           NavigatorPopHandler<void>(
             enabled: index == _selectedIndex,
             onPopWithResult: (_) {
-              _navigatorKeys[index].currentState?.pop();
+              final navigator = _navigatorKeys[index].currentState;
+              if (navigator != null) {
+                unawaited(navigator.maybePop());
+              }
             },
             child: Navigator(
               key: _navigatorKeys[index],
@@ -141,11 +174,8 @@ class _MobileRoleShellState extends State<MobileRoleShell> {
       selectedIndex: _selectedIndex,
       onDestinationSelected: _select,
       destinations: [
-        for (final destination in widget.destinations)
-          NavigationDestination(
-            icon: Icon(destination.icon),
-            label: destination.label,
-          ),
+        for (final (index, destination) in widget.destinations.indexed)
+          _buildNavigationDestination(index, destination),
       ],
     ),
   );

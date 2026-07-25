@@ -1,14 +1,18 @@
+using System.Data.Common;
 using System.Reflection;
 using System.Linq.Expressions;
 using FluentAssertions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -101,6 +105,9 @@ public sealed class PortalServiceBalanceTests
             sql.Should().Contain("OFFSET");
         }
         chargeSql.Should().Contain("vw_tenant_charge_balances");
+        chargeSql.Should().Contain("\"OpenAmount\" > 0.0");
+        chargeSql.Should().Contain("\"DueOn\" <= ");
+        chargeSql.Should().Contain("\"BusinessDate\"");
         entrySql.Should().Contain("DESC", "unknown entry sorts retain newest-first ordering");
     }
 
@@ -279,4 +286,327 @@ public sealed class PortalServiceBalanceTests
             .UseNpgsql(
                 "Host=localhost;Database=translation_only;Username=translation_only;Password=translation_only")
             .Options);
+}
+
+[Collection(MigratedPostgreSqlCollection.Name)]
+public sealed class PortalServicePayableChargePostgreSqlTests : IAsyncLifetime
+{
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private readonly List<string> _commands = [];
+    private MigratedPostgreSqlTestContext _context = null!;
+
+    public PortalServicePayableChargePostgreSqlTests(MigratedPostgreSqlFixture fixture) =>
+        _fixture = fixture;
+
+    public async Task InitializeAsync() =>
+        _context = await _fixture.CreateContextAsync([new QueryRecorder(_commands)]);
+
+    public async Task DisposeAsync()
+    {
+        if (_context is not null)
+        {
+            await _context.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task ChargePage_ReturnsOnlyDueOpenCharge_AndCountsAndPagesInSql()
+    {
+        var scenario = await SeedScenarioAsync();
+        _commands.Clear();
+
+        var page = await new PortalService(
+                _context.Db, Mock.Of<ILeaseQaService>(), TimeProvider.System)
+            .ListTenantAccountChargesPageAsync(
+                scenario.Scope,
+                scenario.TenantAccountId,
+                new PortalTenantChargeListQuery { Take = 20 });
+
+        page.Should().NotBeNull();
+        page!.TotalCount.Should().Be(1);
+        page.Items.Should().ContainSingle(item =>
+            item.TenantLedgerEntryId == scenario.DueOpenRentId);
+
+        _commands.Should().HaveCount(3,
+            "the endpoint uses one identity query, one count query, and one bounded page query");
+        var chargeCommands = _commands
+            .Where(sql => sql.Contains("vw_tenant_charge_balances", StringComparison.Ordinal))
+            .ToArray();
+        chargeCommands.Should().HaveCount(2);
+        chargeCommands.Should().OnlyContain(sql =>
+            sql.Contains("\"OpenAmount\" > 0.0", StringComparison.Ordinal)
+            && sql.Contains("\"DueOn\" <= ", StringComparison.Ordinal)
+            && sql.Contains("\"BusinessDate\"", StringComparison.Ordinal));
+        chargeCommands.Should().ContainSingle(sql =>
+            sql.TrimStart().StartsWith("SELECT count(*)", StringComparison.OrdinalIgnoreCase));
+        chargeCommands.Should().ContainSingle(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task<Scenario> SeedScenarioAsync()
+    {
+        const int portfolioId = 1;
+        const int userId = 1;
+        var now = DateTime.UtcNow;
+        var businessDate = await _context.Db.Database
+            .SqlQuery<DateOnly>($"SELECT rc_business_date({portfolioId}) AS \"Value\"")
+            .SingleAsync();
+
+        var accessContext = new WorkspaceAccessContext
+        {
+            UserId = userId,
+            PortfolioId = portfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = WorkspaceExperience.Tenant,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var property = new Property
+        {
+            PortfolioId = portfolioId,
+            Name = "Payable charge property",
+            AddressLine1 = "1 Charge Way",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = portfolioId,
+            FirstName = "Portal",
+            LastName = "Tenant",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _context.Db.AddRange(accessContext, property, tenant);
+        await _context.Db.SaveChangesAsync();
+
+        var unit = new Unit
+        {
+            PortfolioId = portfolioId,
+            PropertyId = property.Id,
+            UnitNumber = "1",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _context.Db.Add(unit);
+        await _context.Db.SaveChangesAsync();
+
+        var management = new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            RelationshipNumber = "LM-PAYABLE-CHARGES",
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = userId,
+            RowVersion = Guid.NewGuid(),
+        };
+        _context.Db.Add(management);
+        await _context.Db.SaveChangesAsync();
+
+        var account = new TenantAccount
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolioId,
+            LeaseManagementId = management.Id,
+            AccountNumber = "TA-PAYABLE-CHARGES",
+            Currency = "USD",
+            OpenedAtUtc = now,
+            CreatedAtUtc = now,
+            CreatedByUserId = userId,
+        };
+        var party = new LeaseManagementParty
+        {
+            PortfolioId = portfolioId,
+            LeaseManagementId = management.Id,
+            TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = businessDate.AddDays(-1),
+            ChangeReason = "portal payable charge proof",
+            CreatedAtUtc = now,
+            CreatedByUserId = userId,
+        };
+        _context.Db.AddRange(account, party);
+        await _context.Db.SaveChangesAsync();
+
+        var agreement = new LeaseAgreement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolioId,
+            LeaseManagementId = management.Id,
+            VersionNumber = 1,
+            AgreementNumber = "AGR-PAYABLE-CHARGES",
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = businessDate.AddMonths(-1),
+            TermEndOn = businessDate.AddYears(1),
+            GoverningFromOn = businessDate.AddMonths(-1),
+            BaseRentAmount = 1100m,
+            RentDueDay = 1,
+            SecurityDepositObligation = 500m,
+            LateFeeAmount = 50m,
+            GracePeriodDays = 5,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
+                portfolioId, userId, now),
+            CreatedAtUtc = now,
+            CreatedByUserId = userId,
+            UpdatedAtUtc = now,
+        };
+        _context.Db.LeaseAgreements.Add(agreement);
+        await _context.Db.SaveChangesAsync();
+
+        _context.Db.LeaseAgreementSigners.Add(new LeaseAgreementSigner
+        {
+            PortfolioId = portfolioId,
+            LeaseAgreementId = agreement.Id,
+            LeaseManagementPartyId = party.Id,
+            TenantId = tenant.Id,
+            SignerRole = LeaseLegalSignerRole.PrimaryTenant,
+            NameSnapshot = $"{tenant.FirstName} {tenant.LastName}",
+            EmailSnapshot = "portal.tenant@example.test",
+            SigningOrder = 1,
+            IsRequired = true,
+        });
+
+        _context.Db.TenantUserAccesses.Add(new TenantUserAccess
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = portfolioId,
+            AccessContextId = accessContext.Id,
+            ApplicationUserId = userId,
+            LeaseManagementPartyId = party.Id,
+            GrantedAtUtc = now,
+            GrantedByUserId = userId,
+            Reason = "portal payable charge proof",
+        });
+
+        var settledDeposit = Charge(
+            account.Id, null, TenantLedgerEntryType.DepositCharge, 500m,
+            businessDate.AddDays(-10), "settled-deposit");
+        var settledRent = Charge(
+            account.Id, agreement.Id, TenantLedgerEntryType.RentCharge, 900m,
+            businessDate.AddDays(-5), "settled-rent");
+        var futureOpenRent = Charge(
+            account.Id, agreement.Id, TenantLedgerEntryType.RentCharge, 1000m,
+            businessDate.AddDays(1), "future-open-rent");
+        var dueOpenRent = Charge(
+            account.Id, agreement.Id, TenantLedgerEntryType.RentCharge, 1100m,
+            businessDate, "due-open-rent");
+        var depositReceipt = Receipt(account.Id, 500m, businessDate, "deposit-receipt");
+        var rentReceipt = Receipt(account.Id, 900m, businessDate, "rent-receipt");
+        _context.Db.TenantLedgerEntries.AddRange(
+            settledDeposit, settledRent, futureOpenRent, dueOpenRent,
+            depositReceipt, rentReceipt);
+        await _context.Db.SaveChangesAsync();
+
+        _context.Db.TenantLedgerAllocations.AddRange(
+            Allocation(account.Id, settledDeposit.Id, depositReceipt.Id, 500m, now, "settled-deposit"),
+            Allocation(account.Id, settledRent.Id, rentReceipt.Id, 900m, now, "settled-rent"));
+        await _context.Db.SaveChangesAsync();
+        _context.Db.ChangeTracker.Clear();
+
+        return new Scenario(
+            new PortalTenantReadScope(
+                portfolioId, userId, accessContext.Id, accessContext.AccessRevision),
+            account.Id,
+            dueOpenRent.Id);
+    }
+
+    private static TenantLedgerEntry Charge(
+        int accountId,
+        int? leaseAgreementId,
+        TenantLedgerEntryType entryType,
+        decimal amount,
+        DateOnly dueOn,
+        string key) => new()
+    {
+        PublicId = Guid.NewGuid(),
+        PortfolioId = 1,
+        TenantAccountId = accountId,
+        LeaseAgreementId = leaseAgreementId,
+        EntryType = entryType,
+        Direction = TenantLedgerDirection.Debit,
+        Amount = amount,
+        Currency = "USD",
+        EffectiveOn = dueOn,
+        DueOn = dueOn,
+        PostedAtUtc = DateTime.UtcNow,
+        Description = key,
+        BusinessKey = $"portal-payable:{key}",
+        CreatedByUserId = 1,
+    };
+
+    private static TenantLedgerEntry Receipt(
+        int accountId,
+        decimal amount,
+        DateOnly effectiveOn,
+        string key) => new()
+    {
+        PublicId = Guid.NewGuid(),
+        PortfolioId = 1,
+        TenantAccountId = accountId,
+        EntryType = TenantLedgerEntryType.PaymentReceipt,
+        Direction = TenantLedgerDirection.Credit,
+        Amount = amount,
+        Currency = "USD",
+        EffectiveOn = effectiveOn,
+        PostedAtUtc = DateTime.UtcNow,
+        Description = key,
+        BusinessKey = $"portal-payable:{key}",
+        CreatedByUserId = 1,
+    };
+
+    private static TenantLedgerAllocation Allocation(
+        int accountId,
+        long debitId,
+        long creditId,
+        decimal amount,
+        DateTime allocatedAtUtc,
+        string key) => new()
+    {
+        PortfolioId = 1,
+        TenantAccountId = accountId,
+        DebitEntryId = debitId,
+        CreditEntryId = creditId,
+        Amount = amount,
+        AllocatedAtUtc = allocatedAtUtc,
+        BusinessKey = $"portal-payable:{key}:allocation",
+        CreatedByUserId = 1,
+    };
+
+    private sealed class QueryRecorder(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return result;
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    private sealed record Scenario(
+        PortalTenantReadScope Scope,
+        int TenantAccountId,
+        long DueOpenRentId);
 }

@@ -669,6 +669,46 @@ public class ReportsServiceTests : IDisposable
             .Should().BeTrue("row income and expense totals should be SQL aggregates");
     }
 
+    [Fact]
+    public async Task GetPropertyProfitAndLossAsync_UnfilteredTotalsIncludePortfolioExpenseOnce_ButFilteredTotalsExcludeIt()
+    {
+        var maple = SeedProperty("Maple");
+        var oak = SeedProperty("Oak");
+        SeedExpense(maple.Id, 300m, paidAt: D(2026, 1, 10));
+        SeedExpense(oak.Id, 450m, paidAt: D(2026, 1, 11));
+        SeedExpense(null, 125m, paidAt: D(2026, 1, 12));
+
+        _executedSql.Clear();
+
+        var unfiltered = await _sut.GetPropertyProfitAndLossAsync(_scope, new ReportRangeQuery
+        {
+            From = D(2026, 1, 1),
+            To = D(2026, 1, 31),
+        }, CancellationToken.None);
+
+        unfiltered.Rows.Single(row => row.PropertyName == "Maple").Expense.Should().Be(300m);
+        unfiltered.Rows.Single(row => row.PropertyName == "Oak").Expense.Should().Be(450m);
+        unfiltered.TotalExpense.Should().Be(875m);
+        unfiltered.TotalNet.Should().Be(-875m);
+        _executedSql
+            .Where(sql => sql.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase))
+            .Should().HaveCount(3, "P&L remains row projection plus SQL income and expense total aggregates");
+
+        _executedSql.Clear();
+
+        var filtered = await _sut.GetPropertyProfitAndLossAsync(_scope, new ReportRangeQuery
+        {
+            From = D(2026, 1, 1),
+            To = D(2026, 1, 31),
+            PropertyIds = [maple.Id],
+        }, CancellationToken.None);
+
+        filtered.Rows.Should().ContainSingle();
+        filtered.Rows[0].Expense.Should().Be(300m);
+        filtered.TotalExpense.Should().Be(300m);
+        filtered.TotalNet.Should().Be(-300m);
+    }
+
     // ── True cash flow (§9/§18, DB) ──────────────────────────────────────────────────────────────
 
     [Fact]
@@ -740,6 +780,48 @@ public class ReportsServiceTests : IDisposable
         p.OperatingExpenses.Should().Be(240m);       // taxes kept (not escrow-funded)
         p.DebtService.Should().Be(800m);
         p.CashFlow.Should().Be(1000m - 240m - 800m); // -40
+    }
+
+    [Fact]
+    public async Task GetTrueCashFlowAsync_UnfilteredTotalsIncludePortfolioExpenseOnce_ButFilteredTotalsExcludeIt()
+    {
+        var property = SeedProperty("Maple");
+        var lease = SeedLease(property, SeedUnit("1"), SeedTenant("Ann", "Acre"), rent: 1000m);
+        SeedPayment(lease, 1000m, dueDate: D(2026, 3, 1), paidInFull: true, paidDate: D(2026, 3, 2));
+        SeedExpense(property.Id, 300m, paidAt: D(2026, 3, 15), category: ScheduleECategory.Repairs);
+        SeedExpense(null, 125m, paidAt: D(2026, 3, 16), category: ScheduleECategory.Repairs);
+
+        _executedSql.Clear();
+
+        var unfiltered = await _sut.GetTrueCashFlowAsync(_scope, new ReportRangeQuery
+        {
+            From = D(2026, 3, 1),
+            To = D(2026, 3, 31),
+        }, CancellationToken.None);
+
+        unfiltered.Properties.Should().ContainSingle();
+        unfiltered.Properties[0].OperatingExpenses.Should().Be(300m);
+        unfiltered.TotalOperatingExpenses.Should().Be(425m);
+        unfiltered.TotalNoi.Should().Be(575m);
+        unfiltered.TotalCashFlow.Should().Be(575m);
+        _executedSql
+            .Where(sql => sql.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase))
+            .Should().HaveCount(3, "true cash flow remains rows plus SQL property totals plus SQL operating-expense total");
+
+        _executedSql.Clear();
+
+        var filtered = await _sut.GetTrueCashFlowAsync(_scope, new ReportRangeQuery
+        {
+            From = D(2026, 3, 1),
+            To = D(2026, 3, 31),
+            PropertyIds = [property.Id],
+        }, CancellationToken.None);
+
+        filtered.Properties.Should().ContainSingle();
+        filtered.Properties[0].OperatingExpenses.Should().Be(300m);
+        filtered.TotalOperatingExpenses.Should().Be(300m);
+        filtered.TotalNoi.Should().Be(700m);
+        filtered.TotalCashFlow.Should().Be(700m);
     }
 
     // ── Year-end view (§11/§18, DB) ──────────────────────────────────────────────────────────────
@@ -962,6 +1044,44 @@ public class ReportsServiceTests : IDisposable
         totalsSql.Should().Contain("TotalDeductions");
     }
 
+    [Fact]
+    public async Task GetSecurityDepositRegisterAsync_PagesAndSortsInSql()
+    {
+        var maple = SeedProperty("Maple");
+        var oak = SeedProperty("Oak");
+        var mapleLease = SeedLease(maple, SeedUnit("1", maple.Id), SeedTenant("Ann", "Acre"), rent: 1000m);
+        var oakLease = SeedLease(oak, SeedUnit("A", oak.Id), SeedTenant("Bob", "Birch"), rent: 1000m);
+
+        SeedSecurityDeposit(mapleLease, D(2025, 1, 1), "maple");
+        SeedSecurityDeposit(oakLease, D(2025, 1, 2), "oak");
+
+        _executedSql.Clear();
+
+        var report = await _sut.GetSecurityDepositRegisterAsync(_scope, new ReportRangeQuery
+        {
+            Skip = 1,
+            Take = 1,
+            Sort = "property",
+        }, CancellationToken.None);
+
+        report.TotalCount.Should().Be(2);
+        report.Skip.Should().Be(1);
+        report.Take.Should().Be(1);
+        report.Sort.Should().Be("property");
+        report.Rows.Should().ContainSingle();
+        report.Rows[0].PropertyName.Should().Be("Oak");
+
+        _executedSql.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase),
+            "deposit report ordering and paging must be pushed into the database");
+        _executedSql.Should().Contain(sql =>
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("vw_security_deposit_balances", StringComparison.OrdinalIgnoreCase),
+            "the deposit report total count must be a SQL count over the filtered register");
+    }
+
     // ── Property filter IDOR guard (DB) ────────────────────────────────────────────────────────────
 
     [Fact]
@@ -1088,9 +1208,11 @@ public class ReportsServiceTests : IDisposable
             "a property-scoped report cannot expose a portfolio-wide vendor with no in-scope expense");
         report.Rows.Single(r => r.VendorName == paidIneligible.Name).TotalPaid.Should().Be(250m);
         report.TotalPaid.Should().Be(950m);
+        report.NeedsW9Count.Should().Be(1);
 
         var sql = string.Join("\n---\n", _executedSql);
         sql.Should().Contain("EXISTS", "vendors with paid expenses should be filtered in SQL");
+        sql.Should().Contain("COUNT", "the missing W-9 count must be aggregated in SQL");
         (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
             .Should().BeTrue("1099 totals must be summed in SQL");
         sql.Should().NotContain("strftime", "the tax-year filter should be a date range, not a client/year extraction filter");
@@ -1353,7 +1475,7 @@ public class ReportsServiceTests : IDisposable
         return receipt;
     }
 
-    private Expense SeedExpense(int propertyId, decimal amount, DateTime paidAt,
+    private Expense SeedExpense(int? propertyId, decimal amount, DateTime paidAt,
         ScheduleECategory category = ScheduleECategory.Repairs)
     {
         var expense = new Expense
@@ -1372,6 +1494,37 @@ public class ReportsServiceTests : IDisposable
         _db.Expenses.Add(expense);
         _db.SaveChanges();
         return expense;
+    }
+
+    private void SeedSecurityDeposit(LeaseAgreement lease, DateTime postedAt, string key)
+    {
+        var depositAccount = new SecurityDepositAccount
+        {
+            PortfolioId = PortfolioId,
+            TenantAccountId = lease.LeaseManagement!.TenantAccount!.Id,
+            OriginatingAgreementId = lease.Id,
+            Currency = "USD",
+            CreatedAtUtc = postedAt,
+            CreatedByUserId = 1,
+        };
+        _db.SecurityDepositAccounts.Add(depositAccount);
+        _db.SaveChanges();
+        _db.SecurityDepositEntries.Add(new SecurityDepositEntry
+        {
+            PortfolioId = PortfolioId,
+            SecurityDepositAccountId = depositAccount.Id,
+            EntryType = SecurityDepositEntryType.Receipt,
+            Direction = SecurityDepositDirection.Increase,
+            Amount = 1000m,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(postedAt),
+            PostedAtUtc = postedAt,
+            BusinessKey = $"deposit:receipt:{key}",
+            Description = "Deposit received",
+            LeaseAgreementId = lease.Id,
+            CreatedByUserId = 1,
+        });
+        _db.SaveChanges();
     }
 
     private Vendor SeedVendor(string name, bool eligible, bool w9OnFile)

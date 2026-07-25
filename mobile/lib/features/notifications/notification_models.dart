@@ -1,3 +1,5 @@
+import '../../core/push/mobile_navigation_intent.dart';
+
 /// A single landlord notification row, mirroring the API's `NotificationResponse`.
 ///
 /// All string fields are defended with `?? ''` / nullable parsing so a partial
@@ -11,7 +13,7 @@ class AppNotification {
     required this.title,
     required this.message,
     required this.severity,
-    this.actionUrl,
+    this.navigationIntent,
     this.relatedEntityType,
     this.relatedEntityId,
     required this.isRead,
@@ -27,9 +29,9 @@ class AppNotification {
   /// values fall back to neutral styling.
   final String severity;
 
-  /// Server-emitted deep-link path, for example a canonical tenant-ledger
-  /// entry route carrying both account and entry ids. May be absent.
-  final String? actionUrl;
+  /// Server-issued typed destination. Malformed or unknown payloads are
+  /// discarded by the parser and safely fall back in the inbox.
+  final MobileNavigationIntent? navigationIntent;
   final String? relatedEntityType;
   final int? relatedEntityId;
 
@@ -43,7 +45,7 @@ class AppNotification {
       title: title,
       message: message,
       severity: severity,
-      actionUrl: actionUrl,
+      navigationIntent: navigationIntent,
       relatedEntityType: relatedEntityType,
       relatedEntityId: relatedEntityId,
       isRead: isRead ?? this.isRead,
@@ -58,7 +60,9 @@ class AppNotification {
       title: json['title'] as String? ?? '',
       message: json['message'] as String? ?? '',
       severity: json['severity'] as String? ?? 'Info',
-      actionUrl: json['actionUrl'] as String?,
+      navigationIntent: MobileNavigationIntent.tryParse(
+        json['navigationIntent'],
+      ),
       relatedEntityType: json['relatedEntityType'] as String?,
       relatedEntityId: (json['relatedEntityId'] as num?)?.toInt(),
       isRead: json['isRead'] as bool? ?? false,

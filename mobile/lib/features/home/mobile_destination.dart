@@ -178,6 +178,61 @@ class MobileDestinationGroup {
   final List<MobileDestination> destinations;
 }
 
+enum TenantShellDestinationId {
+  home,
+  accountAndLease,
+  maintenance,
+  messages,
+  profile,
+}
+
+class TenantShellDestination {
+  const TenantShellDestination({
+    required this.id,
+    required this.label,
+    required this.bottomNavigationLabel,
+    required this.icon,
+  });
+
+  final TenantShellDestinationId id;
+  final String label;
+  final String bottomNavigationLabel;
+  final IconData icon;
+}
+
+const tenantShellDestinations = <TenantShellDestination>[
+  TenantShellDestination(
+    id: TenantShellDestinationId.home,
+    label: 'Home',
+    bottomNavigationLabel: 'Home',
+    icon: Symbols.home_rounded,
+  ),
+  TenantShellDestination(
+    id: TenantShellDestinationId.accountAndLease,
+    label: 'Account & lease',
+    bottomNavigationLabel: 'Lease',
+    icon: Symbols.description_rounded,
+  ),
+  TenantShellDestination(
+    id: TenantShellDestinationId.maintenance,
+    label: 'Maintenance',
+    bottomNavigationLabel: 'Repairs',
+    icon: Symbols.build_rounded,
+  ),
+  TenantShellDestination(
+    id: TenantShellDestinationId.messages,
+    label: 'Messages',
+    bottomNavigationLabel: 'Messages',
+    icon: Symbols.forum_rounded,
+  ),
+  TenantShellDestination(
+    id: TenantShellDestinationId.profile,
+    label: 'Profile',
+    bottomNavigationLabel: 'Profile',
+    icon: Symbols.account_circle_rounded,
+  ),
+];
+
 const gettingStartedDestination = MobileDestination(
   id: MobileDestinationId.gettingStarted,
   icon: Symbols.rocket_launch_rounded,

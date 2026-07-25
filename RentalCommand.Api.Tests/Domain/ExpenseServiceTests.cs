@@ -218,6 +218,99 @@ public class ExpenseServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ListPageAsync_FiltersSortsAndProjectsAllocationsInSqlWithoutDuplicates()
+    {
+        var (unitId, otherUnitId) = SeedUnitsForListPage();
+        SeedDirectUnitExpense(unitId, "Allocated 20", DateTime.UtcNow.AddDays(-2), 20m);
+        SeedDirectUnitExpense(unitId, "Allocated 40", DateTime.UtcNow.AddDays(-1), 40m);
+        SeedDirectUnitExpense(otherUnitId, "Decoy", DateTime.UtcNow, 80m);
+        var selected = _db.Expenses
+            .Where(expense => expense.UnitId == unitId)
+            .OrderBy(expense => expense.Amount)
+            .ToArray();
+        _db.ExpenseAllocations.AddRange(
+            new ExpenseAllocation
+            {
+                PortfolioId = PortfolioId,
+                ExpenseId = selected[0].Id,
+                TargetKind = ExpenseAllocationTargetKind.Unit,
+                UnitId = unitId,
+                Amount = 20m,
+                CreatedAt = DateTime.UtcNow,
+            },
+            new ExpenseAllocation
+            {
+                PortfolioId = PortfolioId,
+                ExpenseId = selected[1].Id,
+                TargetKind = ExpenseAllocationTargetKind.Unit,
+                UnitId = unitId,
+                Amount = 40m,
+                CreatedAt = DateTime.UtcNow,
+            });
+        _db.SaveChanges();
+
+        _commands.Clear();
+        var page = await _sut.ListPageAsync(
+            PortfolioId,
+            propertyId: null,
+            unitId: null,
+            workOrderId: null,
+            workOrderLinkedOnly: false,
+            new ExpenseListQuery
+            {
+                AllocationTargetKind = ExpenseAllocationTargetKind.Unit,
+                AllocationTargetId = unitId,
+                Sort = "-allocationTotal",
+                Skip = 0,
+                Take = 10,
+            });
+
+        page.TotalCount.Should().Be(2);
+        page.Items.Select(item => item.Id).Should().OnlyHaveUniqueItems();
+        page.Items.Select(item => item.AllocationTotal).Should().Equal(40m, 20m);
+        _commands.Should().HaveCount(2,
+            "one translated count and one bounded page query are the list budget");
+        _commands[0].Should().Contain("ExpenseAllocations");
+        _commands[0].Should().Contain("EXISTS");
+        _commands[1].Should().Contain("ExpenseAllocations");
+        (_commands[1].Contains("SUM(", StringComparison.OrdinalIgnoreCase) ||
+         _commands[1].Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("allocation totals must be summed in translated SQL");
+        _commands[1].Should().Contain("ORDER BY");
+        _commands[1].Should().Contain("LIMIT");
+    }
+
+    [Fact]
+    public async Task GetAsync_ProjectsCanonicalScopeAndTypedAllocationsInSql()
+    {
+        var (unitId, _) = SeedUnitsForListPage();
+        SeedDirectUnitExpense(unitId, "Canonical allocation", DateTime.UtcNow, 25m);
+        var expense = await _db.Expenses.SingleAsync(row => row.Description == "Canonical allocation");
+        _db.ExpenseAllocations.Add(new ExpenseAllocation
+        {
+            PortfolioId = PortfolioId,
+            ExpenseId = expense.Id,
+            TargetKind = ExpenseAllocationTargetKind.Unit,
+            UnitId = unitId,
+            Amount = 25m,
+            CreatedAt = DateTime.UtcNow,
+        });
+        await _db.SaveChangesAsync();
+
+        _commands.Clear();
+        var result = await _sut.GetAsync(PortfolioId, expense.Id);
+
+        result.Should().NotBeNull();
+        result!.OperationalScope.Should().Be(ExpenseOperationalScope.Unit);
+        result.AllocationTotal.Should().Be(25m);
+        result.Allocations.Should().ContainSingle().Which.UnitId.Should().Be(unitId);
+        _commands.Should().Contain(sql =>
+            sql.Contains("ExpenseAllocations", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("SUM", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void MutationsExposeOnlyScopedReceiptBackedOverloads()
     {
         var mutationMethods = typeof(IExpenseService).GetMethods()
@@ -298,6 +391,9 @@ public class ExpenseServiceTests : IDisposable
         _db.Expenses.Add(new Expense
         {
             PortfolioId = PortfolioId,
+            OperationalScope = ExpenseOperationalScope.WorkOrder,
+            PropertyId = propertyId,
+            UnitId = unitId,
             WorkOrderId = workOrder.Id,
             Category = ScheduleECategory.Repairs,
             Description = description,
@@ -322,6 +418,7 @@ public class ExpenseServiceTests : IDisposable
         _db.Expenses.Add(new Expense
         {
             PortfolioId = PortfolioId,
+            OperationalScope = ExpenseOperationalScope.Unit,
             PropertyId = propertyId,
             UnitId = unitId,
             Category = ScheduleECategory.Repairs,

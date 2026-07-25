@@ -46,4 +46,14 @@ describe('canonical portal money contract', () => {
 		assert.match(pageSource, /data-testid="portal-autopay-unavailable"/);
 		assert.match(pageSource, /queryKey: \['portal-autopay', selectedAccountId\]/);
 	});
+
+	it('uses stable loaders and retry actions for payment reads', () => {
+		assert.match(pageSource, /LoadingState/);
+		assert.match(pageSource, /portal-payment-accounts-loading/);
+		assert.match(pageSource, /portal-autopay-loading/);
+		assert.match(pageSource, /portal-charges-loading/);
+		assert.match(pageSource, /accountsQuery\.refetch\(\)/);
+		assert.match(pageSource, /autopayQuery\.refetch\(\)/);
+		assert.match(pageSource, /chargesQuery\.refetch\(\)/);
+	});
 });

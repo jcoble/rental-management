@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Tests;
 using RentalCommand.Core;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -14,19 +15,25 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public class PropertyServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class PropertyServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
     private readonly List<string> _commands = [];
-    private readonly SqliteTestContext _ctx;
-    private readonly PropertyService _sut;
-    private readonly WorkspaceReadScope _scope;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private PropertyService _sut = null!;
+    private WorkspaceReadScope _scope;
 
-    public PropertyServiceTests()
+    public PropertyServiceTests(MigratedPostgreSqlFixture fixture)
     {
-        _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
-        _ctx.Db.Database.InstallCanonicalLeaseProjectionViewsForSqlite();
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
         _scope = SeedAdministratorScope();
         _sut = new PropertyService(_ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
     }
@@ -93,7 +100,7 @@ public class PropertyServiceTests : IDisposable
             PortfolioId, user.Id, session.Id, accessContext.Id, accessContext.AccessRevision);
     }
 
-    public void Dispose() => _ctx.Dispose();
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
     public async Task ListPageAsync_ReturnsSqlCountAndRequestedWindow()
@@ -122,6 +129,197 @@ public class PropertyServiceTests : IDisposable
             sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
     }
+
+    [Fact]
+    public async Task ListAndDetail_UsePersistedRentalStructureForWorkspaceEntry()
+    {
+        var now = DateTime.UtcNow;
+        var single = NewProperty("One address", RentalStructure.SingleRental, now);
+        var duplex = NewProperty("One entered unit", RentalStructure.MultiRental, now);
+        var singleUnit = NewUnit(single, "Rental", now);
+        _ctx.Db.AddRange(single, duplex, singleUnit, NewUnit(duplex, "A", now));
+        _ctx.Db.SaveChanges();
+
+        _commands.Clear();
+        var page = await _sut.ListPageAsync(_scope, new PropertyListQuery
+        {
+            Sort = "name",
+            Take = 20,
+        });
+
+        var singleRow = page.Items.Single(row => row.Id == single.Id);
+        singleRow.WorkspaceEntry.Destination.Should().Be(PropertyWorkspaceDestination.Unit);
+        singleRow.WorkspaceEntry.UnitId.Should().Be(singleUnit.Id);
+        singleRow.WorkspaceEntry.Areas.Should().BeEmpty();
+
+        var duplexRow = page.Items.Single(row => row.Id == duplex.Id);
+        duplexRow.UnitCount.Should().Be(1);
+        duplexRow.WorkspaceEntry.Destination.Should().Be(PropertyWorkspaceDestination.Property);
+        duplexRow.WorkspaceEntry.UnitId.Should().BeNull();
+        duplexRow.WorkspaceEntry.Areas.Should().Equal(
+            PropertyWorkspaceArea.Summary,
+            PropertyWorkspaceArea.Rentals,
+            PropertyWorkspaceArea.OwnershipManagement,
+            PropertyWorkspaceArea.PropertyWork,
+            PropertyWorkspaceArea.PropertyFinances,
+            PropertyWorkspaceArea.DocumentsHistory);
+
+        var listCommands = _commands.ToArray();
+        listCommands.Should().HaveCount(2);
+        listCommands[1].Should().Contain("RentalStructure");
+        listCommands[1].Should().Contain("Units");
+
+        _commands.Clear();
+        var detail = await _sut.GetAsync(_scope, single.Id);
+        detail.Should().NotBeNull();
+        detail!.WorkspaceEntry.UnitId.Should().Be(singleUnit.Id);
+        _commands.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ListAndDetail_ProjectOnlyCurrentEffectiveOwnershipRelationshipFacts()
+    {
+        var now = DateTime.UtcNow;
+        var property = NewProperty("Shared ownership", RentalStructure.MultiRental, now);
+        var currentOwner = new OwnerEntity
+        {
+            PortfolioId = PortfolioId,
+            Name = "Current Owner LLC",
+            Email = "current-owner@example.test",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var formerOwner = new OwnerEntity
+        {
+            PortfolioId = PortfolioId,
+            Name = "Former Owner LLC",
+            Email = "former-owner@example.test",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        property.Ownerships.Add(new PropertyOwnership
+        {
+            PortfolioId = PortfolioId,
+            OwnerEntity = currentOwner,
+            OwnershipSharePercent = 62.5000m,
+            EffectiveFromUtc = now.AddDays(-10),
+            StatementRecipientName = "Current Statements",
+            StatementRecipientEmail = "statements@example.test",
+            PayeeName = "Current Payee LLC",
+        });
+        property.Ownerships.Add(new PropertyOwnership
+        {
+            PortfolioId = PortfolioId,
+            OwnerEntity = formerOwner,
+            OwnershipSharePercent = 100m,
+            EffectiveFromUtc = now.AddYears(-1),
+            EffectiveToUtc = now.AddDays(-30),
+            StatementRecipientName = "Former Statements",
+            StatementRecipientEmail = "former-statements@example.test",
+            PayeeName = "Former Payee LLC",
+        });
+        _ctx.Db.Properties.Add(property);
+        _ctx.Db.SaveChanges();
+
+        _commands.Clear();
+        var page = await _sut.ListPageAsync(_scope, new PropertyListQuery
+        {
+            Search = "Current Owner",
+            Sort = "name",
+            Take = 20,
+        });
+
+        var row = page.Items.Should().ContainSingle().Subject;
+        var ownership = row.Ownerships.Should().ContainSingle().Subject;
+        ownership.OwnerEntityId.Should().Be(currentOwner.Id);
+        ownership.OwnerName.Should().Be("Current Owner LLC");
+        ownership.OwnershipSharePercent.Should().Be(62.5000m);
+        ownership.StatementRecipientName.Should().Be("Current Statements");
+        ownership.StatementRecipientEmail.Should().Be("statements@example.test");
+        ownership.PayeeName.Should().Be("Current Payee LLC");
+        _commands.Should().HaveCount(2, "the translated count and bounded page are the only reads");
+        var countSql = _commands.Single(sql =>
+            sql.TrimStart().StartsWith("SELECT count(*)", StringComparison.OrdinalIgnoreCase) &&
+            !sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            !sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
+            !sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
+        var pageSql = _commands.Single(sql =>
+            !sql.TrimStart().StartsWith("SELECT count(*)", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
+        new[] { countSql, pageSql }.Should().OnlyContain(sql =>
+            sql.Contains("AuthSessions", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("PropertyOwnerships", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("EffectiveFromUtc", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("EffectiveToUtc", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase));
+
+        _commands.Clear();
+        var formerOwnerPage = await _sut.ListPageAsync(_scope, new PropertyListQuery
+        {
+            Search = "Former Owner",
+            Sort = "name",
+            Take = 20,
+        });
+
+        formerOwnerPage.Items.Should().BeEmpty(
+            "expired ownership relationships must not contribute owner-name search matches");
+        formerOwnerPage.TotalCount.Should().Be(0);
+        _commands.Should().HaveCount(2, "the negative owner search remains a count and bounded page read");
+        var formerCountSql = _commands.Single(sql =>
+            sql.TrimStart().StartsWith("SELECT count(*)", StringComparison.OrdinalIgnoreCase) &&
+            !sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            !sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
+            !sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
+        var formerPageSql = _commands.Single(sql =>
+            !sql.TrimStart().StartsWith("SELECT count(*)", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
+        new[] { formerCountSql, formerPageSql }.Should().OnlyContain(sql =>
+            sql.Contains("AuthSessions", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("PropertyOwnerships", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("EffectiveFromUtc", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("EffectiveToUtc", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase));
+
+        _commands.Clear();
+        var detail = await _sut.GetAsync(_scope, property.Id);
+
+        detail.Should().NotBeNull();
+        detail!.Ownerships.Should().ContainSingle(item =>
+            item.OwnerEntityId == currentOwner.Id
+            && item.OwnershipSharePercent == 62.5000m
+            && item.StatementRecipientName == "Current Statements"
+            && item.StatementRecipientEmail == "statements@example.test"
+            && item.PayeeName == "Current Payee LLC");
+        detail.Ownerships.Should().NotContain(item => item.OwnerEntityId == formerOwner.Id);
+        _commands.Should().ContainSingle();
+        _commands[0].Should().Contain("PropertyOwnerships");
+    }
+
+    private static Property NewProperty(string name, RentalStructure structure, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        Name = name,
+        RentalStructure = structure,
+        AddressLine1 = $"{name} Street",
+        City = "Columbus",
+        State = "OH",
+        PostalCode = "43215",
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+
+    private static Unit NewUnit(Property property, string unitNumber, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        Property = property,
+        UnitNumber = unitNumber,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
 
     private void SeedProperties(params string[] names)
     {

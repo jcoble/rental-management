@@ -4,6 +4,7 @@
 	import { workOrders } from '$lib/api/endpoints/workOrders';
 	import { inspections } from '$lib/api/endpoints/inspections';
 	import { properties } from '$lib/api/endpoints/properties';
+	import { units } from '$lib/api/endpoints/units';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { vendors } from '$lib/api/endpoints/vendors';
 	import type { InspectionTemplate, InspectionTemplateInput, InspectionType, WorkOrder } from '$lib/types';
@@ -18,6 +19,7 @@
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
+	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import DateTimePicker from '$lib/components/shared/DateTimePicker.svelte';
@@ -102,7 +104,39 @@
 		}),
 	}));
 	const inspectionsQuery = createQuery(() => ({ queryKey: ['inspections', portfolioId], queryFn: () => inspections.list(portfolioId) }));
-	const propertiesQuery = createQuery(() => ({ queryKey: ['properties', portfolioId], queryFn: () => properties.list(portfolioId, { take: 200 }) }));
+	async function loadPropertyOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await properties.listPage(portfolioId, { ...params, sort: 'name' });
+		return {
+			...result,
+			items: result.items.map((property) => ({
+				id: property.id,
+				label: property.name,
+				description: `${property.addressLine1}, ${property.city}, ${property.state}`
+			}))
+		};
+	}
+	async function loadTenantOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await tenants.listPage(portfolioId, { ...params, sort: 'lastName' });
+		return {
+			...result,
+			items: result.items.map((tenant) => ({
+				id: tenant.id,
+				label: tenant.fullName || `${tenant.firstName} ${tenant.lastName}`,
+				description: tenant.email || tenant.phone || null
+			}))
+		};
+	}
+	async function loadVendorOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await vendors.listPage(portfolioId, { ...params, sort: 'name' });
+		return {
+			...result,
+			items: result.items.map((vendor) => ({
+				id: vendor.id,
+				label: vendor.name,
+				description: vendor.serviceType || vendor.email || vendor.phone || null
+			}))
+		};
+	}
 
 	// --- Work order form/dialog ---
 	const emptyWo = {
@@ -126,6 +160,10 @@
 	let woStep = $state(0);
 	let completedWoSteps = $state<number[]>([]);
 	let woDeleteTarget = $state<WorkOrder | null>(null);
+	let selectedWoPropertyLabel = $state<string | null>(null);
+	let selectedWoUnitLabel = $state<string | null>(null);
+	let selectedWoTenantLabel = $state<string | null>(null);
+	let selectedWoVendorLabel = $state<string | null>(null);
 
 	const woSteps: FormStepperStep[] = [
 		{ id: 'issue', label: 'Issue', description: 'Title and details' },
@@ -176,14 +214,22 @@
 
 	// Optional work-order context. Tenants/vendors load only while the form is open; units are
 	// fetched per selected property so the Unit dropdown only offers units of that property.
-	const tenantsQuery = createQuery(() => ({ queryKey: ['tenants', portfolioId], queryFn: () => tenants.list(portfolioId, { take: 200 }), enabled: showWoForm }));
-	const vendorsQuery = createQuery(() => ({ queryKey: ['vendors', portfolioId], queryFn: () => vendors.list(portfolioId, { take: 200 }), enabled: showWoForm }));
 	const woPropertyId = $derived(woForm.propertyId ? Number(woForm.propertyId) : null);
-	const woUnitsQuery = createQuery(() => ({
-		queryKey: ['units', woPropertyId],
-		queryFn: () => properties.listUnits(woPropertyId as number),
-		enabled: showWoForm && woPropertyId != null,
-	}));
+	async function loadWoUnitOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await units.listWithHealthPage({
+			...params,
+			propertyId: woPropertyId ?? undefined,
+			sort: 'unitNumber'
+		});
+		return {
+			...result,
+			items: result.items.map((unit) => ({
+				id: unit.id,
+				label: `Unit ${unit.unitNumber}`,
+				description: unit.status
+			}))
+		};
+	}
 
 	function invalidateWo() {
 		queryClient.invalidateQueries({ queryKey: ['work-orders', portfolioId] });
@@ -216,6 +262,10 @@
 		woErrors = {};
 		woStep = 0;
 		completedWoSteps = [];
+		selectedWoPropertyLabel = null;
+		selectedWoUnitLabel = null;
+		selectedWoTenantLabel = null;
+		selectedWoVendorLabel = null;
 		showWoForm = true;
 	}
 	function openEditWo(wo: WorkOrder) {
@@ -238,6 +288,10 @@
 		woErrors = {};
 		woStep = 0;
 		completedWoSteps = [];
+		selectedWoPropertyLabel = wo.propertyName ?? null;
+		selectedWoUnitLabel = wo.unitNumber ? `Unit ${wo.unitNumber}` : null;
+		selectedWoTenantLabel = wo.tenantName ?? null;
+		selectedWoVendorLabel = wo.vendorName ?? null;
 		showWoForm = true;
 	}
 	function closeWoForm() {
@@ -246,6 +300,10 @@
 		woErrors = {};
 		woStep = 0;
 		completedWoSteps = [];
+		selectedWoPropertyLabel = null;
+		selectedWoUnitLabel = null;
+		selectedWoTenantLabel = null;
+		selectedWoVendorLabel = null;
 	}
 	function workOrderWindowErrors(): Record<string, string> {
 		if (woForm.scheduledFor && woForm.scheduledWindowEnd) {
@@ -319,6 +377,7 @@
 	let inspectionErrors = $state<Record<string, string>>({});
 	let inspectionStep = $state(0);
 	let completedInspectionSteps = $state<number[]>([]);
+	let selectedInspectionPropertyLabel = $state<string | null>(null);
 	const inspectionSteps: FormStepperStep[] = [
 		{ id: 'where', label: 'Where', description: 'Property and type' },
 		{ id: 'checklist', label: 'Checklist', description: 'Template and inspector' },
@@ -347,6 +406,7 @@
 		inspectionErrors = {};
 		inspectionStep = 0;
 		completedInspectionSteps = [];
+		selectedInspectionPropertyLabel = null;
 		showInspectionForm = true;
 	}
 
@@ -356,6 +416,7 @@
 		inspectionErrors = {};
 		inspectionStep = 0;
 		completedInspectionSteps = [];
+		selectedInspectionPropertyLabel = null;
 	}
 
 	function inspectionStepErrorFields(step: number, errors: Record<string, string>) {
@@ -888,46 +949,40 @@
 						</div>
 					{:else if woStep === 2}
 						<div>
-							<span class="mb-1 block text-xs font-medium text-muted-foreground">Property</span>
-							<Select.Root
-							type="single"
-							value={woForm.propertyId}
-							onValueChange={(v) => {
-								woForm.propertyId = v;
-								woForm.unitId = '';
-							}}
-						>
-							<Select.Trigger class="w-full" data-testid="work-order-property-input">
-								{woForm.propertyId
-									? ((propertiesQuery.data || []).find((p) => String(p.id) === woForm.propertyId)?.name ?? 'Select property')
-									: 'Select property'}
-							</Select.Trigger>
-							<Select.Content>
-								<Select.Item value="" label="Select property">Select property</Select.Item>
-								{#each propertiesQuery.data || [] as property}
-									<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
-								{/each}
-							</Select.Content>
-						</Select.Root>
+							<RemoteRecordSelect
+								queryKey={['work-order-property', portfolioId]}
+								label="Property"
+								bind:value={woForm.propertyId}
+								selectedLabel={selectedWoPropertyLabel}
+								placeholder="Select property"
+								searchPlaceholder="Search properties…"
+								emptyLabel="No matching properties"
+								required
+								loadPage={loadPropertyOptions}
+								onValueChange={(_value, option) => {
+									selectedWoPropertyLabel = option?.label ?? null;
+									woForm.unitId = '';
+									selectedWoUnitLabel = null;
+								}}
+								testid="work-order-property-input"
+							/>
 						{#if woErrors.propertyId}<p class="mt-1 text-xs text-destructive" data-testid="work-order-property-error">{woErrors.propertyId}</p>{/if}
 					</div>
 					<div>
-						<label for="work-order-unit" class="mb-1 block text-xs font-medium text-muted-foreground">Unit (optional)</label>
-						<Select.Root type="single" bind:value={woForm.unitId} disabled={woPropertyId == null}>
-							<Select.Trigger id="work-order-unit" class="w-full" data-testid="work-order-unit-input">
-								{woForm.unitId
-									? ((woUnitsQuery.data || []).find((u) => String(u.id) === woForm.unitId)?.unitNumber ?? 'Select unit')
-									: woPropertyId == null
-										? 'Select a property first'
-										: 'No specific unit'}
-							</Select.Trigger>
-							<Select.Content>
-								<Select.Item value="" label="No specific unit">No specific unit</Select.Item>
-								{#each woUnitsQuery.data || [] as unit (unit.id)}
-									<Select.Item value={String(unit.id)} label={unit.unitNumber}>Unit {unit.unitNumber}</Select.Item>
-								{/each}
-							</Select.Content>
-							</Select.Root>
+						<RemoteRecordSelect
+							queryKey={['work-order-unit', portfolioId, woPropertyId]}
+							label="Unit (optional)"
+							bind:value={woForm.unitId}
+							selectedLabel={selectedWoUnitLabel}
+							placeholder={woPropertyId == null ? 'Select a property first' : 'No specific unit'}
+							clearLabel="No specific unit"
+							searchPlaceholder="Search units…"
+							emptyLabel="No matching units"
+							disabled={woPropertyId == null}
+							loadPage={loadWoUnitOptions}
+							onValueChange={(_value, option) => (selectedWoUnitLabel = option?.label ?? null)}
+							testid="work-order-unit-input"
+						/>
 						</div>
 					{:else if woStep === 3}
 						<div class="grid gap-3 sm:grid-cols-2">
@@ -944,44 +999,32 @@
 						</div>
 				{:else if woStep === 4}
 					<div class="grid gap-3 sm:grid-cols-2">
-						<div>
-							<label for="work-order-tenant" class="mb-1 block text-xs font-medium text-muted-foreground">Tenant (optional)</label>
-							<Select.Root type="single" bind:value={woForm.tenantId}>
-								<Select.Trigger id="work-order-tenant" class="w-full" data-testid="work-order-tenant-input">
-									{woForm.tenantId
-										? ((tenantsQuery.data || []).find((t) => String(t.id) === woForm.tenantId)?.fullName
-											?? (() => {
-												const t = (tenantsQuery.data || []).find((t) => String(t.id) === woForm.tenantId);
-												return t ? `${t.firstName} ${t.lastName}`.trim() : 'No tenant';
-											})())
-										: 'No tenant'}
-								</Select.Trigger>
-								<Select.Content>
-									<Select.Item value="" label="No tenant">No tenant</Select.Item>
-									{#each tenantsQuery.data || [] as tenant (tenant.id)}
-										<Select.Item value={String(tenant.id)} label={tenant.fullName ?? `${tenant.firstName} ${tenant.lastName}`.trim()}>
-											{tenant.fullName ?? `${tenant.firstName} ${tenant.lastName}`.trim()}
-										</Select.Item>
-									{/each}
-								</Select.Content>
-							</Select.Root>
-						</div>
-						<div>
-							<label for="work-order-vendor" class="mb-1 block text-xs font-medium text-muted-foreground">Vendor (optional)</label>
-							<Select.Root type="single" bind:value={woForm.vendorId}>
-								<Select.Trigger id="work-order-vendor" class="w-full" data-testid="work-order-vendor-input">
-									{woForm.vendorId
-										? ((vendorsQuery.data || []).find((v) => String(v.id) === woForm.vendorId)?.name ?? 'No vendor')
-										: 'No vendor'}
-								</Select.Trigger>
-								<Select.Content>
-									<Select.Item value="" label="No vendor">No vendor</Select.Item>
-									{#each vendorsQuery.data || [] as vendor (vendor.id)}
-										<Select.Item value={String(vendor.id)} label={vendor.name}>{vendor.name}</Select.Item>
-									{/each}
-								</Select.Content>
-							</Select.Root>
-						</div>
+						<RemoteRecordSelect
+							queryKey={['work-order-tenant', portfolioId]}
+							label="Tenant (optional)"
+							bind:value={woForm.tenantId}
+							selectedLabel={selectedWoTenantLabel}
+							placeholder="No tenant"
+							clearLabel="No tenant"
+							searchPlaceholder="Search tenants…"
+							emptyLabel="No matching tenants"
+							loadPage={loadTenantOptions}
+							onValueChange={(_value, option) => (selectedWoTenantLabel = option?.label ?? null)}
+							testid="work-order-tenant-input"
+						/>
+						<RemoteRecordSelect
+							queryKey={['work-order-vendor', portfolioId]}
+							label="Vendor (optional)"
+							bind:value={woForm.vendorId}
+							selectedLabel={selectedWoVendorLabel}
+							placeholder="No vendor"
+							clearLabel="No vendor"
+							searchPlaceholder="Search vendors…"
+							emptyLabel="No matching vendors"
+							loadPage={loadVendorOptions}
+							onValueChange={(_value, option) => (selectedWoVendorLabel = option?.label ?? null)}
+							testid="work-order-vendor-input"
+						/>
 					</div>
 				{:else}
 					<div>
@@ -1028,19 +1071,19 @@
 			<div class="space-y-4" data-testid="inspection-form">
 				{#if inspectionStep === 0}
 					<div>
-						<Select.Root type="single" bind:value={inspectionForm.propertyId}>
-							<Select.Trigger class="w-full" data-testid="inspection-property-input">
-								{inspectionForm.propertyId
-									? ((propertiesQuery.data || []).find((p) => String(p.id) === inspectionForm.propertyId)?.name ?? 'Select property')
-									: 'Select property'}
-							</Select.Trigger>
-							<Select.Content>
-								<Select.Item value="" label="Select property">Select property</Select.Item>
-								{#each propertiesQuery.data || [] as property}
-									<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
-								{/each}
-							</Select.Content>
-						</Select.Root>
+						<RemoteRecordSelect
+							queryKey={['inspection-property', portfolioId]}
+							label="Property"
+							bind:value={inspectionForm.propertyId}
+							selectedLabel={selectedInspectionPropertyLabel}
+							placeholder="Select property"
+							searchPlaceholder="Search properties…"
+							emptyLabel="No matching properties"
+							required
+							loadPage={loadPropertyOptions}
+							onValueChange={(_value, option) => (selectedInspectionPropertyLabel = option?.label ?? null)}
+							testid="inspection-property-input"
+						/>
 						{#if inspectionErrors.propertyId}<p class="mt-1 text-xs text-destructive" data-testid="inspection-property-error">{inspectionErrors.propertyId}</p>{/if}
 					</div>
 					<Select.Root type="single" bind:value={inspectionForm.type}>

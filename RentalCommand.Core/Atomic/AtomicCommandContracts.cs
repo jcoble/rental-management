@@ -276,6 +276,10 @@ public sealed class AtomicMorningBriefingDigest : IAtomicResultData
 /// </summary>
 public interface IAtomicNoticeDraftPersistence
 {
+    Task<IReadOnlyList<AtomicGeneratedTenantNoticeDraft>> GenerateClaimedBatchAsync(
+        Guid claimToken,
+        CancellationToken ct = default);
+
     Task<IReadOnlyList<AtomicGeneratedTenantNoticeDraft>> GenerateManualAsync(
         WorkspaceReadScope scope,
         int? recipientTenantId,
@@ -294,6 +298,7 @@ public sealed class AtomicGeneratedTenantNoticeDraft : IAtomicResultData
     public int DraftId { get; init; }
     public bool WasCreated { get; init; }
     public int CreatedCount { get; init; }
+    public int PortfolioId { get; init; }
     public int LeaseManagementId { get; init; }
     public int TenantAccountId { get; init; }
     public int RecipientLeaseManagementPartyId { get; init; }
@@ -335,6 +340,12 @@ public interface IAtomicAccountSecurityPersistence
         string ownerName,
         string ownerEmail,
         DateTime createdAtUtc,
+        CancellationToken ct = default);
+
+    Task<int> DeleteFreshWorkspaceSuppliedNoticeTemplateVersionsAsync(
+        int userId,
+        int portfolioId,
+        IReadOnlyList<int> templateVersionIds,
         CancellationToken ct = default);
 
     /// <summary>

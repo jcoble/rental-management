@@ -419,6 +419,95 @@ export interface ReturnPossessionResponse {
   replayed: boolean;
 }
 
+export type CancelPlannedAccessDisposition = "RevokeNow" | "Retain";
+
+export interface CancelPlannedRelationshipRequest {
+  unitId: number;
+  cancellationReasonCode: string;
+  cancellationNote: string | null;
+  draftCancellationReason: string;
+  accesses: Array<{
+    tenantUserAccessId: number;
+    disposition: CancelPlannedAccessDisposition;
+  }>;
+}
+
+export interface CancelPlannedRelationshipResponse {
+  leaseManagementId: number;
+  unitId: number;
+  canceledAtUtc: string;
+  accountClosedAtUtc: string;
+  canceledAgreementDraftIds: number[];
+  canceledAddendumDraftIds: number[];
+  revokedAccessIds: number[];
+  retainedAccessIds: number[];
+  replayed: boolean;
+}
+
+export interface TransferLeaseManagementRequest {
+  sourceUnitId: number;
+  destinationUnitId: number;
+  effectiveOn: string;
+  plannedDestinationPossessionAtUtc: string | null;
+  giveDestinationPossessionNow: boolean;
+  possessionAgreementExceptionReason: string | null;
+  destinationDocumentTemplateId: number;
+  carryTenantBalance: boolean;
+  carrySecurityDeposit: boolean;
+  transferReason: string;
+}
+
+export interface TransferLeaseManagementResponse {
+  transferPublicId: string;
+  sourceLeaseManagementId: number;
+  sourceUnitId: number;
+  destinationLeaseManagementId: number;
+  destinationUnitId: number;
+  destinationTenantAccountId: number;
+  destinationAgreementId: number;
+  replayed: boolean;
+}
+
+export interface CloseTenantAccountRequest {
+  tenantAccountId: number;
+  closeReasonCode: string;
+  closeNote: string | null;
+}
+
+export interface CloseTenantAccountResponse {
+  value: {
+    outcome: string;
+    leaseManagementId: number;
+    tenantAccountId: number;
+    closedAtUtc: string | null;
+    error: string | null;
+  };
+  replayed: boolean;
+}
+
+export type LeaseLifecycleAction = "cancel" | "transfer" | "close-account";
+
+export interface LeaseLifecycleActionRequest {
+  path: string;
+  options: RequestInit;
+}
+
+export function buildLeaseLifecycleActionRequest(
+  leaseManagementId: number,
+  action: LeaseLifecycleAction,
+  request: unknown,
+  operationKey: string
+): LeaseLifecycleActionRequest {
+  return {
+    path: `/lease-managements/${leaseManagementId}/${action}`,
+    options: {
+      method: "POST",
+      headers: { "Idempotency-Key": operationKey },
+      body: JSON.stringify(request),
+    },
+  };
+}
+
 export interface RecordLeaseEndingDispositionRequest {
   unitId: number;
   disposition: LeaseManagementEndingDisposition;
@@ -497,6 +586,21 @@ function idempotentJson<T>(
     headers: { "Idempotency-Key": operationKey },
     body: JSON.stringify(request),
   });
+}
+
+function lifecycleActionJson<T>(
+  leaseManagementId: number,
+  action: LeaseLifecycleAction,
+  request: unknown,
+  operationKey: string
+) {
+  const mutation = buildLeaseLifecycleActionRequest(
+    leaseManagementId,
+    action,
+    request,
+    operationKey
+  );
+  return fetchApi<T>(mutation.path, mutation.options);
 }
 
 export const leaseManagements = {
@@ -600,6 +704,39 @@ export const leaseManagements = {
     idempotentJson<RecordLeaseEndingDispositionResponse>(
       `/lease-managements/${leaseManagementId}/ending-disposition`,
       "POST",
+      request,
+      operationKey
+    ),
+  cancelPlannedRelationship: (
+    leaseManagementId: number,
+    request: CancelPlannedRelationshipRequest,
+    operationKey: string
+  ) =>
+    lifecycleActionJson<CancelPlannedRelationshipResponse>(
+      leaseManagementId,
+      "cancel",
+      request,
+      operationKey
+    ),
+  transferToUnit: (
+    leaseManagementId: number,
+    request: TransferLeaseManagementRequest,
+    operationKey: string
+  ) =>
+    lifecycleActionJson<TransferLeaseManagementResponse>(
+      leaseManagementId,
+      "transfer",
+      request,
+      operationKey
+    ),
+  closeAccount: (
+    leaseManagementId: number,
+    request: CloseTenantAccountRequest,
+    operationKey: string
+  ) =>
+    lifecycleActionJson<CloseTenantAccountResponse>(
+      leaseManagementId,
+      "close-account",
       request,
       operationKey
     ),

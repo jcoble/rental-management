@@ -237,28 +237,33 @@ class _MobileDomainHubScreenState extends ConsumerState<MobileDomainHubScreen> {
   void _openDestination(
     MobileDestinationId destination, {
     MobileDetailBuilder? detailBuilder,
+    MobileNavigationGuard? canNavigate,
   }) {
     final index = widget.destinations.indexWhere((d) => d.id == destination);
     if (index < 0) {
       if (detailBuilder != null) {
+        if (canNavigate?.call() == false) return;
         Navigator.of(context).push<void>(_detailRoute(detailBuilder));
       }
       return;
     }
+    if (canNavigate?.call() == false) return;
 
-    setState(() {
-      _selectedIndex = index;
-      _headerCollapsed = false;
-      _quickActionFallbackReady = false;
-      if (detailBuilder == null) {
-        _headerController.clearActiveDetail();
-      }
-    });
-    _scheduleQuickActionFallbackCheck();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      if (canNavigate?.call() == false) return;
+      setState(() {
+        _selectedIndex = index;
+        _headerCollapsed = false;
+        _quickActionFallbackReady = false;
+        if (detailBuilder == null) {
+          _headerController.clearActiveDetail();
+        }
+      });
+      _scheduleQuickActionFallbackCheck();
       _replaceContentRoot(widget.destinations[index]);
       if (detailBuilder != null) {
+        if (canNavigate?.call() == false) return;
         _contentNavigatorKey.currentState?.push<void>(
           _detailRoute(detailBuilder),
         );

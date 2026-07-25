@@ -194,7 +194,6 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
         var property = new Property
         {
             PortfolioId = _portfolioId,
-            OwnerEntityId = ownerEntityId,
             Name = name,
             AddressLine1 = "1 Main St",
             City = "Columbus",
@@ -204,6 +203,17 @@ public sealed class OwnerDistributionAuthorizationTests : IAsyncLifetime
             UpdatedAt = now,
         };
         _ctx.Db.Properties.Add(property);
+        _ctx.Db.SaveChanges();
+        _ctx.Db.PropertyOwnerships.Add(new PropertyOwnership
+        {
+            PortfolioId = _portfolioId,
+            PropertyId = property.Id,
+            OwnerEntityId = ownerEntityId,
+            OwnershipSharePercent = 100m,
+            EffectiveFromUtc = now,
+            StatementRecipientName = "Owner",
+            PayeeName = "Owner",
+        });
         _ctx.Db.SaveChanges();
         return property;
     }

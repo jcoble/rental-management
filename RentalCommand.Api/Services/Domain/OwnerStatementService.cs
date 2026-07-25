@@ -65,7 +65,12 @@ public class OwnerStatementService : IOwnerStatementService
             .Where(owner =>
                 owner.PortfolioId == portfolioId &&
                 owner.Id == ownerId &&
-                authorizedProperties.Any(property => property.OwnerEntityId == owner.Id))
+                _db.PropertyOwnerships.Any(ownership =>
+                    ownership.PortfolioId == portfolioId
+                    && ownership.OwnerEntityId == owner.Id
+                    && ownership.EffectiveFromUtc < end
+                    && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > start)
+                    && authorizedProperties.Any(property => property.Id == ownership.PropertyId)))
             .Select(owner => new OwnerStatementSqlRow
             {
                 OwnerId = owner.Id,
@@ -91,12 +96,20 @@ public class OwnerStatementService : IOwnerStatementService
                         ((distribution.PropertyId != null &&
                           authorizedProperties.Any(property =>
                               property.Id == distribution.PropertyId &&
-                              property.OwnerEntityId == owner.Id)) ||
+                              _db.PropertyOwnerships.Any(ownership =>
+                                  ownership.PortfolioId == portfolioId
+                                  && ownership.PropertyId == property.Id
+                                  && ownership.OwnerEntityId == owner.Id
+                                  && ownership.EffectiveFromUtc < end
+                                  && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > start)))) ||
                          (distribution.PropertyId == null &&
-                          !_db.Properties.Any(property =>
-                              property.PortfolioId == portfolioId &&
-                              property.OwnerEntityId == owner.Id &&
-                              !authorizedProperties.Any(authorized => authorized.Id == property.Id)))))
+                          !_db.PropertyOwnerships.Any(ownership =>
+                              ownership.PortfolioId == portfolioId
+                              && ownership.OwnerEntityId == owner.Id
+                              && ownership.EffectiveFromUtc < end
+                              && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > start)
+                              && !authorizedProperties.Any(authorized =>
+                                  authorized.Id == ownership.PropertyId)))))
                     .Sum(distribution => (decimal?)distribution.Amount) ?? 0m,
                 Properties = roundedPropertyLines
                     .Where(row => row.OwnerId == owner.Id)
@@ -256,12 +269,20 @@ public class OwnerStatementService : IOwnerStatementService
                         ((distribution.PropertyId != null &&
                           authorizedProperties.Any(property =>
                               property.Id == distribution.PropertyId &&
-                              property.OwnerEntityId == group.Key.OwnerId)) ||
+                              _db.PropertyOwnerships.Any(ownership =>
+                                  ownership.PortfolioId == portfolioId
+                                  && ownership.PropertyId == property.Id
+                                  && ownership.OwnerEntityId == group.Key.OwnerId
+                                  && ownership.EffectiveFromUtc < end
+                                  && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > start)))) ||
                          (distribution.PropertyId == null &&
-                          !_db.Properties.Any(property =>
-                              property.PortfolioId == portfolioId &&
-                              property.OwnerEntityId == group.Key.OwnerId &&
-                              !authorizedProperties.Any(authorized => authorized.Id == property.Id)))))
+                          !_db.PropertyOwnerships.Any(ownership =>
+                              ownership.PortfolioId == portfolioId
+                              && ownership.OwnerEntityId == group.Key.OwnerId
+                              && ownership.EffectiveFromUtc < end
+                              && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > start)
+                              && !authorizedProperties.Any(authorized =>
+                                  authorized.Id == ownership.PropertyId)))))
                     .Sum(distribution => (decimal?)distribution.Amount) ?? 0m,
             });
     }
@@ -296,18 +317,20 @@ public class OwnerStatementService : IOwnerStatementService
         IQueryable<Property> authorizedProperties)
     {
         var (startOn, endOn) = YearDateRange(year);
+        var (startUtc, endUtc) = YearRange(year);
 
-        return authorizedProperties
-            .Where(p =>
-                p.PortfolioId == portfolioId &&
-                p.OwnerEntityId != null &&
-                p.OwnerEntity != null)
-            .Select(p => new OwnerPropertyNetRow
+        return
+            from ownership in _db.PropertyOwnerships.AsNoTracking()
+            join p in authorizedProperties on ownership.PropertyId equals p.Id
+            where ownership.PortfolioId == portfolioId
+                && ownership.EffectiveFromUtc < endUtc
+                && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > startUtc)
+            select new OwnerPropertyNetRow
             {
                 PropertyId = p.Id,
                 PropertyName = p.Name,
-                OwnerId = p.OwnerEntityId!.Value,
-                OwnerName = p.OwnerEntity!.Name,
+                OwnerId = ownership.OwnerEntityId,
+                OwnerName = ownership.OwnerEntity!.Name,
                 ManagementFeePercent = p.ManagementFeePercent ?? 0m,
                 RentalIncome = (
                     from allocation in _db.TenantLedgerAllocations
@@ -328,8 +351,11 @@ public class OwnerStatementService : IOwnerStatementService
                         && credit.EntryType == TenantLedgerEntryType.PaymentReceipt
                         && credit.EffectiveOn >= startOn
                         && credit.EffectiveOn < endOn
+                        && credit.PostedAtUtc >= ownership.EffectiveFromUtc
+                        && (ownership.EffectiveToUtc == null
+                            || credit.PostedAtUtc < ownership.EffectiveToUtc)
                         && debit.EntryType == TenantLedgerEntryType.RentCharge
-                    select (decimal?)allocation.Amount).Sum() ?? 0m,
+                    select (decimal?)(allocation.Amount * ownership.OwnershipSharePercent / 100m)).Sum() ?? 0m,
                 Expenses = _db.Expenses
                     .Where(e =>
                         e.PortfolioId == portfolioId &&
@@ -337,9 +363,12 @@ public class OwnerStatementService : IOwnerStatementService
                         e.Status == ExpenseStatus.Paid &&
                         // Sargable half-open year range (was .Year ==).
                         (e.PaidAt ?? e.IncurredAt) >= new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc) &&
-                        (e.PaidAt ?? e.IncurredAt) < new DateTime(year + 1, 1, 1, 0, 0, 0, DateTimeKind.Utc))
-                    .Sum(e => (decimal?)e.Amount) ?? 0m,
-            });
+                        (e.PaidAt ?? e.IncurredAt) < new DateTime(year + 1, 1, 1, 0, 0, 0, DateTimeKind.Utc) &&
+                        (e.PaidAt ?? e.IncurredAt) >= ownership.EffectiveFromUtc &&
+                        (ownership.EffectiveToUtc == null
+                            || (e.PaidAt ?? e.IncurredAt) < ownership.EffectiveToUtc))
+                    .Sum(e => (decimal?)(e.Amount * ownership.OwnershipSharePercent / 100m)) ?? 0m,
+            };
     }
 
     private IQueryable<Property> AuthorizedProperties(WorkspaceReadScope scope) =>
@@ -353,6 +382,7 @@ public class OwnerStatementService : IOwnerStatementService
 
     private IQueryable<Property> AuthorizedOwnerPortalProperties(OwnerPortalReadScope scope)
     {
+        var now = _timeProvider.UtcNow();
         var ownerAccess = _db.EffectiveOwnerAccess.AsNoTracking().Where(access =>
             access.AccessContextId == scope.AccessContextId &&
             access.UserId == scope.UserId &&
@@ -363,7 +393,12 @@ public class OwnerStatementService : IOwnerStatementService
             property.DeletedAt == null &&
             ownerAccess.Any(access =>
                 access.PropertyId == property.Id &&
-                access.OwnerEntityId == property.OwnerEntityId));
+                _db.PropertyOwnerships.Any(ownership =>
+                    ownership.PortfolioId == scope.PortfolioId
+                    && ownership.PropertyId == property.Id
+                    && ownership.OwnerEntityId == access.OwnerEntityId
+                    && ownership.EffectiveFromUtc <= now
+                    && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now))));
     }
 
     private static (DateTime Start, DateTime End) YearRange(int year)

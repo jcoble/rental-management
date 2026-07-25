@@ -310,8 +310,9 @@ void _invalidateForEntity(Ref ref, String entityType) {
       // In-app Notification rows are broadcast over THIS (updates) hub by the
       // API/Engine (RentChargeService, ConversationService, LateFeeService,
       // LeaseExpiryReminderService, the SMS-inbound services, ...). Refresh the
-      // unread badge and, if the inbox screen is open, its list — so a new
-      // notification appears live without a manual reload.
+      // tenant dashboard snapshot, unread badge, and (when open) inbox list so
+      // a new notification appears live without a manual reload.
+      ref.invalidate(tenantPortalSnapshotProvider);
       _refreshIfAlive(ref, unreadCountProvider);
       _refreshIfAlive(ref, inboxProvider);
 

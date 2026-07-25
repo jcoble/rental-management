@@ -9,13 +9,14 @@
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
+	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { getUnitsEmptyStateCopy } from '$lib/units/unit-list-state';
 	import { Home } from '@lucide/svelte';
-	import * as Select from '$lib/components/ui/select';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
+	import { Button } from '$lib/components/ui/button';
 
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const PAGE_SIZE = 20;
@@ -56,10 +57,17 @@
 			}),
 	}));
 
-	const propertiesQuery = createQuery(() => ({
-		queryKey: ['properties', portfolioId],
-		queryFn: () => properties.list(portfolioId, { take: 200 }),
-	}));
+	async function loadPropertyOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await properties.listPage(portfolioId, { ...params, sort: 'name' });
+		return {
+			...result,
+			items: result.items.map((property) => ({
+				id: property.id,
+				label: property.name,
+				description: `${property.addressLine1}${property.city ? `, ${property.city}` : ''}${property.state ? `, ${property.state}` : ''}`
+			}))
+		};
+	}
 
 	const list = $derived(unitsQuery.data?.items ?? []);
 	const totalCount = $derived(unitsQuery.data?.totalCount ?? 0);
@@ -119,6 +127,13 @@
 		data-testid="units-header"
 	/>
 
+	{#if unitsQuery.isError}
+		<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="units-list-error">
+			<p class="font-medium text-destructive">Could not load units.</p>
+			<p class="mt-1 text-sm text-muted-foreground">Try again. The rentals list is temporarily unavailable.</p>
+			<Button class="mt-4" variant="outline" onclick={() => unitsQuery.refetch()}>Try again</Button>
+		</div>
+	{:else}
 	<DataGrid
 		data={list}
 		{columns}
@@ -144,18 +159,22 @@
 				<div class="max-w-sm flex-1">
 					<SearchInput bind:value={search} placeholder="Search units…" testid="unit-search" />
 				</div>
-				<Select.Root type="single" bind:value={propertyFilter}>
-					<Select.Trigger class="w-[200px]" data-testid="unit-property-filter">
-						{propertiesQuery.data?.find((p) => String(p.id) === propertyFilter)?.name ?? 'All properties'}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" label="All properties">All properties</Select.Item>
-						{#each propertiesQuery.data ?? [] as property}
-							<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
+				<div class="w-[240px]">
+					<RemoteRecordSelect
+						queryKey={['unit-property-filter', portfolioId]}
+						label="Property"
+						bind:value={propertyFilter}
+						selectedLabel={propertyFilter ? `Property #${propertyFilter}` : null}
+						placeholder="All properties"
+						clearLabel="All properties"
+						searchPlaceholder="Search properties…"
+						emptyLabel="No matching properties"
+						loadPage={loadPropertyOptions}
+						testid="unit-property-filter"
+					/>
+				</div>
 			</div>
 		{/snippet}
 	</DataGrid>
+	{/if}
 </div>

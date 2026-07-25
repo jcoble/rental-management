@@ -5,14 +5,71 @@ using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.DTOs;
 
+/// <summary>
+/// The canonical record opened from a Property collection row. This is selected from persisted
+/// <see cref="RentalStructure"/> by the server; clients must not infer it from Unit count.
+/// </summary>
+public enum PropertyWorkspaceDestination
+{
+    Property,
+    Unit,
+}
+
+/// <summary>One stable top-level area in the MultiRental Property workspace.</summary>
+public enum PropertyWorkspaceArea
+{
+    Summary,
+    Rentals,
+    OwnershipManagement,
+    PropertyWork,
+    PropertyFinances,
+    DocumentsHistory,
+}
+
+/// <summary>
+/// Server-owned presentation routing for a Property. SingleRental opens its canonical Unit directly;
+/// MultiRental opens the Property workspace and exposes the six approved top-level areas.
+/// </summary>
+public sealed class PropertyWorkspaceEntryResponse
+{
+    public PropertyWorkspaceDestination Destination { get; init; }
+    public int PropertyId { get; init; }
+    public int? UnitId { get; init; }
+    public IReadOnlyList<PropertyWorkspaceArea> Areas { get; init; } = [];
+
+    public static PropertyWorkspaceEntryResponse FromPersistedStructure(
+        RentalStructure rentalStructure,
+        int propertyId,
+        int? singleRentalUnitId) =>
+        rentalStructure == RentalStructure.SingleRental
+            ? new PropertyWorkspaceEntryResponse
+            {
+                Destination = PropertyWorkspaceDestination.Unit,
+                PropertyId = propertyId,
+                UnitId = singleRentalUnitId,
+            }
+            : new PropertyWorkspaceEntryResponse
+            {
+                Destination = PropertyWorkspaceDestination.Property,
+                PropertyId = propertyId,
+                Areas =
+                [
+                    PropertyWorkspaceArea.Summary,
+                    PropertyWorkspaceArea.Rentals,
+                    PropertyWorkspaceArea.OwnershipManagement,
+                    PropertyWorkspaceArea.PropertyWork,
+                    PropertyWorkspaceArea.PropertyFinances,
+                    PropertyWorkspaceArea.DocumentsHistory,
+                ],
+            };
+}
+
 /// <summary>Wire shape returned for a <see cref="Property"/>.</summary>
 public class PropertyResponse
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
-    public int? OwnerId { get; set; }
-    public int? OwnerEntityId { get; set; }
-    public string? OwnerName { get; set; }
+    public IReadOnlyList<PropertyOwnershipResponse> Ownerships { get; set; } = [];
     public string Name { get; set; } = string.Empty;
 
     /// <summary>
@@ -63,6 +120,12 @@ public class PropertyResponse
     /// <summary>Units currently occupied. Computed in SQL from canonical possession projection.</summary>
     public int OccupiedUnits { get; set; }
 
+    /// <summary>
+    /// Server-selected collection entry. Its destination is based only on persisted RentalStructure;
+    /// the canonical SingleRental Unit id is selected in the same SQL projection as this Property.
+    /// </summary>
+    public PropertyWorkspaceEntryResponse WorkspaceEntry { get; set; } = new();
+
     /// <summary>Stable selector for frontend tests, e.g. <c>property-1</c>.</summary>
     public string TestId => $"property-{Id}";
 
@@ -70,9 +133,6 @@ public class PropertyResponse
     {
         Id = e.Id,
         PortfolioId = e.PortfolioId,
-        OwnerId = e.OwnerId,
-        OwnerEntityId = e.OwnerEntityId,
-        OwnerName = e.OwnerEntity?.Name ?? e.Owner?.Name,
         Name = e.Name,
         PropertyType = e.PropertyType,
         RentalStructure = e.RentalStructure,
@@ -97,6 +157,41 @@ public class PropertyResponse
     };
 }
 
+public sealed class PropertyOwnershipResponse
+{
+    public int Id { get; set; }
+    public int OwnerEntityId { get; set; }
+    public string OwnerName { get; set; } = string.Empty;
+    public decimal OwnershipSharePercent { get; set; }
+    public DateTime EffectiveFromUtc { get; set; }
+    public DateTime? EffectiveToUtc { get; set; }
+    public string StatementRecipientName { get; set; } = string.Empty;
+    public string? StatementRecipientEmail { get; set; }
+    public string PayeeName { get; set; } = string.Empty;
+}
+
+public sealed class PropertyOwnershipRequest
+{
+    [Range(1, int.MaxValue)]
+    public int OwnerEntityId { get; set; }
+
+    [Range(typeof(decimal), "0.0001", "100")]
+    public decimal OwnershipSharePercent { get; set; } = 100m;
+
+    public DateTime? EffectiveFromUtc { get; set; }
+    public DateTime? EffectiveToUtc { get; set; }
+
+    [MaxLength(200)]
+    public string? StatementRecipientName { get; set; }
+
+    [MaxLength(254)]
+    [EmailAddress]
+    public string? StatementRecipientEmail { get; set; }
+
+    [MaxLength(200)]
+    public string? PayeeName { get; set; }
+}
+
 public class PropertyListResponse
 {
     public IReadOnlyList<PropertyResponse> Items { get; set; } = [];
@@ -115,17 +210,17 @@ public class PropertyListQuery : ListQuery
 
 public class CreatePropertyRequest
 {
-    [Range(1, int.MaxValue)]
-    public int? OwnerId { get; set; }
-
-    [Range(1, int.MaxValue)]
-    public int? OwnerEntityId { get; set; }
+    /// <summary>
+    /// Optional complete canonical ownership set. When omitted, setup assigns the workspace's
+    /// primary OwnerEntity as one effective 100% relationship.
+    /// </summary>
+    public IReadOnlyList<PropertyOwnershipRequest>? Ownerships { get; set; }
 
     /// <summary>
-    /// Explicitly leave the property without an owner. Without this flag, create falls back to the
-    /// portfolio's primary owner when no owner is supplied.
+    /// Explicitly leave the property without effective ownership. Without this flag, setup falls
+    /// back to the portfolio's primary OwnerEntity when no ownership rows are supplied.
     /// </summary>
-    public bool ClearOwnerEntity { get; set; }
+    public bool ClearOwnership { get; set; }
 
     [Required]
     [MaxLength(200)]
@@ -180,17 +275,16 @@ public class CreatePropertyRequest
 
 public class UpdatePropertyRequest
 {
-    [Range(1, int.MaxValue)]
-    public int? OwnerId { get; set; }
-
-    [Range(1, int.MaxValue)]
-    public int? OwnerEntityId { get; set; }
+    /// <summary>
+    /// Optional replacement set for current ownership. Existing current rows are ended and these
+    /// effective rows are inserted in the same atomic command.
+    /// </summary>
+    public IReadOnlyList<PropertyOwnershipRequest>? Ownerships { get; set; }
 
     /// <summary>
-    /// Explicitly clears the owner entity on update. Nullable owner ids alone cannot distinguish
-    /// "field omitted" from "user chose No owner assigned" in a partial PATCH payload.
+    /// Explicitly ends every current ownership row on update.
     /// </summary>
-    public bool ClearOwnerEntity { get; set; }
+    public bool ClearOwnership { get; set; }
 
     [MaxLength(200)]
     public string? Name { get; set; }

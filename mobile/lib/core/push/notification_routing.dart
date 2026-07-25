@@ -1,71 +1,85 @@
-/// Maps a server-emitted `actionUrl` to a safe in-app route.
-///
-/// The server usually emits paths that match mobile go_router routes directly
-/// (`/tenant-accounts/{accountId}/entries/{entryId}`, `/maintenance/{id}`,
-/// `/expenses/{id}`, `/scan/{id}`,
-/// `/messages/{id}`, plus section roots). Anything outside the canonical
-/// allowlist resolves to `/notifications` so a stale or future action type
-/// lands on the inbox rather than creating a second route contract.
-///
-/// Centralized here so the push tap handler and the inbox tap handler share one
-/// allowlist.
-library;
+import 'mobile_navigation_intent.dart';
 
-/// Known route prefixes that an `actionUrl` may target. Order doesn't matter;
-/// these are membership tests, not a switch.
-const _allowedPrefixes = <String>[
-  '/expenses/',
-  '/scan/',
-  '/units/',
-  '/leasing/rentals/',
-  '/leasing/applications/',
-  '/leasing/appointments/',
-  '/leasing/conversations/',
-  '/leasing/move-ins/',
-  '/notifications/',
-];
+/// Exhaustively maps the closed intent set to canonical app destinations.
+/// Resource kinds and positive identifiers must match the selected destination;
+/// malformed combinations return null so callers use the safe fallback.
+String? resolveNavigationIntentRoute(MobileNavigationIntent intent) {
+  final resource = intent.resource;
+  final parent = intent.parentResource;
+  return switch (intent.destination) {
+    MobileNavigationDestination.home => '/',
+    MobileNavigationDestination.notifications => '/notifications',
+    MobileNavigationDestination.rentals => '/rentals',
+    MobileNavigationDestination.owners => '/owners',
+    MobileNavigationDestination.money => '/money',
+    MobileNavigationDestination.work => '/work',
+    MobileNavigationDestination.inbox => '/inbox',
+    MobileNavigationDestination.unitSummary =>
+      _unitRoute(resource, 'summary'),
+    MobileNavigationDestination.unitTenantLease =>
+      _unitRoute(resource, 'tenant-lease'),
+    MobileNavigationDestination.unitMoney => _unitRoute(resource, 'money'),
+    MobileNavigationDestination.unitMaintenance =>
+      _unitRoute(resource, 'maintenance'),
+    MobileNavigationDestination.unitRecords => _unitRoute(resource, 'records'),
+    MobileNavigationDestination.tenantLedgerEntry =>
+      _tenantLedgerRoute(parent, resource),
+    MobileNavigationDestination.expense =>
+      _detailRoute('/expenses', resource, 'Expense'),
+    MobileNavigationDestination.scanDraft =>
+      _detailRoute('/scan', resource, 'ScanDraft'),
+    MobileNavigationDestination.message =>
+      _detailRoute('/messages', resource, 'Conversation'),
+    MobileNavigationDestination.workOrder =>
+      _detailRoute('/maintenance', resource, 'WorkOrder'),
+    MobileNavigationDestination.technicianWork =>
+      _detailRoute('/maintenance/work', resource, 'WorkOrder'),
+    MobileNavigationDestination.leasingRental =>
+      _detailRoute('/leasing/rentals', resource, 'Unit'),
+    MobileNavigationDestination.leasingApplication =>
+      _detailRoute('/leasing/applications', resource, 'RentalApplication'),
+    MobileNavigationDestination.leasingAppointment =>
+      _detailRoute('/leasing/appointments', resource, 'Appointment'),
+    MobileNavigationDestination.leasingConversation =>
+      _detailRoute('/leasing/conversations', resource, 'Conversation'),
+    MobileNavigationDestination.leasingMoveIn =>
+      _detailRoute('/leasing/move-ins', resource, 'LeaseManagement'),
+  };
+}
 
-/// Known exact section roots (no trailing id).
-const _allowedExact = <String>{
-  '/money',
-  '/work',
-  '/rentals',
-  '/owners',
-  '/units',
-  '/inbox',
-  '/notifications',
-};
+String resolveSafeFallbackRoute(MobileNavigationDestination destination) =>
+    switch (destination) {
+      MobileNavigationDestination.notifications => '/notifications',
+      MobileNavigationDestination.home => '/',
+      _ => '/',
+    };
 
-/// Resolves [actionUrl] to a route the app can navigate to. Returns
-/// `/notifications` for unknown/missing targets.
-String resolveNotificationRoute(String? actionUrl) {
-  final url = actionUrl?.trim();
-  if (url == null || url.isEmpty || !url.startsWith('/')) {
-    return '/notifications';
-  }
+String? _unitRoute(MobileNavigationResource? resource, String tab) {
+  final id = _kindId(resource, 'Unit');
+  return id == null ? null : '/units/$id?tab=$tab';
+}
 
-  final uri = Uri.tryParse(url);
-  if (uri == null) return '/notifications';
+String? _detailRoute(
+  String prefix,
+  MobileNavigationResource? resource,
+  String kind,
+) {
+  final id = _kindId(resource, kind);
+  return id == null ? null : '$prefix/$id';
+}
 
-  final path = uri.path;
+int? _kindId(MobileNavigationResource? resource, String kind) =>
+    resource != null && resource.kind == kind && resource.id > 0
+    ? resource.id
+    : null;
 
-  if (_allowedExact.contains(path)) return path;
-
-  if (RegExp(r'^/tenant-accounts/[1-9]\d*/entries/[1-9]\d*$').hasMatch(path)) {
-    return path;
-  }
-
-  if (RegExp(r'^/maintenance/(?:work/)?[1-9]\d*$').hasMatch(path)) {
-    return path;
-  }
-
-  if (RegExp(r'^/messages/[1-9]\d*$').hasMatch(path)) return path;
-
-  for (final prefix in _allowedPrefixes) {
-    if (path.startsWith(prefix) && path.length > prefix.length) {
-      return uri.hasQuery ? '$path?${uri.query}' : path;
-    }
-  }
-
-  return '/notifications';
+String? _tenantLedgerRoute(
+  MobileNavigationResource? parent,
+  MobileNavigationResource? resource,
+) {
+  final accountId = _kindId(parent, 'TenantAccount');
+  final entryId = _kindId(resource, 'TenantLedgerEntry');
+  return accountId == null || entryId == null
+      ? null
+      : '/tenant-accounts/$accountId/entries/$entryId';
 }

@@ -70,7 +70,7 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
         CancellationToken ct = default)
     {
         var rows = BuildDepositListQuery(scope, query);
-        var totalCount = await rows.CountAsync(ct);
+        var totalCount = await BuildDepositCountQuery(scope, query).CountAsync(ct);
         var items = await ApplyDepositSort(rows, query)
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
@@ -403,6 +403,47 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
         ApplyDepositSort(BuildDepositListQuery(scope, query), query)
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake);
+
+    internal IQueryable<int> BuildDepositCountQuery(
+        WorkspaceReadScope scope,
+        TenantAccountDepositListQuery query)
+    {
+        // Status and free-text search depend on the balance/lifecycle projections, so keep those
+        // filtered counts on the full translated query. The common unfiltered page count only needs
+        // canonical deposit identity and authorization; joining both aggregate views made that
+        // first-page count several seconds slower than the page itself.
+        if (!string.IsNullOrWhiteSpace(query.Status) || !string.IsNullOrWhiteSpace(query.Search))
+        {
+            return BuildDepositListQuery(scope, query)
+                .Select(row => row.SecurityDepositAccountId);
+        }
+
+        var rows =
+            from account in BuildAuthorizedDepositAccountQuery(scope)
+            join management in _db.LeaseManagements.AsNoTracking()
+                on new { account.PortfolioId, Id = account.LeaseManagementId }
+                equals new { management.PortfolioId, management.Id }
+            join deposit in _db.SecurityDepositAccounts.AsNoTracking()
+                on new { account.PortfolioId, TenantAccountId = account.Id }
+                equals new { deposit.PortfolioId, deposit.TenantAccountId }
+            select new
+            {
+                DepositId = deposit.Id,
+                TenantAccountId = account.Id,
+                management.PropertyId,
+            };
+
+        if (query.TenantAccountId.HasValue)
+        {
+            rows = rows.Where(row => row.TenantAccountId == query.TenantAccountId.Value);
+        }
+        if (query.PropertyId.HasValue)
+        {
+            rows = rows.Where(row => row.PropertyId == query.PropertyId.Value);
+        }
+
+        return rows.Select(row => row.DepositId);
+    }
 
     internal IQueryable<TenantAccountDetailResponse> BuildDetailQuery(
         WorkspaceReadScope scope,

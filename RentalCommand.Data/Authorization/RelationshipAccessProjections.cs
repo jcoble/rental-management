@@ -38,14 +38,21 @@ internal static class RelationshipAccessProjectionSql
     public const string Create = """
         CREATE VIEW "vw_effective_owner_access" WITH (security_invoker = true) AS
         SELECT c."Id" AS "AccessContextId", c."UserId", c."PortfolioId", c."AccessRevision",
-               access."Id" AS "OwnerUserAccessId", access."OwnerEntityId", property."Id" AS "PropertyId"
+               access."Id" AS "OwnerUserAccessId", access."OwnerEntityId",
+               property."Id" AS "PropertyId"
         FROM "WorkspaceAccessContexts" c
         JOIN "OwnerUserAccesses" access
           ON access."AccessContextId" = c."Id" AND access."ApplicationUserId" = c."UserId"
          AND access."PortfolioId" = c."PortfolioId"
+        LEFT JOIN "PropertyOwnerships" ownership
+          ON ownership."PortfolioId" = access."PortfolioId"
+         AND ownership."OwnerEntityId" = access."OwnerEntityId"
+         AND ownership."EffectiveFromUtc" <= CURRENT_TIMESTAMP
+         AND (ownership."EffectiveToUtc" IS NULL OR ownership."EffectiveToUtc" > CURRENT_TIMESTAMP)
         LEFT JOIN "Properties" property
-          ON property."PortfolioId" = access."PortfolioId"
-         AND property."OwnerEntityId" = access."OwnerEntityId" AND property."DeletedAt" IS NULL
+          ON property."Id" = ownership."PropertyId"
+         AND property."PortfolioId" = ownership."PortfolioId"
+         AND property."DeletedAt" IS NULL
         JOIN "Portfolios" portfolio ON portfolio."Id" = c."PortfolioId" AND portfolio."DeletedAt" IS NULL
         WHERE c."Status" = 'Active' AND c."SuspendedAtUtc" IS NULL AND c."RevokedAtUtc" IS NULL
           AND access."RevokedAtUtc" IS NULL AND access."EffectiveFromUtc" <= CURRENT_TIMESTAMP

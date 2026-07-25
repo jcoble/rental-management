@@ -2,6 +2,7 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import { CalendarDays, ClipboardList, Home, Inbox, Search } from '@lucide/svelte';
 	import { leasingWorkspace } from '$lib/api/endpoints/leasing-workspace';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 
@@ -75,9 +76,12 @@
 		</form>
 
 		{#if pageQuery.isLoading}
-			<p class="rounded-xl border p-8 text-center text-sm text-muted-foreground">Loading {meta.title.toLowerCase()}…</p>
+			<LoadingState label={`Loading ${meta.title.toLowerCase()}`} variant="page" testid="leasing-{kind}-loading" />
 		{:else if pageQuery.isError || !result}
-			<p class="rounded-xl border border-destructive/40 p-8 text-center text-sm text-destructive">We could not load this leasing work area.</p>
+			<div class="rounded-xl border border-destructive/40 p-8 text-center">
+				<p class="text-sm font-medium text-destructive">We could not load this leasing work area.</p>
+				<Button type="button" variant="outline" size="sm" class="mt-3" onclick={() => pageQuery.refetch()}>Try again</Button>
+			</div>
 		{:else if result.items.length === 0}
 			<div class="rounded-xl border border-dashed p-10 text-center"><meta.icon class="mx-auto h-8 w-8 text-muted-foreground" /><h2 class="mt-3 font-semibold">Nothing needs attention here</h2><p class="mt-1 text-sm text-muted-foreground">Try another search or return later when new leasing work arrives.</p></div>
 		{:else}

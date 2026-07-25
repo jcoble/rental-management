@@ -12,6 +12,64 @@ import '../vendors/vendors_models.dart' show Vendor;
 import '../vendors/vendors_repository.dart';
 import 'recurring_maintenance_models.dart';
 
+class RecurringMaintenanceListQuery {
+  const RecurringMaintenanceListQuery({
+    required this.unitId,
+    this.skip = 0,
+    this.take = 20,
+    this.search,
+    this.sort = 'nextDueDate',
+    this.activeOnly,
+  });
+
+  final int unitId;
+  final int skip;
+  final int take;
+  final String? search;
+  final String sort;
+  final bool? activeOnly;
+
+  @override
+  bool operator ==(Object other) =>
+      other is RecurringMaintenanceListQuery &&
+      other.unitId == unitId &&
+      other.skip == skip &&
+      other.take == take &&
+      other.search == search &&
+      other.sort == sort &&
+      other.activeOnly == activeOnly;
+
+  @override
+  int get hashCode => Object.hash(unitId, skip, take, search, sort, activeOnly);
+}
+
+class RecurringMaintenanceListPage {
+  const RecurringMaintenanceListPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<RecurringMaintenanceTask> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+
+  factory RecurringMaintenanceListPage.fromJson(Map<String, dynamic> json) {
+    final items = (json['items'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(RecurringMaintenanceTask.fromJson)
+        .toList();
+    return RecurringMaintenanceListPage(
+      items: items,
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? items.length,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? items.length,
+    );
+  }
+}
+
 /// Repository for recurring maintenance tasks.
 ///
 /// Endpoints (all JWT-scoped, portfolio from claim):
@@ -25,6 +83,30 @@ class RecurringMaintenanceRepository {
   RecurringMaintenanceRepository(this._dio);
 
   final Dio _dio;
+
+  Future<RecurringMaintenanceListPage> listUnitPage(
+    RecurringMaintenanceListQuery query,
+  ) async {
+    final params = <String, dynamic>{
+      'unitId': query.unitId,
+      'skip': query.skip,
+      'take': query.take,
+      'search': query.search,
+      'sort': query.sort,
+      'activeOnly': query.activeOnly,
+    }..removeWhere((_, value) => value == null || value == '');
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/recurring-maintenance/page',
+        queryParameters: params,
+      );
+      return RecurringMaintenanceListPage.fromJson(
+        response.data ?? const <String, dynamic>{},
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
 
   Future<List<RecurringMaintenanceTask>> list({
     int? propertyId,
@@ -162,6 +244,13 @@ final recurringMaintenanceRepositoryProvider =
     Provider<RecurringMaintenanceRepository>((ref) {
   return RecurringMaintenanceRepository(ref.watch(dioProvider));
 });
+
+final unitRecurringMaintenancePageProvider = FutureProvider.autoDispose
+    .family<RecurringMaintenanceListPage, RecurringMaintenanceListQuery>(
+      (ref, query) => ref
+          .watch(recurringMaintenanceRepositoryProvider)
+          .listUnitPage(query),
+    );
 
 // ── Task list ─────────────────────────────────────────────────────────────────
 

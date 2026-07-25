@@ -1,6 +1,8 @@
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Automation;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data.Notifications;
 
@@ -10,20 +12,20 @@ namespace RentalCommand.Engine.Services;
 public sealed class NoticeDraftGenerationService : INoticeDraftGenerationService
 {
     private readonly ITenantNoticeWorkClaimStore _claims;
-    private readonly ITenantNoticeDraftSetStore _drafts;
+    private readonly IAtomicUnitOfWork _atomic;
     private readonly INotificationFoundationService _foundation;
     private readonly ILogger<NoticeDraftGenerationService> _logger;
     private readonly TimeProvider _clock;
 
     public NoticeDraftGenerationService(
         ITenantNoticeWorkClaimStore claims,
-        ITenantNoticeDraftSetStore drafts,
+        IAtomicUnitOfWork atomic,
         INotificationFoundationService foundation,
         ILogger<NoticeDraftGenerationService> logger,
         TimeProvider clock)
     {
         _claims = claims;
-        _drafts = drafts;
+        _atomic = atomic;
         _foundation = foundation;
         _logger = logger;
         _clock = clock;
@@ -37,11 +39,17 @@ public sealed class NoticeDraftGenerationService : INoticeDraftGenerationService
         var work = await _claims.ClaimReadyAsync(owner, token, now, now.AddMinutes(5), 50, ct);
         if (work.Count == 0) return 0;
 
-        var generated = await _drafts.GenerateClaimedBatchAsync(token, ct);
+        var command = new ApplyClaimedTenantNoticeDraftBatchCommand(token);
+        var outcome = await _atomic.ExecuteAsync(
+            TenantNoticeDraftAutomation.Identity(command),
+            command,
+            TenantNoticeDraftAutomation.Codec,
+            ct);
+        var generated = outcome.Value.Drafts;
         var byWorkItem = generated
             .ToDictionary(row => row.WorkItemId
                 ?? throw new InvalidOperationException("Claimed notice batch returned an unbound draft."));
-        var created = generated.FirstOrDefault()?.CreatedCount ?? 0;
+        var created = outcome.Value.CreatedCount;
 
         foreach (var item in work)
         {

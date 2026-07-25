@@ -426,7 +426,6 @@ public class OwnerStatementServiceTests : IDisposable
         var property = new Property
         {
             PortfolioId = PortfolioId,
-            OwnerEntityId = ownerId,
             Name = name,
             AddressLine1 = "1 Main",
             City = "Columbus",
@@ -437,6 +436,17 @@ public class OwnerStatementServiceTests : IDisposable
             UpdatedAt = DateTime.UtcNow,
         };
         _db.Properties.Add(property);
+        _db.SaveChanges();
+        _db.PropertyOwnerships.Add(new PropertyOwnership
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            OwnerEntityId = ownerId,
+            OwnershipSharePercent = 100m,
+            EffectiveFromUtc = property.CreatedAt,
+            StatementRecipientName = "Owner",
+            PayeeName = "Owner",
+        });
         _db.SaveChanges();
         return property;
     }

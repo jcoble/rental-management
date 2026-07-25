@@ -27,7 +27,7 @@ public class RecurringMaintenanceController : ManagementControllerBase
     [HttpGet]
     [ProducesResponseType(typeof(IReadOnlyList<RecurringMaintenanceTaskResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<RecurringMaintenanceTaskResponse>>> List(
-        [FromQuery] ListQuery query, [FromQuery] int? propertyId, [FromQuery] bool? activeOnly, CancellationToken ct)
+        [FromQuery] RecurringMaintenanceTaskListQuery query, [FromQuery] int? propertyId, [FromQuery] bool? activeOnly, CancellationToken ct)
     {
         var items = await _service.ListAuthorizedAsync(
             GetWorkspaceReadScope(), propertyId, activeOnly, query, ct);
@@ -37,7 +37,7 @@ public class RecurringMaintenanceController : ManagementControllerBase
     [HttpGet("page")]
     [ProducesResponseType(typeof(RecurringMaintenanceTaskListResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<RecurringMaintenanceTaskListResponse>> ListPage(
-        [FromQuery] ListQuery query, [FromQuery] int? propertyId, [FromQuery] bool? activeOnly, CancellationToken ct)
+        [FromQuery] RecurringMaintenanceTaskListQuery query, [FromQuery] int? propertyId, [FromQuery] bool? activeOnly, CancellationToken ct)
     {
         var page = await _service.ListPageAuthorizedAsync(
             GetWorkspaceReadScope(), propertyId, activeOnly, query, ct);

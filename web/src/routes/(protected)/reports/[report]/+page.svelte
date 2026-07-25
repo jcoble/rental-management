@@ -96,6 +96,9 @@
 	let selectedPropertyIds = $state<number[]>([]); // empty = all properties
 	let year = $state(String(currentYear));
 	let days = $state('90');
+	let reportSkip = $state(0);
+	let reportTake = $state(20);
+	let reportSort = $state('property');
 
 	// The applied params snapshot — only changes when the user clicks Generate, so the table is stable.
 	let applied = $state<ReportRequestParams>({});
@@ -109,6 +112,9 @@
 		selectedPropertyIds = [];
 		year = String(currentYear);
 		days = '90';
+		reportSkip = 0;
+		reportTake = 20;
+		reportSort = 'property';
 		applied = {};
 		hasGenerated = false;
 	});
@@ -122,11 +128,22 @@
 		if (accepts.has('propertyId') && selectedPropertyIds.length) p.propertyId = selectedPropertyIds[0];
 		if (accepts.has('year') && year) p.year = Number(year);
 		if (accepts.has('days') && days) p.days = Number(days);
+		if (accepts.has('skip')) p.skip = reportSkip;
+		if (accepts.has('take')) p.take = reportTake;
+		if (accepts.has('sort')) p.sort = reportSort;
 		return p;
 	}
 
 	function generate() {
-		applied = collectParams();
+		reportSkip = 0;
+		applied = { ...collectParams(), skip: accepts.has('skip') ? 0 : undefined };
+		hasGenerated = true;
+	}
+
+	function setReportPage(skip: number) {
+		const nextSkip = Math.max(0, skip);
+		reportSkip = nextSkip;
+		applied = { ...collectParams(), skip: nextSkip };
 		hasGenerated = true;
 	}
 
@@ -757,6 +774,19 @@
 									<td class="px-3 py-2 text-right font-mono tabular-nums">{money(deposits.totalReturned)}</td>
 									<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(deposits.totalCurrentBalance)}</td>
 									<td></td>
+								</tr>
+								<tr class="border-t bg-background font-normal print:hidden">
+									<td class="px-3 py-2 text-xs text-muted-foreground" colspan="4">
+										Showing {deposits.totalCount === 0 ? 0 : deposits.skip + 1}-{Math.min(deposits.skip + deposits.rows.length, deposits.totalCount)} of {deposits.totalCount}
+									</td>
+									<td class="px-3 py-2 text-right" colspan="3">
+										<Button variant="outline" size="sm" onclick={() => setReportPage(deposits.skip - deposits.take)} disabled={deposits.skip <= 0 || reportQuery.isFetching}>
+											Previous
+										</Button>
+										<Button class="ml-2" variant="outline" size="sm" onclick={() => setReportPage(deposits.skip + deposits.take)} disabled={deposits.skip + deposits.take >= deposits.totalCount || reportQuery.isFetching}>
+											Next
+										</Button>
+									</td>
 								</tr>
 							</tfoot>
 

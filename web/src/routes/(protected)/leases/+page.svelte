@@ -41,6 +41,17 @@
 				take: PAGE_SIZE
 			})
 	}));
+	const hasRelationshipFilters = $derived(Boolean(search.trim() || lifecycle));
+	const relationshipEmptyMessage = $derived(
+		hasRelationshipFilters
+			? 'No tenant and lease relationships match these filters.'
+			: 'No tenant and lease relationships yet.'
+	);
+	const relationshipEmptyDescription = $derived(
+		hasRelationshipFilters
+			? 'Try a different household, rental, agreement number, or relationship stage.'
+			: 'Approve an application and prepare a move-in, or import an existing signed agreement.'
+	);
 
 	const columns: ColumnDef<LeaseManagementSummary>[] = [
 		{
@@ -105,12 +116,19 @@
 		{/snippet}
 	</PageHeader>
 
+	{#if relationshipsQuery.isError}
+		<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="leases-list-error">
+			<p class="font-medium text-destructive">Could not load tenant and lease relationships.</p>
+			<p class="mt-1 text-sm text-muted-foreground">Try again. The relationship list is temporarily unavailable.</p>
+			<Button class="mt-4" variant="outline" onclick={() => relationshipsQuery.refetch()}>Try again</Button>
+		</div>
+	{:else}
 	<DataGrid
 		data={relationshipsQuery.data?.items ?? []}
 		{columns}
 		loading={relationshipsQuery.isLoading}
-		emptyMessage="No tenant and lease relationships found"
-		emptyDescription="Approve an application and prepare a move-in, or import an existing signed agreement."
+		emptyMessage={relationshipEmptyMessage}
+		emptyDescription={relationshipEmptyDescription}
 		onRowClick={(item) => goto(`/leases/${item.leaseManagementId}`)}
 		getRowKey={(item) => item.leaseManagementId}
 		serverSide
@@ -150,4 +168,5 @@
 			<StatusBadge status={item.lifecycle} />
 		{/snippet}
 	</DataGrid>
+	{/if}
 </div>

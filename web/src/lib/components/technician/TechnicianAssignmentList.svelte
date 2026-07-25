@@ -3,6 +3,7 @@
 	import { technician, type TechnicianAssignmentParams } from '$lib/api/endpoints/technician';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { debounced } from '$lib/utils/debounce.svelte';
@@ -85,9 +86,12 @@
 	</section>
 
 	{#if query.isPending}
-		<div class="rounded-2xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">Loading assigned work…</div>
+		<LoadingState label="Loading assigned work" variant="page" testid="technician-assignment-list-loading" />
 	{:else if query.isError}
-		<div class="rounded-2xl border border-destructive/40 bg-destructive/5 p-6 text-sm text-destructive">Assigned work is unavailable right now.</div>
+		<div class="rounded-2xl border border-destructive/40 bg-destructive/5 p-6">
+			<p class="text-sm font-medium text-destructive">Assigned work is unavailable right now.</p>
+			<Button type="button" variant="outline" size="sm" class="mt-3" onclick={() => query.refetch()}>Try again</Button>
+		</div>
 	{:else if (query.data?.items.length ?? 0) === 0}
 		<div class="rounded-2xl border border-dashed border-border bg-card p-10 text-center">
 			<EmptyIcon class="mx-auto mb-3 h-8 w-8 text-muted-foreground" />

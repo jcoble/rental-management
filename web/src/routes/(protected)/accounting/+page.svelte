@@ -31,6 +31,7 @@
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
+	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import { Pencil, Plus, Download, FileBarChart, Landmark, Check, Sparkles } from '@lucide/svelte';
@@ -45,6 +46,7 @@
 	import { clearFieldError } from '$lib/forms/form-errors';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -163,9 +165,58 @@
 		// compete with an unrelated report build or fail behind its timeout.
 		enabled: activeTab === 'reports',
 	}));
-	const vendorsQuery = createQuery(() => ({ queryKey: ['vendors', portfolioId], queryFn: () => vendors.list(portfolioId, { take: 200 }) }));
-	const propertiesQuery = createQuery(() => ({ queryKey: ['properties', portfolioId], queryFn: () => properties.list(portfolioId, { take: 200 }) }));
-	const workOrdersQuery = createQuery(() => ({ queryKey: ['work-orders', portfolioId], queryFn: () => workOrders.list(portfolioId, { take: 200 }) }));
+	let vendorOptionCache = $state<Record<string, Vendor>>({});
+	let workOrderOptionCache = $state<Record<string, WorkOrder>>({});
+	async function loadPropertyOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await properties.listPage(portfolioId, { ...params, sort: 'name' });
+		return {
+			...result,
+			items: result.items.map((property) => ({
+				id: property.id,
+				label: property.name,
+				description: `${property.addressLine1}, ${property.city}, ${property.state}`
+			}))
+		};
+	}
+	async function loadVendorOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await vendors.listPage(portfolioId, { ...params, sort: 'name' });
+		for (const vendor of result.items) vendorOptionCache[String(vendor.id)] = vendor;
+		return {
+			...result,
+			items: result.items.map((vendor) => ({
+				id: vendor.id,
+				label: vendor.name,
+				description: vendor.serviceType || vendor.email || vendor.phone || null
+			}))
+		};
+	}
+	async function loadWorkOrderOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await workOrders.listPage(portfolioId, { ...params, sort: '-updatedAt' });
+		for (const workOrder of result.items) workOrderOptionCache[String(workOrder.id)] = workOrder;
+		return {
+			...result,
+			items: result.items.map((workOrder) => ({
+				id: workOrder.id,
+				label: workOrder.title,
+				description: `${workOrder.propertyName ?? 'Property'}${workOrder.unitNumber ? ` · Unit ${workOrder.unitNumber}` : ''}`
+			}))
+		};
+	}
+	async function loadUnitOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await units.listWithHealthPage({
+			...params,
+			propertyId: expensePropertyId ?? undefined,
+			sort: 'unitNumber'
+		});
+		return {
+			...result,
+			items: result.items.map((unit) => ({
+				id: unit.id,
+				label: `Unit ${unit.unitNumber}`,
+				description: unit.status
+			}))
+		};
+	}
 
 	function invalidatePayments() {
 		queryClient.invalidateQueries({ queryKey: ['payments', portfolioId] });
@@ -203,15 +254,14 @@
 	let expenseDeleteTarget = $state<Expense | null>(null);
 	let lastExpenseVendorAutofillId = $state('');
 	let lastExpenseWorkOrderAutofillId = $state('');
+	let transactionPropertyLabel = $state<string | null>(null);
+	let selectedPropertyLabel = $state<string | null>(null);
+	let selectedVendorLabel = $state<string | null>(null);
+	let selectedUnitLabel = $state<string | null>(null);
+	let selectedWorkOrderLabel = $state<string | null>(null);
 	// Holds the parsed ReceiptData of the expense being edited, so line items / extra survive a re-save.
 	let editingReceipt = $state<Record<string, any> | null>(null);
 	const expensePropertyId = $derived(expenseForm.propertyId ? Number(expenseForm.propertyId) : null);
-	const expenseUnitsQuery = createQuery(() => ({
-		queryKey: ['units', portfolioId, 'expense-form', expensePropertyId],
-		queryFn: () => units.list({ propertyId: expensePropertyId ?? undefined, take: 500, sort: 'unitNumber' }),
-		enabled: showExpenseForm && expensePropertyId != null
-	}));
-
 	const expenseSteps: FormStepperStep[] = [
 		{ id: 'source', label: 'Source', description: 'Links and defaults' },
 		{ id: 'details', label: 'Details', description: 'Description and amount' },
@@ -292,6 +342,10 @@
 		completedExpenseSteps = [];
 		lastExpenseVendorAutofillId = '';
 		lastExpenseWorkOrderAutofillId = '';
+		selectedPropertyLabel = null;
+		selectedVendorLabel = null;
+		selectedUnitLabel = null;
+		selectedWorkOrderLabel = null;
 		showExpenseForm = true;
 	}
 	function openEditExpense(e: Expense) {
@@ -330,6 +384,10 @@
 		completedExpenseSteps = [];
 		lastExpenseVendorAutofillId = '';
 		lastExpenseWorkOrderAutofillId = '';
+		selectedPropertyLabel = e.propertyName ?? null;
+		selectedVendorLabel = e.vendorName ?? null;
+		selectedUnitLabel = e.unitNumber ? `Unit ${e.unitNumber}` : null;
+		selectedWorkOrderLabel = e.workOrderTitle ?? null;
 		showExpenseForm = true;
 	}
 	function vendorAddress(vendor: Vendor) {
@@ -353,8 +411,7 @@
 	}
 	function autofillExpenseFromVendorId(vendorId: string) {
 		if (!vendorId) return false;
-		const vendor = (vendorsQuery.data || []).find((v) => String(v.id) === vendorId);
-		return autofillExpenseFromVendor(vendor);
+		return autofillExpenseFromVendor(vendorOptionCache[vendorId]);
 	}
 	function dateOnly(value: string | null | undefined) {
 		return value?.slice(0, 10);
@@ -373,12 +430,10 @@
 	}
 	function autofillExpenseFromWorkOrderId(workOrderId: string) {
 		if (!workOrderId) return false;
-		const workOrder = (workOrdersQuery.data || []).find((wo) => String(wo.id) === workOrderId);
-		return autofillExpenseFromWorkOrder(workOrder);
+		return autofillExpenseFromWorkOrder(workOrderOptionCache[workOrderId]);
 	}
 	$effect(() => {
 		const vendorId = expenseForm.vendorId;
-		vendorsQuery.data;
 		if (!showExpenseForm || !vendorId) {
 			if (!vendorId) lastExpenseVendorAutofillId = '';
 			return;
@@ -388,7 +443,6 @@
 	});
 	$effect(() => {
 		const workOrderId = expenseForm.workOrderId;
-		workOrdersQuery.data;
 		if (!showExpenseForm || !workOrderId) {
 			if (!workOrderId) lastExpenseWorkOrderAutofillId = '';
 			return;
@@ -404,6 +458,10 @@
 		completedExpenseSteps = [];
 		lastExpenseVendorAutofillId = '';
 		lastExpenseWorkOrderAutofillId = '';
+		selectedPropertyLabel = null;
+		selectedVendorLabel = null;
+		selectedUnitLabel = null;
+		selectedWorkOrderLabel = null;
 	}
 	function expenseStepErrorFields(step: number, errors: Record<string, string>) {
 		const visibleFields = new Set<string>(expenseStepFields[step] ?? []);
@@ -551,19 +609,6 @@
 	const recentLedger = $derived(reports?.recentLedger ?? reports?.ledger ?? []);
 	const ledgerTotalCount = $derived(reports?.ledgerTotalCount ?? reports?.ledger.length ?? 0);
 	const vendorReviewCount = $derived((reports?.vendors1099 ?? []).filter((v) => v.needsW9 || v.needs1099Review).length);
-
-	const selectedPropertyLabel = $derived(
-		(propertiesQuery.data || []).find((p) => String(p.id) === expenseForm.propertyId)?.name ?? null
-	);
-	const selectedVendorLabel = $derived(
-		(vendorsQuery.data || []).find((v) => String(v.id) === expenseForm.vendorId)?.name ?? null
-	);
-	const selectedUnitLabel = $derived(
-		(expenseUnitsQuery.data || []).find((u) => String(u.id) === expenseForm.unitId)?.unitNumber ?? null
-	);
-	const selectedWorkOrderLabel = $derived(
-		(workOrdersQuery.data || []).find((w) => String(w.id) === expenseForm.workOrderId)?.title ?? null
-	);
 
 	// ── DataGrid column definitions ───────────────────────────────────────────────
 
@@ -805,6 +850,14 @@
 		<span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">All-time</span>
 		<span class="text-xs text-muted-foreground">These four totals cover all dates — the date filter on the ledger below doesn't change them.</span>
 	</div>
+	{#if accountingSummaryQuery.isError}
+		<div class="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2" role="alert">
+			<p class="text-sm text-destructive">The all-time money summary could not be loaded.</p>
+			<Button variant="outline" size="sm" onclick={() => accountingSummaryQuery.refetch()}>
+				Retry money summary
+			</Button>
+		</div>
+	{/if}
 	<div class="mb-5 grid gap-3 sm:grid-cols-2 md:grid-cols-4">
 		<Card.Root class="m3-tonal-card m3-tonal-card--mint gap-0 py-0" data-testid="accounting-collected">
 			<Card.Content class="p-4">
@@ -899,7 +952,7 @@
 		</div>
 
 		{#if accountingReportsQuery.isLoading}
-			<p class="rounded-lg border border-border p-6 text-sm text-muted-foreground">Loading accounting reports…</p>
+			<LoadingState label="Loading accounting reports" testid="accounting-reports-loading" />
 		{:else if accountingReportsQuery.isError}
 			<div class="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 p-6">
 				<p class="text-sm text-destructive">Could not load accounting reports.</p>
@@ -1079,10 +1132,12 @@
 			onSortChange={(sort) => { transactionSort = sort ?? '-createdAt'; transactionPage = 1; }}
 		>
 			{#snippet toolbar()}
-				<div class="grid w-full gap-2 lg:grid-cols-[minmax(14rem,1fr)_9rem_10rem_11rem_12rem_9rem_9rem]">
-					<SearchInput bind:value={transactionSearch} placeholder="Search descriptions, property, tenant, vendor…" testid="transaction-search" />
+				<div class="grid w-full items-center gap-3 sm:grid-cols-2 xl:grid-cols-4">
+					<div class="sm:col-span-2 [&_input]:h-11">
+						<SearchInput bind:value={transactionSearch} placeholder="Search descriptions, property, tenant, vendor…" testid="transaction-search" />
+					</div>
 					<Select.Root type="single" bind:value={transactionKindFilter}>
-						<Select.Trigger data-testid="transaction-kind-filter">
+						<Select.Trigger class="!h-11 w-full min-w-0" aria-label="Transaction type" data-testid="transaction-kind-filter">
 							{transactionKindFilter || 'All types'}
 						</Select.Trigger>
 						<Select.Content>
@@ -1093,7 +1148,7 @@
 						</Select.Content>
 					</Select.Root>
 					<Select.Root type="single" bind:value={transactionStatusFilter}>
-						<Select.Trigger data-testid="transaction-status-filter">
+						<Select.Trigger class="!h-11 w-full min-w-0" aria-label="Transaction status" data-testid="transaction-status-filter">
 							{transactionStatusFilter || 'All statuses'}
 						</Select.Trigger>
 						<Select.Content>
@@ -1104,7 +1159,7 @@
 						</Select.Content>
 					</Select.Root>
 					<Select.Root type="single" bind:value={transactionCategoryFilter}>
-						<Select.Trigger data-testid="transaction-category-filter">
+						<Select.Trigger class="!h-11 w-full min-w-0" aria-label="Transaction category" data-testid="transaction-category-filter">
 							{transactionCategoryFilter ? formatExpenseCategory(transactionCategoryFilter) : 'All categories'}
 						</Select.Trigger>
 						<Select.Content>
@@ -1114,17 +1169,24 @@
 							{/each}
 						</Select.Content>
 					</Select.Root>
-					<Select.Root type="single" bind:value={transactionPropertyFilter}>
-						<Select.Trigger data-testid="transaction-property-filter">
-							{propertiesQuery.data?.find((p) => String(p.id) === transactionPropertyFilter)?.name ?? 'All properties'}
-						</Select.Trigger>
-						<Select.Content>
-							<Select.Item value="" label="All properties">All properties</Select.Item>
-							{#each propertiesQuery.data || [] as property}
-								<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
-							{/each}
-						</Select.Content>
-					</Select.Root>
+					<RemoteRecordSelect
+						queryKey={['transaction-property-filter', portfolioId]}
+						label="Property"
+						hideLabel
+						triggerClass="!h-11"
+						bind:value={transactionPropertyFilter}
+						selectedLabel={transactionPropertyLabel}
+						placeholder="All properties"
+						clearLabel="All properties"
+						searchPlaceholder="Search properties…"
+						emptyLabel="No matching properties"
+						loadPage={loadPropertyOptions}
+						onValueChange={(_value, option) => {
+							transactionPropertyLabel = option?.label ?? null;
+							transactionPage = 1;
+						}}
+						testid="transaction-property-filter"
+					/>
 					<DatePicker testid="transaction-from-filter" bind:value={transactionFromFilter} placeholder="From date" max={transactionToFilter || undefined} />
 					<DatePicker testid="transaction-to-filter" bind:value={transactionToFilter} placeholder="To date" min={transactionFromFilter || undefined} />
 				</div>
@@ -1196,86 +1258,70 @@
 		>
 				<div class="space-y-4" data-testid="expense-form">
 					{#if expenseStep === 0}
-						<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Work order</span>
-							<Select.Root
-								type="single"
-								value={expenseForm.workOrderId}
-								onValueChange={(value) => {
-									expenseForm.workOrderId = value;
-								}}
-							>
-								<Select.Trigger class="w-full" data-testid="expense-workorder-input">
-									{selectedWorkOrderLabel ?? 'No work order'}
-								</Select.Trigger>
-								<Select.Content>
-									<Select.Item value="" label="No work order">No work order</Select.Item>
-									{#each workOrdersQuery.data || [] as wo}
-										<Select.Item value={String(wo.id)} label={wo.title}>{wo.title}</Select.Item>
-									{/each}
-								</Select.Content>
-							</Select.Root>
-						</div>
+						<RemoteRecordSelect
+							queryKey={['expense-work-order', portfolioId]}
+							label="Work order"
+							bind:value={expenseForm.workOrderId}
+							selectedLabel={selectedWorkOrderLabel}
+							placeholder="No work order"
+							clearLabel="No work order"
+							searchPlaceholder="Search work orders…"
+							emptyLabel="No matching work orders"
+							loadPage={loadWorkOrderOptions}
+							onValueChange={(value, option) => {
+								selectedWorkOrderLabel = option?.label ?? null;
+								if (value) autofillExpenseFromWorkOrderId(value);
+							}}
+							testid="expense-workorder-input"
+						/>
 						<div class="grid gap-3 sm:grid-cols-3">
-							<div>
-								<span class="mb-1 block text-xs text-muted-foreground">Property</span>
-								<Select.Root
-									type="single"
-									value={expenseForm.propertyId}
-									onValueChange={(value) => {
-										expenseForm.propertyId = value;
-										expenseForm.unitId = '';
-									}}
-								>
-									<Select.Trigger class="w-full" data-testid="expense-property-input">
-										{selectedPropertyLabel ?? 'No property'}
-									</Select.Trigger>
-									<Select.Content>
-										<Select.Item value="" label="No property">No property</Select.Item>
-										{#each propertiesQuery.data || [] as property}
-											<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
-										{/each}
-									</Select.Content>
-								</Select.Root>
-							</div>
-							<div>
-								<span class="mb-1 block text-xs text-muted-foreground">Unit</span>
-								<Select.Root type="single" bind:value={expenseForm.unitId} disabled={!expenseForm.propertyId}>
-									<Select.Trigger class="w-full" data-testid="expense-unit-input">
-										{#if !expenseForm.propertyId}
-											Select property first
-										{:else}
-											{selectedUnitLabel ?? 'No unit'}
-										{/if}
-									</Select.Trigger>
-									<Select.Content>
-										<Select.Item value="" label="No unit">No unit</Select.Item>
-										{#each expenseUnitsQuery.data || [] as unit}
-											<Select.Item value={String(unit.id)} label={unit.unitNumber}>{unit.unitNumber}</Select.Item>
-										{/each}
-									</Select.Content>
-								</Select.Root>
-							</div>
-							<div>
-								<span class="mb-1 block text-xs text-muted-foreground">Vendor</span>
-								<Select.Root
-									type="single"
-									value={expenseForm.vendorId}
-									onValueChange={(value) => {
-										expenseForm.vendorId = value;
-									}}
-								>
-									<Select.Trigger class="w-full" data-testid="expense-vendor-input">
-										{selectedVendorLabel ?? 'No vendor'}
-									</Select.Trigger>
-									<Select.Content>
-										<Select.Item value="" label="No vendor">No vendor</Select.Item>
-										{#each vendorsQuery.data || [] as vendor}
-											<Select.Item value={String(vendor.id)} label={vendor.name}>{vendor.name}</Select.Item>
-										{/each}
-									</Select.Content>
-								</Select.Root>
-							</div>
+							<RemoteRecordSelect
+								queryKey={['expense-property', portfolioId]}
+								label="Property"
+								bind:value={expenseForm.propertyId}
+								selectedLabel={selectedPropertyLabel}
+								placeholder="No property"
+								clearLabel="No property"
+								searchPlaceholder="Search properties…"
+								emptyLabel="No matching properties"
+								loadPage={loadPropertyOptions}
+								onValueChange={(_value, option) => {
+									selectedPropertyLabel = option?.label ?? null;
+									expenseForm.unitId = '';
+									selectedUnitLabel = null;
+								}}
+								testid="expense-property-input"
+							/>
+							<RemoteRecordSelect
+								queryKey={['expense-unit', portfolioId, expensePropertyId]}
+								label="Unit"
+								bind:value={expenseForm.unitId}
+								selectedLabel={selectedUnitLabel}
+								placeholder={expenseForm.propertyId ? 'No unit' : 'Select property first'}
+								clearLabel="No unit"
+								searchPlaceholder="Search units…"
+								emptyLabel="No matching units"
+								disabled={!expenseForm.propertyId}
+								loadPage={loadUnitOptions}
+								onValueChange={(_value, option) => (selectedUnitLabel = option?.label ?? null)}
+								testid="expense-unit-input"
+							/>
+							<RemoteRecordSelect
+								queryKey={['expense-vendor', portfolioId]}
+								label="Vendor"
+								bind:value={expenseForm.vendorId}
+								selectedLabel={selectedVendorLabel}
+								placeholder="No vendor"
+								clearLabel="No vendor"
+								searchPlaceholder="Search vendors…"
+								emptyLabel="No matching vendors"
+								loadPage={loadVendorOptions}
+								onValueChange={(value, option) => {
+									selectedVendorLabel = option?.label ?? null;
+									if (value) autofillExpenseFromVendorId(value);
+								}}
+								testid="expense-vendor-input"
+							/>
 						</div>
 					{:else if expenseStep === 1}
 						<div>

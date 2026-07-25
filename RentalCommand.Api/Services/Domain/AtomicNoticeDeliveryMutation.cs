@@ -7,6 +7,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Navigation;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
 
@@ -215,6 +216,8 @@ public sealed class AtomicNoticeDeliveryHandler
                 Channel = NoticeDeliveryChannel.TenantPortal,
                 Destination = access.UserId.ToString(),
                 RecipientUserId = (int?)access.UserId,
+                NavigationAccessContextId = (int?)access.AccessContextId,
+                NavigationAccessRevision = (long?)access.AccessRevision,
                 party.PropertyId,
                 party.UnitId,
             };
@@ -229,6 +232,8 @@ public sealed class AtomicNoticeDeliveryHandler
                 Channel = NoticeDeliveryChannel.Email,
                 Destination = row.Email!,
                 RecipientUserId = (int?)null,
+                NavigationAccessContextId = (int?)null,
+                NavigationAccessRevision = (long?)null,
                 row.PropertyId,
                 row.UnitId,
             });
@@ -243,6 +248,8 @@ public sealed class AtomicNoticeDeliveryHandler
                 Channel = NoticeDeliveryChannel.Sms,
                 Destination = row.Phone!,
                 RecipientUserId = (int?)null,
+                NavigationAccessContextId = (int?)null,
+                NavigationAccessRevision = (long?)null,
                 row.PropertyId,
                 row.UnitId,
             });
@@ -271,6 +278,8 @@ public sealed class AtomicNoticeDeliveryHandler
                 Channel = NoticeDeliveryChannel.MobilePush,
                 Destination = device.Token,
                 RecipientUserId = (int?)access.UserId,
+                NavigationAccessContextId = (int?)access.AccessContextId,
+                NavigationAccessRevision = (long?)access.AccessRevision,
                 party.PropertyId,
                 party.UnitId,
             };
@@ -288,6 +297,8 @@ public sealed class AtomicNoticeDeliveryHandler
             row.Channel,
             row.Destination,
             row.RecipientUserId,
+            row.NavigationAccessContextId,
+            row.NavigationAccessRevision,
             row.PropertyId,
             row.UnitId)).ToList();
         if (destinations.Count == 0)
@@ -353,7 +364,15 @@ public sealed class AtomicNoticeDeliveryHandler
                     Title = rendered.Subject,
                     Message = rendered.Body.Length <= 280 ? rendered.Body : rendered.Body[..280],
                     Severity = "Info",
-                    ActionUrl = $"/portal/messages?conversation={portalMessage.ConversationId}",
+                    NavigationExperience = NavigationExperience.Tenant,
+                    NavigationDestination = NavigationDestination.Message,
+                    NavigationAccessContextId = destination.NavigationAccessContextId,
+                    NavigationAccessRevision = destination.NavigationAccessRevision,
+                    NavigationResourceKind = nameof(Conversation),
+                    NavigationResourceId = portalMessage.ConversationId,
+                    NavigationAction = NavigationAction.Open,
+                    NavigationExpiresAtUtc = now.AddDays(7),
+                    NavigationFallbackDestination = NavigationDestination.Home,
                     RelatedEntityType = nameof(Conversation),
                     RelatedEntityId = portalMessage.ConversationId,
                     CreatedAt = now,
@@ -361,7 +380,7 @@ public sealed class AtomicNoticeDeliveryHandler
                 attempt.Persistence.Add(notification);
                 portalNotifications.Add(notification);
             }
-            var (messageType, payload) = Payload(rendered, draft, destination, portalMessage);
+            var (messageType, payload) = Payload(rendered, draft, destination, portalMessage, now);
             var outbox = new OutboxMessage
             {
                 PortfolioId = command.PortfolioId,
@@ -561,7 +580,8 @@ public sealed class AtomicNoticeDeliveryHandler
         RenderedNotice rendered,
         NoticeDraft draft,
         DeliveryProjection destination,
-        ConversationMessage? portalMessage) => destination.Channel switch
+        ConversationMessage? portalMessage,
+        DateTime now) => destination.Channel switch
     {
         NoticeDeliveryChannel.Email => ("email", JsonSerializer.Serialize(new
         {
@@ -581,10 +601,22 @@ public sealed class AtomicNoticeDeliveryHandler
             deviceToken = destination.Destination,
             title = rendered.Subject,
             body = rendered.Body,
-            actionUrl = "/notices",
-            type = "TenantNotice",
-            relatedEntityType = nameof(RenderedNotice),
-            relatedEntityId = rendered.Id.ToString(),
+            navigationIntent = destination.NavigationAccessContextId is null
+                || destination.NavigationAccessRevision is null
+                    ? null
+                    : new
+                    {
+                        experience = NavigationExperience.Tenant.ToString(),
+                        destination = NavigationDestination.Notifications.ToString(),
+                        accessContextId = destination.NavigationAccessContextId.Value,
+                        accessRevision = destination.NavigationAccessRevision.Value,
+                        resource = (object?)null,
+                        parentResource = (object?)null,
+                        childResource = (object?)null,
+                        action = NavigationAction.Review.ToString(),
+                        expiresAtUtc = now.AddDays(7),
+                        fallbackDestination = NavigationDestination.Home.ToString(),
+                    },
         })),
         NoticeDeliveryChannel.TenantPortal when portalMessage is not null =>
             ("data-update", JsonSerializer.Serialize(new
@@ -682,6 +714,8 @@ public sealed class AtomicNoticeDeliveryHandler
         NoticeDeliveryChannel Channel,
         string Destination,
         int? RecipientUserId,
+        int? NavigationAccessContextId,
+        long? NavigationAccessRevision,
         int PropertyId,
         int UnitId);
 }

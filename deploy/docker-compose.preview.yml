@@ -17,7 +17,7 @@ services:
       timeout: 5s
       retries: 20
     mem_limit: 1g
-    cpus: 1.0
+    cpus: 3.0
 
   migrate:
     image: ${API_IMAGE}
@@ -53,7 +53,23 @@ services:
       Stripe__SecretKey: ""
       Authentication__Google__ClientId: ${GOOGLE_CLIENT_ID:-}
       Authentication__Google__ClientSecret: ${GOOGLE_CLIENT_SECRET:-}
+      PlatformAdmin__Emails__0: ${PLATFORM_ADMIN_EMAILS:-}
+      # Azure's mode-600 preview env pins the public callbacks to the stable Tailscale origin:
+      # Plaid /plaid/auth; QuickBooks /api/v1/integrations/accounting/callback.
+      Plaid__Environment: ${PLAID_ENVIRONMENT:-sandbox}
+      Plaid__ClientId: ${PLAID_CLIENT_ID:-}
+      Plaid__Secret: ${PLAID_SECRET:-}
+      Plaid__RedirectUri: ${PLAID_REDIRECT_URI:-}
+      Plaid__AndroidPackageName: ${PLAID_ANDROID_PACKAGE_NAME:-com.rentalcommand.rental_command.dev}
+      QuickBooks__ClientId: ${QUICKBOOKS_CLIENT_ID:-}
+      QuickBooks__ClientSecret: ${QUICKBOOKS_CLIENT_SECRET:-}
+      QuickBooks__Environment: ${QUICKBOOKS_ENVIRONMENT:-sandbox}
+      QuickBooks__RedirectUri: ${QUICKBOOKS_REDIRECT_URI:-}
       Notifications__NotifyTenants: "false"
+      Notifications__PublicWebhookBaseUrl: ${WEB_ORIGIN}
+      Notifications__Twilio__AccountSid: ${TWILIO_ACCOUNT_SID:-}
+      Notifications__Twilio__AuthToken: ${TWILIO_AUTH_TOKEN:-}
+      Notifications__Twilio__FromNumber: ${TWILIO_FROM_NUMBER:-}
     volumes:
       - uploads:/var/lib/rentalcommand/uploads
       - dataprotection_keys:/var/lib/rentalcommand/dataprotection-keys
@@ -67,7 +83,7 @@ services:
       retries: 12
       start_period: 30s
     mem_limit: 1g
-    cpus: 1.0
+    cpus: 2.0
 
   engine:
     image: ${ENGINE_IMAGE}
@@ -81,12 +97,21 @@ services:
       Assistant__ModelId: ${ASSISTANT_MODEL_ID:-gpt-4o}
       Assistant__ApiKey: ${ASSISTANT_API_KEY:-}
       Stripe__SecretKey: ""
+      QuickBooks__ClientId: ${QUICKBOOKS_CLIENT_ID:-}
+      QuickBooks__ClientSecret: ${QUICKBOOKS_CLIENT_SECRET:-}
+      QuickBooks__Environment: ${QUICKBOOKS_ENVIRONMENT:-sandbox}
+      QuickBooks__RedirectUri: ${QUICKBOOKS_REDIRECT_URI:-}
       Notifications__NotifyTenants: "false"
       Notifications__EnableRentCharges: "false"
       Notifications__EnableLateFees: "false"
       Notifications__EnableRecurringMaintenance: "false"
-      Notifications__SendGrid__ApiKey: ""
-      Notifications__Twilio__AuthToken: ""
+      Notifications__Email__Transport: ${EMAIL_TRANSPORT:-SendGrid}
+      Notifications__SendGrid__ApiKey: ${SENDGRID_API_KEY:-}
+      Notifications__SendGrid__FromEmail: ${SENDGRID_FROM_EMAIL:-}
+      Notifications__SendGrid__FromName: ${SENDGRID_FROM_NAME:-Rental Command}
+      Notifications__Twilio__AccountSid: ${TWILIO_ACCOUNT_SID:-}
+      Notifications__Twilio__AuthToken: ${TWILIO_AUTH_TOKEN:-}
+      Notifications__Twilio__FromNumber: ${TWILIO_FROM_NUMBER:-}
     volumes:
       - uploads:/var/lib/rentalcommand/uploads
       - dataprotection_keys:/var/lib/rentalcommand/dataprotection-keys
@@ -105,6 +130,7 @@ services:
       ORIGIN: ${WEB_ORIGIN}
       API_URL: http://api:8080
       PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      PLATFORM_ADMIN_EMAILS: ${PLATFORM_ADMIN_EMAILS:-}
     depends_on: [api]
     networks: [edge]
     mem_limit: 512m

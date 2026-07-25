@@ -92,6 +92,10 @@ public static class ReportParamKeys
 
     /// <summary>Forward-looking window in days, bound from query <c>days</c> (lease expirations).</summary>
     public const string Days = "days";
+
+    public const string Skip = "skip";
+    public const string Take = "take";
+    public const string Sort = "sort";
 }
 
 // ── Shared param binding ─────────────────────────────────────────────────────────────────────────
@@ -104,6 +108,9 @@ public static class ReportParamKeys
 /// </summary>
 public class ReportRangeQuery
 {
+    public const int DefaultTake = 20;
+    public const int MaxTake = 100;
+
     [Microsoft.AspNetCore.Mvc.FromQuery(Name = "from")]
     public DateTime? From { get; set; }
 
@@ -115,6 +122,25 @@ public class ReportRangeQuery
 
     [Microsoft.AspNetCore.Mvc.FromQuery(Name = "propertyIds")]
     public List<int>? PropertyIds { get; set; }
+
+    [Microsoft.AspNetCore.Mvc.FromQuery(Name = "skip")]
+    public int Skip { get; set; }
+
+    [Microsoft.AspNetCore.Mvc.FromQuery(Name = "take")]
+    public int Take { get; set; } = DefaultTake;
+
+    [Microsoft.AspNetCore.Mvc.FromQuery(Name = "sort")]
+    public string? Sort { get; set; }
+
+    public int NormalizedSkip => Math.Max(0, Skip);
+
+    public int NormalizedTake => Take <= 0 ? DefaultTake : Math.Min(Take, MaxTake);
+
+    public string NormalizedSort => string.IsNullOrWhiteSpace(Sort) ? "property" : Sort.Trim();
+
+    public string SortField => NormalizedSort.TrimStart('-').Replace("_", string.Empty, StringComparison.Ordinal).ToLowerInvariant();
+
+    public bool SortDescending => NormalizedSort.StartsWith("-", StringComparison.Ordinal);
 }
 
 // ── Rent Roll ────────────────────────────────────────────────────────────────────────────────────
@@ -271,6 +297,10 @@ public class CashFlowResponse
     public DateTime From { get; set; }
     public DateTime To { get; set; }
     public IReadOnlyList<CashFlowMonth> Months { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
+    public string Sort { get; set; } = "month";
     public decimal TotalIncome { get; set; }
     public decimal TotalExpense { get; set; }
     public decimal TotalNet { get; set; }
@@ -426,6 +456,10 @@ public class SecurityDepositRegisterResponse
 {
     public DateTime GeneratedAt { get; set; }
     public IReadOnlyList<SecurityDepositRegisterRow> Rows { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
+    public string Sort { get; set; } = "property";
     public decimal TotalHeld { get; set; }
     public decimal TotalDeductions { get; set; }
     public decimal TotalReturned { get; set; }
@@ -473,6 +507,9 @@ public class Vendor1099Response
 
     /// <summary>Sum of <see cref="Vendor1099Row.TotalPaid"/> across all rows.</summary>
     public decimal TotalPaid { get; set; }
+
+    /// <summary>Count of paid, 1099-eligible vendors that do not have a W-9 on file.</summary>
+    public int NeedsW9Count { get; set; }
 
     /// <summary>The IRS 1099 reporting threshold applied to flag "needs review" (currently $600).</summary>
     public decimal Threshold { get; set; }

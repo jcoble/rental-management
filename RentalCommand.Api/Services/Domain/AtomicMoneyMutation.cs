@@ -192,7 +192,7 @@ public sealed class AtomicMoneyMutationHandler
         {
             var query = persistence.Query<Expense>();
             if (command.Operation == AtomicMoneyOperation.Update)
-                query = query.Include(row => row.LineItems);
+                query = query.Include(row => row.LineItems).Include(row => row.Allocations);
             entity = await query.SingleOrDefaultAsync(
                 row => row.Id == command.EntityId && row.PortfolioId == command.PortfolioId && row.DeletedAt == null, ct);
             if (entity is null) return Missing();
@@ -215,15 +215,21 @@ public sealed class AtomicMoneyMutationHandler
         if (command.Operation == AtomicMoneyOperation.Create)
         {
             var request = Read<CreateExpenseRequest>(command);
-            if (!await ExpenseReferencesExistAsync(command.PortfolioId, request.PropertyId, request.UnitId,
-                    request.VendorId, request.WorkOrderId, persistence, ct)) return Missing();
+            var operationalScope = ResolveExpenseOperationalScope(
+                request.OperationalScope, request.PropertyId, request.UnitId, request.WorkOrderId);
+            ValidateExpenseAllocations(request.Allocations, request.Amount);
+            var references = await ExpenseReferencesExistAsync(
+                command.PortfolioId, operationalScope, request.PropertyId, request.UnitId,
+                request.VendorId, request.WorkOrderId, request.Allocations, persistence, ct);
+            if (references is null) return Missing();
             if (!await HasPropertyAuthorityAsync(command, persistence, now,
-                    request.PropertyId, request.UnitId, request.WorkOrderId, ct))
+                    references.PropertyId, references.UnitId, references.WorkOrderId, ct))
                 return Missing();
             entity = new Expense
             {
-                PortfolioId = command.PortfolioId, PropertyId = request.PropertyId, UnitId = request.UnitId,
-                VendorId = request.VendorId, WorkOrderId = request.WorkOrderId, Category = request.Category,
+                PortfolioId = command.PortfolioId, OperationalScope = operationalScope,
+                PropertyId = references.PropertyId, UnitId = references.UnitId,
+                VendorId = request.VendorId, WorkOrderId = references.WorkOrderId, Category = request.Category,
                 Description = request.Description, Status = request.Status, Amount = request.Amount,
                 IncurredAt = Utc(request.IncurredAt), DueDate = Utc(request.DueDate), PaidAt = Utc(request.PaidAt),
                 BillableToOwner = request.BillableToOwner, Notes = request.Notes, Subtotal = request.Subtotal,
@@ -236,6 +242,9 @@ public sealed class AtomicMoneyMutationHandler
                     Description = line.Description ?? string.Empty, Quantity = line.Quantity,
                     UnitPrice = line.UnitPrice, Amount = line.Amount, LineNumber = line.LineNumber,
                 });
+            foreach (var allocation in request.Allocations)
+                entity.Allocations.Add(NewExpenseAllocation(
+                    allocation, command.PortfolioId, now));
             persistence.Add(entity);
             attempt.BindSemanticAudit(entity, Audit(command, nameof(Expense), AuditLogOperation.Created,
                 $"Expense {entity.Description} created", entityId: 0));
@@ -243,18 +252,25 @@ public sealed class AtomicMoneyMutationHandler
         else
         {
             var request = Read<UpdateExpenseRequest>(command);
-            var effectivePropertyId = request.PropertyId ?? entity!.PropertyId;
-            var effectiveUnitId = request.UnitId ?? entity.UnitId;
-            var effectiveWorkOrderId = request.WorkOrderId ?? entity.WorkOrderId;
-            if (!await ExpenseReferencesExistAsync(command.PortfolioId, effectivePropertyId, effectiveUnitId,
-                    request.VendorId, effectiveWorkOrderId, persistence, ct)) return Missing();
+            var operationalScope = ResolveUpdatedExpenseOperationalScope(entity!, request);
+            var (requestedPropertyId, requestedUnitId, requestedWorkOrderId) =
+                ResolveUpdatedExpenseReferenceIds(entity, request, operationalScope);
+            var effectiveAmount = request.Amount ?? entity.Amount;
+            if (request.Allocations is not null)
+                ValidateExpenseAllocations(request.Allocations, effectiveAmount);
+            var references = await ExpenseReferencesExistAsync(
+                command.PortfolioId, operationalScope, requestedPropertyId, requestedUnitId,
+                request.VendorId ?? entity.VendorId, requestedWorkOrderId, request.Allocations,
+                persistence, ct);
+            if (references is null) return Missing();
             if (!await HasPropertyAuthorityAsync(command, persistence, now,
-                    effectivePropertyId, effectiveUnitId, effectiveWorkOrderId, ct))
+                    references.PropertyId, references.UnitId, references.WorkOrderId, ct))
                 return Missing();
-            if (request.PropertyId.HasValue) entity!.PropertyId = request.PropertyId;
-            if (request.UnitId.HasValue) entity!.UnitId = request.UnitId;
+            entity!.OperationalScope = operationalScope;
+            entity.PropertyId = references.PropertyId;
+            entity.UnitId = references.UnitId;
+            entity.WorkOrderId = references.WorkOrderId;
             if (request.VendorId.HasValue) entity!.VendorId = request.VendorId;
-            if (request.WorkOrderId.HasValue) entity!.WorkOrderId = request.WorkOrderId;
             if (request.Category.HasValue) entity!.Category = request.Category.Value;
             if (request.Description is not null) entity!.Description = request.Description;
             if (request.Status.HasValue) entity!.Status = request.Status.Value;
@@ -281,6 +297,14 @@ public sealed class AtomicMoneyMutationHandler
                         UnitPrice = line.UnitPrice, Amount = line.Amount, LineNumber = index + 1,
                     });
                 }
+            }
+            if (request.Allocations is not null)
+            {
+                foreach (var existing in entity!.Allocations.ToArray()) persistence.Remove(existing);
+                entity.Allocations.Clear();
+                foreach (var allocation in request.Allocations)
+                    entity.Allocations.Add(NewExpenseAllocation(
+                        allocation, command.PortfolioId, now));
             }
             entity!.UpdatedAt = now;
             attempt.BindSemanticAudit(entity, Audit(command, nameof(Expense), AuditLogOperation.Updated,
@@ -902,22 +926,192 @@ public sealed class AtomicMoneyMutationHandler
                 order.Id == workOrderId && order.PortfolioId == command.PortfolioId && order.PropertyId == property.Id)), ct);
     }
 
-    private static Task<bool> ExpenseReferencesExistAsync(
-        int portfolioId, int? propertyId, int? unitId, int? vendorId, int? workOrderId,
-        IAtomicPersistenceSession persistence, CancellationToken ct) =>
-        persistence.Query<Portfolio>().AnyAsync(portfolio =>
-            portfolio.Id == portfolioId &&
-            (propertyId == null || persistence.Query<Property>().Any(row =>
-                row.Id == propertyId && row.PortfolioId == portfolioId)) &&
-            (unitId == null || persistence.Query<Unit>().Any(row =>
-                row.Id == unitId && row.PortfolioId == portfolioId &&
-                (propertyId == null || row.PropertyId == propertyId))) &&
-            (vendorId == null || persistence.Query<Vendor>().Any(row =>
-                row.Id == vendorId && row.PortfolioId == portfolioId)) &&
-            (workOrderId == null || persistence.Query<WorkOrder>().Any(row =>
-                row.Id == workOrderId && row.PortfolioId == portfolioId &&
-                (propertyId == null || row.PropertyId == propertyId) &&
-                (unitId == null || row.UnitId == unitId))), ct);
+    private static async Task<ExpenseReferenceContext?> ExpenseReferencesExistAsync(
+        int portfolioId,
+        ExpenseOperationalScope operationalScope,
+        int? propertyId,
+        int? unitId,
+        int? vendorId,
+        int? workOrderId,
+        IReadOnlyList<ExpenseAllocationRequest>? allocations,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        var allocationPropertyIds = new HashSet<int>();
+        var allocationUnitIds = new HashSet<int>();
+        var allocationOwnerIds = new HashSet<int>();
+        if (allocations is not null)
+        {
+            foreach (var allocation in allocations)
+            {
+                if (allocation.PropertyId is int allocationPropertyId)
+                    allocationPropertyIds.Add(allocationPropertyId);
+                if (allocation.UnitId is int allocationUnitId)
+                    allocationUnitIds.Add(allocationUnitId);
+                if (allocation.OwnerEntityId is int allocationOwnerId)
+                    allocationOwnerIds.Add(allocationOwnerId);
+            }
+        }
+
+        var propertyTargets = allocationPropertyIds.ToArray();
+        var unitTargets = allocationUnitIds.ToArray();
+        var ownerTargets = allocationOwnerIds.ToArray();
+        var portfolio = persistence.Query<Portfolio>().Where(row =>
+            row.Id == portfolioId &&
+            (vendorId == null || persistence.Query<Vendor>().Any(candidate =>
+                candidate.Id == vendorId && candidate.PortfolioId == portfolioId)) &&
+            (propertyTargets.Length == 0 || persistence.Query<Property>().Count(candidate =>
+                candidate.PortfolioId == portfolioId && propertyTargets.Contains(candidate.Id)) ==
+                propertyTargets.Length) &&
+            (unitTargets.Length == 0 || persistence.Query<Unit>().Count(candidate =>
+                candidate.PortfolioId == portfolioId && unitTargets.Contains(candidate.Id)) ==
+                unitTargets.Length) &&
+            (ownerTargets.Length == 0 || persistence.Query<OwnerEntity>().Count(candidate =>
+                candidate.PortfolioId == portfolioId && ownerTargets.Contains(candidate.Id)) ==
+                ownerTargets.Length));
+
+        return operationalScope switch
+        {
+            ExpenseOperationalScope.Portfolio when
+                propertyId is null && unitId is null && workOrderId is null =>
+                await portfolio.Select(_ => new ExpenseReferenceContext(
+                        ExpenseOperationalScope.Portfolio, null, null, null))
+                    .SingleOrDefaultAsync(ct),
+
+            ExpenseOperationalScope.Property when
+                propertyId is not null && unitId is null && workOrderId is null =>
+                await portfolio.SelectMany(_ => persistence.Query<Property>()
+                        .Where(candidate =>
+                            candidate.Id == propertyId && candidate.PortfolioId == portfolioId))
+                    .Select(candidate => new ExpenseReferenceContext(
+                        ExpenseOperationalScope.Property, candidate.Id, null, null))
+                    .SingleOrDefaultAsync(ct),
+
+            ExpenseOperationalScope.Unit when unitId is not null && workOrderId is null =>
+                await portfolio.SelectMany(_ => persistence.Query<Unit>()
+                        .Where(candidate =>
+                            candidate.Id == unitId && candidate.PortfolioId == portfolioId &&
+                            (propertyId == null || candidate.PropertyId == propertyId)))
+                    .Select(candidate => new ExpenseReferenceContext(
+                        ExpenseOperationalScope.Unit, candidate.PropertyId, candidate.Id, null))
+                    .SingleOrDefaultAsync(ct),
+
+            ExpenseOperationalScope.WorkOrder when workOrderId is not null =>
+                await portfolio.SelectMany(_ => persistence.Query<WorkOrder>()
+                        .Where(candidate =>
+                            candidate.Id == workOrderId && candidate.PortfolioId == portfolioId &&
+                            (propertyId == null || candidate.PropertyId == propertyId) &&
+                            (unitId == null || candidate.UnitId == unitId)))
+                    .Select(candidate => new ExpenseReferenceContext(
+                        ExpenseOperationalScope.WorkOrder, candidate.PropertyId,
+                        candidate.UnitId, candidate.Id))
+                    .SingleOrDefaultAsync(ct),
+
+            _ => null,
+        };
+    }
+
+    private static ExpenseOperationalScope ResolveExpenseOperationalScope(
+        ExpenseOperationalScope? requested,
+        int? propertyId,
+        int? unitId,
+        int? workOrderId) =>
+        requested ?? (workOrderId is not null
+            ? ExpenseOperationalScope.WorkOrder
+            : unitId is not null
+                ? ExpenseOperationalScope.Unit
+                : propertyId is not null
+                    ? ExpenseOperationalScope.Property
+                    : ExpenseOperationalScope.Portfolio);
+
+    private static ExpenseOperationalScope ResolveUpdatedExpenseOperationalScope(
+        Expense entity,
+        UpdateExpenseRequest request)
+    {
+        if (request.OperationalScope.HasValue)
+            return request.OperationalScope.Value;
+        if (request.WorkOrderId.HasValue)
+            return ExpenseOperationalScope.WorkOrder;
+        if (request.UnitId.HasValue && entity.OperationalScope != ExpenseOperationalScope.WorkOrder)
+            return ExpenseOperationalScope.Unit;
+        if (request.PropertyId.HasValue &&
+            entity.OperationalScope == ExpenseOperationalScope.Portfolio)
+            return ExpenseOperationalScope.Property;
+        return entity.OperationalScope;
+    }
+
+    private static (int? PropertyId, int? UnitId, int? WorkOrderId)
+        ResolveUpdatedExpenseReferenceIds(
+            Expense entity,
+            UpdateExpenseRequest request,
+            ExpenseOperationalScope operationalScope) =>
+        operationalScope switch
+        {
+            ExpenseOperationalScope.Portfolio => (null, null, null),
+            ExpenseOperationalScope.Property =>
+                (request.PropertyId ?? entity.PropertyId, null, null),
+            ExpenseOperationalScope.Unit =>
+                (request.PropertyId ?? entity.PropertyId,
+                    request.UnitId ?? entity.UnitId, null),
+            ExpenseOperationalScope.WorkOrder =>
+                (request.PropertyId ?? entity.PropertyId,
+                    request.UnitId ?? entity.UnitId,
+                    request.WorkOrderId ?? entity.WorkOrderId),
+            _ => throw new InvalidOperationException("Unsupported expense operational scope."),
+        };
+
+    private static void ValidateExpenseAllocations(
+        IReadOnlyList<ExpenseAllocationRequest> allocations,
+        decimal expenseAmount)
+    {
+        decimal total = 0m;
+        foreach (var allocation in allocations)
+        {
+            if (allocation.Amount <= 0m)
+                throw new InvalidOperationException("Expense allocations must be positive.");
+            var validTarget = allocation.TargetKind switch
+            {
+                ExpenseAllocationTargetKind.Property =>
+                    allocation.PropertyId is not null &&
+                    allocation.UnitId is null && allocation.OwnerEntityId is null,
+                ExpenseAllocationTargetKind.Unit =>
+                    allocation.PropertyId is null &&
+                    allocation.UnitId is not null && allocation.OwnerEntityId is null,
+                ExpenseAllocationTargetKind.OwnerEntity =>
+                    allocation.PropertyId is null &&
+                    allocation.UnitId is null && allocation.OwnerEntityId is not null,
+                _ => false,
+            };
+            if (!validTarget)
+                throw new InvalidOperationException(
+                    "Each expense allocation must name exactly one target matching its target kind.");
+            total += allocation.Amount;
+        }
+
+        if (allocations.Count > 0 && total != expenseAmount)
+            throw new InvalidOperationException(
+                "A nonempty expense allocation set must exactly equal the expense amount.");
+    }
+
+    private static ExpenseAllocation NewExpenseAllocation(
+        ExpenseAllocationRequest request,
+        int portfolioId,
+        DateTime now) => new()
+    {
+        PortfolioId = portfolioId,
+        TargetKind = request.TargetKind,
+        PropertyId = request.PropertyId,
+        UnitId = request.UnitId,
+        OwnerEntityId = request.OwnerEntityId,
+        Amount = request.Amount,
+        CreatedAt = now,
+    };
+
+    private sealed record ExpenseReferenceContext(
+        ExpenseOperationalScope OperationalScope,
+        int? PropertyId,
+        int? UnitId,
+        int? WorkOrderId);
 
     private static Task<bool> PropertyUnitReferencesExistAsync(
         int portfolioId, int? propertyId, int? unitId, IAtomicPersistenceSession persistence,
@@ -935,8 +1129,11 @@ public sealed class AtomicMoneyMutationHandler
         int portfolioId, int ownerId, int? propertyId, IAtomicPersistenceSession persistence, CancellationToken ct) =>
         persistence.Query<OwnerEntity>().AnyAsync(owner =>
             owner.Id == ownerId && owner.PortfolioId == portfolioId &&
-            (propertyId == null || persistence.Query<Property>().Any(row =>
-                row.Id == propertyId && row.PortfolioId == portfolioId && row.OwnerEntityId == ownerId)), ct);
+            (propertyId == null || persistence.Query<PropertyOwnership>().Any(ownership =>
+                ownership.PropertyId == propertyId
+                && ownership.PortfolioId == portfolioId
+                && ownership.OwnerEntityId == ownerId
+                && ownership.EffectiveToUtc == null)), ct);
 
     private static T Read<T>(AtomicMoneyMutationCommand command) where T : class =>
         JsonSerializer.Deserialize<T>(command.RequestJson)

@@ -26,7 +26,7 @@ public class InspectionController : ManagementControllerBase
     [HttpGet]
     [ProducesResponseType(typeof(IReadOnlyList<InspectionResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<InspectionResponse>>> List(
-        [FromQuery] ListQuery query, [FromQuery] int? propertyId, CancellationToken ct)
+        [FromQuery] InspectionListQuery query, [FromQuery] int? propertyId, CancellationToken ct)
     {
         var items = await _service.ListAuthorizedAsync(GetWorkspaceReadScope(), propertyId, query, ct);
         return Ok(items);
@@ -35,7 +35,7 @@ public class InspectionController : ManagementControllerBase
     [HttpGet("page")]
     [ProducesResponseType(typeof(InspectionListResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<InspectionListResponse>> ListPage(
-        [FromQuery] ListQuery query, [FromQuery] int? propertyId, CancellationToken ct)
+        [FromQuery] InspectionListQuery query, [FromQuery] int? propertyId, CancellationToken ct)
     {
         var page = await _service.ListPageAuthorizedAsync(GetWorkspaceReadScope(), propertyId, query, ct);
         return Ok(page);

@@ -138,11 +138,43 @@ public sealed class CanonicalRegistrationBootstrapTests : IAsyncLifetime
             .OwnerEntityId.Should().Be(owner.Id);
         var suppliedTemplates = await _ctx.Db.WorkspaceNoticeTemplateVersions
             .Where(template => template.PortfolioId == context.PortfolioId)
+            .OrderBy(template => template.SystemKey)
             .ToListAsync();
         suppliedTemplates.Should().HaveCount(5);
         suppliedTemplates.Should().OnlyContain(template =>
-            template.Version == 1 && template.BasedOnSystemTemplateVersionId > 0 &&
+            template.BasedOnSystemTemplateVersionId > 0 &&
             template.CreatedByUserId == user.Id);
+        suppliedTemplates.Single(template => template.SystemKey == "lease-non-renewal")
+            .Version.Should().Be(2);
+        suppliedTemplates.Single(template => template.SystemKey == "late-rent-late-fee")
+            .Version.Should().Be(2);
+        suppliedTemplates.Where(template =>
+                template.SystemKey != "lease-non-renewal" &&
+                template.SystemKey != "late-rent-late-fee")
+            .Should().OnlyContain(template => template.Version == 1);
+
+        var policies = await _ctx.Db.TenantNoticePolicies.AsNoTracking()
+            .Where(policy => policy.PortfolioId == context.PortfolioId)
+            .OrderBy(policy => policy.AutomationKey)
+            .ToListAsync();
+        policies.Should().HaveCount(5);
+        policies.Should().OnlyContain(policy => policy.Mode == TenantNoticeMode.Draft);
+        policies.Should().OnlyContain(policy => suppliedTemplates.Any(template =>
+            template.Id == policy.WorkspaceNoticeTemplateVersionId &&
+            template.SystemKey == policy.AutomationKey));
+
+        var bootstrapAudits = await _ctx.Db.AtomicAuditLogs.AsNoTracking()
+            .Where(audit => audit.PortfolioId == context.PortfolioId &&
+                audit.ActorLabel == "authentication:registration")
+            .ToListAsync();
+        bootstrapAudits.Count(audit =>
+                audit.EntityType == nameof(WorkspaceNoticeTemplateVersion) &&
+                audit.ChangeReason == "Fresh workspace supplied legal template replaced with latest immutable version")
+            .Should().Be(2);
+        bootstrapAudits.Count(audit =>
+                audit.EntityType == nameof(TenantNoticePolicy) &&
+                audit.ChangeReason == "Fresh workspace Draft policy rebound to latest supplied legal template")
+            .Should().Be(2);
 
         var preLoginOptions = await ExecuteAsApiDatabaseIdentityAsync(() =>
             new EffectiveAccessContextSelectionQuery(_ctx.Db)

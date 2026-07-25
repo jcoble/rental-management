@@ -59,8 +59,8 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
 
     // Domain entities
     public DbSet<Portfolio> Portfolios => Set<Portfolio>();
-    public DbSet<Owner> Owners => Set<Owner>();
     public DbSet<OwnerEntity> OwnerEntities => Set<OwnerEntity>();
+    public DbSet<PropertyOwnership> PropertyOwnerships => Set<PropertyOwnership>();
     public DbSet<OwnerUserAccess> OwnerUserAccesses => Set<OwnerUserAccess>();
     public DbSet<OwnerDistribution> OwnerDistributions => Set<OwnerDistribution>();
     public DbSet<Property> Properties => Set<Property>();
@@ -113,6 +113,7 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
     public DbSet<DocumentTemplate> DocumentTemplates => Set<DocumentTemplate>();
     public DbSet<DocumentTemplateField> DocumentTemplateFields => Set<DocumentTemplateField>();
     public DbSet<Expense> Expenses => Set<Expense>();
+    public DbSet<ExpenseAllocation> ExpenseAllocations => Set<ExpenseAllocation>();
     public DbSet<ExpenseLineItem> ExpenseLineItems => Set<ExpenseLineItem>();
     public DbSet<CapitalAsset> CapitalAssets => Set<CapitalAsset>();
     public DbSet<PropertyDisposition> PropertyDispositions => Set<PropertyDisposition>();
@@ -135,6 +136,8 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
     public DbSet<NotificationReadState> NotificationReadStates => Set<NotificationReadState>();
     public DbSet<AutomationSettings> AutomationSettings => Set<AutomationSettings>();
     public DbSet<MessagingProviderSettings> MessagingProviderSettings => Set<MessagingProviderSettings>();
+    public DbSet<WorkspaceLlmCredential> WorkspaceLlmCredentials => Set<WorkspaceLlmCredential>();
+    public DbSet<LlmUsageEvidence> LlmUsageEvidence => Set<LlmUsageEvidence>();
     public DbSet<UserAlertPreference> UserAlertPreferences => Set<UserAlertPreference>();
     public DbSet<TeamRoutingRule> TeamRoutingRules => Set<TeamRoutingRule>();
     public DbSet<TeamRoutingRuleRecipient> TeamRoutingRuleRecipients => Set<TeamRoutingRuleRecipient>();
@@ -312,9 +315,9 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
         modelBuilder.Entity<OwnerEntity>(entity =>
         {
             entity.HasKey(e => e.Id);
+            entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
             entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
             entity.Property(e => e.TaxId).HasMaxLength(64);
-            entity.Property(e => e.Address).HasMaxLength(500);
             entity.Property(e => e.Phone).HasMaxLength(50);
             entity.Property(e => e.Email).HasMaxLength(200);
             entity.Property(e => e.OwnerEntityType).HasConversion<int>();
@@ -568,8 +571,70 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.Property(e => e.Title).IsRequired().HasMaxLength(200);
             entity.Property(e => e.Message).IsRequired().HasMaxLength(1000);
             entity.Property(e => e.Severity).IsRequired().HasMaxLength(20);
-            entity.Property(e => e.ActionUrl).HasMaxLength(500);
+            entity.Property(e => e.NavigationExperience).HasConversion<string>().HasMaxLength(20);
+            entity.Property(e => e.NavigationDestination).HasConversion<string>().HasMaxLength(40);
+            entity.Property(e => e.NavigationResourceKind).HasMaxLength(120);
+            entity.Property(e => e.NavigationParentResourceKind).HasMaxLength(120);
+            entity.Property(e => e.NavigationChildResourceKind).HasMaxLength(120);
+            entity.Property(e => e.NavigationAction).HasConversion<string>().HasMaxLength(20);
+            entity.Property(e => e.NavigationFallbackDestination).HasConversion<string>().HasMaxLength(40);
             entity.Property(e => e.RelatedEntityType).HasMaxLength(120);
+            entity.ToTable(table => table.HasCheckConstraint(
+                "CK_Notifications_NavigationIntentShape",
+                """
+                (
+                    "NavigationExperience" IS NULL
+                    AND "NavigationDestination" IS NULL
+                    AND "NavigationAccessContextId" IS NULL
+                    AND "NavigationAccessRevision" IS NULL
+                    AND "NavigationResourceKind" IS NULL
+                    AND "NavigationResourceId" IS NULL
+                    AND "NavigationParentResourceKind" IS NULL
+                    AND "NavigationParentResourceId" IS NULL
+                    AND "NavigationChildResourceKind" IS NULL
+                    AND "NavigationChildResourceId" IS NULL
+                    AND "NavigationAction" IS NULL
+                    AND "NavigationExpiresAtUtc" IS NULL
+                    AND "NavigationFallbackDestination" IS NULL
+                )
+                OR
+                (
+                    "NavigationExperience" IS NOT NULL
+                    AND "NavigationExperience" IN ('Management', 'Leasing', 'Maintenance', 'Owner', 'Tenant')
+                    AND "NavigationDestination" IS NOT NULL
+                    AND "NavigationDestination" IN (
+                        'Home', 'Notifications', 'Rentals', 'Owners', 'Money', 'Work', 'Inbox',
+                        'UnitSummary', 'UnitTenantLease', 'UnitMoney', 'UnitMaintenance', 'UnitRecords',
+                        'TenantLedgerEntry', 'Expense', 'ScanDraft', 'Message', 'WorkOrder',
+                        'TechnicianWork', 'LeasingRental', 'LeasingApplication', 'LeasingAppointment',
+                        'LeasingConversation', 'LeasingMoveIn'
+                    )
+                    AND "NavigationAccessContextId" IS NOT NULL
+                    AND "NavigationAccessContextId" > 0
+                    AND "NavigationAccessRevision" IS NOT NULL
+                    AND "NavigationAccessRevision" > 0
+                    AND "NavigationAction" IS NOT NULL
+                    AND "NavigationAction" IN ('Open', 'Review', 'Resolve')
+                    AND "NavigationExpiresAtUtc" IS NOT NULL
+                    AND "NavigationFallbackDestination" IS NOT NULL
+                    AND "NavigationFallbackDestination" IN ('Home', 'Notifications')
+                    AND (("NavigationResourceKind" IS NULL AND "NavigationResourceId" IS NULL)
+                        OR ("NavigationResourceKind" IS NOT NULL
+                            AND btrim("NavigationResourceKind") <> ''
+                            AND "NavigationResourceId" IS NOT NULL
+                            AND "NavigationResourceId" > 0))
+                    AND (("NavigationParentResourceKind" IS NULL AND "NavigationParentResourceId" IS NULL)
+                        OR ("NavigationParentResourceKind" IS NOT NULL
+                            AND btrim("NavigationParentResourceKind") <> ''
+                            AND "NavigationParentResourceId" IS NOT NULL
+                            AND "NavigationParentResourceId" > 0))
+                    AND (("NavigationChildResourceKind" IS NULL AND "NavigationChildResourceId" IS NULL)
+                        OR ("NavigationChildResourceKind" IS NOT NULL
+                            AND btrim("NavigationChildResourceKind") <> ''
+                            AND "NavigationChildResourceId" IS NOT NULL
+                            AND "NavigationChildResourceId" > 0))
+                )
+                """));
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.UserId);
             entity.HasIndex(e => e.CreatedAt);
@@ -621,6 +686,33 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.Property(e => e.SmsCredentialCCipherText).HasMaxLength(4000);
             entity.Property(e => e.SmsFromNumberCipherText).HasMaxLength(4000);
             entity.HasIndex(e => e.PortfolioId).IsUnique();
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<WorkspaceLlmCredential>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Provider).IsRequired().HasMaxLength(32);
+            entity.Property(e => e.ModelId).IsRequired().HasMaxLength(128);
+            entity.Property(e => e.ApiKeyCipherText).IsRequired().HasMaxLength(4000);
+            entity.HasIndex(e => e.PortfolioId).IsUnique();
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<LlmUsageEvidence>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Provider).IsRequired().HasMaxLength(32);
+            entity.Property(e => e.ModelId).IsRequired().HasMaxLength(128);
+            entity.Property(e => e.Feature).IsRequired().HasMaxLength(80);
+            entity.Property(e => e.EstimatedCostUsd).HasPrecision(18, 8);
+            entity.HasIndex(e => new { e.PortfolioId, e.OccurredAtUtc });
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)
@@ -1488,24 +1580,10 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.HasQueryFilter(e => e.DeletedAt == null);
         });
 
-        modelBuilder.Entity<Owner>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
-            entity.Property(e => e.Email).HasMaxLength(200);
-            entity.Property(e => e.Phone).HasMaxLength(50);
-            entity.Property(e => e.MailingAddress).HasMaxLength(500);
-            entity.Property(e => e.Notes).HasMaxLength(2000);
-            entity.HasIndex(e => e.PortfolioId);
-            entity.HasOne(e => e.Portfolio)
-                .WithMany(p => p.Owners)
-                .HasForeignKey(e => e.PortfolioId)
-                .OnDelete(DeleteBehavior.Cascade);
-        });
-
         modelBuilder.Entity<Property>(entity =>
         {
             entity.HasKey(e => e.Id);
+            entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
             entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
             entity.Property(e => e.AddressLine1).IsRequired().HasMaxLength(250);
             entity.Property(e => e.AddressLine2).HasMaxLength(250);
@@ -1522,22 +1600,56 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.Property(e => e.RentalStructure).HasConversion<string>().HasMaxLength(20);
             entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.PortfolioId);
-            entity.HasIndex(e => e.OwnerId);
-            entity.HasIndex(e => e.OwnerEntityId);
             entity.HasIndex(e => e.Status);
             entity.HasQueryFilter(e => e.DeletedAt == null);
             entity.HasOne(e => e.Portfolio)
                 .WithMany(p => p.Properties)
                 .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Cascade);
-            entity.HasOne(e => e.Owner)
-                .WithMany(o => o.Properties)
-                .HasForeignKey(e => e.OwnerId)
-                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<PropertyOwnership>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.OwnershipSharePercent).HasPrecision(7, 4);
+            entity.Property(e => e.StatementRecipientName).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.StatementRecipientEmail).HasMaxLength(254);
+            entity.Property(e => e.PayeeName).IsRequired().HasMaxLength(200);
+            entity.ToTable(table =>
+            {
+                table.HasCheckConstraint(
+                    "CK_PropertyOwnerships_EffectivePeriod",
+                    "\"EffectiveToUtc\" IS NULL OR \"EffectiveToUtc\" > \"EffectiveFromUtc\"");
+                table.HasCheckConstraint(
+                    "CK_PropertyOwnerships_OwnershipSharePercent",
+                    "\"OwnershipSharePercent\" > 0 AND \"OwnershipSharePercent\" <= 100");
+                table.HasCheckConstraint(
+                    "CK_PropertyOwnerships_StatementRecipientName",
+                    "length(btrim(\"StatementRecipientName\")) > 0");
+                table.HasCheckConstraint(
+                    "CK_PropertyOwnerships_PayeeName",
+                    "length(btrim(\"PayeeName\")) > 0");
+            });
+            entity.HasIndex(e => new { e.PortfolioId, e.PropertyId, e.EffectiveFromUtc });
+            entity.HasIndex(e => new { e.PortfolioId, e.OwnerEntityId, e.EffectiveFromUtc })
+                .HasDatabaseName("IX_PropertyOwnerships_Portfolio_OwnerEntity_EffectiveFromUtc");
+            entity.HasIndex(e => new { e.PropertyId, e.OwnerEntityId, e.EffectiveToUtc })
+                .IsUnique()
+                .HasFilter("\"EffectiveToUtc\" IS NULL");
+            entity.HasOne(e => e.Portfolio)
+                .WithMany(p => p.PropertyOwnerships)
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Property)
+                .WithMany(p => p.Ownerships)
+                .HasForeignKey(e => new { e.PropertyId, e.PortfolioId })
+                .HasPrincipalKey(p => new { p.Id, p.PortfolioId })
+                .OnDelete(DeleteBehavior.Cascade);
             entity.HasOne(e => e.OwnerEntity)
-                .WithMany()
-                .HasForeignKey(e => e.OwnerEntityId)
-                .OnDelete(DeleteBehavior.SetNull);
+                .WithMany(o => o.PropertyOwnerships)
+                .HasForeignKey(e => new { e.OwnerEntityId, e.PortfolioId })
+                .HasPrincipalKey(o => new { o.Id, o.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<Unit>(entity =>
@@ -1586,6 +1698,8 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
         modelBuilder.Entity<Expense>(entity =>
         {
             entity.HasKey(e => e.Id);
+            entity.HasAlternateKey(e => new { e.Id, e.PortfolioId });
+            entity.Property(e => e.OperationalScope).HasConversion<string>().HasMaxLength(20);
             entity.Property(e => e.Category).HasConversion<int>();
             entity.Property(e => e.Description).IsRequired().HasMaxLength(500);
             entity.Property(e => e.Amount).HasPrecision(18, 2);
@@ -1653,6 +1767,66 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
                 .WithOne(li => li.Expense)
                 .HasForeignKey(li => li.ExpenseId)
                 .OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(e => e.Allocations)
+                .WithOne(allocation => allocation.Expense)
+                .HasForeignKey(allocation => new { allocation.ExpenseId, allocation.PortfolioId })
+                .HasPrincipalKey(expense => new { expense.Id, expense.PortfolioId })
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.ToTable(table => table.HasCheckConstraint(
+                "CK_Expenses_OperationalScope",
+                """
+                ("OperationalScope" = 'Portfolio' AND "PropertyId" IS NULL AND "UnitId" IS NULL AND "WorkOrderId" IS NULL)
+                OR ("OperationalScope" = 'Property' AND "PropertyId" IS NOT NULL AND "UnitId" IS NULL AND "WorkOrderId" IS NULL)
+                OR ("OperationalScope" = 'Unit' AND "PropertyId" IS NOT NULL AND "UnitId" IS NOT NULL AND "WorkOrderId" IS NULL)
+                OR ("OperationalScope" = 'WorkOrder' AND "PropertyId" IS NOT NULL AND "WorkOrderId" IS NOT NULL)
+                """));
+        });
+
+        modelBuilder.Entity<ExpenseAllocation>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.TargetKind).HasConversion<string>().HasMaxLength(20);
+            entity.Property(e => e.Amount).HasPrecision(18, 2);
+            entity.HasIndex(e => new { e.ExpenseId, e.PortfolioId });
+            entity.HasIndex(e => new { e.PropertyId, e.PortfolioId });
+            entity.HasIndex(e => new { e.UnitId, e.PortfolioId });
+            entity.HasIndex(e => new { e.OwnerEntityId, e.PortfolioId });
+            entity.HasIndex(e => new { e.PortfolioId, e.ExpenseId });
+            entity.HasIndex(e => new { e.PortfolioId, e.PropertyId });
+            entity.HasIndex(e => new { e.PortfolioId, e.UnitId });
+            entity.HasIndex(e => new { e.PortfolioId, e.OwnerEntityId });
+            entity.HasOne(e => e.Expense)
+                .WithMany(expense => expense.Allocations)
+                .HasForeignKey(e => new { e.ExpenseId, e.PortfolioId })
+                .HasPrincipalKey(expense => new { expense.Id, expense.PortfolioId })
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Property)
+                .WithMany()
+                .HasForeignKey(e => new { Id = e.PropertyId, e.PortfolioId })
+                .HasPrincipalKey(property => new { property.Id, property.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.Unit)
+                .WithMany()
+                .HasForeignKey(e => new { Id = e.UnitId, e.PortfolioId })
+                .HasPrincipalKey(unit => new { unit.Id, unit.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.OwnerEntity)
+                .WithMany()
+                .HasForeignKey(e => new { Id = e.OwnerEntityId, e.PortfolioId })
+                .HasPrincipalKey(owner => new { owner.Id, owner.PortfolioId })
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.ToTable(table =>
+            {
+                table.HasCheckConstraint(
+                    "CK_ExpenseAllocations_PositiveAmount", "\"Amount\" > 0");
+                table.HasCheckConstraint(
+                    "CK_ExpenseAllocations_TypedTarget",
+                    """
+                    ("TargetKind" = 'Property' AND "PropertyId" IS NOT NULL AND "UnitId" IS NULL AND "OwnerEntityId" IS NULL)
+                    OR ("TargetKind" = 'Unit' AND "PropertyId" IS NULL AND "UnitId" IS NOT NULL AND "OwnerEntityId" IS NULL)
+                    OR ("TargetKind" = 'OwnerEntity' AND "PropertyId" IS NULL AND "UnitId" IS NULL AND "OwnerEntityId" IS NOT NULL)
+                    """);
+            });
         });
 
         modelBuilder.Entity<ExpenseLineItem>(entity =>
@@ -2300,7 +2474,9 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
         modelBuilder.Entity<NotificationReadState>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<AutomationSettings>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<MessagingProviderSettings>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
-        modelBuilder.Entity<Owner>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<WorkspaceLlmCredential>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<LlmUsageEvidence>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<PropertyOwnership>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<QueuedJob>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<ScanBatch>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<ScanDraft>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
@@ -2316,6 +2492,7 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
         // PortfolioId and must not recover deleted applicant PII through the application navigation.
 
         // Dependent of Expense (Expense has `DeletedAt == null`).
+        modelBuilder.Entity<ExpenseAllocation>().HasQueryFilter(e => e.Expense!.DeletedAt == null);
         modelBuilder.Entity<ExpenseLineItem>().HasQueryFilter(e => e.Expense!.DeletedAt == null);
 
         // Dependent of WorkOrder (WorkOrder has `DeletedAt == null`).

@@ -1,12 +1,16 @@
 using System.Text.Json;
+using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Services.Esign;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Leasing;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Api.Services.Auth;
 
@@ -27,6 +31,11 @@ public class DemoDataSeeder
     private readonly ILegalDocumentSourceVersionResolver _sourceVersions;
     private readonly IAtomicInfrastructureUnitOfWork _infrastructure;
     private readonly IAtomicExecutionState _atomicExecution;
+    private readonly ILeaseAgreementRenderer _agreementRenderer;
+    private readonly ILeaseAgreementPdfGenerator _agreementPdf;
+    private readonly IExecutedLeasePdfGenerator _executedLeasePdf;
+    private readonly IPendingFileUploadStore _pendingUploads;
+    private readonly IFileStorage _fileStorage;
 
     public DemoDataSeeder(
         RentalCommandDbContext db,
@@ -34,7 +43,12 @@ public class DemoDataSeeder
         TimeProvider timeProvider,
         ILegalDocumentSourceVersionResolver sourceVersions,
         IAtomicInfrastructureUnitOfWork infrastructure,
-        IAtomicExecutionState atomicExecution)
+        IAtomicExecutionState atomicExecution,
+        ILeaseAgreementRenderer agreementRenderer,
+        ILeaseAgreementPdfGenerator agreementPdf,
+        IExecutedLeasePdfGenerator executedLeasePdf,
+        IPendingFileUploadStore pendingUploads,
+        IFileStorage fileStorage)
     {
         _db = db;
         _logger = logger;
@@ -42,23 +56,42 @@ public class DemoDataSeeder
         _sourceVersions = sourceVersions;
         _infrastructure = infrastructure;
         _atomicExecution = atomicExecution;
+        _agreementRenderer = agreementRenderer;
+        _agreementPdf = agreementPdf;
+        _executedLeasePdf = executedLeasePdf;
+        _pendingUploads = pendingUploads;
+        _fileStorage = fileStorage;
     }
 
     /// <summary>Startup convenience: seeds the dev-admin portfolio (id 1).</summary>
     public Task SeedAsync(CancellationToken ct = default) => SeedPortfolioAsync(1, ct);
 
     /// <summary>
-    /// Seeds the full demo dataset for an arbitrary portfolio. Idempotent: a no-op if the portfolio
-    /// already has any properties. Atomic: a failure mid-way rolls the whole thing back, so a partial
-    /// dataset can never strand the idempotency guard (which checks for any property).
+    /// Seeds the full demo dataset for an arbitrary portfolio, or reconciles the stable lifecycle and
+    /// legal-document fixtures when data already exists. Database graph creation and later artifact
+    /// finalization are independently atomic; rendering/admission/storage run between them and retries
+    /// reuse deterministic identities.
     /// </summary>
-    public Task SeedPortfolioAsync(int portfolioId, CancellationToken ct = default) =>
-        _infrastructure.ExecuteAsync(
+    public async Task SeedPortfolioAsync(int portfolioId, CancellationToken ct = default)
+    {
+        var seedResult = await _infrastructure.ExecuteAsync(
             AtomicInfrastructureOperation.DemoSeed,
             innerCt => SeedPortfolioCoreAsync(portfolioId, innerCt),
             ct);
+        _db.ChangeTracker.Clear();
 
-    private async Task SeedPortfolioCoreAsync(int portfolioId, CancellationToken ct)
+        var prepared = await PrepareLegalDocumentAsync(seedResult.LegalDocumentIntent, ct);
+        if (prepared is not null)
+        {
+            await _infrastructure.ExecuteAsync(
+                AtomicInfrastructureOperation.DemoSeed,
+                innerCt => FinalizeLegalDocumentAsync(prepared, innerCt),
+                ct);
+            _db.ChangeTracker.Clear();
+        }
+    }
+
+    private async Task<CanonicalDemoLeaseSeedResult> SeedPortfolioCoreAsync(int portfolioId, CancellationToken ct)
     {
         // Serialize the idempotency check and complete seed beneath the portfolio row. The
         // infrastructure kernel owns the enclosing transaction, including every intermediate flush.
@@ -78,13 +111,6 @@ public class DemoDataSeeder
         if (lockedPortfolioId == 0)
         {
             throw new InvalidOperationException($"Portfolio {portfolioId} does not exist.");
-        }
-
-        // Idempotency guard — if any properties exist for this portfolio we are already seeded.
-        if (await _db.Properties.AnyAsync(p => p.PortfolioId == portfolioId, ct))
-        {
-            _logger.LogDebug("Demo data already present for portfolio {PortfolioId}; skipping.", portfolioId);
-            return;
         }
 
         var now = _timeProvider.UtcNow();
@@ -107,6 +133,16 @@ public class DemoDataSeeder
             ?? throw new InvalidOperationException($"Portfolio {portfolioId} has no administering user for demo facts.");
         var currency = seedContext.Currency.Trim().ToUpperInvariant();
 
+        // Existing demo portfolios still run the stable lifecycle/document reconciliation. This is
+        // deliberately not a blanket reseed: only DEMO-LM facts are repaired and the stable legal
+        // artifact intent is resumed.
+        if (await _db.Properties.AnyAsync(p => p.PortfolioId == portfolioId, ct))
+        {
+            _logger.LogDebug("Demo data already present for portfolio {PortfolioId}; reconciling canonical facts.", portfolioId);
+            return await CanonicalDemoLeaseSeeder.ReconcileAsync(
+                _db, _atomicExecution, portfolioId, actorUserId, now, ct);
+        }
+
         // ── 1. OwnerEntities ──────────────────────────────────────────────────────────
         var ownerEntities = new List<OwnerEntity>
         {
@@ -120,7 +156,6 @@ public class DemoDataSeeder
                 City = "Columbus",
                 State = "OH",
                 PostalCode = "43215",
-                Address = AddressComposer.Compose("1200 Commerce Dr", null, "Columbus", "OH", "43215"),
                 Phone = "614-555-0100",
                 CreatedAt = now,
                 UpdatedAt = now
@@ -135,7 +170,6 @@ public class DemoDataSeeder
                 City = "Gahanna",
                 State = "OH",
                 PostalCode = "43230",
-                Address = AddressComposer.Compose("88 Westview Ct", null, "Gahanna", "OH", "43230"),
                 Phone = "614-555-0101",
                 CreatedAt = now,
                 UpdatedAt = now
@@ -281,7 +315,6 @@ public class DemoDataSeeder
             var prop = new Property
             {
                 PortfolioId       = portfolioId,
-                OwnerEntityId     = pd.ownerIdx == 0 ? ownerLlc.Id : ownerPerson.Id,
                 Name              = pd.name,
                 AddressLine1      = pd.addr,
                 City              = pd.city,
@@ -302,6 +335,24 @@ public class DemoDataSeeder
 
         _db.Properties.AddRange(properties);
         await _db.SaveChangesAsync(ct);   // get IDs
+
+        var propertyOwnerships = properties.Select((property, index) =>
+        {
+            var owner = propertyDefs[index].ownerIdx == 0 ? ownerLlc : ownerPerson;
+            return new PropertyOwnership
+            {
+                PortfolioId = portfolioId,
+                PropertyId = property.Id,
+                OwnerEntityId = owner.Id,
+                OwnershipSharePercent = 100m,
+                EffectiveFromUtc = property.CreatedAt,
+                StatementRecipientName = owner.Name,
+                StatementRecipientEmail = owner.Email,
+                PayeeName = owner.Name,
+            };
+        }).ToList();
+        _db.PropertyOwnerships.AddRange(propertyOwnerships);
+        await _db.SaveChangesAsync(ct);
 
         // Now add units
         for (int pi = 0; pi < propertyDefs.Length; pi++)
@@ -485,6 +536,7 @@ public class DemoDataSeeder
             var expense = new Expense
             {
                 PortfolioId    = portfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
                 PropertyId     = prop.Id,
                 VendorId       = vendor.Id,
                 Category       = ed.cat,
@@ -810,5 +862,339 @@ public class DemoDataSeeder
             woList.Count,
             appts.Count,
             inspections.Count);
+        return leaseSeed;
     }
+
+    private async Task<PreparedDemoLegalDocument?> PrepareLegalDocumentAsync(
+        CanonicalDemoLegalDocumentIntent? intent,
+        CancellationToken ct)
+    {
+        if (intent is null)
+        {
+            return null;
+        }
+        EnsureProviderIoIsOutsideInfrastructure();
+
+        var issued = await _agreementRenderer.RenderExactAsync(
+            intent.PortfolioId,
+            intent.DocumentSourceVersionId,
+            intent.RenderData,
+            () => _agreementPdf.Generate(intent.RenderData),
+            ct);
+        EnsurePdf(issued.PdfBytes, "issued");
+        var issuedHash = Sha256(issued.PdfBytes);
+        var issuedFileName = "DEMO-AGR-ACTIVE-001-V1-issued.pdf";
+        var issuanceFingerprint = LegalDocumentIssuanceBinding.Create(
+            nameof(LeaseAgreement),
+            intent.PortfolioId,
+            intent.LeaseManagementId,
+            intent.AgreementId,
+            intent.DraftRevision,
+            intent.DocumentSourceVersionId,
+            intent.TermsSchemaVersion,
+            intent.TermsPayload,
+            issuedHash,
+            issued.PdfBytes.LongLength,
+            issuedFileName);
+
+        var executedBytes = _executedLeasePdf.Generate(
+            new ExecutedLeaseData
+            {
+                Agreement = intent.RenderData,
+                Signers =
+                [
+                    new ExecutedSigner
+                    {
+                        Name = intent.TenantName,
+                        Email = intent.TenantEmail,
+                        SignerRole = DocumentTemplateSignerRole.Tenant,
+                        SignatureType = SignatureSignatureType.Typed,
+                        TypedName = intent.TenantName,
+                        SignedAtUtc = intent.ExecutedAtUtc,
+                        ViewedAtUtc = intent.ExecutedAtUtc.AddMinutes(-2),
+                        ConsentGiven = true,
+                    },
+                    new ExecutedSigner
+                    {
+                        Name = intent.RenderData.LandlordName,
+                        Email = "admin@rentalcommand.local",
+                        SignerRole = DocumentTemplateSignerRole.Landlord,
+                        SignatureType = SignatureSignatureType.Typed,
+                        TypedName = intent.RenderData.LandlordName,
+                        SignedAtUtc = intent.ExecutedAtUtc,
+                        ViewedAtUtc = intent.ExecutedAtUtc.AddMinutes(-1),
+                        ConsentGiven = true,
+                    },
+                ],
+                LandlordName = intent.RenderData.LandlordName,
+                EnvelopeId = $"demo-{intent.PortfolioId}-DEMO-AGR-ACTIVE-001-V1",
+                DocumentName = issuedFileName,
+                OriginalDocumentBytes = issued.PdfBytes,
+                TemplateFieldSnapshotJson = issued.TemplateFieldSnapshotJson,
+                CompletedAtUtc = intent.ExecutedAtUtc,
+            },
+            issuedHash);
+        EnsurePdf(executedBytes, "executed");
+        var executedHash = Sha256(executedBytes);
+        var executedFileName = "DEMO-AGR-ACTIVE-001-V1-executed.pdf";
+
+        var issuedAdmission = await _pendingUploads.PrepareAsync(
+            intent.PortfolioId,
+            intent.ActorUserId,
+            "demo-legal-issued",
+            $"demo-legal/{intent.PortfolioId}/DEMO-AGR-ACTIVE-001-V1/issued/v1",
+            issuanceFingerprint,
+            issuedFileName,
+            "application/pdf",
+            issued.PdfBytes.LongLength,
+            intent.IssuedAtUtc,
+            ct);
+        await UploadPreparedAsync(issuedAdmission, issued.PdfBytes, issuedFileName, ct);
+
+        var executedAdmission = await _pendingUploads.PrepareAsync(
+            intent.PortfolioId,
+            intent.ActorUserId,
+            "demo-legal-executed",
+            $"demo-legal/{intent.PortfolioId}/DEMO-AGR-ACTIVE-001-V1/executed/v1",
+            executedHash,
+            executedFileName,
+            "application/pdf",
+            executedBytes.LongLength,
+            intent.ExecutedAtUtc,
+            ct);
+        await UploadPreparedAsync(executedAdmission, executedBytes, executedFileName, ct);
+
+        return new PreparedDemoLegalDocument(
+            intent,
+            issuedAdmission,
+            issuedFileName,
+            issued.PdfBytes.LongLength,
+            issuedHash,
+            issuanceFingerprint,
+            executedAdmission,
+            executedFileName,
+            executedBytes.LongLength,
+            executedHash);
+    }
+
+    private async Task UploadPreparedAsync(
+        PendingFileUploadAdmission admission,
+        byte[] bytes,
+        string fileName,
+        CancellationToken ct)
+    {
+        if (admission.State == PendingFileUploadState.Abandoned)
+        {
+            throw new InvalidOperationException("The deterministic demo legal-document upload was abandoned.");
+        }
+        if (admission.State != PendingFileUploadState.Prepared)
+        {
+            return;
+        }
+
+        EnsureProviderIoIsOutsideInfrastructure();
+        await using var stream = new MemoryStream(bytes, writable: false);
+        await _fileStorage.UploadAtAsync(stream, admission.StoragePath, fileName, "application/pdf", ct);
+    }
+
+    private async Task FinalizeLegalDocumentAsync(PreparedDemoLegalDocument prepared, CancellationToken ct)
+    {
+        var intent = prepared.Intent;
+        var agreement = await _db.LeaseAgreements
+            .Include(candidate => candidate.LeaseManagement)
+            .SingleAsync(candidate => candidate.PortfolioId == intent.PortfolioId
+                && candidate.Id == intent.AgreementId
+                && candidate.AgreementNumber == "DEMO-AGR-ACTIVE-001-V1", ct);
+
+        var pendingById = await LockPendingUploadsAsync(
+            [prepared.IssuedAdmission.Id, prepared.ExecutedAdmission.Id], ct);
+        if (!pendingById.TryGetValue(prepared.IssuedAdmission.Id, out var issuedPending)
+            || !pendingById.TryGetValue(prepared.ExecutedAdmission.Id, out var executedPending))
+        {
+            throw new InvalidOperationException("The deterministic demo legal-document admissions are unavailable.");
+        }
+        ValidatePending(issuedPending, prepared.IssuedAdmission, prepared.IssuedLength);
+        ValidatePending(executedPending, prepared.ExecutedAdmission, prepared.ExecutedLength);
+
+        var artifactStorageKeys = new[] { issuedPending.StoragePath, executedPending.StoragePath };
+        var existingArtifactsByStorageKey = await _db.LegalDocumentArtifacts
+            .Where(artifact => artifact.PortfolioId == intent.PortfolioId
+                && artifactStorageKeys.Contains(artifact.StorageKey))
+            .ToDictionaryAsync(artifact => artifact.StorageKey, ct);
+
+        var issuedArtifact = await GetOrCreateArtifactAsync(
+            intent,
+            issuedPending,
+            existingArtifactsByStorageKey,
+            LegalDocumentArtifactKind.IssuedAgreement,
+            prepared.IssuedFileName,
+            prepared.IssuedLength,
+            prepared.IssuedHash,
+            prepared.IssuanceFingerprint,
+            ct);
+        var executedArtifact = await GetOrCreateArtifactAsync(
+            intent,
+            executedPending,
+            existingArtifactsByStorageKey,
+            LegalDocumentArtifactKind.ExecutedAgreement,
+            prepared.ExecutedFileName,
+            prepared.ExecutedLength,
+            prepared.ExecutedHash,
+            null,
+            ct);
+
+        if (agreement.IssuedArtifactId is not null && agreement.IssuedArtifactId != issuedArtifact.Id
+            || agreement.ExecutedArtifactId is not null && agreement.ExecutedArtifactId != executedArtifact.Id)
+        {
+            throw new InvalidOperationException("The deterministic demo Agreement is already bound to different artifacts.");
+        }
+
+        agreement.IssuedArtifactId = issuedArtifact.Id;
+        agreement.IssuedAtUtc = intent.IssuedAtUtc;
+        agreement.ExecutedArtifactId = executedArtifact.Id;
+        agreement.FullyExecutedAtUtc = intent.ExecutedAtUtc;
+        agreement.UpdatedAtUtc = intent.ExecutedAtUtc;
+        agreement.LeaseManagement!.PossessionAgreementExceptionReason = null;
+        agreement.LeaseManagement.PossessionAgreementExceptionAuthorizedByUserId = null;
+        agreement.LeaseManagement.UpdatedAtUtc = intent.ExecutedAtUtc;
+        agreement.LeaseManagement.RowVersion = Guid.NewGuid();
+
+        issuedPending.State = PendingFileUploadState.Finalized;
+        issuedPending.StoredFileId = issuedArtifact.StoredFileId;
+        issuedPending.UpdatedAtUtc = intent.ExecutedAtUtc;
+        executedPending.State = PendingFileUploadState.Finalized;
+        executedPending.StoredFileId = executedArtifact.StoredFileId;
+        executedPending.UpdatedAtUtc = intent.ExecutedAtUtc;
+        await _db.SaveChangesAsync(ct);
+    }
+
+    private async Task<IReadOnlyDictionary<Guid, PendingFileUpload>> LockPendingUploadsAsync(
+        Guid[] ids,
+        CancellationToken ct)
+    {
+        if (_db.Database.IsNpgsql())
+        {
+            return await _db.PendingFileUploads
+                .FromSqlInterpolated($$"""
+                    SELECT upload.*
+                    FROM "PendingFileUploads" AS upload
+                    WHERE upload."Id" = ANY ({{ids}})
+                    ORDER BY upload."Id"
+                    FOR UPDATE
+                    """)
+                .AsTracking()
+                .ToDictionaryAsync(upload => upload.Id, ct);
+        }
+
+        return await _db.PendingFileUploads
+            .Where(upload => ids.Contains(upload.Id))
+            .OrderBy(upload => upload.Id)
+            .ToDictionaryAsync(upload => upload.Id, ct);
+    }
+
+    private async Task<LegalDocumentArtifact> GetOrCreateArtifactAsync(
+        CanonicalDemoLegalDocumentIntent intent,
+        PendingFileUpload pending,
+        IReadOnlyDictionary<string, LegalDocumentArtifact> existingArtifactsByStorageKey,
+        LegalDocumentArtifactKind kind,
+        string fileName,
+        long length,
+        string hash,
+        string? issuanceFingerprint,
+        CancellationToken ct)
+    {
+        if (existingArtifactsByStorageKey.TryGetValue(pending.StoragePath, out var existing))
+        {
+            if (existing.ArtifactKind != kind || existing.ContentSha256 != hash
+                || existing.ByteLength != length || existing.FileName != fileName)
+            {
+                throw new InvalidOperationException("The deterministic demo artifact identity conflicts with existing content.");
+            }
+            return existing;
+        }
+
+        var storedFile = new StoredFile
+        {
+            PortfolioId = intent.PortfolioId,
+            FileName = fileName,
+            FilePath = pending.StoragePath,
+            ContentType = "application/pdf",
+            FileSize = length,
+            EntityType = nameof(LeaseAgreement),
+            EntityId = intent.AgreementId,
+            UploadedAt = kind == LegalDocumentArtifactKind.IssuedAgreement
+                ? intent.IssuedAtUtc
+                : intent.ExecutedAtUtc,
+        };
+        _db.StoredFiles.Add(storedFile);
+        await _db.SaveChangesAsync(ct);
+
+        var artifact = new LegalDocumentArtifact
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = intent.PortfolioId,
+            StoredFileId = storedFile.Id,
+            ArtifactKind = kind,
+            StorageKey = pending.StoragePath,
+            FileName = fileName,
+            ContentType = "application/pdf",
+            ByteLength = length,
+            ContentSha256 = hash,
+            LegalIssuanceFingerprint = issuanceFingerprint,
+            CreatedAtUtc = kind == LegalDocumentArtifactKind.IssuedAgreement
+                ? intent.IssuedAtUtc
+                : intent.ExecutedAtUtc,
+            CreatedByUserId = intent.ActorUserId,
+        };
+        _db.LegalDocumentArtifacts.Add(artifact);
+        await _db.SaveChangesAsync(ct);
+        return artifact;
+    }
+
+    private static void ValidatePending(
+        PendingFileUpload pending,
+        PendingFileUploadAdmission admission,
+        long expectedLength)
+    {
+        if (pending.State == PendingFileUploadState.Abandoned
+            || pending.StoragePath != admission.StoragePath
+            || pending.RequestFingerprint != admission.RequestFingerprint
+            || pending.SizeBytes != expectedLength)
+        {
+            throw new InvalidOperationException("The deterministic demo legal-document admission changed before finalization.");
+        }
+    }
+
+    private void EnsureProviderIoIsOutsideInfrastructure()
+    {
+        if (_atomicExecution.IsInfrastructureActive)
+        {
+            throw new AtomicArchitectureException(
+                "Demo legal-document rendering and storage I/O cannot run inside an infrastructure transaction.");
+        }
+    }
+
+    private static void EnsurePdf(byte[] bytes, string artifactName)
+    {
+        if (bytes.Length < 4 || bytes[0] != (byte)'%' || bytes[1] != (byte)'P'
+            || bytes[2] != (byte)'D' || bytes[3] != (byte)'F')
+        {
+            throw new InvalidOperationException($"The {artifactName} demo legal document is not a non-empty PDF.");
+        }
+    }
+
+    private static string Sha256(byte[] bytes) =>
+        Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+
+    private sealed record PreparedDemoLegalDocument(
+        CanonicalDemoLegalDocumentIntent Intent,
+        PendingFileUploadAdmission IssuedAdmission,
+        string IssuedFileName,
+        long IssuedLength,
+        string IssuedHash,
+        string IssuanceFingerprint,
+        PendingFileUploadAdmission ExecutedAdmission,
+        string ExecutedFileName,
+        long ExecutedLength,
+        string ExecutedHash);
 }

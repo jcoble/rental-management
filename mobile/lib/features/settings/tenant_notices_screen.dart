@@ -512,10 +512,15 @@ class _TenantTemplateEditorSheetState
   late final TextEditingController _subject;
   late final TextEditingController _body;
   late final TextEditingController _jurisdiction;
+  late final TextEditingController _testDestination;
   late bool _confirmed;
   late Future<List<NoticeMergeFieldHelp>> _mergeFields;
   bool _saving = false;
   bool _restoring = false;
+  bool _previewing = false;
+  bool _sendingTest = false;
+  NoticePreview? _preview;
+  NoticeTestSendResult? _testResult;
 
   @override
   void initState() {
@@ -526,6 +531,7 @@ class _TenantTemplateEditorSheetState
     _jurisdiction = TextEditingController(
       text: policy.templateJurisdictionCode ?? '',
     );
+    _testDestination = TextEditingController();
     _confirmed = policy.templateJurisdictionReviewedAtUtc != null;
     _mergeFields = ref
         .read(notificationFoundationRepositoryProvider)
@@ -537,7 +543,53 @@ class _TenantTemplateEditorSheetState
     _subject.dispose();
     _body.dispose();
     _jurisdiction.dispose();
+    _testDestination.dispose();
     super.dispose();
+  }
+
+  Future<void> _renderPreview() async {
+    if (_subject.text.trim().isEmpty || _body.text.trim().isEmpty) {
+      _showMessage('Add a subject and message first.');
+      return;
+    }
+    setState(() => _previewing = true);
+    try {
+      final preview = await ref
+          .read(notificationFoundationRepositoryProvider)
+          .previewTenantNotice(
+            systemKey: widget.policy.templateSystemKey,
+            subject: _subject.text,
+            body: _body.text,
+          );
+      if (mounted) setState(() => _preview = preview);
+    } catch (error) {
+      if (mounted) _showError(error, 'We couldn\'t render the preview.');
+    } finally {
+      if (mounted) setState(() => _previewing = false);
+    }
+  }
+
+  Future<void> _sendTest() async {
+    if (_testDestination.text.trim().isEmpty) {
+      _showMessage('Enter a controlled non-tenant test email.');
+      return;
+    }
+    setState(() => _sendingTest = true);
+    try {
+      final result = await ref
+          .read(notificationFoundationRepositoryProvider)
+          .sendTenantNoticeTest(
+            systemKey: widget.policy.templateSystemKey,
+            subject: _subject.text,
+            body: _body.text,
+            destination: _testDestination.text.trim(),
+          );
+      if (mounted) setState(() => _testResult = result);
+    } catch (error) {
+      if (mounted) _showError(error, 'We couldn\'t send the isolated test.');
+    } finally {
+      if (mounted) setState(() => _sendingTest = false);
+    }
   }
 
   Future<void> _save() async {
@@ -699,6 +751,89 @@ class _TenantTemplateEditorSheetState
                 ),
               );
             },
+          ),
+          const SizedBox(height: 16),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'Preview unsaved message',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Example values render only this preview and test. '
+                    'Nothing is saved, reviewed, or sent to a tenant.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: _previewing ? null : _renderPreview,
+                    icon: const Icon(Icons.preview_outlined),
+                    label: Text(
+                      _previewing ? 'Rendering…' : 'Render current edits',
+                    ),
+                  ),
+                  if (_preview != null) ...[
+                    const SizedBox(height: 12),
+                    Semantics(
+                      liveRegion: true,
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          border: Border.all(
+                            color: Theme.of(context).colorScheme.outlineVariant,
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _preview!.subject,
+                              style: Theme.of(context).textTheme.titleSmall,
+                            ),
+                            const SizedBox(height: 8),
+                            Text(_preview!.body),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _testDestination,
+                    keyboardType: TextInputType.emailAddress,
+                    autofillHints: const [],
+                    decoration: const InputDecoration(
+                      labelText: 'Controlled non-tenant test email',
+                      hintText: 'you+notice-test@example.com',
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  FilledButton.icon(
+                    onPressed: _sendingTest ? null : _sendTest,
+                    icon: const Icon(Icons.send_outlined),
+                    label: Text(
+                      _sendingTest ? 'Sending test…' : 'Send isolated test',
+                    ),
+                  ),
+                  if (_testResult != null) ...[
+                    const SizedBox(height: 8),
+                    Semantics(
+                      liveRegion: true,
+                      child: Text(
+                        '${_testResult!.state == 'ProviderError' ? 'Provider error' : _testResult!.state}: '
+                        '${_testResult!.message}',
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
           if (legal) ...[
             const SizedBox(height: 16),

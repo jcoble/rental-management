@@ -1,4 +1,5 @@
 using System.Net.Sockets;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -223,7 +224,25 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
         await SeedAsync(new OutboxMessage
         {
             MessageType = "push",
-            Payload = """{"deviceToken":"device-a","title":"Rent","body":"Received"}""",
+            Payload = """
+                {
+                  "deviceToken":"device-a",
+                  "title":"Rent",
+                  "body":"Received",
+                  "navigationIntent":{
+                    "experience":"Tenant",
+                    "destination":"Notifications",
+                    "accessContextId":7,
+                    "accessRevision":3,
+                    "resource":null,
+                    "parentResource":null,
+                    "childResource":null,
+                    "action":"Review",
+                    "expiresAtUtc":"2026-07-30T12:00:00Z",
+                    "fallbackDestination":"Home"
+                  }
+                }
+                """,
             IdempotencyKey = "dispatch-push:device-a",
             CreatedAtUtc = now,
             NextAttemptAtUtc = now,
@@ -233,6 +252,13 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
         await RunWorkerAsync(new CapturingChannel(), push);
 
         push.Tokens.Should().Equal("device-a");
+        push.Data.Should().ContainSingle();
+        push.Data[0].Should().ContainSingle().Which.Key.Should().Be("navigationIntent");
+        using (var intent = JsonDocument.Parse(push.Data[0]["navigationIntent"]))
+        {
+            intent.RootElement.GetProperty("destination").GetString().Should().Be("Notifications");
+            intent.RootElement.TryGetProperty("actionUrl", out _).Should().BeFalse();
+        }
         await using var verify = NewContext();
         var row = await verify.OutboxMessages.SingleAsync(message => message.IdempotencyKey == "dispatch-push:device-a");
         row.Provider.Should().Be("fcm");
@@ -441,6 +467,7 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
     private sealed class CapturingPushSender : IPushSender
     {
         public List<string> Tokens { get; } = [];
+        public List<IReadOnlyDictionary<string, string>> Data { get; } = [];
 
         public Task<PushSendResult> SendAsync(
             string deviceToken,
@@ -451,6 +478,7 @@ public sealed class OutboxClaimStoreTests : IAsyncLifetime
             CancellationToken ct = default)
         {
             Tokens.Add(deviceToken);
+            Data.Add(data ?? new Dictionary<string, string>());
             return Task.FromResult(PushSendResult.Ok("push-provider-id"));
         }
     }

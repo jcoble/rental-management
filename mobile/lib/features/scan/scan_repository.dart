@@ -52,6 +52,45 @@ class TenantAccountOptionPage {
   final int take;
 }
 
+class ScanUnitTargetOption {
+  const ScanUnitTargetOption({
+    required this.unitId,
+    required this.propertyId,
+    required this.propertyName,
+    required this.unitNumber,
+  });
+
+  final int unitId;
+  final int propertyId;
+  final String propertyName;
+  final String unitNumber;
+
+  factory ScanUnitTargetOption.fromJson(Map<String, dynamic> json) =>
+      ScanUnitTargetOption(
+        unitId: (json['id'] as num).toInt(),
+        propertyId: (json['propertyId'] as num).toInt(),
+        propertyName: json['propertyName'] as String? ?? '',
+        unitNumber: json['unitNumber'] as String? ?? '',
+      );
+}
+
+class ScanUnitTargetOptionPage {
+  const ScanUnitTargetOptionPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<ScanUnitTargetOption> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+
+  bool get hasPrevious => skip > 0;
+  bool get hasNext => skip + items.length < totalCount;
+}
+
 /// Repository for all scan-draft API calls.
 ///
 /// Endpoints (all under /api/v1/scans):
@@ -343,6 +382,40 @@ class ScanRepository {
         );
       }
       return TenantAccountOption.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Fetches one authorized, server-filtered, sorted, and paged set of Unit
+  /// targets for Scan / Add. The client never preloads the workspace inventory.
+  Future<ScanUnitTargetOptionPage> listTargetOptions({
+    String? search,
+    String sort = 'propertyName',
+    int skip = 0,
+    int take = 20,
+  }) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/units/list-with-health/page',
+        queryParameters: {
+          'skip': skip,
+          'take': take,
+          'sort': sort,
+          if (search != null && search.trim().isNotEmpty)
+            'search': search.trim(),
+        },
+      );
+      final items = response.data?['items'] as List<dynamic>? ?? const [];
+      return ScanUnitTargetOptionPage(
+        items: items
+            .whereType<Map<String, dynamic>>()
+            .map(ScanUnitTargetOption.fromJson)
+            .toList(),
+        totalCount: (response.data?['totalCount'] as num?)?.toInt() ?? 0,
+        skip: (response.data?['skip'] as num?)?.toInt() ?? skip,
+        take: (response.data?['take'] as num?)?.toInt() ?? take,
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

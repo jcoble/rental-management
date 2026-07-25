@@ -1,4 +1,16 @@
-import type { AuditEntry, ListingWorkspace, SaveListingWorkspaceRequest, Unit, UnitDashboard, UnitHealth } from '$lib/types';
+import type {
+	AuditEntry,
+	ListingWorkspace,
+	SaveListingWorkspaceRequest,
+	Unit,
+	UnitDashboard,
+	UnitHealth,
+	UnitLegalNoticeCondition,
+	UnitMaintenanceTurnoverCondition,
+	UnitMarketingAvailabilityCondition,
+	UnitOccupancyPossessionCondition,
+	UnitTenantAccountCondition,
+} from '$lib/types';
 import { api, downloadFile } from '../client';
 import { buildListQuery, type ListParams } from '../list-params';
 import { normalizeOptionalApiResult } from '../optional-result';
@@ -12,6 +24,12 @@ export interface UnitHealthListParams extends ListParams {
 	propertyId?: number;
 }
 
+export interface UnitListParams extends ListParams {
+	propertyId?: number;
+	availableForLease?: boolean;
+	excludeUnitId?: number;
+}
+
 export interface UnitHealthListResponse {
 	items: UnitHealth[];
 	totalCount: number;
@@ -19,15 +37,49 @@ export interface UnitHealthListResponse {
 	take: number;
 }
 
+export interface UnitListResponse {
+	items: Unit[];
+	totalCount: number;
+	skip: number;
+	take: number;
+}
+
+export type UnitDashboardResponse = UnitDashboard & {
+	occupancyPossession: UnitOccupancyPossessionCondition;
+	marketingAvailability: UnitMarketingAvailabilityCondition;
+	tenantAccountCondition: UnitTenantAccountCondition;
+	legalNoticeCondition: UnitLegalNoticeCondition;
+	maintenanceTurnover: UnitMaintenanceTurnoverCondition;
+};
+
 /**
  * Unit endpoints. Units are portfolio-scoped through their owning property; the API resolves scope from
  * the server-validated workspace context, so it is not part of the path (kept only for query-cache keying by callers).
  */
 export const units = {
 	/** Plain unit list (optionally filtered by property). */
-	list: (params?: ListParams & { propertyId?: number }) => {
-		const { propertyId, ...list } = params ?? {};
-		return api.get<Unit[]>(`/units${buildListQuery(list, { propertyId })}`);
+	list: (params?: UnitListParams) => {
+		const { propertyId, availableForLease, excludeUnitId, ...list } = params ?? {};
+		return api.get<Unit[]>(
+			`/units${buildListQuery(list, {
+				propertyId,
+				availableForLease:
+					availableForLease === undefined ? undefined : String(availableForLease),
+				excludeUnitId,
+			})}`
+		);
+	},
+
+	listPage: (params?: UnitListParams) => {
+		const { propertyId, availableForLease, excludeUnitId, ...list } = params ?? {};
+		return api.get<UnitListResponse>(
+			`/units/page${buildListQuery(list, {
+				propertyId,
+				availableForLease:
+					availableForLease === undefined ? undefined : String(availableForLease),
+				excludeUnitId,
+			})}`
+		);
 	},
 
 	/** Units with cheap health badges for the /units page (one projection query server-side). */
@@ -53,7 +105,7 @@ export const units = {
 		),
 
 	/** The Unit Command Center at-a-glance aggregate (header, lease/tenant, stage, overview, timeline). */
-	dashboard: (id: number) => api.get<UnitDashboard>(`/units/${id}/dashboard`),
+	dashboard: (id: number) => api.get<UnitDashboardResponse>(`/units/${id}/dashboard`),
 
 	listingWorkspace: async (id: number) =>
 		normalizeOptionalApiResult(await api.get<ListingWorkspace | null | undefined>(`/units/${id}/listing-workspace`)),

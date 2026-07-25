@@ -7,6 +7,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Conversations;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Navigation;
 using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Data.Conversations;
@@ -370,30 +371,61 @@ public sealed class SendConversationMessageHandler
         // A tenant message resolves the current relationship property and the saved leasing topic
         // responsibility in one query. Named recipients are revalidated at event time and the
         // visible administrator fallback applies only when nobody eligible is assigned.
-        var userIds = await ScopedNotificationRecipientQuery
+        var userIds = ScopedNotificationRecipientQuery
             .ForTenantTeamTopic(
                 attempt,
                 command.PortfolioId,
                 tenant.Id,
                 TeamRoutingTopic.ApplicationsAndLeasing,
-                command.CreatedAtUtc)
-            .OrderBy(userId => userId)
+                command.CreatedAtUtc);
+        var recipients = await (
+                from context in attempt.Persistence.Query<WorkspaceAccessContext>()
+                join membership in attempt.Persistence.Query<WorkspaceMembership>()
+                    on new { AccessContextId = context.Id, context.PortfolioId }
+                    equals new { membership.AccessContextId, membership.PortfolioId }
+                where context.PortfolioId == command.PortfolioId
+                    && userIds.Contains(context.UserId)
+                select new
+                {
+                    context.UserId,
+                    AccessContextId = context.Id,
+                    context.AccessRevision,
+                    Experience = context.LastAuthorizedExperience ?? membership.DefaultExperience,
+                })
+            .Distinct()
+            .OrderBy(recipient => recipient.UserId)
             .ToListAsync(ct);
 
         var tenantName = $"{tenant.FirstName} {tenant.LastName}".Trim();
         if (string.IsNullOrWhiteSpace(tenantName)) tenantName = "Tenant";
-        return userIds.Select(userId => new Notification
+        return recipients.Select(recipient =>
         {
-            PortfolioId = command.PortfolioId,
-            UserId = userId,
-            Type = "TenantMessage",
-            Title = $"New message from {tenantName}",
-            Message = Preview(command.Body) ?? conversation.Subject,
-            Severity = "Info",
-            ActionUrl = $"/messages/{conversation.Id}",
-            RelatedEntityType = nameof(Conversation),
-            RelatedEntityId = conversation.Id,
-            CreatedAt = command.CreatedAtUtc,
+            var notification = new Notification
+            {
+                PortfolioId = command.PortfolioId,
+                UserId = recipient.UserId,
+                Type = "TenantMessage",
+                Title = $"New message from {tenantName}",
+                Message = Preview(command.Body) ?? conversation.Subject,
+                Severity = "Info",
+                RelatedEntityType = nameof(Conversation),
+                RelatedEntityId = conversation.Id,
+                CreatedAt = command.CreatedAtUtc,
+            };
+            if (recipient.Experience is WorkspaceExperience.Management or WorkspaceExperience.Leasing)
+            {
+                notification.NavigationExperience =
+                    (NavigationExperience)(int)recipient.Experience;
+                notification.NavigationDestination = NavigationDestination.Message;
+                notification.NavigationAccessContextId = recipient.AccessContextId;
+                notification.NavigationAccessRevision = recipient.AccessRevision;
+                notification.NavigationResourceKind = nameof(Conversation);
+                notification.NavigationResourceId = conversation.Id;
+                notification.NavigationAction = NavigationAction.Open;
+                notification.NavigationExpiresAtUtc = command.CreatedAtUtc.AddDays(7);
+                notification.NavigationFallbackDestination = NavigationDestination.Home;
+            }
+            return notification;
         }).ToList();
     }
 
@@ -410,7 +442,7 @@ public sealed class SendConversationMessageHandler
             return [];
         }
 
-        var tenantUserId = await attempt.Persistence.Query<TenantUserAccess>()
+        var tenantRecipient = await attempt.Persistence.Query<TenantUserAccess>()
             .Where(access => access.PortfolioId == command.PortfolioId
                 && access.RevokedAtUtc == null
                 && access.AccessContext!.Status == WorkspaceAccessContextStatus.Active
@@ -421,9 +453,14 @@ public sealed class SendConversationMessageHandler
                 && (access.LeaseManagementParty.EffectiveThrough == null
                     || access.LeaseManagementParty.EffectiveThrough >= businessDate))
             .OrderBy(access => access.ApplicationUserId)
-            .Select(access => (int?)access.ApplicationUserId)
+            .Select(access => new
+            {
+                UserId = access.ApplicationUserId,
+                AccessContextId = access.AccessContextId,
+                access.AccessContext!.AccessRevision,
+            })
             .FirstOrDefaultAsync(ct);
-        if (tenantUserId is null)
+        if (tenantRecipient is null)
         {
             return [];
         }
@@ -433,12 +470,20 @@ public sealed class SendConversationMessageHandler
             new Notification
             {
                 PortfolioId = command.PortfolioId,
-                UserId = tenantUserId,
+                UserId = tenantRecipient.UserId,
                 Type = "TenantNotice",
                 Title = conversation.Subject,
                 Message = Preview(command.Body) ?? conversation.Subject,
                 Severity = "Info",
-                ActionUrl = $"/portal/messages?conversation={conversation.Id}",
+                NavigationExperience = NavigationExperience.Tenant,
+                NavigationDestination = NavigationDestination.Message,
+                NavigationAccessContextId = tenantRecipient.AccessContextId,
+                NavigationAccessRevision = tenantRecipient.AccessRevision,
+                NavigationResourceKind = nameof(Conversation),
+                NavigationResourceId = conversation.Id,
+                NavigationAction = NavigationAction.Open,
+                NavigationExpiresAtUtc = command.CreatedAtUtc.AddDays(7),
+                NavigationFallbackDestination = NavigationDestination.Home,
                 RelatedEntityType = nameof(Conversation),
                 RelatedEntityId = conversation.Id,
                 CreatedAt = command.CreatedAtUtc,

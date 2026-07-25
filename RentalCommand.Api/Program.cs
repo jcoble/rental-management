@@ -66,9 +66,25 @@ builder.Services.Configure<RentalCommand.Core.Configuration.ScreeningConfig>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.ScreeningConfig.SectionName));
 builder.Services.Configure<RentalCommand.Core.Configuration.QuickBooksOptions>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.QuickBooksOptions.SectionName));
+builder.Services.Configure<RentalCommand.Core.Configuration.NotificationsConfig>(
+    builder.Configuration.GetSection(RentalCommand.Core.Configuration.NotificationsConfig.SectionName));
 var llmProvider = builder.Configuration.GetValue<string>("Assistant:Provider") ?? "openai";
 builder.Services.AddSingleton<RentalCommand.Api.Scanning.IImageTextExtractor,
     RentalCommand.Api.Scanning.TesseractImageTextExtractor>();
+builder.Services.AddHttpClient<RentalCommand.Api.Scanning.OpenAiLlmProvider>(c =>
+{
+    c.BaseAddress = new Uri("https://api.openai.com/");
+    c.Timeout = TimeSpan.FromSeconds(90);
+});
+builder.Services.AddHttpClient<RentalCommand.Api.Scanning.AnthropicLlmProvider>(c =>
+{
+    c.BaseAddress = new Uri("https://api.anthropic.com/");
+    c.Timeout = TimeSpan.FromSeconds(90);
+});
+builder.Services.AddScoped<RentalCommand.Core.Interfaces.ILlmCredentialProbe>(sp =>
+    sp.GetRequiredService<RentalCommand.Api.Scanning.OpenAiLlmProvider>());
+builder.Services.AddScoped<RentalCommand.Core.Interfaces.ILlmCredentialProbe>(sp =>
+    sp.GetRequiredService<RentalCommand.Api.Scanning.AnthropicLlmProvider>());
 if (string.Equals(llmProvider, "anthropic", StringComparison.OrdinalIgnoreCase))
 {
     builder.Services.AddHttpClient<RentalCommand.Core.Interfaces.ILlmProvider, RentalCommand.Api.Scanning.AnthropicLlmProvider>(c =>
