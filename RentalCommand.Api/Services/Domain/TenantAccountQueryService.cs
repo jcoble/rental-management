@@ -456,12 +456,37 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
 
         var rows =
             from seed in pagedSeeds
-            join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
-                on new { seed.PortfolioId, seed.LeaseManagementId }
-                equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
-            join balance in _db.SecurityDepositBalanceProjections.AsNoTracking()
-                on new { seed.PortfolioId, seed.SecurityDepositAccountId }
-                equals new { balance.PortfolioId, balance.SecurityDepositAccountId }
+            // Referencing the already-paged seed in each projection intentionally keeps these
+            // expensive views as correlated LATERAL lookups. A normal join lets PostgreSQL expand
+            // both security-invoker views across the whole portfolio before applying the keys.
+            from lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                .Where(row => row.PortfolioId == seed.PortfolioId
+                    && row.LeaseManagementId == seed.LeaseManagementId)
+                .Select(row => new
+                {
+                    row.CurrentPrimaryTenantName,
+                    SeedId = seed.SecurityDepositAccountId,
+                })
+                .Take(1)
+            from balance in _db.SecurityDepositBalanceProjections.AsNoTracking()
+                .Where(row => row.PortfolioId == seed.PortfolioId
+                    && row.SecurityDepositAccountId == seed.SecurityDepositAccountId)
+                .Select(row => new
+                {
+                    row.Currency,
+                    row.EffectiveNowUtc,
+                    row.BusinessDate,
+                    row.TotalReceived,
+                    row.TotalDeductions,
+                    row.TotalRefunded,
+                    row.TotalTransferredIn,
+                    row.TotalTransferredOut,
+                    row.NetAdjustments,
+                    row.HeldBalance,
+                    row.DepositStatus,
+                    SeedId = seed.SecurityDepositAccountId,
+                })
+                .Take(1)
             join property in _db.Properties.AsNoTracking()
                 on new { seed.PortfolioId, Id = seed.PropertyId }
                 equals new { property.PortfolioId, property.Id }
