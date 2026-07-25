@@ -365,7 +365,7 @@ The proof report is:
 Step 2B completes only when UNITNAV-06 is evidenced on an exact-SHA Azure
 emulator build.
 
-## Active contract: Step 2C — preserve Today work-order origin
+## Completed contract: Step 2C — preserve Today work-order origin
 
 ### Evidence
 
@@ -493,6 +493,140 @@ and relevance gate only after the active step closes.
 - Make chart months readable and preserve distinguishing list context.
 - Clarify the vendor work-count label according to its authoritative metric.
 - Evidence: 06, 07, 14, 16, 24–26, 30, 31, 41, 42, 55.
+
+#### Active contract: Step 3A — make Unit summary and money language understandable
+
+Independent review passed after expanding the contract to all thirteen ledger
+entry types and every existing raw Unit status/type/stage call site.
+
+##### Evidence and authoritative meaning
+
+Audit captures `41-unit-main-overview.png`, `42-unit-main-money.png`, and
+`55-unit-main-overview-bottom.png` show raw identifiers and wire values including
+`TenantAccount`, `PaymentReceipt`, `NoGoverningAgreement`, `NotAvailable`, and
+`RentReady`.
+
+The charge-balance projection proves:
+
+- `OriginalAmount` is the posted charge amount;
+- `NetAllocations` is the sum of ledger allocations applied to that debit;
+- `OpenAmount` is the amount still due after reversals and allocations.
+
+Because reversals are a separate server field not included in the mobile charge
+model, the UI must not imply that `OriginalAmount - NetAllocations` always equals
+`OpenAmount`. The understandable and accurate mobile summary is therefore
+“Charge amount” plus “Still due”; the internal allocation term is omitted.
+
+##### Allowed source files
+
+- `mobile/lib/core/presentation/plain_english_labels.dart` (new)
+- `mobile/lib/features/units/unit_command_center_screen.dart`
+
+##### Allowed test files
+
+- `mobile/test/plain_english_labels_test.dart` (new)
+- `mobile/test/unit_money_contract_test.dart`
+
+No repository, DTO, API, database, paging, navigation, authorization, form,
+write path, or non-Unit screen is in this boundary.
+
+##### Required change
+
+- Add one presentation-only label translator with explicit understandable
+  mappings for the Unit condition values and all thirteen tenant-ledger entry
+  types emitted by the current backend. Unknown non-empty Pascal/camel-case
+  values receive a readable spaced fallback; blank values receive a
+  caller-supplied fallback.
+- In Unit Summary, rename `TenantAccount` to `Tenant account` and translate the
+  five independent condition values plus Unit status and lifecycle stage without
+  changing the underlying values or their independent rows.
+- In Unit Money:
+  - translate account-activity entry types such as `PaymentReceipt` to
+    `Payment received` and `RentCharge` to `Rent charged`;
+  - rename `Charge allocation and open amount` to `Rent charges`;
+  - render each charge as `Charge amount: <amount> · Still due: <amount>`;
+  - do not display `allocated`, `allocation`, `open amount`, or the internal
+    tenant-account numeric ID;
+  - translate deposit statuses at the presentation boundary.
+- Apply the same translator to every other raw status/type/stage string already
+  rendered by the Unit Command Center: inspection type/status, payment
+  type/status, work-order priority/status, appointment type/status, Unit status,
+  lifecycle stage, and deposit status. Preserve specialized enum labels that
+  are already user-facing.
+- Keep descriptions, dates, currency amounts, row actions, payment-detail
+  navigation, server paging, provider lifecycles, and all wire values unchanged.
+
+##### Acceptance criteria
+
+- **UNITCOPY-01:** Unit Summary displays `Tenant account`, `Not available`,
+  `No signed lease`, and `Ready to rent` for the corresponding audited wire
+  values, with no raw `TenantAccount`, `NotAvailable`,
+  `NoGoverningAgreement`, or `RentReady` text.
+- **UNITCOPY-02:** Account activity displays understandable entry labels for
+  every current `TenantLedgerEntryType`; tests cover `OpeningBalance`,
+  `RentCharge`, `AddendumCharge`, `LateFeeCharge`, `DepositCharge`,
+  `ManualCharge`, `PaymentReceipt`, `Credit`, `Adjustment`, `Refund`,
+  `TransferIn`, `TransferOut`, and `Reversal`.
+- **UNITCOPY-03:** Rent-charge rows display only the description,
+  `Charge amount`, and `Still due`; the existing `NetAllocations` model and API
+  parsing remain unchanged and are not used to create misleading arithmetic.
+- **UNITCOPY-04:** Unit Money never displays a raw internal tenant-account ID
+  when no agreement number exists; the row instead says that the account is
+  available without exposing its database key.
+- **UNITCOPY-05:** Existing payment rows remain tappable and continue opening
+  payment detail; all existing Unit Money providers and independent server
+  pagers remain present.
+- **UNITCOPY-06:** Focused source/widget assertions prove the Unit Command
+  Center's existing condition, Unit status, lifecycle stage, deposit status,
+  inspection type/status, payment type/status, work-order priority/status, and
+  appointment type/status call sites all pass raw values through the
+  presentation translator. Existing specialized enum labels remain unchanged.
+- **UNITCOPY-07:** Exact-SHA Azure emulator proof captures Unit Summary and Unit
+  Money with the audited raw values absent, the charge explanation readable,
+  and payment-detail navigation still working at 1080x2400 / 420 density.
+
+##### Targeted commands
+
+Run serially from `mobile/`:
+
+```bash
+dart format lib/core/presentation/plain_english_labels.dart \
+  lib/features/units/unit_command_center_screen.dart \
+  test/plain_english_labels_test.dart \
+  test/unit_money_contract_test.dart
+flutter test test/plain_english_labels_test.dart \
+  test/unit_money_contract_test.dart \
+  test/unit_navigation_test.dart
+flutter analyze lib/core/presentation/plain_english_labels.dart \
+  lib/features/units/unit_command_center_screen.dart \
+  test/plain_english_labels_test.dart \
+  test/unit_money_contract_test.dart
+git diff --check
+```
+
+##### Relevance gate
+
+After implementation, a read-only reviewer checks only:
+
+1. the four allowed-file diffs;
+2. UNITCOPY-01 through UNITCOPY-06 evidence;
+3. preservation of wire values, repositories, independent server paging,
+   payment-detail actions, navigation, and authorization;
+4. absence of data, backend, form, or other roadmap changes.
+
+##### Emulator proof gate
+
+The sole emulator tester captures PNG and matching hierarchy XML under:
+
+`Docs/Reviews/artifacts/tsk-750/post-unit-copy/`
+
+- `unit-summary-plain-english`
+- `unit-money-plain-english`
+- `unit-money-payment-detail`
+
+The proof report is:
+
+`Docs/Reviews/2026-07-25-tsk-750-mobile-unit-copy-proof.md`
 
 ### Step 4 — honest empty states and legal-notice safety
 
