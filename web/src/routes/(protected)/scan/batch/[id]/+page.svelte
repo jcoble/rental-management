@@ -13,6 +13,8 @@
 	import { CheckCircle2 } from '@lucide/svelte';
 
 	const batchId = $derived(parseInt(page.params.id ?? '0', 10));
+	const PAGE_SIZE = 20;
+	let currentPage = $state(1);
 
 	// Draft statuses don't all exist in StatusBadge's default map — supply a custom one.
 	const draftStatusMap: Record<string, { label?: string; class: string }> = {
@@ -42,18 +44,18 @@
 		}
 	};
 
-	const PROCESSING_STATUSES = new Set(['Pending', 'Processing']);
-	const DONE_STATUSES = new Set(['Confirmed', 'Rejected', 'Failed']);
-
 	const batchQuery = createQuery(() => ({
-		queryKey: ['scan-batches', batchId],
-		queryFn: () => scan.getBatch(batchId),
+		queryKey: ['scan-batches', batchId, currentPage],
+		queryFn: () =>
+			scan.getBatch(batchId, {
+				skip: (currentPage - 1) * PAGE_SIZE,
+				take: PAGE_SIZE
+			}),
 		// Poll while any draft is still being read by the LLM.
 		refetchInterval: (query) => {
 			const data = query.state.data;
 			if (!data) return 2000;
-			const stillProcessing = data.drafts.some((d) => PROCESSING_STATUSES.has(d.status));
-			return stillProcessing ? 2000 : false;
+			return data.counts.pending > 0 ? 2000 : false;
 		}
 	}));
 
@@ -62,8 +64,10 @@
 	const counts = $derived(batch?.counts);
 	const total = $derived(counts?.total ?? drafts.length);
 	const confirmedCount = $derived(counts?.confirmed ?? 0);
-	const settledCount = $derived(drafts.filter((d) => DONE_STATUSES.has(d.status)).length);
-	const reviewingCount = $derived(drafts.filter((d) => d.status === 'Reviewing').length);
+	const settledCount = $derived(
+		(counts?.confirmed ?? 0) + (counts?.rejected ?? 0) + (counts?.failed ?? 0)
+	);
+	const reviewingCount = $derived(counts?.reviewing ?? 0);
 	const allSettled = $derived(total > 0 && settledCount >= total);
 
 	const columns: ColumnDef<ScanBatchDraft>[] = [
@@ -196,7 +200,7 @@
 					{/if}
 				</div>
 				<Progress value={settledCount} max={Math.max(total, 1)} />
-				{#if !allSettled && drafts.some((d) => PROCESSING_STATUSES.has(d.status))}
+				{#if !allSettled && (counts?.pending ?? 0) > 0}
 					<p class="mt-2 text-xs text-muted-foreground">
 						Still reading some files — this page updates on its own.
 					</p>
@@ -224,6 +228,11 @@
 			data={drafts}
 			{columns}
 			loading={false}
+			serverSide
+			page={currentPage}
+			pageSize={PAGE_SIZE}
+			totalCount={batch?.draftTotalCount ?? total}
+			onPageChange={(nextPage) => (currentPage = nextPage)}
 			emptyMessage="No leases in this import."
 			{onRowClick}
 			getRowKey={(d) => d.id}

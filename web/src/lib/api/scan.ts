@@ -173,6 +173,9 @@ export interface ScanBatchDraft {
 /** Full batch detail with its drafts. */
 export interface ScanBatchDetail extends ScanBatchSummary {
 	drafts: ScanBatchDraft[];
+	draftTotalCount: number;
+	skip: number;
+	take: number;
 }
 
 /** Response from creating a batch. */
@@ -293,5 +296,9 @@ export const scan = {
 
 	listBatches: (): Promise<ScanBatchSummary[]> => api.get<ScanBatchSummary[]>('/scans/batches'),
 
-	getBatch: (id: number): Promise<ScanBatchDetail> => api.get<ScanBatchDetail>(`/scans/batches/${id}`)
+	getBatch: (
+		id: number,
+		params: { skip?: number; take?: number } = {}
+	): Promise<ScanBatchDetail> =>
+		api.get<ScanBatchDetail>(`/scans/batches/${id}${buildListQuery(params)}`)
 };

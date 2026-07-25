@@ -28,9 +28,6 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 		throw redirect(303, `/login?redirectTo=${encodeURIComponent(redirectTo)}`);
 	}
 
-	if (locals.access?.selectedContext.activeExperience === 'Tenant') {
-		throw redirect(303, '/portal');
-	}
 	if (!locals.access) {
 		throw redirect(303, '/logout');
 	}

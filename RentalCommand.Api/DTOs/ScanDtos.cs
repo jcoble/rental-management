@@ -183,7 +183,8 @@ public sealed record ScanBatchDraftResponse(
 /// <summary>Full batch detail: the batch, its rollup counts, and its drafts for the review queue.</summary>
 public sealed record ScanBatchDetailResponse(
     int Id, string? Name, string TargetEntityType, string Status, int FileCount,
-    DateTime CreatedAtUtc, ScanBatchCounts Counts, IReadOnlyList<ScanBatchDraftResponse> Drafts);
+    DateTime CreatedAtUtc, ScanBatchCounts Counts, IReadOnlyList<ScanBatchDraftResponse> Drafts,
+    int DraftTotalCount, int Skip, int Take);
 
 /// <summary>Stable operation identity plus optional reviewed field overrides for scan confirmation.</summary>
 public sealed class ConfirmScanRequest
