@@ -653,10 +653,15 @@ The proof report is:
 
 `Docs/Reviews/2026-07-25-tsk-750-mobile-unit-copy-proof.md`
 
-#### Active contract: Step 3B — clarify Today, chart months, and vendor counts
+#### Completed contract: Step 3B — clarify Today, chart months, and vendor counts
 
-Step 3A's exact-SHA emulator proof and independent review passed. Step 3B is now
-the active implementation boundary.
+Step 3A's exact-SHA emulator proof and independent review passed. Step 3B source
+commit `a1eb500391b79b62399ab57c5650d419e9ec0e95` passed its focused tests,
+targeted analysis, relevance review, and exact-SHA emulator proof. COPYFOLLOW-05
+passed on APK SHA-256
+`16f0a14ff7277e391a93286757790cd40e60f53e9487b0314c999d34f79b9ab6`;
+the report is
+`Docs/Reviews/2026-07-25-tsk-750-mobile-copy-followup-proof.md`.
 
 ##### Evidence and authoritative meaning
 
@@ -769,13 +774,245 @@ The proof report is:
 
 ### Step 4 — honest empty states and legal-notice safety
 
-- Make Automations and Messages empty-state instructions match real available
-  actions.
-- Reproduce the legal-notice placeholder/admin-instruction source boundary.
-- Prevent approval/sending when unresolved merge fields or internal instructions
-  remain.
-- Evidence: 18, 20, 21.
-- No general notification workflow redesign is authorized by this audit.
+#### Proposed contract: Step 4A — make empty-state instructions truthful
+
+##### Evidence and authoritative behavior
+
+- Audit capture `18-work-recurring-maintenance.png` says `Tap + to schedule
+  recurring maintenance`, but the screen exposes a shared quick-action launcher
+  whose contextual action is labeled `New recurring task`; there is no
+  permanently visible plus control.
+- Audit capture `21-inbox-messages.png` says `Tap the pencil to message a
+  tenant`. The pencil is only the contextual icon inside the shared quick-action
+  launcher, and that action is omitted when the signed-in user lacks
+  `rentals.manage` and `leasing.onboarding.manage`.
+- The action implementation, capability decision, and navigation are already
+  correct. Only the instructions are false or unavailable to some users.
+
+##### Allowed source files
+
+- `mobile/lib/features/recurring_maintenance/recurring_maintenance_list_screen.dart`
+- `mobile/lib/features/messages/messages_list_screen.dart`
+
+##### Allowed test files
+
+- `mobile/test/mobile_empty_state_copy_test.dart` (new)
+
+No FAB behavior, authorization policy, repository, paging, filter, navigation,
+backend, or notification workflow is in this boundary.
+
+##### Required change
+
+- Recurring Maintenance tells the user to open the action button and choose
+  `New recurring task`; it does not refer to a visible plus.
+- Messages receives the already-computed `canStartConversation` and
+  `tenantMode` decisions. When creation is allowed, its empty state tells the
+  user to open the action button and choose `New conversation`. In tenant
+  experience it says that messages from the rental team will appear here. In a
+  management experience without either create capability, it explains that the
+  user can read conversations here but needs workspace access to start one. No
+  branch may point to a control that is absent.
+- Filtered-empty instructions remain `Try changing your search or filters.`
+
+##### Acceptance criteria
+
+- **EMPTY-01:** The recurring-maintenance empty state names the existing
+  `New recurring task` action and contains no `Tap +`.
+- **EMPTY-02:** An authorized management user with no conversations sees an
+  instruction naming `New conversation`; a management user without either
+  start-message capability sees an access explanation; and a tenant sees
+  tenant-appropriate waiting copy. Neither denied branch shows a pencil or
+  unavailable action instruction.
+- **EMPTY-03:** A filtered-empty Messages result keeps the existing search/filter
+  guidance regardless of create capability.
+- **EMPTY-04:** Existing quick actions, capabilities, page queries, search,
+  filters, paging, refresh, and navigation are byte-for-byte unchanged outside
+  passing the existing capability result into the empty-state presenter.
+- **EMPTY-05:** Exact-SHA Azure emulator proof captures both empty states with
+  readable wrapping and verifies that the named contextual action is present
+  for the authorized test user.
+
+##### Targeted commands
+
+Run serially from `mobile/`:
+
+```bash
+dart format lib/features/recurring_maintenance/recurring_maintenance_list_screen.dart \
+  lib/features/messages/messages_list_screen.dart \
+  test/mobile_empty_state_copy_test.dart
+flutter test test/mobile_empty_state_copy_test.dart
+flutter analyze lib/features/recurring_maintenance/recurring_maintenance_list_screen.dart \
+  lib/features/messages/messages_list_screen.dart \
+  test/mobile_empty_state_copy_test.dart
+git diff --check
+```
+
+##### Relevance and emulator gates
+
+A read-only relevance review checks the three allowed-file diffs, EMPTY-01
+through EMPTY-04, and the absence of FAB, authorization, data, or navigation
+changes. The sole emulator tester then captures PNG and hierarchy XML under
+`Docs/Reviews/artifacts/tsk-750/post-empty-copy/` as:
+
+- `recurring-maintenance-empty`
+- `recurring-maintenance-action-open`
+- `messages-empty-authorized`
+- `messages-action-open-authorized`
+- `messages-empty-no-create-access`
+- `messages-actions-no-create-access`
+
+The denied capture must use an existing non-privileged or tenant experience on
+the installed app without changing roles, clearing data, or reseeding. Its
+hierarchy must contain the denied/tenant explanation and must not expose a
+`New conversation` action. If the installed account has no such existing
+experience, EMPTY-05 remains unproved and Step 4A stays open rather than
+manufacturing authorization state.
+
+The proof report is
+`Docs/Reviews/2026-07-25-tsk-750-mobile-empty-copy-proof.md`.
+
+#### Proposed contract: Step 4B — block unsafe notice delivery at the atomic boundary
+
+##### Reproduced source boundary
+
+- Audit capture `20-work-notices.png` shows a Draft notice containing a
+  brace-wrapped tenant value and the internal sentence beginning
+  `Workspace administrator:` while the `Approve` action remains enabled.
+- `SuppliedNoticeTemplateBaseline.V2Legal` currently places that internal
+  instruction directly inside both tenant-facing legal template bodies.
+- `TenantNoticeDraftSetStore` renders canonical facts in one PostgreSQL set
+  statement, but persisted/customized malformed tokens can still leave brace
+  markers in a draft.
+- `AtomicNoticeDeliveryHandler` freezes `draft.Subject` and `draft.Body` and
+  creates recipient/outbox evidence inside the canonical transaction without
+  checking for unresolved merge content or internal instructions. Both mobile
+  approval entry points call this same API boundary.
+
+##### Allowed source files
+
+- `RentalCommand.Api/Services/Domain/NoticeDeliveryContentSafety.cs` (new pure policy)
+- `RentalCommand.Api/Services/Domain/AtomicNoticeDeliveryMutation.cs`
+- `mobile/lib/features/notices/notice_content_safety.dart` (new presentation mirror)
+- `mobile/lib/features/notices/notices_screen.dart`
+- `mobile/lib/features/notices/create_tenant_notice.dart`
+
+##### Allowed test files
+
+- `RentalCommand.Api.Tests/Notices/NoticeDeliveryContentSafetyTests.cs` (new)
+- `RentalCommand.IntegrationTests/SuppliedNoticeTemplateBaselineTests.cs`
+- `mobile/test/notice_content_safety_test.dart` (new)
+- `mobile/test/create_tenant_notice_test.dart`
+
+Supplied-template version correction is a separate Step 4C boundary. No
+controller route, DTO, repository, delivery-channel selection, recipient
+resolution, outbox construction, legal-jurisdiction rule, or transaction
+structure changes in Step 4B.
+
+##### Required change
+
+- Add a deterministic server-side content-safety policy that reserves balanced
+  non-empty brace-delimited fragments (`{...}`, including `{{...}}`) as unsafe
+  merge residue and also rejects the internal `Workspace administrator:`
+  instruction. Literal balanced braces are intentionally unsupported in
+  outgoing notice copy because this product uses braces exclusively for merge
+  syntax. Unbalanced braces and ordinary punctuation outside that reserved
+  grammar are not guessed to be tokens. The policy returns one stable,
+  plain-English correction message without echoing tenant content.
+- Call that policy inside `AtomicNoticeDeliveryHandler` after the authorized
+  editable draft is loaded and before any `RenderedNotice`, inbox message,
+  delivery evidence, outbox row, status transition, or flush is created. A
+  failure therefore rolls back/no-ops inside the existing atomic command.
+- Mirror the same deterministic check in mobile presentation so the standalone
+  Draft card disables `Approve` and explains what must be corrected. The
+  editable tenant-scoped review sheet disables `Send notice` until its current
+  subject/body controllers contain safe text and shows the same guidance.
+- The API remains authoritative: direct or stale clients cannot bypass the
+  block. Mobile does not claim that editing alone proves legal sufficiency.
+
+##### Acceptance criteria
+
+- **NOTICE-SAFE-01:** Subject or body containing `{{tenant_name}}`,
+  `{Sofia Rodriguez}`, another non-empty brace-delimited fragment, or
+  `Workspace administrator:` is rejected before any delivery mutation.
+- **NOTICE-SAFE-02:** Safe tenant-facing copy, ordinary punctuation, and
+  unbalanced literal braces pass. Balanced non-empty braces are the one
+  explicitly reserved punctuation form. The policy does not inspect or
+  transform recipients, channels, amounts, dates, or jurisdiction facts.
+- **NOTICE-SAFE-03:** Pure server tests cover the exact reserved grammar and one
+  non-sensitive correction message. The existing PostgreSQL
+  `ApproveAndQueue_UsesDispatchableOutboxTypes_AndProjectsDurableStatus`
+  handler fixture first submits unsafe content through
+  `NotificationFoundationService.ApproveAndQueueAsync`, then asserts zero
+  `RenderedNotice`, `NoticeDeliveryEvidence`, tenant-notice `OutboxMessage`,
+  `Conversation`, `ConversationMessage`, and tenant `Notification` rows; the
+  draft remains `Draft`, its work item remains `Claimed`, and no status or
+  conversation ID changes. The same fixture then replaces the body with safe
+  content and retains its existing successful-delivery assertions.
+- **NOTICE-SAFE-04:** The standalone mobile Draft card disables `Approve` and
+  shows the correction guidance for unsafe persisted content; safe Draft cards
+  preserve channel selection and approval.
+- **NOTICE-SAFE-05:** The editable review sheet reevaluates current controller
+  text, disables `Send notice` while unsafe, and enables it after the user
+  removes all residue/internal guidance. `Keep as draft` remains available.
+- **NOTICE-SAFE-06:** Existing atomic locking, authorization, one-transaction
+  delivery, recipient SQL projection, outbox/evidence graph, idempotency, and
+  external-after-commit behavior remain unchanged.
+- **NOTICE-SAFE-07:** Exact-SHA Azure emulator proof shows the captured unsafe
+  legal draft cannot be approved, explains why in plain English, and a safe
+  edited draft can reach an enabled send state without submitting a real
+  delivery during proof.
+
+##### Targeted commands
+
+Run the focused API and mobile commands serially; no parallel build/test:
+
+```bash
+dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj \
+  --filter FullyQualifiedName~NoticeDeliveryContentSafetyTests
+dotnet test RentalCommand.IntegrationTests/RentalCommand.IntegrationTests.csproj \
+  --filter FullyQualifiedName~ApproveAndQueue_UsesDispatchableOutboxTypes_AndProjectsDurableStatus
+cd mobile
+dart format lib/features/notices/notice_content_safety.dart \
+  lib/features/notices/notices_screen.dart \
+  lib/features/notices/create_tenant_notice.dart \
+  test/notice_content_safety_test.dart \
+  test/create_tenant_notice_test.dart
+flutter test test/notice_content_safety_test.dart \
+  test/create_tenant_notice_test.dart
+flutter analyze lib/features/notices/notice_content_safety.dart \
+  lib/features/notices/notices_screen.dart \
+  lib/features/notices/create_tenant_notice.dart \
+  test/notice_content_safety_test.dart \
+  test/create_tenant_notice_test.dart
+git diff --check
+```
+
+##### Relevance and emulator gates
+
+A read-only relevance review checks only the nine allowed files,
+NOTICE-SAFE-01 through NOTICE-SAFE-06, and confirms that no query, route,
+recipient, channel, legal-review, or atomicity behavior changed beyond the
+pre-mutation safety rejection. The sole emulator tester captures PNG and XML
+under `Docs/Reviews/artifacts/tsk-750/post-notice-safety/` as:
+
+- `unsafe-notice-blocked`
+- `unsafe-notice-guidance`
+- `safe-edited-notice-ready`
+
+The proof report is
+`Docs/Reviews/2026-07-25-tsk-750-mobile-notice-safety-proof.md`.
+
+#### Discovery boundary: Step 4C — correct the supplied legal template version
+
+Append a new immutable legal template version that removes tenant-facing
+administrator instructions, update fresh-workspace latest-version assertions,
+and migrate only uncustomized workspace bindings through a narrow,
+transactional, rollback-safe migration. Customized templates and existing draft
+history must remain untouched; unsafe existing drafts stay blocked by Step 4B.
+The exact migration/upgrade contract requires separate database evidence and
+plan review before implementation.
+
+No general notification workflow redesign is authorized by this audit.
 
 ### Step 5 — Deposits performance
 
