@@ -264,7 +264,7 @@ The proof report is:
 Step 2A completes only when HUB-06 is evidenced on an exact-SHA Azure emulator
 build.
 
-## Active contract: Step 2B — make Unit Command Center sections discoverable
+## Completed contract: Step 2B — make Unit Command Center sections discoverable
 
 ### Evidence
 
@@ -365,16 +365,124 @@ The proof report is:
 Step 2B completes only when UNITNAV-06 is evidenced on an exact-SHA Azure
 emulator build.
 
+## Active contract: Step 2C — preserve Today work-order origin
+
+### Evidence
+
+Audit captures `04-today-briefing-bottom.png`,
+`05-work-order-detail-from-today.png`, `06-work-order-detail-loaded.png`, and
+`07-back-from-work-order.png` prove that a work order opened from Today changes
+the selected shell destination to Work. Back therefore returns to the Work root
+instead of the prior Today scroll position.
+
+Source tracing confirms two Today-owned work-order entry points make that
+destination switch:
+
+- `_FieldQueueCard.onTap` calls `MobileShellNavigator.openTab` for
+  `MobileShellTabId.work`.
+- a briefing bullet whose entity type is `WorkOrder` maps to a
+  `_BriefingTarget` that also opens the Work destination.
+
+The existing `WorkOrderUnitAwareLoaderScreen` already supplies the correct
+unit-centered detail. The defect is the origin-changing shell navigation before
+that loader is pushed.
+
+### Allowed source files
+
+- `mobile/lib/features/home/home_shell.dart`
+
+### Allowed test files
+
+- `mobile/test/navigation_contract_test.dart`
+- `mobile/test/work_order_shell_target_loader_test.dart`
+
+No work-order content, unit content, domain hub, repository, authorization,
+router, Today data provider, backend, or database file is in this boundary.
+
+### Required change
+
+- Work orders tapped in Today's Work Orders queue must push the existing
+  `WorkOrderUnitAwareLoaderScreen` over the current Navigator route without
+  selecting the Work shell destination.
+- Work-order bullets tapped in Today's briefing must use the same
+  current-origin policy.
+- Keep the Today `CustomScrollView` mounted underneath the pushed detail so Back
+  restores the exact prior scroll offset.
+- Retain `WorkOrderUnitAwareLoaderScreen` unchanged so unit-scoped work orders
+  still open the Unit Command Center's Maintenance / Work orders view and
+  non-unit work orders still open ordinary work-order detail.
+- Keep `View all` switching to Work; it is an explicit destination change, not a
+  detail drill-in.
+- Keep direct `/work-orders/{id}` routes, notification/deep-link routing, voice
+  navigation, and work orders opened from the Work hub on their existing shell
+  destination paths.
+- Do not change authorization, work-order fetching, detail content, restoration
+  persistence, or any write/data boundary.
+
+### Acceptance criteria
+
+- **TODAYNAV-01:** Tapping a Today Work Orders queue row pushes the unit-aware
+  detail without changing the selected bottom destination from Today.
+- **TODAYNAV-02:** Tapping a Today briefing bullet for a WorkOrder uses the same
+  current-origin push; other briefing entity targets retain their existing
+  destination routing.
+- **TODAYNAV-03:** Back from both the loading state and loaded unit-aware detail
+  returns to Today at the prior scroll position.
+- **TODAYNAV-04:** `View all` still selects Work and ordinary Work-hub rows still
+  return to the Work root.
+- **TODAYNAV-05:** Existing direct work-order route and unit-aware shell-target
+  tests continue to pass without changes to the loader or router.
+- **TODAYNAV-06:** Exact-SHA Azure emulator proof captures Today at its Work
+  Orders section, the selected unit-aware work-order detail, and Back on Today
+  at the same scroll position; the bottom bar remains on Today before and after.
+
+### Targeted commands
+
+Run serially from `mobile/`:
+
+```bash
+dart format lib/features/home/home_shell.dart \
+  test/navigation_contract_test.dart \
+  test/work_order_shell_target_loader_test.dart
+flutter test test/navigation_contract_test.dart \
+  test/work_order_shell_target_loader_test.dart
+flutter analyze lib/features/home/home_shell.dart \
+  test/navigation_contract_test.dart \
+  test/work_order_shell_target_loader_test.dart
+git diff --check
+```
+
+### Relevance gate
+
+After implementation, a read-only reviewer checks only:
+
+1. the allowed-file diff;
+2. TODAYNAV-01 through TODAYNAV-05 evidence;
+3. preservation of the unit-aware loader, direct/deep-link routing, explicit
+   `View all` tab switching, Work-hub origin, and non-work-order briefing paths;
+4. absence of content, data, authorization, router, or other roadmap changes.
+
+### Emulator proof gate
+
+The sole emulator tester captures PNG and matching hierarchy XML under:
+
+`Docs/Reviews/artifacts/tsk-750/post-today-origin/`
+
+- `today-work-order-origin`
+- `today-work-order-detail`
+- `today-work-order-back`
+
+The proof report is:
+
+`Docs/Reviews/2026-07-25-tsk-750-mobile-today-origin-proof.md`
+
+Step 2C completes only when TODAYNAV-06 is evidenced on an exact-SHA Azure
+emulator build.
+
 ## Pending roadmap boundaries
 
 These are evidence-backed but inactive. Each receives its own exact-file contract
 and relevance gate only after the active step closes.
-
-### Step 2C — preserve Today navigation origin
-
-- Preserve unit/property context, destination restoration, and deep links.
-- Restore Today as the Back destination for work orders opened from Today.
-- Evidence: 00, 05–07, 42, 52, 53, 57.
 
 ### Step 3 — plain-English money and rental presentation
 
