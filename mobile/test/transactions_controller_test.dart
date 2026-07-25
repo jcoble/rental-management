@@ -93,6 +93,116 @@ void main() {
     },
   );
 
+  testWidgets('ledger append retains rows with compact list-end progress', (
+    tester,
+  ) async {
+    final repo = _FakeMoneyRepository();
+    repo.completeNext(
+      _pageWith(items: [_tx(kind: 'Payment', id: 1)], totalCount: 2),
+    );
+    final nextPage = Completer<AccountingTransactionsPage>();
+    repo.queue(nextPage.future);
+    final container = ProviderContainer(
+      overrides: [
+        accountingRepositoryProvider.overrideWithValue(
+          _FakeAccountingRepository(),
+        ),
+        moneyRepositoryProvider.overrideWithValue(repo),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(
+          home: MoneyScreen(
+            initialView: MoneyScreenView.payments,
+            showTransactionSelector: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    final append = container.read(transactionsProvider.notifier).loadMore();
+    await tester.pump();
+
+    expect(find.text('Payment row'), findsOneWidget);
+    final progress = tester.widget<SizedBox>(
+      find.byKey(const Key('ledger-append-progress')),
+    );
+    expect(progress.width, 22);
+    expect(progress.height, 22);
+    expect(repo.skips.last, 1);
+    expect(repo.takes.last, 40);
+
+    nextPage.complete(
+      _pageWith(items: [_tx(kind: 'Payment', id: 2)], totalCount: 2, skip: 1),
+    );
+    await append;
+    await tester.pump();
+
+    expect(container.read(transactionsProvider).items, hasLength(2));
+    expect(find.byKey(const Key('ledger-append-progress')), findsNothing);
+  });
+
+  testWidgets('ledger source and date context may wrap twice at phone width', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(360, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final repo = _FakeMoneyRepository();
+    const counterparty =
+        'Franklin County Housing Assistance Administration Office';
+    const category = 'Emergency property stabilization reimbursement';
+    repo.completeNext(
+      _page(
+        AccountingTransaction(
+          kind: 'Payment',
+          id: 7,
+          date: DateTime(2026, 7, 8),
+          description: 'Assistance payment',
+          category: category,
+          status: 'Scheduled',
+          amount: 75,
+          counterparty: counterparty,
+          hasReceipt: false,
+          receiptIsImage: false,
+          reconciled: false,
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          accountingRepositoryProvider.overrideWithValue(
+            _FakeAccountingRepository(),
+          ),
+          moneyRepositoryProvider.overrideWithValue(repo),
+        ],
+        child: const MaterialApp(
+          home: MoneyScreen(
+            initialView: MoneyScreenView.payments,
+            showTransactionSelector: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    final contextText = tester.widget<Text>(
+      find.text('$counterparty / $category / Jul 8'),
+    );
+    expect(contextText.maxLines, 2);
+    expect(find.text(r'+$75.00'), findsOneWidget);
+    expect(find.text('Scheduled'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   test('tenant ledger rows preserve canonical tenant-account identity', () {
     final transaction = AccountingTransaction.fromJson({
       'kind': 'TenantLedger',
@@ -209,6 +319,8 @@ class _FakeMoneyRepository extends MoneyRepository {
   _FakeMoneyRepository() : super(Dio());
 
   final requests = <TransactionsFilter>[];
+  final skips = <int>[];
+  final takes = <int>[];
   final _responses = <Future<AccountingTransactionsPage>>[];
 
   void completeNext(AccountingTransactionsPage page) {
@@ -226,6 +338,8 @@ class _FakeMoneyRepository extends MoneyRepository {
     TransactionsFilter filter = const TransactionsFilter(),
   }) {
     requests.add(filter);
+    skips.add(skip);
+    takes.add(take);
     if (_responses.isEmpty) {
       throw StateError('No queued transaction page.');
     }
@@ -234,13 +348,19 @@ class _FakeMoneyRepository extends MoneyRepository {
 }
 
 AccountingTransactionsPage _page(AccountingTransaction tx) {
-  return AccountingTransactionsPage(
-    items: [tx],
-    totalCount: 1,
-    skip: 0,
-    take: 40,
-  );
+  return _pageWith(items: [tx], totalCount: 1);
 }
+
+AccountingTransactionsPage _pageWith({
+  required List<AccountingTransaction> items,
+  required int totalCount,
+  int skip = 0,
+}) => AccountingTransactionsPage(
+  items: items,
+  totalCount: totalCount,
+  skip: skip,
+  take: 40,
+);
 
 AccountingTransaction _tx({required String kind, required int id}) {
   return AccountingTransaction(

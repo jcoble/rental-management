@@ -642,7 +642,7 @@ class _LedgerTabState extends ConsumerState<_LedgerTab> {
     return RefreshIndicator(
       onRefresh: () => ref.read(transactionsProvider.notifier).refresh(),
       child: state.loading && state.items.isEmpty
-          ? const Center(child: CircularProgressIndicator())
+          ? const _LedgerLoadingBody()
           : state.error != null && state.items.isEmpty
           ? ListView(
               children: [
@@ -673,6 +673,7 @@ class _LedgerTabState extends ConsumerState<_LedgerTab> {
                     padding: EdgeInsets.all(16),
                     child: Center(
                       child: SizedBox(
+                        key: Key('ledger-append-progress'),
                         width: 22,
                         height: 22,
                         child: CircularProgressIndicator(strokeWidth: 2),
@@ -689,6 +690,50 @@ class _LedgerTabState extends ConsumerState<_LedgerTab> {
                 );
               },
             ),
+    );
+  }
+}
+
+class _LedgerLoadingBody extends StatelessWidget {
+  const _LedgerLoadingBody();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+
+    return ListView(
+      key: const Key('ledger-loading'),
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+      children: [
+        MobileM3ListItem(
+          position: MobileM3ListItemPosition.single,
+          leading: MobileM3LeadingIcon(
+            icon: Icons.receipt_long_outlined,
+            backgroundColor: colors.primaryContainer,
+            foregroundColor: colors.onPrimaryContainer,
+          ),
+          title: Text(
+            'Loading ledger',
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          supporting: [
+            Text(
+              'Payments, expenses, sources, and dates',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colors.onSurfaceVariant,
+              ),
+            ),
+          ],
+          trailing: const SizedBox.square(
+            dimension: 22,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -786,7 +831,7 @@ class _TransactionCard extends StatelessWidget {
             if (tx.category.isNotEmpty) tx.category,
             shortDateFmt(tx.date),
           ].where((s) => s.isNotEmpty).join(' / '),
-          maxLines: 1,
+          maxLines: 2,
           overflow: TextOverflow.ellipsis,
           style: theme.textTheme.bodySmall?.copyWith(
             color: cs.onSurfaceVariant,
