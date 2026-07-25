@@ -176,6 +176,45 @@ class MobileQuickActionScope
   }
 }
 
+/// Temporarily hides the nearest shell quick-action launcher while [child] is
+/// mounted.
+///
+/// Multiple hiders can overlap safely because each owns its own registration.
+/// Removing one hider does not reveal the launcher until every owner clears.
+class MobileQuickActionHider extends StatefulWidget {
+  const MobileQuickActionHider({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  State<MobileQuickActionHider> createState() => _MobileQuickActionHiderState();
+}
+
+class _MobileQuickActionHiderState extends State<MobileQuickActionHider> {
+  final Object _owner = Object();
+  MobileQuickActionController? _controller;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final nextController = MobileQuickActionScope.maybeOf(context);
+    if (identical(nextController, _controller)) return;
+
+    _controller?.clearHidden(_owner);
+    _controller = nextController;
+    _controller?.setHidden(_owner, true);
+  }
+
+  @override
+  void dispose() {
+    _controller?.clearHidden(_owner);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
 class MobileQuickActionFabRegistry extends ChangeNotifier {
   int _mountedFabCount = 0;
   bool _notificationScheduled = false;

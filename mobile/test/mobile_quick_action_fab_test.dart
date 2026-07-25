@@ -379,6 +379,48 @@ void main() {
     expect(controller.hidden, isFalse);
   });
 
+  testWidgets(
+    'scope hider restores visibility without clearing another owner',
+    (tester) async {
+      final controller = MobileQuickActionController();
+      final otherOwner = Object();
+      var showHider = true;
+      late StateSetter setHostState;
+      addTearDown(controller.dispose);
+
+      await tester.pumpWidget(
+        _authenticatedApp(
+          home: MobileQuickActionScope(
+            controller: controller,
+            child: StatefulBuilder(
+              builder: (context, setState) {
+                setHostState = setState;
+                return showHider
+                    ? const MobileQuickActionHider(child: Text('Action form'))
+                    : const Text('Ordinary page');
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(controller.hidden, isTrue);
+
+      controller.setHidden(otherOwner, true);
+      setHostState(() => showHider = false);
+      await tester.pump();
+
+      expect(find.text('Ordinary page'), findsOneWidget);
+      expect(controller.hidden, isTrue);
+
+      controller.clearHidden(otherOwner);
+      await tester.pump();
+
+      expect(controller.hidden, isFalse);
+    },
+  );
+
   testWidgets('scoped primary action falls back when top action unmounts', (
     tester,
   ) async {

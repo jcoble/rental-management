@@ -6,6 +6,7 @@ import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
 import '../../core/auth/mobile_access_policy.dart';
 import '../activity/activity_history_screen.dart';
+import '../home/mobile_quick_action_fab.dart';
 import '../money/money_format.dart';
 import 'payments_repository.dart';
 
@@ -206,7 +207,9 @@ class _PaymentCorrectionSheetState
     if (_reason.text.trim().isEmpty ||
         _method.text.trim().isEmpty ||
         _provenance.text.trim().isEmpty) {
-      setState(() => _error = 'Reason, method, and payout provenance are required.');
+      setState(
+        () => _error = 'Reason, method, and payout provenance are required.',
+      );
       return;
     }
     setState(() {
@@ -252,91 +255,93 @@ class _PaymentCorrectionSheetState
     final tenant = receipt.primaryTenantName?.trim().isNotEmpty == true
         ? receipt.primaryTenantName!
         : 'Tenant not named';
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: EdgeInsets.fromLTRB(
-          20,
-          20,
-          20,
-          MediaQuery.viewInsetsOf(context).bottom + 24,
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'Correct payment',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'The original posting remains permanent. This appends a linked refund and compensating allocations.',
-            ),
-            const SizedBox(height: 16),
-            _DetailRow(label: 'Account', value: receipt.accountNumber),
-            _DetailRow(
-              label: 'Unit',
-              value: '${receipt.propertyName} · Unit ${receipt.unitNumber}',
-            ),
-            _DetailRow(label: 'Tenant', value: tenant),
-            _DetailRow(
-              label: 'Payment',
-              value:
-                  '${moneyFmt(receipt.amount)} · entry #${receipt.tenantLedgerEntryId}',
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _reason,
-              decoration: const InputDecoration(labelText: 'Reason'),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _method,
-              decoration: const InputDecoration(labelText: 'Payment method'),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _provenance,
-              decoration: const InputDecoration(
-                labelText: 'Payout provenance',
-              ),
-            ),
-            const SizedBox(height: 12),
-            OutlinedButton(
-              onPressed: () async {
-                final selected = await showDatePicker(
-                  context: context,
-                  firstDate: DateTime(2000),
-                  lastDate: DateTime(2100),
-                  initialDate: _effectiveOn,
-                );
-                if (selected != null) setState(() => _effectiveOn = selected);
-              },
-              child: Text('Correction date · ${dateFmt(_effectiveOn)}'),
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 12),
+    return MobileQuickActionHider(
+      child: SafeArea(
+        child: SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(
+            20,
+            20,
+            20,
+            MediaQuery.viewInsetsOf(context).bottom + 24,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
               Text(
-                _error!,
-                key: const Key('payment-correction-conflict'),
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+                'Correct payment',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'The original posting remains permanent. This appends a linked refund and compensating allocations.',
+              ),
+              const SizedBox(height: 16),
+              _DetailRow(label: 'Account', value: receipt.accountNumber),
+              _DetailRow(
+                label: 'Unit',
+                value: '${receipt.propertyName} · Unit ${receipt.unitNumber}',
+              ),
+              _DetailRow(label: 'Tenant', value: tenant),
+              _DetailRow(
+                label: 'Payment',
+                value:
+                    '${moneyFmt(receipt.amount)} · entry #${receipt.tenantLedgerEntryId}',
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _reason,
+                decoration: const InputDecoration(labelText: 'Reason'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _method,
+                decoration: const InputDecoration(labelText: 'Payment method'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _provenance,
+                decoration: const InputDecoration(
+                  labelText: 'Payout provenance',
+                ),
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton(
+                onPressed: () async {
+                  final selected = await showDatePicker(
+                    context: context,
+                    firstDate: DateTime(2000),
+                    lastDate: DateTime(2100),
+                    initialDate: _effectiveOn,
+                  );
+                  if (selected != null) setState(() => _effectiveOn = selected);
+                },
+                child: Text('Correction date · ${dateFmt(_effectiveOn)}'),
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  _error!,
+                  key: const Key('payment-correction-conflict'),
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ],
+              if (_result != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  'Linked refund entry #${_result!.refundEntryId}; '
+                  '${_result!.compensatedAllocationCount} allocation(s) compensated.',
+                  key: const Key('payment-correction-result'),
+                ),
+              ],
+              const SizedBox(height: 16),
+              FilledButton(
+                key: const Key('payment-correction-submit'),
+                onPressed: _submitting ? null : _submit,
+                child: Text(_submitting ? 'Correcting…' : 'Append correction'),
               ),
             ],
-            if (_result != null) ...[
-              const SizedBox(height: 12),
-              Text(
-                'Linked refund entry #${_result!.refundEntryId}; '
-                '${_result!.compensatedAllocationCount} allocation(s) compensated.',
-                key: const Key('payment-correction-result'),
-              ),
-            ],
-            const SizedBox(height: 16),
-            FilledButton(
-              key: const Key('payment-correction-submit'),
-              onPressed: _submitting ? null : _submit,
-              child: Text(_submitting ? 'Correcting…' : 'Append correction'),
-            ),
-          ],
+          ),
         ),
       ),
     );
