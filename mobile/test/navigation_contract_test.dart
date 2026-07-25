@@ -437,6 +437,55 @@ void main() {
     expect(shellSource, contains('MobileAccessDeniedScreen('));
   });
 
+  test('Today work-order details preserve their Today navigation origin', () {
+    final shellSource = File(
+      'lib/features/home/home_shell.dart',
+    ).readAsStringSync();
+    final queueStart = shellSource.indexOf('class _FieldQueueCard');
+    final queueEnd = shellSource.indexOf('class _LoadingCard', queueStart);
+    final queueBlock = shellSource.substring(queueStart, queueEnd);
+    final workOrderTargetStart = shellSource.indexOf("case 'WorkOrder':");
+    final workOrderTargetEnd = shellSource.indexOf(
+      "case 'Payment':",
+      workOrderTargetStart,
+    );
+    final workOrderTarget = shellSource.substring(
+      workOrderTargetStart,
+      workOrderTargetEnd,
+    );
+    final targetOpeningStart = shellSource.indexOf(
+      'void _openTarget(BuildContext context, _BriefingTarget target)',
+    );
+    final targetOpeningEnd = shellSource.indexOf(
+      '/// Maps a briefing',
+      targetOpeningStart,
+    );
+    final targetOpening = shellSource.substring(
+      targetOpeningStart,
+      targetOpeningEnd,
+    );
+
+    expect(queueBlock, contains('_pushTodayDetail(context, detailBuilder)'));
+    expect(queueBlock, isNot(contains('MobileShellTabId.work')));
+    expect(workOrderTarget, contains('preserveTodayOrigin: true'));
+    expect(
+      targetOpening,
+      contains('target.preserveTodayOrigin && target.detailBuilder != null'),
+    );
+    expect(
+      targetOpening,
+      contains('_pushTodayDetail(context, target.detailBuilder!)'),
+    );
+    expect(
+      shellSource,
+      contains('onAction: () => onSwitchToTab(_workTabIndex)'),
+    );
+    expect(
+      RegExp(r'preserveTodayOrigin:\s*true').allMatches(shellSource),
+      hasLength(1),
+    );
+  });
+
   test('owner experience uses a dedicated relationship-scoped shell', () {
     final shellSource = File(
       'lib/features/home/home_shell.dart',
