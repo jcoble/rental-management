@@ -494,7 +494,7 @@ and relevance gate only after the active step closes.
 - Clarify the vendor work-count label according to its authoritative metric.
 - Evidence: 06, 07, 14, 16, 24–26, 30, 31, 41, 42, 55.
 
-#### Active contract: Step 3A — make Unit summary and money language understandable
+#### Completed contract: Step 3A — make Unit summary and money language understandable
 
 Independent review passed after expanding the contract to all thirteen ledger
 entry types and every existing raw Unit status/type/stage call site.
@@ -653,10 +653,10 @@ The proof report is:
 
 `Docs/Reviews/2026-07-25-tsk-750-mobile-unit-copy-proof.md`
 
-#### Proposed contract: Step 3B — clarify Today, chart months, and vendor counts
+#### Active contract: Step 3B — clarify Today, chart months, and vendor counts
 
-This contract remains planning-only until Step 3A's emulator proof closes and
-independent review passes.
+Step 3A's exact-SHA emulator proof and independent review passed. Step 3B is now
+the active implementation boundary.
 
 ##### Evidence and authoritative meaning
 
