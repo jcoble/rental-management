@@ -521,14 +521,18 @@ model, the UI must not imply that `OriginalAmount - NetAllocations` always equal
 
 - `mobile/lib/core/presentation/plain_english_labels.dart` (new)
 - `mobile/lib/features/units/unit_command_center_screen.dart`
+- `mobile/lib/features/payments/payment_detail_screen.dart`
 
 ##### Allowed test files
 
 - `mobile/test/plain_english_labels_test.dart` (new)
 - `mobile/test/unit_money_contract_test.dart`
+- `mobile/test/payment_detail_copy_contract_test.dart` (new)
 
-No repository, DTO, API, database, paging, navigation, authorization, form,
-write path, or non-Unit screen is in this boundary.
+No repository, DTO, API, database, paging, navigation, authorization, write
+path, validation, submission behavior, or non-listed screen is in this
+boundary. The only form change allowed is presentation copy inside the listed
+payment-correction sheet.
 
 ##### Required change
 
@@ -555,6 +559,12 @@ write path, or non-Unit screen is in this boundary.
   are already user-facing.
 - Keep descriptions, dates, currency amounts, row actions, payment-detail
   navigation, server paging, provider lifecycles, and all wire values unchanged.
+- On payment detail and its correction sheet, replace accounting-system language
+  (`immutable posted record`, `compensating allocations`, `payout provenance`,
+  and raw ledger-entry numbers) with plain-English receipt, refund, payment
+  reference, and account-history wording. Label the two stable business
+  identifiers `Account number` and `Lease number`; do not alter or hide their
+  values.
 
 ##### Acceptance criteria
 
@@ -584,6 +594,10 @@ write path, or non-Unit screen is in this boundary.
 - **UNITCOPY-07:** Exact-SHA Azure emulator proof captures Unit Summary and Unit
   Money with the audited raw values absent, the charge explanation readable,
   and payment-detail navigation still working at 1080x2400 / 420 density.
+- **UNITCOPY-08:** Payment detail and the correction sheet explain permanent
+  receipt/refund behavior in plain English, label the business identifiers as
+  `Account number` and `Lease number`, and expose no `allocation`,
+  `immutable`, `provenance`, or raw ledger-entry number to the user.
 
 ##### Targeted commands
 
@@ -592,15 +606,20 @@ Run serially from `mobile/`:
 ```bash
 dart format lib/core/presentation/plain_english_labels.dart \
   lib/features/units/unit_command_center_screen.dart \
+  lib/features/payments/payment_detail_screen.dart \
   test/plain_english_labels_test.dart \
-  test/unit_money_contract_test.dart
+  test/unit_money_contract_test.dart \
+  test/payment_detail_copy_contract_test.dart
 flutter test test/plain_english_labels_test.dart \
   test/unit_money_contract_test.dart \
+  test/payment_detail_copy_contract_test.dart \
   test/unit_navigation_test.dart
 flutter analyze lib/core/presentation/plain_english_labels.dart \
   lib/features/units/unit_command_center_screen.dart \
+  lib/features/payments/payment_detail_screen.dart \
   test/plain_english_labels_test.dart \
-  test/unit_money_contract_test.dart
+  test/unit_money_contract_test.dart \
+  test/payment_detail_copy_contract_test.dart
 git diff --check
 ```
 
@@ -608,11 +627,12 @@ git diff --check
 
 After implementation, a read-only reviewer checks only:
 
-1. the four allowed-file diffs;
-2. UNITCOPY-01 through UNITCOPY-06 evidence;
+1. the six allowed-file diffs;
+2. UNITCOPY-01 through UNITCOPY-06 plus UNITCOPY-08 evidence;
 3. preservation of wire values, repositories, independent server paging,
-   payment-detail actions, navigation, and authorization;
-4. absence of data, backend, form, or other roadmap changes.
+   payment-detail actions, correction validation/submission behavior,
+   navigation, authorization, and activity history;
+4. absence of data, backend, form-behavior, or other roadmap changes.
 
 ##### Emulator proof gate
 
@@ -623,10 +643,129 @@ The sole emulator tester captures PNG and matching hierarchy XML under:
 - `unit-summary-plain-english`
 - `unit-money-plain-english`
 - `unit-money-payment-detail`
+- `unit-money-payment-correction`
+
+The payment-detail and payment-correction captures must both satisfy
+UNITCOPY-08 while preserving the correction sheet's existing fields and submit
+behavior.
 
 The proof report is:
 
 `Docs/Reviews/2026-07-25-tsk-750-mobile-unit-copy-proof.md`
+
+#### Proposed contract: Step 3B — clarify Today, chart months, and vendor counts
+
+This contract remains planning-only until Step 3A's emulator proof closes and
+independent review passes.
+
+##### Evidence and authoritative meaning
+
+- Audit capture `04-today-briefing-bottom.png` shows `InProgress` leaking into
+  Today's Work Orders row. Its subtitle also forces property, status, and
+  priority into one truncated line.
+- Capture `25-money-dashboard.png` shows chart labels such as `-08` because the
+  painter takes the last three characters of a `YYYY-MM` value.
+- Capture `16-work-vendors.png` shows an assigned vendor beside `0 jobs`. The
+  authoritative mobile field is named
+  `jobsCompleted`, its model documents it as completed work orders, and Vendor
+  detail already labels the same scorecard value `Jobs completed`.
+
+##### Allowed source files
+
+- `mobile/lib/core/presentation/date_labels.dart` (new)
+- `mobile/lib/features/home/home_shell.dart`
+- `mobile/lib/features/analytics/insights_screen.dart`
+- `mobile/lib/features/vendors/vendors_list_screen.dart`
+
+##### Allowed test files
+
+- `mobile/test/date_labels_test.dart` (new)
+- `mobile/test/navigation_contract_test.dart`
+- `mobile/test/vendor_mobile_crud_test.dart`
+
+The existing `plain_english_labels.dart` translator is reused unchanged. No
+model, repository, API, database, query, chart metric, navigation, list paging,
+vendor scorecard, or work-order action is in this boundary.
+
+##### Required change
+
+- Today Work Orders passes status and priority through the existing
+  presentation translator and gives property, status, and priority two readable
+  lines instead of one slash-delimited truncated line. Preserve the current
+  detail push and Today-origin behavior.
+- Add one pure short-month label helper that converts canonical `YYYY-MM` values
+  to `Jan` through `Dec`, preserves already readable month labels, and returns a
+  safe fallback for blank values. The analytics painter uses the helper without
+  changing bar values, order, dimensions, or repaint behavior.
+- Vendor list labels `jobsCompleted` explicitly as `completed job` or
+  `completed jobs`. Preserve the numeric value and scorecard/detail behavior.
+
+##### Acceptance criteria
+
+- **COPYFOLLOW-01:** A Today row renders `In progress` rather than `InProgress`,
+  preserves its property name, renders priority in understandable sentence
+  case, permits two subtitle lines, and still pushes the same unit-aware detail
+  without switching the shell destination.
+- **COPYFOLLOW-02:** `2026-01`, `2026-08`, and `2026-12` render `Jan`, `Aug`, and
+  `Dec`; `Jan` remains `Jan`; blank data renders `—`; invalid non-empty data is
+  preserved rather than guessed.
+- **COPYFOLLOW-03:** Analytics continues to paint the same income/expense
+  `TrendPoint` values in their existing server order; no client aggregation,
+  sorting, filtering, or paging is introduced.
+- **COPYFOLLOW-04:** Vendor rows render `0 completed jobs`, `1 completed job`,
+  and plural counts accurately from the existing `jobsCompleted` field.
+- **COPYFOLLOW-05:** Exact-SHA Azure emulator proof captures the Today work-order
+  row, Analytics chart, and Vendor list with readable, unclipped copy and no
+  blank screen, hang, FAB overlap, or navigation regression.
+
+##### Targeted commands
+
+Run serially from `mobile/`:
+
+```bash
+dart format lib/core/presentation/date_labels.dart \
+  lib/features/home/home_shell.dart \
+  lib/features/analytics/insights_screen.dart \
+  lib/features/vendors/vendors_list_screen.dart \
+  test/date_labels_test.dart \
+  test/navigation_contract_test.dart \
+  test/vendor_mobile_crud_test.dart
+flutter test test/date_labels_test.dart \
+  test/navigation_contract_test.dart \
+  test/vendor_mobile_crud_test.dart
+flutter analyze lib/core/presentation/date_labels.dart \
+  lib/features/home/home_shell.dart \
+  lib/features/analytics/insights_screen.dart \
+  lib/features/vendors/vendors_list_screen.dart \
+  test/date_labels_test.dart \
+  test/navigation_contract_test.dart \
+  test/vendor_mobile_crud_test.dart
+git diff --check
+```
+
+##### Relevance gate
+
+After implementation, a read-only reviewer checks only:
+
+1. the seven allowed-file diffs;
+2. COPYFOLLOW-01 through COPYFOLLOW-04 evidence;
+3. preservation of Today-origin navigation, analytics values/order, the
+   `jobsCompleted` numeric authority, server paging, and all actions;
+4. absence of repository, DTO, backend, query, data, or other roadmap changes.
+
+##### Emulator proof gate
+
+The sole emulator tester captures PNG and matching hierarchy XML under:
+
+`Docs/Reviews/artifacts/tsk-750/post-copy-followup/`
+
+- `today-work-order-readable`
+- `analytics-readable-months`
+- `vendors-completed-jobs`
+
+The proof report is:
+
+`Docs/Reviews/2026-07-25-tsk-750-mobile-copy-followup-proof.md`
 
 ### Step 4 — honest empty states and legal-notice safety
 
