@@ -1,4 +1,5 @@
 import { api } from '../client';
+import { idempotentMutation } from '../idempotency';
 import { buildListQuery, type ListParams } from '../list-params';
 
 export type DepreciationMethod = 'StraightLine' | 'Macrs';
@@ -76,7 +77,20 @@ export const capitalAssets = {
 		api.get<CapitalAssetListResponse>(`/capital-assets/page${buildListQuery(params, queryParams(params))}`),
 	get: (id: number, year?: number) =>
 		api.get<CapitalAsset>(`/capital-assets/${id}${buildListQuery(undefined, { year })}`),
-	create: (data: CreateCapitalAssetRequest) => api.post<CapitalAsset>('/capital-assets', data),
-	update: (id: number, data: Record<string, unknown>) => api.patch<CapitalAsset>(`/capital-assets/${id}`, data),
-	remove: (id: number) => api.delete(`/capital-assets/${id}`)
+	create: (data: CreateCapitalAssetRequest) =>
+		idempotentMutation(`capital-assets:create:${JSON.stringify(data)}`, (key) =>
+			api.post<CapitalAsset>('/capital-assets', data, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
+	update: (id: number, data: Record<string, unknown>) =>
+		idempotentMutation(`capital-assets:update:${id}:${JSON.stringify(data)}`, (key) =>
+			api.patch<CapitalAsset>(`/capital-assets/${id}`, data, {
+				headers: { 'Idempotency-Key': key }
+			})
+		),
+	remove: (id: number) =>
+		idempotentMutation(`capital-assets:delete:${id}`, (key) =>
+			api.delete(`/capital-assets/${id}`, { headers: { 'Idempotency-Key': key } })
+		)
 };

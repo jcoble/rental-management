@@ -12,7 +12,12 @@
 	import { buildScanReviewTarget, shouldAskForScanDocumentType } from '$lib/scan/scan-launcher';
 	import { scanUploadCopy } from '$lib/scan/scan-copy';
 	import { prepareScanDocumentUpload } from '$lib/scan/scan-upload';
-	import type { ScanContext, ScanDocType } from '$lib/scan/scan-context';
+	import {
+		SCAN_DOC_TYPES,
+		type ScanContext,
+		type ScanDocType,
+		type ScanIntakeType
+	} from '$lib/scan/scan-context';
 	import {
 		VOICE_MAX_AUDIO_BYTES,
 		VOICE_MAX_RECORDING_SECONDS,
@@ -23,11 +28,17 @@
 
 	const queryClient = useQueryClient();
 
+	const AUTO_TYPE: { value: ScanIntakeType; label: string; hint: string } = {
+		value: 'Auto',
+		label: 'Auto / classify for me',
+		hint: 'Best for mixed paperwork — identify it first, then show the right review'
+	};
+
 	const DOC_TYPES: { value: ScanDocType; label: string; hint: string }[] = [
 		{ value: 'Expense', label: 'Receipt / Bill', hint: 'Becomes an expense record' },
 		{ value: 'Payment', label: 'Rent Check / Payment', hint: 'Becomes a payment record' },
 		{ value: 'WorkOrder', label: 'Maintenance Request', hint: 'Becomes a work order' },
-		{ value: 'Lease', label: 'Lease Agreement', hint: 'Becomes a lease record' },
+		{ value: 'LeaseAgreement', label: 'Lease Agreement', hint: 'Becomes an agreement record' },
 		{ value: 'Application', label: 'Rental Application', hint: 'Becomes an applicant record' },
 		{ value: 'Loan', label: 'Mortgage / Loan', hint: 'Becomes a loan on the property' }
 	];
@@ -35,17 +46,21 @@
 	let {
 		context = {},
 		defaultType = context.type ?? 'Expense',
+		allowedTypes = SCAN_DOC_TYPES,
+		allowVoice = true,
 		compact = false,
 		oncreated
 	}: {
 		context?: ScanContext;
 		defaultType?: ScanDocType;
+		allowedTypes?: readonly ScanDocType[];
+		allowVoice?: boolean;
 		compact?: boolean;
-		oncreated?: (draftId: number, docType: ScanDocType) => void;
+		oncreated?: (draftId: number, docType: ScanIntakeType) => void;
 	} = $props();
 
-	let docType = $state<ScanDocType>('Expense');
-	let lastDefaultType = $state<ScanDocType | null>(null);
+	let docType = $state<ScanIntakeType>('Expense');
+	let lastDefaultType = $state<ScanIntakeType | null>(null);
 	let isPreparingUpload = $state(false);
 	let isRecording = $state(false);
 	let recordingSeconds = $state(0);
@@ -54,11 +69,24 @@
 	let recordingTimer: ReturnType<typeof setInterval> | null = null;
 	let voiceChunks: Blob[] = [];
 
-	const askForType = $derived(shouldAskForScanDocumentType(context));
+	const availableDocTypes = $derived(DOC_TYPES.filter((option) => allowedTypes.includes(option.value)));
+	const canAutoClassify = $derived(
+		SCAN_DOC_TYPES.every((type) => allowedTypes.includes(type)) && !context.type
+	);
+	const availableIntakeTypes = $derived([
+		...(canAutoClassify ? [AUTO_TYPE] : []),
+		...availableDocTypes
+	]);
+	const askForType = $derived(shouldAskForScanDocumentType(context) && availableDocTypes.length > 1);
 	const uploadCopy = $derived(scanUploadCopy(docType));
+	const selectedTarget = $derived(docType === 'Auto' ? undefined : docType);
 
 	$effect(() => {
-		const nextDefault = context.type ?? defaultType;
+		const requestedDefault: ScanIntakeType = context.type ?? (canAutoClassify ? 'Auto' : defaultType);
+		const nextDefault = requestedDefault === 'Auto' || allowedTypes.includes(requestedDefault)
+			? requestedDefault
+			: availableDocTypes[0]?.value;
+		if (!nextDefault) return;
 		if (lastDefaultType !== nextDefault) {
 			lastDefaultType = nextDefault;
 			docType = nextDefault;
@@ -68,12 +96,17 @@
 	function navigateToDraft(draftId: number) {
 		oncreated?.(draftId, docType);
 		if (!oncreated) {
-			goto(buildScanReviewTarget(draftId, { ...context, type: docType }));
+			goto(
+				buildScanReviewTarget(
+					draftId,
+					docType === 'Auto' ? { ...context, type: undefined } : { ...context, type: docType }
+				)
+			);
 		}
 	}
 
 	const uploadMutation = createMutation(() => ({
-		mutationFn: (file: File) => scan.upload(file, docType),
+		mutationFn: (file: File) => scan.upload(file, selectedTarget, context),
 		onSuccess: (res) => {
 			queryClient.invalidateQueries({ queryKey: ['scans'] });
 			navigateToDraft(res.draftId);
@@ -204,7 +237,12 @@
 </script>
 
 <div class={compact ? 'space-y-4' : 'space-y-6'} data-testid="scan-capture-panel">
-	{#if askForType && !uploadMutation.isPending && !isPreparingUpload}
+	{#if availableDocTypes.length === 0}
+		<div class="rounded-lg border border-border bg-muted/30 p-4" data-testid="scan-no-authorized-types">
+			<p class="text-sm font-medium">No scan command is available for this access.</p>
+			<p class="mt-1 text-xs text-muted-foreground">Switch to an authorized workspace experience or ask an administrator to update your assignment.</p>
+		</div>
+	{:else if askForType && !uploadMutation.isPending && !isPreparingUpload}
 		<div data-testid="scan-doc-type">
 			<div class="mb-2 flex items-center gap-1.5">
 				<span class="block text-sm font-medium">What are you scanning?</span>
@@ -216,17 +254,22 @@
 				/>
 			</div>
 			<div class="grid gap-3 sm:grid-cols-2 {compact ? '' : 'lg:grid-cols-3'}">
-				{#each DOC_TYPES as opt}
+				{#each availableIntakeTypes as opt}
 					<button
 						type="button"
 						data-testid="scan-doc-type-{opt.value}"
 						aria-pressed={docType === opt.value}
 						onclick={() => { docType = opt.value; }}
-						class="flex flex-col items-start gap-0.5 rounded-lg border px-4 py-3 text-left transition-colors active:scale-[0.99] {docType === opt.value
+						class="flex flex-col items-start gap-0.5 rounded-lg border px-4 py-3 text-left transition-[color,background-color,border-color,transform] active:scale-[0.98] {docType === opt.value
 							? 'border-accent bg-accent/10 ring-2 ring-accent'
 							: 'border-border bg-background hover:bg-muted/50'}"
 					>
-						<span class="text-sm font-semibold">{opt.label}</span>
+						<span class="flex items-center gap-2 text-sm font-semibold">
+							{opt.label}
+							{#if opt.value === 'Auto'}
+								<span class="rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-accent">Recommended</span>
+							{/if}
+						</span>
 						<span class="text-xs text-muted-foreground">{opt.hint}</span>
 					</button>
 				{/each}
@@ -234,7 +277,7 @@
 		</div>
 	{/if}
 
-	<div data-testid="scan-upload">
+	{#if availableDocTypes.length > 0}<div data-testid="scan-upload">
 		{#if uploadMutation.isPending || isPreparingUpload}
 			<Card.Root class="flex items-center justify-center border-2 border-dashed px-6 py-8">
 				<Card.Content class="p-0">
@@ -247,9 +290,9 @@
 		{:else}
 			<FileDrop multiple onselectedmany={handleFilesSelected} title={uploadCopy.title} helperText={uploadCopy.helperText} />
 		{/if}
-	</div>
+	</div>{/if}
 
-	<div class="flex flex-wrap items-center gap-3 border-t pt-4" data-testid="voice-capture">
+	{#if allowVoice && availableDocTypes.length > 0}<div class="flex flex-wrap items-center gap-3 border-t pt-4" data-testid="voice-capture">
 		<Button
 			type="button"
 			variant={isRecording ? 'destructive' : 'outline'}
@@ -279,5 +322,5 @@
 				Recording {formatRecordingTime(recordingSeconds)} / {formatRecordingTime(VOICE_MAX_RECORDING_SECONDS)}
 			</span>
 		{/if}
-	</div>
+	</div>{/if}
 </div>

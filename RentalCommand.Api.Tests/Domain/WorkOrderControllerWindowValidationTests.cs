@@ -1,13 +1,14 @@
-using System.Security.Claims;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Moq;
+using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
@@ -50,11 +51,11 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
             Description = "End before start",
             ScheduledFor = new DateTimeOffset(2026, 6, 20, 16, 0, 0, TimeSpan.FromHours(-4)),
             ScheduledWindowEnd = new DateTimeOffset(2026, 6, 20, 14, 0, 0, TimeSpan.FromHours(-4)),
-        }, CancellationToken.None);
+        }, "create-invalid-window", CancellationToken.None);
 
         result.Result.Should().BeOfType<BadRequestObjectResult>();
-        service.Verify(s => s.CreateAsync(It.IsAny<int>(), It.IsAny<CreateWorkOrderRequest>(),
-            It.IsAny<int?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
+        service.Verify(s => s.CreateAuthorizedAsync(It.IsAny<WorkspaceReadScope>(), It.IsAny<CreateWorkOrderRequest>(),
+            It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -71,7 +72,7 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
             Description = "End equals start",
             ScheduledFor = same,
             ScheduledWindowEnd = same,
-        }, CancellationToken.None);
+        }, "create-zero-window", CancellationToken.None);
 
         result.Result.Should().BeOfType<BadRequestObjectResult>();
     }
@@ -86,19 +87,19 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
         {
             ScheduledFor = new DateTimeOffset(2026, 6, 20, 16, 0, 0, TimeSpan.FromHours(-4)),
             ScheduledWindowEnd = new DateTimeOffset(2026, 6, 20, 15, 0, 0, TimeSpan.FromHours(-4)),
-        }, CancellationToken.None);
+        }, "update-invalid-window", CancellationToken.None);
 
         result.Result.Should().BeOfType<BadRequestObjectResult>();
-        service.Verify(s => s.UpdateAsync(It.IsAny<int>(), It.IsAny<int>(), It.IsAny<UpdateWorkOrderRequest>(),
-            It.IsAny<int?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
+        service.Verify(s => s.UpdateAuthorizedAsync(It.IsAny<WorkspaceReadScope>(), It.IsAny<int>(), It.IsAny<UpdateWorkOrderRequest>(),
+            It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
     public async Task Create_ValidWindow_ReachesService()
     {
         var service = new Mock<IWorkOrderService>();
-        service.Setup(s => s.CreateAsync(It.IsAny<int>(), It.IsAny<CreateWorkOrderRequest>(),
-                It.IsAny<int?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+        service.Setup(s => s.CreateAuthorizedAsync(It.IsAny<WorkspaceReadScope>(), It.IsAny<CreateWorkOrderRequest>(),
+                It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new WorkOrderResponse { Id = 11, Title = "Valid window" });
         var controller = CreateController(service.Object);
 
@@ -109,11 +110,11 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
             Description = "End after start",
             ScheduledFor = new DateTimeOffset(2026, 6, 20, 14, 0, 0, TimeSpan.FromHours(-4)),
             ScheduledWindowEnd = new DateTimeOffset(2026, 6, 20, 16, 0, 0, TimeSpan.FromHours(-4)),
-        }, CancellationToken.None);
+        }, "create-valid-window", CancellationToken.None);
 
         result.Result.Should().BeOfType<CreatedAtActionResult>();
-        service.Verify(s => s.CreateAsync(It.IsAny<int>(), It.IsAny<CreateWorkOrderRequest>(),
-            It.IsAny<int?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
+        service.Verify(s => s.CreateAuthorizedAsync(It.IsAny<WorkspaceReadScope>(), It.IsAny<CreateWorkOrderRequest>(),
+            It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -121,8 +122,8 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
     {
         // A window-end with no start is a partial shape; the invariant only fires when both are present.
         var service = new Mock<IWorkOrderService>();
-        service.Setup(s => s.CreateAsync(It.IsAny<int>(), It.IsAny<CreateWorkOrderRequest>(),
-                It.IsAny<int?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+        service.Setup(s => s.CreateAuthorizedAsync(It.IsAny<WorkspaceReadScope>(), It.IsAny<CreateWorkOrderRequest>(),
+                It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new WorkOrderResponse { Id = 12, Title = "End only" });
         var controller = CreateController(service.Object);
 
@@ -132,13 +133,24 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
             Title = "End only",
             Description = "No start",
             ScheduledWindowEnd = new DateTimeOffset(2026, 6, 20, 16, 0, 0, TimeSpan.FromHours(-4)),
-        }, CancellationToken.None);
+        }, "create-end-only", CancellationToken.None);
 
         result.Result.Should().BeOfType<CreatedAtActionResult>();
     }
 
     private WorkOrderController CreateController(IWorkOrderService service)
     {
+        var httpContext = new DefaultHttpContext();
+        httpContext.Items[CanonicalAccessContextHttpItem.Key] = new ActiveAccessContext(
+            Guid.Parse("11111111-1111-1111-1111-111111111111"),
+            UserId: 7,
+            AccessContextId: 1,
+            PortfolioId: 42,
+            AccessRevision: 1,
+            LastAuthorizedExperience: null,
+            WorkspaceMembershipId: null,
+            DefaultExperience: null);
+
         var controller = new WorkOrderController(
             service,
             Mock.Of<IVendorDispatchService>(),
@@ -147,13 +159,7 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
         {
             ControllerContext = new ControllerContext
             {
-                HttpContext = new DefaultHttpContext
-                {
-                    User = new ClaimsPrincipal(new ClaimsIdentity([
-                        new Claim("portfolioId", "42"),
-                        new Claim(ClaimTypes.NameIdentifier, "7"),
-                    ], "test")),
-                },
+                HttpContext = httpContext,
             },
         };
 
@@ -161,7 +167,7 @@ public class WorkOrderControllerWindowValidationTests : IDisposable
     }
 }
 
-internal sealed class WorkOrderWindowTestDbContext : RentalCommandDbContext
+internal sealed class WorkOrderWindowTestDbContext : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext
 {
     public WorkOrderWindowTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
 }

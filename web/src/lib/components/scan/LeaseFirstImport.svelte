@@ -4,16 +4,18 @@
 	import { toast } from 'svelte-sonner';
 	import { scan } from '$lib/api/scan';
 	import { properties } from '$lib/api/endpoints/properties';
+	import { units } from '$lib/api/endpoints/units';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { Button } from '$lib/components/ui/button';
-	import * as Select from '$lib/components/ui/select';
+	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import { Loader2 } from '@lucide/svelte';
 	import FileDrop from '$lib/components/FileDrop.svelte';
 	import PropertyFields from '$lib/components/forms/PropertyFields.svelte';
 	import UnitFields from '$lib/components/forms/UnitFields.svelte';
 	import TenantFields from '$lib/components/forms/TenantFields.svelte';
 	import LeaseTermFields from '$lib/components/forms/LeaseTermFields.svelte';
-	import { propertySchema, unitSchema, tenantSchema, leaseSchema, leaseRentTrackingErrors, parseForm } from '$lib/schemas';
+	import LeaseScanSignatureChoice, { type LeaseScanReviewDisposition } from './LeaseScanSignatureChoice.svelte';
+	import { propertySchema, unitSchema, tenantSchema, leaseSchema, parseForm } from '$lib/schemas';
 	import { toLeasePrefill, type PrefillConfidence } from '$lib/scan/lease-prefill';
 	import { createNewRentalPropertyForm, findNewRentalExistingUnitId, formatNewRentalStepLabel, formatNewRentalStepPosition, newRentalDraftUrl, seedNewRentalLateFeeAmount, type NewRentalPhase } from '$lib/scan/new-rental-state';
 	import { prepareNewRentalPhotoUpload } from '$lib/scan/new-rental-upload';
@@ -28,7 +30,7 @@
 		/** Keep the standalone scan page reloadable/bookmarkable while avoiding URL churn in embedded onboarding. */
 		syncDraftToUrl?: boolean;
 		/** Called on a SUCCESSFUL scan.confirm. The parent decides where to navigate. */
-		oncomplete: (result: { leaseId?: number | null; propertyId?: number | null; unitId?: number | null; tenantId?: number | null }) => void;
+		oncomplete: (result: { leaseManagementId?: number | null; agreementId?: number | null; propertyId?: number | null; unitId?: number | null; tenantId?: number | null }) => void;
 		/** Called when an embedded parent wants to close the capture flow without saving. */
 		oncancel?: () => void;
 	}
@@ -61,11 +63,6 @@
 		securityDeposit: '',
 		lateFeeAmount: '',
 		rentDueDay: '1',
-		rentTrackingStartMode: 'ForwardOnly',
-		rentTrackingStartDate: '',
-		openingBalanceAmount: '',
-		openingBalanceAsOfDate: '',
-		openingBalanceNote: '',
 		status: 'Active',
 		notes: ''
 	});
@@ -74,6 +71,8 @@
 	let unitErrors = $state<Record<string, string>>({});
 	let tenantErrors = $state<Record<string, string>>({});
 	let leaseErrors = $state<Record<string, string>>({});
+	let reviewDisposition = $state<LeaseScanReviewDisposition | ''>('');
+	let documentTemplateId = $state('');
 
 	// Which step-form fields were auto-filled (drives the "from your lease" badge).
 	let autoFilled = $state<Set<string>>(new Set());
@@ -83,24 +82,67 @@
 	let propertyChoice = $state<string>(CREATE); // a real id string => link; CREATE => create-new
 	let unitChoice = $state<string>(CREATE);      // existing unit id, or CREATE
 	let tenantChoice = $state<string>(CREATE);    // existing tenant id, or CREATE
+	let selectedPropertyLabel = $state('');
+	let selectedUnitLabel = $state('');
+	let selectedTenantLabel = $state('');
 	const isCreatingProperty = $derived(propertyChoice === CREATE);
 	const isCreatingTenant = $derived(tenantChoice === CREATE);
 
 	const propertiesQuery = createQuery(() => ({
-		queryKey: ['properties', portfolioId],
-		queryFn: () => properties.list(portfolioId, { take: 200 }),
+		queryKey: ['properties', portfolioId, 'new-rental-candidate', propertyForm.name, propertyForm.addressLine1],
+		queryFn: () => properties.listPage(portfolioId, { search: propertyForm.name || propertyForm.addressLine1, skip: 0, take: 20, sort: 'name' }),
 		enabled: phase === 'steps'
 	}));
 	const unitsQuery = createQuery(() => ({
-		queryKey: ['units-for-new-rental', propertyChoice],
-		queryFn: () => properties.listUnits(Number(propertyChoice)),
+		queryKey: ['units-for-new-rental', propertyChoice, unitForm.unitNumber],
+		queryFn: () => units.listWithHealthPage({ propertyId: Number(propertyChoice), search: unitForm.unitNumber, skip: 0, take: 20, sort: 'unitNumber' }),
 		enabled: phase === 'steps' && propertyChoice !== CREATE && !!propertyChoice
 	}));
 	const tenantsQuery = createQuery(() => ({
-		queryKey: ['tenants', portfolioId],
-		queryFn: () => tenants.list(portfolioId, { take: 200 }),
+		queryKey: ['tenants', portfolioId, 'new-rental-candidate', tenantForm.firstName, tenantForm.lastName],
+		queryFn: () => tenants.listPage(portfolioId, { search: `${tenantForm.firstName} ${tenantForm.lastName}`.trim(), skip: 0, take: 20, sort: 'lastName' }),
 		enabled: phase === 'steps'
 	}));
+
+	async function loadPropertyOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await properties.listPage(portfolioId, { ...params, sort: 'name' });
+		return {
+			...result,
+			items: result.items.map((property) => ({
+				id: property.id,
+				label: property.name,
+				description: `${property.addressLine1}, ${property.city}, ${property.state}`,
+			})),
+		};
+	}
+
+	async function loadUnitOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await units.listWithHealthPage({
+			...params,
+			propertyId: Number(propertyChoice),
+			sort: 'unitNumber',
+		});
+		return {
+			...result,
+			items: result.items.map((unit) => ({
+				id: unit.id,
+				label: `Unit ${unit.unitNumber}`,
+				description: unit.status,
+			})),
+		};
+	}
+
+	async function loadTenantOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await tenants.listPage(portfolioId, { ...params, sort: 'lastName' });
+		return {
+			...result,
+			items: result.items.map((tenant) => ({
+				id: tenant.id,
+				label: tenant.fullName || `${tenant.firstName} ${tenant.lastName}`,
+				description: tenant.email || tenant.phone || null,
+			})),
+		};
+	}
 
 	function resetReviewStateForDraft() {
 		confidence = {};
@@ -116,11 +158,6 @@
 			securityDeposit: '',
 			lateFeeAmount: '',
 			rentDueDay: '1',
-			rentTrackingStartMode: 'ForwardOnly',
-			rentTrackingStartDate: '',
-			openingBalanceAmount: '',
-			openingBalanceAsOfDate: '',
-			openingBalanceNote: '',
 			status: 'Active',
 			notes: ''
 		};
@@ -128,17 +165,22 @@
 		unitErrors = {};
 		tenantErrors = {};
 		leaseErrors = {};
+		reviewDisposition = '';
+		documentTemplateId = '';
 		autoFilled = new Set();
 		propertyChoice = CREATE;
 		unitChoice = CREATE;
 		tenantChoice = CREATE;
+		selectedPropertyLabel = '';
+		selectedUnitLabel = '';
+		selectedTenantLabel = '';
 		seeded = false;
 		unitChoiceSeeded = false;
 	}
 
 	// ----- upload: one PDF passes straight through; many photos are stitched first -----
 	const uploadOne = createMutation(() => ({
-		mutationFn: (file: File) => scan.upload(file, 'Lease'),
+		mutationFn: (file: File) => scan.upload(file, 'LeaseAgreement'),
 		onSuccess: (res) => {
 			resetReviewStateForDraft();
 			draftId = res.draftId;
@@ -251,27 +293,15 @@
 		step = 0;
 	});
 	$effect(() => {
-		if (leaseForm.rentTrackingStartMode !== 'CustomCutoffDate' && leaseForm.rentTrackingStartDate) {
-			leaseForm.rentTrackingStartDate = '';
-		}
-	});
-	$effect(() => {
-		if (leaseForm.rentTrackingStartMode !== 'OpeningBalanceOnly') {
-			if (leaseForm.openingBalanceAmount) leaseForm.openingBalanceAmount = '';
-			if (leaseForm.openingBalanceAsOfDate) leaseForm.openingBalanceAsOfDate = '';
-			if (leaseForm.openingBalanceNote) leaseForm.openingBalanceNote = '';
-		}
-	});
-
-	$effect(() => {
 		if (phase !== 'steps' || isCreatingProperty || unitChoiceSeeded || unitChoice !== CREATE) return;
 		const unitId = findNewRentalExistingUnitId(
 			unitForm.unitNumber,
 			draftQuery.data?.leaseProposal?.unit,
-			unitsQuery.data ?? []
+			unitsQuery.data?.items ?? []
 		);
 		if (!unitId) return;
 		unitChoice = unitId;
+		selectedUnitLabel = `Unit ${unitsQuery.data?.items.find((unit) => String(unit.id) === unitId)?.unitNumber ?? unitId}`;
 		unitChoiceSeeded = true;
 	});
 
@@ -305,7 +335,7 @@
 			// drop id errors (they aren't user-entered here)
 			const e = { ...(r.errors ?? {}) };
 			delete e.propertyId; delete e.unitId; delete e.tenantId;
-			leaseErrors = { ...e, ...leaseRentTrackingErrors(probe) };
+			leaseErrors = e;
 			return Object.keys(leaseErrors).length === 0;
 		}
 		return true;
@@ -319,24 +349,34 @@
 
 	const selectedExistingPropertyLabel = $derived.by(() => {
 		if (propertyChoice === CREATE) return 'Create new from the lease';
-		return propertiesQuery.data?.find((p) => String(p.id) === propertyChoice)?.name ?? 'Select a property';
+		return selectedPropertyLabel || (propertiesQuery.data?.items.find((p) => String(p.id) === propertyChoice)?.name ?? 'Select a property');
 	});
 	const selectedExistingUnitLabel = $derived.by(() => {
 		if (unitChoice === CREATE) return 'Create new from the lease';
-		const u = unitsQuery.data?.find((u) => String(u.id) === unitChoice);
-		return u ? `Unit ${u.unitNumber}` : 'Select a unit';
+		const unit = unitsQuery.data?.items.find((candidate) => String(candidate.id) === unitChoice);
+		return selectedUnitLabel || (unit ? `Unit ${unit.unitNumber}` : 'Select a unit');
 	});
 	const selectedExistingTenantLabel = $derived.by(() => {
 		if (tenantChoice === CREATE) return 'Create new from the lease';
-		const t = tenantsQuery.data?.find((t) => String(t.id) === tenantChoice);
-		return t ? t.fullName || `${t.firstName} ${t.lastName}`.trim() : 'Select a tenant';
+		const tenant = tenantsQuery.data?.items.find((candidate) => String(candidate.id) === tenantChoice);
+		return selectedTenantLabel || (tenant ? tenant.fullName || `${tenant.firstName} ${tenant.lastName}`.trim() : 'Select a tenant');
 	});
+
+	function propertyReviewAddress(): string {
+		return [propertyForm.addressLine1, propertyForm.city, propertyForm.state]
+			.reduce<string[]>((parts, value) => {
+				if (value) parts.push(value);
+				return parts;
+			}, [])
+			.join(', ');
+	}
 
 	// ----- confirm: emit Contract-3 override JSON, ONE ConfirmAsLeaseAsync -----
 	function buildOverrides(): string {
 		const o: Record<string, unknown> = {};
 		if (isCreatingProperty) {
 			o.propertyId = null;
+			o.rentalStructure = propertyForm.rentalStructure;
 			if (propertyForm.type) o.propertyType = propertyForm.type;
 			if (propertyForm.name.trim()) o.propertyName = propertyForm.name.trim();
 			if (propertyForm.addressLine1.trim()) o.propertyAddress = propertyForm.addressLine1.trim();
@@ -373,17 +413,14 @@
 		if (leaseForm.securityDeposit.trim()) o.securityDeposit = Number(leaseForm.securityDeposit);
 		if (leaseForm.lateFeeAmount.trim()) o.lateFee = Number(leaseForm.lateFeeAmount);
 		if (leaseForm.rentDueDay.trim()) o.rentDueDay = Number(leaseForm.rentDueDay);
-		o.rentTrackingStartMode = leaseForm.rentTrackingStartMode;
-		if (leaseForm.rentTrackingStartMode === 'CustomCutoffDate') {
-			o.rentTrackingStartDate = leaseForm.rentTrackingStartDate;
-		}
-		if (leaseForm.rentTrackingStartMode === 'OpeningBalanceOnly') {
-			if (leaseForm.openingBalanceAmount.trim()) o.openingBalanceAmount = Number(leaseForm.openingBalanceAmount);
-			if (leaseForm.openingBalanceAsOfDate.trim()) o.openingBalanceAsOfDate = leaseForm.openingBalanceAsOfDate;
-			if (leaseForm.openingBalanceNote.trim()) o.openingBalanceNote = leaseForm.openingBalanceNote.trim();
+		o.reviewDisposition = reviewDisposition;
+		if (reviewDisposition === 'NeedsSignatures' && documentTemplateId) {
+			o.documentTemplateId = Number(documentTemplateId);
 		}
 		return JSON.stringify(o);
 	}
+
+	const signatureChoiceInvalid = $derived(!reviewDisposition);
 
 	const confirmMutation = createMutation(() => ({
 		mutationFn: () => scan.confirm(draftId as number, buildOverrides()),
@@ -393,7 +430,7 @@
 			// A linked existing unit has an id in scope; a freshly created unit (unitChoice === CREATE)
 			// does not, so we hand the parent null and it falls back to /leases/{id}.
 			const unitId = unitChoice !== CREATE ? Number(unitChoice) : null;
-			oncomplete({ leaseId: res.leaseId, propertyId: null, unitId, tenantId: null });
+			oncomplete({ leaseManagementId: res.leaseManagementId, agreementId: res.agreementId, propertyId: null, unitId, tenantId: null });
 		},
 		onError: (err) => showError(apiErrorMessage(err, 'Could not create the rental. Check the details and try again.'))
 	}));
@@ -451,17 +488,24 @@
 			<h2 class="text-base font-semibold text-foreground">Property</h2>
 			<!-- AC-4 duplicate-guard at the Property step -->
 			<div>
-				<p class="mb-1 text-xs font-medium text-muted-foreground">Is this one of your existing properties?</p>
-				<Select.Root type="single" bind:value={propertyChoice}>
-					<Select.Trigger class="w-full" data-testid="new-rental-property-choice">{selectedExistingPropertyLabel}</Select.Trigger>
-					<Select.Content>
-						<Select.Item value={CREATE} label="Create new from the lease">Create new from the lease</Select.Item>
-						{#each propertiesQuery.data ?? [] as p (p.id)}
-							<Select.Item value={String(p.id)} label={p.name}>{p.name}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-				{#if propertiesQuery.data && propertiesQuery.data.length > 0 && isCreatingProperty}
+				<RemoteRecordSelect
+					queryKey={['new-rental-properties', portfolioId]}
+					label="Is this one of your existing properties?"
+					value={propertyChoice === CREATE ? '' : propertyChoice}
+					selectedLabel={selectedExistingPropertyLabel}
+					placeholder="Create new from the lease"
+					clearLabel="Create new from the lease"
+					searchPlaceholder="Search properties…"
+					testid="new-rental-property-choice"
+					loadPage={loadPropertyOptions}
+					onValueChange={(value, option) => {
+						propertyChoice = value || CREATE;
+						selectedPropertyLabel = option?.label ?? '';
+						unitChoice = CREATE;
+						selectedUnitLabel = '';
+					}}
+				/>
+				{#if (propertiesQuery.data?.totalCount ?? 0) > 0 && isCreatingProperty}
 					<p class="mt-1 text-xs text-[var(--warning)]" data-testid="new-rental-dupe-hint">If this lease is for a property you already have, pick it above to avoid a duplicate.</p>
 				{/if}
 			</div>
@@ -474,16 +518,21 @@
 			<h2 class="text-base font-semibold text-foreground">Unit</h2>
 			{#if !isCreatingProperty}
 				<div>
-					<p class="mb-1 text-xs font-medium text-muted-foreground">Pick an existing unit, or create one.</p>
-					<Select.Root type="single" bind:value={unitChoice}>
-						<Select.Trigger class="w-full" data-testid="new-rental-unit-choice">{selectedExistingUnitLabel}</Select.Trigger>
-						<Select.Content>
-							<Select.Item value={CREATE} label="Create new from the lease">Create new from the lease</Select.Item>
-							{#each unitsQuery.data ?? [] as u (u.id)}
-								<Select.Item value={String(u.id)} label={`Unit ${u.unitNumber}`}>Unit {u.unitNumber} ({u.status})</Select.Item>
-							{/each}
-						</Select.Content>
-					</Select.Root>
+					<RemoteRecordSelect
+						queryKey={['new-rental-units', portfolioId, propertyChoice]}
+						label="Pick an existing unit, or create one."
+						value={unitChoice === CREATE ? '' : unitChoice}
+						selectedLabel={selectedExistingUnitLabel}
+						placeholder="Create new from the lease"
+						clearLabel="Create new from the lease"
+						searchPlaceholder="Search units…"
+						testid="new-rental-unit-choice"
+						loadPage={loadUnitOptions}
+						onValueChange={(value, option) => {
+							unitChoice = value || CREATE;
+							selectedUnitLabel = option?.label ?? '';
+						}}
+					/>
 				</div>
 			{/if}
 			{#if isCreatingProperty || unitChoice === CREATE}
@@ -494,17 +543,22 @@
 		<div class="space-y-3" data-testid="new-rental-step-tenant">
 			<h2 class="text-base font-semibold text-foreground">Tenant</h2>
 			<div>
-				<p class="mb-1 text-xs font-medium text-muted-foreground">Is this one of your existing tenants?</p>
-				<Select.Root type="single" bind:value={tenantChoice}>
-					<Select.Trigger class="w-full" data-testid="new-rental-tenant-choice">{selectedExistingTenantLabel}</Select.Trigger>
-					<Select.Content>
-						<Select.Item value={CREATE} label="Create new from the lease">Create new from the lease</Select.Item>
-						{#each tenantsQuery.data ?? [] as t (t.id)}
-							<Select.Item value={String(t.id)} label={t.fullName || `${t.firstName} ${t.lastName}`}>{t.fullName || `${t.firstName} ${t.lastName}`}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-				{#if tenantsQuery.data && tenantsQuery.data.length > 0 && isCreatingTenant}
+				<RemoteRecordSelect
+					queryKey={['new-rental-tenants', portfolioId]}
+					label="Is this one of your existing tenants?"
+					value={tenantChoice === CREATE ? '' : tenantChoice}
+					selectedLabel={selectedExistingTenantLabel}
+					placeholder="Create new from the lease"
+					clearLabel="Create new from the lease"
+					searchPlaceholder="Search tenants…"
+					testid="new-rental-tenant-choice"
+					loadPage={loadTenantOptions}
+					onValueChange={(value, option) => {
+						tenantChoice = value || CREATE;
+						selectedTenantLabel = option?.label ?? '';
+					}}
+				/>
+				{#if (tenantsQuery.data?.totalCount ?? 0) > 0 && isCreatingTenant}
 					<p class="mt-1 text-xs text-[var(--warning)]" data-testid="new-rental-tenant-dupe-hint">If this lease is for someone you already have, pick them above to avoid a duplicate.</p>
 				{/if}
 			</div>
@@ -523,7 +577,7 @@
 			<h2 class="text-base font-semibold text-foreground">Here's what I'll add</h2>
 			<ul class="space-y-2 rounded-md border border-border bg-muted/30 p-3 text-sm">
 				<li data-testid="review-property"><span class="font-medium">Property:</span>
-					{#if isCreatingProperty}{propertyForm.name || propertyForm.addressLine1} — {[propertyForm.addressLine1, propertyForm.city, propertyForm.state].filter(Boolean).join(', ')} <span class="text-xs text-[var(--success)]">(new)</span>
+					{#if isCreatingProperty}{propertyForm.name || propertyForm.addressLine1} — {propertyReviewAddress()} <span class="text-xs text-[var(--success)]">(new)</span>
 					{:else}{selectedExistingPropertyLabel} <span class="text-xs text-muted-foreground">(existing)</span>{/if}
 				</li>
 				<li data-testid="review-unit"><span class="font-medium">Unit:</span>
@@ -536,6 +590,12 @@
 				</li>
 				<li data-testid="review-lease"><span class="font-medium">Lease:</span> ${leaseForm.monthlyRent}/mo, {leaseForm.startDate} – {leaseForm.endDate}</li>
 			</ul>
+			<LeaseScanSignatureChoice
+				bind:reviewDisposition
+				bind:documentTemplateId
+				propertyId={isCreatingProperty ? 0 : Number(propertyChoice)}
+				disabled={confirmMutation.isPending}
+			/>
 			<p class="text-xs text-muted-foreground">Nothing is saved until you tap Confirm. We'll create everything in one step.</p>
 		</div>
 	{/if}
@@ -545,7 +605,7 @@
 		{#if step < TOTAL}
 			<Button onclick={next} data-testid="new-rental-next">Next</Button>
 		{:else}
-			<Button onclick={() => confirmMutation.mutate()} disabled={confirmMutation.isPending} data-testid="new-rental-confirm">
+			<Button onclick={() => confirmMutation.mutate()} disabled={confirmMutation.isPending || signatureChoiceInvalid} data-testid="new-rental-confirm">
 				{confirmMutation.isPending ? 'Creating…' : 'Confirm & create'}
 			</Button>
 		{/if}

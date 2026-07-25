@@ -6,8 +6,8 @@ namespace RentalCommand.Engine.Workers;
 
 /// <summary>
 /// Polls every 6 hours to assess late fees on overdue rent payments via <see cref="ILateFeeService"/>.
-/// Controlled by <see cref="Core.Configuration.NotificationsConfig.EnableLateFees"/>; when that flag
-/// is false the service returns 0 immediately and no records are touched.
+/// Controlled per workspace by <c>AutomationSettings.EnableLateFees</c>; disabled workspaces
+/// produce no eligible rows and are not touched.
 /// </summary>
 public sealed class LateFeeWorker : EngineWorkerBase
 {

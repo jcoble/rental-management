@@ -1,12 +1,15 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.Scanning;       // ReceiptExtractionSchema
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Scanning;
 
 namespace RentalCommand.Engine.Workers;
 
@@ -22,7 +25,11 @@ public sealed record ExtractionSchema(
 /// </summary>
 public class ScanProcessingWorker : EngineWorkerBase
 {
-    private const int BatchSize = 10;
+    // Extraction is remote and sequential. Claim one row so a cycle timeout cannot strand later
+    // rows from a pre-claimed batch; the next cycle claims the next oldest row.
+    private const int BatchSize = 1;
+    private static readonly TimeSpan ClaimLease = TimeSpan.FromMinutes(2);
+    private readonly string _claimOwner = $"{Environment.MachineName}:{Environment.ProcessId}:scan:{Guid.NewGuid():N}";
 
     protected override string WorkerName => "ScanProcessingWorker";
     // Poll quickly: the user is actively waiting on extraction, so pick up a
@@ -45,14 +52,16 @@ public class ScanProcessingWorker : EngineWorkerBase
                         ? new ExtractionSchema(LoanExtractionSchema.Instructions, LoanExtractionSchema.Fields)
                         : new ExtractionSchema(ReceiptExtractionSchema.Instructions, ReceiptExtractionSchema.Fields);
 
+    private static readonly HashSet<string> SupportedTargets = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Expense", "Payment", "WorkOrder", nameof(LeaseAgreement), "Application", "Loan",
+    };
+
     /// <summary>
-    /// A lease import is requested either by the explicit upload target "Lease", or by a document the
-    /// model classified as a lease ("Lease"/"LeaseAgreement"). Both pick the lease extraction schema and
-    /// confirm as a Lease.
+    /// A lease import uses the explicit canonical upload target "LeaseAgreement".
     /// </summary>
     private static bool IsLeaseTarget(string? targetEntityType) =>
-        string.Equals(targetEntityType, "Lease", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(targetEntityType, "LeaseAgreement", StringComparison.OrdinalIgnoreCase);
+        string.Equals(targetEntityType, "LeaseAgreement", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// An application import is requested by the explicit upload target "Application" (a landlord scanning
@@ -73,17 +82,18 @@ public class ScanProcessingWorker : EngineWorkerBase
     protected override async Task<int> ExecuteCycleAsync(IServiceProvider scoped, CancellationToken ct)
     {
         var db = scoped.GetRequiredService<RentalCommandDbContext>();
-        var llm = scoped.GetRequiredService<ILlmProvider>();
+        var credentialResolver = scoped.GetRequiredService<IWorkspaceLlmCredentialResolver>();
+        var usageRecorder = scoped.GetRequiredService<ILlmUsageEvidenceRecorder>();
+        var workspaceProviders = scoped.GetServices<IWorkspaceLlmExtractionProvider>()
+            .ToDictionary(provider => provider.ProviderKey, StringComparer.OrdinalIgnoreCase);
         var storage = scoped.GetRequiredService<IFileStorage>();
         var dataUpdate = scoped.GetRequiredService<IDataUpdateService>();
         var timeProvider = scoped.GetRequiredService<TimeProvider>();
         var logger = scoped.GetRequiredService<ILogger<ScanProcessingWorker>>();
+        var claimStore = scoped.GetRequiredService<IScanProcessingClaimStore>();
 
-        var pending = await db.ScanDrafts
-            .Where(d => d.Status == "Pending")
-            .OrderBy(d => d.CreatedAt).ThenBy(d => d.Id)
-            .Take(BatchSize)
-            .ToListAsync(ct);
+        var pending = await claimStore.ClaimAsync(
+            _claimOwner, ClaimLease, BatchSize, ct);
         if (pending.Count == 0) return 0;
 
         var processed = 0;
@@ -91,23 +101,29 @@ public class ScanProcessingWorker : EngineWorkerBase
         {
             ct.ThrowIfCancellationRequested();
 
-            // Tracks whether THIS draft is currently claimed in 'Processing'. If a
-            // cancellation (per-cycle StepTimeout or host shutdown) interrupts the LLM
-            // call below, the cancellation handler uses this to drive the claimed draft to
-            // a visible terminal 'Failed' state instead of leaving it stuck in 'Processing'.
-            var claimedThisDraft = false;
             try
             {
-                // Atomically claim this draft: flip Pending → Processing only if it is still
-                // Pending. If another Engine restart already picked it up (or another instance
-                // raced us), zero rows are updated and we skip to avoid double-processing the
-                // paid LLM call and double-incrementing TokensUsed/CostUsd.
-                var claimed = await db.ScanDrafts
-                    .Where(d => d.Id == draft.Id && d.Status == "Pending")
-                    .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, "Processing"), ct);
-                if (claimed == 0)
+                var credential = await credentialResolver.ResolveActiveAsync(
+                    draft.PortfolioId, ct);
+                if (credential is null)
+                {
+                    await MarkFailedAsync(
+                        scoped, dataUpdate, draft.PortfolioId, draft.Id,
+                        draft.ClaimOwner, draft.ClaimToken, logger,
+                        "AI extraction unavailable: configure a workspace OpenAI or Anthropic credential in Settings");
                     continue;
-                claimedThisDraft = true;
+                }
+
+                if (!workspaceProviders.TryGetValue(
+                        credential.Provider,
+                        out var workspaceProvider))
+                {
+                    await MarkFailedAsync(
+                        scoped, dataUpdate, draft.PortfolioId, draft.Id,
+                        draft.ClaimOwner, draft.ClaimToken, logger,
+                        "AI extraction unavailable: the configured workspace provider is not supported");
+                    continue;
+                }
 
                 // Read the stored bytes back from the blob store.
                 await using var stream = await storage.DownloadAsync(draft.FilePath, ct);
@@ -118,8 +134,11 @@ public class ScanProcessingWorker : EngineWorkerBase
                 // The stored key is extensionless, so prefer the real content type captured on the
                 // StoredFile row at upload (PNG/HEIC would otherwise be mislabeled image/jpeg);
                 // fall back to the path-based guess only if the row/type is missing.
-                var storedFile = await db.StoredFiles
-                    .FirstOrDefaultAsync(f => f.FilePath == draft.FilePath, ct);
+                var storedFile = draft.SourceStoredFileId is int sourceStoredFileId
+                    ? await db.StoredFiles.AsNoTracking()
+                        .FirstOrDefaultAsync(f =>
+                            f.Id == sourceStoredFileId && f.PortfolioId == draft.PortfolioId, ct)
+                    : null;
                 var contentType = !string.IsNullOrWhiteSpace(storedFile?.ContentType)
                     ? storedFile!.ContentType
                     : GuessContentType(draft.FilePath);
@@ -130,14 +149,78 @@ public class ScanProcessingWorker : EngineWorkerBase
                 // prompt small/cheap on large portfolios.
                 var groundingContext = await BuildGroundingContextAsync(db, draft.PortfolioId, ct);
 
-                var schema = ChooseExtractionSchema(draft.TargetEntityType);
+                var resolvedTargetEntityType = draft.TargetEntityType;
+                ExtractedFields? classification = null;
+                if (string.IsNullOrWhiteSpace(resolvedTargetEntityType))
+                {
+                    var classificationSchema = new ExtractionSchema(
+                        DocumentClassificationExtractionSchema.Instructions,
+                        DocumentClassificationExtractionSchema.Fields);
+                    classification = await ExtractWithRetryAsync(
+                        workspaceProvider,
+                        credential,
+                        usageRecorder,
+                        draft.PortfolioId,
+                        "scan.classification",
+                        bytes,
+                        contentType,
+                        classificationSchema,
+                        groundingContext,
+                        draft.Id,
+                        logger,
+                        ct);
+                    var classificationFailure = GetExtractionFailureReason(
+                        classification, classificationSchema.Fields);
+                    if (classificationFailure is not null
+                        || !classification.Fields.TryGetValue("target_entity_type", out var targetField)
+                        || !SupportedTargets.Contains(targetField.Value))
+                    {
+                        await MarkFailedAsync(
+                            scoped, dataUpdate, draft.PortfolioId, draft.Id,
+                            draft.ClaimOwner, draft.ClaimToken, logger,
+                            classificationFailure ?? "document destination could not be classified");
+                        continue;
+                    }
 
+                    resolvedTargetEntityType = SupportedTargets.First(target =>
+                        string.Equals(target, targetField.Value, StringComparison.OrdinalIgnoreCase));
+                    logger.LogInformation(
+                        "Scan draft {DraftId} classified as {Target}; starting typed extraction",
+                        draft.Id, resolvedTargetEntityType);
+                }
+
+                var schema = ChooseExtractionSchema(resolvedTargetEntityType);
                 var extracted = await ExtractWithRetryAsync(
-                    llm, bytes, contentType, schema, groundingContext, draft.Id, logger, ct);
+                    workspaceProvider,
+                    credential,
+                    usageRecorder,
+                    draft.PortfolioId,
+                    "scan.extraction",
+                    bytes,
+                    contentType,
+                    schema,
+                    groundingContext,
+                    draft.Id,
+                    logger,
+                    ct);
+
+                // Preserve classification evidence in the review proposal, but never treat it as
+                // authority. Confirmation still validates current session, capability, and scope.
+                if (classification is not null)
+                {
+                    CopyClassificationField(classification, extracted, "document_kind");
+                    CopyClassificationField(classification, extracted, "classification_reason");
+                    extracted.InputTokens += classification.InputTokens;
+                    extracted.OutputTokens += classification.OutputTokens;
+                    extracted.TokensUsed += classification.TokensUsed;
+                    extracted.ModelId = string.IsNullOrWhiteSpace(extracted.ModelId)
+                        ? classification.ModelId
+                        : extracted.ModelId;
+                }
 
                 if (string.IsNullOrWhiteSpace(extracted.FailureReason))
                 {
-                    var repairInstruction = GetExtractionQualityRepairInstruction(draft.TargetEntityType, extracted);
+                    var repairInstruction = GetExtractionQualityRepairInstruction(resolvedTargetEntityType, extracted);
                     if (repairInstruction is not null)
                     {
                         logger.LogInformation(
@@ -151,9 +234,18 @@ public class ScanProcessingWorker : EngineWorkerBase
                                 " Return the full extraction schema again. Keep previously correct fields unchanged; " +
                                 "only improve fields you can read from the document.",
                                 schema.Fields);
-                            var repaired = await llm.ExtractAsync(
-                                bytes, contentType, repairSchema.Instructions, repairSchema.Fields, groundingContext, ct);
-                            ApplyQualityRepair(draft.TargetEntityType, extracted, repaired);
+                            var repaired = await InvokeWorkspaceExtractionAsync(
+                                workspaceProvider,
+                                credential,
+                                usageRecorder,
+                                draft.PortfolioId,
+                                "scan.quality-repair",
+                                bytes,
+                                contentType,
+                                repairSchema,
+                                groundingContext,
+                                ct);
+                            ApplyQualityRepair(resolvedTargetEntityType, extracted, repaired);
                         }
                         catch (Exception ex) when (!ct.IsCancellationRequested)
                         {
@@ -163,7 +255,7 @@ public class ScanProcessingWorker : EngineWorkerBase
                         }
                     }
 
-                    NormalizeExtractionQuality(draft.TargetEntityType, extracted);
+                    NormalizeExtractionQuality(resolvedTargetEntityType, extracted);
                 }
 
                 // Guard against the silent-empty-draft bug: a failed/empty/truncated/unparseable
@@ -177,7 +269,9 @@ public class ScanProcessingWorker : EngineWorkerBase
                         "Scan extraction produced no usable result for draft {DraftId} " +
                         "(model {ModelId}): {Reason}; marking Failed",
                         draft.Id, extracted.ModelId, failureReason);
-                    await MarkFailedAsync(scoped, dataUpdate, draft.PortfolioId, draft.Id, logger, failureReason);
+                    await MarkFailedAsync(
+                        scoped, dataUpdate, draft.PortfolioId, draft.Id,
+                        draft.ClaimOwner, draft.ClaimToken, logger, failureReason);
                     continue;
                 }
 
@@ -185,64 +279,47 @@ public class ScanProcessingWorker : EngineWorkerBase
                 var fieldJson = JsonSerializer.Serialize(extracted.Fields.ToDictionary(
                     kv => kv.Key,
                     kv => new { value = kv.Value.Value, confidence = kv.Value.Confidence }));
-                draft.ExtractedFields = fieldJson;
-                draft.FailureReason = null;
-                draft.ModelId = extracted.ModelId;
-                draft.TokensUsed = extracted.TokensUsed;
-                draft.CostUsd = EstimateCost(extracted.ModelId, extracted.InputTokens, extracted.OutputTokens);
+                var targetEntityType = resolvedTargetEntityType;
 
-                if (string.Equals(draft.TargetEntityType, "WorkOrder", StringComparison.OrdinalIgnoreCase))
+                var completed = await claimStore.MarkReviewingAsync(
+                    draft.Id,
+                    draft.ClaimOwner,
+                    draft.ClaimToken,
+                    new ScanProcessingResult(
+                        fieldJson,
+                        extracted.ModelId,
+                        extracted.TokensUsed,
+                        EstimateCost(extracted.ModelId, extracted.InputTokens, extracted.OutputTokens),
+                        targetEntityType,
+                        timeProvider.UtcNow()),
+                    ct);
+                if (completed == 0)
                 {
-                    draft.TargetEntityType = "WorkOrder";
+                    logger.LogWarning(
+                        "Discarded stale scan extraction completion for draft {DraftId}; its claim lease was lost",
+                        draft.Id);
+                    continue;
                 }
-                else if (IsLeaseTarget(draft.TargetEntityType))
-                {
-                    // A lease PDF was uploaded with the Lease target (the "import your PDF leases" path):
-                    // it was extracted with the lease schema, so confirm it as a Lease.
-                    draft.TargetEntityType = "Lease";
-                }
-                else if (IsApplicationTarget(draft.TargetEntityType))
-                {
-                    // A completed rental application was uploaded with the Application target: it was
-                    // extracted with the application schema, so confirm it as an Application.
-                    draft.TargetEntityType = "Application";
-                }
-                else if (IsLoanTarget(draft.TargetEntityType))
-                {
-                    // A mortgage statement / closing disclosure was uploaded with the Loan target: it was
-                    // extracted with the loan schema, so confirm it as a Loan on the property.
-                    draft.TargetEntityType = "Loan";
-                }
-                else
-                {
-                    // Route by classified document kind: a lease agreement the model recognised becomes a
-                    // Lease, rent checks become Payments, everything else Expenses. (A document classified
-                    // as a lease here was extracted with the receipt schema, so the confirm step still asks
-                    // the reviewer to fill the lease terms — but it lands on the correct review branch.)
-                    var classifiedKind = extracted.Fields.TryGetValue("document_kind", out var kindField)
-                        ? kindField.Value ?? string.Empty
-                        : string.Empty;
-                    draft.TargetEntityType = classifiedKind switch
-                    {
-                        "Lease" or "LeaseAgreement" => "Lease",
-                        "RentCheck" => "Payment",
-                        _ => "Expense",
-                    };
-                }
-
-                draft.Status = "Reviewing";
-                draft.ReviewedAt = timeProvider.UtcNow();
-                await db.SaveChangesAsync(ct);
 
                 logger.LogInformation(
                     "Scan extraction succeeded for draft {DraftId} (model {ModelId}): " +
                     "{FieldCount} field(s) with a value → {Target}, Reviewing",
                     draft.Id, extracted.ModelId,
-                    CountNonEmptyDataFields(extracted, schema.Fields), draft.TargetEntityType);
+                    CountNonEmptyDataFields(extracted, schema.Fields), targetEntityType);
 
-                await dataUpdate.BroadcastEntityUpdateAsync(
-                    draft.PortfolioId, "ScanDraft", draft.Id,
-                    new { draft.Id, draft.Status, draft.TargetEntityType }, ct);
+                try
+                {
+                    await dataUpdate.BroadcastEntityUpdateAsync(
+                        draft.PortfolioId, "ScanDraft", draft.Id,
+                        new { draft.Id, Status = "Reviewing", TargetEntityType = targetEntityType }, ct);
+                }
+                catch (Exception ex)
+                {
+                    // Extraction is already durably complete. Realtime invalidation is best-effort and
+                    // must not turn a committed Reviewing draft into a false processing failure.
+                    logger.LogWarning(ex,
+                        "Scan draft {DraftId} completed but realtime invalidation failed", draft.Id);
+                }
                 processed++;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -250,16 +327,15 @@ public class ScanProcessingWorker : EngineWorkerBase
                 // The cycle was cancelled mid-flight — either the per-cycle StepTimeout fired
                 // (a slow/poison document) or the host is shutting down. Both cancel the same
                 // token, and either way a draft we already flipped to 'Processing' would be
-                // stranded there forever (the worker only ever polls 'Pending'). Drive it to a
-                // visible terminal 'Failed' state so the user can retry or reject. The write must
+                // remain leased until expiry. Drive the currently-owned claim to a visible terminal
+                // 'Failed' state so the user can retry or reject. The write must
                 // NOT use the already-cancelled token, or the status update would never persist.
-                if (claimedThisDraft)
-                {
-                    logger.LogWarning(
-                        "Scan extraction interrupted (cancellation) for draft {DraftId}; marking Failed", draft.Id);
-                    await MarkFailedAsync(scoped, dataUpdate, draft.PortfolioId, draft.Id, logger,
-                        "extraction interrupted (timeout or shutdown)");
-                }
+                logger.LogWarning(
+                    "Scan extraction interrupted (cancellation) for draft {DraftId}; marking Failed", draft.Id);
+                await MarkFailedAsync(
+                    scoped, dataUpdate, draft.PortfolioId, draft.Id,
+                    draft.ClaimOwner, draft.ClaimToken, logger,
+                    "extraction interrupted (timeout or shutdown)");
                 break;
             }
             catch (Exception ex)
@@ -268,11 +344,25 @@ public class ScanProcessingWorker : EngineWorkerBase
                 // Use a fresh, non-cancelled save: if the failure rode in on an already-cancelled
                 // token (e.g. a timeout surfaced as a DB/HTTP cancellation), reusing it here would
                 // throw again and leave the draft stuck in 'Processing'.
-                await MarkFailedAsync(scoped, dataUpdate, draft.PortfolioId, draft.Id, logger,
+                await MarkFailedAsync(scoped, dataUpdate, draft.PortfolioId, draft.Id,
+                    draft.ClaimOwner, draft.ClaimToken, logger,
                     "extraction failed (provider or processing error)");
             }
         }
         return processed;
+    }
+
+    private static void CopyClassificationField(
+        ExtractedFields classification,
+        ExtractedFields extracted,
+        string fieldName)
+    {
+        if (!extracted.Fields.ContainsKey(fieldName)
+            && classification.Fields.TryGetValue(fieldName, out var field)
+            && !string.IsNullOrWhiteSpace(field.Value))
+        {
+            extracted.Fields[fieldName] = field;
+        }
     }
 
     // Per-list cap on grounding records so the prompt stays small/cheap even on large
@@ -282,10 +372,10 @@ public class ScanProcessingWorker : EngineWorkerBase
     private const int GroundingCap = 150;
 
     /// <summary>
-    /// Builds a compact JSON grounding object — { vendors, properties, units, tenants, leases } — of the
+    /// Builds a compact JSON grounding object — { vendors, properties, units, tenants, leaseManagements } — of the
     /// portfolio's known records so the LLM can normalise extracted names to the exact records on
     /// file AND return their primary-key ids for auto-fill. Each entry is an {id, name} pair (units
-    /// also carry {unitNumber, propertyId}, leases carry {leaseNumber, propertyId, unitId, tenantId}) so the model can hand back a real id that downstream
+    /// also carry canonical relationship/agreement ids) so the model can hand back a real id that downstream
     /// code validates against this same set before trusting it. Active (non-soft-deleted) rows only,
     /// capped per list, read no-tracking. Returns null when the portfolio has no records to ground
     /// against (keeps the prompt unchanged in that case).
@@ -328,27 +418,37 @@ public class ScanProcessingWorker : EngineWorkerBase
             .Take(GroundingCap)
             .ToListAsync(ct);
 
-        var leases = await db.Leases.AsNoTracking()
-            .Where(l => l.PortfolioId == portfolioId
-                        && l.DeletedAt == null
-                        && l.Status != LeaseStatus.Terminated
-                        && l.Status != LeaseStatus.Void)
-            .OrderByDescending(l => l.UpdatedAt)
-            .Select(l => new
+        var leaseManagements = await (
+            from lifecycle in db.LeaseManagementLifecycleProjections.AsNoTracking()
+            join management in db.LeaseManagements.AsNoTracking()
+                on new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+                equals new { management.PortfolioId, LeaseManagementId = management.Id }
+            join agreement in db.LeaseAgreements.AsNoTracking()
+                on new { lifecycle.PortfolioId, AgreementId = lifecycle.CurrentAgreementId }
+                equals new { agreement.PortfolioId, AgreementId = (int?)agreement.Id }
+            where lifecycle.PortfolioId == portfolioId
+                && lifecycle.Lifecycle != "Canceled"
+                && lifecycle.Lifecycle != "Closed"
+            orderby management.UpdatedAtUtc descending
+            select new
             {
-                id = l.Id,
-                leaseNumber = l.LeaseNumber,
-                propertyId = l.PropertyId,
-                unitId = l.UnitId,
-                tenantId = l.TenantId,
+                id = management.Id,
+                leaseManagementId = management.Id,
+                leaseAgreementId = agreement.Id,
+                relationshipNumber = management.RelationshipNumber,
+                agreementNumber = agreement.AgreementNumber,
+                propertyId = management.PropertyId,
+                unitId = management.UnitId,
+                tenantId = lifecycle.CurrentPrimaryTenantId,
+                tenantName = lifecycle.CurrentPrimaryTenantName,
             })
             .Take(GroundingCap)
             .ToListAsync(ct);
 
-        if (vendors.Count == 0 && properties.Count == 0 && units.Count == 0 && tenants.Count == 0 && leases.Count == 0)
+        if (vendors.Count == 0 && properties.Count == 0 && units.Count == 0 && tenants.Count == 0 && leaseManagements.Count == 0)
             return null;
 
-        return JsonSerializer.Serialize(new { vendors, properties, units, tenants, leases });
+        return JsonSerializer.Serialize(new { vendors, properties, units, tenants, leaseManagements });
     }
 
     /// <summary>
@@ -362,6 +462,8 @@ public class ScanProcessingWorker : EngineWorkerBase
         IDataUpdateService dataUpdate,
         int portfolioId,
         int draftId,
+        string claimOwner,
+        Guid claimToken,
         ILogger logger,
         string? failureReason = null)
     {
@@ -372,25 +474,38 @@ public class ScanProcessingWorker : EngineWorkerBase
         try
         {
             using var failScope = scoped.GetRequiredService<IServiceScopeFactory>().CreateScope();
-            var failDb = failScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            var failStore = failScope.ServiceProvider.GetRequiredService<IScanProcessingClaimStore>();
             // Hoist "now" to a local: an injected TimeProvider call can't be translated inside the
             // ExecuteUpdate expression tree (it would try to compile to SQL).
             var reviewedAt = failScope.ServiceProvider.GetRequiredService<TimeProvider>().UtcNow();
-            await failDb.ScanDrafts
-                .Where(d => d.Id == draftId && d.Status == "Processing")
-                .ExecuteUpdateAsync(s => s
-                    .SetProperty(d => d.Status, "Failed")
-                    .SetProperty(d => d.FailureReason, reason)
-                    .SetProperty(d => d.ReviewedAt, reviewedAt), CancellationToken.None);
+            var completed = await failStore.MarkFailedAsync(
+                draftId, claimOwner, claimToken, reviewedAt, reason, CancellationToken.None);
+            if (completed == 0)
+            {
+                logger.LogWarning(
+                    "Discarded stale scan failure completion for draft {DraftId}; its claim lease was lost",
+                    draftId);
+                return;
+            }
 
-            await dataUpdate.BroadcastEntityUpdateAsync(
-                portfolioId, "ScanDraft", draftId,
-                new { Id = draftId, Status = "Failed", FailureReason = reason }, CancellationToken.None);
+            try
+            {
+                await dataUpdate.BroadcastEntityUpdateAsync(
+                    portfolioId, "ScanDraft", draftId,
+                    new { Id = draftId, Status = "Failed", FailureReason = reason }, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                // The fenced failure is already durable. Realtime invalidation is best-effort and
+                // must not be reported as a database finalization failure.
+                logger.LogWarning(ex,
+                    "Scan draft {DraftId} failed durably but realtime invalidation failed", draftId);
+            }
         }
         catch (Exception ex)
         {
             // Last-resort: never let the failure-handling itself throw out of the cycle. The
-            // startup crash-recovery (Processing → Pending) is the backstop if this never lands.
+            // Lease expiry is the backstop if this never lands.
             logger.LogError(ex, "Failed to mark draft {DraftId} as Failed", draftId);
         }
     }
@@ -637,7 +752,11 @@ public class ScanProcessingWorker : EngineWorkerBase
     /// a reason. Honours the cycle token (a real cancellation/timeout propagates as before).
     /// </summary>
     private static async Task<ExtractedFields> ExtractWithRetryAsync(
-        ILlmProvider llm,
+        IWorkspaceLlmExtractionProvider provider,
+        WorkspaceLlmRuntimeCredential credential,
+        ILlmUsageEvidenceRecorder usageRecorder,
+        int portfolioId,
+        string feature,
         byte[] bytes,
         string contentType,
         ExtractionSchema schema,
@@ -648,8 +767,17 @@ public class ScanProcessingWorker : EngineWorkerBase
     {
         try
         {
-            return await llm.ExtractAsync(
-                bytes, contentType, schema.Instructions, schema.Fields, groundingContext, ct);
+            return await InvokeWorkspaceExtractionAsync(
+                provider,
+                credential,
+                usageRecorder,
+                portfolioId,
+                feature,
+                bytes,
+                contentType,
+                schema,
+                groundingContext,
+                ct);
         }
         catch (HttpRequestException ex) when (!ct.IsCancellationRequested)
         {
@@ -658,8 +786,67 @@ public class ScanProcessingWorker : EngineWorkerBase
             logger.LogWarning(ex,
                 "Transient extraction error for draft {DraftId}; retrying once", draftId);
             await Task.Delay(TimeSpan.FromMilliseconds(750), ct);
-            return await llm.ExtractAsync(
-                bytes, contentType, schema.Instructions, schema.Fields, groundingContext, ct);
+            return await InvokeWorkspaceExtractionAsync(
+                provider,
+                credential,
+                usageRecorder,
+                portfolioId,
+                feature,
+                bytes,
+                contentType,
+                schema,
+                groundingContext,
+                ct);
+        }
+    }
+
+    private static async Task<ExtractedFields> InvokeWorkspaceExtractionAsync(
+        IWorkspaceLlmExtractionProvider provider,
+        WorkspaceLlmRuntimeCredential credential,
+        ILlmUsageEvidenceRecorder usageRecorder,
+        int portfolioId,
+        string feature,
+        byte[] bytes,
+        string contentType,
+        ExtractionSchema schema,
+        string? groundingContext,
+        CancellationToken ct)
+    {
+        var startedAt = Stopwatch.GetTimestamp();
+        ExtractedFields? result = null;
+        try
+        {
+            result = await provider.ExtractWorkspaceAsync(
+                credential,
+                bytes,
+                contentType,
+                schema.Instructions,
+                schema.Fields,
+                groundingContext,
+                ct);
+            return result;
+        }
+        finally
+        {
+            var modelId = string.IsNullOrWhiteSpace(result?.ModelId)
+                ? credential.ModelId
+                : result.ModelId;
+            var inputUnits = Math.Max(0, result?.InputTokens ?? 0);
+            var outputUnits = Math.Max(0, result?.OutputTokens ?? 0);
+            var latency = (int)Math.Clamp(
+                Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+                0,
+                int.MaxValue);
+            await usageRecorder.RecordUsageAsync(
+                portfolioId,
+                provider.ProviderKey,
+                modelId,
+                feature,
+                latency,
+                inputUnits,
+                outputUnits,
+                EstimateCost(modelId, inputUnits, outputUnits),
+                ct.IsCancellationRequested ? CancellationToken.None : ct);
         }
     }
 

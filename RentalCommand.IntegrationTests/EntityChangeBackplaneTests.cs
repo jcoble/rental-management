@@ -1,11 +1,14 @@
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
 using RentalCommand.Api.Services;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Data;
+using RentalCommand.Data.Security;
 using RentalCommand.Engine.Services;
 using Testcontainers.PostgreSql;
 using Xunit;
@@ -26,9 +29,14 @@ namespace RentalCommand.IntegrationTests;
 /// </summary>
 public sealed class EntityChangeBackplaneTests : IAsyncLifetime
 {
+    private const string ApiPassword = "entity-change-api-password";
+    private const string EnginePassword = "entity-change-engine-password";
+
     private PostgreSqlContainer? _pg;
     private bool _dockerAvailable;
     private string _connString = string.Empty;
+    private string _apiConnString = string.Empty;
+    private string _engineConnString = string.Empty;
 
     public async Task InitializeAsync()
     {
@@ -47,7 +55,23 @@ public sealed class EntityChangeBackplaneTests : IAsyncLifetime
         catch
         {
             _dockerAvailable = false;
+            return;
         }
+
+        // The production listener and publisher connect as distinct restricted runtime logins.
+        // Apply the foundation and provision their passwords so this exercises that identity boundary.
+        await using var db = new RentalCommandDbContext(
+            new DbContextOptionsBuilder<RentalCommandDbContext>()
+                .UseNpgsql(_connString)
+                .Options);
+        await db.Database.MigrateAsync();
+        _apiConnString = RuntimeConnectionString(DatabaseRuntimeIdentity.ApiRole, ApiPassword);
+        _engineConnString = RuntimeConnectionString(DatabaseRuntimeIdentity.EngineRole, EnginePassword);
+        await RuntimeDatabaseRoleProvisioner.ProvisionAsync(
+            _connString,
+            _apiConnString,
+            _engineConnString,
+            allowDevelopmentDefaults: true);
     }
 
     public async Task DisposeAsync()
@@ -75,7 +99,7 @@ public sealed class EntityChangeBackplaneTests : IAsyncLifetime
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["ConnectionStrings:DefaultConnection"] = _connString,
+                ["ConnectionStrings:DefaultConnection"] = _apiConnString,
             })
             .Build();
 
@@ -86,7 +110,7 @@ public sealed class EntityChangeBackplaneTests : IAsyncLifetime
         await listener.StartAsync(cts.Token);
 
         // --- Engine side: the real publisher on its own data source (a separate connection pool) ---
-        await using var dataSource = new NpgsqlDataSourceBuilder(_connString).Build();
+        await using var dataSource = new NpgsqlDataSourceBuilder(_engineConnString).Build();
         var publisher = new NotifyDataUpdateService(dataSource, NullLogger<NotifyDataUpdateService>.Instance);
 
         try
@@ -146,6 +170,14 @@ public sealed class EntityChangeBackplaneTests : IAsyncLifetime
             }
         }
     }
+
+    private string RuntimeConnectionString(string role, string password) =>
+        new NpgsqlConnectionStringBuilder(_connString)
+        {
+            Username = role,
+            Password = password,
+            Pooling = false,
+        }.ConnectionString;
 
     private sealed record Broadcast(string Op, int PortfolioId, string EntityType, int EntityId, object? Data);
 

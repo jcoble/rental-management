@@ -14,6 +14,7 @@
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
+	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import DateTimePicker from '$lib/components/shared/DateTimePicker.svelte';
 	import { DataGrid } from '$lib/components/data-grid';
@@ -93,15 +94,36 @@
 	}));
 	const calendarQuery = createQuery(() => ({
 		queryKey: ['appointments', portfolioId, 'calendar', debouncedSearch.value, typeFilter, statusFilter],
-		queryFn: () => appointments.list(portfolioId, {
+		queryFn: () => appointments.listPage(portfolioId, {
 			search: debouncedSearch.value,
 			type: typeFilter || undefined,
 			status: statusFilter || undefined,
-			take: 500,
+			sort: 'scheduledStart',
+			take: PAGE_SIZE,
 		}),
 	}));
-	const propertiesQuery = createQuery(() => ({ queryKey: ['properties', portfolioId], queryFn: () => properties.list(portfolioId, { take: 200 }) }));
-	const tenantsQuery = createQuery(() => ({ queryKey: ['tenants', portfolioId], queryFn: () => tenants.list(portfolioId, { take: 200 }) }));
+	async function loadPropertyOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await properties.listPage(portfolioId, { ...params, sort: 'name' });
+		return {
+			...result,
+			items: result.items.map((property) => ({
+				id: property.id,
+				label: property.name,
+				description: `${property.addressLine1}, ${property.city}, ${property.state}`
+			}))
+		};
+	}
+	async function loadTenantOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await tenants.listPage(portfolioId, { ...params, sort: 'lastName' });
+		return {
+			...result,
+			items: result.items.map((tenant) => ({
+				id: tenant.id,
+				label: tenant.fullName || `${tenant.firstName} ${tenant.lastName}`,
+				description: tenant.email || tenant.phone || null
+			}))
+		};
+	}
 
 	const empty = {
 		title: '', type: 'Showing', scheduledStart: '', scheduledEnd: '',
@@ -114,6 +136,8 @@
 	let appointmentStep = $state(0);
 	let completedAppointmentSteps = $state<number[]>([]);
 	let deleteTarget = $state<Appointment | null>(null);
+	let selectedPropertyLabel = $state<string | null>(null);
+	let selectedTenantLabel = $state<string | null>(null);
 
 	function clearFormError(field: string) {
 		if (!formErrors[field]) return;
@@ -206,7 +230,7 @@
 	}));
 
 	const deleteMutation = createMutation(() => ({
-		mutationFn: (id: number) => appointments.delete(id),
+		mutationFn: (appointment: Appointment) => appointments.delete(appointment.id, appointment.propertyId),
 		onSuccess: () => {
 			showSuccess('Appointment deleted.');
 			deleteTarget = null;
@@ -221,6 +245,8 @@
 		formErrors = {};
 		appointmentStep = 0;
 		completedAppointmentSteps = [];
+		selectedPropertyLabel = null;
+		selectedTenantLabel = null;
 		showForm = true;
 	}
 	// Calendar: clicked an empty day/slot → create prefilled with that local time.
@@ -230,6 +256,8 @@
 		formErrors = {};
 		appointmentStep = 0;
 		completedAppointmentSteps = [];
+		selectedPropertyLabel = null;
+		selectedTenantLabel = null;
 		showForm = true;
 	}
 	function openEdit(a: Appointment) {
@@ -244,6 +272,8 @@
 			prospectName: a.prospectName ?? '', prospectEmail: a.prospectEmail ?? '', assignedTo: a.assignedTo ?? '',
 		};
 		formErrors = {};
+		selectedPropertyLabel = a.propertyName ?? null;
+		selectedTenantLabel = a.tenantName ?? null;
 		appointmentStep = 0;
 		completedAppointmentSteps = [];
 		showForm = true;
@@ -254,6 +284,8 @@
 		formErrors = {};
 		appointmentStep = 0;
 		completedAppointmentSteps = [];
+		selectedPropertyLabel = null;
+		selectedTenantLabel = null;
 	}
 	function submit() {
 		const result = parseForm(appointmentSchema, form);
@@ -285,7 +317,7 @@
 
 	const list = $derived(appointmentsQuery.data?.items ?? []);
 	const totalCount = $derived(appointmentsQuery.data?.totalCount ?? 0);
-	const calendarList = $derived(calendarQuery.data ?? []);
+	const calendarList = $derived(calendarQuery.data?.items ?? []);
 
 	const columns: ColumnDef<Appointment>[] = [
 		{ key: 'title', title: 'Title', sortable: true, mobileRole: 'title' },
@@ -547,34 +579,32 @@
 							Link this to a property, tenant, prospect, or staff member when you have that context.
 						</div>
 						<div class="grid gap-4 sm:grid-cols-2">
-							<div>
-								<span class="mb-2 block text-sm font-medium text-muted-foreground">Property</span>
-								<Select.Root type="single" bind:value={form.propertyId}>
-									<Select.Trigger class="w-full" data-testid="appointment-property-input">
-										{form.propertyId ? (propertiesQuery.data?.find((p) => String(p.id) === form.propertyId)?.name ?? form.propertyId) : 'No property'}
-									</Select.Trigger>
-									<Select.Content>
-										<Select.Item value="" label="No property">No property</Select.Item>
-										{#each propertiesQuery.data || [] as property}<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>{/each}
-									</Select.Content>
-								</Select.Root>
-							</div>
-							<div>
-								<span class="mb-2 block text-sm font-medium text-muted-foreground">Tenant</span>
-								<Select.Root type="single" bind:value={form.tenantId}>
-									<Select.Trigger class="w-full" data-testid="appointment-tenant-input">
-										{#if form.tenantId}
-											{tenantsQuery.data?.find((t) => String(t.id) === form.tenantId)?.fullName || (() => { const t = tenantsQuery.data?.find((t) => String(t.id) === form.tenantId); return t ? `${t.firstName} ${t.lastName}` : form.tenantId; })()}
-										{:else}
-											No tenant
-										{/if}
-									</Select.Trigger>
-									<Select.Content>
-										<Select.Item value="" label="No tenant">No tenant</Select.Item>
-										{#each tenantsQuery.data || [] as tenant}<Select.Item value={String(tenant.id)} label={tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</Select.Item>{/each}
-									</Select.Content>
-								</Select.Root>
-							</div>
+							<RemoteRecordSelect
+								queryKey={['appointment-property', portfolioId]}
+								label="Property"
+								bind:value={form.propertyId}
+								selectedLabel={selectedPropertyLabel}
+								placeholder="No property"
+								clearLabel="No property"
+								searchPlaceholder="Search properties…"
+								emptyLabel="No matching properties"
+								loadPage={loadPropertyOptions}
+								onValueChange={(_value, option) => (selectedPropertyLabel = option?.label ?? null)}
+								testid="appointment-property-input"
+							/>
+							<RemoteRecordSelect
+								queryKey={['appointment-tenant', portfolioId]}
+								label="Tenant"
+								bind:value={form.tenantId}
+								selectedLabel={selectedTenantLabel}
+								placeholder="No tenant"
+								clearLabel="No tenant"
+								searchPlaceholder="Search tenants…"
+								emptyLabel="No matching tenants"
+								loadPage={loadTenantOptions}
+								onValueChange={(_value, option) => (selectedTenantLabel = option?.label ?? null)}
+								testid="appointment-tenant-input"
+							/>
 							<div>
 								<label class="mb-2 block text-sm font-medium text-muted-foreground" for="appointment-assigned">Assigned to</label>
 								<Input id="appointment-assigned" data-testid="appointment-assigned-input" bind:value={form.assignedTo} placeholder="Assigned to" />
@@ -619,6 +649,6 @@
 	message={deleteTarget ? `Delete "${deleteTarget.title}"?` : ''}
 	busy={deleteMutation.isPending}
 	testid="appointment-delete"
-	onconfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+	onconfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget)}
 	oncancel={() => (deleteTarget = null)}
 />

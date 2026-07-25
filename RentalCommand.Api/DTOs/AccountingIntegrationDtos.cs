@@ -110,6 +110,7 @@ public class AccountingMappingResponse
     /// <summary>True once the landlord (or an unambiguous auto-link) confirmed the mapping.</summary>
     public bool Confirmed { get; set; }
     public DateTime? ConfirmedAt { get; set; }
+    public long Revision { get; set; }
 }
 
 /// <summary>
@@ -119,6 +120,8 @@ public class AccountingMappingResponse
 /// </summary>
 public class ConfirmAccountingMappingRequest
 {
+    public string ClientOperationId { get; set; } = string.Empty;
+    public long ExpectedRevision { get; set; }
     public string ExternalType { get; set; } = string.Empty;
     public string ExternalId { get; set; } = string.Empty;
     public string? ExternalDisplayName { get; set; }
@@ -126,6 +129,27 @@ public class ConfirmAccountingMappingRequest
     public string LocalEntityType { get; set; } = string.Empty;
     public int? LocalEntityId { get; set; }
     public string? LocalEnumValue { get; set; }
+}
+
+public class ConfirmAccountingMappingResponse
+{
+    public int MappingId { get; set; }
+    public long MappingRevision { get; set; }
+    public int Promoted { get; set; }
+    public Guid? ContinuationId { get; set; }
+    public bool HasMore { get; set; }
+}
+
+public class ContinueAccountingMappingPromotionRequest
+{
+    public string ClientOperationId { get; set; } = string.Empty;
+}
+
+public class ContinueAccountingMappingPromotionResponse
+{
+    public int Promoted { get; set; }
+    public int TotalPromoted { get; set; }
+    public bool HasMore { get; set; }
 }
 
 /// <summary>One imported transaction parked in the review queue (unmatched / needs-review).</summary>

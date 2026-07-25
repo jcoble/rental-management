@@ -4,7 +4,7 @@ using RentalCommand.Core.Enums;
 namespace RentalCommand.Api.Services.Auditing;
 
 /// <summary>
-/// Turns a raw <see cref="AuditLog"/> row into one plain-English sentence for a non-technical
+/// Turns a raw <see cref="AtomicAuditLog"/> row into one plain-English sentence for a non-technical
 /// landlord, e.g. "Recorded a payment", "Updated lease", "Deleted expense". Deterministic — no LLM.
 /// Soft-deletes already arrive as <see cref="AuditLogOperation.Deleted"/> from the interceptor, so a
 /// delete reads as "Deleted {entity}". Falls back to "{Operation} {EntityType} #{Id}" for anything
@@ -12,7 +12,7 @@ namespace RentalCommand.Api.Services.Auditing;
 /// </summary>
 public sealed class AuditDescriber
 {
-    public string Describe(AuditLog row)
+    public string Describe(AtomicAuditLog row)
     {
         var noun = EntityNoun(row.EntityType);
 
@@ -30,7 +30,7 @@ public sealed class AuditDescriber
     // "Created" reads better as a domain verb for several types ("Recorded a payment").
     private static string Created(string entityType, string noun) => entityType switch
     {
-        "Payment" => "Recorded a payment",
+        "TenantLedgerEntry" => "Posted a tenant account entry",
         "Expense" => "Recorded an expense",
         "WorkOrder" => "Created a work order",
         "Appointment" => "Scheduled an appointment",
@@ -42,9 +42,11 @@ public sealed class AuditDescriber
 
     private static string EntityNoun(string entityType) => entityType switch
     {
-        "Payment" => "payment",
+        "TenantAccount" => "tenant account",
+        "TenantLedgerEntry" => "tenant account entry",
+        "LeaseManagement" => "tenant and lease relationship",
+        "LeaseAgreement" => "lease agreement",
         "Expense" => "expense",
-        "Lease" => "lease",
         "Tenant" => "tenant",
         "Property" => "property",
         "Unit" => "unit",

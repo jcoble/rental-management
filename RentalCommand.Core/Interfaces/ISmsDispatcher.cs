@@ -1,5 +1,7 @@
 namespace RentalCommand.Core.Interfaces;
 
+using RentalCommand.Core.Outbox;
+
 /// <summary>
 /// Resolves and sends an SMS for a portfolio: the portfolio's own configured provider takes
 /// precedence; when it has none configured the platform-level env credentials are used as the
@@ -7,12 +9,17 @@ namespace RentalCommand.Core.Interfaces;
 /// thrown, so the outbox dispatch worker is never crashed by SMS config state. A real transport
 /// error from a configured provider DOES throw so the worker can retry.
 /// </summary>
-public interface ISmsDispatcher
+public interface ISmsDispatcher : RentalCommand.Core.Atomic.IAtomicRemoteDependency
 {
     /// <summary>
     /// Sends <paramref name="message"/> to <paramref name="toPhoneNumber"/> on behalf of
     /// <paramref name="portfolioId"/>. <paramref name="portfolioId"/> is null for platform-level
     /// sends (e.g. test-from-platform), which use the env credentials only.
     /// </summary>
-    Task SendAsync(int? portfolioId, string toPhoneNumber, string message, CancellationToken ct = default);
+    Task<NotificationDeliveryReceipt> SendAsync(
+        int? portfolioId,
+        string toPhoneNumber,
+        string message,
+        NotificationDeliveryContext delivery,
+        CancellationToken ct = default);
 }

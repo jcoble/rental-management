@@ -1,7 +1,11 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
+using RentalCommand.Api.Auth;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Enums;
+using RentalCommand.Core.Navigation;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -11,12 +15,10 @@ namespace RentalCommand.Api.Controllers;
 public class NotificationsController : AuthenticatedPortfolioControllerBase
 {
     private readonly INotificationService _notifications;
-    private readonly INotificationSettingsService _settings;
 
-    public NotificationsController(INotificationService notifications, INotificationSettingsService settings)
+    public NotificationsController(INotificationService notifications)
     {
         _notifications = notifications;
-        _settings = settings;
     }
 
     [HttpGet]
@@ -27,8 +29,31 @@ public class NotificationsController : AuthenticatedPortfolioControllerBase
         [FromQuery] int take = 20,
         CancellationToken ct = default)
     {
-        var items = await _notifications.ListAsync(GetPortfolioId(), GetUserId(), unreadOnly, skip, take, ct);
+        var active = GetActiveAccessContext();
+        var scope = new WorkspaceReadScope(
+            active.PortfolioId, active.UserId, active.SessionId,
+            active.AccessContextId, active.AccessRevision);
+        var experience = (NavigationExperience)(
+            active.LastAuthorizedExperience ?? active.DefaultExperience ?? WorkspaceExperience.Management);
+        var items = await _notifications.ListAsync(scope, experience, unreadOnly, skip, take, ct);
         return Ok(items);
+    }
+
+    [HttpGet("{id:int}")]
+    [ProducesResponseType(typeof(NotificationResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<NotificationResponse>> Get(int id, CancellationToken ct)
+    {
+        var active = GetActiveAccessContext();
+        var scope = new WorkspaceReadScope(
+            active.PortfolioId, active.UserId, active.SessionId,
+            active.AccessContextId, active.AccessRevision);
+        var experience = (NavigationExperience)(
+            active.LastAuthorizedExperience ?? active.DefaultExperience ?? WorkspaceExperience.Management);
+        var item = await _notifications.GetAsync(scope, experience, id, ct);
+        return item is null
+            ? NotFound(new { error = "Notification not found" })
+            : Ok(item);
     }
 
     [HttpGet("unread-count")]
@@ -42,77 +67,47 @@ public class NotificationsController : AuthenticatedPortfolioControllerBase
     [HttpPost("{id:int}/read")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> MarkAsRead(int id, CancellationToken ct)
+    public async Task<IActionResult> MarkAsRead(
+        int id,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var found = await _notifications.MarkAsReadAsync(GetPortfolioId(), GetUserId(), id, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey)) return InvalidKey();
+        var found = await _notifications.MarkAsReadAsync(GetMutationScope(), id, operationKey, ct);
         return found ? NoContent() : NotFound(new { error = "Notification not found" });
     }
 
     [HttpPost("read-all")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
-    public async Task<IActionResult> MarkAllAsRead(CancellationToken ct)
+    public async Task<IActionResult> MarkAllAsRead(
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        await _notifications.MarkAllAsReadAsync(GetPortfolioId(), GetUserId(), ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey)) return InvalidKey();
+        await _notifications.MarkAllAsReadAsync(GetMutationScope(), operationKey, ct);
         return NoContent();
     }
 
     [HttpPost("broadcast")]
-    [Authorize(Roles = "Admin,Manager,Owner")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.TeamManage)]
     [ProducesResponseType(typeof(NotificationResponse), StatusCodes.Status201Created)]
     public async Task<ActionResult<NotificationResponse>> Broadcast(
         [FromBody] CreateBroadcastNotificationRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
-        var created = await _notifications.CreateBroadcastAsync(GetPortfolioId(), request, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey)) return InvalidKey();
+        var created = await _notifications.CreateBroadcastAsync(GetMutationScope(), request, operationKey, ct);
         return Created($"/api/v1/notifications/{created.Id}", created);
     }
 
-    [HttpGet("email")]
-    [ProducesResponseType(typeof(NotificationEmailResponse), StatusCodes.Status200OK)]
-    public async Task<ActionResult<NotificationEmailResponse>> GetNotificationEmail(CancellationToken ct)
+    private WorkspaceReadScope GetMutationScope()
     {
-        return Ok(await _notifications.GetNotificationEmailAsync(GetPortfolioId(), ct));
+        var active = GetActiveAccessContext();
+        return new WorkspaceReadScope(active.PortfolioId, active.UserId, active.SessionId,
+            active.AccessContextId, active.AccessRevision);
     }
 
-    [HttpPut("email")]
-    [ProducesResponseType(typeof(NotificationEmailResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<NotificationEmailResponse>> SetNotificationEmail(
-        [FromBody] SetNotificationEmailRequest request,
-        CancellationToken ct)
-    {
-        var response = await _notifications.SetNotificationEmailAsync(GetPortfolioId(), request.Email, ct);
-        return response is null ? NotFound(new { error = "Portfolio not found" }) : Ok(response);
-    }
-
-    [HttpGet("settings")]
-    [ProducesResponseType(typeof(NotificationSettingsResponse), StatusCodes.Status200OK)]
-    public async Task<ActionResult<NotificationSettingsResponse>> GetSettings(CancellationToken ct)
-    {
-        return Ok(await _settings.GetAdminAsync(GetPortfolioId(), ct));
-    }
-
-    [HttpPut("settings")]
-    [ProducesResponseType(typeof(NotificationSettingsResponse), StatusCodes.Status200OK)]
-    public async Task<ActionResult<NotificationSettingsResponse>> SetSettings(
-        [FromBody] UpdateNotificationSettingsRequest request,
-        CancellationToken ct)
-    {
-        return Ok(await _settings.UpdateAsync(GetPortfolioId(), request, ct));
-    }
-
-    /// <summary>
-    /// Sends a one-off verification SMS for the chosen provider so the landlord can confirm their
-    /// credentials work. Blank credential slots fall back to the portfolio's saved secrets. Always
-    /// returns 200 with a <see cref="TestSmsResponse"/> (success flag + message) — provider/transport
-    /// errors are reported in the body, never as a 500, so the UI can show a friendly result.
-    /// </summary>
-    [HttpPost("settings/test-sms")]
-    [ProducesResponseType(typeof(TestSmsResponse), StatusCodes.Status200OK)]
-    public async Task<ActionResult<TestSmsResponse>> SendTestSms(
-        [FromBody] TestSmsRequest request,
-        CancellationToken ct)
-    {
-        return Ok(await _settings.SendTestSmsAsync(GetPortfolioId(), request, ct));
-    }
+    private BadRequestObjectResult InvalidKey() =>
+        BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
 }

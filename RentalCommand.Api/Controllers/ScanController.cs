@@ -1,25 +1,40 @@
+using System.Linq.Expressions;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Api.Auth;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
-using RentalCommand.Core.Time;
+using RentalCommand.Core.Scanning;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Api.Controllers;
 
 /// <summary>
-/// Upload-and-scan intake endpoints. All routes are scoped to the caller's portfolio
-/// via the JWT <c>portfolioId</c> claim — no <c>{portfolioId}</c> route parameter.
+/// Upload-and-scan intake endpoints. All routes are scoped to the caller's server-validated
+/// workspace context — no <c>{portfolioId}</c> route parameter.
 /// </summary>
 [ApiController]
 [Route("api/v1/scans")]
 [Produces("application/json")]
 public class ScanController : ManagementControllerBase
 {
+    private static readonly AtomicJsonResultCodec<ConfirmScanDraftResult> ConfirmResultCodec =
+        new("scan-confirm.result.v1");
+    private static readonly AtomicJsonResultCodec<ScanDraftMutationResult> DraftMutationCodec =
+        new("scan-draft.mutation.result.v1");
+
     private readonly IScanService _scan;
+    private readonly IScanUploadService _uploads;
+    private readonly IAtomicUnitOfWork _atomic;
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
     private readonly TimeProvider _timeProvider;
@@ -31,19 +46,27 @@ public class ScanController : ManagementControllerBase
         "application/pdf", "image/jpeg", "image/png", "image/gif", "image/webp", "image/heic"
     };
 
-    // Recognised scan targets. Empty/null at single-file upload is allowed (the worker auto-classifies);
-    // a batch always has a concrete target (defaulting to "Lease", the migration on-ramp).
+    // Recognised scan targets. Empty/null is the canonical classify-first path for both a single
+    // upload and each file in a batch; an explicit target skips classification.
     private static readonly HashSet<string> ValidTargets = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Expense", "Payment", "WorkOrder", "Lease", "Application", "Loan"
+        "Expense", "Payment", "WorkOrder", nameof(LeaseAgreement), "Application", "Loan"
     };
 
     // Cap per batch so one request can't enqueue an unbounded number of (paid) LLM extractions.
     private const int MaxBatchFiles = 100;
 
-    public ScanController(IScanService scan, RentalCommandDbContext db, IFileStorage files, TimeProvider timeProvider)
+    public ScanController(
+        IScanService scan,
+        IScanUploadService uploads,
+        IAtomicUnitOfWork atomic,
+        RentalCommandDbContext db,
+        IFileStorage files,
+        TimeProvider timeProvider)
     {
         _scan = scan;
+        _uploads = uploads;
+        _atomic = atomic;
         _db = db;
         _files = files;
         _timeProvider = timeProvider;
@@ -59,36 +82,63 @@ public class ScanController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<ScanCreatedResponse>> Upload(
         IFormFile file,
-        [FromForm] string targetEntityType,
+        [FromForm] string? targetEntityType,
+        [FromForm] string clientOperationId,
         CancellationToken ct)
     {
         if (file is null || file.Length == 0)
             return BadRequest(new { error = "A non-empty file is required." });
+        if (string.IsNullOrWhiteSpace(clientOperationId) || clientOperationId.Length > 160)
+            return BadRequest(new { error = "A non-blank clientOperationId of at most 160 characters is required." });
 
         // When a targetEntityType is explicitly provided it must be a recognised value.
         // Empty/null is allowed — the LLM worker will classify it during processing.
-        if (!string.IsNullOrEmpty(targetEntityType) && !ValidTargets.Contains(targetEntityType))
+        var target = targetEntityType?.Trim() ?? string.Empty;
+        if (!string.IsNullOrEmpty(target) && !ValidTargets.Contains(target))
         {
-            return BadRequest(new { error = $"targetEntityType '{targetEntityType}' is not valid. Allowed values: Expense, Payment, WorkOrder, Lease, Application, Loan (or omit to auto-classify)." });
+            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, LeaseAgreement, Application, Loan (or omit to auto-classify)." });
         }
+        if (!string.IsNullOrEmpty(target))
+            target = ValidTargets.First(validTarget =>
+                string.Equals(validTarget, target, StringComparison.OrdinalIgnoreCase));
 
         using var ms = new MemoryStream();
         await file.CopyToAsync(ms, ct);
         var bytes = ms.ToArray();
 
+        var captureContext = await BuildCaptureContextAsync(ct);
+        if (!await CanCaptureAsync(target, captureContext, ct))
+            return Forbid();
+
         try
         {
-            var draft = await _scan.CreateDraftAsync(
-                GetPortfolioId(), bytes, file.ContentType, targetEntityType, ct);
+            var result = await _uploads.UploadAsync(
+                GetWorkspaceReadScope(),
+                clientOperationId,
+                target,
+                createBatch: false,
+                batchName: null,
+                captureContext,
+                [new ScanUploadFilePayload(bytes, file.FileName, file.ContentType)],
+                ct);
+            var draft = result.Drafts.Single();
 
             return CreatedAtAction(
                 nameof(Get),
-                new { id = draft.Id },
-                new ScanCreatedResponse(draft.Id, draft.Status, $"/api/v1/scans/{draft.Id}/file"));
+                new { id = draft.DraftId },
+                new ScanCreatedResponse(draft.DraftId, draft.Status, $"/api/v1/scans/{draft.DraftId}/file"));
+        }
+        catch (UploadOperationConflictException ex)
+        {
+            return Conflict(new { error = ex.Message });
         }
         catch (ArgumentException ex)
         {
             return BadRequest(new { error = ex.Message });
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
         }
     }
 
@@ -110,22 +160,25 @@ public class ScanController : ManagementControllerBase
         [FromForm] List<IFormFile> files,
         [FromForm] string? targetEntityType,
         [FromForm] string? name,
+        [FromForm] string clientOperationId,
         CancellationToken ct)
     {
         var nonEmpty = (files ?? []).Where(f => f is { Length: > 0 }).ToList();
         if (nonEmpty.Count == 0)
             return BadRequest(new { error = "At least one non-empty file is required." });
+        if (string.IsNullOrWhiteSpace(clientOperationId) || clientOperationId.Length > 160)
+            return BadRequest(new { error = "A non-blank clientOperationId of at most 160 characters is required." });
 
         if (nonEmpty.Count > MaxBatchFiles)
             return BadRequest(new { error = $"A batch can contain at most {MaxBatchFiles} files (got {nonEmpty.Count})." });
 
-        // A batch always targets a concrete entity; default to the lease-import on-ramp.
-        var target = string.IsNullOrWhiteSpace(targetEntityType) ? "Lease" : targetEntityType.Trim();
-        if (!ValidTargets.Contains(target))
-            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, Lease, Application, Loan." });
-
-        // Normalize to the canonical casing so the worker's case-sensitive target checks match.
-        target = ValidTargets.First(t => string.Equals(t, target, StringComparison.OrdinalIgnoreCase));
+        // An omitted target is the canonical classify-first path. Every file in the batch is
+        // independently routed to its own typed review draft; an explicit target skips that pass.
+        var target = targetEntityType?.Trim() ?? string.Empty;
+        if (!string.IsNullOrWhiteSpace(target) && !ValidTargets.Contains(target))
+            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, LeaseAgreement, Application, Loan (or omit to auto-classify)." });
+        if (!string.IsNullOrWhiteSpace(target))
+            target = ValidTargets.First(t => string.Equals(t, target, StringComparison.OrdinalIgnoreCase));
 
         var portfolioId = GetPortfolioId();
 
@@ -139,40 +192,151 @@ public class ScanController : ManagementControllerBase
             payloads.Add((ms.ToArray(), file.ContentType));
         }
 
-        await using var tx = await _db.Database.BeginTransactionAsync(ct);
-        var batch = new ScanBatch
-        {
-            PortfolioId = portfolioId,
-            Name = string.IsNullOrWhiteSpace(name) ? null : name.Trim(),
-            TargetEntityType = target,
-            Status = ScanBatchStatus.Processing,
-            FileCount = payloads.Count,
-            CreatedAtUtc = _timeProvider.UtcNow(),
-        };
-        _db.ScanBatches.Add(batch);
-        await _db.SaveChangesAsync(ct);
+        var captureContext = await BuildCaptureContextAsync(ct);
+        if (!await CanCaptureAsync(target, captureContext, ct))
+            return Forbid();
 
-        var draftIds = new List<int>(payloads.Count);
         try
         {
-            foreach (var (bytes, contentType) in payloads)
-            {
-                var draft = await _scan.CreateBatchDraftAsync(portfolioId, batch.Id, bytes, contentType, target, ct);
-                draftIds.Add(draft.Id);
-            }
+            var result = await _uploads.UploadAsync(
+                GetWorkspaceReadScope(),
+                clientOperationId,
+                target,
+                createBatch: true,
+                name,
+                captureContext,
+                payloads.Select((payload, index) => new ScanUploadFilePayload(
+                    payload.Bytes,
+                    nonEmpty[index].FileName,
+                    payload.ContentType)).ToArray(),
+                ct);
+            var batchId = result.BatchId
+                ?? throw new InvalidOperationException("Atomic batch upload returned no batch id.");
+
+            return CreatedAtAction(
+                nameof(GetBatch),
+                new { id = batchId },
+                new ScanBatchCreatedResponse(
+                    batchId,
+                    result.BatchName,
+                    result.TargetEntityType,
+                    nameof(ScanBatchStatus.Processing),
+                    result.Drafts.Count,
+                    result.Drafts.Select(draft => draft.DraftId).ToArray()));
+        }
+        catch (UploadOperationConflictException ex)
+        {
+            return Conflict(new { error = ex.Message });
         }
         catch (ArgumentException ex)
         {
-            await tx.RollbackAsync(ct);
             return BadRequest(new { error = ex.Message });
         }
-        await tx.CommitAsync(ct);
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
+        }
+    }
 
-        return CreatedAtAction(
-            nameof(GetBatch),
-            new { id = batch.Id },
-            new ScanBatchCreatedResponse(
-                batch.Id, batch.Name, batch.TargetEntityType, batch.Status.ToString(), batch.FileCount, draftIds));
+    private async Task<ScanCaptureContextData> BuildCaptureContextAsync(CancellationToken ct)
+    {
+        var active = HttpContext.Items.TryGetValue(CanonicalAccessContextHttpItem.Key, out var value)
+            ? value as ActiveAccessContext
+            : null;
+        IFormCollection? form = null;
+        if (Request.HasFormContentType)
+            form = await Request.ReadFormAsync(ct);
+
+        static int? Positive(IFormCollection? values, string key) =>
+            values is not null && int.TryParse(values[key], out var parsed) && parsed > 0
+                ? parsed
+                : null;
+        static long? PositiveLong(IFormCollection? values, string key) =>
+            values is not null && long.TryParse(values[key], out var parsed) && parsed > 0
+                ? parsed
+                : null;
+        static string? Text(IFormCollection? values, string key, int maxLength)
+        {
+            var text = values?[key].ToString().Trim();
+            return string.IsNullOrWhiteSpace(text)
+                ? null
+                : text.Length <= maxLength
+                    ? text
+                    : throw new ArgumentException($"{key} cannot exceed {maxLength} characters.");
+        }
+
+        return new ScanCaptureContextData(
+            active?.LastAuthorizedExperience ?? active?.DefaultExperience,
+            active?.AccessContextId,
+            active?.AccessRevision,
+            Positive(form, "propertyId"),
+            Positive(form, "unitId"),
+            Positive(form, "leaseManagementId"),
+            Positive(form, "leaseAgreementId"),
+            Positive(form, "tenantAccountId"),
+            PositiveLong(form, "tenantLedgerEntryId"),
+            Positive(form, "workOrderId"),
+            Positive(form, "applicationId"),
+            Positive(form, "rentalListingId"),
+            Text(form, "sourceLabel", 100));
+    }
+
+    private async Task<bool> CanCaptureAsync(
+        string? targetEntityType,
+        ScanCaptureContextData context,
+        CancellationToken ct)
+    {
+        var capabilities = ScanDraftAuthorizationQuery.CapabilitiesForTarget(targetEntityType);
+        if (capabilities.Count == 0)
+            return false;
+
+        var portfolioId = GetPortfolioId();
+        if (context.PropertyId is int propertyId)
+            return await HasAnyCapabilityAsync(
+                capabilities, new PropertyCapabilityAuthorizationTarget(portfolioId, propertyId), ct);
+        if (context.UnitId is int unitId)
+            return await HasAnyCapabilityAsync(
+                capabilities, new UnitCapabilityAuthorizationTarget(portfolioId, unitId), ct);
+        if (context.LeaseAgreementId is int agreementId)
+            return await HasAnyCapabilityAsync(
+                capabilities, new LeaseAgreementCapabilityAuthorizationTarget(portfolioId, agreementId), ct);
+        if (context.LeaseManagementId is int leaseManagementId)
+            return await HasAnyCapabilityAsync(
+                capabilities, new LeaseManagementCapabilityAuthorizationTarget(portfolioId, leaseManagementId), ct);
+        if (context.WorkOrderId is int workOrderId)
+            return await HasAnyCapabilityAsync(
+                capabilities, new WorkOrderCapabilityAuthorizationTarget(portfolioId, workOrderId), ct);
+        if (context.ApplicationId is int applicationId)
+            return await HasAnyCapabilityAsync(
+                capabilities, new RentalApplicationCapabilityAuthorizationTarget(portfolioId, applicationId), ct);
+
+        // Tenant-account, ledger-entry, and listing context resolve to one Property in SQL. A
+        // dangling or cross-workspace reference yields null and therefore fails closed.
+        var inferredPropertyId = await _db.Properties.AsNoTracking()
+            .Where(property => property.PortfolioId == portfolioId)
+            .Where(property =>
+                (context.TenantAccountId != null && _db.TenantAccounts.Any(account =>
+                    account.Id == context.TenantAccountId && account.PortfolioId == portfolioId
+                    && account.LeaseManagement != null && account.LeaseManagement.PropertyId == property.Id))
+                || (context.TenantLedgerEntryId != null && _db.TenantLedgerEntries.Any(entry =>
+                    entry.Id == context.TenantLedgerEntryId && entry.PortfolioId == portfolioId
+                    && entry.TenantAccount != null && entry.TenantAccount.LeaseManagement != null
+                    && entry.TenantAccount.LeaseManagement.PropertyId == property.Id))
+                || (context.RentalListingId != null && _db.RentalListings.Any(listing =>
+                    listing.Id == context.RentalListingId && listing.PortfolioId == portfolioId
+                    && listing.PropertyId == property.Id)))
+            .Select(property => (int?)property.Id)
+            .SingleOrDefaultAsync(ct);
+        if (inferredPropertyId is int inferred)
+            return await HasAnyCapabilityAsync(
+                capabilities, new PropertyCapabilityAuthorizationTarget(portfolioId, inferred), ct);
+
+        return context.TenantAccountId is null
+            && context.TenantLedgerEntryId is null
+            && context.RentalListingId is null
+            && await ScanDraftAuthorizationQuery.CanCreateGlobalDraftAsync(
+                _db, GetWorkspaceReadScope(), targetEntityType,
+                _timeProvider.GetUtcNow().UtcDateTime, ct);
     }
 
     // -------------------------------------------------------------------------
@@ -186,41 +350,19 @@ public class ScanController : ManagementControllerBase
         [FromQuery] int take = 50,
         CancellationToken ct = default)
     {
-        var portfolioId = GetPortfolioId();
+        var scope = GetWorkspaceReadScope();
+        skip = Math.Max(0, skip);
+        take = Math.Clamp(take, 1, 100);
 
-        var batches = await _db.ScanBatches
-            .Where(b => b.PortfolioId == portfolioId)
+        var batches = await QueryBatchSummaryRows(scope)
             .OrderByDescending(b => b.CreatedAtUtc)
             .ThenByDescending(b => b.Id)
             .Skip(skip)
             .Take(take)
+            .Select(BatchSummaryProjection)
             .ToListAsync(ct);
 
-        if (batches.Count == 0)
-            return Ok(Array.Empty<ScanBatchSummaryResponse>());
-
-        var batchIds = batches.Select(b => b.Id).ToList();
-
-        // One grouped query for all the rollup counts (status per batch) instead of N per-batch queries.
-        var statusCounts = await _db.ScanDrafts
-            .Where(d => d.PortfolioId == portfolioId && d.BatchId != null && batchIds.Contains(d.BatchId.Value))
-            .GroupBy(d => new { BatchId = d.BatchId!.Value, d.Status })
-            .Select(g => new { g.Key.BatchId, g.Key.Status, Count = g.Count() })
-            .ToListAsync(ct);
-
-        var countsByBatch = statusCounts
-            .GroupBy(x => x.BatchId)
-            .ToDictionary(g => g.Key, g => BuildCounts(g.Select(x => (x.Status, x.Count))));
-
-        var result = batches.Select(b =>
-        {
-            var counts = countsByBatch.TryGetValue(b.Id, out var c) ? c : EmptyCounts;
-            return new ScanBatchSummaryResponse(
-                b.Id, b.Name, b.TargetEntityType, ComputeStatus(b, counts).ToString(),
-                b.FileCount, b.CreatedAtUtc, counts);
-        }).ToList();
-
-        return Ok(result);
+        return Ok(batches);
     }
 
     // -------------------------------------------------------------------------
@@ -230,95 +372,144 @@ public class ScanController : ManagementControllerBase
     [HttpGet("batches/{id:int}", Name = nameof(GetBatch))]
     [ProducesResponseType(typeof(ScanBatchDetailResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<ScanBatchDetailResponse>> GetBatch(int id, CancellationToken ct)
+    public async Task<ActionResult<ScanBatchDetailResponse>> GetBatch(
+        int id,
+        CancellationToken ct,
+        [FromQuery] int skip = 0,
+        [FromQuery] int take = 20)
     {
-        var portfolioId = GetPortfolioId();
+        var scope = GetWorkspaceReadScope();
+        skip = Math.Max(0, skip);
+        take = Math.Clamp(take, 1, 100);
 
-        var batch = await _db.ScanBatches
-            .FirstOrDefaultAsync(b => b.Id == id && b.PortfolioId == portfolioId, ct);
+        var batch = await QueryBatchSummaryRows(scope)
+            .Where(b => b.Id == id)
+            .Select(BatchSummaryProjection)
+            .SingleOrDefaultAsync(ct);
 
         if (batch is null)
             return NotFound(new { error = "Scan batch not found" });
 
         // Portfolio-scoped: only this portfolio's drafts in this batch (IDOR-safe — a foreign caller
         // can neither read the batch above nor any draft here).
-        var drafts = await _db.ScanDrafts
-            .Where(d => d.PortfolioId == portfolioId && d.BatchId == id)
+        var drafts = await AuthorizedDrafts(scope)
+            .AsNoTracking()
+            .Where(d => d.BatchId == id)
             .OrderBy(d => d.CreatedAt)
             .ThenBy(d => d.Id)
+            .Select(d => new ScanBatchDraftQueryRow
+            {
+                Id = d.Id,
+                Status = d.Status,
+                TargetEntityType = d.TargetEntityType,
+                ExtractedFields = d.ExtractedFields,
+                ConfirmedEntityId = d.Status == "Confirmed" ? d.ConfirmedEntityId : null,
+                CreatedAt = d.CreatedAt,
+                FailureReason = d.FailureReason,
+            })
+            .Skip(skip)
+            .Take(take)
             .ToListAsync(ct);
 
-        var statusCounts = await _db.ScanDrafts
-            .Where(d => d.PortfolioId == portfolioId && d.BatchId == id)
-            .GroupBy(d => d.Status)
-            .Select(g => new { Status = g.Key, Count = g.Count() })
-            .ToListAsync(ct);
-
-        var counts = BuildCounts(statusCounts.Select(c => (c.Status, c.Count)));
-
-        // Resolve the created-entity id for any confirmed draft so the UI can link straight to the record.
-        var filePaths = drafts.Select(d => d.FilePath).ToHashSet(StringComparer.Ordinal);
-        var linkedFiles = await _db.StoredFiles
-            .AsNoTracking()
-            .Where(f => f.PortfolioId == portfolioId && filePaths.Contains(f.FilePath))
-            .ToDictionaryAsync(f => f.FilePath, ct);
-
-        var draftDtos = drafts.Select(d =>
+        var draftDtos = new List<ScanBatchDraftResponse>(drafts.Count);
+        foreach (var draft in drafts)
         {
-            linkedFiles.TryGetValue(d.FilePath, out var linkedFile);
-            var (tenant, unit, term) = SummarizeLeaseFields(d.ExtractedFields);
-            return new ScanBatchDraftResponse(
-                d.Id, d.Status, d.TargetEntityType, $"/api/v1/scans/{d.Id}/file",
+            var (tenant, unit, term) = SummarizeLeaseFields(draft.ExtractedFields);
+            draftDtos.Add(new ScanBatchDraftResponse(
+                draft.Id, draft.Status, draft.TargetEntityType, $"/api/v1/scans/{draft.Id}/file",
                 tenant, unit, term,
-                d.Status == "Confirmed" ? linkedFile?.EntityId : null,
-                d.CreatedAt,
-                d.FailureReason);
-        }).ToList();
+                draft.ConfirmedEntityId,
+                draft.CreatedAt,
+                draft.FailureReason));
+        }
 
         return Ok(new ScanBatchDetailResponse(
-            batch.Id, batch.Name, batch.TargetEntityType, ComputeStatus(batch, counts).ToString(),
-            batch.FileCount, batch.CreatedAtUtc, counts, draftDtos));
+            batch.Id, batch.Name, batch.TargetEntityType, batch.Status,
+            batch.FileCount, batch.CreatedAtUtc, batch.Counts, draftDtos,
+            batch.Counts.Total, skip, take));
     }
 
     // -------------------------------------------------------------------------
     // Batch rollup helpers
     // -------------------------------------------------------------------------
 
-    private static readonly ScanBatchCounts EmptyCounts = new(0, 0, 0, 0, 0, 0);
-
-    /// <summary>Folds per-status draft counts into a <see cref="ScanBatchCounts"/> rollup.</summary>
-    private static ScanBatchCounts BuildCounts(IEnumerable<(string Status, int Count)> statusCounts)
+    private IQueryable<ScanBatchSummaryQueryRow> QueryBatchSummaryRows(WorkspaceReadScope scope)
     {
-        int total = 0, pending = 0, reviewing = 0, confirmed = 0, rejected = 0, failed = 0;
-        foreach (var (status, count) in statusCounts)
-        {
-            total += count;
-            switch (status)
+        var authorizedRollups = AuthorizedDrafts(scope)
+            .Where(draft => draft.BatchId != null)
+            .GroupBy(draft => draft.BatchId!.Value)
+            .Select(group => new
             {
-                // "Processing" (mid-extraction) and "Confirming" (mid-confirm) are transient; surface
-                // them under Pending so a batch still in flight reads as not-yet-reviewable.
-                case "Pending" or "Processing" or "Confirming": pending += count; break;
-                case "Reviewing": reviewing += count; break;
-                case "Confirmed": confirmed += count; break;
-                case "Rejected": rejected += count; break;
-                case "Failed": failed += count; break;
-            }
-        }
-        return new ScanBatchCounts(total, pending, reviewing, confirmed, rejected, failed);
+                BatchId = group.Key,
+                Total = group.Count(),
+                Pending = group.Count(draft =>
+                    draft.Status == "Pending" || draft.Status == "Processing" || draft.Status == "Confirming"),
+                Reviewing = group.Count(draft => draft.Status == "Reviewing"),
+                Confirmed = group.Count(draft => draft.Status == "Confirmed"),
+                Rejected = group.Count(draft => draft.Status == "Rejected"),
+                Failed = group.Count(draft => draft.Status == "Failed"),
+            });
+
+        return
+            from batch in _db.ScanBatches.AsNoTracking()
+            join rollup in authorizedRollups on batch.Id equals rollup.BatchId
+            where batch.PortfolioId == scope.PortfolioId
+            select new ScanBatchSummaryQueryRow
+            {
+                Id = batch.Id,
+                Name = batch.Name,
+                TargetEntityType = batch.TargetEntityType,
+                CreatedAtUtc = batch.CreatedAtUtc,
+                Total = rollup.Total,
+                Pending = rollup.Pending,
+                Reviewing = rollup.Reviewing,
+                Confirmed = rollup.Confirmed,
+                Rejected = rollup.Rejected,
+                Failed = rollup.Failed,
+            };
     }
 
-    /// <summary>
-    /// Computes the batch's effective status from its draft rollup (cheap on read so a confirm/reject
-    /// never has to touch the batch row): Completed when every draft is confirmed/rejected, Reviewing
-    /// when at least one draft is ready to review, otherwise still Processing.
-    /// </summary>
-    private static ScanBatchStatus ComputeStatus(ScanBatch batch, ScanBatchCounts counts)
+    private IQueryable<ScanDraft> AuthorizedDrafts(WorkspaceReadScope scope) =>
+        _db.ScanDrafts.AsNoTracking().WhereAuthorizedForReview(
+            _db, scope, _timeProvider.GetUtcNow().UtcDateTime);
+
+    private static readonly Expression<Func<ScanBatchSummaryQueryRow, ScanBatchSummaryResponse>> BatchSummaryProjection =
+        row => new ScanBatchSummaryResponse(
+            row.Id,
+            row.Name,
+            row.TargetEntityType,
+            row.Total > 0 && row.Pending == 0 && row.Reviewing == 0
+                ? "Completed"
+                : row.Reviewing > 0 || row.Confirmed > 0 || row.Rejected > 0
+                    ? "Reviewing"
+                    : "Processing",
+            row.Total,
+            row.CreatedAtUtc,
+            new ScanBatchCounts(row.Total, row.Pending, row.Reviewing, row.Confirmed, row.Rejected, row.Failed));
+
+    private sealed class ScanBatchSummaryQueryRow
     {
-        if (counts.Total > 0 && counts.Pending == 0 && counts.Reviewing == 0)
-            return ScanBatchStatus.Completed;
-        if (counts.Reviewing > 0 || counts.Confirmed > 0 || counts.Rejected > 0)
-            return ScanBatchStatus.Reviewing;
-        return ScanBatchStatus.Processing;
+        public int Id { get; init; }
+        public string? Name { get; init; }
+        public string TargetEntityType { get; init; } = string.Empty;
+        public DateTime CreatedAtUtc { get; init; }
+        public int Total { get; init; }
+        public int Pending { get; init; }
+        public int Reviewing { get; init; }
+        public int Confirmed { get; init; }
+        public int Rejected { get; init; }
+        public int Failed { get; init; }
+    }
+
+    private sealed class ScanBatchDraftQueryRow
+    {
+        public int Id { get; init; }
+        public string Status { get; init; } = string.Empty;
+        public string TargetEntityType { get; init; } = string.Empty;
+        public string? ExtractedFields { get; init; }
+        public int? ConfirmedEntityId { get; init; }
+        public DateTime CreatedAt { get; init; }
+        public string? FailureReason { get; init; }
     }
 
     /// <summary>
@@ -391,29 +582,52 @@ public class ScanController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<ScanDraftResponse>> Get(int id, CancellationToken ct)
     {
-        var portfolioId = GetPortfolioId();
-        var draft = await _db.ScanDrafts
-            .FirstOrDefaultAsync(d => d.Id == id && d.PortfolioId == portfolioId, ct);
+        var scope = GetWorkspaceReadScope();
+        var portfolioId = scope.PortfolioId;
+        var draft = await AuthorizedDrafts(scope)
+            .FirstOrDefaultAsync(d => d.Id == id, ct);
 
         if (draft is null)
             return NotFound(new { error = "Scan draft not found" });
 
-        var linkedFile = await _db.StoredFiles
-            .AsNoTracking()
-            .FirstOrDefaultAsync(f => f.PortfolioId == portfolioId && f.FilePath == draft.FilePath, ct);
-
-        var createdUnitId = await ResolveCreatedUnitIdAsync(
-            portfolioId, linkedFile?.EntityType, linkedFile?.EntityId, ct);
-        var response = ScanDraftResponse.FromEntity(
-            draft,
-            linkedFile?.EntityType,
-            linkedFile?.EntityId,
-            createdUnitId);
+        ScanDraftResponse response;
+        if (draft.Status == "Confirmed"
+            && draft.TargetEntityType == "Payment"
+            && draft.ConfirmedEntityId is int tenantAccountId)
+        {
+            var receipt = await (
+                from entry in _db.TenantLedgerEntries.AsNoTracking()
+                join account in _db.TenantAccounts.AsNoTracking()
+                    on new { entry.PortfolioId, entry.TenantAccountId }
+                    equals new { account.PortfolioId, TenantAccountId = account.Id }
+                where entry.PortfolioId == portfolioId
+                    && entry.TenantAccountId == tenantAccountId
+                    && entry.EntryType == TenantLedgerEntryType.PaymentReceipt
+                    && entry.BusinessKey == "scan-receipt:" + draft.Id
+                select new
+                {
+                    EntryId = (long?)entry.Id,
+                    UnitId = (int?)account.LeaseManagement!.UnitId,
+                }).SingleOrDefaultAsync(ct);
+            response = ScanDraftResponse.FromEntity(
+                draft, "Payment", receipt?.EntryId, receipt?.UnitId);
+        }
+        else
+        {
+            var linkedFile = draft.SourceStoredFileId is int sourceStoredFileId
+                ? await _db.StoredFiles.AsNoTracking().SingleOrDefaultAsync(
+                    file => file.Id == sourceStoredFileId && file.PortfolioId == portfolioId, ct)
+                : null;
+            var createdUnitId = await ResolveCreatedUnitIdAsync(
+                portfolioId, linkedFile?.EntityType, linkedFile?.EntityId, ct);
+            response = ScanDraftResponse.FromEntity(
+                draft, linkedFile?.EntityType, linkedFile?.EntityId, createdUnitId);
+        }
 
         // For a lease draft, attach the property/unit import proposal (link-existing vs create-new) so the
         // review UI can show what confirming will do — the empty-portfolio bootstrap is visible up front.
         // Uses no overrides: this is the default preview before the reviewer edits anything.
-        if (draft.TargetEntityType is "Lease")
+        if (draft.TargetEntityType is nameof(LeaseAgreement))
         {
             var proposal = await _scan.BuildLeaseProposalAsync(portfolioId, id, overridesJson: "{}", ct);
             response = response.WithLeaseProposal(proposal);
@@ -435,7 +649,7 @@ public class ScanController : ManagementControllerBase
         CancellationToken ct = default)
     {
         var page = await LoadScanDraftPageAsync(
-            GetPortfolioId(),
+            GetWorkspaceReadScope(),
             status,
             new ListQuery { Skip = skip, Take = take },
             ct);
@@ -449,19 +663,18 @@ public class ScanController : ManagementControllerBase
         [FromQuery] string? status,
         CancellationToken ct = default)
     {
-        var page = await LoadScanDraftPageAsync(GetPortfolioId(), status, query, ct);
+        var page = await LoadScanDraftPageAsync(GetWorkspaceReadScope(), status, query, ct);
         return Ok(page);
     }
 
     private async Task<ScanDraftListResponse> LoadScanDraftPageAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         string? status,
         ListQuery listQuery,
         CancellationToken ct)
     {
-        var query = _db.ScanDrafts
-            .AsNoTracking()
-            .Where(d => d.PortfolioId == portfolioId);
+        var portfolioId = scope.PortfolioId;
+        var query = AuthorizedDrafts(scope);
 
         if (!string.IsNullOrWhiteSpace(status))
             query = query.Where(d => d.Status == status);
@@ -479,137 +692,110 @@ public class ScanController : ManagementControllerBase
         var drafts = await query
             .Skip(listQuery.NormalizedSkip)
             .Take(listQuery.NormalizedTake)
+            .Select(d => new ScanDraftPageQueryRow
+            {
+                Id = d.Id,
+                PortfolioId = d.PortfolioId,
+                TargetEntityType = d.TargetEntityType,
+                Status = d.Status,
+                ExtractedFields = d.ExtractedFields,
+                ModelId = d.ModelId,
+                TokensUsed = d.TokensUsed,
+                CostUsd = d.CostUsd,
+                FailureReason = d.FailureReason,
+                CreatedAt = d.CreatedAt,
+                ReviewedAt = d.ReviewedAt,
+                ConfirmedAt = d.ConfirmedAt,
+                SourceContentSha256 = d.SourceContentSha256,
+                SourceLabel = d.SourceLabel,
+                CaptureExperience = d.CaptureExperience,
+                CaptureAccessContextId = d.CaptureAccessContextId,
+                CaptureAccessRevision = d.CaptureAccessRevision,
+                CapturePropertyId = d.CapturePropertyId,
+                CaptureUnitId = d.CaptureUnitId,
+                CaptureLeaseManagementId = d.CaptureLeaseManagementId,
+                CaptureLeaseAgreementId = d.CaptureLeaseAgreementId,
+                CaptureTenantAccountId = d.CaptureTenantAccountId,
+                CaptureTenantLedgerEntryId = d.CaptureTenantLedgerEntryId,
+                CaptureWorkOrderId = d.CaptureWorkOrderId,
+                CaptureApplicationId = d.CaptureApplicationId,
+                CaptureRentalListingId = d.CaptureRentalListingId,
+                CreatedEntityType = d.Status == "Confirmed" && d.ConfirmedEntityId != null
+                    ? d.TargetEntityType
+                    : null,
+                CreatedEntityId = d.Status != "Confirmed" || d.ConfirmedEntityId == null
+                    ? null
+                    : d.TargetEntityType == "Payment"
+                        ? _db.TenantLedgerEntries
+                            .Where(entry => entry.PortfolioId == portfolioId
+                                && entry.TenantAccountId == d.ConfirmedEntityId
+                                && entry.EntryType == TenantLedgerEntryType.PaymentReceipt
+                                && entry.BusinessKey == "scan-receipt:" + d.Id)
+                            .Select(entry => (long?)entry.Id)
+                            .FirstOrDefault()
+                        : (long?)d.ConfirmedEntityId,
+                CreatedUnitId = d.Status != "Confirmed" || d.ConfirmedEntityId == null
+                    ? null
+                    : d.TargetEntityType == "Payment"
+                        ? _db.TenantAccounts
+                            .Where(account => account.PortfolioId == portfolioId
+                                && account.Id == d.ConfirmedEntityId)
+                            .Select(account => account.LeaseManagement != null
+                                ? (int?)account.LeaseManagement.UnitId
+                                : null)
+                            .FirstOrDefault()
+                        : d.TargetEntityType == "Expense"
+                            ? _db.Expenses
+                                .Where(e => e.PortfolioId == portfolioId && e.Id == d.ConfirmedEntityId)
+                                .Select(e => e.UnitId ?? (e.WorkOrder != null ? e.WorkOrder.UnitId : null))
+                                .FirstOrDefault()
+                            : d.TargetEntityType == "WorkOrder"
+                                ? _db.WorkOrders
+                                    .Where(w => w.PortfolioId == portfolioId && w.Id == d.ConfirmedEntityId)
+                                    .Select(w => w.UnitId)
+                                    .FirstOrDefault()
+                                : d.TargetEntityType == nameof(LeaseAgreement)
+                                    ? _db.LeaseAgreements
+                                        .Where(agreement => agreement.PortfolioId == portfolioId
+                                            && agreement.Id == d.ConfirmedEntityId)
+                                        .Select(agreement => (int?)agreement.LeaseManagement!.UnitId)
+                                        .FirstOrDefault()
+                                    : d.TargetEntityType == "Application" || d.TargetEntityType == "RentalApplication"
+                                        ? _db.RentalApplications
+                                            .Where(a => a.PortfolioId == portfolioId && a.Id == d.ConfirmedEntityId)
+                                            .Select(a => a.UnitId)
+                                            .FirstOrDefault()
+                                        : null,
+            })
             .ToListAsync(ct);
 
-        var filePaths = drafts.Select(d => d.FilePath).ToHashSet(StringComparer.Ordinal);
-        var linkedFiles = filePaths.Count == 0
-            ? new Dictionary<string, StoredFile>(StringComparer.Ordinal)
-            : await _db.StoredFiles
-                .AsNoTracking()
-                .Where(f => f.PortfolioId == portfolioId && filePaths.Contains(f.FilePath))
-                .ToDictionaryAsync(f => f.FilePath, ct);
-
-        var createdRefs = new List<CreatedEntityRef>();
+        var items = new List<ScanDraftResponse>(drafts.Count);
         foreach (var draft in drafts)
         {
-            if (linkedFiles.TryGetValue(draft.FilePath, out var linkedFile)
-                && linkedFile.EntityId is > 0
-                && !string.IsNullOrWhiteSpace(linkedFile.EntityType))
-            {
-                createdRefs.Add(new CreatedEntityRef(linkedFile.EntityType, linkedFile.EntityId.Value));
-            }
+            items.Add(new ScanDraftResponse(
+                draft.Id, draft.PortfolioId, draft.TargetEntityType, draft.Status,
+                $"/api/v1/scans/{draft.Id}/file",
+                ScanDraftResponse.ParseFields(draft.ExtractedFields),
+                draft.ModelId, draft.TokensUsed, draft.CostUsd, draft.FailureReason,
+                draft.CreatedAt, draft.ReviewedAt, draft.ConfirmedAt,
+                draft.CreatedEntityType, draft.CreatedEntityId, draft.CreatedUnitId,
+                CaptureContext: new ScanCaptureContextDto(
+                    draft.CaptureExperience?.ToString(), draft.CaptureAccessContextId,
+                    draft.CaptureAccessRevision, draft.CapturePropertyId, draft.CaptureUnitId,
+                    draft.CaptureLeaseManagementId, draft.CaptureLeaseAgreementId,
+                    draft.CaptureTenantAccountId, draft.CaptureTenantLedgerEntryId,
+                    draft.CaptureWorkOrderId, draft.CaptureApplicationId,
+                    draft.CaptureRentalListingId, draft.SourceLabel),
+                SourceContentSha256: draft.SourceContentSha256));
         }
-
-        var createdUnitIds = await ResolveCreatedUnitIdsAsync(portfolioId, createdRefs, ct);
-
-        var items = drafts.Select(d =>
-        {
-            linkedFiles.TryGetValue(d.FilePath, out var linkedFile);
-            int? createdUnitId = null;
-            if (linkedFile?.EntityId is > 0 && !string.IsNullOrWhiteSpace(linkedFile.EntityType))
-            {
-                createdUnitId = createdUnitIds.GetValueOrDefault((linkedFile.EntityType, linkedFile.EntityId.Value));
-            }
-
-            return ScanDraftResponse.FromEntity(d, linkedFile?.EntityType, linkedFile?.EntityId, createdUnitId);
-        }).ToList();
 
         return new ScanDraftListResponse(items, totalCount, listQuery.NormalizedSkip, listQuery.NormalizedTake);
-    }
-
-    private async Task<IReadOnlyDictionary<(string EntityType, int EntityId), int?>> ResolveCreatedUnitIdsAsync(
-        int portfolioId,
-        IReadOnlyList<CreatedEntityRef> refs,
-        CancellationToken ct)
-    {
-        var unitIds = new Dictionary<(string, int), int?>();
-        if (refs.Count == 0)
-        {
-            return unitIds;
-        }
-
-        List<int> Ids(string type)
-        {
-            var ids = new List<int>();
-            foreach (var item in refs)
-            {
-                if (string.Equals(item.EntityType, type, StringComparison.OrdinalIgnoreCase)
-                    && !ids.Contains(item.EntityId))
-                {
-                    ids.Add(item.EntityId);
-                }
-            }
-
-            return ids;
-        }
-
-        async Task AddAsync(string type, IQueryable<CreatedUnitRefRow> projected)
-        {
-            foreach (var row in await projected.ToListAsync(ct))
-            {
-                unitIds[(type, row.Id)] = row.UnitId;
-            }
-        }
-
-        var paymentIds = Ids("Payment");
-        if (paymentIds.Count > 0)
-        {
-            await AddAsync("Payment", _db.Payments.AsNoTracking()
-                .Where(p => p.PortfolioId == portfolioId && paymentIds.Contains(p.Id))
-                .Select(p => new CreatedUnitRefRow { Id = p.Id, UnitId = p.Lease != null ? (int?)p.Lease.UnitId : null }));
-        }
-
-        var expenseIds = Ids("Expense");
-        if (expenseIds.Count > 0)
-        {
-            await AddAsync("Expense", _db.Expenses.AsNoTracking()
-                .Where(e => e.PortfolioId == portfolioId && expenseIds.Contains(e.Id))
-                .Select(e => new CreatedUnitRefRow
-                {
-                    Id = e.Id,
-                    UnitId = e.UnitId ?? (e.WorkOrder != null ? e.WorkOrder.UnitId : null),
-                }));
-        }
-
-        var workOrderIds = Ids("WorkOrder");
-        if (workOrderIds.Count > 0)
-        {
-            await AddAsync("WorkOrder", _db.WorkOrders.AsNoTracking()
-                .Where(w => w.PortfolioId == portfolioId && workOrderIds.Contains(w.Id))
-                .Select(w => new CreatedUnitRefRow { Id = w.Id, UnitId = w.UnitId }));
-        }
-
-        var leaseIds = Ids("Lease");
-        if (leaseIds.Count > 0)
-        {
-            await AddAsync("Lease", _db.Leases.AsNoTracking()
-                .Where(l => l.PortfolioId == portfolioId && leaseIds.Contains(l.Id))
-                .Select(l => new CreatedUnitRefRow { Id = l.Id, UnitId = l.UnitId }));
-        }
-
-        var applicationIds = Ids("Application");
-        applicationIds.AddRange(Ids("RentalApplication").Where(id => !applicationIds.Contains(id)));
-        if (applicationIds.Count > 0)
-        {
-            var rows = await _db.RentalApplications.AsNoTracking()
-                .Where(a => a.PortfolioId == portfolioId && applicationIds.Contains(a.Id))
-                .Select(a => new CreatedUnitRefRow { Id = a.Id, UnitId = a.UnitId })
-                .ToListAsync(ct);
-
-            foreach (var row in rows)
-            {
-                unitIds[("Application", row.Id)] = row.UnitId;
-                unitIds[("RentalApplication", row.Id)] = row.UnitId;
-            }
-        }
-
-        return unitIds;
     }
 
     private async Task<int?> ResolveCreatedUnitIdAsync(
         int portfolioId,
         string? entityType,
-        int? entityId,
+        long? entityId,
         CancellationToken ct)
     {
         if (entityId is not > 0 || string.IsNullOrWhiteSpace(entityType))
@@ -619,11 +805,6 @@ public class ScanController : ManagementControllerBase
 
         return entityType switch
         {
-            "Payment" => await _db.Payments
-                .AsNoTracking()
-                .Where(p => p.PortfolioId == portfolioId && p.Id == entityId.Value)
-                .Select(p => p.Lease != null ? (int?)p.Lease.UnitId : null)
-                .FirstOrDefaultAsync(ct),
             "Expense" => await _db.Expenses
                 .AsNoTracking()
                 .Where(e => e.PortfolioId == portfolioId && e.Id == entityId.Value)
@@ -634,10 +815,10 @@ public class ScanController : ManagementControllerBase
                 .Where(w => w.PortfolioId == portfolioId && w.Id == entityId.Value)
                 .Select(w => w.UnitId)
                 .FirstOrDefaultAsync(ct),
-            "Lease" => await _db.Leases
+            nameof(LeaseAgreement) => await _db.LeaseAgreements
                 .AsNoTracking()
-                .Where(l => l.PortfolioId == portfolioId && l.Id == entityId.Value)
-                .Select(l => (int?)l.UnitId)
+                .Where(agreement => agreement.PortfolioId == portfolioId && agreement.Id == entityId.Value)
+                .Select(agreement => (int?)agreement.LeaseManagement!.UnitId)
                 .FirstOrDefaultAsync(ct),
             "Application" or "RentalApplication" => await _db.RentalApplications
                 .AsNoTracking()
@@ -648,12 +829,37 @@ public class ScanController : ManagementControllerBase
         };
     }
 
-    private readonly record struct CreatedEntityRef(string EntityType, int EntityId);
-
-    private sealed class CreatedUnitRefRow
+    private sealed class ScanDraftPageQueryRow
     {
-        public int Id { get; set; }
-        public int? UnitId { get; set; }
+        public int Id { get; init; }
+        public int PortfolioId { get; init; }
+        public string TargetEntityType { get; init; } = string.Empty;
+        public string Status { get; init; } = string.Empty;
+        public string? ExtractedFields { get; init; }
+        public string? ModelId { get; init; }
+        public int? TokensUsed { get; init; }
+        public decimal? CostUsd { get; init; }
+        public string? FailureReason { get; init; }
+        public DateTime CreatedAt { get; init; }
+        public DateTime? ReviewedAt { get; init; }
+        public DateTime? ConfirmedAt { get; init; }
+        public string? SourceContentSha256 { get; init; }
+        public string? SourceLabel { get; init; }
+        public WorkspaceExperience? CaptureExperience { get; init; }
+        public int? CaptureAccessContextId { get; init; }
+        public long? CaptureAccessRevision { get; init; }
+        public int? CapturePropertyId { get; init; }
+        public int? CaptureUnitId { get; init; }
+        public int? CaptureLeaseManagementId { get; init; }
+        public int? CaptureLeaseAgreementId { get; init; }
+        public int? CaptureTenantAccountId { get; init; }
+        public long? CaptureTenantLedgerEntryId { get; init; }
+        public int? CaptureWorkOrderId { get; init; }
+        public int? CaptureApplicationId { get; init; }
+        public int? CaptureRentalListingId { get; init; }
+        public string? CreatedEntityType { get; init; }
+        public long? CreatedEntityId { get; init; }
+        public int? CreatedUnitId { get; init; }
     }
 
     // -------------------------------------------------------------------------
@@ -664,30 +870,47 @@ public class ScanController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Retry(int id, CancellationToken ct)
+    public async Task<IActionResult> Retry(
+        int id,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var portfolioId = GetPortfolioId();
+        if (string.IsNullOrWhiteSpace(idempotencyKey) || idempotencyKey.Trim().Length > 200)
+            return BadRequest(new { error = "A valid Idempotency-Key is required (maximum 200 characters)." });
 
-        var updated = await _db.ScanDrafts
-            .Where(d => d.Id == id && d.PortfolioId == portfolioId && d.Status == "Failed")
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(d => d.Status, "Pending")
-                .SetProperty(d => d.ExtractedFields, (string?)null)
-                .SetProperty(d => d.ModelId, (string?)null)
-                .SetProperty(d => d.TokensUsed, (int?)null)
-                .SetProperty(d => d.CostUsd, (decimal?)null)
-                .SetProperty(d => d.FailureReason, (string?)null)
-                .SetProperty(d => d.ReviewedAt, (DateTime?)null)
-                .SetProperty(d => d.ReviewedBy, (string?)null)
-                .SetProperty(d => d.ConfirmedAt, (DateTime?)null), ct);
+        var scope = GetWorkspaceReadScope();
+        var operationDigest = Convert.ToHexString(SHA256.HashData(
+                Encoding.UTF8.GetBytes(idempotencyKey.Trim())))
+            .ToLowerInvariant();
+        var command = new RetryScanDraftCommand(
+            scope.PortfolioId,
+            id,
+            scope.UserId,
+            scope.SessionId,
+            scope.AccessContextId,
+            scope.AccessRevision,
+            $"scan-retry:{scope.PortfolioId}:{id}:{operationDigest}");
+        ScanDraftMutationResult result;
+        try
+        {
+            var outcome = await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "scan-draft.retry",
+                    $"{scope.PortfolioId}:{id}:{operationDigest}"),
+                command,
+                DraftMutationCodec,
+                ct);
+            result = outcome.Value;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return NotFound(new { error = "Scan draft not found" });
+        }
 
-        if (updated == 1)
+        if (result.Outcome == ScanDraftMutationOutcome.Applied)
             return Ok();
 
-        var exists = await _db.ScanDrafts
-            .AnyAsync(d => d.Id == id && d.PortfolioId == portfolioId, ct);
-
-        return exists
+        return result.Outcome == ScanDraftMutationOutcome.InvalidStatus
             ? BadRequest(new { error = "Only failed scan drafts can be retried." })
             : NotFound(new { error = "Scan draft not found" });
     }
@@ -701,7 +924,8 @@ public class ScanController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> DownloadFile(int id, [FromQuery] string? full, CancellationToken ct)
     {
-        var portfolioId = GetPortfolioId();
+        var scope = GetWorkspaceReadScope();
+        var portfolioId = scope.PortfolioId;
 
         // Accept both ?full=1 and ?full=true (case-insensitive). A plain bool param would
         // 400 on "1"/"0", so parse the flag ourselves; anything else (null, empty, "0",
@@ -710,8 +934,8 @@ public class ScanController : ManagementControllerBase
             && (full.Equals("1", StringComparison.OrdinalIgnoreCase)
                 || full.Equals("true", StringComparison.OrdinalIgnoreCase));
 
-        var draft = await _db.ScanDrafts
-            .FirstOrDefaultAsync(d => d.Id == id && d.PortfolioId == portfolioId, ct);
+        var draft = await AuthorizedDrafts(scope)
+            .FirstOrDefaultAsync(d => d.Id == id, ct);
 
         if (draft is null)
             return NotFound(new { error = "Scan draft not found" });
@@ -765,35 +989,113 @@ public class ScanController : ManagementControllerBase
     }
 
     // -------------------------------------------------------------------------
-    // POST /api/v1/scans/{id}/confirm  — confirm a draft → create Expense
+    // POST /api/v1/scans/{id}/confirm  — atomically confirm a reviewed draft
     // -------------------------------------------------------------------------
 
     [HttpPost("{id:int}/confirm")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
     public async Task<IActionResult> Confirm(
         int id,
         [FromBody] ConfirmScanRequest? body,
         CancellationToken ct)
     {
-        var result = await _scan.ConfirmAndCreateAsync(
-            GetPortfolioId(), id, GetUserId(), body?.OverridesJson ?? "{}", ct);
-
-        if (!result.Success)
-            return BadRequest(new { error = result.Error });
-
-        // Return a named id field that matches the created entity type so clients can
-        // navigate directly to the record. Both keys are included for backward compatibility
-        // (older clients that always read expenseId still get a value; newer clients use
-        // entityType + entityId for a generic approach).
-        return result.EntityType switch
+        if (body is null || string.IsNullOrWhiteSpace(body.ClientOperationId)
+            || body.ClientOperationId.Trim().Length > 160)
         {
-            "Payment" => Ok(new { paymentId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId, unitId = result.UnitId }),
-            "WorkOrder" => Ok(new { workOrderId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId, unitId = result.UnitId }),
-            "Lease" => Ok(new { leaseId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId, unitId = result.UnitId }),
-            "Application" => Ok(new { applicationId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId, unitId = result.UnitId }),
-            "Loan" => Ok(new { loanId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId, unitId = result.UnitId }),
-            _ => Ok(new { expenseId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId, unitId = result.UnitId }),
+            return BadRequest(new { error = "clientOperationId is required and cannot exceed 160 characters." });
+        }
+
+        var scope = GetWorkspaceReadScope();
+        var portfolioId = scope.PortfolioId;
+        if (!await AuthorizedDrafts(scope).AnyAsync(draft => draft.Id == id, ct))
+            return NotFound(new { error = "Scan draft not found." });
+        ScanConfirmationPreparation preparation;
+        try
+        {
+            preparation = await _scan.PrepareConfirmationAsync(
+                portfolioId, id, GetUserId(), body.OverridesJson ?? "{}", ct);
+        }
+        catch (ScanConfirmationValidationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+
+        if (preparation.Outcome == ScanConfirmationPreparationOutcome.DraftNotFound)
+            return NotFound(new { error = preparation.Error });
+        if (preparation.Outcome == ScanConfirmationPreparationOutcome.TemporarilyUnavailable)
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = preparation.Error });
+        if (preparation.Outcome != ScanConfirmationPreparationOutcome.Ready
+            || preparation.Command is null)
+            return BadRequest(new { error = preparation.Error ?? "Scan confirmation request is invalid." });
+
+        if (!TryGetActiveAccessContext(out var active))
+            return Forbid();
+        var operationDigest = Convert.ToHexString(SHA256.HashData(
+                Encoding.UTF8.GetBytes(body.ClientOperationId.Trim())))
+            .ToLowerInvariant();
+        var command = preparation.Command with
+        {
+            AuthSessionId = active.SessionId,
+            AccessContextId = active.AccessContextId,
+            ExpectedAccessRevision = active.AccessRevision,
+            DeliveryIdempotencyKey = $"scan-confirm:{portfolioId}:{id}:{operationDigest}",
+        };
+
+        AtomicCommandOutcome<ConfirmScanDraftResult> atomicResult;
+        try
+        {
+            atomicResult = await _atomic.ExecuteAsync(
+                ScanConfirmationCommandIdentity.Create(
+                    portfolioId, id, body.ClientOperationId),
+                command,
+                ConfirmResultCodec,
+                ct);
+        }
+        catch (ScanConfirmationValidationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
+        }
+
+        var result = atomicResult.Value;
+        return result.Outcome switch
+        {
+            ConfirmScanDraftOutcome.Confirmed or ConfirmScanDraftOutcome.AlreadyConfirmed =>
+                ConfirmationOk(result, atomicResult.Disposition),
+            ConfirmScanDraftOutcome.DraftNotFound => NotFound(new { error = result.Error ?? "Scan draft not found." }),
+            ConfirmScanDraftOutcome.DraftRejected => Conflict(new { error = result.Error ?? "Scan draft is rejected." }),
+            _ => BadRequest(new { error = result.Error ?? "Scan draft could not be confirmed." }),
+        };
+    }
+
+    private IActionResult ConfirmationOk(
+        ConfirmScanDraftResult result,
+        AtomicCommandDisposition disposition)
+    {
+        var replayed = disposition is AtomicCommandDisposition.Replayed or AtomicCommandDisposition.Joined;
+        var atomicDisposition = disposition.ToString();
+        var entityType = Enum.TryParse<ScanConfirmationTargetKind>(
+            result.TargetEntityType, ignoreCase: true, out var targetKind)
+            ? targetKind.ToString()
+            : result.TargetEntityType;
+        var status = result.Outcome == ConfirmScanDraftOutcome.AlreadyConfirmed
+            ? "alreadyConfirmed"
+            : "confirmed";
+        return entityType switch
+        {
+            "Payment" => Ok(new { receiptId = result.LedgerEntryId, tenantAccountId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
+            "WorkOrder" => Ok(new { workOrderId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
+            "Application" => Ok(new { applicationId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
+            "Loan" => Ok(new { loanId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
+            nameof(LeaseAgreement) => Ok(new { leaseManagementId = result.LeaseManagementId, agreementId = result.TargetEntityId, entityType = nameof(LeaseAgreement), entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
+            _ => Ok(new { expenseId = result.TargetEntityId, entityType, entityId = result.TargetEntityId, unitId = result.UnitId, status, replayed, atomicDisposition }),
         };
     }
 
@@ -810,7 +1112,7 @@ public class ScanController : ManagementControllerBase
         CancellationToken ct)
     {
         var found = await _scan.RejectDraftAsync(
-            GetPortfolioId(), id, GetUserId(), body?.Reason, ct);
+            GetWorkspaceReadScope(), id, GetUserId(), body?.Reason, ct);
 
         return found ? Ok() : NotFound(new { error = "Scan draft not found" });
     }

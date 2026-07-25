@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -6,6 +7,7 @@ using Moq;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Simulation;
 using RentalCommand.Engine.Services;
 using RentalCommand.Engine.Workers;
 using Testcontainers.PostgreSql;
@@ -82,6 +84,7 @@ public sealed class DevWorkersCommandBridgeTests : IAsyncLifetime
 
         var services = new ServiceCollection();
         services.AddDbContext<RentalCommandDbContext>(o => o.UseNpgsql(_conn));
+        services.AddScoped<ISimWorkerCommandClaimStore, SimWorkerCommandClaimStore>();
         services.AddSingleton(rentCharge.Object);
         services.AddSingleton<SimWorkerRegistry>();
         await using var provider = services.BuildServiceProvider();
@@ -98,7 +101,9 @@ public sealed class DevWorkersCommandBridgeTests : IAsyncLifetime
         {
             var row = await verify.SimWorkerCommands.AsNoTracking().SingleAsync(c => c.Id == id);
             row.Status.Should().Be(SimWorkerCommandStatus.Done);
-            row.ResultJson.Should().Contain("\"created\":3");
+            row.ResultJson.Should().NotBeNull();
+            using var result = JsonDocument.Parse(row.ResultJson!);
+            result.RootElement.GetProperty("created").GetInt32().Should().Be(3);
             row.CompletedRealUtc.Should().NotBeNull();
             row.Error.Should().BeNull();
         }
@@ -132,6 +137,7 @@ public sealed class DevWorkersCommandBridgeTests : IAsyncLifetime
 
         var services = new ServiceCollection();
         services.AddDbContext<RentalCommandDbContext>(o => o.UseNpgsql(_conn));
+        services.AddScoped<ISimWorkerCommandClaimStore, SimWorkerCommandClaimStore>();
         services.AddSingleton(lateFee.Object);
         services.AddSingleton<SimWorkerRegistry>();
         await using var provider = services.BuildServiceProvider();

@@ -1,48 +1,59 @@
-using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
 using Microsoft.Extensions.Options;
 using Stripe;
 using Stripe.Checkout;
 using RentalCommand.Core.Configuration;
-using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
-using RentalCommand.Data;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Payments;
 
 namespace RentalCommand.Api.Services.Payments;
 
 /// <inheritdoc cref="IStripePaymentService"/>
 public class StripePaymentService : IStripePaymentService
 {
-    // Checkout/SetupIntent metadata keys — carried by Stripe back to the webhook so we can
-    // resolve which Payment was paid / which lease enrolled in autopay.
-    private const string MetadataPaymentId = "paymentId";
+    // Canonical account/attempt facts carried back to the signature-verified webhook.
+    private const string MetadataTenantAccountId = "tenantAccountId";
+    private const string MetadataChargeLedgerEntryId = "chargeLedgerEntryId";
+    private const string MetadataPaymentAttemptId = "paymentAttemptId";
     private const string MetadataPortfolioId = "portfolioId";
-    private const string MetadataLeaseId = "leaseId";
+    private const string MetadataAuthorizingPartyId = "authorizingPartyId";
+    private const string MetadataActorUserId = "actorUserId";
     private const string MetadataTenantId = "tenantId";
     private const string MetadataAutopay = "autopay";
 
     private const string DefaultSuccessUrl = "/portal/payments?checkout=success";
     private const string DefaultCancelUrl = "/portal/payments?checkout=cancel";
 
-    private readonly RentalCommandDbContext _db;
     private readonly StripeConfig _config;
     private readonly ISandboxGuard _sandbox;
     private readonly ILogger<StripePaymentService> _logger;
     private readonly TimeProvider _timeProvider;
+    private readonly IAtomicUnitOfWork _atomicUnitOfWork;
+
+    private static readonly AtomicJsonResultCodec<PrepareProviderPaymentCreateResult> PrepareCodec =
+        new("prepare-provider-payment-create-result.v1");
+    private static readonly AtomicJsonResultCodec<FinalizeProviderPaymentCreateResult> FinalizeCodec =
+        new("finalize-provider-payment-create-result.v1");
+    private static readonly AtomicJsonResultCodec<PrepareProviderAutopaySetupResult> PrepareSetupCodec =
+        new("prepare-provider-autopay-setup-result.v1");
+    private static readonly AtomicJsonResultCodec<RecordVerifiedProviderPaymentEventResult> ProviderEventCodec =
+        new("record-verified-provider-payment-event-result.v1");
 
     public StripePaymentService(
-        RentalCommandDbContext db,
         IOptions<StripeConfig> config,
         ISandboxGuard sandbox,
         ILogger<StripePaymentService> logger,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IAtomicUnitOfWork atomicUnitOfWork)
     {
-        _db = db;
         _config = config.Value;
         _sandbox = sandbox;
         _logger = logger;
         _timeProvider = timeProvider;
+        _atomicUnitOfWork = atomicUnitOfWork;
     }
 
     /// <inheritdoc/>
@@ -57,7 +68,8 @@ public class StripePaymentService : IStripePaymentService
     }
 
     /// <inheritdoc/>
-    public async Task<CreateIntentResult> CreatePaymentIntentAsync(int portfolioId, int paymentId, CancellationToken ct)
+    public async Task<CreateIntentResult> CreatePaymentIntentAsync(
+        int portfolioId, int tenantAccountId, long chargeLedgerEntryId, int actorUserId, CancellationToken ct)
     {
         if (!_config.Enabled)
         {
@@ -72,10 +84,23 @@ public class StripePaymentService : IStripePaymentService
             return CreateIntentResult.NotEnabled();
         }
 
-        var payment = await _db.Payments
-            .FirstOrDefaultAsync(p => p.Id == paymentId && p.PortfolioId == portfolioId, ct);
-
-        if (payment == null)
+        var idempotencyKey = BuildPaymentIdempotencyKey("intent", chargeLedgerEntryId);
+        var prepared = await _atomicUnitOfWork.ExecuteAsync(
+            new AtomicCommandIdentity("payments.provider-create.prepare", idempotencyKey),
+            new PrepareProviderPaymentCreateCommand(
+                portfolioId,
+                tenantAccountId,
+                chargeLedgerEntryId,
+                actorUserId,
+                TenantId: null,
+                AutopayEnrollmentId: null,
+                Provider: "stripe",
+                IdempotencyKey: idempotencyKey,
+                Currency: "USD",
+                PreparedAtUtc: _timeProvider.UtcNow()),
+            PrepareCodec,
+            ct);
+        if (prepared.Value.Outcome == PrepareProviderPaymentCreateOutcome.NotFound)
         {
             return CreateIntentResult.NotFound();
         }
@@ -85,16 +110,18 @@ public class StripePaymentService : IStripePaymentService
             ApiKey = _config.SecretKey,
             // Deterministic per payment + period: a retried/double-submitted create returns the
             // original PaymentIntent rather than minting a second one for the same rent obligation.
-            IdempotencyKey = BuildPaymentIdempotencyKey("intent", payment),
+            IdempotencyKey = idempotencyKey,
         };
         var intentService = new PaymentIntentService();
         var intent = await intentService.CreateAsync(new PaymentIntentCreateOptions
         {
-            Amount = (long)(payment.Amount * 100),
+            Amount = (long)(prepared.Value.Amount * 100),
             Currency = "usd",
             Metadata = new Dictionary<string, string>
             {
-                ["paymentId"] = paymentId.ToString(),
+                [MetadataTenantAccountId] = tenantAccountId.ToString(),
+                [MetadataChargeLedgerEntryId] = chargeLedgerEntryId.ToString(),
+                [MetadataPaymentAttemptId] = prepared.Value.PaymentAttemptId.ToString(),
                 ["portfolioId"] = portfolioId.ToString()
             },
             AutomaticPaymentMethods = new PaymentIntentAutomaticPaymentMethodsOptions
@@ -103,33 +130,35 @@ public class StripePaymentService : IStripePaymentService
             }
         }, requestOptions, ct);
 
-        var now = _timeProvider.UtcNow();
-        var transaction = new PaymentTransaction
-        {
-            PortfolioId = portfolioId,
-            PaymentId = paymentId,
-            Amount = payment.Amount,
-            Currency = "usd",
-            Provider = "stripe",
-            ProviderPaymentIntentId = intent.Id,
-            Status = PaymentTransactionStatus.Pending,
-            CreatedAt = now,
-            UpdatedAt = now
-        };
-
-        _db.PaymentTransactions.Add(transaction);
-        await _db.SaveChangesAsync(ct);
+        await _atomicUnitOfWork.ExecuteAsync(
+            new AtomicCommandIdentity("payments.provider-create.finalize", idempotencyKey),
+            new FinalizeProviderPaymentCreateCommand(
+                portfolioId,
+                tenantAccountId,
+                prepared.Value.PaymentAttemptId,
+                Provider: "stripe",
+                IdempotencyKey: idempotencyKey,
+                ProviderPaymentId: intent.Id,
+                State: TenantPaymentAttemptState.Submitted,
+                FailureReason: null,
+                RecordedAtUtc: _timeProvider.UtcNow()),
+            FinalizeCodec,
+            ct);
 
         _logger.LogInformation(
-            "Created Stripe PaymentIntent {IntentId} for payment {PaymentId} (portfolio {PortfolioId})",
-            intent.Id, paymentId, portfolioId);
+            "Created Stripe PaymentIntent {IntentId} for tenant account {TenantAccountId} charge {ChargeId} (portfolio {PortfolioId})",
+            intent.Id, tenantAccountId, chargeLedgerEntryId, portfolioId);
 
-        return CreateIntentResult.Ok(intent.ClientSecret!, _config.PublishableKey, transaction.Id);
+        return CreateIntentResult.Ok(
+            intent.ClientSecret!,
+            _config.PublishableKey,
+            prepared.Value.PaymentAttemptId);
     }
 
     /// <inheritdoc/>
     public async Task<CheckoutResult> CreatePaymentCheckoutSessionAsync(
-        int portfolioId, int tenantId, int paymentId, string? successUrl, string? cancelUrl, CancellationToken ct)
+        int portfolioId, int tenantId, int tenantAccountId, long chargeLedgerEntryId, int actorUserId,
+        string? successUrl, string? cancelUrl, CancellationToken ct)
     {
         if (!_config.Enabled)
         {
@@ -144,31 +173,33 @@ public class StripePaymentService : IStripePaymentService
             return CheckoutResult.NotEnabled();
         }
 
-        // OWNERSHIP: the payment must be in this portfolio AND on a lease belonging to the calling
-        // tenant. A payment on someone else's lease is simply "not found" — a tenant can never pay,
-        // or even probe the existence of, another tenant's rent (IDOR guard).
-        var payment = await _db.Payments
-            .FirstOrDefaultAsync(
-                p => p.Id == paymentId
-                     && p.PortfolioId == portfolioId
-                     && _db.Leases.Any(l => l.Id == p.LeaseId && l.TenantId == tenantId),
-                ct);
-
-        if (payment == null)
+        var idempotencyKey = BuildPaymentIdempotencyKey("checkout", chargeLedgerEntryId);
+        var prepared = await _atomicUnitOfWork.ExecuteAsync(
+            new AtomicCommandIdentity("payments.provider-create.prepare", idempotencyKey),
+            new PrepareProviderPaymentCreateCommand(
+                portfolioId,
+                tenantAccountId,
+                chargeLedgerEntryId,
+                actorUserId,
+                tenantId,
+                AutopayEnrollmentId: null,
+                Provider: "stripe",
+                IdempotencyKey: idempotencyKey,
+                Currency: "USD",
+                PreparedAtUtc: _timeProvider.UtcNow()),
+            PrepareCodec,
+            ct);
+        if (prepared.Value.Outcome == PrepareProviderPaymentCreateOutcome.NotFound)
         {
             return CheckoutResult.NotFound();
         }
-
-        var description = payment.PaymentType == PaymentType.Rent
-            ? $"Rent payment{(payment.PeriodKey != null ? $" — {payment.PeriodKey}" : "")}"
-            : $"{payment.PaymentType} payment";
 
         var requestOptions = new RequestOptions
         {
             ApiKey = _config.SecretKey,
             // Deterministic per payment + period so a retried checkout returns the original session
             // for the same rent obligation instead of opening (and potentially charging via) a second.
-            IdempotencyKey = BuildPaymentIdempotencyKey("checkout", payment),
+            IdempotencyKey = idempotencyKey,
         };
         var sessionService = new SessionService();
         var session = await sessionService.CreateAsync(new SessionCreateOptions
@@ -176,6 +207,7 @@ public class StripePaymentService : IStripePaymentService
             Mode = "payment",
             // Card AND ACH bank debit, so a tenant can choose either at the hosted page.
             PaymentMethodTypes = new List<string> { "card", "us_bank_account" },
+            Expand = new List<string> { "payment_intent" },
             LineItems = new List<SessionLineItemOptions>
             {
                 new()
@@ -184,10 +216,10 @@ public class StripePaymentService : IStripePaymentService
                     PriceData = new SessionLineItemPriceDataOptions
                     {
                         Currency = "usd",
-                        UnitAmount = (long)(payment.Amount * 100),
+                        UnitAmount = (long)(prepared.Value.Amount * 100),
                         ProductData = new SessionLineItemPriceDataProductDataOptions
                         {
-                            Name = description,
+                            Name = "Tenant account payment",
                         },
                     },
                 },
@@ -195,40 +227,51 @@ public class StripePaymentService : IStripePaymentService
             // Carried back on checkout.session.completed so we can resolve + mark the Payment Paid.
             Metadata = new Dictionary<string, string>
             {
-                [MetadataPaymentId] = paymentId.ToString(),
+                [MetadataTenantAccountId] = tenantAccountId.ToString(),
+                [MetadataChargeLedgerEntryId] = chargeLedgerEntryId.ToString(),
+                [MetadataPaymentAttemptId] = prepared.Value.PaymentAttemptId.ToString(),
                 [MetadataPortfolioId] = portfolioId.ToString(),
+            },
+            PaymentIntentData = new SessionPaymentIntentDataOptions
+            {
+                Metadata = new Dictionary<string, string>
+                {
+                    [MetadataTenantAccountId] = tenantAccountId.ToString(),
+                    [MetadataChargeLedgerEntryId] = chargeLedgerEntryId.ToString(),
+                    [MetadataPaymentAttemptId] = prepared.Value.PaymentAttemptId.ToString(),
+                    [MetadataPortfolioId] = portfolioId.ToString(),
+                },
             },
             SuccessUrl = ResolveSuccessUrl(successUrl),
             CancelUrl = ResolveCancelUrl(cancelUrl),
         }, requestOptions, ct);
 
-        // Record a pending transaction now; the webhook flips it (and the Payment) on completion.
-        var now = _timeProvider.UtcNow();
-        var transaction = new PaymentTransaction
-        {
-            PortfolioId = portfolioId,
-            PaymentId = paymentId,
-            Amount = payment.Amount,
-            Currency = "usd",
-            Provider = "stripe",
-            ProviderPaymentIntentId = session.Id, // Checkout session id; reconciled on completion.
-            Status = PaymentTransactionStatus.Pending,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _db.PaymentTransactions.Add(transaction);
-        await _db.SaveChangesAsync(ct);
+        await _atomicUnitOfWork.ExecuteAsync(
+            new AtomicCommandIdentity("payments.provider-create.finalize", idempotencyKey),
+            new FinalizeProviderPaymentCreateCommand(
+                portfolioId,
+                tenantAccountId,
+                prepared.Value.PaymentAttemptId,
+                Provider: "stripe",
+                IdempotencyKey: idempotencyKey,
+                ProviderPaymentId: ResolveCheckoutPaymentObjectId(session),
+                State: TenantPaymentAttemptState.Submitted,
+                FailureReason: null,
+                RecordedAtUtc: _timeProvider.UtcNow()),
+            FinalizeCodec,
+            ct);
 
         _logger.LogInformation(
-            "Created Stripe Checkout session {SessionId} for payment {PaymentId} (portfolio {PortfolioId}, tenant {TenantId})",
-            session.Id, paymentId, portfolioId, tenantId);
+            "Created Stripe Checkout session {SessionId} for tenant account {TenantAccountId} charge {ChargeId} (portfolio {PortfolioId}, tenant {TenantId})",
+            session.Id, tenantAccountId, chargeLedgerEntryId, portfolioId, tenantId);
 
         return CheckoutResult.Ok(session.Url!);
     }
 
     /// <inheritdoc/>
     public async Task<CheckoutResult> CreateAutopaySetupSessionAsync(
-        int portfolioId, int tenantId, int leaseId, string? successUrl, string? cancelUrl, CancellationToken ct)
+        int portfolioId, int tenantId, int tenantAccountId, int actorUserId, string operationKey,
+        string? successUrl, string? cancelUrl, CancellationToken ct)
     {
         if (!_config.Enabled)
         {
@@ -243,17 +286,22 @@ public class StripePaymentService : IStripePaymentService
             return CheckoutResult.NotEnabled();
         }
 
-        // OWNERSHIP: lease must be the calling tenant's own lease in this portfolio.
-        var lease = await _db.Leases
-            .FirstOrDefaultAsync(
-                l => l.Id == leaseId && l.PortfolioId == portfolioId && l.TenantId == tenantId, ct);
-
-        if (lease == null)
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationKey);
+        var idempotencyKey = $"autopay-setup:{operationKey.Trim()}";
+        if (idempotencyKey.Length > 200)
+            throw new ArgumentException("Autopay setup operation key cannot exceed 186 characters.", nameof(operationKey));
+        var prepared = await _atomicUnitOfWork.ExecuteAsync(
+            new AtomicCommandIdentity("payments.provider-autopay.prepare", idempotencyKey),
+            new PrepareProviderAutopaySetupCommand(portfolioId, tenantAccountId, tenantId,
+                actorUserId, "stripe", idempotencyKey, "USD", _timeProvider.UtcNow()),
+            PrepareSetupCodec,
+            ct);
+        if (prepared.Value.Outcome == PrepareProviderAutopaySetupOutcome.NotFound)
         {
             return CheckoutResult.NotFound();
         }
 
-        var requestOptions = new RequestOptions { ApiKey = _config.SecretKey };
+        var requestOptions = new RequestOptions { ApiKey = _config.SecretKey, IdempotencyKey = idempotencyKey };
         var sessionService = new SessionService();
         var session = await sessionService.CreateAsync(new SessionCreateOptions
         {
@@ -265,7 +313,10 @@ public class StripePaymentService : IStripePaymentService
                 Metadata = new Dictionary<string, string>
                 {
                     [MetadataAutopay] = "1",
-                    [MetadataLeaseId] = leaseId.ToString(),
+                    [MetadataTenantAccountId] = tenantAccountId.ToString(),
+                    [MetadataAuthorizingPartyId] = prepared.Value.AuthorizingPartyId.ToString(),
+                    [MetadataActorUserId] = actorUserId.ToString(),
+                    [MetadataPaymentAttemptId] = prepared.Value.PaymentAttemptId.ToString(),
                     [MetadataTenantId] = tenantId.ToString(),
                     [MetadataPortfolioId] = portfolioId.ToString(),
                 },
@@ -273,7 +324,10 @@ public class StripePaymentService : IStripePaymentService
             Metadata = new Dictionary<string, string>
             {
                 [MetadataAutopay] = "1",
-                [MetadataLeaseId] = leaseId.ToString(),
+                [MetadataTenantAccountId] = tenantAccountId.ToString(),
+                [MetadataAuthorizingPartyId] = prepared.Value.AuthorizingPartyId.ToString(),
+                [MetadataActorUserId] = actorUserId.ToString(),
+                [MetadataPaymentAttemptId] = prepared.Value.PaymentAttemptId.ToString(),
                 [MetadataTenantId] = tenantId.ToString(),
                 [MetadataPortfolioId] = portfolioId.ToString(),
             },
@@ -281,9 +335,17 @@ public class StripePaymentService : IStripePaymentService
             CancelUrl = ResolveCancelUrl(cancelUrl),
         }, requestOptions, ct);
 
+        await _atomicUnitOfWork.ExecuteAsync(
+            new AtomicCommandIdentity("payments.provider-create.finalize", idempotencyKey),
+            new FinalizeProviderPaymentCreateCommand(portfolioId, tenantAccountId,
+                prepared.Value.PaymentAttemptId, "stripe", idempotencyKey, session.Id,
+                TenantPaymentAttemptState.Submitted, null, _timeProvider.UtcNow()),
+            FinalizeCodec,
+            ct);
+
         _logger.LogInformation(
-            "Created Stripe autopay setup session {SessionId} for lease {LeaseId} (portfolio {PortfolioId}, tenant {TenantId})",
-            session.Id, leaseId, portfolioId, tenantId);
+            "Created Stripe autopay setup session {SessionId} for tenant account {TenantAccountId} (portfolio {PortfolioId}, tenant {TenantId})",
+            session.Id, tenantAccountId, portfolioId, tenantId);
 
         return CheckoutResult.Ok(session.Url!);
     }
@@ -296,246 +358,160 @@ public class StripePaymentService : IStripePaymentService
         // this SDK build doesn't hard-fail every webhook. We only read a small, stable set of fields
         // (event id/type, session/intent id, payment_status, metadata) that are version-agnostic.
         var ev = EventUtility.ConstructEvent(json, signature, _config.WebhookSecret, throwOnApiVersionMismatch: false);
-
-        // Idempotency check — if we have already processed this event, skip it.
-        var existing = await _db.StripeWebhookEvents
-            .FirstOrDefaultAsync(e => e.EventId == ev.Id, ct);
-        if (existing != null)
-        {
-            _logger.LogInformation("Stripe webhook event {EventId} already processed — skipping", ev.Id);
-            return;
-        }
-
         var now = _timeProvider.UtcNow();
-        var webhookEvent = new StripeWebhookEvent
-        {
-            EventId = ev.Id,
-            EventType = ev.Type,
-            ReceivedAt = now
-        };
-        _db.StripeWebhookEvents.Add(webhookEvent);
-
-        // Run the per-type handler FIRST. Only if it succeeds do we mark the event processed and
-        // commit. If the handler throws, the exception propagates (→ controller returns non-2xx) and
-        // nothing is saved, so Stripe retries and we never leave a phantom "processed" event behind
-        // with stale payment state.
-        {
-            switch (ev.Type)
-            {
-                case "payment_intent.succeeded":
-                {
-                    var intent = ev.Data.Object as PaymentIntent;
-                    if (intent != null)
-                    {
-                        var transaction = await _db.PaymentTransactions
-                            .Include(t => t.Payment)
-                            .FirstOrDefaultAsync(t => t.ProviderPaymentIntentId == intent.Id, ct);
-
-                        if (transaction != null)
-                        {
-                            transaction.Status = PaymentTransactionStatus.Succeeded;
-                            transaction.UpdatedAt = now;
-
-                            if (transaction.Payment != null)
-                            {
-                                transaction.Payment.Status = PaymentStatus.Paid;
-                                transaction.Payment.PaidDate = now;
-                                transaction.Payment.Method = "card";
-                                transaction.Payment.ExternalReference = intent.Id;
-                                transaction.Payment.UpdatedAt = now;
-                            }
-
-                            _logger.LogInformation(
-                                "Stripe PaymentIntent {IntentId} succeeded — payment {PaymentId} marked Paid",
-                                intent.Id, transaction.PaymentId);
-                        }
-                        else
-                        {
-                            _logger.LogWarning(
-                                "No PaymentTransaction found for succeeded PaymentIntent {IntentId}", intent.Id);
-                        }
-                    }
-                    break;
-                }
-
-                case "payment_intent.payment_failed":
-                {
-                    var intent = ev.Data.Object as PaymentIntent;
-                    if (intent != null)
-                    {
-                        var transaction = await _db.PaymentTransactions
-                            .FirstOrDefaultAsync(t => t.ProviderPaymentIntentId == intent.Id, ct);
-
-                        if (transaction != null)
-                        {
-                            transaction.Status = PaymentTransactionStatus.Failed;
-                            transaction.FailureReason = intent.LastPaymentError?.Message;
-                            transaction.UpdatedAt = now;
-
-                            _logger.LogInformation(
-                                "Stripe PaymentIntent {IntentId} failed — reason: {Reason}",
-                                intent.Id, transaction.FailureReason);
-                        }
-                        else
-                        {
-                            _logger.LogWarning(
-                                "No PaymentTransaction found for failed PaymentIntent {IntentId}", intent.Id);
-                        }
-                    }
-                    break;
-                }
-
-                case "checkout.session.completed":
-                {
-                    var session = ev.Data.Object as Session;
-                    if (session != null)
-                    {
-                        await HandleCheckoutSessionCompletedAsync(session, now, ct);
-                    }
-                    break;
-                }
-
-                default:
-                    // Unknown event type — safe no-op; still recorded and returns 200.
-                    _logger.LogDebug("Stripe webhook event type {EventType} received but not handled", ev.Type);
-                    break;
-            }
-        }
-
-        // Handler completed without throwing — record the event as processed and persist the
-        // payment/transaction mutations together in a single SaveChanges.
-        webhookEvent.ProcessedAt = now;
-        await _db.SaveChangesAsync(ct);
-    }
-
-    /// <summary>
-    /// Dispatches a completed Checkout session: a setup session (mode=setup, autopay metadata) stores
-    /// an <see cref="AutopayEnrollment"/>; a payment session marks the linked <c>Payment</c> Paid once
-    /// Stripe reports the session paid. ACH sessions may complete before settlement — only flip to Paid
-    /// when PaymentStatus == "paid"; the PaymentIntent webhook also covers the later success.
-    /// </summary>
-    private async Task HandleCheckoutSessionCompletedAsync(Session session, DateTime now, CancellationToken ct)
-    {
-        var metadata = session.Metadata ?? new Dictionary<string, string>();
-
-        // --- Autopay setup session ---
-        if (session.Mode == "setup" ||
-            (metadata.TryGetValue(MetadataAutopay, out var autopayFlag) && autopayFlag == "1"))
-        {
-            await HandleAutopaySetupCompletedAsync(session, metadata, now, ct);
-            return;
-        }
-
-        // --- One-off rent payment session ---
-        // Only mark Paid once Stripe confirms the session itself is paid (card success; ACH that
-        // already settled). For still-processing ACH, leave the transaction Pending — the
-        // payment_intent.succeeded webhook flips it later.
-        if (!string.Equals(session.PaymentStatus, "paid", StringComparison.OrdinalIgnoreCase))
-        {
-            _logger.LogInformation(
-                "Checkout session {SessionId} completed but not yet paid (status {Status}) — leaving transaction pending",
-                session.Id, session.PaymentStatus);
-            return;
-        }
-
-        var transaction = await _db.PaymentTransactions
-            .Include(t => t.Payment)
-            .FirstOrDefaultAsync(t => t.ProviderPaymentIntentId == session.Id, ct);
-
-        if (transaction == null)
-        {
-            _logger.LogWarning("No PaymentTransaction found for completed Checkout session {SessionId}", session.Id);
-            return;
-        }
-
-        transaction.Status = PaymentTransactionStatus.Succeeded;
-        transaction.UpdatedAt = now;
-        // Pin the real PaymentIntent id so a later payment_intent.succeeded event reconciles to the
-        // same transaction (idempotent — it finds this row by ProviderPaymentIntentId).
-        if (!string.IsNullOrEmpty(session.PaymentIntentId))
-        {
-            transaction.ProviderPaymentIntentId = session.PaymentIntentId;
-        }
-
-        if (transaction.Payment != null && transaction.Payment.Status != PaymentStatus.Paid)
-        {
-            transaction.Payment.Status = PaymentStatus.Paid;
-            transaction.Payment.PaidDate = now;
-            transaction.Payment.Method = "online";
-            transaction.Payment.ExternalReference = session.PaymentIntentId ?? session.Id;
-            transaction.Payment.UpdatedAt = now;
-        }
+        var command = await NormalizeVerifiedEventAsync(ev, now, ct);
+        var outcome = await _atomicUnitOfWork.ExecuteAsync(
+            new AtomicCommandIdentity("payments.provider-event.record", $"stripe:{ev.Id}"),
+            command,
+            ProviderEventCodec,
+            ct);
 
         _logger.LogInformation(
-            "Checkout session {SessionId} paid — payment {PaymentId} marked Paid",
-            session.Id, transaction.PaymentId);
+            "Stripe webhook event {EventId} ({EventType}) completed with {Outcome}.",
+            ev.Id,
+            ev.Type,
+            outcome.Value.Outcome);
     }
 
-    /// <summary>
-    /// Resolves the saved payment method from the session's SetupIntent and stores (or refreshes) the
-    /// tenant's <see cref="AutopayEnrollment"/> as Active. Idempotent: a duplicate webhook delivery
-    /// updates the same active enrollment rather than creating a second.
-    /// </summary>
-    private async Task HandleAutopaySetupCompletedAsync(
-        Session session, IDictionary<string, string> metadata, DateTime now, CancellationToken ct)
+    private async Task<RecordVerifiedProviderPaymentEventCommand> NormalizeVerifiedEventAsync(
+        Event ev,
+        DateTime receivedAtUtc,
+        CancellationToken ct)
     {
-        if (!metadata.TryGetValue(MetadataLeaseId, out var leaseRaw) || !int.TryParse(leaseRaw, out var leaseId) ||
-            !metadata.TryGetValue(MetadataTenantId, out var tenantRaw) || !int.TryParse(tenantRaw, out var tenantId) ||
-            !metadata.TryGetValue(MetadataPortfolioId, out var portfolioRaw) || !int.TryParse(portfolioRaw, out var portfolioId))
+        if (ev.Data.Object is PaymentIntent intent &&
+            ev.Type is "payment_intent.succeeded" or "payment_intent.payment_failed" or "payment_intent.canceled")
         {
-            _logger.LogWarning(
-                "Autopay setup session {SessionId} completed without resolvable lease/tenant/portfolio metadata — skipping",
-                session.Id);
-            return;
-        }
-
-        // Resolve the saved payment method. The session carries the SetupIntent id; retrieve it to
-        // read the saved PaymentMethod + Customer that Stripe created for us.
-        string? customerId = session.CustomerId;
-        string? paymentMethodId = null;
-        if (!string.IsNullOrEmpty(session.SetupIntentId))
-        {
-            var setupIntentService = new SetupIntentService();
-            var setupIntent = await setupIntentService.GetAsync(
-                session.SetupIntentId,
-                requestOptions: new RequestOptions { ApiKey = _config.SecretKey },
-                cancellationToken: ct);
-            paymentMethodId = setupIntent.PaymentMethodId;
-            customerId ??= setupIntent.CustomerId;
-        }
-
-        if (string.IsNullOrEmpty(paymentMethodId) || string.IsNullOrEmpty(customerId))
-        {
-            _logger.LogWarning(
-                "Autopay setup session {SessionId} completed but no saved payment method/customer was resolved — not enrolling",
-                session.Id);
-            return;
-        }
-
-        var enrollment = await _db.AutopayEnrollments
-            .FirstOrDefaultAsync(e => e.LeaseId == leaseId && e.Active, ct);
-
-        if (enrollment == null)
-        {
-            enrollment = new AutopayEnrollment
+            var kind = ev.Type switch
             {
-                PortfolioId = portfolioId,
-                LeaseId = leaseId,
-                TenantId = tenantId,
-                CreatedAt = now,
+                "payment_intent.succeeded" => ProviderPaymentEventKind.Succeeded,
+                "payment_intent.payment_failed" => ProviderPaymentEventKind.Failed,
+                _ => ProviderPaymentEventKind.Canceled,
             };
-            _db.AutopayEnrollments.Add(enrollment);
+            return new RecordVerifiedProviderPaymentEventCommand(
+                "stripe",
+                ev.Id,
+                ev.Type,
+                JsonSerializer.Serialize(new
+                {
+                    intent.Id,
+                    intent.Status,
+                    intent.Amount,
+                    intent.Currency,
+                }),
+                intent.Id,
+                kind,
+                intent.Amount / 100m,
+                intent.Currency,
+                intent.LastPaymentError?.Message,
+                receivedAtUtc,
+                receivedAtUtc);
         }
 
-        enrollment.StripeCustomerId = customerId;
-        enrollment.StripePaymentMethodId = paymentMethodId;
-        enrollment.Active = true;
-        enrollment.UpdatedAt = now;
+        if (ev.Data.Object is Session session && ev.Type == "checkout.session.completed")
+        {
+            var metadata = session.Metadata ?? new Dictionary<string, string>();
+            var isSetup = session.Mode == "setup" ||
+                (metadata.TryGetValue(MetadataAutopay, out var autopay) && autopay == "1");
+            if (!isSetup)
+            {
+                return new RecordVerifiedProviderPaymentEventCommand(
+                    "stripe",
+                    ev.Id,
+                    ev.Type,
+                    JsonSerializer.Serialize(new
+                    {
+                        session.Id,
+                        session.PaymentIntentId,
+                        session.PaymentStatus,
+                        session.Mode,
+                    }),
+                    ResolveCheckoutPaymentObjectId(session),
+                    string.Equals(session.PaymentStatus, "paid", StringComparison.OrdinalIgnoreCase)
+                        ? ProviderPaymentEventKind.Succeeded
+                        : ProviderPaymentEventKind.Pending,
+                    session.AmountTotal is long amount ? amount / 100m : null,
+                    session.Currency,
+                    null,
+                    receivedAtUtc,
+                    receivedAtUtc);
+            }
 
-        _logger.LogInformation(
-            "Autopay enrolled for lease {LeaseId} (tenant {TenantId}, portfolio {PortfolioId}) via session {SessionId}",
-            leaseId, tenantId, portfolioId, session.Id);
+            metadata.TryGetValue(MetadataTenantAccountId, out var accountRaw);
+            metadata.TryGetValue(MetadataAuthorizingPartyId, out var partyRaw);
+            metadata.TryGetValue(MetadataActorUserId, out var actorRaw);
+            metadata.TryGetValue(MetadataPaymentAttemptId, out var attemptRaw);
+            metadata.TryGetValue(MetadataTenantId, out var tenantRaw);
+            metadata.TryGetValue(MetadataPortfolioId, out var portfolioRaw);
+            _ = int.TryParse(accountRaw, out var tenantAccountId);
+            _ = int.TryParse(partyRaw, out var authorizingPartyId);
+            _ = int.TryParse(actorRaw, out var actorUserId);
+            _ = long.TryParse(attemptRaw, out var paymentAttemptId);
+            _ = int.TryParse(tenantRaw, out var tenantId);
+            _ = int.TryParse(portfolioRaw, out var portfolioId);
+
+            string? customerId = session.CustomerId;
+            string? paymentMethodId = null;
+            if (!string.IsNullOrWhiteSpace(session.SetupIntentId))
+            {
+                var setupIntent = await new SetupIntentService().GetAsync(
+                    session.SetupIntentId,
+                    requestOptions: new RequestOptions { ApiKey = _config.SecretKey },
+                    cancellationToken: ct);
+                paymentMethodId = setupIntent.PaymentMethodId;
+                customerId ??= setupIntent.CustomerId;
+            }
+
+            return new RecordVerifiedProviderPaymentEventCommand(
+                "stripe",
+                ev.Id,
+                ev.Type,
+                JsonSerializer.Serialize(new
+                {
+                    session.Id,
+                    session.SetupIntentId,
+                    session.Mode,
+                    portfolioId,
+                    tenantAccountId,
+                    authorizingPartyId,
+                    actorUserId,
+                    paymentAttemptId,
+                    tenantId,
+                }),
+                session.Id,
+                ProviderPaymentEventKind.SetupCompleted,
+                null,
+                null,
+                null,
+                receivedAtUtc,
+                receivedAtUtc,
+                portfolioId > 0 ? portfolioId : null,
+                tenantAccountId > 0 ? tenantAccountId : null,
+                authorizingPartyId > 0 ? authorizingPartyId : null,
+                actorUserId > 0 ? actorUserId : null,
+                paymentAttemptId > 0 ? paymentAttemptId : null,
+                customerId,
+                paymentMethodId);
+        }
+
+        return new RecordVerifiedProviderPaymentEventCommand(
+            "stripe",
+            ev.Id,
+            ev.Type,
+            JsonSerializer.Serialize(new { ev.Id, ev.Type }),
+            $"event:{ev.Id}",
+            ProviderPaymentEventKind.Ignored,
+            null,
+            null,
+            null,
+            receivedAtUtc,
+            receivedAtUtc);
     }
+
+    internal static string ResolveCheckoutPaymentObjectId(Session session) =>
+        !string.IsNullOrWhiteSpace(session.PaymentIntentId)
+            ? session.PaymentIntentId
+            : throw new InvalidOperationException(
+                $"Stripe Checkout session {session.Id} did not expose its PaymentIntent identity.");
 
     /// <summary>
     /// Resolves the success URL: an explicit request value is honored ONLY when it passes the
@@ -585,11 +561,6 @@ public class StripePaymentService : IStripePaymentService
     /// of creating a second; Stripe expires idempotency keys after 24h, so a genuinely new attempt for
     /// the same payment later still proceeds. Falls back to the due date when a payment has no PeriodKey.
     /// </summary>
-    private static string BuildPaymentIdempotencyKey(string kind, Payment payment)
-    {
-        var period = string.IsNullOrEmpty(payment.PeriodKey)
-            ? payment.DueDate.ToString("yyyyMMdd")
-            : payment.PeriodKey;
-        return $"{kind}-{payment.Id}-{period}";
-    }
+    private static string BuildPaymentIdempotencyKey(string kind, long chargeLedgerEntryId) =>
+        $"{kind}:tenant-charge:{chargeLedgerEntryId}";
 }

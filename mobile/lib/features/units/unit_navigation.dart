@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../../core/models/lease.dart';
 import '../../core/models/work_order.dart';
 import '../applications/applications_models.dart';
 import '../home/mobile_domain_navigation.dart';
@@ -9,8 +8,9 @@ import 'unit_command_center_screen.dart';
 void openUnitCommandCenter(
   BuildContext context, {
   required int unitId,
-  UnitCommandCenterTab initialTab = UnitCommandCenterTab.overview,
-  Lease? lease,
+  UnitCommandCenterTab initialTab = UnitCommandCenterTab.summary,
+  UnitCommandCenterView? initialView,
+  int? leaseManagementId,
   RentalApplication? application,
   WorkOrder? workOrder,
   int? tenantId,
@@ -18,7 +18,8 @@ void openUnitCommandCenter(
   Widget detailBuilder(BuildContext _) => UnitCommandCenterLoaderScreen(
     unitId: unitId,
     initialTab: initialTab,
-    initialLease: lease,
+    initialView: initialView,
+    initialLeaseManagementId: leaseManagementId,
     initialApplication: application,
     initialWorkOrder: workOrder,
     selectedTenantId: tenantId,
@@ -48,6 +49,7 @@ bool openUnitCommandCenterRoute(BuildContext context, String route) {
     context,
     unitId: target.unitId,
     initialTab: target.initialTab,
+    initialView: target.initialView,
   );
   return true;
 }

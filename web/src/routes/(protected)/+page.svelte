@@ -48,8 +48,8 @@
 				return 'workOrder';
 			case 'Payment':
 				return 'payment';
-			case 'Lease':
-				return 'lease';
+			case 'LeaseManagement':
+				return 'leaseManagement';
 			case 'Expense':
 				return 'expense';
 			case 'RentalApplication':
@@ -71,6 +71,16 @@
 	// unit Command Center tab; records without a unit keep their generic detail page.
 	function bulletHref(bullet: BriefingBullet): string | null {
 		if (!bullet.entityType || bullet.entityId == null) return null;
+		if (bullet.entityType === 'TenantAccount') {
+			return bullet.unitId
+				? `/units/${bullet.unitId}?tab=money&tenantAccount=${bullet.entityId}`
+				: `/tenant-accounts/${bullet.entityId}`;
+		}
+		if (bullet.entityType === 'LeaseAgreement') {
+			return bullet.unitId
+				? `/units/${bullet.unitId}?tab=tenant-lease&view=agreements&agreement=${bullet.entityId}`
+				: `/lease-agreements/${bullet.entityId}`;
+		}
 		const unitHref = recordEntityHref(bullet.entityType, bullet.entityId, bullet.unitId);
 		if (unitHref) return unitHref;
 		switch (bullet.entityType) {

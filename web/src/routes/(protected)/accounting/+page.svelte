@@ -3,26 +3,22 @@
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { payments } from '$lib/api/endpoints/payments';
 	import { expenses } from '$lib/api/endpoints/expenses';
 	import {
 		accounting,
 		downloadScheduleECsv,
 		type ReconciledAccountingTransaction
 	} from '$lib/api/endpoints/accounting';
-	import { leases } from '$lib/api/endpoints/leases';
 	import { vendors } from '$lib/api/endpoints/vendors';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { units } from '$lib/api/endpoints/units';
 	import { workOrders } from '$lib/api/endpoints/workOrders';
-	import type { Payment, Expense, AccountingReports, AccountingSummary, AccountingTransaction, Vendor, WorkOrder } from '$lib/types';
+	import type { Expense, AccountingReports, AccountingSummary, AccountingTransaction, Vendor, WorkOrder } from '$lib/types';
 	import { recordHref } from '$lib/navigation/record-href';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { PAYMENT_METHODS } from '$lib/constants/payments';
-	import { paymentSchema, expenseSchema, parseForm } from '$lib/schemas';
+	import { expenseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
-	import { paymentTypeLabel } from '$lib/utils/payment-labels';
 	import {
 		EXPENSE_CATEGORIES,
 		EXPENSE_CATEGORY_OPTIONS,
@@ -35,9 +31,10 @@
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
+	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
-	import { Pencil, Trash2, Plus, Download, FileBarChart, Landmark, Check, Sparkles } from '@lucide/svelte';
+	import { Pencil, Plus, Download, FileBarChart, Landmark, Check, Sparkles } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
@@ -49,7 +46,7 @@
 	import { clearFieldError } from '$lib/forms/form-errors';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
-	import { formatLeasePickerLabel } from '$lib/accounting/payment-detail-display';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -87,7 +84,6 @@
 	// Default newest-entered-first: a just-scanned item lands at the top of the ledger even when its
 	// transaction date is wrong/old. The "Date" (transaction date) column stays sortable too.
 	let transactionSort = $state(readGridParam(initialParams, 'sort') || DEFAULT_SORT);
-	let transactionDeleteTarget = $state<AccountingTransaction | null>(null);
 	const debouncedTransactionSearch = debounced(() => transactionSearch, 300);
 	const selectedPropertyFilter = $derived(transactionPropertyFilter ? Number(transactionPropertyFilter) : undefined);
 
@@ -161,41 +157,66 @@
 	}));
 	// Single accounting rollup: payment collection (collected/outstanding/overdue) + expense totals.
 	const accountingSummaryQuery = createQuery(() => ({ queryKey: ['accounting-summary', portfolioId], queryFn: () => accounting.summary() }));
-	const accountingReportsQuery = createQuery(() => ({ queryKey: ['accounting-reports', portfolioId], queryFn: () => accounting.reports() }));
-	const leasesQuery = createQuery(() => ({ queryKey: ['leases', portfolioId], queryFn: () => leases.list(portfolioId, { take: 200 }) }));
-	const vendorsQuery = createQuery(() => ({ queryKey: ['vendors', portfolioId], queryFn: () => vendors.list(portfolioId, { take: 200 }) }));
-	const propertiesQuery = createQuery(() => ({ queryKey: ['properties', portfolioId], queryFn: () => properties.list(portfolioId, { take: 200 }) }));
-	const workOrdersQuery = createQuery(() => ({ queryKey: ['work-orders', portfolioId], queryFn: () => workOrders.list(portfolioId, { take: 200 }) }));
-
-	// --- Payment form/dialog ---
-	// amountPaid is the cash-collected-so-far split that only applies to a Partial payment; blank for
-	// every other status (dropped on submit so the server clears it).
-	const emptyPayment = { leaseId: '', amount: '', amountPaid: '', dueDate: '', paymentType: 'Rent', status: 'Scheduled' };
-	let showPaymentForm = $state(false);
-	let editingPaymentId = $state<number | null>(null);
-	let paymentForm = $state({ ...emptyPayment });
-	let paymentErrors = $state<Record<string, string>>({});
-	let paymentDeleteTarget = $state<Payment | null>(null);
-
-	function clearPaymentError(field: string) {
-		if (!paymentErrors[field]) return;
-		const next = { ...paymentErrors };
-		delete next[field];
-		paymentErrors = next;
+	const accountingReportsQuery = createQuery(() => ({
+		queryKey: ['accounting-reports', portfolioId],
+		queryFn: () => accounting.reports(),
+		// Reports is the heaviest accounting read and is not used by Ledger or Overview.
+		// Fetch it only when the user asks for that tab so the everyday ledger does not
+		// compete with an unrelated report build or fail behind its timeout.
+		enabled: activeTab === 'reports',
+	}));
+	let vendorOptionCache = $state<Record<string, Vendor>>({});
+	let workOrderOptionCache = $state<Record<string, WorkOrder>>({});
+	async function loadPropertyOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await properties.listPage(portfolioId, { ...params, sort: 'name' });
+		return {
+			...result,
+			items: result.items.map((property) => ({
+				id: property.id,
+				label: property.name,
+				description: `${property.addressLine1}, ${property.city}, ${property.state}`
+			}))
+		};
 	}
-
-	$effect(() => {
-		if (paymentForm.leaseId) clearPaymentError('leaseId');
-	});
-	$effect(() => {
-		if (paymentForm.amount) clearPaymentError('amount');
-	});
-	$effect(() => {
-		if (paymentForm.dueDate) clearPaymentError('dueDate');
-	});
-	$effect(() => {
-		if (paymentForm.amountPaid) clearPaymentError('amountPaid');
-	});
+	async function loadVendorOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await vendors.listPage(portfolioId, { ...params, sort: 'name' });
+		for (const vendor of result.items) vendorOptionCache[String(vendor.id)] = vendor;
+		return {
+			...result,
+			items: result.items.map((vendor) => ({
+				id: vendor.id,
+				label: vendor.name,
+				description: vendor.serviceType || vendor.email || vendor.phone || null
+			}))
+		};
+	}
+	async function loadWorkOrderOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await workOrders.listPage(portfolioId, { ...params, sort: '-updatedAt' });
+		for (const workOrder of result.items) workOrderOptionCache[String(workOrder.id)] = workOrder;
+		return {
+			...result,
+			items: result.items.map((workOrder) => ({
+				id: workOrder.id,
+				label: workOrder.title,
+				description: `${workOrder.propertyName ?? 'Property'}${workOrder.unitNumber ? ` · Unit ${workOrder.unitNumber}` : ''}`
+			}))
+		};
+	}
+	async function loadUnitOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await units.listWithHealthPage({
+			...params,
+			propertyId: expensePropertyId ?? undefined,
+			sort: 'unitNumber'
+		});
+		return {
+			...result,
+			items: result.items.map((unit) => ({
+				id: unit.id,
+				label: `Unit ${unit.unitNumber}`,
+				description: unit.status
+			}))
+		};
+	}
 
 	function invalidatePayments() {
 		queryClient.invalidateQueries({ queryKey: ['payments', portfolioId] });
@@ -204,131 +225,16 @@
 		queryClient.invalidateQueries({ queryKey: ['accounting-reports', portfolioId] });
 	}
 
-	const savePaymentMutation = createMutation(() => ({
-		mutationFn: ({ id, data }: { id: number | null; data: Record<string, unknown> }) =>
-			id == null ? payments.create(data) : payments.update(id, data),
-		onSuccess: (_r, vars) => {
-			showSuccess(vars.id == null ? 'Payment created.' : 'Payment updated.');
-			closePaymentForm();
-			invalidatePayments();
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	// --- Mark Paid modal ---
-	// Capture how the money arrived (method / reference) + when, with smart defaults so one click
-	// is still fast: date = today, method = the last method this user picked (remembered in
-	// localStorage). The mark-paid endpoint accepts paidDate / method / externalReference / notes; the
-	// payment record already carries its own amount, so there's no amount field here. Methods come from
-	// the shared canonical list so web + mobile offer identical values.
-	const LAST_METHOD_KEY = 'rc.payments.lastMethod';
-	function loadLastMethod(): string {
-		if (typeof localStorage === 'undefined') return '';
-		try {
-			return localStorage.getItem(LAST_METHOD_KEY) ?? '';
-		} catch {
-			return '';
-		}
-	}
-	function rememberLastMethod(method: string) {
-		if (!method || typeof localStorage === 'undefined') return;
-		try {
-			localStorage.setItem(LAST_METHOD_KEY, method);
-		} catch {
-			/* storage may be unavailable */
-		}
-	}
-	const emptyMarkPaid = { paidDate: '', method: '', externalReference: '', notes: '' };
-	let showMarkPaidForm = $state(false);
-	let markPaidTarget = $state<AccountingTransaction | null>(null);
-	let markPaidForm = $state({ ...emptyMarkPaid });
-
-	function todayLocal(): string {
-		const d = new Date();
-		const p = (n: number) => String(n).padStart(2, '0');
-		return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-	}
-
 	// A ledger row's destination: unit-tied Payment/Expense rows fold into their unit's Command Center
 	// tab (via recordHref); Bank rows (no detail page / no unit) keep the server detailHref fallback.
 	function ledgerHref(t: AccountingTransaction): string {
-		if (t.kind === 'Payment') return recordHref('payment', { id: t.id, unitId: t.unitId });
+		if (t.kind === 'Payment') return recordHref('payment', {
+			id: t.id,
+			unitId: t.unitId,
+			tenantAccountId: t.tenantAccountId
+		});
 		if (t.kind === 'Expense') return recordHref('expense', { id: t.id, unitId: t.unitId });
 		return t.detailHref ?? `/accounting/${t.kind.toLowerCase()}s/${t.id}`;
-	}
-
-	function openMarkPaid(t: AccountingTransaction) {
-		markPaidTarget = t;
-		markPaidForm = { paidDate: todayLocal(), method: loadLastMethod(), externalReference: '', notes: '' };
-		showMarkPaidForm = true;
-	}
-	function closeMarkPaid() {
-		showMarkPaidForm = false;
-		markPaidTarget = null;
-	}
-
-	const markPaidMutation = createMutation(() => ({
-		mutationFn: ({ id, data }: { id: number; data: Record<string, unknown> }) => payments.markPaid(id, data),
-		onSuccess: (_r, vars) => {
-			showSuccess('Payment marked paid.');
-			rememberLastMethod(String(vars.data.method ?? ''));
-			closeMarkPaid();
-			invalidatePayments();
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	function submitMarkPaid() {
-		if (!markPaidTarget) return;
-		const data: Record<string, unknown> = {};
-		if (markPaidForm.paidDate) data.paidDate = markPaidForm.paidDate;
-		if (markPaidForm.method) data.method = markPaidForm.method;
-		if (markPaidForm.externalReference.trim()) data.externalReference = markPaidForm.externalReference.trim();
-		if (markPaidForm.notes.trim()) data.notes = markPaidForm.notes.trim();
-		markPaidMutation.mutate({ id: markPaidTarget.id, data });
-	}
-
-	const deletePaymentMutation = createMutation(() => ({
-		mutationFn: (id: number) => payments.delete(id),
-		onSuccess: () => {
-			showSuccess('Payment deleted.');
-			paymentDeleteTarget = null;
-			invalidatePayments();
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	function openCreatePayment() {
-		editingPaymentId = null;
-		paymentForm = { ...emptyPayment };
-		paymentErrors = {};
-		showPaymentForm = true;
-	}
-	function openEditPayment(p: Payment) {
-		editingPaymentId = p.id;
-		paymentForm = { leaseId: String(p.leaseId), amount: String(p.amount), amountPaid: p.amountPaid != null ? String(p.amountPaid) : '', dueDate: p.dueDate?.slice(0, 10) ?? '', paymentType: p.paymentType, status: p.status };
-		paymentErrors = {};
-		showPaymentForm = true;
-	}
-	function closePaymentForm() {
-		showPaymentForm = false;
-		editingPaymentId = null;
-		paymentErrors = {};
-	}
-	function submitPayment() {
-		const result = parseForm(paymentSchema, paymentForm);
-		if (result.errors) {
-			paymentErrors = result.errors;
-			return;
-		}
-		paymentErrors = {};
-		// amountPaid only travels for a Partial payment. For any other status send null so the server
-		// clears a stale collected-so-far (e.g. when editing a payment away from Partial); mirrors
-		// PaymentService.NormalizeAmountPaid, which nulls AmountPaid for non-Partial statuses.
-		const { amountPaid, ...rest } = result.data;
-		const data: Record<string, unknown> =
-			rest.status === 'Partial' ? { portfolioId, ...rest, amountPaid } : { portfolioId, ...rest, amountPaid: null };
-		savePaymentMutation.mutate({ id: editingPaymentId, data });
 	}
 
 	// --- Expense form/dialog ---
@@ -348,15 +254,14 @@
 	let expenseDeleteTarget = $state<Expense | null>(null);
 	let lastExpenseVendorAutofillId = $state('');
 	let lastExpenseWorkOrderAutofillId = $state('');
+	let transactionPropertyLabel = $state<string | null>(null);
+	let selectedPropertyLabel = $state<string | null>(null);
+	let selectedVendorLabel = $state<string | null>(null);
+	let selectedUnitLabel = $state<string | null>(null);
+	let selectedWorkOrderLabel = $state<string | null>(null);
 	// Holds the parsed ReceiptData of the expense being edited, so line items / extra survive a re-save.
 	let editingReceipt = $state<Record<string, any> | null>(null);
 	const expensePropertyId = $derived(expenseForm.propertyId ? Number(expenseForm.propertyId) : null);
-	const expenseUnitsQuery = createQuery(() => ({
-		queryKey: ['units', portfolioId, 'expense-form', expensePropertyId],
-		queryFn: () => units.list({ propertyId: expensePropertyId ?? undefined, take: 500, sort: 'unitNumber' }),
-		enabled: showExpenseForm && expensePropertyId != null
-	}));
-
 	const expenseSteps: FormStepperStep[] = [
 		{ id: 'source', label: 'Source', description: 'Links and defaults' },
 		{ id: 'details', label: 'Details', description: 'Description and amount' },
@@ -428,18 +333,6 @@
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
-	const deleteTransactionMutation = createMutation(() => ({
-		mutationFn: (t: AccountingTransaction) =>
-			t.kind === 'Payment' ? payments.delete(t.id) : expenses.delete(t.id),
-		onSuccess: () => {
-			showSuccess('Transaction deleted.');
-			transactionDeleteTarget = null;
-			invalidatePayments();
-			invalidateExpenses();
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
 	function openCreateExpense() {
 		editingExpenseId = null;
 		editingReceipt = null;
@@ -449,6 +342,10 @@
 		completedExpenseSteps = [];
 		lastExpenseVendorAutofillId = '';
 		lastExpenseWorkOrderAutofillId = '';
+		selectedPropertyLabel = null;
+		selectedVendorLabel = null;
+		selectedUnitLabel = null;
+		selectedWorkOrderLabel = null;
 		showExpenseForm = true;
 	}
 	function openEditExpense(e: Expense) {
@@ -487,6 +384,10 @@
 		completedExpenseSteps = [];
 		lastExpenseVendorAutofillId = '';
 		lastExpenseWorkOrderAutofillId = '';
+		selectedPropertyLabel = e.propertyName ?? null;
+		selectedVendorLabel = e.vendorName ?? null;
+		selectedUnitLabel = e.unitNumber ? `Unit ${e.unitNumber}` : null;
+		selectedWorkOrderLabel = e.workOrderTitle ?? null;
 		showExpenseForm = true;
 	}
 	function vendorAddress(vendor: Vendor) {
@@ -510,8 +411,7 @@
 	}
 	function autofillExpenseFromVendorId(vendorId: string) {
 		if (!vendorId) return false;
-		const vendor = (vendorsQuery.data || []).find((v) => String(v.id) === vendorId);
-		return autofillExpenseFromVendor(vendor);
+		return autofillExpenseFromVendor(vendorOptionCache[vendorId]);
 	}
 	function dateOnly(value: string | null | undefined) {
 		return value?.slice(0, 10);
@@ -530,12 +430,10 @@
 	}
 	function autofillExpenseFromWorkOrderId(workOrderId: string) {
 		if (!workOrderId) return false;
-		const workOrder = (workOrdersQuery.data || []).find((wo) => String(wo.id) === workOrderId);
-		return autofillExpenseFromWorkOrder(workOrder);
+		return autofillExpenseFromWorkOrder(workOrderOptionCache[workOrderId]);
 	}
 	$effect(() => {
 		const vendorId = expenseForm.vendorId;
-		vendorsQuery.data;
 		if (!showExpenseForm || !vendorId) {
 			if (!vendorId) lastExpenseVendorAutofillId = '';
 			return;
@@ -545,7 +443,6 @@
 	});
 	$effect(() => {
 		const workOrderId = expenseForm.workOrderId;
-		workOrdersQuery.data;
 		if (!showExpenseForm || !workOrderId) {
 			if (!workOrderId) lastExpenseWorkOrderAutofillId = '';
 			return;
@@ -561,6 +458,10 @@
 		completedExpenseSteps = [];
 		lastExpenseVendorAutofillId = '';
 		lastExpenseWorkOrderAutofillId = '';
+		selectedPropertyLabel = null;
+		selectedVendorLabel = null;
+		selectedUnitLabel = null;
+		selectedWorkOrderLabel = null;
 	}
 	function expenseStepErrorFields(step: number, errors: Record<string, string>) {
 		const visibleFields = new Set<string>(expenseStepFields[step] ?? []);
@@ -708,23 +609,6 @@
 	const recentLedger = $derived(reports?.recentLedger ?? reports?.ledger ?? []);
 	const ledgerTotalCount = $derived(reports?.ledgerTotalCount ?? reports?.ledger.length ?? 0);
 	const vendorReviewCount = $derived((reports?.vendors1099 ?? []).filter((v) => v.needsW9 || v.needs1099Review).length);
-
-	const selectedLeaseLabel = $derived.by(() => {
-		const lease = (leasesQuery.data || []).find((l) => String(l.id) === paymentForm.leaseId);
-		return lease ? formatLeasePickerLabel(lease) : null;
-	});
-	const selectedPropertyLabel = $derived(
-		(propertiesQuery.data || []).find((p) => String(p.id) === expenseForm.propertyId)?.name ?? null
-	);
-	const selectedVendorLabel = $derived(
-		(vendorsQuery.data || []).find((v) => String(v.id) === expenseForm.vendorId)?.name ?? null
-	);
-	const selectedUnitLabel = $derived(
-		(expenseUnitsQuery.data || []).find((u) => String(u.id) === expenseForm.unitId)?.unitNumber ?? null
-	);
-	const selectedWorkOrderLabel = $derived(
-		(workOrdersQuery.data || []).find((w) => String(w.id) === expenseForm.workOrderId)?.title ?? null
-	);
 
 	// ── DataGrid column definitions ───────────────────────────────────────────────
 
@@ -930,13 +814,6 @@
 				size="sm"
 				onclick={(ev) => { ev.stopPropagation(); goto('/banking'); }}
 			>Reconcile</Button>
-		{:else if t.kind === 'Payment' && t.status !== 'Paid'}
-			<Button
-				data-testid="payment-mark-paid"
-				variant="outline"
-				size="sm"
-				onclick={(ev) => { ev.stopPropagation(); openMarkPaid(t); }}
-			>Mark paid</Button>
 		{/if}
 		{#if t.kind !== 'Bank'}
 			<Button
@@ -946,13 +823,6 @@
 				size="icon"
 				onclick={(ev) => { ev.stopPropagation(); goto(ledgerHref(t)); }}
 			><Pencil class="h-3.5 w-3.5" /></Button>
-			<Button
-				data-testid="transaction-delete"
-				aria-label="Delete transaction"
-				variant="outline"
-				size="icon"
-				onclick={(ev) => { ev.stopPropagation(); transactionDeleteTarget = t; }}
-			><Trash2 class="h-3.5 w-3.5" /></Button>
 		{/if}
 	</div>
 {/snippet}
@@ -980,12 +850,22 @@
 		<span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">All-time</span>
 		<span class="text-xs text-muted-foreground">These four totals cover all dates — the date filter on the ledger below doesn't change them.</span>
 	</div>
+	{#if accountingSummaryQuery.isError}
+		<div class="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2" role="alert">
+			<p class="text-sm text-destructive">The all-time money summary could not be loaded.</p>
+			<Button variant="outline" size="sm" onclick={() => accountingSummaryQuery.refetch()}>
+				Retry money summary
+			</Button>
+		</div>
+	{/if}
 	<div class="mb-5 grid gap-3 sm:grid-cols-2 md:grid-cols-4">
 		<Card.Root class="m3-tonal-card m3-tonal-card--mint gap-0 py-0" data-testid="accounting-collected">
 			<Card.Content class="p-4">
 				<p class="text-xs font-medium text-muted-foreground" title="Rent and fees received (security deposits are tracked separately under Deposits).">Total Collected</p>
 				{#if accountingSummaryQuery.isLoading}
 					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
+				{:else if accountingSummaryQuery.isError}
+					<p class="mt-1 text-sm font-medium text-destructive">Unavailable</p>
 				{:else}
 					<p class="font-mono text-2xl font-bold tabular-nums text-success">{money(summary?.payments.collected || 0)}</p>
 				{/if}
@@ -996,6 +876,8 @@
 				<p class="text-xs font-medium text-muted-foreground">Outstanding</p>
 				{#if accountingSummaryQuery.isLoading}
 					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
+				{:else if accountingSummaryQuery.isError}
+					<p class="mt-1 text-sm font-medium text-destructive">Unavailable</p>
 				{:else}
 					<p class="font-mono text-2xl font-bold tabular-nums">{money(summary?.payments.outstanding || 0)}</p>
 				{/if}
@@ -1006,6 +888,8 @@
 				<p class="text-xs font-medium text-muted-foreground">Overdue</p>
 				{#if accountingSummaryQuery.isLoading}
 					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
+				{:else if accountingSummaryQuery.isError}
+					<p class="mt-1 text-sm font-medium text-destructive">Unavailable</p>
 				{:else}
 					<p class="font-mono text-2xl font-bold tabular-nums {(summary?.payments.overdue || 0) > 0 ? 'text-destructive' : ''}">{money(summary?.payments.overdue || 0)}</p>
 				{/if}
@@ -1016,6 +900,8 @@
 				<p class="text-xs font-medium text-muted-foreground">Expenses</p>
 				{#if accountingSummaryQuery.isLoading}
 					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
+				{:else if accountingSummaryQuery.isError}
+					<p class="mt-1 text-sm font-medium text-destructive">Unavailable</p>
 				{:else}
 					<p class="font-mono text-2xl font-bold tabular-nums text-[var(--warning)]">{money(summary?.totalExpenses || 0)}</p>
 				{/if}
@@ -1065,6 +951,14 @@
 			</div>
 		</div>
 
+		{#if accountingReportsQuery.isLoading}
+			<LoadingState label="Loading accounting reports" testid="accounting-reports-loading" />
+		{:else if accountingReportsQuery.isError}
+			<div class="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 p-6">
+				<p class="text-sm text-destructive">Could not load accounting reports.</p>
+				<Button size="sm" variant="outline" onclick={() => accountingReportsQuery.refetch()}>Retry</Button>
+			</div>
+		{:else}
 		<div class="grid gap-4 lg:grid-cols-4">
 			<Card.Root class="m3-tonal-card m3-tonal-card--mint gap-0 py-0">
 				<Card.Content class="p-4">
@@ -1190,9 +1084,10 @@
 						{/each}
 					</div>
 				</div>
-			</details>
+				</details>
+			</div>
+		{/if}
 		</div>
-	</div>
 
 		</Tabs.Content>
 
@@ -1213,10 +1108,6 @@
 				<p class="text-sm text-muted-foreground">Payments, expenses, deposits, and withdrawals in one paged ledger.</p>
 			</div>
 			<div class="flex flex-wrap gap-2">
-				<Button data-testid="payment-create-button" variant="outline" class="shrink-0 gap-2" onclick={openCreatePayment}>
-					<Plus class="h-4 w-4" />
-					New Payment
-				</Button>
 				<Button data-testid="expense-create-button" class="shrink-0 gap-2" onclick={openCreateExpense}>
 					<Plus class="h-4 w-4" />
 					New Expense
@@ -1241,10 +1132,12 @@
 			onSortChange={(sort) => { transactionSort = sort ?? '-createdAt'; transactionPage = 1; }}
 		>
 			{#snippet toolbar()}
-				<div class="grid w-full gap-2 lg:grid-cols-[minmax(14rem,1fr)_9rem_10rem_11rem_12rem_9rem_9rem]">
-					<SearchInput bind:value={transactionSearch} placeholder="Search descriptions, property, tenant, vendor…" testid="transaction-search" />
+				<div class="grid w-full items-center gap-3 sm:grid-cols-2 xl:grid-cols-4">
+					<div class="sm:col-span-2 [&_input]:h-11">
+						<SearchInput bind:value={transactionSearch} placeholder="Search descriptions, property, tenant, vendor…" testid="transaction-search" />
+					</div>
 					<Select.Root type="single" bind:value={transactionKindFilter}>
-						<Select.Trigger data-testid="transaction-kind-filter">
+						<Select.Trigger class="!h-11 w-full min-w-0" aria-label="Transaction type" data-testid="transaction-kind-filter">
 							{transactionKindFilter || 'All types'}
 						</Select.Trigger>
 						<Select.Content>
@@ -1255,7 +1148,7 @@
 						</Select.Content>
 					</Select.Root>
 					<Select.Root type="single" bind:value={transactionStatusFilter}>
-						<Select.Trigger data-testid="transaction-status-filter">
+						<Select.Trigger class="!h-11 w-full min-w-0" aria-label="Transaction status" data-testid="transaction-status-filter">
 							{transactionStatusFilter || 'All statuses'}
 						</Select.Trigger>
 						<Select.Content>
@@ -1266,7 +1159,7 @@
 						</Select.Content>
 					</Select.Root>
 					<Select.Root type="single" bind:value={transactionCategoryFilter}>
-						<Select.Trigger data-testid="transaction-category-filter">
+						<Select.Trigger class="!h-11 w-full min-w-0" aria-label="Transaction category" data-testid="transaction-category-filter">
 							{transactionCategoryFilter ? formatExpenseCategory(transactionCategoryFilter) : 'All categories'}
 						</Select.Trigger>
 						<Select.Content>
@@ -1276,17 +1169,24 @@
 							{/each}
 						</Select.Content>
 					</Select.Root>
-					<Select.Root type="single" bind:value={transactionPropertyFilter}>
-						<Select.Trigger data-testid="transaction-property-filter">
-							{propertiesQuery.data?.find((p) => String(p.id) === transactionPropertyFilter)?.name ?? 'All properties'}
-						</Select.Trigger>
-						<Select.Content>
-							<Select.Item value="" label="All properties">All properties</Select.Item>
-							{#each propertiesQuery.data || [] as property}
-								<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
-							{/each}
-						</Select.Content>
-					</Select.Root>
+					<RemoteRecordSelect
+						queryKey={['transaction-property-filter', portfolioId]}
+						label="Property"
+						hideLabel
+						triggerClass="!h-11"
+						bind:value={transactionPropertyFilter}
+						selectedLabel={transactionPropertyLabel}
+						placeholder="All properties"
+						clearLabel="All properties"
+						searchPlaceholder="Search properties…"
+						emptyLabel="No matching properties"
+						loadPage={loadPropertyOptions}
+						onValueChange={(_value, option) => {
+							transactionPropertyLabel = option?.label ?? null;
+							transactionPage = 1;
+						}}
+						testid="transaction-property-filter"
+					/>
 					<DatePicker testid="transaction-from-filter" bind:value={transactionFromFilter} placeholder="From date" max={transactionToFilter || undefined} />
 					<DatePicker testid="transaction-to-filter" bind:value={transactionToFilter} placeholder="To date" min={transactionFromFilter || undefined} />
 				</div>
@@ -1316,6 +1216,11 @@
 							<div class="h-5 w-64 animate-pulse rounded bg-muted"></div>
 							<div class="h-4 w-full max-w-2xl animate-pulse rounded bg-muted"></div>
 						</div>
+					{:else if accountingSummaryQuery.isError}
+						<div class="flex flex-wrap items-center gap-3">
+							<p class="text-sm text-destructive">Could not load the money summary.</p>
+							<Button size="sm" variant="outline" onclick={() => accountingSummaryQuery.refetch()}>Retry</Button>
+						</div>
 					{:else if summary?.snapshot}
 						<p class="text-base font-semibold">{summary.snapshot.title}</p>
 						<p class="mt-1 text-sm text-muted-foreground">{summary.snapshot.summary}</p>
@@ -1336,146 +1241,6 @@
 	</Tabs.Root>
 </div>
 
-<Dialog.Root
-	open={showPaymentForm}
-	onOpenChange={(v) => { if (!v) closePaymentForm(); }}
->
-	<Dialog.Content class="max-w-lg">
-		<Dialog.Header>
-			<Dialog.Title>{editingPaymentId == null ? 'New Payment' : 'Edit Payment'}</Dialog.Title>
-		</Dialog.Header>
-		<div class="space-y-2" data-testid="payment-form">
-			<div>
-				<label for="payment-lease-input" class="mb-1 block text-xs font-medium text-muted-foreground">Property / unit</label>
-				<Select.Root type="single" bind:value={paymentForm.leaseId}>
-					<Select.Trigger id="payment-lease-input" class="w-full" data-testid="payment-lease-input">
-						{selectedLeaseLabel ?? 'Property / unit'}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" label="Property / unit">Property / unit</Select.Item>
-						{#each leasesQuery.data || [] as lease}
-							<Select.Item value={String(lease.id)} label={formatLeasePickerLabel(lease)}>{formatLeasePickerLabel(lease)}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-				{#if paymentErrors.leaseId}<p class="mt-1 text-xs text-destructive" data-testid="payment-lease-error">{paymentErrors.leaseId}</p>{/if}
-			</div>
-			<div class="grid grid-cols-2 gap-2">
-				<div>
-					<Input data-testid="payment-amount-input" bind:value={paymentForm.amount} placeholder="Amount" type="text" inputmode="decimal" mask="currency" />
-					{#if paymentErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="payment-amount-error">{paymentErrors.amount}</p>{/if}
-				</div>
-				<div>
-					<DatePicker testid="payment-due-date-input" bind:value={paymentForm.dueDate} placeholder="Due date" />
-					{#if paymentErrors.dueDate}<p class="mt-1 text-xs text-destructive" data-testid="payment-due-date-error">{paymentErrors.dueDate}</p>{/if}
-				</div>
-			</div>
-			<div class="grid grid-cols-2 gap-2">
-				<Select.Root type="single" bind:value={paymentForm.paymentType}>
-					<Select.Trigger class="w-full" data-testid="payment-type-input">
-						{paymentForm.paymentType ? paymentTypeLabel(paymentForm.paymentType) : 'Select type'}
-					</Select.Trigger>
-					<Select.Content>
-						{#each PAYMENT_TYPES as t}
-							<Select.Item value={t} label={paymentTypeLabel(t)}>{paymentTypeLabel(t)}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-				<Select.Root type="single" bind:value={paymentForm.status}>
-					<Select.Trigger class="w-full" data-testid="payment-status-input">
-						{paymentForm.status || 'Select status'}
-					</Select.Trigger>
-					<Select.Content>
-						{#each PAYMENT_STATUSES as s}
-							<Select.Item value={s} label={s}>{s}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-			</div>
-			<!-- Partial payments collect only some of the amount up front. The "Amount paid" split is
-			     shown (and required) only for status = Partial; the remainder (amount − paid) stays owed.
-			     Hidden for every other status, where it has no meaning. -->
-			{#if paymentForm.status === 'Partial'}
-				<div>
-					<label for="payment-amount-paid-input" class="mb-1 block text-xs font-medium text-muted-foreground">Amount paid (so far)</label>
-					<Input id="payment-amount-paid-input" data-testid="payment-amount-paid-input" bind:value={paymentForm.amountPaid} placeholder="Amount paid" type="text" inputmode="decimal" mask="currency" />
-					{#if paymentErrors.amountPaid}
-						<p class="mt-1 text-xs text-destructive" data-testid="payment-amount-paid-error">{paymentErrors.amountPaid}</p>
-					{:else}
-						<p class="mt-1 text-xs text-muted-foreground">How much was collected. The rest stays owed.</p>
-					{/if}
-				</div>
-			{/if}
-		</div>
-		<Dialog.Footer>
-			<Button data-testid="payment-form-cancel" variant="outline" onclick={closePaymentForm}>Cancel</Button>
-			<Button data-testid="payment-form-save" onclick={submitPayment} disabled={savePaymentMutation.isPending}>{savePaymentMutation.isPending ? 'Saving…' : 'Save payment'}</Button>
-		</Dialog.Footer>
-	</Dialog.Content>
-</Dialog.Root>
-
-<!-- Mark Paid: capture how/when the money arrived. Smart defaults (today + last-used method) keep
-	 it one quick confirm; the payment record carries its own amount so there's no amount field. -->
-<Dialog.Root
-	open={showMarkPaidForm}
-	onOpenChange={(v) => { if (!v) closeMarkPaid(); }}
->
-	<Dialog.Content class="max-w-md" data-testid="mark-paid-dialog">
-		<Dialog.Header>
-			<Dialog.Title>Mark paid</Dialog.Title>
-			{#if markPaidTarget}
-				<Dialog.Description data-testid="mark-paid-summary">
-					{markPaidTarget.description} · {money(markPaidTarget.amount)}
-				</Dialog.Description>
-			{/if}
-		</Dialog.Header>
-		<div class="space-y-3" data-testid="mark-paid-form">
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Date received</span>
-				<DatePicker testid="mark-paid-date-input" bind:value={markPaidForm.paidDate} placeholder="Date received" />
-			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Method</span>
-				<Select.Root type="single" bind:value={markPaidForm.method}>
-					<Select.Trigger class="w-full" data-testid="mark-paid-method-input">
-						{markPaidForm.method || 'Select method'}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" label="No method">No method</Select.Item>
-						{#each PAYMENT_METHODS as m}
-							<Select.Item value={m} label={m}>{m}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Reference</span>
-				<Input
-					data-testid="mark-paid-reference-input"
-					bind:value={markPaidForm.externalReference}
-					placeholder="Check #, confirmation #, etc. (optional)"
-				/>
-			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Notes</span>
-				<textarea
-					data-testid="mark-paid-notes-input"
-					bind:value={markPaidForm.notes}
-					rows={2}
-					maxlength={2000}
-					placeholder="Anything to remember about this payment (optional)"
-					class="w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-				></textarea>
-			</div>
-		</div>
-		<Dialog.Footer>
-			<Button data-testid="mark-paid-cancel" variant="outline" onclick={closeMarkPaid}>Cancel</Button>
-			<Button data-testid="mark-paid-confirm" onclick={submitMarkPaid} disabled={markPaidMutation.isPending}>
-				{markPaidMutation.isPending ? 'Saving…' : 'Mark paid'}
-			</Button>
-		</Dialog.Footer>
-	</Dialog.Content>
-</Dialog.Root>
 
 <Dialog.Root
 	open={showExpenseForm}
@@ -1493,86 +1258,70 @@
 		>
 				<div class="space-y-4" data-testid="expense-form">
 					{#if expenseStep === 0}
-						<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Work order</span>
-							<Select.Root
-								type="single"
-								value={expenseForm.workOrderId}
-								onValueChange={(value) => {
-									expenseForm.workOrderId = value;
-								}}
-							>
-								<Select.Trigger class="w-full" data-testid="expense-workorder-input">
-									{selectedWorkOrderLabel ?? 'No work order'}
-								</Select.Trigger>
-								<Select.Content>
-									<Select.Item value="" label="No work order">No work order</Select.Item>
-									{#each workOrdersQuery.data || [] as wo}
-										<Select.Item value={String(wo.id)} label={wo.title}>{wo.title}</Select.Item>
-									{/each}
-								</Select.Content>
-							</Select.Root>
-						</div>
+						<RemoteRecordSelect
+							queryKey={['expense-work-order', portfolioId]}
+							label="Work order"
+							bind:value={expenseForm.workOrderId}
+							selectedLabel={selectedWorkOrderLabel}
+							placeholder="No work order"
+							clearLabel="No work order"
+							searchPlaceholder="Search work orders…"
+							emptyLabel="No matching work orders"
+							loadPage={loadWorkOrderOptions}
+							onValueChange={(value, option) => {
+								selectedWorkOrderLabel = option?.label ?? null;
+								if (value) autofillExpenseFromWorkOrderId(value);
+							}}
+							testid="expense-workorder-input"
+						/>
 						<div class="grid gap-3 sm:grid-cols-3">
-							<div>
-								<span class="mb-1 block text-xs text-muted-foreground">Property</span>
-								<Select.Root
-									type="single"
-									value={expenseForm.propertyId}
-									onValueChange={(value) => {
-										expenseForm.propertyId = value;
-										expenseForm.unitId = '';
-									}}
-								>
-									<Select.Trigger class="w-full" data-testid="expense-property-input">
-										{selectedPropertyLabel ?? 'No property'}
-									</Select.Trigger>
-									<Select.Content>
-										<Select.Item value="" label="No property">No property</Select.Item>
-										{#each propertiesQuery.data || [] as property}
-											<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
-										{/each}
-									</Select.Content>
-								</Select.Root>
-							</div>
-							<div>
-								<span class="mb-1 block text-xs text-muted-foreground">Unit</span>
-								<Select.Root type="single" bind:value={expenseForm.unitId} disabled={!expenseForm.propertyId}>
-									<Select.Trigger class="w-full" data-testid="expense-unit-input">
-										{#if !expenseForm.propertyId}
-											Select property first
-										{:else}
-											{selectedUnitLabel ?? 'No unit'}
-										{/if}
-									</Select.Trigger>
-									<Select.Content>
-										<Select.Item value="" label="No unit">No unit</Select.Item>
-										{#each expenseUnitsQuery.data || [] as unit}
-											<Select.Item value={String(unit.id)} label={unit.unitNumber}>{unit.unitNumber}</Select.Item>
-										{/each}
-									</Select.Content>
-								</Select.Root>
-							</div>
-							<div>
-								<span class="mb-1 block text-xs text-muted-foreground">Vendor</span>
-								<Select.Root
-									type="single"
-									value={expenseForm.vendorId}
-									onValueChange={(value) => {
-										expenseForm.vendorId = value;
-									}}
-								>
-									<Select.Trigger class="w-full" data-testid="expense-vendor-input">
-										{selectedVendorLabel ?? 'No vendor'}
-									</Select.Trigger>
-									<Select.Content>
-										<Select.Item value="" label="No vendor">No vendor</Select.Item>
-										{#each vendorsQuery.data || [] as vendor}
-											<Select.Item value={String(vendor.id)} label={vendor.name}>{vendor.name}</Select.Item>
-										{/each}
-									</Select.Content>
-								</Select.Root>
-							</div>
+							<RemoteRecordSelect
+								queryKey={['expense-property', portfolioId]}
+								label="Property"
+								bind:value={expenseForm.propertyId}
+								selectedLabel={selectedPropertyLabel}
+								placeholder="No property"
+								clearLabel="No property"
+								searchPlaceholder="Search properties…"
+								emptyLabel="No matching properties"
+								loadPage={loadPropertyOptions}
+								onValueChange={(_value, option) => {
+									selectedPropertyLabel = option?.label ?? null;
+									expenseForm.unitId = '';
+									selectedUnitLabel = null;
+								}}
+								testid="expense-property-input"
+							/>
+							<RemoteRecordSelect
+								queryKey={['expense-unit', portfolioId, expensePropertyId]}
+								label="Unit"
+								bind:value={expenseForm.unitId}
+								selectedLabel={selectedUnitLabel}
+								placeholder={expenseForm.propertyId ? 'No unit' : 'Select property first'}
+								clearLabel="No unit"
+								searchPlaceholder="Search units…"
+								emptyLabel="No matching units"
+								disabled={!expenseForm.propertyId}
+								loadPage={loadUnitOptions}
+								onValueChange={(_value, option) => (selectedUnitLabel = option?.label ?? null)}
+								testid="expense-unit-input"
+							/>
+							<RemoteRecordSelect
+								queryKey={['expense-vendor', portfolioId]}
+								label="Vendor"
+								bind:value={expenseForm.vendorId}
+								selectedLabel={selectedVendorLabel}
+								placeholder="No vendor"
+								clearLabel="No vendor"
+								searchPlaceholder="Search vendors…"
+								emptyLabel="No matching vendors"
+								loadPage={loadVendorOptions}
+								onValueChange={(value, option) => {
+									selectedVendorLabel = option?.label ?? null;
+									if (value) autofillExpenseFromVendorId(value);
+								}}
+								testid="expense-vendor-input"
+							/>
 						</div>
 					{:else if expenseStep === 1}
 						<div>
@@ -1725,24 +1474,6 @@
 	</Dialog.Content>
 </Dialog.Root>
 
-<ConfirmDialog
-	open={transactionDeleteTarget !== null}
-	title="Delete transaction"
-	message={transactionDeleteTarget ? `Delete this ${transactionDeleteTarget.kind.toLowerCase()} for ${money(transactionDeleteTarget.amount)}?` : ''}
-	busy={deleteTransactionMutation.isPending}
-	testid="transaction-delete"
-	onconfirm={() => transactionDeleteTarget && deleteTransactionMutation.mutate(transactionDeleteTarget)}
-	oncancel={() => (transactionDeleteTarget = null)}
-/>
-<ConfirmDialog
-	open={paymentDeleteTarget !== null}
-	title="Delete payment"
-	message={paymentDeleteTarget ? `Delete this ${money(paymentDeleteTarget.amount)} ${paymentTypeLabel(paymentDeleteTarget.paymentType).toLowerCase()} charge?` : ''}
-	busy={deletePaymentMutation.isPending}
-	testid="payment-delete"
-	onconfirm={() => paymentDeleteTarget && deletePaymentMutation.mutate(paymentDeleteTarget.id)}
-	oncancel={() => (paymentDeleteTarget = null)}
-/>
 <ConfirmDialog
 	open={expenseDeleteTarget !== null}
 	title="Delete expense"

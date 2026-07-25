@@ -37,20 +37,25 @@ public class Portfolio
     public DateTime? DeletedAt { get; set; }
 
     public List<Property> Properties { get; set; } = [];
-    public List<Owner> Owners { get; set; } = [];
+    public List<PropertyOwnership> PropertyOwnerships { get; set; } = [];
     public List<OwnerEntity> OwnerEntities { get; set; } = [];
     public List<Tenant> Tenants { get; set; } = [];
     public List<Vendor> Vendors { get; set; } = [];
-    public List<Lease> Leases { get; set; } = [];
-    public List<LeaseTenant> LeaseTenants { get; set; } = [];
-    public List<Payment> Payments { get; set; } = [];
+    public List<LeaseManagement> LeaseManagements { get; set; } = [];
+    public List<LeaseManagementParty> LeaseManagementParties { get; set; } = [];
+    public List<TenantUserAccess> TenantUserAccesses { get; set; } = [];
+    public List<OwnerUserAccess> OwnerUserAccesses { get; set; } = [];
+    public List<UnitOperationalPeriod> UnitOperationalPeriods { get; set; } = [];
+    public List<LegalDocumentArtifact> LegalDocumentArtifacts { get; set; } = [];
+    public List<LegalDocumentSourceVersion> LegalDocumentSourceVersions { get; set; } = [];
+    public List<LeaseAgreement> LeaseAgreements { get; set; } = [];
+    public List<LeaseAddendum> LeaseAddenda { get; set; } = [];
     public List<Expense> Expenses { get; set; } = [];
     public List<WorkOrder> WorkOrders { get; set; } = [];
     public List<RecurringMaintenanceTask> RecurringMaintenanceTasks { get; set; } = [];
     public List<Appointment> Appointments { get; set; } = [];
     public List<Inspection> Inspections { get; set; } = [];
-    public List<UserAccount> UserAccounts { get; set; } = [];
-    public List<PortalMessage> PortalMessages { get; set; } = [];
     public List<RentalApplication> RentalApplications { get; set; } = [];
     public List<DocumentTemplate> DocumentTemplates { get; set; } = [];
+    public List<WorkspaceAccessContext> AccessContexts { get; set; } = [];
 }

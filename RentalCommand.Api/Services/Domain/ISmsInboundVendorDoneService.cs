@@ -7,14 +7,8 @@ namespace RentalCommand.Api.Services.Domain;
 /// </summary>
 public interface ISmsInboundVendorDoneService
 {
-    /// <summary>
-    /// True when the sender is a vendor with an open dispatch AND the body is a DONE keyword — i.e.
-    /// this inbound message is a vendor completion the router should hand to <see cref="HandleAsync"/>
-    /// rather than the rent-confirmation path.
-    /// </summary>
-    Task<bool> CanHandleAsync(string? fromPhone, string? body, CancellationToken ct = default);
-
-    Task<SmsInboundVendorDoneResult> HandleAsync(
+    Task<SmsInboundVendorDoneResult> TryHandleAsync(
+        string providerEventId,
         string? fromPhone,
         string? body,
         DateTime receivedAtUtc,

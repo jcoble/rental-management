@@ -3,6 +3,7 @@ using MailKit.Net.Smtp;
 using MailKit.Security;
 using MimeKit;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Outbox;
 
 namespace RentalCommand.Engine.Services;
 
@@ -13,16 +14,29 @@ namespace RentalCommand.Engine.Services;
 /// class only knows HOW to talk SMTP. Throws on failure so the outbox worker can retry — mirroring
 /// the SendGrid path's exception-on-failure contract.
 /// </summary>
-public interface ISmtpEmailSender
+public interface ISmtpEmailSender : RentalCommand.Core.Atomic.IAtomicRemoteDependency
 {
-    Task SendAsync(SmtpOptions smtp, string toEmail, string subject, string body, string? htmlBody = null, CancellationToken ct = default);
+    Task<string?> SendAsync(
+        SmtpOptions smtp,
+        string toEmail,
+        string subject,
+        string body,
+        NotificationDeliveryContext delivery,
+        string? htmlBody = null,
+        CancellationToken ct = default);
 }
 
 /// <inheritdoc />
 public sealed class SmtpEmailSender : ISmtpEmailSender
 {
-    public async Task SendAsync(
-        SmtpOptions smtp, string toEmail, string subject, string body, string? htmlBody = null, CancellationToken ct = default)
+    public async Task<string?> SendAsync(
+        SmtpOptions smtp,
+        string toEmail,
+        string subject,
+        string body,
+        NotificationDeliveryContext delivery,
+        string? htmlBody = null,
+        CancellationToken ct = default)
     {
         // Caller (RoutingNotificationChannel) only reaches here when smtp.Enabled, so Host is present
         // and either credentials exist or FromEmail is available for no-auth relay.
@@ -33,6 +47,9 @@ public sealed class SmtpEmailSender : ISmtpEmailSender
         message.From.Add(new MailboxAddress(fromName, fromEmail));
         message.To.Add(MailboxAddress.Parse(toEmail));
         message.Subject = subject;
+        // A retry must retain the same RFC Message-Id. This does not make SMTP itself
+        // idempotent, but it gives relays and operators a stable reconciliation key.
+        message.MessageId = $"<rc-outbox-{delivery.OutboxMessageId}@rentalcommand.net>";
 
         // The outbox carries a plaintext body (the source of truth / fallback) plus an optional
         // pre-composed htmlBody. Use the supplied HTML verbatim when present (e.g. auth emails with a
@@ -76,6 +93,8 @@ public sealed class SmtpEmailSender : ISmtpEmailSender
                 try { await client.DisconnectAsync(true, ct); } catch { /* ignore */ }
             }
         }
+
+        return message.MessageId;
     }
 
     // Minimal, safe HTML alternative: escape the plaintext and turn newlines into <br>. The outbox

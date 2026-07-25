@@ -1,84 +1,106 @@
-using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
+using RentalCommand.Api.Auth;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Hubs;
 
 /// <summary>
-/// Realtime data-change channel. On connect each client joins its <c>user-{userId}</c> and
-/// <c>portfolio-{portfolioId}</c> groups (derived from JWT claims). The server broadcasts
-/// <c>EntityUpdated</c>/<c>EntityDeleted</c> events to the portfolio group so the frontend can
-/// invalidate cached queries. Requires auth; websocket transports supply the JWT via the
-/// <c>access_token</c> query string (wired in Program.cs JwtBearerEvents).
+/// Realtime data-change channel. Each connection joins only the group for its current canonical
+/// session and access revision. Publishers resolve authorized session groups from the database for
+/// every invalidation, so relationship-only contexts, out-of-scope properties, stale revisions, and
+/// revoked sessions cannot inherit a workspace-wide fanout group. JWT claims identify the session
+/// coordinates only; they never directly select realtime groups.
 /// </summary>
 [Authorize]
 public class DataUpdateHub : Hub
 {
+    private readonly IActiveAccessContextResolver _accessContextResolver;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<DataUpdateHub> _logger;
 
-    public DataUpdateHub(ILogger<DataUpdateHub> logger)
+    public DataUpdateHub(
+        IActiveAccessContextResolver accessContextResolver,
+        TimeProvider timeProvider,
+        ILogger<DataUpdateHub> logger)
     {
+        _accessContextResolver = accessContextResolver;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
     public override async Task OnConnectedAsync()
     {
-        var userId = GetUserId();
-        var portfolioId = GetPortfolioId();
-
-        if (userId.HasValue)
+        var presented = GetPresentedAccessContext();
+        ActiveAccessContext current;
+        try
         {
-            await Groups.AddToGroupAsync(Context.ConnectionId, $"user-{userId}");
+            current = await _accessContextResolver.ResolveAsync(
+                presented.SessionId,
+                presented.UserId,
+                presented.AccessContextId,
+                presented.AccessRevision,
+                _timeProvider.GetUtcNow().UtcDateTime,
+                Context.ConnectionAborted);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Rejected data update hub connection {ConnectionId} for inactive or stale access context {AccessContextId}",
+                Context.ConnectionId,
+                presented.AccessContextId);
+            throw new HubException("The validated access context is unavailable.");
         }
 
-        if (portfolioId.HasValue)
-        {
-            await Groups.AddToGroupAsync(Context.ConnectionId, $"portfolio-{portfolioId}");
-            _logger.LogInformation(
-                "User {UserId} connected to data update hub for portfolio {PortfolioId}",
-                userId, portfolioId);
-        }
+        await Groups.AddToGroupAsync(
+            Context.ConnectionId,
+            SessionRevisionGroup(current.SessionId, current.AccessRevision));
+        _logger.LogInformation(
+            "User {UserId} connected to data update hub with session {SessionId} revision {AccessRevision}",
+            current.UserId,
+            current.SessionId,
+            current.AccessRevision);
 
         await base.OnConnectedAsync();
     }
 
-    public override async Task OnDisconnectedAsync(Exception? exception)
-    {
-        var userId = GetUserId();
-        var portfolioId = GetPortfolioId();
+    internal static string SessionRevisionGroup(Guid sessionId, long accessRevision) =>
+        $"access-session-{sessionId:N}-revision-{accessRevision}";
 
-        if (userId.HasValue)
+    private ActiveAccessContext GetPresentedAccessContext()
+    {
+        var httpContext = Context.GetHttpContext();
+        if (httpContext is not null &&
+            httpContext.Items.TryGetValue(CanonicalAccessContextHttpItem.Key, out var value) &&
+            value is ActiveAccessContext
+            {
+                SessionId: var sessionId,
+                UserId: > 0,
+                AccessContextId: > 0,
+                PortfolioId: > 0,
+                AccessRevision: > 0,
+            } accessContext &&
+            sessionId != Guid.Empty)
         {
-            await Groups.RemoveFromGroupAsync(Context.ConnectionId, $"user-{userId}");
+            return accessContext;
         }
 
-        if (portfolioId.HasValue)
-        {
-            await Groups.RemoveFromGroupAsync(Context.ConnectionId, $"portfolio-{portfolioId}");
-        }
-
-        await base.OnDisconnectedAsync(exception);
-    }
-
-    private int? GetUserId()
-    {
-        var claim = Context.User?.FindFirst(ClaimTypes.NameIdentifier);
-        return claim != null && int.TryParse(claim.Value, out var userId) ? userId : null;
-    }
-
-    private int? GetPortfolioId()
-    {
-        var claim = Context.User?.FindFirst("portfolioId");
-        return claim != null && int.TryParse(claim.Value, out var portfolioId) ? portfolioId : null;
+        _logger.LogWarning(
+            "Rejected data update hub connection {ConnectionId} without a valid canonical access context",
+            Context.ConnectionId);
+        throw new HubException("The validated access context is unavailable.");
     }
 }
 
-/// <summary>Payload broadcast on the <c>EntityUpdated</c> data-update event.</summary>
+/// <summary>
+/// Safe cache-invalidation payload. Entity DTOs are deliberately not carried over SignalR; clients
+/// refetch through the normally authorized REST query after receiving this hint.
+/// </summary>
 public class EntityUpdatePayload
 {
     public string EntityType { get; set; } = null!;
     public int EntityId { get; set; }
-    public object? Data { get; set; }
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
 }
 

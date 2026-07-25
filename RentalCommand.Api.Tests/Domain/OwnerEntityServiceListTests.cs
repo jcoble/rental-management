@@ -6,6 +6,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
 
@@ -18,10 +19,12 @@ public class OwnerEntityServiceListTests : IDisposable
     private readonly List<string> _commands = [];
     private readonly SqliteTestContext _ctx;
     private readonly OwnerEntityService _sut;
+    private readonly WorkspaceReadScope _scope;
 
     public OwnerEntityServiceListTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(OwnerEntityServiceListTests));
         _sut = new OwnerEntityService(_ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
     }
 
@@ -36,7 +39,7 @@ public class OwnerEntityServiceListTests : IDisposable
         SeedOwner("Delta Holdings", OwnerEntityType.LLC);
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new ListQuery
+        var result = await _sut.ListPageAsync(_scope, new ListQuery
         {
             Sort = "name",
             Skip = 1,
@@ -67,7 +70,7 @@ public class OwnerEntityServiceListTests : IDisposable
         SeedProperty(otherOwner, "Bravo One");
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new ListQuery
+        var result = await _sut.ListPageAsync(_scope, new ListQuery
         {
             Sort = "name",
             Take = 10,
@@ -89,7 +92,7 @@ public class OwnerEntityServiceListTests : IDisposable
         SeedOwner("Delta Holdings", OwnerEntityType.LLC);
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new OwnerEntityListQuery
+        var result = await _sut.ListPageAsync(_scope, new OwnerEntityListQuery
         {
             OwnerEntityType = OwnerEntityType.LLC,
             Sort = "name",
@@ -110,7 +113,7 @@ public class OwnerEntityServiceListTests : IDisposable
         SeedProperty(owner, "Alpha One");
         SeedProperty(owner, "Alpha Two");
 
-        var result = await _sut.GetAsync(PortfolioId, owner.Id);
+        var result = await _sut.GetAsync(_scope, owner.Id);
 
         result.Should().NotBeNull();
         result!.AssignedPropertyCount.Should().Be(2);
@@ -136,10 +139,9 @@ public class OwnerEntityServiceListTests : IDisposable
     private void SeedProperty(OwnerEntity owner, string name)
     {
         var now = DateTime.UtcNow;
-        _ctx.Db.Properties.Add(new Property
+        var property = new Property
         {
             PortfolioId = PortfolioId,
-            OwnerEntityId = owner.Id,
             Name = name,
             AddressLine1 = "1 Main St",
             City = "Columbus",
@@ -147,6 +149,19 @@ public class OwnerEntityServiceListTests : IDisposable
             PostalCode = "43215",
             CreatedAt = now,
             UpdatedAt = now,
+        };
+        _ctx.Db.Properties.Add(property);
+        _ctx.Db.SaveChanges();
+        _ctx.Db.PropertyOwnerships.Add(new PropertyOwnership
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            OwnerEntityId = owner.Id,
+            OwnershipSharePercent = 100m,
+            EffectiveFromUtc = now,
+            StatementRecipientName = owner.Name,
+            StatementRecipientEmail = owner.Email,
+            PayeeName = owner.Name,
         });
         _ctx.Db.SaveChanges();
     }

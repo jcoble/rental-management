@@ -44,7 +44,7 @@ public sealed record SmsCredentials(
 /// throw on a non-success response (the outbox worker turns that into a retry); a misconfigured/missing
 /// provider is handled by the caller as a suppression log, never a crash.
 /// </summary>
-public interface ISmsProvider
+public interface ISmsProvider : RentalCommand.Core.Atomic.IAtomicRemoteDependency
 {
     /// <summary>The provider this implementation serves.</summary>
     SmsProviderKey Key { get; }
@@ -54,5 +54,10 @@ public interface ISmsProvider
     /// normalized to E.164. Throws on a non-success HTTP response (with the provider's error body in
     /// the message) so the outbox worker can retry.
     /// </summary>
-    Task SendAsync(SmsCredentials credentials, string toPhoneNumber, string message, CancellationToken ct = default);
+    Task<RentalCommand.Core.Outbox.SmsProviderReceipt> SendAsync(
+        SmsCredentials credentials,
+        string toPhoneNumber,
+        string message,
+        RentalCommand.Core.Outbox.NotificationDeliveryContext delivery,
+        CancellationToken ct = default);
 }

@@ -1,248 +1,98 @@
 <script lang="ts">
-	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { createQuery } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
-	import { securityDeposits } from '$lib/api/endpoints/securityDeposits';
-	import { leases } from '$lib/api/endpoints/leases';
-	import type { SecurityDepositHolding } from '$lib/types';
+	import { page } from '$app/state';
+	import {
+		securityDeposits,
+		type SecurityDepositStatus,
+		type TenantAccountDeposit,
+	} from '$lib/api/endpoints/securityDeposits';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
-	import { newDepositHoldingSchema, depositDeductionSchema, parseForm } from '$lib/schemas';
+	import { debounced } from '$lib/utils/debounce.svelte';
+	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
-	import { AlertTriangle, Info, Plus } from '@lucide/svelte';
-	import { page } from '$app/state';
-	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
+	import { Info } from '@lucide/svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 
-	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const PAGE_SIZE = 20;
-
 	const initialParams = page.url.searchParams;
+	let search = $state(readGridParam(initialParams, 'q'));
+	let statusFilter = $state(readGridParam(initialParams, 'status'));
 	let gridSort = $state(readGridParam(initialParams, 'sort'));
 	let gridPage = $state(readGridParam(initialParams, 'page', 1));
+	const debouncedSearch = debounced(() => search, 300);
 
+	let searchResetPrimed = false;
 	$effect(() => {
-		syncGridUrl({ sort: gridSort, page: gridPage }, { page: 1 });
+		search;
+		statusFilter;
+		if (!searchResetPrimed) {
+			searchResetPrimed = true;
+			return;
+		}
+		gridPage = 1;
 	});
 
-	// --- Queries ---
+	$effect(() => {
+		syncGridUrl(
+			{ q: search, status: statusFilter, sort: gridSort, page: gridPage },
+			{ page: 1 }
+		);
+	});
+
 	const depositsQuery = createQuery(() => ({
-		queryKey: ['deposits', portfolioId, 'page', gridSort, gridPage, PAGE_SIZE],
+		queryKey: [
+			'deposits',
+			portfolioId,
+			'page',
+			debouncedSearch.value,
+			statusFilter,
+			gridSort,
+			gridPage,
+			PAGE_SIZE,
+		],
 		queryFn: () => securityDeposits.listPage({
+			search: debouncedSearch.value,
+			status: statusFilter ? (statusFilter as SecurityDepositStatus) : undefined,
 			sort: gridSort || undefined,
 			skip: (gridPage - 1) * PAGE_SIZE,
 			take: PAGE_SIZE,
 		}),
 	}));
 
-	const leasesQuery = createQuery(() => ({
-		queryKey: ['leases', portfolioId],
-		queryFn: () => leases.list(portfolioId, { take: 200 }),
-	}));
-
-	function invalidateDeposits() {
-		queryClient.invalidateQueries({ queryKey: ['deposits', portfolioId] });
-	}
-
-	// --- New holding dialog ---
-	let showNewHolding = $state(false);
-	let newHoldingLeaseId = $state('');
-	let newHoldingAmount = $state('');
-	let newHoldingNotes = $state('');
-	let newHoldingErrors = $state<Record<string, string>>({});
-
-	function clearNewHoldingError(field: string) {
-		if (!newHoldingErrors[field]) return;
-		const next = { ...newHoldingErrors };
-		delete next[field];
-		newHoldingErrors = next;
-	}
-
-	$effect(() => {
-		if (newHoldingLeaseId) clearNewHoldingError('leaseId');
-	});
-	$effect(() => {
-		if (newHoldingAmount) clearNewHoldingError('amount');
-	});
-
-	function openNewHolding() {
-		newHoldingLeaseId = '';
-		newHoldingAmount = '';
-		newHoldingNotes = '';
-		newHoldingErrors = {};
-		showNewHolding = true;
-	}
-	function closeNewHolding() {
-		newHoldingErrors = {};
-		showNewHolding = false;
-	}
-
-	const createMut = createMutation(() => ({
-		mutationFn: (body: { leaseId: number; amount?: number; notes?: string }) =>
-			securityDeposits.create(body),
-		onSuccess: () => {
-			showSuccess('Security deposit holding created.');
-			closeNewHolding();
-			invalidateDeposits();
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	function submitNewHolding() {
-		const result = parseForm(newDepositHoldingSchema, {
-			leaseId: newHoldingLeaseId,
-			amount: newHoldingAmount,
-			notes: newHoldingNotes,
-		});
-		if (result.errors) {
-			newHoldingErrors = result.errors;
-			return;
-		}
-		newHoldingErrors = {};
-		const { leaseId, amount, notes } = result.data;
-		const body: { leaseId: number; amount?: number; notes?: string } = { leaseId };
-		if (amount != null) body.amount = amount;
-		if (notes) body.notes = notes;
-		createMut.mutate(body);
-	}
-
-	const selectedLeaseLabel = $derived(
-		(leasesQuery.data ?? []).find((l) => String(l.id) === newHoldingLeaseId)
-			? `${(leasesQuery.data ?? []).find((l) => String(l.id) === newHoldingLeaseId)!.leaseNumber} · ${(leasesQuery.data ?? []).find((l) => String(l.id) === newHoldingLeaseId)!.tenantName}`
-			: null
-	);
-
-	// --- Add deduction dialog ---
-	let deductionTarget = $state<SecurityDepositHolding | null>(null);
-	let deductionReason = $state('');
-	let deductionAmount = $state('');
-	let deductionNotes = $state('');
-	let deductionErrors = $state<Record<string, string>>({});
-
-	// Live preview while typing: how much this new deduction would push cumulative deductions past
-	// the held amount on the target holding (0 when it still fits within the deposit). The server
-	// has no cumulative cap — it only clamps the net refund at $0 — so the overage is owed by the tenant.
-	const deductionProjectedOver = $derived(
-		deductionTarget && deductionAmount.trim() !== '' && Number.isFinite(Number(deductionAmount)) && Number(deductionAmount) > 0
-			? Math.max(0, deductionTarget.totalDeductions + Number(deductionAmount) - deductionTarget.amount)
-			: 0
-	);
-
-	function openDeduction(deposit: SecurityDepositHolding) {
-		if (deposit.status !== 'Held') return;
-		deductionTarget = deposit;
-		deductionReason = '';
-		deductionAmount = '';
-		deductionNotes = '';
-		deductionErrors = {};
-	}
-	function closeDeduction() {
-		deductionErrors = {};
-		deductionTarget = null;
-	}
-
-	const deductionMut = createMutation(() => ({
-		mutationFn: ({ id, body }: { id: number; body: { reason: string; amount: number; notes?: string } }) =>
-			securityDeposits.addDeduction(id, body),
-		onSuccess: () => {
-			showSuccess('Deduction added.');
-			closeDeduction();
-			invalidateDeposits();
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	function submitDeduction() {
-		if (!deductionTarget) return;
-		const result = parseForm(depositDeductionSchema, {
-			reason: deductionReason,
-			amount: deductionAmount,
-			notes: deductionNotes,
-		});
-		if (result.errors) {
-			deductionErrors = result.errors;
-			return;
-		}
-		deductionErrors = {};
-		const { reason, amount, notes } = result.data;
-		const body: { reason: string; amount: number; notes?: string } = { reason, amount };
-		if (notes) body.notes = notes;
-		deductionMut.mutate({ id: deductionTarget.id, body });
-	}
-
-	// --- Process return confirm dialog ---
-	let returnTarget = $state<SecurityDepositHolding | null>(null);
-	let returnNotes = $state('');
-	let showReturnDialog = $state(false);
-
-	function openReturn(deposit: SecurityDepositHolding) {
-		returnTarget = deposit;
-		returnNotes = '';
-		showReturnDialog = true;
-	}
-	function closeReturn() {
-		showReturnDialog = false;
-		returnTarget = null;
-	}
-
-	const returnMut = createMutation(() => ({
-		mutationFn: ({ id, body }: { id: number; body: { notes?: string } }) =>
-			securityDeposits.processReturn(id, body),
-		onSuccess: () => {
-			showSuccess('Deposit return processed.');
-			closeReturn();
-			invalidateDeposits();
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	function submitReturn() {
-		if (!returnTarget) return;
-		const body: { notes?: string } = {};
-		if (returnNotes.trim()) body.notes = returnNotes.trim();
-		returnMut.mutate({ id: returnTarget.id, body });
-	}
-
-	// --- Helpers ---
-	function money(value: number) {
-		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(value ?? 0);
-	}
+	const accounts = $derived(depositsQuery.data?.items ?? []);
+	const totalCount = $derived(depositsQuery.data?.totalCount ?? 0);
 
 	const depositStatusMap: Record<string, { label?: string; class: string }> = {
+		NotFunded: { label: 'Not funded', class: 'm3-tone-chip border m3-tone--warning' },
 		Held: { class: 'm3-tone-chip border m3-tone--info' },
-		PartiallyReturned: { label: 'Partially Returned', class: 'm3-tone-chip border m3-tone--warning' },
+		PartiallyReturned: { label: 'Partially returned', class: 'm3-tone-chip border m3-tone--warning' },
 		Returned: { class: 'm3-tone-chip border m3-tone--success' },
-		// Whole deposit consumed by deductions — nothing returned. Red, distinct from the amber partial.
 		Withheld: { class: 'm3-tone-chip border m3-tone--error' },
 	};
 
-	const depositsList = $derived(depositsQuery.data?.items ?? []);
-	const depositsTotalCount = $derived(depositsQuery.data?.totalCount ?? 0);
-
-	// --- DataGrid columns ---
-	const columns: ColumnDef<SecurityDepositHolding>[] = [
+	const columns: ColumnDef<TenantAccountDeposit>[] = [
 		{
-			key: 'lease',
-			title: 'Lease / Tenant',
+			key: 'propertyName',
+			title: 'Rental / tenant',
 			sortable: true,
 			mobileRole: 'title',
-			accessor: (d) => d.leaseNumber ?? `Lease #${d.leaseId}`,
-			cell: leaseCell,
+			accessor: (account) => account.propertyName ?? `Property #${account.propertyId}`,
+			cell: rentalCell,
 		},
 		{
-			key: 'amount',
-			title: 'Amount',
+			key: 'heldBalance',
+			title: 'Held balance',
 			format: 'currency',
 			sortable: true,
 			mobileRole: 'metric',
-			accessor: (d) => d.amount,
+			accessor: (account) => account.heldBalance,
 		},
 		{
 			key: 'status',
@@ -251,57 +101,44 @@
 			cell: statusCell,
 		},
 		{
-			key: 'heldAt',
-			title: 'Held Since',
-			format: 'date',
-			sortable: true,
+			key: 'totalReceived',
+			title: 'Received',
+			format: 'currency',
+			mobileRole: 'meta',
+		},
+		{
+			key: 'totalDeductions',
+			title: 'Deductions',
+			format: 'currency',
 			mobileRole: 'meta',
 		},
 		{
 			key: 'actions',
 			title: '',
-			mobileRole: 'hidden',
 			align: 'right',
-			width: '12rem',
+			mobileRole: 'hidden',
 			cell: actionsCell,
 		},
 	];
 </script>
 
-{#snippet leaseCell(d: SecurityDepositHolding)}
-	<div class="flex flex-col" data-testid="deposit-lease">
-		<span>{d.leaseNumber ?? `Lease #${d.leaseId}`}</span>
-		{#if d.tenantName}
-			<span class="text-xs text-muted-foreground">{d.tenantName}</span>
-		{/if}
+{#snippet rentalCell(account: TenantAccountDeposit)}
+	<div class="flex flex-col" data-testid="deposit-rental">
+		<span>{account.propertyName ?? `Property #${account.propertyId}`}{account.unitNumber ? ` · Unit ${account.unitNumber}` : ''}</span>
+		<span class="text-xs text-muted-foreground">
+			{account.primaryTenantName ?? 'Tenant account'} · {account.relationshipNumber}
+		</span>
 	</div>
 {/snippet}
 
-{#snippet statusCell(d: SecurityDepositHolding)}
-	<StatusBadge status={d.status} map={depositStatusMap} />
+{#snippet statusCell(account: TenantAccountDeposit)}
+	<StatusBadge status={account.status} map={depositStatusMap} />
 {/snippet}
 
-{#snippet actionsCell(d: SecurityDepositHolding)}
-	<div class="flex items-center justify-end gap-1" onclick={(e) => e.stopPropagation()} role="none">
-		<Button
-			size="sm"
-			variant="outline"
-			class="h-7 text-xs"
-			onclick={(e) => { e.stopPropagation(); openDeduction(d); }}
-			disabled={d.status !== 'Held'}
-			data-testid="add-deduction-{d.id}"
-		>
-			Add deduction
-		</Button>
-		<Button
-			size="sm"
-			variant="outline"
-			class="h-7 text-xs"
-			onclick={(e) => { e.stopPropagation(); openReturn(d); }}
-			disabled={d.status !== 'Held'}
-			data-testid="process-return-{d.id}"
-		>
-			Return
+{#snippet actionsCell(account: TenantAccountDeposit)}
+	<div class="flex justify-end" onclick={(event) => event.stopPropagation()} role="none">
+		<Button size="sm" variant="outline" class="h-7 text-xs" onclick={() => goto(`/deposits/${account.tenantAccountId}`)}>
+			{account.status === 'NotFunded' ? 'Record funds' : 'Manage'}
 		</Button>
 	</div>
 {/snippet}
@@ -318,180 +155,66 @@
 		tone="mint"
 		eyebrow="Money"
 		title="Security Deposits"
-		description="Money held in trust per lease, separate from rental income. Track held deposits, deductions, and returns."
+		description="Track each tenant account's deposit funds, deductions, refunds, and current held balance."
 		data-testid="deposits-header"
 	/>
 
-	<!-- Explainer so this page doesn't read like a duplicate of Payments: a deposit is the tenant's
-	     money you're safekeeping, not income you've earned. -->
-	<div
-		class="mb-4 flex items-start gap-3 rounded-lg border border-[color-mix(in_srgb,var(--info)_38%,transparent)] bg-[color-mix(in_srgb,var(--info)_8%,var(--card))] p-3 text-sm"
-		data-testid="deposits-explainer"
-	>
+	<div class="mb-4 flex items-start gap-3 rounded-lg border border-[color-mix(in_srgb,var(--info)_38%,transparent)] bg-[color-mix(in_srgb,var(--info)_8%,var(--card))] p-3 text-sm" data-testid="deposits-explainer">
 		<Info class="mt-0.5 h-4 w-4 shrink-0 text-[var(--info)]" />
 		<p class="text-foreground">
-			A security deposit is the tenant's money held in trust until the lease ends — it is
-			<span class="font-medium">not rental income</span>. Rent and other payments live on the
-			<a href="/accounting" class="font-medium underline underline-offset-2">Money</a> page; this page only
-			tracks what you're safekeeping and what gets deducted or returned.
+			A deposit account is prepared with the move-in agreement. Record money when it is actually
+			received; do not create another holding. Deposits remain the tenant's money and are separate
+			from rental income.
 		</p>
 	</div>
 
+	{#if depositsQuery.isError}
+		<div class="rounded-lg border border-destructive/40 bg-destructive/5 p-4" data-testid="deposits-load-error">
+			<div class="flex items-center justify-between gap-4">
+				<div>
+					<p class="font-medium text-destructive">Security deposits could not be loaded.</p>
+					<p class="mt-1 text-sm text-muted-foreground">Try again. No deposit records have been changed.</p>
+				</div>
+				<Button variant="outline" onclick={() => depositsQuery.refetch()}>Try again</Button>
+			</div>
+		</div>
+	{:else}
 	<DataGrid
-		data={depositsList}
+		data={accounts}
 		{columns}
-		loading={depositsQuery.isLoading || depositsQuery.isFetching}
-		emptyMessage="No security deposits on record yet. Add a holding to get started."
-		getRowKey={(d) => d.id}
-		getRowTestId={() => 'deposit-row'}
-		onRowClick={(d) => goto(`/deposits/${d.id}`)}
+		loading={depositsQuery.isLoading}
+		emptyMessage={search.trim() ? 'No security deposit accounts match your search.' : 'No security deposit accounts yet.'}
+		emptyDescription={search.trim() ? 'Try a tenant, property, unit, or account number.' : 'An account is created when an approved application is prepared for move-in.'}
+		getRowKey={(account) => account.securityDepositAccountId}
+		getRowTestId={(account) => `deposit-row-${account.securityDepositAccountId}`}
+		onRowClick={(account) => goto(`/deposits/${account.tenantAccountId}`)}
 		data-testid="deposits-list"
 		pageSize={PAGE_SIZE}
 		page={gridPage}
-		totalCount={depositsTotalCount}
+		totalCount={totalCount}
 		serverSide
-		onPageChange={(page) => (gridPage = page)}
+		onPageChange={(nextPage) => (gridPage = nextPage)}
 		sort={gridSort}
-		onSortChange={(s) => { gridSort = s ?? ''; gridPage = 1; }}
+		onSortChange={(nextSort) => { gridSort = nextSort ?? ''; gridPage = 1; }}
 	>
 		{#snippet toolbar()}
-			<div class="flex-1"></div>
-			<Button data-testid="new-holding-button" class="gap-2 shrink-0" onclick={openNewHolding}>
-				<Plus class="h-4 w-4" />
-				New Holding
-			</Button>
-		{/snippet}
-	</DataGrid>
-</div>
-
-<!-- New Holding Dialog -->
-<Dialog.Root open={showNewHolding} onOpenChange={(v) => { if (!v) closeNewHolding(); }}>
-	<Dialog.Content class="max-w-md">
-		<Dialog.Header>
-			<Dialog.Title>New Security Deposit Holding</Dialog.Title>
-			<Dialog.Description>Record a deposit held for a lease. Amount defaults to the deposit on the lease if left blank.</Dialog.Description>
-		</Dialog.Header>
-		<div class="space-y-3" data-testid="new-holding-form">
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Lease</span>
-				<Select.Root type="single" bind:value={newHoldingLeaseId}>
-					<Select.Trigger class="w-full" data-testid="holding-lease-select">
-						{selectedLeaseLabel ?? 'Select a lease'}
+			<div class="flex max-w-xl flex-1 items-center gap-2">
+				<SearchInput bind:value={search} placeholder="Search deposits…" testid="deposit-search" />
+				<Select.Root type="single" bind:value={statusFilter}>
+					<Select.Trigger class="h-9 w-44 text-sm" data-testid="deposit-status-filter">
+						{statusFilter === 'NotFunded' ? 'Not funded' : statusFilter === 'PartiallyReturned' ? 'Partially returned' : statusFilter || 'All statuses'}
 					</Select.Trigger>
 					<Select.Content>
-						<Select.Item value="" label="Select a lease">Select a lease</Select.Item>
-						{#each leasesQuery.data ?? [] as lease}
-							<Select.Item value={String(lease.id)} label="{lease.leaseNumber} · {lease.tenantName}">
-								{lease.leaseNumber} · {lease.tenantName}
-							</Select.Item>
-						{/each}
+						<Select.Item value="" label="All statuses">All statuses</Select.Item>
+						<Select.Item value="NotFunded" label="Not funded">Not funded</Select.Item>
+						<Select.Item value="Held" label="Held">Held</Select.Item>
+						<Select.Item value="PartiallyReturned" label="Partially returned">Partially returned</Select.Item>
+						<Select.Item value="Returned" label="Returned">Returned</Select.Item>
+						<Select.Item value="Withheld" label="Withheld">Withheld</Select.Item>
 					</Select.Content>
 				</Select.Root>
-				{#if newHoldingErrors.leaseId}<p class="mt-1 text-xs text-destructive" data-testid="holding-lease-error">{newHoldingErrors.leaseId}</p>{/if}
 			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Amount (optional)</span>
-				<Input
-					data-testid="holding-amount-input"
-					bind:value={newHoldingAmount}
-					placeholder="Defaults to lease deposit"
-					type="text"
-					inputmode="decimal"
-					mask="currency"
-				/>
-				{#if newHoldingErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="holding-amount-error">{newHoldingErrors.amount}</p>{/if}
-			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Notes (optional)</span>
-				<textarea
-					data-testid="holding-notes-input"
-					bind:value={newHoldingNotes}
-					rows="2"
-					class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-				></textarea>
-			</div>
-		</div>
-		<Dialog.Footer>
-			<Button variant="outline" onclick={closeNewHolding} data-testid="new-holding-cancel">Cancel</Button>
-			<Button onclick={submitNewHolding} disabled={createMut.isPending} data-testid="new-holding-save">
-				{createMut.isPending ? 'Saving…' : 'Create Holding'}
-			</Button>
-		</Dialog.Footer>
-	</Dialog.Content>
-</Dialog.Root>
-
-<!-- Add Deduction Dialog -->
-<Dialog.Root open={deductionTarget !== null} onOpenChange={(v) => { if (!v) closeDeduction(); }}>
-	<Dialog.Content class="max-w-md">
-		<Dialog.Header>
-			<Dialog.Title>Add deduction</Dialog.Title>
-			<Dialog.Description>
-				{deductionTarget ? `Deduct from the ${money(deductionTarget.amount)} deposit on lease ${deductionTarget.leaseNumber ?? deductionTarget.leaseId}.` : ''}
-			</Dialog.Description>
-		</Dialog.Header>
-		<div class="space-y-3" data-testid="deduction-form">
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Reason</span>
-				<Input
-					data-testid="deduction-reason-input"
-					bind:value={deductionReason}
-					placeholder="e.g. Carpet cleaning, Broken window"
-				/>
-				{#if deductionErrors.reason}<p class="mt-1 text-xs text-destructive" data-testid="deduction-reason-error">{deductionErrors.reason}</p>{/if}
-			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Amount</span>
-				<Input
-					data-testid="deduction-amount-input"
-					bind:value={deductionAmount}
-					type="text"
-					inputmode="decimal"
-					mask="currency"
-					placeholder="0.00"
-				/>
-				{#if deductionErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="deduction-amount-error">{deductionErrors.amount}</p>{/if}
-				{#if deductionProjectedOver > 0}
-					<div
-						class="m3-warning-surface mt-2 flex items-start gap-2 rounded-md px-2.5 py-1.5 text-xs"
-						data-testid="deduction-exceeds-warning"
-					>
-						<AlertTriangle class="mt-0.5 h-3.5 w-3.5 shrink-0" />
-						<span>
-							Deductions exceed the deposit held — the tenant will owe the difference
-							({money(deductionProjectedOver)} over).
-						</span>
-					</div>
-				{/if}
-			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Notes (optional)</span>
-				<textarea
-					data-testid="deduction-notes-input"
-					bind:value={deductionNotes}
-					rows="2"
-					class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-				></textarea>
-			</div>
-		</div>
-		<Dialog.Footer>
-			<Button variant="outline" onclick={closeDeduction} data-testid="deduction-cancel">Cancel</Button>
-			<Button onclick={submitDeduction} disabled={deductionMut.isPending} data-testid="deduction-save">
-				{deductionMut.isPending ? 'Saving…' : 'Add deduction'}
-			</Button>
-		</Dialog.Footer>
-	</Dialog.Content>
-</Dialog.Root>
-
-<!-- Process Return Confirm Dialog -->
-<ConfirmDialog
-	open={showReturnDialog}
-	title="Process deposit return"
-	message={returnTarget
-		? `Return ${money(returnTarget.netRefund)} (deposit ${money(returnTarget.amount)} minus ${money(returnTarget.totalDeductions)} in deductions) to the tenant?`
-		: ''}
-	busy={returnMut.isPending}
-	testid="return-confirm"
-	confirmLabel="Process return"
-	onconfirm={submitReturn}
-	oncancel={closeReturn}
-/>
+		{/snippet}
+	</DataGrid>
+	{/if}
+</div>

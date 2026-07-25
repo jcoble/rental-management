@@ -11,6 +11,7 @@ public class ExpenseResponse
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
+    public ExpenseOperationalScope OperationalScope { get; set; }
     public int? PropertyId { get; set; }
     public int? UnitId { get; set; }
     public int? VendorId { get; set; }
@@ -64,6 +65,12 @@ public class ExpenseResponse
     /// <summary>True when the linked file's content type starts with <c>image/</c>.</summary>
     public bool ReceiptIsImage { get; set; }
 
+    /// <summary>Total allocated amount, calculated by PostgreSQL in list/detail projections.</summary>
+    public decimal AllocationTotal { get; set; }
+
+    /// <summary>Typed allocations; populated on detail/mutation responses and empty on list pages.</summary>
+    public IReadOnlyList<ExpenseAllocationResponse> Allocations { get; set; } = [];
+
     /// <summary>
     /// Typed line items loaded from the <see cref="Core.Entities.ExpenseLineItem"/> child rows.
     /// Populated on the single-item GET; empty list on list endpoints (not loaded to avoid N+1).
@@ -77,6 +84,7 @@ public class ExpenseResponse
     {
         Id = e.Id,
         PortfolioId = e.PortfolioId,
+        OperationalScope = e.OperationalScope,
         PropertyId = e.PropertyId,
         UnitId = e.UnitId,
         VendorId = e.VendorId,
@@ -103,6 +111,8 @@ public class ExpenseResponse
         PropertyName = e.Property?.Name,
         UnitNumber = e.Unit?.UnitNumber,
         VendorName = e.Vendor?.Name,
+        // AllocationTotal/Allocations are intentionally supplied only by MoneyResponseProjection,
+        // where PostgreSQL performs the aggregate and child projection.
     };
 }
 
@@ -116,6 +126,16 @@ public class ExpenseListResponse
 
 public class ExpenseListQuery : ListQuery
 {
+    [FromQuery(Name = "operationalScope")]
+    public ExpenseOperationalScope? OperationalScope { get; set; }
+
+    [FromQuery(Name = "allocationTargetKind")]
+    public ExpenseAllocationTargetKind? AllocationTargetKind { get; set; }
+
+    [FromQuery(Name = "allocationTargetId")]
+    [Range(1, int.MaxValue)]
+    public int? AllocationTargetId { get; set; }
+
     [FromQuery(Name = "incurredFrom")]
     public DateTime? IncurredFrom { get; set; }
 
@@ -133,6 +153,46 @@ public class ExpenseListQuery : ListQuery
 
     [FromQuery(Name = "paidTo")]
     public DateTime? PaidTo { get; set; }
+}
+
+/// <summary>One persisted typed allocation returned with an Expense.</summary>
+public class ExpenseAllocationResponse
+{
+    public int Id { get; set; }
+    public ExpenseAllocationTargetKind TargetKind { get; set; }
+    public int? PropertyId { get; set; }
+    public int? UnitId { get; set; }
+    public int? OwnerEntityId { get; set; }
+    public decimal Amount { get; set; }
+
+    public static ExpenseAllocationResponse FromEntity(ExpenseAllocation allocation) => new()
+    {
+        Id = allocation.Id,
+        TargetKind = allocation.TargetKind,
+        PropertyId = allocation.PropertyId,
+        UnitId = allocation.UnitId,
+        OwnerEntityId = allocation.OwnerEntityId,
+        Amount = allocation.Amount,
+    };
+}
+
+/// <summary>One positive typed allocation supplied on create or replacement update.</summary>
+public class ExpenseAllocationRequest
+{
+    [EnumDataType(typeof(ExpenseAllocationTargetKind))]
+    public ExpenseAllocationTargetKind TargetKind { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int? PropertyId { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int? UnitId { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int? OwnerEntityId { get; set; }
+
+    [Range(0.01, 99999999)]
+    public decimal Amount { get; set; }
 }
 
 /// <summary>One typed line item returned on an <see cref="ExpenseResponse"/>.</summary>
@@ -156,6 +216,12 @@ public class ExpenseLineItemResponse
 
 public class CreateExpenseRequest
 {
+    /// <summary>
+    /// Canonical context. Omit to preserve legacy behavior: WorkOrder, Unit, Property, then Portfolio.
+    /// </summary>
+    [EnumDataType(typeof(ExpenseOperationalScope))]
+    public ExpenseOperationalScope? OperationalScope { get; set; }
+
     [Range(1, int.MaxValue)]
     public int? PropertyId { get; set; }
 
@@ -217,6 +283,9 @@ public class CreateExpenseRequest
 
     /// <summary>Itemized lines from the scanned receipt; persisted as ExpenseLineItem child rows.</summary>
     public List<CreateExpenseLineItem> LineItems { get; set; } = new();
+
+    /// <summary>Optional positive typed shares; a nonempty set must total <see cref="Amount"/>.</summary>
+    public List<ExpenseAllocationRequest> Allocations { get; set; } = new();
 }
 
 /// <summary>One scanned receipt line item to persist as an <see cref="Core.Entities.ExpenseLineItem"/>.</summary>
@@ -235,6 +304,13 @@ public class CreateExpenseLineItem
 
 public class UpdateExpenseRequest
 {
+    /// <summary>
+    /// Optional canonical scope replacement. Supplying Portfolio clears inherited Property/Unit/WorkOrder
+    /// context; omitting this field preserves the existing scope unless a legacy reference is supplied.
+    /// </summary>
+    [EnumDataType(typeof(ExpenseOperationalScope))]
+    public ExpenseOperationalScope? OperationalScope { get; set; }
+
     [Range(1, int.MaxValue)]
     public int? PropertyId { get; set; }
 
@@ -288,6 +364,11 @@ public class UpdateExpenseRequest
     /// Each item's LineNumber is assigned 1-based in list order.
     /// </summary>
     public List<UpdateExpenseLineItem>? LineItems { get; set; }
+
+    /// <summary>
+    /// When supplied, atomically replaces all allocations. Empty clears them; null preserves them.
+    /// </summary>
+    public List<ExpenseAllocationRequest>? Allocations { get; set; }
 }
 
 /// <summary>One line item in an <see cref="UpdateExpenseRequest"/>; replaces existing rows when provided.</summary>

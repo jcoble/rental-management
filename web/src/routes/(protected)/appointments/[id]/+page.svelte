@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { appointments } from '$lib/api/endpoints/appointments';
+	import type { Appointment } from '$lib/types';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
@@ -11,6 +12,7 @@
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -32,31 +34,34 @@
 		queryFn: () => appointments.get(id),
 		enabled: !isNaN(id) && id > 0,
 	}));
-	const propertiesQuery = createQuery(() => ({
-		queryKey: ['properties', portfolioId],
-		queryFn: () => properties.list(portfolioId, { take: 200 }),
-	}));
-	const tenantsQuery = createQuery(() => ({
-		queryKey: ['tenants', portfolioId],
-		queryFn: () => tenants.list(portfolioId, { take: 200 }),
-	}));
+	async function loadPropertyOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await properties.listPage(portfolioId, { ...params, sort: 'name' });
+		return {
+			...result,
+			items: result.items.map((property) => ({
+				id: property.id,
+				label: property.name,
+				description: `${property.addressLine1}, ${property.city}, ${property.state}`
+			}))
+		};
+	}
+	async function loadTenantOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await tenants.listPage(portfolioId, { ...params, sort: 'lastName' });
+		return {
+			...result,
+			items: result.items.map((tenant) => ({
+				id: tenant.id,
+				label: tenant.fullName || `${tenant.firstName} ${tenant.lastName}`,
+				description: tenant.email || tenant.phone || null
+			}))
+		};
+	}
 
 	const appt = $derived(appointmentQuery.data);
 
 	const typeOptions = $derived(APPT_TYPES.map((value) => ({ value, label: labelForType(value) })));
 	const statusOptions = appointmentStatusOptions();
 	const statusActions = $derived(appt ? appointmentDetailStatusActions(appt.status) : null);
-	const propertyOptions = $derived([
-		{ value: '', label: 'No property' },
-		...(propertiesQuery.data ?? []).map((p) => ({ value: String(p.id), label: p.name })),
-	]);
-	const tenantOptions = $derived([
-		{ value: '', label: 'No tenant' },
-		...(tenantsQuery.data ?? []).map((t) => ({
-			value: String(t.id),
-			label: t.fullName || `${t.firstName} ${t.lastName}`,
-		})),
-	]);
 
 	function invalidate() {
 		invalidateAppointmentQueries(queryClient, portfolioId, id);
@@ -69,10 +74,14 @@
 		propertyId: '', tenantId: '', prospectName: '', prospectEmail: '', assignedTo: '', status: 'Scheduled',
 	});
 	let formErrors = $state<Record<string, string>>({});
+	let selectedPropertyLabel = $state<string | null>(null);
+	let selectedTenantLabel = $state<string | null>(null);
 
 	function startEditing() {
 		if (!appt) return;
 		form = createAppointmentDetailEditForm(appt);
+		selectedPropertyLabel = appt.propertyName ?? null;
+		selectedTenantLabel = appt.tenantName ?? null;
 		formErrors = {};
 		editing = true;
 	}
@@ -113,7 +122,7 @@
 	// ── Delete ────────────────────────────────────────────────────────────────
 	let showDelete = $state(false);
 	const deleteMutation = createMutation(() => ({
-		mutationFn: (apptId: number) => appointments.delete(apptId),
+		mutationFn: (appointment: Appointment) => appointments.delete(appointment.id, appointment.propertyId),
 		onSuccess: () => {
 			showSuccess('Appointment deleted.');
 			goto('/appointments');
@@ -259,8 +268,37 @@
 			</DetailCard>
 
 			<DetailCard title="Who" icon={Users} accent="muted" testid="appointment-detail-who" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-				<InlineField label="Property" bind:value={form.propertyId} display={appt.propertyName ? `${appt.propertyName}${appt.unitNumber ? ' · Unit ' + appt.unitNumber : ''}` : ''} {editing} type="select" options={propertyOptions} testid="appointment-detail-property" />
-				<InlineField label="Tenant" bind:value={form.tenantId} display={appt.tenantName ?? ''} {editing} type="select" options={tenantOptions} testid="appointment-detail-tenant" />
+				{#if editing}
+					<RemoteRecordSelect
+						queryKey={['appointment-detail-property', portfolioId]}
+						label="Property"
+						bind:value={form.propertyId}
+						selectedLabel={selectedPropertyLabel}
+						placeholder="No property"
+						clearLabel="No property"
+						searchPlaceholder="Search properties…"
+						emptyLabel="No matching properties"
+						loadPage={loadPropertyOptions}
+						onValueChange={(_value, option) => (selectedPropertyLabel = option?.label ?? null)}
+						testid="appointment-detail-property"
+					/>
+					<RemoteRecordSelect
+						queryKey={['appointment-detail-tenant', portfolioId]}
+						label="Tenant"
+						bind:value={form.tenantId}
+						selectedLabel={selectedTenantLabel}
+						placeholder="No tenant"
+						clearLabel="No tenant"
+						searchPlaceholder="Search tenants…"
+						emptyLabel="No matching tenants"
+						loadPage={loadTenantOptions}
+						onValueChange={(_value, option) => (selectedTenantLabel = option?.label ?? null)}
+						testid="appointment-detail-tenant"
+					/>
+				{:else}
+					<InlineField label="Property" bind:value={form.propertyId} display={appt.propertyName ? `${appt.propertyName}${appt.unitNumber ? ' · Unit ' + appt.unitNumber : ''}` : ''} editing={false} testid="appointment-detail-property" />
+					<InlineField label="Tenant" bind:value={form.tenantId} display={appt.tenantName ?? ''} editing={false} testid="appointment-detail-tenant" />
+				{/if}
 				<InlineField label="Prospect" bind:value={form.prospectName} display={appt.prospectName} {editing} testid="appointment-detail-prospect-name" />
 				<InlineField label="Prospect email" bind:value={form.prospectEmail} display={appt.prospectEmail} {editing} type="email" error={formErrors.prospectEmail} testid="appointment-detail-prospect-email" />
 				<InlineField label="Assigned to" bind:value={form.assignedTo} display={appt.assignedTo} {editing} testid="appointment-detail-assigned" />
@@ -297,6 +335,6 @@
 	message={appt ? `Delete "${appt.title}"?` : ''}
 	busy={deleteMutation.isPending}
 	testid="appointment-delete"
-	onconfirm={() => appt && deleteMutation.mutate(appt.id)}
+	onconfirm={() => appt && deleteMutation.mutate(appt)}
 	oncancel={() => (showDelete = false)}
 />

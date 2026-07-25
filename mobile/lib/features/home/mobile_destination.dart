@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
+import '../../core/auth/auth_models.dart';
+import '../../core/auth/mobile_access_policy.dart';
 import '../activity/activity_history_screen.dart';
 import '../ai/ai_tab.dart';
 import '../analytics/insights_screen.dart';
@@ -36,6 +38,7 @@ class MobileDestination {
     required this.label,
     required this.subtitle,
     required this.builder,
+    this.capabilityKeys = const [],
   });
 
   final MobileDestinationId id;
@@ -43,6 +46,20 @@ class MobileDestination {
   final String label;
   final String subtitle;
   final WidgetBuilder builder;
+  final List<String> capabilityKeys;
+
+  bool isVisibleFor(Set<String> capabilities) =>
+      capabilityKeys.isEmpty || capabilityKeys.any(capabilities.contains);
+
+  MobileDestination copyWith({String? label, String? subtitle}) =>
+      MobileDestination(
+        id: id,
+        icon: icon,
+        label: label ?? this.label,
+        subtitle: subtitle ?? this.subtitle,
+        builder: builder,
+        capabilityKeys: capabilityKeys,
+      );
 
   void open(BuildContext context) {
     final target = _shellTargetFor(id);
@@ -161,6 +178,61 @@ class MobileDestinationGroup {
   final List<MobileDestination> destinations;
 }
 
+enum TenantShellDestinationId {
+  home,
+  accountAndLease,
+  maintenance,
+  messages,
+  profile,
+}
+
+class TenantShellDestination {
+  const TenantShellDestination({
+    required this.id,
+    required this.label,
+    required this.bottomNavigationLabel,
+    required this.icon,
+  });
+
+  final TenantShellDestinationId id;
+  final String label;
+  final String bottomNavigationLabel;
+  final IconData icon;
+}
+
+const tenantShellDestinations = <TenantShellDestination>[
+  TenantShellDestination(
+    id: TenantShellDestinationId.home,
+    label: 'Home',
+    bottomNavigationLabel: 'Home',
+    icon: Symbols.home_rounded,
+  ),
+  TenantShellDestination(
+    id: TenantShellDestinationId.accountAndLease,
+    label: 'Account & lease',
+    bottomNavigationLabel: 'Lease',
+    icon: Symbols.description_rounded,
+  ),
+  TenantShellDestination(
+    id: TenantShellDestinationId.maintenance,
+    label: 'Maintenance',
+    bottomNavigationLabel: 'Repairs',
+    icon: Symbols.build_rounded,
+  ),
+  TenantShellDestination(
+    id: TenantShellDestinationId.messages,
+    label: 'Messages',
+    bottomNavigationLabel: 'Messages',
+    icon: Symbols.forum_rounded,
+  ),
+  TenantShellDestination(
+    id: TenantShellDestinationId.profile,
+    label: 'Profile',
+    bottomNavigationLabel: 'Profile',
+    icon: Symbols.account_circle_rounded,
+  ),
+];
+
 const gettingStartedDestination = MobileDestination(
   id: MobileDestinationId.gettingStarted,
   icon: Symbols.rocket_launch_rounded,
@@ -192,6 +264,7 @@ const rentalDestinations = <MobileDestination>[
     label: 'Properties',
     subtitle: 'Buildings, units and details',
     builder: _propertiesBuilder,
+    capabilityKeys: rentalReadCapabilityKeys,
   ),
   MobileDestination(
     id: MobileDestinationId.owners,
@@ -199,6 +272,7 @@ const rentalDestinations = <MobileDestination>[
     label: 'Owners',
     subtitle: 'Entities, contacts and property assignments',
     builder: _ownersBuilder,
+    capabilityKeys: ownerDirectoryCapabilityKeys,
   ),
   MobileDestination(
     id: MobileDestinationId.units,
@@ -206,6 +280,7 @@ const rentalDestinations = <MobileDestination>[
     label: 'Units',
     subtitle: 'Command centers for each rental',
     builder: _unitsBuilder,
+    capabilityKeys: rentalReadCapabilityKeys,
   ),
   MobileDestination(
     id: MobileDestinationId.tenants,
@@ -213,6 +288,7 @@ const rentalDestinations = <MobileDestination>[
     label: 'Tenants',
     subtitle: 'People and contacts',
     builder: _tenantsBuilder,
+    capabilityKeys: rentalReadCapabilityKeys,
   ),
   MobileDestination(
     id: MobileDestinationId.leases,
@@ -220,6 +296,7 @@ const rentalDestinations = <MobileDestination>[
     label: 'Leases',
     subtitle: 'Agreements and terms',
     builder: _leasesBuilder,
+    capabilityKeys: rentalReadCapabilityKeys,
   ),
   MobileDestination(
     id: MobileDestinationId.applications,
@@ -227,7 +304,27 @@ const rentalDestinations = <MobileDestination>[
     label: 'Applications',
     subtitle: 'Review and approve applicants',
     builder: _applicationsBuilder,
+    capabilityKeys: applicationCapabilityKeys,
   ),
+];
+
+const depositsDestination = MobileDestination(
+  id: MobileDestinationId.deposits,
+  icon: Symbols.shield_rounded,
+  label: 'Deposits',
+  subtitle: 'Holdings, deductions and returns',
+  builder: _depositsBuilder,
+  capabilityKeys: depositCapabilityKeys,
+);
+
+List<MobileDestination> rentalHubDestinationsFor({
+  required WorkspaceExperience experience,
+  required Set<String> capabilities,
+}) => [
+  ...visibleMobileDestinations(rentalDestinations, capabilities),
+  if (experience == WorkspaceExperience.leasing &&
+      depositsDestination.isVisibleFor(capabilities))
+    depositsDestination,
 ];
 
 const moneyHubDestinations = <MobileDestination>[
@@ -237,6 +334,7 @@ const moneyHubDestinations = <MobileDestination>[
     label: 'Portfolio',
     subtitle: 'Occupancy, collections and trends',
     builder: _insightsBuilder,
+    capabilityKeys: reportsCapabilityKeys,
   ),
   MobileDestination(
     id: MobileDestinationId.moneyOverview,
@@ -244,6 +342,7 @@ const moneyHubDestinations = <MobileDestination>[
     label: 'Insights',
     subtitle: 'Collection health and cash movement',
     builder: _moneyInsightsBuilder,
+    capabilityKeys: moneyOverviewCapabilityKeys,
   ),
   MobileDestination(
     id: MobileDestinationId.moneyLedger,
@@ -251,20 +350,16 @@ const moneyHubDestinations = <MobileDestination>[
     label: 'Ledger',
     subtitle: 'Payments and expenses in one feed',
     builder: _moneyLedgerBuilder,
+    capabilityKeys: moneyLedgerCapabilityKeys,
   ),
-  MobileDestination(
-    id: MobileDestinationId.deposits,
-    icon: Symbols.shield_rounded,
-    label: 'Deposits',
-    subtitle: 'Holdings, deductions and returns',
-    builder: _depositsBuilder,
-  ),
+  depositsDestination,
   MobileDestination(
     id: MobileDestinationId.banking,
     icon: Symbols.account_balance_rounded,
     label: 'Banking',
     subtitle: 'Reconciliation and matches',
     builder: _bankingBuilder,
+    capabilityKeys: bankingCapabilityKeys,
   ),
   MobileDestination(
     id: MobileDestinationId.reports,
@@ -272,6 +367,7 @@ const moneyHubDestinations = <MobileDestination>[
     label: 'Reports',
     subtitle: 'Annual owner statements',
     builder: _ownerReportsBuilder,
+    capabilityKeys: reportsCapabilityKeys,
   ),
 ];
 
@@ -282,6 +378,7 @@ const workHubDestinations = <MobileDestination>[
     label: 'Orders',
     subtitle: 'Open repairs and maintenance requests',
     builder: _workOrdersBuilder,
+    capabilityKeys: workOrderCapabilityKeys,
   ),
   MobileDestination(
     id: MobileDestinationId.calendar,
@@ -289,6 +386,7 @@ const workHubDestinations = <MobileDestination>[
     label: 'Calendar',
     subtitle: 'Showings and visits',
     builder: _appointmentsBuilder,
+    capabilityKeys: ['work.read', 'leasing.showings.manage'],
   ),
   MobileDestination(
     id: MobileDestinationId.inspections,
@@ -296,6 +394,7 @@ const workHubDestinations = <MobileDestination>[
     label: 'Inspections',
     subtitle: 'Walk units with smart checklists',
     builder: _inspectionsBuilder,
+    capabilityKeys: ['work.read', 'work.manage'],
   ),
   MobileDestination(
     id: MobileDestinationId.vendors,
@@ -303,6 +402,7 @@ const workHubDestinations = <MobileDestination>[
     label: 'Vendors',
     subtitle: 'Text jobs, ratings and scorecards',
     builder: _vendorsBuilder,
+    capabilityKeys: ['work.manage'],
   ),
   MobileDestination(
     id: MobileDestinationId.automations,
@@ -310,6 +410,7 @@ const workHubDestinations = <MobileDestination>[
     label: 'Automations',
     subtitle: 'Recurring maintenance templates',
     builder: _recurringMaintenanceBuilder,
+    capabilityKeys: ['work.manage'],
   ),
   MobileDestination(
     id: MobileDestinationId.notices,
@@ -317,7 +418,32 @@ const workHubDestinations = <MobileDestination>[
     label: 'Notices',
     subtitle: 'Renewal, late-rent and move-out drafts',
     builder: _noticesBuilder,
+    capabilityKeys: [tenantNoticeDraftCapability],
   ),
+];
+
+bool canOpenWorkHub(Set<String> capabilities) => workHubDestinations.any(
+  (destination) => destination.isVisibleFor(capabilities),
+);
+
+bool canOpenWorkOrders(Set<String> capabilities) => workHubDestinations
+    .firstWhere(
+      (destination) => destination.id == MobileDestinationId.workOrders,
+    )
+    .isVisibleFor(capabilities);
+
+List<MobileDestination> workDestinationsFor(
+  Set<String> capabilities, {
+  required bool assignedWorkExperience,
+}) => [
+  for (final destination in workHubDestinations)
+    if (destination.isVisibleFor(capabilities))
+      assignedWorkExperience && destination.id == MobileDestinationId.workOrders
+          ? destination.copyWith(
+              label: 'My work',
+              subtitle: 'Repairs and maintenance assigned to you',
+            )
+          : destination,
 ];
 
 const inboxHubDestinations = <MobileDestination>[
@@ -327,6 +453,7 @@ const inboxHubDestinations = <MobileDestination>[
     label: 'Messages',
     subtitle: 'Tenant and vendor conversations',
     builder: _messagesBuilder,
+    capabilityKeys: inboxCapabilityKeys,
   ),
   MobileDestination(
     id: MobileDestinationId.notifications,
@@ -334,6 +461,7 @@ const inboxHubDestinations = <MobileDestination>[
     label: 'Notifications',
     subtitle: 'Unread alerts and system updates',
     builder: _notificationsBuilder,
+    capabilityKeys: inboxCapabilityKeys,
   ),
   MobileDestination(
     id: MobileDestinationId.activityHistory,
@@ -341,8 +469,16 @@ const inboxHubDestinations = <MobileDestination>[
     label: 'Activity history',
     subtitle: 'Mobile audit trail and record changes',
     builder: _activityHistoryBuilder,
+    capabilityKeys: reportsCapabilityKeys,
   ),
 ];
+
+List<MobileDestination> visibleMobileDestinations(
+  Iterable<MobileDestination> destinations,
+  Set<String> capabilities,
+) => destinations
+    .where((destination) => destination.isVisibleFor(capabilities))
+    .toList(growable: false);
 
 const browseDestinationGroups = <MobileDestinationGroup>[
   MobileDestinationGroup(

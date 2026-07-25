@@ -1,72 +1,99 @@
-using RentalCommand.Core.Enums;
-
 namespace RentalCommand.Core.Interfaces;
 
 /// <summary>
-/// Abstraction over a tenant-screening provider (e.g. TransUnion SmartMove). The integration is GATED
-/// like Stripe, the LLM provider, and e-sign: when no API key is configured a disabled implementation
-/// is used that reports itself unconfigured and returns a clear "not configured" result — never a false
-/// "passed". Callers MUST have recorded explicit FCRA consent before requesting a screening.
+/// Swappable adapter for a provider-hosted applicant screening flow. Rental Command supplies only
+/// reconciliation and invitation data; the provider collects sensitive identity data directly.
 /// </summary>
-public interface IScreeningProvider
+public interface IScreeningProvider : RentalCommand.Core.Atomic.IAtomicRemoteDependency
 {
-    /// <summary>True when the provider is configured (an API key is present) and will make real calls.</summary>
-    bool IsConfigured { get; }
+    ScreeningProviderDescriptor Descriptor { get; }
 
-    /// <summary>Request a background/credit screening for an applicant and return the result.</summary>
-    Task<ScreeningProviderResult> RequestScreeningAsync(
-        ScreeningRequest request,
+    Task<ScreeningInvitationResult> CreateInvitationAsync(
+        ScreeningInvitationRequest request,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Authenticates a provider callback and translates it to the restricted, provider-neutral
+    /// delivery shape. Concrete adapters verify the vendor's signature and timestamp here. Raw
+    /// callback bodies are transient and must never be persisted or logged.
+    /// </summary>
+    Task<ScreeningProviderDeliveryVerification> VerifyDeliveryAsync(
+        ScreeningProviderCallback callback,
         CancellationToken ct = default);
 }
 
-/// <summary>Applicant details submitted for screening.</summary>
-public class ScreeningRequest
-{
-    public string FullName { get; set; } = string.Empty;
-    public string Email { get; set; } = string.Empty;
-    public string? Ssn { get; set; }
-    public string? Address { get; set; }
+public sealed record ScreeningProviderDescriptor(
+    string Key,
+    string DisplayName,
+    bool IsConfigured,
+    ScreeningProviderCapabilities Capabilities);
 
-    /// <summary>Our application id, echoed to the provider as a client reference for reconciliation.</summary>
-    public int ApplicationId { get; set; }
-}
+public sealed record ScreeningProviderCapabilities(
+    bool CreatesHostedInvitation,
+    bool SupportsStatusWebhooks,
+    bool SuppliesAdverseActionAgency,
+    bool SupportsApplicantPaidOrders,
+    bool SupportsLandlordPaidOrders);
 
 /// <summary>
-/// Outcome of a screening request from the provider. Distinct from the persisted
-/// <see cref="Entities.ScreeningResult"/> entity — this is the transient provider response the
-/// service maps onto a stored row.
+/// OperationKey remains stable across recovery retries and must be forwarded by an adapter as the
+/// provider's idempotency key.
 /// </summary>
-public class ScreeningProviderResult
+public sealed record ScreeningInvitationRequest(
+    int ApplicationId,
+    string OperationKey,
+    string ApplicantName,
+    string ApplicantEmail,
+    DateTime ConsentAtUtc);
+
+public sealed record ScreeningInvitationResult(
+    bool Accepted,
+    string? ProviderReference,
+    string? ProviderHostedUrl,
+    DateTime? InvitedAtUtc,
+    string? ErrorCode,
+    string? CreditReportingAgencyName = null,
+    string? CreditReportingAgencyAddress = null,
+    string? CreditReportingAgencyPhone = null);
+
+/// <summary>
+/// Normalized result of a provider adapter's signature-verified delivery. The adapter may inspect
+/// the remote payload transiently, but only this restricted metadata crosses into persistence.
+/// </summary>
+public sealed record ScreeningProviderStatusDelivery(
+    string ProviderKey,
+    string DeliveryId,
+    string ProviderReference,
+    string EventType,
+    RentalCommand.Core.Enums.ApplicantScreeningStatus Status,
+    DateTime OccurredAtUtc,
+    string? ProviderHostedUrl = null,
+    string? CreditReportingAgencyName = null,
+    string? CreditReportingAgencyAddress = null,
+    string? CreditReportingAgencyPhone = null);
+
+/// <summary>Transient callback material supplied to the installed provider adapter.</summary>
+public sealed record ScreeningProviderCallback(
+    string ProviderKey,
+    byte[] Body,
+    string? ContentType,
+    IReadOnlyDictionary<string, string> Headers);
+
+/// <summary>
+/// Result of signature/authentication verification. A verified callback may still be malformed;
+/// ErrorCode is safe operational metadata and must not contain the raw provider payload.
+/// </summary>
+public sealed record ScreeningProviderDeliveryVerification(
+    bool IsAuthentic,
+    ScreeningProviderStatusDelivery? Delivery,
+    string? ErrorCode)
 {
-    /// <summary>False when the provider is not configured; the operation was a no-op (never a false "passed").</summary>
-    public bool IsConfigured { get; set; } = true;
+    public static ScreeningProviderDeliveryVerification Rejected(string errorCode) =>
+        new(false, null, errorCode);
 
-    /// <summary>True when the provider returned a usable, completed report.</summary>
-    public bool Completed { get; set; }
+    public static ScreeningProviderDeliveryVerification Invalid(string errorCode) =>
+        new(true, null, errorCode);
 
-    /// <summary>Provider-side identifier for the screening report.</summary>
-    public string? ProviderReference { get; set; }
-
-    /// <summary>Coarse credit band, e.g. "Excellent"/"Good"/"Fair"/"Poor".</summary>
-    public string? CreditScoreBand { get; set; }
-
-    public bool? HasCriminalRecord { get; set; }
-    public bool? HasEvictionRecord { get; set; }
-
-    /// <summary>The provider's overall recommendation, mapped onto our vocabulary.</summary>
-    public ScreeningRecommendation? Recommendation { get; set; }
-
-    /// <summary>Raw provider response body for audit/troubleshooting.</summary>
-    public string? RawResultJson { get; set; }
-
-    /// <summary>Human-readable error/explanation when the screening could not be performed.</summary>
-    public string? Error { get; set; }
-
-    /// <summary>The provider is not configured — a clear no-op result, never a false "passed".</summary>
-    public static ScreeningProviderResult NotConfigured() => new()
-    {
-        IsConfigured = false,
-        Completed = false,
-        Error = "Screening provider is not configured.",
-    };
+    public static ScreeningProviderDeliveryVerification Verified(ScreeningProviderStatusDelivery delivery) =>
+        new(true, delivery, null);
 }

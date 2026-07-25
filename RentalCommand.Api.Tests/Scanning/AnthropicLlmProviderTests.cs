@@ -36,6 +36,63 @@ public class AnthropicLlmProviderTests
     // ----- No-op fallback -----
 
     [Fact]
+    public async Task TestCredentialAsync_UsesSuppliedWorkspaceKeyWithoutReturningIt()
+    {
+        var handler = new FixedResponseHandler(HttpStatusCode.OK, """{"content":[]}""");
+        var provider = BuildProvider(null, handler);
+
+        var result = await provider.TestCredentialAsync(
+            "sk-ant-workspace-secret",
+            "claude-3-5-sonnet-latest");
+
+        result.Succeeded.Should().BeTrue();
+        result.Provider.Should().Be("anthropic");
+        result.ModelId.Should().Be("claude-3-5-sonnet-latest");
+        result.ToString().Should().NotContain("sk-ant-workspace-secret");
+    }
+
+    [Fact]
+    public async Task ExtractWorkspaceAsync_UsesOnlySuppliedWorkspaceKeyAndModel()
+    {
+        var response = """
+            {
+              "model": "workspace-response-model",
+              "content": [{
+                "type": "tool_use",
+                "input": {
+                  "vendor_name": "ACME",
+                  "vendor_name_confidence": 0.9,
+                  "amount": "10",
+                  "amount_confidence": 0.8
+                }
+              }],
+              "usage": { "input_tokens": 12, "output_tokens": 4 }
+            }
+            """;
+        var handler = new CaptureRequestHandler(HttpStatusCode.OK, response);
+        var provider = BuildProvider(
+            null,
+            handler,
+            new AssistantConfig
+            {
+                ApiKey = null,
+                ModelId = "shared-model-must-not-run",
+            });
+
+        await provider.ExtractWorkspaceAsync(
+            new WorkspaceLlmRuntimeCredential(
+                42, "anthropic", "workspace-request-model", "sk-ant-workspace-only"),
+            new byte[] { 0xFF, 0xD8, 0xFF },
+            "image/jpeg",
+            "Extract fields",
+            TwoFields());
+
+        handler.ApiKey.Should().Be("sk-ant-workspace-only");
+        handler.RequestBody.Should().Contain("\"model\":\"workspace-request-model\"");
+        handler.RequestBody.Should().NotContain("shared-model-must-not-run");
+    }
+
+    [Fact]
     public async Task ExtractAsync_WhenApiKeyEmpty_ReturnsAllFieldsWithZeroConfidenceAndNoHttpCall()
     {
         var throwingHandler = new ThrowIfCalledHandler();
@@ -207,10 +264,14 @@ public class AnthropicLlmProviderTests
     private sealed class CaptureRequestHandler(HttpStatusCode status, string body) : HttpMessageHandler
     {
         public string? RequestBody { get; private set; }
+        public string? ApiKey { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            ApiKey = request.Headers.TryGetValues("x-api-key", out var values)
+                ? values.SingleOrDefault()
+                : null;
             RequestBody = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);

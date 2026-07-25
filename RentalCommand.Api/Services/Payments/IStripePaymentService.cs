@@ -5,7 +5,7 @@ namespace RentalCommand.Api.Services.Payments;
 /// All methods are gated: when Stripe is not configured (<see cref="CreateIntentResult.Outcome.NotEnabled"/>),
 /// they return gracefully without throwing.
 /// </summary>
-public interface IStripePaymentService
+public interface IStripePaymentService : RentalCommand.Core.Atomic.IAtomicRemoteDependency
 {
     /// <summary>
     /// True when hosted online payments may be offered for the portfolio. This includes the global
@@ -14,28 +14,31 @@ public interface IStripePaymentService
     Task<bool> IsOnlinePaymentsAvailableAsync(int portfolioId, CancellationToken ct);
 
     /// <summary>
-    /// Creates a Stripe PaymentIntent for the given payment and persists a pending
-    /// <c>PaymentTransaction</c>. Returns <see cref="CreateIntentResult"/> — check
+    /// Creates a Stripe PaymentIntent for an open canonical tenant-account charge and persists a
+    /// durable <c>TenantPaymentAttempt</c>. Returns <see cref="CreateIntentResult"/> — check
     /// <see cref="CreateIntentResult.Result"/> before using the client secret.
     /// </summary>
-    Task<CreateIntentResult> CreatePaymentIntentAsync(int portfolioId, int paymentId, CancellationToken ct);
+    Task<CreateIntentResult> CreatePaymentIntentAsync(
+        int portfolioId, int tenantAccountId, long chargeLedgerEntryId, int actorUserId, CancellationToken ct);
 
     /// <summary>
-    /// Tenant-safe hosted-Checkout path for paying a single rent <c>Payment</c>. Verifies the
-    /// payment belongs to the calling tenant's own lease (otherwise <see cref="CheckoutResult.Outcome.NotFound"/>),
-    /// then creates a Stripe Checkout Session (card + ACH) and a pending <c>PaymentTransaction</c>.
+    /// Tenant-safe hosted-Checkout path for paying one open <c>TenantLedgerEntry</c>. Verifies the
+    /// account belongs to the calling tenant (otherwise <see cref="CheckoutResult.Outcome.NotFound"/>),
+    /// then creates a Stripe Checkout Session and a pending <c>TenantPaymentAttempt</c>.
     /// Gated: returns <see cref="CheckoutResult.Outcome.NotEnabled"/> when Stripe is not configured.
     /// </summary>
     Task<CheckoutResult> CreatePaymentCheckoutSessionAsync(
-        int portfolioId, int tenantId, int paymentId, string? successUrl, string? cancelUrl, CancellationToken ct);
+        int portfolioId, int tenantId, int tenantAccountId, long chargeLedgerEntryId, int actorUserId,
+        string? successUrl, string? cancelUrl, CancellationToken ct);
 
     /// <summary>
     /// Creates a Stripe Checkout Session in <c>setup</c> mode so the tenant saves a reusable payment
-    /// method for off-session autopay on the given lease. Verifies the lease belongs to the calling
-    /// tenant (otherwise <see cref="CheckoutResult.Outcome.NotFound"/>). Gated.
+    /// method for off-session autopay on the given tenant account. Verifies the account belongs to
+    /// the calling tenant (otherwise <see cref="CheckoutResult.Outcome.NotFound"/>). Gated.
     /// </summary>
     Task<CheckoutResult> CreateAutopaySetupSessionAsync(
-        int portfolioId, int tenantId, int leaseId, string? successUrl, string? cancelUrl, CancellationToken ct);
+        int portfolioId, int tenantId, int tenantAccountId, int actorUserId, string operationKey,
+        string? successUrl, string? cancelUrl, CancellationToken ct);
 
     /// <summary>
     /// Verifies the Stripe webhook signature and processes the event. Idempotent — duplicate
@@ -66,10 +69,11 @@ public class CreateIntentResult
     public Outcome Result { get; init; }
     public string? ClientSecret { get; init; }
     public string? PublishableKey { get; init; }
-    public int? TransactionId { get; init; }
+    public long? PaymentAttemptId { get; init; }
 
     public static CreateIntentResult NotEnabled() => new() { Result = Outcome.NotEnabled };
     public static CreateIntentResult NotFound() => new() { Result = Outcome.NotFound };
-    public static CreateIntentResult Ok(string clientSecret, string? publishableKey, int transactionId) =>
-        new() { Result = Outcome.Ok, ClientSecret = clientSecret, PublishableKey = publishableKey, TransactionId = transactionId };
+    public static CreateIntentResult Ok(string clientSecret, string? publishableKey, long paymentAttemptId) =>
+        new() { Result = Outcome.Ok, ClientSecret = clientSecret, PublishableKey = publishableKey,
+            PaymentAttemptId = paymentAttemptId };
 }

@@ -16,7 +16,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
 
-	let { propertyId }: { propertyId: number } = $props();
+	let { propertyId, canManage = false }: { propertyId: number; canManage?: boolean } = $props();
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -54,6 +54,7 @@
 	let deleteTarget = $state<PropertyDisposition | null>(null);
 
 	function openAdd() {
+		if (!canManage) return;
 		editingId = null;
 		form = { ...emptyForm };
 		formErrors = {};
@@ -61,6 +62,7 @@
 	}
 
 	function openEdit(disposition: PropertyDisposition) {
+		if (!canManage) return;
 		editingId = disposition.id;
 		form = {
 			closedOnDate: disposition.closedOnDate.slice(0, 10),
@@ -83,7 +85,7 @@
 		queryClient.invalidateQueries({ queryKey: ['property-dispositions', propertyId] });
 		queryClient.invalidateQueries({ queryKey: ['property', propertyId] });
 		queryClient.invalidateQueries({ queryKey: ['properties'] });
-		queryClient.invalidateQueries({ queryKey: ['leases'] });
+		queryClient.invalidateQueries({ queryKey: ['lease-managements'] });
 		queryClient.invalidateQueries({ queryKey: ['units'] });
 		queryClient.invalidateQueries({ queryKey: ['capital-assets', propertyId] });
 		queryClient.invalidateQueries({ queryKey: ['accounting-summary', portfolioId] });
@@ -153,6 +155,7 @@
 </script>
 
 {#snippet actionsCell(disposition: PropertyDisposition)}
+	{#if canManage}
 	<div class="flex items-center justify-end gap-1">
 		<Button variant="ghost" size="sm" class="h-7 w-7 p-0" onclick={(e) => { e.stopPropagation(); openEdit(disposition); }} aria-label="Edit property sale">
 			<Pencil class="h-4 w-4" />
@@ -161,6 +164,7 @@
 			<Trash2 class="h-4 w-4" />
 		</Button>
 	</div>
+	{/if}
 {/snippet}
 
 <div class="mb-6" data-testid="property-detail-dispositions">
@@ -189,7 +193,7 @@
 		loading={query.isLoading || query.isFetching}
 		emptyMessage="No property sale recorded yet."
 		getRowKey={(disposition) => disposition.id}
-		onRowClick={(disposition) => openEdit(disposition)}
+		onRowClick={canManage ? (disposition) => openEdit(disposition) : undefined}
 		pageSize={PAGE_SIZE}
 		{page}
 		totalCount={totalCount}
@@ -201,15 +205,17 @@
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1"></div>
+			{#if canManage}
 			<Button class="gap-2 shrink-0" onclick={openAdd} data-testid="property-disposition-add-button">
 				<Plus class="h-4 w-4" />
 				Record Sale
 			</Button>
+			{/if}
 		{/snippet}
 	</DataGrid>
 </div>
 
-<Dialog.Root open={showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
+<Dialog.Root open={canManage && showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
 	<Dialog.Content class="max-w-md">
 		<Dialog.Header>
 			<Dialog.Title>{editingId == null ? 'Record Property Sale' : 'Edit Property Sale'}</Dialog.Title>
@@ -233,7 +239,7 @@
 </Dialog.Root>
 
 <ConfirmDialog
-	open={deleteTarget !== null}
+	open={canManage && deleteTarget !== null}
 	title="Remove property sale"
 	message={deleteTarget ? `Remove sale record for ${deleteTarget.propertyName ?? 'this property'}?` : ''}
 	busy={deleteMut.isPending}

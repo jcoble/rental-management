@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Import;
@@ -7,7 +9,7 @@ namespace RentalCommand.Api.Controllers;
 /// <summary>
 /// CSV / bulk import for a migrating landlord. Upload a spreadsheet of tenants / properties / units
 /// and create them in bulk, with a dry-run preview (per-row validation + errors) before committing.
-/// All routes are scoped to the caller's portfolio via the JWT <c>portfolioId</c> claim — there is no
+/// All routes are scoped to the caller's server-validated workspace context — there is no
 /// <c>{portfolioId}</c> route parameter and a client can never name another portfolio.
 /// </summary>
 [ApiController]
@@ -40,6 +42,7 @@ public class ImportController : ManagementControllerBase
     public async Task<ActionResult<CsvImportResult>> Import(
         string entityType,
         [FromQuery] bool dryRun,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         IFormFile? file,
         CancellationToken ct)
     {
@@ -61,7 +64,24 @@ public class ImportController : ManagementControllerBase
 
         try
         {
-            var result = await _import.ImportAsync(GetPortfolioId(), entityType, csv, dryRun, ct);
+            if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+            CsvImportCommandContext? commandContext = null;
+            if (!dryRun)
+            {
+                var normalizedKey = idempotencyKey?.Trim();
+                if (string.IsNullOrWhiteSpace(normalizedKey) || normalizedKey.Length > 128)
+                    return BadRequest(new { error = "A valid Idempotency-Key is required for live imports (maximum 128 characters)." });
+                if (!TryGetActiveAccessContext(out var active))
+                    return Forbid();
+
+                commandContext = new CsvImportCommandContext(
+                    active.UserId, active.SessionId, active.AccessContextId, active.AccessRevision,
+                    Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedKey)))
+                        .ToLowerInvariant());
+            }
+
+            var result = await _import.ImportAsync(
+                scope, entityType, csv, dryRun, commandContext, ct);
             return Ok(result);
         }
         catch (ArgumentException ex)

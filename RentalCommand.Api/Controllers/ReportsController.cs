@@ -6,8 +6,8 @@ using RentalCommand.Core.Time;
 namespace RentalCommand.Api.Controllers;
 
 /// <summary>
-/// Reports Hub: read-only reports over the caller's portfolio. Scope comes from the JWT
-/// <c>portfolioId</c> claim; there are no create/update/delete operations. Property filters
+/// Reports Hub: read-only reports over the caller's canonical workspace and property scope.
+/// There are no create/update/delete operations. Property filters
 /// (<c>propertyId</c> / <c>propertyIds</c>) are IDOR-validated against the portfolio inside the
 /// service. Date ranges are <c>from</c>/<c>to</c> (inclusive) and default to year-to-date when omitted.
 ///
@@ -47,7 +47,7 @@ public class ReportsController : ManagementControllerBase
     [HttpGet("rent-roll")]
     [ProducesResponseType(typeof(RentRollResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<RentRollResponse>> RentRoll([FromQuery] ReportRangeQuery query, CancellationToken ct)
-        => Ok(await _service.GetRentRollAsync(GetPortfolioId(), query, ct));
+        => Ok(await _service.GetRentRollAsync(GetWorkspaceReadScope(), query, ct));
 
     /// <summary>
     /// Rent Ledger — per lease over <c>from</c>..<c>to</c>: charges due (accrual) vs. payments received,
@@ -56,7 +56,10 @@ public class ReportsController : ManagementControllerBase
     [HttpGet("rent-ledger")]
     [ProducesResponseType(typeof(RentLedgerResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<RentLedgerResponse>> RentLedger([FromQuery] ReportRangeQuery query, CancellationToken ct)
-        => Ok(await _service.GetRentLedgerAsync(GetPortfolioId(), query, ct));
+    {
+        if (!TryReadAccessContext(out var access)) return Forbid();
+        return Ok(await _service.GetRentLedgerAsync(access, query, ct));
+    }
 
     /// <summary>
     /// Delinquency / Overdue Aging — outstanding balances bucketed by days past due
@@ -65,7 +68,7 @@ public class ReportsController : ManagementControllerBase
     [HttpGet("delinquency")]
     [ProducesResponseType(typeof(DelinquencyResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<DelinquencyResponse>> Delinquency([FromQuery] ReportRangeQuery query, CancellationToken ct)
-        => Ok(await _service.GetDelinquencyAsync(GetPortfolioId(), query, ct));
+        => Ok(await _service.GetDelinquencyAsync(GetWorkspaceReadScope(), query, ct));
 
     /// <summary>
     /// Cash Flow — income vs. expense by month over <c>from</c>..<c>to</c>, with per-month net and grand
@@ -74,7 +77,7 @@ public class ReportsController : ManagementControllerBase
     [HttpGet("cash-flow")]
     [ProducesResponseType(typeof(CashFlowResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<CashFlowResponse>> CashFlow([FromQuery] ReportRangeQuery query, CancellationToken ct)
-        => Ok(await _service.GetCashFlowAsync(GetPortfolioId(), query, ct));
+        => Ok(await _service.GetCashFlowAsync(GetWorkspaceReadScope(), query, ct));
 
     /// <summary>
     /// General Ledger / Account Transactions — every payment (income, positive) and expense (negative)
@@ -83,7 +86,7 @@ public class ReportsController : ManagementControllerBase
     [HttpGet("general-ledger")]
     [ProducesResponseType(typeof(GeneralLedgerResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<GeneralLedgerResponse>> GeneralLedger([FromQuery] ReportRangeQuery query, CancellationToken ct)
-        => Ok(await _service.GetGeneralLedgerAsync(GetPortfolioId(), query, ct));
+        => Ok(await _service.GetGeneralLedgerAsync(GetWorkspaceReadScope(), query, ct));
 
     /// <summary>
     /// Property P&amp;L Summary — income / expense / net per property over <c>from</c>..<c>to</c>, plus
@@ -92,7 +95,7 @@ public class ReportsController : ManagementControllerBase
     [HttpGet("property-pnl")]
     [ProducesResponseType(typeof(PropertyProfitAndLossResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<PropertyProfitAndLossResponse>> PropertyPnl([FromQuery] ReportRangeQuery query, CancellationToken ct)
-        => Ok(await _service.GetPropertyProfitAndLossAsync(GetPortfolioId(), query, ct));
+        => Ok(await _service.GetPropertyProfitAndLossAsync(GetWorkspaceReadScope(), query, ct));
 
     /// <summary>
     /// Occupancy / Vacancy — per property: total / occupied / vacant units and occupancy %, plus
@@ -101,7 +104,7 @@ public class ReportsController : ManagementControllerBase
     [HttpGet("occupancy")]
     [ProducesResponseType(typeof(OccupancyResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<OccupancyResponse>> Occupancy([FromQuery] ReportRangeQuery query, CancellationToken ct)
-        => Ok(await _service.GetOccupancyAsync(GetPortfolioId(), query, ct));
+        => Ok(await _service.GetOccupancyAsync(GetWorkspaceReadScope(), query, ct));
 
     /// <summary>
     /// Lease Expirations / Renewals Due — active/under-notice leases ending within the next
@@ -111,7 +114,7 @@ public class ReportsController : ManagementControllerBase
     [ProducesResponseType(typeof(LeaseExpirationsResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<LeaseExpirationsResponse>> LeaseExpirations(
         [FromQuery] ReportRangeQuery query, [FromQuery] int days = 90, CancellationToken ct = default)
-        => Ok(await _service.GetLeaseExpirationsAsync(GetPortfolioId(), query, days, ct));
+        => Ok(await _service.GetLeaseExpirationsAsync(GetWorkspaceReadScope(), query, days, ct));
 
     /// <summary>
     /// Security Deposit Register — per lease: amount held, deductions, returned, and current balance still
@@ -120,7 +123,7 @@ public class ReportsController : ManagementControllerBase
     [HttpGet("security-deposits")]
     [ProducesResponseType(typeof(SecurityDepositRegisterResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<SecurityDepositRegisterResponse>> SecurityDeposits([FromQuery] ReportRangeQuery query, CancellationToken ct)
-        => Ok(await _service.GetSecurityDepositRegisterAsync(GetPortfolioId(), query, ct));
+        => Ok(await _service.GetSecurityDepositRegisterAsync(GetWorkspaceReadScope(), query, ct));
 
     /// <summary>
     /// Vendor 1099 &amp; Payments — per 1099-eligible vendor (and any vendor paid in the year): total paid
@@ -130,7 +133,7 @@ public class ReportsController : ManagementControllerBase
     [HttpGet("vendor-1099")]
     [ProducesResponseType(typeof(Vendor1099Response), StatusCodes.Status200OK)]
     public async Task<ActionResult<Vendor1099Response>> Vendor1099([FromQuery] int? year, CancellationToken ct)
-        => Ok(await _service.GetVendor1099Async(GetPortfolioId(), year ?? _timeProvider.UtcNow().Year, ct));
+        => Ok(await _service.GetVendor1099Async(GetWorkspaceReadScope(), year ?? _timeProvider.UtcNow().Year, ct));
 
     /// <summary>
     /// Owner Distributions — net distribution per owner for <paramref name="year"/> (rental income minus
@@ -140,7 +143,7 @@ public class ReportsController : ManagementControllerBase
     [HttpGet("owner-distributions")]
     [ProducesResponseType(typeof(OwnerDistributionsResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<OwnerDistributionsResponse>> OwnerDistributions([FromQuery] int? year, CancellationToken ct)
-        => Ok(await _service.GetOwnerDistributionsAsync(GetPortfolioId(), year ?? _timeProvider.UtcNow().Year, ct));
+        => Ok(await _service.GetOwnerDistributionsAsync(GetWorkspaceReadScope(), year ?? _timeProvider.UtcNow().Year, ct));
 
     /// <summary>
     /// Work Orders / Maintenance — work orders requested in <c>from</c>..<c>to</c>, with per-status counts
@@ -149,5 +152,5 @@ public class ReportsController : ManagementControllerBase
     [HttpGet("work-orders")]
     [ProducesResponseType(typeof(WorkOrderReportResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<WorkOrderReportResponse>> WorkOrders([FromQuery] ReportRangeQuery query, CancellationToken ct)
-        => Ok(await _service.GetWorkOrdersAsync(GetPortfolioId(), query, ct));
+        => Ok(await _service.GetWorkOrdersAsync(GetWorkspaceReadScope(), query, ct));
 }

@@ -78,7 +78,8 @@ class MoneySnapshot {
       net: (json['net'] as num?)?.toDouble() ?? 0,
       pastDueAmount: (json['pastDueAmount'] as num?)?.toDouble() ?? 0,
       pastDueCount: (json['pastDueCount'] as num?)?.toInt() ?? 0,
-      collectedLast30Days: (json['collectedLast30Days'] as num?)?.toDouble() ?? 0,
+      collectedLast30Days:
+          (json['collectedLast30Days'] as num?)?.toDouble() ?? 0,
       spentLast30Days: (json['spentLast30Days'] as num?)?.toDouble() ?? 0,
       netLast30Days: (json['netLast30Days'] as num?)?.toDouble() ?? 0,
       explanations: MoneySnapshotExplanations.fromJson(
@@ -89,78 +90,106 @@ class MoneySnapshot {
 }
 
 /// The "Who's behind" list from `GET /api/v1/accounting/past-due`: one row per
-/// lease/tenant behind on rent, plus the headline totals. The list shares the
-/// snapshot's past-due definition, so [totalCount] always equals the dashboard
-/// "tenants behind" KPI and the number of [items].
+/// tenant account behind on rent, plus exact portfolio totals and page metadata.
+/// The list shares the snapshot's past-due definition, so [totalCount] always
+/// equals the dashboard "tenants behind" KPI while [items] is one server page.
 class PastDueResult {
   const PastDueResult({
     required this.items,
     required this.totalCount,
     required this.totalPastDueAmount,
+    required this.businessDate,
+    required this.skip,
+    required this.take,
   });
 
   final List<PastDueLease> items;
   final int totalCount;
   final double totalPastDueAmount;
+  final DateTime? businessDate;
+  final int skip;
+  final int take;
+
+  bool get hasMore => skip + items.length < totalCount;
 
   factory PastDueResult.fromJson(Map<String, dynamic> json) {
+    final items = (json['items'] as List<dynamic>)
+        .map((item) => PastDueLease.fromJson(item as Map<String, dynamic>))
+        .toList(growable: false);
+    final businessDateValue = json['businessDate'];
+    if (items.isNotEmpty && businessDateValue is! String) {
+      throw const FormatException(
+        'Past-due rows require the portfolio business date.',
+      );
+    }
     return PastDueResult(
-      items: (json['items'] as List<dynamic>? ?? [])
-          .whereType<Map<String, dynamic>>()
-          .map(PastDueLease.fromJson)
-          .toList(),
-      totalCount: (json['totalCount'] as num?)?.toInt() ?? 0,
-      totalPastDueAmount:
-          (json['totalPastDueAmount'] as num?)?.toDouble() ?? 0,
+      items: items,
+      totalCount: (json['totalCount'] as num).toInt(),
+      totalPastDueAmount: (json['totalPastDueAmount'] as num).toDouble(),
+      businessDate: businessDateValue is String
+          ? DateTime.parse(businessDateValue)
+          : null,
+      skip: (json['skip'] as num).toInt(),
+      take: (json['take'] as num).toInt(),
     );
   }
 }
 
-/// One lease/tenant behind on rent: who they are, how much they owe, how many
-/// payments are past due, how long they've waited, and the oldest past-due
-/// payment id for a deep-link.
+/// One canonical tenant account behind on rent, with its continuous rental
+/// relationship, unit context, and oldest open ledger charge.
 class PastDueLease {
   const PastDueLease({
-    required this.leaseId,
+    required this.leaseManagementId,
+    required this.tenantAccountId,
+    required this.unitId,
     required this.pastDueAmount,
     required this.overduePaymentCount,
-    required this.oldestDueDate,
-    required this.oldestPaymentId,
+    required this.oldestDueOn,
+    required this.oldestLedgerEntryId,
+    this.currentAgreementId,
     this.tenantName,
     this.tenantPhone,
-    this.leaseNumber,
+    this.relationshipNumber,
     this.propertyName,
     this.unitNumber,
   });
 
-  final int leaseId;
+  final int leaseManagementId;
+  final int tenantAccountId;
+  final int? currentAgreementId;
+  final int unitId;
   final double pastDueAmount;
   final int overduePaymentCount;
-  final DateTime oldestDueDate;
-  final int oldestPaymentId;
+  final DateTime oldestDueOn;
+  final int oldestLedgerEntryId;
   final String? tenantName;
   final String? tenantPhone;
-  final String? leaseNumber;
+  final String? relationshipNumber;
   final String? propertyName;
   final String? unitNumber;
 
-  /// A friendly label for the row: tenant name, else lease number, else lease id.
-  String get displayName =>
-      tenantName ??
-      (leaseNumber != null ? 'Lease $leaseNumber' : 'Lease #$leaseId');
+  /// A friendly label for the account without reviving legacy lease identity.
+  String get displayName => tenantName?.trim().isNotEmpty == true
+      ? tenantName!.trim()
+      : relationshipNumber?.trim().isNotEmpty == true
+      ? relationshipNumber!.trim()
+      : unitNumber?.trim().isNotEmpty == true
+      ? 'Unit ${unitNumber!.trim()}'
+      : 'Tenant account';
 
   factory PastDueLease.fromJson(Map<String, dynamic> json) {
     return PastDueLease(
-      leaseId: (json['leaseId'] as num?)?.toInt() ?? 0,
-      pastDueAmount: (json['pastDueAmount'] as num?)?.toDouble() ?? 0,
-      overduePaymentCount: (json['overduePaymentCount'] as num?)?.toInt() ?? 0,
-      oldestDueDate:
-          DateTime.tryParse(json['oldestDueDate'] as String? ?? '') ??
-              DateTime(0),
-      oldestPaymentId: (json['oldestPaymentId'] as num?)?.toInt() ?? 0,
+      leaseManagementId: (json['leaseManagementId'] as num).toInt(),
+      tenantAccountId: (json['tenantAccountId'] as num).toInt(),
+      currentAgreementId: (json['currentAgreementId'] as num?)?.toInt(),
+      unitId: (json['unitId'] as num).toInt(),
+      pastDueAmount: (json['pastDueAmount'] as num).toDouble(),
+      overduePaymentCount: (json['overduePaymentCount'] as num).toInt(),
+      oldestDueOn: DateTime.parse(json['oldestDueOn'] as String),
+      oldestLedgerEntryId: (json['oldestLedgerEntryId'] as num).toInt(),
       tenantName: json['tenantName'] as String?,
       tenantPhone: json['tenantPhone'] as String?,
-      leaseNumber: json['leaseNumber'] as String?,
+      relationshipNumber: json['relationshipNumber'] as String?,
       propertyName: json['propertyName'] as String?,
       unitNumber: json['unitNumber'] as String?,
     );

@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/api/api_exception.dart';
-import '../../core/push/notification_routing.dart';
+import '../../core/auth/auth_controller.dart';
 import '../../core/widgets/mobile_m3_list.dart';
 import '../home/mobile_domain_chrome.dart';
 import 'notification_models.dart';
@@ -11,8 +11,7 @@ import 'notifications_repository.dart';
 
 /// Landlord notification inbox: paginated list of notifications with unread
 /// emphasis, severity icons, relative timestamps, pull-to-refresh and
-/// mark-all-read. Tapping a row marks it read and navigates via its
-/// `actionUrl`.
+/// mark-all-read. Tapping a row resolves its access-bound typed intent.
 class NotificationsInboxScreen extends ConsumerStatefulWidget {
   const NotificationsInboxScreen({super.key});
 
@@ -55,7 +54,14 @@ class _NotificationsInboxScreenState
     // A14: PUSH the target detail screen onto the stack (not `go`, which
     // REPLACES it) so the detail screen keeps a working back button and the
     // user lands back here on `pop()` instead of being stranded.
-    final route = resolveNotificationRoute(n.actionUrl);
+    final authority = ref.read(authControllerProvider);
+    final route = authority is AuthStateAuthenticated
+        ? n.navigationIntent?.resolveFor(
+                authority,
+                nowUtc: DateTime.now().toUtc(),
+              ) ??
+              '/'
+        : '/';
     context.push(route);
   }
 

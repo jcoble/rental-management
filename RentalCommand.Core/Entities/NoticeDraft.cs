@@ -1,12 +1,17 @@
+using RentalCommand.Core.Interfaces;
+
 namespace RentalCommand.Core.Entities;
 
-public class NoticeDraft
+public class NoticeDraft : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
-    public int LeaseId { get; set; }
-    public int? PaymentId { get; set; }
-    public int TenantId { get; set; }
+    public int LeaseManagementId { get; set; }
+    public int TenantAccountId { get; set; }
+    public int RecipientLeaseManagementPartyId { get; set; }
+    public int? LeaseAgreementId { get; set; }
+    public int? LeaseAddendumId { get; set; }
+    public long? TenantLedgerEntryId { get; set; }
     public int? PropertyId { get; set; }
     public string NoticeType { get; set; } = string.Empty;
     public string Status { get; set; } = "Draft";
@@ -23,6 +28,9 @@ public class NoticeDraft
 
     public DateTime TriggerDate { get; set; }
     public int? ConversationId { get; set; }
+    public int? TenantNoticePolicyId { get; set; }
+    public int? WorkspaceNoticeTemplateVersionId { get; set; }
+    public long? RenderedNoticeId { get; set; }
     public string? ApprovedChannels { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
@@ -30,9 +38,12 @@ public class NoticeDraft
     public DateTime? DismissedAt { get; set; }
 
     public Portfolio? Portfolio { get; set; }
-    public Lease? Lease { get; set; }
-    public Payment? Payment { get; set; }
-    public Tenant? Tenant { get; set; }
+    public LeaseManagement? LeaseManagement { get; set; }
+    public TenantAccount? TenantAccount { get; set; }
+    public LeaseManagementParty? RecipientLeaseManagementParty { get; set; }
+    public LeaseAgreement? LeaseAgreement { get; set; }
+    public LeaseAddendum? LeaseAddendum { get; set; }
+    public TenantLedgerEntry? TenantLedgerEntry { get; set; }
     public Property? Property { get; set; }
     public Conversation? Conversation { get; set; }
 }

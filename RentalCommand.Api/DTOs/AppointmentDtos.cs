@@ -11,7 +11,8 @@ public class AppointmentResponse
     public int PortfolioId { get; set; }
     public int? PropertyId { get; set; }
     public int? UnitId { get; set; }
-    public int? LeaseId { get; set; }
+    public int? LeaseManagementId { get; set; }
+    public int? RentalApplicationId { get; set; }
     public int? TenantId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string? ProspectName { get; set; }
@@ -44,7 +45,8 @@ public class AppointmentResponse
         PortfolioId = e.PortfolioId,
         PropertyId = e.PropertyId,
         UnitId = e.UnitId,
-        LeaseId = e.LeaseId,
+        LeaseManagementId = e.LeaseManagementId,
+        RentalApplicationId = e.RentalApplicationId,
         TenantId = e.TenantId,
         Title = e.Title,
         ProspectName = e.ProspectName,
@@ -72,6 +74,18 @@ public class AppointmentListResponse
     public int Take { get; set; }
 }
 
+/// <summary>
+/// Minimal shell read model for the signed-in staff user's authorized schedule. The window is
+/// half-open: appointments starting at <see cref="WindowStartUtc"/> are included and appointments
+/// starting exactly at <see cref="WindowEndUtc"/> are excluded.
+/// </summary>
+public sealed class AppointmentScheduleSummaryResponse
+{
+    public int NextSevenDaysCount { get; set; }
+    public DateTime WindowStartUtc { get; set; }
+    public DateTime WindowEndUtc { get; set; }
+}
+
 public class AppointmentListQuery : ListQuery
 {
     public int? PropertyId { get; set; }
@@ -89,7 +103,10 @@ public class CreateAppointmentRequest
     public int? UnitId { get; set; }
 
     [Range(1, int.MaxValue)]
-    public int? LeaseId { get; set; }
+    public int? LeaseManagementId { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int? RentalApplicationId { get; set; }
 
     [Range(1, int.MaxValue)]
     public int? TenantId { get; set; }
@@ -132,7 +149,10 @@ public class UpdateAppointmentRequest
     public int? UnitId { get; set; }
 
     [Range(1, int.MaxValue)]
-    public int? LeaseId { get; set; }
+    public int? LeaseManagementId { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int? RentalApplicationId { get; set; }
 
     [Range(1, int.MaxValue)]
     public int? TenantId { get; set; }

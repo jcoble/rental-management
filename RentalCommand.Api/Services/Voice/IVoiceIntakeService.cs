@@ -1,3 +1,4 @@
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 
 namespace RentalCommand.Api.Services.Voice;
@@ -5,10 +6,11 @@ namespace RentalCommand.Api.Services.Voice;
 public interface IVoiceIntakeService
 {
     Task<ScanDraft> CreateDraftAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         byte[] audioBytes,
         string? contentType,
         string? providedTranscript,
+        string operationKey,
         CancellationToken ct = default);
 
     /// <summary>
@@ -20,10 +22,11 @@ public interface IVoiceIntakeService
     /// <exception cref="KeyNotFoundException">No such draft in the portfolio.</exception>
     /// <exception cref="ArgumentException">Neither audio nor transcript provided.</exception>
     Task<ScanDraft> AnswerAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         int draftId,
         byte[] audioBytes,
         string? contentType,
         string? providedTranscript,
+        string operationKey,
         CancellationToken ct = default);
 }

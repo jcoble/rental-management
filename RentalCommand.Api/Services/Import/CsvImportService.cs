@@ -1,55 +1,51 @@
 using System.ComponentModel.DataAnnotations;
 using System.Globalization;
-using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
-using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Import;
 
 /// <inheritdoc cref="ICsvImportService"/>
 public sealed class CsvImportService : ICsvImportService
 {
-    private readonly RentalCommandDbContext _db;
-    private readonly ITenantService _tenants;
-    private readonly IPropertyService _properties;
-    private readonly IUnitService _units;
-    private readonly IPaymentService _payments;
-    private readonly IExpenseService _expenses;
-    private readonly ILoanService _loans;
+    private readonly IAtomicUnitOfWork _atomic;
+    private readonly IUnitCsvImportPreviewQuery _unitPreview;
+    private readonly ICoreCsvImportPreviewQuery _corePreview;
+    private readonly IPaymentCsvImportPreviewQuery _paymentPreview;
 
     // Defined column sets per entity type (the order doubles as the downloadable template header).
     private static readonly string[] TenantColumns = ["firstName", "lastName", "email", "phone"];
-    private static readonly string[] PropertyColumns = ["name", "addressLine1", "addressLine2", "city", "state", "postalCode", "type"];
+    private static readonly string[] PropertyColumns = ["name", "addressLine1", "addressLine2", "city", "state", "postalCode", "type", "rentalStructure", "unitNumber"];
     private static readonly string[] UnitColumns = ["propertyName", "propertyId", "unitNumber", "bedrooms", "bathrooms", "marketRent"];
-    private static readonly string[] PaymentColumns = ["leaseNumber", "propertyName", "unitNumber", "paymentType", "amount", "paidDate", "method", "externalReference", "notes"];
+    private static readonly string[] PaymentColumns = ["relationshipNumber", "propertyName", "unitNumber", "paymentType", "amount", "paidDate", "method", "externalReference", "notes"];
     private static readonly string[] ExpenseColumns = ["propertyName", "category", "description", "amount", "incurredAt", "paidAt", "notes"];
     private static readonly string[] LoanColumns = ["propertyName", "lender", "originalAmount", "currentBalance", "annualInterestRatePct", "termMonths", "startDate", "dayOfMonthDue", "monthlyPrincipalInterest", "monthlyEscrow"];
 
     public CsvImportService(
-        RentalCommandDbContext db,
-        ITenantService tenants,
-        IPropertyService properties,
-        IUnitService units,
-        IPaymentService payments,
-        IExpenseService expenses,
-        ILoanService loans)
+        IAtomicUnitOfWork atomic,
+        IUnitCsvImportPreviewQuery unitPreview,
+        ICoreCsvImportPreviewQuery corePreview,
+        IPaymentCsvImportPreviewQuery paymentPreview)
     {
-        _db = db;
-        _tenants = tenants;
-        _properties = properties;
-        _units = units;
-        _payments = payments;
-        _expenses = expenses;
-        _loans = loans;
+        _atomic = atomic;
+        _unitPreview = unitPreview;
+        _corePreview = corePreview;
+        _paymentPreview = paymentPreview;
     }
 
     public string GetTemplate(string entityType) =>
         string.Join(",", ColumnsFor(entityType));
 
     public async Task<CsvImportResult> ImportAsync(
-        int portfolioId, string entityType, Stream csv, bool dryRun, CancellationToken ct = default)
+        WorkspaceReadScope scope,
+        string entityType,
+        Stream csv,
+        bool dryRun,
+        CsvImportCommandContext? commandContext = null,
+        CancellationToken ct = default)
     {
         var canonicalType = Canonicalize(entityType); // throws ArgumentException for unsupported types
 
@@ -71,883 +67,526 @@ public sealed class CsvImportService : ICsvImportService
         var rows = table.Rows
             .Select((cells, index) => new ImportRow(index + 2, cells))
             .ToList();
-        var batch = await BuildBatchContextAsync(portfolioId, canonicalType, rows, columnIndex, ct);
-
-        var rowResults = new List<CsvImportRowResult>(table.Rows.Count);
-        var validCount = 0;
-        var createdCount = 0;
-        var duplicateCount = 0;
-
-        for (var r = 0; r < rows.Count; r++)
+        if (!dryRun && commandContext is null)
+            throw new ArgumentException("Authenticated operation context is required for atomic imports.");
+        if (canonicalType is "Property" or "Tenant" or "Expense" or "Loan")
         {
-            var row = rows[r];
-            var cells = row.Cells;
-
-            string? Cell(string column) =>
-                columnIndex.TryGetValue(column, out var idx) && idx < cells.Length
-                    ? cells[idx].Trim()
-                    : null;
-
-            var errors = new List<string>();
-            batch.BeginRow(row.RowNumber);
-
-            // Build + validate the create request, then (when committing) create it. A failure of any
-            // single row is captured as that row's errors and never aborts the whole import.
-            int? createdId = null;
-            var valid = false;
-            try
-            {
-                switch (canonicalType)
-                {
-                    case "Tenant":
-                        valid = await TryImportTenantAsync(portfolioId, Cell, dryRun, errors, id => createdId = id, ct);
-                        break;
-                    case "Property":
-                        valid = await TryImportPropertyAsync(portfolioId, Cell, dryRun, errors, id => createdId = id, ct);
-                        break;
-                    case "Unit":
-                        valid = await TryImportUnitAsync(portfolioId, Cell, batch, dryRun, errors, id => createdId = id, ct);
-                        break;
-                    case "Payment":
-                        valid = await TryImportPaymentAsync(portfolioId, Cell, batch, dryRun, errors, id => createdId = id, ct);
-                        break;
-                    case "Expense":
-                        valid = await TryImportExpenseAsync(portfolioId, Cell, batch, dryRun, errors, id => createdId = id, ct);
-                        break;
-                    case "Loan":
-                        valid = await TryImportLoanAsync(portfolioId, Cell, batch, dryRun, errors, id => createdId = id, ct);
-                        break;
-                }
-            }
-            catch (Exception ex)
-            {
-                // Defensive: a row should never throw, but if it does, record it instead of failing the run.
-                errors.Add($"Unexpected error: {ex.Message}");
-                valid = false;
-            }
-
-            if (valid)
-            {
-                validCount++;
-                if (createdId.HasValue)
-                {
-                    createdCount++;
-                }
-            }
-
-            string? skipReason = null;
-            var isDuplicate = errors.Count == 0 && batch.TryGetSkip(row.RowNumber, out skipReason);
-            if (isDuplicate)
-            {
-                duplicateCount++;
-            }
-
-            rowResults.Add(new CsvImportRowResult
-            {
-                RowNumber = row.RowNumber,
-                Valid = valid,
-                Errors = errors,
-                CreatedId = createdId,
-                IsDuplicate = isDuplicate,
-                SkipReason = skipReason,
-            });
+            return await ImportCoreAtomicAsync(
+                scope, canonicalType, rows, columnIndex, commandContext, dryRun, ct);
+        }
+        if (canonicalType == "Unit")
+        {
+            var unitContext = commandContext ?? new CsvImportCommandContext(
+                scope.UserId, scope.SessionId, scope.AccessContextId, scope.AccessRevision, "dry-run");
+            return await ImportUnitsAtomicAsync(
+                scope, rows, columnIndex, unitContext, dryRun, ct);
+        }
+        if (canonicalType == "Payment")
+        {
+            return await ImportPaymentsAtomicAsync(
+                scope, rows, columnIndex, commandContext, dryRun, ct);
         }
 
-        return new CsvImportResult
-        {
-            EntityType = canonicalType,
-            DryRun = dryRun,
-            TotalRows = rows.Count,
-            ValidRows = validCount,
-            CreatedRows = createdCount,
-            DuplicateRows = duplicateCount,
-            Rows = rowResults,
-        };
+        throw new ArgumentOutOfRangeException(nameof(canonicalType));
     }
 
     // -------------------------------------------------------------------------
     // Per-entity row import
     // -------------------------------------------------------------------------
 
-    private async Task<bool> TryImportTenantAsync(
-        int portfolioId, Func<string, string?> cell, bool dryRun, List<string> errors, Action<int> setId, CancellationToken ct)
+    private async Task<CsvImportResult> ImportCoreAtomicAsync(
+        WorkspaceReadScope scope,
+        string canonicalType,
+        IReadOnlyList<ImportRow> rows,
+        IReadOnlyDictionary<string, int> columnIndex,
+        CsvImportCommandContext? context,
+        bool dryRun,
+        CancellationToken ct)
     {
-        var request = new CreateTenantRequest
+        if (rows.Count == 0)
         {
-            FirstName = cell("firstName") ?? string.Empty,
-            LastName = cell("lastName") ?? string.Empty,
-            Email = NullIfEmpty(cell("email")),
-            Phone = NullIfEmpty(cell("phone")),
+            return new CsvImportResult
+            {
+                EntityType = canonicalType,
+                DryRun = dryRun,
+                Rows = [],
+            };
+        }
+
+        var domain = canonicalType switch
+        {
+            "Property" => AtomicCoreCsvImportDomain.Property,
+            "Tenant" => AtomicCoreCsvImportDomain.Tenant,
+            "Expense" => AtomicCoreCsvImportDomain.Expense,
+            "Loan" => AtomicCoreCsvImportDomain.Loan,
+            _ => throw new ArgumentOutOfRangeException(nameof(canonicalType)),
+        };
+        var rowsJson = domain switch
+        {
+            AtomicCoreCsvImportDomain.Property => JsonSerializer.Serialize(BuildPropertyRows(rows, columnIndex)),
+            AtomicCoreCsvImportDomain.Tenant => JsonSerializer.Serialize(BuildTenantRows(rows, columnIndex)),
+            AtomicCoreCsvImportDomain.Expense => JsonSerializer.Serialize(BuildExpenseRows(rows, columnIndex)),
+            AtomicCoreCsvImportDomain.Loan => JsonSerializer.Serialize(BuildLoanRows(rows, columnIndex)),
+            _ => throw new ArgumentOutOfRangeException(nameof(domain)),
         };
 
-        if (!TryValidate(request, errors))
+        AtomicCoreCsvImportBatchResult batch;
+        if (dryRun)
         {
-            return false;
+            batch = await _corePreview.PreviewAsync(scope, domain, rowsJson, ct);
+        }
+        else
+        {
+            var commandContext = context!.Value;
+            var command = new AtomicCoreCsvImportCommand(
+                scope.PortfolioId, commandContext.ActorUserId, commandContext.AuthSessionId,
+                commandContext.AccessContextId, commandContext.AccessRevision, domain,
+                commandContext.OperationKeyDigest, rowsJson);
+            var outcome = await _atomic.ExecuteAsync(
+                AtomicCoreCsvImport.Identity(command), command, AtomicCoreCsvImport.Codec, ct);
+            batch = new AtomicCoreCsvImportBatchResult(
+                true, outcome.Value.Rows, [], outcome.Value.TotalRows,
+                outcome.Value.ValidRows, outcome.Value.CreatedRows, outcome.Value.DuplicateRows);
         }
 
-        if (!dryRun)
+        if (!batch.Authorized)
+            throw new UnauthorizedAccessException("Workspace access changed. Refresh and try again.");
+        return new CsvImportResult
         {
-            var created = await _tenants.CreateAsync(portfolioId, request, ct);
-            setId(created.Id);
-        }
-
-        return true;
+            EntityType = canonicalType,
+            DryRun = dryRun,
+            TotalRows = batch.TotalRows,
+            ValidRows = batch.ValidRows,
+            CreatedRows = batch.CreatedCount,
+            DuplicateRows = batch.DuplicateRows,
+            Rows = Array.ConvertAll(batch.Rows.ToArray(), row => new CsvImportRowResult
+            {
+                RowNumber = row.RowNumber,
+                Valid = row.Valid,
+                Errors = row.Errors,
+                CreatedId = row.CreatedId,
+                IsDuplicate = row.IsDuplicate,
+                SkipReason = row.IsDuplicate ? "A matching record already exists." : null,
+            }),
+        };
     }
 
-    private async Task<bool> TryImportPropertyAsync(
-        int portfolioId, Func<string, string?> cell, bool dryRun, List<string> errors, Action<int> setId, CancellationToken ct)
-    {
-        var request = new CreatePropertyRequest
+    private static AtomicPropertyImportRow[] BuildPropertyRows(
+        IReadOnlyList<ImportRow> rows,
+        IReadOnlyDictionary<string, int> columnIndex) =>
+        rows.Select(row =>
         {
-            Name = cell("name") ?? string.Empty,
-            AddressLine1 = cell("addressLine1") ?? string.Empty,
-            AddressLine2 = NullIfEmpty(cell("addressLine2")),
-            City = cell("city") ?? string.Empty,
-            State = cell("state") ?? string.Empty,
-            PostalCode = cell("postalCode") ?? string.Empty,
-        };
-
-        // type defaults sensibly (MultiFamily); only override when a parseable value is supplied.
-        var typeRaw = NullIfEmpty(cell("type"));
-        if (typeRaw != null)
-        {
-            if (Enum.TryParse<PropertyType>(typeRaw, ignoreCase: true, out var type))
+            string? Cell(string column) =>
+                columnIndex.TryGetValue(column, out var index) && index < row.Cells.Length
+                    ? row.Cells[index].Trim()
+                    : null;
+            var errors = new List<string>();
+            var request = new CreatePropertyRequest
             {
-                request.PropertyType = type;
+                Name = Cell("name") ?? string.Empty,
+                AddressLine1 = Cell("addressLine1") ?? string.Empty,
+                AddressLine2 = NullIfEmpty(Cell("addressLine2")),
+                City = Cell("city") ?? string.Empty,
+                State = Cell("state") ?? string.Empty,
+                PostalCode = Cell("postalCode") ?? string.Empty,
+            };
+            var typeRaw = NullIfEmpty(Cell("type"));
+            if (typeRaw is not null)
+            {
+                if (Enum.TryParse<PropertyType>(typeRaw, true, out var propertyType))
+                    request.PropertyType = propertyType;
+                else
+                    errors.Add($"type '{typeRaw}' is not a valid property type. Allowed: {string.Join(", ", Enum.GetNames<PropertyType>())}.");
+            }
+            var structureRaw = NullIfEmpty(Cell("rentalStructure"));
+            if (structureRaw is null)
+            {
+                errors.Add("rentalStructure is required.");
+            }
+            else if (Enum.TryParse<RentalStructure>(structureRaw, true, out var rentalStructure))
+            {
+                request.RentalStructure = rentalStructure;
             }
             else
             {
-                errors.Add($"type '{typeRaw}' is not a valid property type. Allowed: {string.Join(", ", Enum.GetNames<PropertyType>())}.");
+                errors.Add($"rentalStructure '{structureRaw}' is invalid. Allowed: {string.Join(", ", Enum.GetNames<RentalStructure>())}.");
             }
-        }
+            var unitNumber = NullIfEmpty(Cell("unitNumber"));
+            if (unitNumber is null)
+                errors.Add("unitNumber is required so the Property and its first explicit Unit are imported together.");
+            else if (unitNumber.Length > 50)
+                errors.Add("unitNumber cannot exceed 50 characters.");
+            TryValidate(request, errors);
+            return new AtomicPropertyImportRow(
+                row.RowNumber, request.Name, request.AddressLine1, request.AddressLine2,
+                request.City, request.State, request.PostalCode, (int)request.PropertyType,
+                request.RentalStructure.ToString(), unitNumber ?? string.Empty,
+                errors.ToArray());
+        }).ToArray();
 
-        if (!TryValidate(request, errors))
+    private static AtomicTenantImportRow[] BuildTenantRows(
+        IReadOnlyList<ImportRow> rows,
+        IReadOnlyDictionary<string, int> columnIndex) =>
+        rows.Select(row =>
         {
-            return false;
-        }
-
-        if (!dryRun)
-        {
-            var created = await _properties.CreateAsync(portfolioId, request, ct);
-            if (created == null)
+            string? Cell(string column) =>
+                columnIndex.TryGetValue(column, out var index) && index < row.Cells.Length
+                    ? row.Cells[index].Trim()
+                    : null;
+            var errors = new List<string>();
+            var request = new CreateTenantRequest
             {
-                // CreateAsync only returns null here on an owner/owner-entity scope failure, which a
-                // CSV import never supplies — treat defensively as a failed row.
-                errors.Add("The property could not be created.");
-                return false;
-            }
-            setId(created.Id);
-        }
+                FirstName = Cell("firstName") ?? string.Empty,
+                LastName = Cell("lastName") ?? string.Empty,
+                Email = NullIfEmpty(Cell("email")),
+                Phone = NullIfEmpty(Cell("phone")),
+            };
+            TryValidate(request, errors);
+            return new AtomicTenantImportRow(
+                row.RowNumber, request.FirstName, request.LastName,
+                request.Email, request.Phone, errors.ToArray());
+        }).ToArray();
 
-        return true;
-    }
+    private static AtomicExpenseImportRow[] BuildExpenseRows(
+        IReadOnlyList<ImportRow> rows,
+        IReadOnlyDictionary<string, int> columnIndex) =>
+        rows.Select(row =>
+        {
+            string? Cell(string column) =>
+                columnIndex.TryGetValue(column, out var index) && index < row.Cells.Length
+                    ? row.Cells[index].Trim()
+                    : null;
+            var errors = new List<string>();
+            var amount = ParseRequiredDecimal("amount", Cell("amount"), errors) ?? 0m;
+            var incurredAt = ParseRequiredDate("incurredAt", Cell("incurredAt"), errors) ?? default;
+            var paidAt = ParseDate("paidAt", Cell("paidAt"), errors);
+            var category = ParseEnum("category", Cell("category"), ScheduleECategory.Other, errors)
+                ?? ScheduleECategory.Other;
+            var request = new CreateExpenseRequest
+            {
+                PropertyId = 1,
+                Category = category,
+                Description = Cell("description") ?? string.Empty,
+                Status = paidAt.HasValue ? ExpenseStatus.Paid : ExpenseStatus.Pending,
+                Amount = amount,
+                IncurredAt = incurredAt,
+                PaidAt = paidAt,
+                Notes = NullIfEmpty(Cell("notes")),
+            };
+            TryValidate(request, errors);
+            if (string.IsNullOrWhiteSpace(Cell("propertyName")))
+                errors.Add("propertyName is required.");
+            return new AtomicExpenseImportRow(
+                row.RowNumber, Cell("propertyName") ?? string.Empty, (int)category,
+                request.Description, amount, incurredAt, paidAt, request.Notes, errors.ToArray());
+        }).ToArray();
 
-    private async Task<bool> TryImportUnitAsync(
-        int portfolioId, Func<string, string?> cell, ImportBatchContext batch, bool dryRun, List<string> errors, Action<int> setId, CancellationToken ct)
+    private static AtomicLoanImportRow[] BuildLoanRows(
+        IReadOnlyList<ImportRow> rows,
+        IReadOnlyDictionary<string, int> columnIndex) =>
+        rows.Select(row =>
+        {
+            string? Cell(string column) =>
+                columnIndex.TryGetValue(column, out var index) && index < row.Cells.Length
+                    ? row.Cells[index].Trim()
+                    : null;
+            var errors = new List<string>();
+            var originalAmount = ParseRequiredDecimal("originalAmount", Cell("originalAmount"), errors) ?? 0m;
+            var currentBalance = ParseDecimal("currentBalance", Cell("currentBalance"), errors);
+            var rate = ParseDecimal("annualInterestRatePct", Cell("annualInterestRatePct"), errors) ?? 0m;
+            var term = ParseRequiredInt("termMonths", Cell("termMonths"), errors) ?? 0;
+            var startDate = ParseRequiredDate("startDate", Cell("startDate"), errors) ?? default;
+            var dueDay = ParseInt("dayOfMonthDue", Cell("dayOfMonthDue"), errors) ?? 1;
+            var principalInterest = ParseDecimal("monthlyPrincipalInterest", Cell("monthlyPrincipalInterest"), errors) ?? 0m;
+            var escrow = ParseDecimal("monthlyEscrow", Cell("monthlyEscrow"), errors) ?? 0m;
+            var request = new CreateLoanRequest
+            {
+                PropertyId = 1,
+                Lender = Cell("lender") ?? string.Empty,
+                OriginalAmount = originalAmount,
+                CurrentBalance = currentBalance,
+                AnnualInterestRatePct = rate,
+                TermMonths = term,
+                StartDate = startDate,
+                DayOfMonthDue = dueDay,
+                MonthlyPrincipalInterest = principalInterest,
+                MonthlyEscrow = escrow,
+            };
+            TryValidate(request, errors);
+            if (string.IsNullOrWhiteSpace(Cell("propertyName")))
+                errors.Add("propertyName is required.");
+            return new AtomicLoanImportRow(
+                row.RowNumber, Cell("propertyName") ?? string.Empty, request.Lender,
+                originalAmount, currentBalance, rate, term, startDate, dueDay,
+                principalInterest, escrow, errors.ToArray());
+        }).ToArray();
+
+    private async Task<CsvImportResult> ImportUnitsAtomicAsync(
+        WorkspaceReadScope scope,
+        IReadOnlyList<ImportRow> rows,
+        IReadOnlyDictionary<string, int> columnIndex,
+        CsvImportCommandContext context,
+        bool dryRun,
+        CancellationToken ct)
     {
-        // Resolve the property reference: an explicit propertyId wins; otherwise resolve by name
-        // (case-insensitive, in-portfolio). Ambiguous or missing names are a clear per-row error.
-        var propertyIdRaw = NullIfEmpty(cell("propertyId"));
-        var propertyName = NullIfEmpty(cell("propertyName"));
-        var propertyId = ResolvePropertyReference(propertyIdRaw, propertyName, batch, errors);
-
-        var request = new CreateUnitRequest
+        var commands = new List<AtomicUnitImportRow>();
+        foreach (var row in rows)
         {
-            // Use a placeholder when resolution failed so the [Range] annotation doesn't add a
-            // confusing second "PropertyId" error on top of our clear property-resolution message;
-            // creation below is gated on propertyId.HasValue regardless.
-            PropertyId = propertyId ?? 1,
-            UnitNumber = cell("unitNumber") ?? string.Empty,
-            Bedrooms = ParseDecimal("bedrooms", cell("bedrooms"), errors) ?? 0m,
-            Bathrooms = ParseDecimal("bathrooms", cell("bathrooms"), errors) ?? 0m,
-            MarketRent = ParseDecimal("marketRent", cell("marketRent"), errors) ?? 0m,
-        };
-
-        // Validate the remaining DataAnnotations (UnitNumber required, ranges on bedrooms/bath/rent).
-        TryValidate(request, errors);
-
-        if (errors.Count > 0 || !propertyId.HasValue)
-        {
-            return false;
-        }
-
-        if (!dryRun)
-        {
-            var created = await _units.CreateAsync(portfolioId, request, ct);
-            if (created == null)
+            string? Cell(string column) =>
+                columnIndex.TryGetValue(column, out var index) && index < row.Cells.Length
+                    ? row.Cells[index].Trim()
+                    : null;
+            var errors = new List<string>();
+            int? propertyId = null;
+            var propertyIdRaw = NullIfEmpty(Cell("propertyId"));
+            if (propertyIdRaw is not null)
             {
-                errors.Add("The unit could not be created (the property is missing or outside this portfolio).");
-                return false;
+                if (int.TryParse(propertyIdRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+                    && parsed > 0) propertyId = parsed;
+                else errors.Add("propertyId must be a positive whole number.");
             }
-            setId(created.Id);
+            var request = new CreateUnitRequest
+            {
+                PropertyId = propertyId ?? 1,
+                UnitNumber = Cell("unitNumber") ?? string.Empty,
+                Bedrooms = ParseDecimal("bedrooms", Cell("bedrooms"), errors) ?? 0m,
+                Bathrooms = ParseDecimal("bathrooms", Cell("bathrooms"), errors) ?? 0m,
+                MarketRent = ParseDecimal("marketRent", Cell("marketRent"), errors) ?? 0m,
+            };
+            TryValidate(request, errors);
+            if (propertyId is null && string.IsNullOrWhiteSpace(Cell("propertyName")))
+                errors.Add("propertyName or propertyId is required.");
+            commands.Add(new AtomicUnitImportRow(
+                row.RowNumber, propertyId, NullIfEmpty(Cell("propertyName")),
+                request.UnitNumber.Trim(), request.Bedrooms, request.Bathrooms, request.MarketRent,
+                errors.ToArray()));
         }
 
-        return true;
+        if (commands.Count == 0)
+        {
+            return new CsvImportResult
+            {
+                EntityType = "Unit",
+                DryRun = dryRun,
+                Rows = [],
+            };
+        }
+
+        AtomicUnitImportRowResult[] databaseRows;
+        int totalRows;
+        int validRows;
+        int createdRows;
+        int duplicateRows;
+        if (dryRun)
+        {
+            var preview = await _unitPreview.PreviewAsync(scope, commands, ct);
+            if (!preview.Authorized)
+                throw new UnauthorizedAccessException(
+                    "At least one Unit row is outside your assigned property scope.");
+            databaseRows = preview.Rows.ToArray();
+            totalRows = preview.TotalRows;
+            validRows = preview.ValidRows;
+            createdRows = preview.CreatedCount;
+            duplicateRows = preview.DuplicateRows;
+        }
+        else
+        {
+            var command = new AtomicUnitCsvImportCommand(
+                scope.PortfolioId, context.ActorUserId, context.AuthSessionId,
+                context.AccessContextId, context.AccessRevision,
+                context.OperationKeyDigest, commands.ToArray());
+            var outcome = await _atomic.ExecuteAsync(
+                AtomicUnitCsvImport.Identity(command), command, AtomicUnitCsvImport.Codec, ct);
+            databaseRows = outcome.Value.Rows;
+            totalRows = outcome.Value.TotalRows;
+            validRows = outcome.Value.ValidRows;
+            createdRows = outcome.Value.CreatedRows;
+            duplicateRows = outcome.Value.DuplicateRows;
+        }
+        var responseRows = Array.ConvertAll(databaseRows, row => new CsvImportRowResult
+        {
+            RowNumber = row.RowNumber,
+            Valid = row.Valid,
+            Errors = row.Errors,
+            CreatedId = row.CreatedId,
+            IsDuplicate = row.IsDuplicate,
+            SkipReason = row.IsDuplicate
+                ? "A live unit with this number already exists on the property."
+                : null,
+        });
+        return new CsvImportResult
+        {
+            EntityType = "Unit",
+            DryRun = dryRun,
+            TotalRows = totalRows,
+            ValidRows = validRows,
+            CreatedRows = createdRows,
+            DuplicateRows = duplicateRows,
+            Rows = responseRows,
+        };
     }
 
-    private async Task<bool> TryImportPaymentAsync(
-        int portfolioId, Func<string, string?> cell, ImportBatchContext batch, bool dryRun, List<string> errors, Action<int> setId, CancellationToken ct)
+    private async Task<CsvImportResult> ImportPaymentsAtomicAsync(
+        WorkspaceReadScope scope,
+        IReadOnlyList<ImportRow> rows,
+        IReadOnlyDictionary<string, int> columnIndex,
+        CsvImportCommandContext? context,
+        bool dryRun,
+        CancellationToken ct)
     {
-        var leaseId = ResolveLeaseReference(
-            NullIfEmpty(cell("leaseNumber")),
-            NullIfEmpty(cell("propertyName")),
-            NullIfEmpty(cell("unitNumber")),
-            batch,
-            errors);
-
-        var amount = ParseRequiredDecimal("amount", cell("amount"), errors);
-        var paidDate = ParseRequiredDate("paidDate", cell("paidDate"), errors);
-        var paymentType = ParseEnum("paymentType", cell("paymentType"), PaymentType.Rent, errors);
-
-        if (errors.Count > 0 || !leaseId.HasValue || !amount.HasValue || !paidDate.HasValue || !paymentType.HasValue)
+        if (rows.Count == 0)
         {
-            return false;
+            return new CsvImportResult { EntityType = "Payment", DryRun = dryRun, Rows = [] };
+        }
+        if (rows.Count > 256)
+            throw new ArgumentException("Payment CSV imports are limited to 256 rows.");
+
+        var rowsJson = JsonSerializer.Serialize(BuildPaymentRows(
+            scope.PortfolioId, rows, columnIndex, context?.OperationKeyDigest ?? "dry-run"));
+        AtomicPaymentCsvImportBatchResult batch;
+        if (dryRun)
+        {
+            batch = await _paymentPreview.PreviewAsync(scope, rowsJson, ct);
+        }
+        else
+        {
+            var commandContext = context!.Value;
+            var command = new AtomicPaymentCsvImportCommand(
+                scope.PortfolioId, commandContext.ActorUserId, commandContext.AuthSessionId,
+                commandContext.AccessContextId, commandContext.AccessRevision,
+                commandContext.OperationKeyDigest, rowsJson);
+            var outcome = await _atomic.ExecuteAsync(
+                AtomicPaymentCsvImport.Identity(command), command, AtomicPaymentCsvImport.Codec, ct);
+            batch = new AtomicPaymentCsvImportBatchResult(
+                true, outcome.Value.Rows, [], outcome.Value.TotalRows,
+                outcome.Value.ValidRows, outcome.Value.CreatedRows, outcome.Value.DuplicateRows);
         }
 
-        var dedupeKey = PaymentKey(leaseId.Value, amount.Value, paidDate.Value, NullIfEmpty(cell("externalReference")));
-        if (batch.ExistingPaymentKeys.Contains(dedupeKey))
+        if (!batch.Authorized)
+            throw new UnauthorizedAccessException("Workspace access changed. Refresh and try again.");
+        return new CsvImportResult
         {
-            batch.SkipCurrent("duplicate of existing payment");
-            return true;
-        }
-        if (!batch.SeenPaymentKeys.Add(dedupeKey))
-        {
-            batch.SkipCurrent("duplicate payment row in this file");
-            return true;
-        }
-
-        var request = new CreatePaymentRequest
-        {
-            LeaseId = leaseId.Value,
-            PaymentType = paymentType.Value,
-            Status = PaymentStatus.Paid,
-            Amount = amount.Value,
-            DueDate = paidDate.Value,
-            PaidDate = paidDate.Value,
-            Method = NullIfEmpty(cell("method")),
-            ExternalReference = NullIfEmpty(cell("externalReference")),
-            Notes = NullIfEmpty(cell("notes")),
-        };
-
-        if (!TryValidate(request, errors))
-        {
-            return false;
-        }
-
-        if (!dryRun)
-        {
-            var created = await _payments.CreateAsync(portfolioId, request, ct);
-            if (created == null)
+            EntityType = "Payment",
+            DryRun = dryRun,
+            TotalRows = batch.TotalRows,
+            ValidRows = batch.ValidRows,
+            CreatedRows = batch.CreatedCount,
+            DuplicateRows = batch.DuplicateRows,
+            Rows = Array.ConvertAll(batch.Rows.ToArray(), row => new CsvImportRowResult
             {
-                errors.Add("The payment could not be created (the lease is missing or outside this portfolio).");
-                return false;
-            }
-            setId(created.Id);
-        }
-
-        return true;
+                RowNumber = row.RowNumber,
+                Valid = row.Valid,
+                Errors = row.Errors,
+                CreatedId = row.CreatedId,
+                IsDuplicate = row.IsDuplicate,
+                SkipReason = row.IsDuplicate ? "A matching payment already exists." : null,
+            }),
+        };
     }
 
-    private async Task<bool> TryImportExpenseAsync(
-        int portfolioId, Func<string, string?> cell, ImportBatchContext batch, bool dryRun, List<string> errors, Action<int> setId, CancellationToken ct)
-    {
-        var propertyId = ResolvePropertyReference(null, NullIfEmpty(cell("propertyName")), batch, errors);
-        var amount = ParseRequiredDecimal("amount", cell("amount"), errors);
-        var incurredAt = ParseRequiredDate("incurredAt", cell("incurredAt"), errors);
-        var paidAt = ParseDate("paidAt", cell("paidAt"), errors);
-        var category = ParseEnum("category", cell("category"), ScheduleECategory.Other, errors);
-
-        if (errors.Count > 0 || !propertyId.HasValue || !amount.HasValue || !incurredAt.HasValue || !category.HasValue)
+    private static AtomicPaymentImportRow[] BuildPaymentRows(
+        int portfolioId,
+        IReadOnlyList<ImportRow> rows,
+        IReadOnlyDictionary<string, int> columnIndex,
+        string operationDigest) =>
+        rows.Select(row =>
         {
-            return false;
-        }
-
-        var description = cell("description") ?? string.Empty;
-        var dedupeKey = ExpenseKey(propertyId.Value, amount.Value, incurredAt.Value, description);
-        if (batch.ExistingExpenseKeys.Contains(dedupeKey))
-        {
-            batch.SkipCurrent("duplicate of existing expense");
-            return true;
-        }
-        if (!batch.SeenExpenseKeys.Add(dedupeKey))
-        {
-            batch.SkipCurrent("duplicate expense row in this file");
-            return true;
-        }
-
-        var request = new CreateExpenseRequest
-        {
-            PropertyId = propertyId.Value,
-            Category = category.Value,
-            Description = description,
-            Status = paidAt.HasValue ? ExpenseStatus.Paid : ExpenseStatus.Pending,
-            Amount = amount.Value,
-            IncurredAt = incurredAt.Value,
-            PaidAt = paidAt,
-            Notes = NullIfEmpty(cell("notes")),
-        };
-
-        if (!TryValidate(request, errors))
-        {
-            return false;
-        }
-
-        if (!dryRun)
-        {
-            var created = await _expenses.CreateAsync(portfolioId, request, ct);
-            if (created == null)
-            {
-                errors.Add("The expense could not be created (the property is missing or outside this portfolio).");
-                return false;
-            }
-            setId(created.Id);
-        }
-
-        return true;
-    }
-
-    private async Task<bool> TryImportLoanAsync(
-        int portfolioId, Func<string, string?> cell, ImportBatchContext batch, bool dryRun, List<string> errors, Action<int> setId, CancellationToken ct)
-    {
-        var propertyId = ResolvePropertyReference(null, NullIfEmpty(cell("propertyName")), batch, errors);
-        var originalAmount = ParseRequiredDecimal("originalAmount", cell("originalAmount"), errors);
-        var currentBalance = ParseDecimal("currentBalance", cell("currentBalance"), errors);
-        var annualInterestRatePct = ParseDecimal("annualInterestRatePct", cell("annualInterestRatePct"), errors) ?? 0m;
-        var termMonths = ParseRequiredInt("termMonths", cell("termMonths"), errors);
-        var startDate = ParseRequiredDate("startDate", cell("startDate"), errors);
-        var dayOfMonthDue = ParseInt("dayOfMonthDue", cell("dayOfMonthDue"), errors) ?? 1;
-        var monthlyPrincipalInterest = ParseDecimal("monthlyPrincipalInterest", cell("monthlyPrincipalInterest"), errors) ?? 0m;
-        var monthlyEscrow = ParseDecimal("monthlyEscrow", cell("monthlyEscrow"), errors) ?? 0m;
-
-        if (errors.Count > 0 || !propertyId.HasValue || !originalAmount.HasValue || !termMonths.HasValue || !startDate.HasValue)
-        {
-            return false;
-        }
-
-        var lender = cell("lender") ?? string.Empty;
-        var dedupeKey = LoanKey(propertyId.Value, lender, originalAmount.Value, startDate.Value);
-        if (batch.ExistingLoanKeys.Contains(dedupeKey))
-        {
-            batch.SkipCurrent("duplicate of existing loan");
-            return true;
-        }
-        if (!batch.SeenLoanKeys.Add(dedupeKey))
-        {
-            batch.SkipCurrent("duplicate loan row in this file");
-            return true;
-        }
-
-        var request = new CreateLoanRequest
-        {
-            PropertyId = propertyId.Value,
-            Lender = lender,
-            OriginalAmount = originalAmount.Value,
-            CurrentBalance = currentBalance,
-            AnnualInterestRatePct = annualInterestRatePct,
-            TermMonths = termMonths.Value,
-            StartDate = startDate.Value,
-            DayOfMonthDue = dayOfMonthDue,
-            MonthlyPrincipalInterest = monthlyPrincipalInterest,
-            MonthlyEscrow = monthlyEscrow,
-        };
-
-        if (!TryValidate(request, errors))
-        {
-            return false;
-        }
-
-        if (!dryRun)
-        {
-            var created = await _loans.CreateAsync(portfolioId, request, ct);
-            if (created == null)
-            {
-                errors.Add("The loan could not be created (the property is missing or outside this portfolio).");
-                return false;
-            }
-            setId(created.Id);
-        }
-
-        return true;
-    }
+            string? Cell(string column) =>
+                columnIndex.TryGetValue(column, out var index) && index < row.Cells.Length
+                    ? row.Cells[index].Trim()
+                    : null;
+            var errors = new List<string>();
+            var relationshipNumber = NullIfEmpty(Cell("relationshipNumber"));
+            var propertyName = NullIfEmpty(Cell("propertyName"));
+            var unitNumber = NullIfEmpty(Cell("unitNumber"));
+            if (relationshipNumber is null && propertyName is null)
+                errors.Add("relationshipNumber or propertyName is required.");
+            var amount = ParseRequiredDecimal("amount", Cell("amount"), errors);
+            if (amount is <= 0) errors.Add("amount must be greater than zero.");
+            var paidAt = ParseRequiredDate("paidDate", Cell("paidDate"), errors);
+            var paymentType = ParseEnum(
+                "paymentType", Cell("paymentType"), PaymentType.Rent, errors);
+            var notes = NullIfEmpty(Cell("notes"));
+            var method = NullIfEmpty(Cell("method")) ?? "Imported payment";
+            var externalReference = NullIfEmpty(Cell("externalReference"));
+            var description = notes ?? $"Imported {paymentType ?? PaymentType.Rent} payment";
+            if (method.Length > 200) errors.Add("method cannot exceed 200 characters.");
+            if (externalReference?.Length > 200)
+                errors.Add("externalReference cannot exceed 200 characters.");
+            if (description.Length > 500) errors.Add("notes cannot exceed 500 characters.");
+            return new AtomicPaymentImportRow(
+                row.RowNumber,
+                relationshipNumber,
+                propertyName,
+                unitNumber,
+                amount ?? 0,
+                DateOnly.FromDateTime(paidAt ?? DateTime.UnixEpoch),
+                method,
+                externalReference,
+                description,
+                $"csv-receipt:{portfolioId}:{operationDigest}:{row.RowNumber}",
+                errors.ToArray());
+        }).ToArray();
 
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
 
     private sealed record ImportRow(int RowNumber, string[] Cells);
-
-    private sealed record ReferenceResolution(int? Id, string? Error)
-    {
-        public static ReferenceResolution Found(int id) => new(id, null);
-        public static ReferenceResolution Failed(string error) => new(null, error);
-    }
-
-    private sealed class ImportBatchContext
-    {
-        private int _currentRowNumber;
-        private readonly Dictionary<int, string> _skipReasons = [];
-
-        public Dictionary<int, bool> PropertyIdsInScope { get; } = [];
-        public Dictionary<string, ReferenceResolution> PropertiesByName { get; } = new(StringComparer.OrdinalIgnoreCase);
-        public Dictionary<string, ReferenceResolution> LeasesByNumber { get; } = new(StringComparer.OrdinalIgnoreCase);
-        public Dictionary<string, ReferenceResolution> ActiveLeasesByProperty { get; } = new(StringComparer.OrdinalIgnoreCase);
-        public Dictionary<string, ReferenceResolution> ActiveLeasesByPropertyUnit { get; } = new(StringComparer.OrdinalIgnoreCase);
-        public HashSet<string> ExistingPaymentKeys { get; } = new(StringComparer.Ordinal);
-        public HashSet<string> ExistingExpenseKeys { get; } = new(StringComparer.Ordinal);
-        public HashSet<string> ExistingLoanKeys { get; } = new(StringComparer.Ordinal);
-        public HashSet<string> SeenPaymentKeys { get; } = new(StringComparer.Ordinal);
-        public HashSet<string> SeenExpenseKeys { get; } = new(StringComparer.Ordinal);
-        public HashSet<string> SeenLoanKeys { get; } = new(StringComparer.Ordinal);
-
-        public void BeginRow(int rowNumber) => _currentRowNumber = rowNumber;
-
-        public void SkipCurrent(string reason) => _skipReasons[_currentRowNumber] = reason;
-
-        public bool TryGetSkip(int rowNumber, out string? reason) =>
-            _skipReasons.TryGetValue(rowNumber, out reason);
-    }
-
-    private async Task<ImportBatchContext> BuildBatchContextAsync(
-        int portfolioId,
-        string canonicalType,
-        IReadOnlyList<ImportRow> rows,
-        IReadOnlyDictionary<string, int> columnIndex,
-        CancellationToken ct)
-    {
-        var batch = new ImportBatchContext();
-
-        string? Cell(ImportRow row, string column) =>
-            columnIndex.TryGetValue(column, out var idx) && idx < row.Cells.Length
-                ? NullIfEmpty(row.Cells[idx].Trim())
-                : null;
-
-        if (canonicalType is "Unit")
-        {
-            var propertyIds = rows
-                .Select(row => Cell(row, "propertyId"))
-                .Where(raw => int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
-                .Select(raw => int.Parse(raw!, NumberStyles.Integer, CultureInfo.InvariantCulture))
-                .Distinct()
-                .ToList();
-
-            if (propertyIds.Count > 0)
-            {
-                var inScopeIds = await _db.Properties
-                    .AsNoTracking()
-                    .Where(p => p.PortfolioId == portfolioId && propertyIds.Contains(p.Id))
-                    .Select(p => p.Id)
-                    .ToListAsync(ct);
-
-                foreach (var id in propertyIds)
-                {
-                    batch.PropertyIdsInScope[id] = inScopeIds.Contains(id);
-                }
-            }
-        }
-
-        if (canonicalType is "Unit" or "Expense" or "Loan" or "Payment")
-        {
-            var propertyNames = rows
-                .Select(row => Cell(row, "propertyName"))
-                .Where(name => name != null)
-                .Select(NormalizeKey)
-                .Distinct(StringComparer.Ordinal)
-                .ToList();
-
-            if (propertyNames.Count > 0)
-            {
-                var propertyMatches = await _db.Properties
-                    .AsNoTracking()
-                    .Where(p => p.PortfolioId == portfolioId && propertyNames.Contains(p.Name.ToLower()))
-                    .GroupBy(p => p.Name.ToLower())
-                    .Select(g => new { Name = g.Key, Count = g.Count(), Id = g.Min(p => p.Id) })
-                    .ToListAsync(ct);
-
-                foreach (var name in propertyNames)
-                {
-                    var match = propertyMatches.SingleOrDefault(p => p.Name == name);
-                    batch.PropertiesByName[name] = match switch
-                    {
-                        null => ReferenceResolution.Failed($"No property named '{{0}}' was found in this portfolio."),
-                        { Count: > 1 } => ReferenceResolution.Failed($"Property name '{{0}}' is ambiguous — more than one property matches. Use propertyId instead."),
-                        _ => ReferenceResolution.Found(match.Id),
-                    };
-                }
-            }
-        }
-
-        if (canonicalType is "Payment")
-        {
-            await LoadLeaseReferencesAsync(portfolioId, rows, columnIndex, batch, ct);
-            await LoadExistingPaymentKeysAsync(portfolioId, rows, columnIndex, batch, ct);
-        }
-        else if (canonicalType is "Expense")
-        {
-            await LoadExistingExpenseKeysAsync(portfolioId, rows, columnIndex, batch, ct);
-        }
-        else if (canonicalType is "Loan")
-        {
-            await LoadExistingLoanKeysAsync(portfolioId, rows, columnIndex, batch, ct);
-        }
-
-        return batch;
-    }
-
-    private async Task LoadLeaseReferencesAsync(
-        int portfolioId,
-        IReadOnlyList<ImportRow> rows,
-        IReadOnlyDictionary<string, int> columnIndex,
-        ImportBatchContext batch,
-        CancellationToken ct)
-    {
-        string? Cell(ImportRow row, string column) =>
-            columnIndex.TryGetValue(column, out var idx) && idx < row.Cells.Length
-                ? NullIfEmpty(row.Cells[idx].Trim())
-                : null;
-
-        var leaseNumbers = rows
-            .Select(row => Cell(row, "leaseNumber"))
-            .Where(value => value != null)
-            .Select(NormalizeKey)
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
-
-        if (leaseNumbers.Count > 0)
-        {
-            var leaseMatches = await _db.Leases
-                .AsNoTracking()
-                .Where(l => l.PortfolioId == portfolioId && leaseNumbers.Contains(l.LeaseNumber.ToLower()))
-                .GroupBy(l => l.LeaseNumber.ToLower())
-                .Select(g => new { LeaseNumber = g.Key, Count = g.Count(), Id = g.Min(l => l.Id) })
-                .ToListAsync(ct);
-
-            foreach (var leaseNumber in leaseNumbers)
-            {
-                var match = leaseMatches.SingleOrDefault(l => l.LeaseNumber == leaseNumber);
-                batch.LeasesByNumber[leaseNumber] = match switch
-                {
-                    null => ReferenceResolution.Failed($"No lease numbered '{{0}}' was found in this portfolio."),
-                    { Count: > 1 } => ReferenceResolution.Failed($"Lease number '{{0}}' is ambiguous — more than one lease matches."),
-                    _ => ReferenceResolution.Found(match.Id),
-                };
-            }
-        }
-
-        var propertyNames = rows
-            .Where(row => Cell(row, "leaseNumber") == null && Cell(row, "propertyName") != null)
-            .Select(row => Cell(row, "propertyName")!)
-            .Select(NormalizeKey)
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
-
-        if (propertyNames.Count == 0)
-        {
-            return;
-        }
-
-        var leasesByProperty = await _db.Leases
-            .AsNoTracking()
-            .Where(l =>
-                l.PortfolioId == portfolioId &&
-                l.Status == LeaseStatus.Active &&
-                propertyNames.Contains(l.Property!.Name.ToLower()))
-            .GroupBy(l => l.Property!.Name.ToLower())
-            .Select(g => new { PropertyName = g.Key, Count = g.Count(), Id = g.Min(l => l.Id) })
-            .ToListAsync(ct);
-
-        foreach (var propertyName in propertyNames)
-        {
-            var match = leasesByProperty.SingleOrDefault(l => l.PropertyName == propertyName);
-            batch.ActiveLeasesByProperty[propertyName] = match switch
-            {
-                null => ReferenceResolution.Failed($"No active lease was found for property '{{0}}'."),
-                { Count: > 1 } => ReferenceResolution.Failed($"Property '{{0}}' has more than one active lease. Add unitNumber or leaseNumber."),
-                _ => ReferenceResolution.Found(match.Id),
-            };
-        }
-
-        var unitNumbers = rows
-            .Where(row => Cell(row, "leaseNumber") == null && Cell(row, "propertyName") != null && Cell(row, "unitNumber") != null)
-            .Select(row => Cell(row, "unitNumber")!)
-            .Select(NormalizeKey)
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
-
-        if (unitNumbers.Count == 0)
-        {
-            return;
-        }
-
-        var leasesByPropertyUnit = await _db.Leases
-            .AsNoTracking()
-            .Where(l =>
-                l.PortfolioId == portfolioId &&
-                l.Status == LeaseStatus.Active &&
-                propertyNames.Contains(l.Property!.Name.ToLower()) &&
-                unitNumbers.Contains(l.Unit!.UnitNumber.ToLower()))
-            .GroupBy(l => new { PropertyName = l.Property!.Name.ToLower(), UnitNumber = l.Unit!.UnitNumber.ToLower() })
-            .Select(g => new { g.Key.PropertyName, g.Key.UnitNumber, Count = g.Count(), Id = g.Min(l => l.Id) })
-            .ToListAsync(ct);
-
-        foreach (var propertyName in propertyNames)
-        {
-            foreach (var unitNumber in unitNumbers)
-            {
-                var key = LeasePropertyUnitKey(propertyName, unitNumber);
-                var match = leasesByPropertyUnit.SingleOrDefault(l => l.PropertyName == propertyName && l.UnitNumber == unitNumber);
-                batch.ActiveLeasesByPropertyUnit[key] = match switch
-                {
-                    null => ReferenceResolution.Failed($"No active lease was found for property '{{0}}' and unit '{{1}}'."),
-                    { Count: > 1 } => ReferenceResolution.Failed($"Property '{{0}}' and unit '{{1}}' have more than one active lease. Use leaseNumber."),
-                    _ => ReferenceResolution.Found(match.Id),
-                };
-            }
-        }
-    }
-
-    private async Task LoadExistingPaymentKeysAsync(
-        int portfolioId,
-        IReadOnlyList<ImportRow> rows,
-        IReadOnlyDictionary<string, int> columnIndex,
-        ImportBatchContext batch,
-        CancellationToken ct)
-    {
-        var candidates = rows
-            .Select(row => new
-            {
-                Amount = TryParseDecimalForLookup(Cell(row, "amount", columnIndex)),
-                EffectiveDate = TryParseDateForLookup(Cell(row, "paidDate", columnIndex)),
-            })
-            .Where(x => x.Amount.HasValue && x.EffectiveDate.HasValue)
-            .ToList();
-
-        if (candidates.Count == 0)
-        {
-            return;
-        }
-
-        var amounts = candidates.Select(c => c.Amount!.Value).Distinct().ToList();
-        var minDate = candidates.Min(c => c.EffectiveDate!.Value);
-        var maxDate = candidates.Max(c => c.EffectiveDate!.Value);
-
-        var existing = await _db.Payments
-            .AsNoTracking()
-            .Where(p =>
-                p.PortfolioId == portfolioId &&
-                amounts.Contains(p.Amount) &&
-                (p.PaidDate ?? p.DueDate) >= minDate &&
-                (p.PaidDate ?? p.DueDate) <= maxDate)
-            .Select(p => new { p.LeaseId, p.Amount, EffectiveDate = p.PaidDate ?? p.DueDate, p.ExternalReference })
-            .ToListAsync(ct);
-
-        foreach (var payment in existing)
-        {
-            if (payment.LeaseId is { } leaseId)
-            {
-                batch.ExistingPaymentKeys.Add(PaymentKey(leaseId, payment.Amount, payment.EffectiveDate, payment.ExternalReference));
-            }
-        }
-    }
-
-    private async Task LoadExistingExpenseKeysAsync(
-        int portfolioId,
-        IReadOnlyList<ImportRow> rows,
-        IReadOnlyDictionary<string, int> columnIndex,
-        ImportBatchContext batch,
-        CancellationToken ct)
-    {
-        var candidates = rows
-            .Select(row => new
-            {
-                Amount = TryParseDecimalForLookup(Cell(row, "amount", columnIndex)),
-                IncurredAt = TryParseDateForLookup(Cell(row, "incurredAt", columnIndex)),
-            })
-            .Where(x => x.Amount.HasValue && x.IncurredAt.HasValue)
-            .ToList();
-
-        if (candidates.Count == 0)
-        {
-            return;
-        }
-
-        var amounts = candidates.Select(c => c.Amount!.Value).Distinct().ToList();
-        var minDate = candidates.Min(c => c.IncurredAt!.Value);
-        var maxDate = candidates.Max(c => c.IncurredAt!.Value);
-
-        var existing = await _db.Expenses
-            .AsNoTracking()
-            .Where(e =>
-                e.PortfolioId == portfolioId &&
-                amounts.Contains(e.Amount) &&
-                e.IncurredAt >= minDate &&
-                e.IncurredAt <= maxDate)
-            .Select(e => new { e.PropertyId, e.Amount, e.IncurredAt, e.Description })
-            .ToListAsync(ct);
-
-        foreach (var expense in existing)
-        {
-            if (expense.PropertyId is { } propertyId)
-            {
-                batch.ExistingExpenseKeys.Add(ExpenseKey(propertyId, expense.Amount, expense.IncurredAt, expense.Description));
-            }
-        }
-    }
-
-    private async Task LoadExistingLoanKeysAsync(
-        int portfolioId,
-        IReadOnlyList<ImportRow> rows,
-        IReadOnlyDictionary<string, int> columnIndex,
-        ImportBatchContext batch,
-        CancellationToken ct)
-    {
-        var candidates = rows
-            .Select(row => new
-            {
-                OriginalAmount = TryParseDecimalForLookup(Cell(row, "originalAmount", columnIndex)),
-                StartDate = TryParseDateForLookup(Cell(row, "startDate", columnIndex)),
-            })
-            .Where(x => x.OriginalAmount.HasValue && x.StartDate.HasValue)
-            .ToList();
-
-        if (candidates.Count == 0)
-        {
-            return;
-        }
-
-        var amounts = candidates.Select(c => c.OriginalAmount!.Value).Distinct().ToList();
-        var minDate = candidates.Min(c => c.StartDate!.Value);
-        var maxDate = candidates.Max(c => c.StartDate!.Value);
-
-        var existing = await _db.Loans
-            .AsNoTracking()
-            .Where(l =>
-                l.PortfolioId == portfolioId &&
-                amounts.Contains(l.OriginalAmount) &&
-                l.StartDate >= minDate &&
-                l.StartDate <= maxDate)
-            .Select(l => new { l.PropertyId, l.Lender, l.OriginalAmount, l.StartDate })
-            .ToListAsync(ct);
-
-        foreach (var loan in existing)
-        {
-            batch.ExistingLoanKeys.Add(LoanKey(loan.PropertyId, loan.Lender, loan.OriginalAmount, loan.StartDate));
-        }
-    }
-
-    private static string? Cell(ImportRow row, string column, IReadOnlyDictionary<string, int> columnIndex) =>
-        columnIndex.TryGetValue(column, out var idx) && idx < row.Cells.Length
-            ? NullIfEmpty(row.Cells[idx].Trim())
-            : null;
-
-    private static int? ResolvePropertyReference(
-        string? propertyIdRaw,
-        string? propertyName,
-        ImportBatchContext batch,
-        List<string> errors)
-    {
-        if (propertyIdRaw != null)
-        {
-            if (!int.TryParse(propertyIdRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedId))
-            {
-                errors.Add($"propertyId '{propertyIdRaw}' is not a valid number.");
-                return null;
-            }
-
-            if (!batch.PropertyIdsInScope.TryGetValue(parsedId, out var inScope) || !inScope)
-            {
-                errors.Add($"propertyId {parsedId} was not found in this portfolio.");
-                return null;
-            }
-
-            return parsedId;
-        }
-
-        if (propertyName == null)
-        {
-            errors.Add("A propertyName or propertyId is required.");
-            return null;
-        }
-
-        if (!batch.PropertiesByName.TryGetValue(NormalizeKey(propertyName), out var resolution))
-        {
-            errors.Add($"No property named '{propertyName}' was found in this portfolio.");
-            return null;
-        }
-
-        if (resolution.Error != null)
-        {
-            errors.Add(string.Format(CultureInfo.InvariantCulture, resolution.Error, propertyName));
-            return null;
-        }
-
-        return resolution.Id;
-    }
-
-    private static int? ResolveLeaseReference(
-        string? leaseNumber,
-        string? propertyName,
-        string? unitNumber,
-        ImportBatchContext batch,
-        List<string> errors)
-    {
-        if (leaseNumber != null)
-        {
-            if (!batch.LeasesByNumber.TryGetValue(NormalizeKey(leaseNumber), out var resolution))
-            {
-                errors.Add($"No lease numbered '{leaseNumber}' was found in this portfolio.");
-                return null;
-            }
-
-            if (resolution.Error != null)
-            {
-                errors.Add(string.Format(CultureInfo.InvariantCulture, resolution.Error, leaseNumber));
-                return null;
-            }
-
-            return resolution.Id;
-        }
-
-        if (propertyName == null)
-        {
-            errors.Add("A leaseNumber or propertyName is required.");
-            return null;
-        }
-
-        var normalizedProperty = NormalizeKey(propertyName);
-        ReferenceResolution? leaseResolution;
-        if (unitNumber != null)
-        {
-            var normalizedUnit = NormalizeKey(unitNumber);
-            var key = LeasePropertyUnitKey(normalizedProperty, normalizedUnit);
-            if (!batch.ActiveLeasesByPropertyUnit.TryGetValue(key, out leaseResolution))
-            {
-                errors.Add($"No active lease was found for property '{propertyName}' and unit '{unitNumber}'.");
-                return null;
-            }
-
-            if (leaseResolution.Error != null)
-            {
-                errors.Add(string.Format(CultureInfo.InvariantCulture, leaseResolution.Error, propertyName, unitNumber));
-                return null;
-            }
-
-            return leaseResolution.Id;
-        }
-
-        if (!batch.ActiveLeasesByProperty.TryGetValue(normalizedProperty, out leaseResolution))
-        {
-            errors.Add($"No active lease was found for property '{propertyName}'.");
-            return null;
-        }
-
-        if (leaseResolution.Error != null)
-        {
-            errors.Add(string.Format(CultureInfo.InvariantCulture, leaseResolution.Error, propertyName));
-            return null;
-        }
-
-        return leaseResolution.Id;
-    }
+    private sealed record AtomicPropertyImportRow(
+        int RowNumber,
+        string Name,
+        string AddressLine1,
+        string? AddressLine2,
+        string City,
+        string State,
+        string PostalCode,
+        int PropertyType,
+        string RentalStructure,
+        string UnitNumber,
+        string[] Errors);
+    private sealed record AtomicTenantImportRow(
+        int RowNumber,
+        string FirstName,
+        string LastName,
+        string? Email,
+        string? Phone,
+        string[] Errors);
+    private sealed record AtomicExpenseImportRow(
+        int RowNumber,
+        string PropertyName,
+        int Category,
+        string Description,
+        decimal Amount,
+        DateTime IncurredAt,
+        DateTime? PaidAt,
+        string? Notes,
+        string[] Errors);
+    private sealed record AtomicLoanImportRow(
+        int RowNumber,
+        string PropertyName,
+        string Lender,
+        decimal OriginalAmount,
+        decimal? CurrentBalance,
+        decimal AnnualInterestRatePct,
+        int TermMonths,
+        DateTime StartDate,
+        int DayOfMonthDue,
+        decimal MonthlyPrincipalInterest,
+        decimal MonthlyEscrow,
+        string[] Errors);
+    private sealed record AtomicPaymentImportRow(
+        int RowNumber,
+        string? RelationshipNumber,
+        string? PropertyName,
+        string? UnitNumber,
+        decimal Amount,
+        DateOnly PaidOn,
+        string Method,
+        string? ExternalReference,
+        string Description,
+        string DeliveryKey,
+        string[] Errors);
 
     /// <summary>
     /// Runs DataAnnotations validation on a create request (the same attributes the controllers use),
@@ -1075,53 +714,6 @@ public sealed class CsvImportService : ICsvImportService
         errors.Add($"{column} '{raw}' is not valid. Allowed: {string.Join(", ", Enum.GetNames<TEnum>())}.");
         return null;
     }
-
-    private static decimal? TryParseDecimalForLookup(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return null;
-        }
-
-        var cleaned = raw.Trim().TrimStart('$').Replace(",", string.Empty);
-        return decimal.TryParse(cleaned, NumberStyles.Number, CultureInfo.InvariantCulture, out var value)
-            ? value
-            : null;
-    }
-
-    private static DateTime? TryParseDateForLookup(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return null;
-        }
-
-        return DateTime.TryParse(
-                raw.Trim(),
-                CultureInfo.InvariantCulture,
-                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-                out var value)
-            ? value
-            : null;
-    }
-
-    private static string PaymentKey(int leaseId, decimal amount, DateTime effectiveDate, string? externalReference) =>
-        string.Join("|", leaseId, amount.ToString("0.00", CultureInfo.InvariantCulture), DateKey(effectiveDate), NormalizeKey(externalReference));
-
-    private static string ExpenseKey(int propertyId, decimal amount, DateTime incurredAt, string? description) =>
-        string.Join("|", propertyId, amount.ToString("0.00", CultureInfo.InvariantCulture), DateKey(incurredAt), NormalizeKey(description));
-
-    private static string LoanKey(int propertyId, string lender, decimal originalAmount, DateTime startDate) =>
-        string.Join("|", propertyId, NormalizeKey(lender), originalAmount.ToString("0.00", CultureInfo.InvariantCulture), DateKey(startDate));
-
-    private static string DateKey(DateTime value) =>
-        value.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-
-    private static string LeasePropertyUnitKey(string propertyName, string unitNumber) =>
-        $"{propertyName}|{unitNumber}";
-
-    private static string NormalizeKey(string? value) =>
-        (value ?? string.Empty).Trim().ToLowerInvariant();
 
     private static string NormalizeEnumToken(string value) =>
         new(value.Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());

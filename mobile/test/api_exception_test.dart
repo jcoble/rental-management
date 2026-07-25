@@ -4,7 +4,7 @@ import 'package:rental_command/core/api/api_exception.dart';
 
 void main() {
   test('includes ASP.NET validation field errors in the message', () {
-    final requestOptions = RequestOptions(path: '/leases');
+    final requestOptions = RequestOptions(path: '/lease-managements');
     final exception = DioException(
       requestOptions: requestOptions,
       response: Response<Map<String, dynamic>>(

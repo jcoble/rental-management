@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -90,6 +92,14 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
   bool _sms = false;
 
   bool _sending = false;
+  String? _sendOperationKey;
+  String? _sendOperationPayload;
+
+  @override
+  void initState() {
+    super.initState();
+    _composeCtrl.addListener(_invalidateSendOperation);
+  }
 
   @override
   void didChangeDependencies() {
@@ -117,6 +127,7 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
       false,
     );
     _scrollCtrl.dispose();
+    _composeCtrl.removeListener(_invalidateSendOperation);
     _composeCtrl.dispose();
     super.dispose();
   }
@@ -144,6 +155,18 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
     if (_sms) 'Sms',
   ];
 
+  void _invalidateSendOperation() {
+    _sendOperationKey = null;
+    _sendOperationPayload = null;
+  }
+
+  void _setChannel(void Function() update) {
+    setState(() {
+      update();
+      _invalidateSendOperation();
+    });
+  }
+
   Future<void> _send() async {
     final text = _composeCtrl.text.trim();
     if (text.isEmpty) return;
@@ -153,12 +176,21 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
       return;
     }
 
+    // A retry key represents exactly one immutable send payload. Unchanged retries reuse it;
+    // any text/channel edit invalidates it (listeners above), and this fingerprint is a final
+    // guard against a payload change that did not originate from the visible controls.
+    final payload = jsonEncode([text, channels]);
+    if (_sendOperationKey == null || _sendOperationPayload != payload) {
+      _sendOperationKey = MessagesRepository.createOperationKey();
+      _sendOperationPayload = payload;
+    }
     setState(() => _sending = true);
     try {
       await ref
           .read(conversationProvider(widget.conversationId).notifier)
-          .sendMessage(text, channels);
+          .sendMessage(text, channels, operationKey: _sendOperationKey);
       if (!mounted) return;
+      _invalidateSendOperation();
       _composeCtrl.clear();
       _scrollToBottom(animated: true);
     } on ApiException catch (e) {
@@ -251,9 +283,9 @@ class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
             portal: _portal,
             email: _email,
             sms: _sms,
-            onPortal: (v) => setState(() => _portal = v),
-            onEmail: (v) => setState(() => _email = v),
-            onSms: (v) => setState(() => _sms = v),
+            onPortal: (v) => _setChannel(() => _portal = v),
+            onEmail: (v) => _setChannel(() => _email = v),
+            onSms: (v) => _setChannel(() => _sms = v),
             onSend: _send,
           ),
         ],
@@ -529,6 +561,7 @@ class _SendButton extends StatelessWidget {
         color: colorScheme.primary,
         shape: const CircleBorder(),
         child: InkWell(
+          key: const Key('message-send-button'),
           customBorder: const CircleBorder(),
           onTap: sending ? null : onSend,
           child: Center(

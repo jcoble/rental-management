@@ -6,6 +6,7 @@ using RentalCommand.Api.Controllers;
 using RentalCommand.Api.Simulation;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 using Testcontainers.PostgreSql;
 using Xunit;
 
@@ -68,8 +69,12 @@ public sealed class DevClockControllerTests : IAsyncLifetime
         clockState.Current.Mode.Should().Be(ClockMode.Real); // seeded state
 
         using var scope = provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         var controller = new DevClockController(
-            scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>(), timeProvider, clockState);
+            db,
+            timeProvider,
+            clockState,
+            new TestAtomicInfrastructureUnitOfWork(db));
 
         var jan1 = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 

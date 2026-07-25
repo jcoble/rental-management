@@ -2,7 +2,7 @@ namespace RentalCommand.Engine.Services;
 
 /// <summary>
 /// Assesses late fees on overdue rent payments, idempotently (one late fee per lease per
-/// billing period). Controlled by <see cref="Core.Configuration.NotificationsConfig.EnableLateFees"/>;
+/// billing period). Controlled per workspace by <c>AutomationSettings.EnableLateFees</c>;
 /// default is OFF (opt-in). Per-state dollar/percent caps are applied from
 /// <see cref="Core.Configuration.NotificationsConfig.StateLateFeeCaps"/>.
 /// </summary>

@@ -1,10 +1,11 @@
 export type PortfolioStatus = 'Onboarding' | 'Active' | 'Archived';
 export type PropertyType = 'SingleFamily' | 'MultiFamily' | 'Condo' | 'Townhome' | 'Commercial' | 'MixedUse';
+export type RentalStructure = 'SingleRental' | 'MultiRental';
 export type PropertyStatus = 'Active' | 'UnderMaintenance' | 'Inactive';
-export type UnitStatus = 'Vacant' | 'Occupied' | 'Reserved' | 'Offline';
+export type DerivedUnitStatus = 'Vacant' | 'Occupied' | 'Reserved' | 'Offline';
 export type LeaseStatus = 'Draft' | 'PendingSignature' | 'Active' | 'NoticeGiven' | 'Expired' | 'Terminated';
 export type EsignStatus = 'None' | 'Sent' | 'Signed' | 'Declined';
-export type PaymentType = 'Rent' | 'SecurityDeposit' | 'LateFee' | 'Utility' | 'Other' | 'ApplicationFee';
+export type PaymentType = 'Rent' | 'SecurityDeposit' | 'LateFee' | 'Utility' | 'Other';
 export type PaymentStatus = 'Scheduled' | 'Paid' | 'Partial' | 'Late' | 'Waived' | 'Failed' | 'Refunded';
 export type ExpenseStatus = 'Pending' | 'Approved' | 'Paid' | 'Rejected' | 'Draft';
 export type WorkOrderPriority = 'Low' | 'Normal' | 'High' | 'Emergency';
@@ -13,27 +14,6 @@ export type AppointmentType = 'Showing' | 'MoveIn' | 'MoveOut' | 'Inspection' | 
 export type AppointmentStatus = 'Scheduled' | 'Confirmed' | 'Completed' | 'Cancelled' | 'NoShow';
 export type InspectionType = 'MoveIn' | 'MoveOut' | 'Routine' | 'AnnualSafety';
 export type InspectionStatus = 'Scheduled' | 'Completed' | 'NeedsFollowUp' | 'Cancelled';
-export type UserRole = 'Admin' | 'Manager' | 'Agent' | 'Owner' | 'Tenant';
-export type PortalMessageStatus = 'Open' | 'InProgress' | 'Resolved' | 'Closed';
-export type MessageStatus = 'Open' | 'InProgress' | 'Resolved' | 'Closed';
-
-export interface Message {
-	id: number;
-	portfolioId: number;
-	propertyId?: number;
-	propertyName?: string;
-	unitId?: number;
-	unitLabel?: string;
-	userAccountId: number;
-	senderName?: string;
-	subject: string;
-	body: string;
-	status: MessageStatus;
-	reply?: string;
-	createdAt: string;
-	updatedAt: string;
-}
-
 export interface Portfolio {
 	id: number;
 	name: string;
@@ -74,7 +54,6 @@ export interface GettingStartedSignalsResponse {
 	tenantCount: number;
 	leaseCount: number;
 	hasNotificationEmail: boolean;
-	hasTexting: boolean;
 	hasAutomations: boolean;
 	isSandbox: boolean;
 }
@@ -104,12 +83,12 @@ export interface Owner {
 export interface Property {
 	id: number;
 	portfolioId: number;
-	ownerId?: number;
-	ownerEntityId?: number | null;
+	ownerships: PropertyOwnership[];
 	name: string;
 	// Wire field is `type` (PropertyResponse maps PropertyType → "type"); the grid column,
 	// type filter, and create/edit forms all read/write this single name.
 	type: PropertyType;
+	rentalStructure: RentalStructure;
 	status: PropertyStatus;
 	addressLine1: string;
 	addressLine2?: string;
@@ -126,11 +105,22 @@ export interface Property {
 	manualAnnualDepreciation?: number | null;
 	/** Cumulative depreciation taken to date (read-only; system-maintained). */
 	accumulatedDepreciation?: number;
-	ownerName?: string;
 	unitCount?: number;
 	occupiedUnits?: number;
 	createdAt: string;
 	updatedAt: string;
+}
+
+export interface PropertyOwnership {
+	id: number;
+	ownerEntityId: number;
+	ownerName: string;
+	ownershipSharePercent: number;
+	effectiveFromUtc: string;
+	effectiveToUtc?: string | null;
+	statementRecipientName: string;
+	statementRecipientEmail?: string | null;
+	payeeName: string;
 }
 
 export interface Unit {
@@ -142,21 +132,70 @@ export interface Unit {
 	bathrooms: number;
 	squareFeet?: number;
 	marketRent: number;
-	status: UnitStatus;
+	status: DerivedUnitStatus;
 	notes?: string;
 	createdAt: string;
 	updatedAt: string;
 }
 
-export type UnitListingStatus = 'Draft' | 'ReadyToPost' | 'Posted' | 'Paused' | 'Filled' | 'Archived';
+export type RentalListingStatus = 'Draft' | 'ReadyToPublish' | 'Published' | 'Paused' | 'Filled' | 'Archived';
+export type ListingPublicationStatus = 'Draft' | 'Ready' | 'Publishing' | 'Published' | 'Paused' | 'Failed' | 'Removed' | 'ReconciliationRequired';
 
-export interface UnitListing {
+export interface ListingPhoto {
+	id: number;
+	position: number;
+	category: string;
+	caption?: string | null;
+	storedFileId?: number | null;
+	fileName?: string | null;
+	sha256?: string | null;
+	contentUrl?: string | null;
+}
+
+export interface ExternalListingSignal {
+	id: number;
+	signalType: string;
+	suggestedExternalListingId?: string | null;
+	suggestedListingUrl?: string | null;
+	suggestedExternalStatus?: string | null;
+	disposition: 'Unconfirmed' | 'Confirmed' | 'Rejected';
+	receivedAtUtc: string;
+}
+
+export interface ListingPublication {
+	id: number;
+	providerKey: string;
+	mode: 'Guided' | 'Connected';
+	status: ListingPublicationStatus;
+	externalListingId?: string | null;
+	listingUrl?: string | null;
+	applicationUrl?: string | null;
+	managementUrl?: string | null;
+	lastConfirmedExternalStatus?: string | null;
+	lastConfirmedAtUtc?: string | null;
+	copyConfirmed: boolean;
+	termsConfirmed: boolean;
+	photosConfirmed: boolean;
+	providerWorkspaceOpened: boolean;
+	needsRepublish: boolean;
+	publishedContentVersion?: number | null;
+	lastDeliveryKey?: string | null;
+	lastDeliveryStatus?: string | null;
+	lastDeliveryError?: string | null;
+	lastDeliveryAttemptAtUtc?: string | null;
+	channelAvailable: boolean;
+	channelState: string;
+	channelUnavailableReason?: string | null;
+	unconfirmedSignals: ExternalListingSignal[];
+}
+
+export interface ListingWorkspace {
 	id: number;
 	portfolioId: number;
 	propertyId: number;
 	unitId: number;
-	channel: 'ZillowManual';
-	status: UnitListingStatus;
+	status: RentalListingStatus;
+	contentVersion: number;
 	headline: string;
 	description: string;
 	rent: number;
@@ -170,34 +209,39 @@ export interface UnitListing {
 	utilities?: string | null;
 	parking?: string | null;
 	amenities?: string | null;
-	photoNotes?: string | null;
-	zillowListingUrl?: string | null;
-	zillowApplicationUrl?: string | null;
-	postedAtUtc?: string | null;
-	isPosted: boolean;
+	photoManifest: ListingPhoto[];
+	publications: ListingPublication[];
+	signedLeaseImportUrl: string;
 	createdAt: string;
 	updatedAt: string;
 }
 
-export interface SaveUnitListingRequest {
-	status?: UnitListingStatus;
+export interface SaveListingWorkspaceRequest {
+	status?: RentalListingStatus;
 	headline?: string;
 	description?: string;
 	rent?: number | null;
 	securityDeposit?: number | null;
-	bedrooms?: number | null;
-	bathrooms?: number | null;
-	squareFeet?: number | null;
 	availableOn?: string | null;
 	leaseTerms?: string | null;
 	petPolicy?: string | null;
 	utilities?: string | null;
 	parking?: string | null;
 	amenities?: string | null;
-	photoNotes?: string | null;
-	zillowListingUrl?: string | null;
-	zillowApplicationUrl?: string | null;
-	postedAtUtc?: string | null;
+	zillowGuided?: {
+		status?: ListingPublicationStatus;
+		externalListingId?: string | null;
+		listingUrl?: string | null;
+		applicationUrl?: string | null;
+		managementUrl?: string | null;
+		lastConfirmedExternalStatus?: string | null;
+		lastConfirmedAtUtc?: string | null;
+		copyConfirmed?: boolean;
+		termsConfirmed?: boolean;
+		photosConfirmed?: boolean;
+		providerWorkspaceOpened?: boolean;
+		markCurrentVersionPublished?: boolean;
+	};
 }
 
 /** A units-list row with health badges (GET /units/list-with-health). */
@@ -206,7 +250,7 @@ export interface UnitHealth {
 	propertyId: number;
 	propertyName: string;
 	unitNumber: string;
-	status: UnitStatus;
+	status: DerivedUnitStatus;
 	marketRent: number;
 	openWorkOrderCount: number;
 	leaseEndsInDays?: number;
@@ -243,8 +287,44 @@ export interface UnitDashboardHeader {
 	currentTenantName?: string;
 }
 
+export interface UnitOccupancyPossessionCondition {
+	status: string;
+	isOccupied: boolean;
+	hasScheduledMoveIn: boolean;
+	leaseManagementId?: number | null;
+}
+
+export interface UnitMarketingAvailabilityCondition {
+	status: string;
+	isAvailable: boolean;
+}
+
+export interface UnitTenantAccountCondition {
+	status: string;
+	tenantAccountId?: number | null;
+	receivableBalance: number;
+	pastDueAmount: number;
+}
+
+export interface UnitLegalNoticeCondition {
+	status: string;
+	agreementId?: number | null;
+	agreementStatus?: string | null;
+	openNoticeCount: number;
+}
+
+export interface UnitMaintenanceTurnoverCondition {
+	status: string;
+	openWorkOrderCount: number;
+	isInTurnover: boolean;
+	isOutOfService: boolean;
+	isOnManagementHold: boolean;
+}
+
 export interface UnitLeaseSummary {
 	id: number;
+	leaseManagementId: number;
+	tenantAccountId?: number | null;
 	leaseNumber: string;
 	status: string;
 	startDate: string;
@@ -262,7 +342,9 @@ export interface UnitTenantSummary {
 
 export interface UnitPaymentSummary {
 	id: number;
-	leaseId: number;
+	tenantAccountId: number;
+	leaseManagementId: number;
+	leaseAgreementId: number | null;
 	type: string;
 	status: string;
 	amount: number;
@@ -326,6 +408,13 @@ export interface UnitDashboard {
 	lifecycleStage: UnitLifecycleStage;
 	nextBestAction: UnitNextBestAction;
 	header: UnitDashboardHeader;
+	occupancyPossession: UnitOccupancyPossessionCondition;
+	marketingAvailability: UnitMarketingAvailabilityCondition;
+	tenantAccountCondition: UnitTenantAccountCondition;
+	legalNoticeCondition: UnitLegalNoticeCondition;
+	maintenanceTurnover: UnitMaintenanceTurnoverCondition;
+	leaseManagementId?: number | null;
+	tenantAccountId?: number | null;
 	currentLease?: UnitLeaseSummary;
 	currentTenant?: UnitTenantSummary;
 	currentTenants?: UnitTenantSummary[];
@@ -349,75 +438,131 @@ export interface Tenant {
 	leaseHistoryCount?: number;
 	canDelete?: boolean;
 	deleteBlockedReason?: string;
-	/** Portal-login state: 'none' (no login), 'active' (can sign in), 'disabled' (login turned off). Only set on the single-tenant GET. */
-	portalAccess?: 'none' | 'active' | 'disabled';
 	createdAt: string;
 	updatedAt: string;
 }
 
-export interface Lease {
-	id: number;
-	portfolioId: number;
+export interface LeaseManagementSummary {
+	leaseManagementId: number;
+	leaseManagementPublicId: string;
+	relationshipNumber: string;
 	propertyId: number;
+	propertyName: string;
 	unitId: number;
-	tenantId: number;
-	tenantIds?: number[];
-	leaseNumber: string;
-	status: LeaseStatus;
-	startDate: string;
-	endDate: string;
-	moveInDate?: string;
-	moveOutDate?: string;
-	monthlyRent: number;
-	securityDeposit: number;
-	lateFeeAmount: number;
-	rentDueDay: number;
-	rentTrackingStartDate?: string | null;
-	notes?: string;
-	tenantName?: string;
-	tenants?: LeaseTenantSummary[];
-	propertyName?: string;
-	unitNumber?: string;
-	hasScan?: boolean;
-	scanIsImage?: boolean;
-	createdAt: string;
-	updatedAt: string;
+	unitNumber: string;
+	lifecycle: string;
+	businessDate: string;
+	leaseAgreementId?: number | null;
+	agreementNumber?: string | null;
+	agreementStatus?: string | null;
+	termStartOn?: string | null;
+	termEndOn?: string | null;
+	baseRentAmount?: number | null;
+	upcomingLeaseAgreementId?: number | null;
+	upcomingAgreementNumber?: string | null;
+	upcomingAgreementStatus?: string | null;
+	upcomingTermStartOn?: string | null;
+	upcomingTermEndOn?: string | null;
+	tenantAccountId?: number | null;
+	primaryTenantId?: number | null;
+	primaryTenantName?: string | null;
+	currentPartyCount: number;
+	currentResidentCount: number;
+	currentFinanciallyResponsiblePartyCount: number;
+	hasReconciliationException: boolean;
+	plannedPossessionAtUtc?: string | null;
+	possessionGivenAtUtc?: string | null;
+	plannedMoveOutAtUtc?: string | null;
+	possessionReturnedAtUtc?: string | null;
+	accountClosedAtUtc?: string | null;
+	canceledAtUtc?: string | null;
+	endingDisposition: LeaseManagementEndingDisposition;
+	endingDispositionDecidedAtUtc?: string | null;
+	endingDispositionDecidedByUserId?: number | null;
+	noticeGivenAtUtc?: string | null;
+	cancellationReasonCode?: string | null;
+	cancellationNote?: string | null;
+	updatedAtUtc: string;
 }
 
-export interface LeaseTenantSummary {
-	id: number;
-	name: string;
+export type LeaseManagementEndingDisposition =
+	| 'Undecided'
+	| 'OfferRenewal'
+	| 'OfferMonthToMonth'
+	| 'NonRenewalMoveOut';
+
+export interface LeaseManagementParty {
+	leaseManagementPartyId: number;
+	leaseManagementId: number;
+	tenantId: number;
+	tenantName: string;
 	email?: string;
 	phone?: string;
-	isPrimary: boolean;
+	role: 'PrimaryTenant' | 'CoTenant' | 'Guarantor' | 'Occupant' | string;
+	effectiveFrom: string;
+	effectiveThrough?: string | null;
+	guarantorLegalNoticeEligible: boolean;
+	isCurrent: boolean;
 }
 
-export interface Payment {
-	id: number;
-	portfolioId: number;
-	leaseId?: number | null;
-	applicationId?: number | null;
-	/** Unit/Property the payment's lease is on; resolved DB-side via the lease join so the UI can route to the unit's tab. */
-	unitId?: number;
-	propertyId?: number;
-	paymentType: PaymentType;
-	status: PaymentStatus;
-	amount: number;
-	/** Cash collected so far on a Partial payment (strictly between 0 and amount); null/absent otherwise. */
-	amountPaid?: number | null;
-	dueDate: string;
-	paidDate?: string;
-	method?: string;
-	externalReference?: string;
-	notes?: string;
-	tenantName?: string;
-	leaseNumber?: string;
-	propertyName?: string;
-	unitNumber?: string;
-	hasScan?: boolean;
-	scanIsImage?: boolean;
-	createdAt: string;
-	updatedAt: string;
+export interface LeaseManagementDetail {
+	summary: LeaseManagementSummary;
+	endingDisposition: LeaseManagementEndingDisposition;
+	endingDispositionDecidedAtUtc?: string | null;
+	endingDispositionDecidedByUserId?: number | null;
+	noticeGivenAtUtc?: string | null;
+	cancellationReasonCode?: string | null;
+	cancellationNote?: string | null;
+	parties: LeaseManagementParty[];
+	agreementCount: number;
+	addendumCount: number;
+	legalArtifactCount: number;
+}
+
+export interface LegalDocumentArtifactSummary {
+	legalDocumentArtifactId: number;
+	publicId: string;
+	artifactKind: string;
+	fileName: string;
+	contentType: string;
+	byteLength: number;
+	contentSha256: string;
+	createdAtUtc: string;
+}
+
+export interface LeaseAgreementSummary {
+	leaseManagementId: number;
+	leaseAgreementId: number;
+	publicId: string;
+	versionNumber: number;
+	agreementNumber: string;
+	changeType: string;
+	correctionReason?: string | null;
+	replacesAgreementId?: number | null;
+	renewsAgreementId?: number | null;
+	reissuesAgreementId?: number | null;
+	reissueReason?: string | null;
+	hasLiveReissue: boolean;
+	termType: string;
+	termStartOn: string;
+	termEndOn?: string | null;
+	governingFromOn: string;
+	supersededEffectiveOn?: string | null;
+	baseRentAmount: number;
+	agreementStatus: string;
+	isGoverning: boolean;
+	signerCount: number;
+	hasSourceScan: boolean;
+	issuedArtifact?: LegalDocumentArtifactSummary | null;
+	executedArtifact?: LegalDocumentArtifactSummary | null;
+	issuedAtUtc?: string | null;
+	fullyExecutedAtUtc?: string | null;
+	voidedAtUtc?: string | null;
+	draftCanceledAtUtc?: string | null;
+	draftCanceledByUserId?: number | null;
+	draftCancellationReason?: string | null;
+	createdAtUtc: string;
+	updatedAtUtc: string;
 }
 
 export interface ExpenseLineItem {
@@ -431,6 +576,7 @@ export interface ExpenseLineItem {
 export interface Expense {
 	id: number;
 	portfolioId: number;
+	operationalScope?: 'Portfolio' | 'Property' | 'Unit' | 'WorkOrder';
 	propertyId?: number;
 	unitId?: number;
 	vendorId?: number;
@@ -440,6 +586,7 @@ export interface Expense {
 	description: string;
 	status: ExpenseStatus;
 	amount: number;
+	allocationTotal?: number;
 	subtotal?: number;
 	taxAmount?: number;
 	incurredAt: string;
@@ -517,9 +664,24 @@ export interface ScheduleEPropertyReport {
 export interface ScheduleEReport {
 	year: number;
 	properties: ScheduleEPropertyReport[];
+	expensesByCategory: ScheduleECategoryAmount[];
 	totalRentalIncome: number;
 	totalExpenses: number;
 	netIncome: number;
+	unallocatedActivity: {
+		canView: boolean;
+		requiresAllocation: boolean;
+		incomeEntryCount: number;
+		rentalIncome: number;
+		expenseCount: number;
+		expensesByCategory: ScheduleECategoryAmount[];
+		totalExpenses: number;
+		netIncome: number;
+		warning: string;
+	};
+	reconciledTotalRentalIncome: number;
+	reconciledTotalExpenses: number;
+	reconciledNetIncome: number;
 }
 
 /** One property's true cash flow for a period (rent − opex − debt service). */
@@ -640,7 +802,7 @@ export interface AccountingTransactionsResponse {
 }
 
 export interface AccountingTransaction {
-	kind: 'Payment' | 'Expense' | 'Bank';
+	kind: 'Payment' | 'TenantLedger' | 'Expense' | 'Bank' | 'ApplicationFee';
 	id: number;
 	date: string;
 	/** When the row entered the system (created). Backs the "Entered" column + default sort. */
@@ -651,6 +813,7 @@ export interface AccountingTransaction {
 	category: string;
 	status: string;
 	amount: number;
+	tenantAccountId?: number | null;
 	propertyId?: number;
 	/** Unit id for the row (via Lease for payments, direct for expenses; null for bank rows).
 	 * Lets the ledger route Payment/Expense rows into their unit's Command Center tab. */
@@ -680,25 +843,25 @@ export interface LedgerTransaction {
 	explanation: string;
 }
 
-/** Tenant-facing ledger from GET /api/v1/leases/{id}/ledger (LeaseLedgerResponse). */
-export interface LeaseLedger {
-	leaseId: number;
-	leaseNumber: string;
+/** Tenant-facing projection of one continuous TenantAccount. */
+export interface LeaseManagementLedger {
+	leaseManagementId: number;
+	tenantAccountId: number;
+	accountNumber: string;
 	tenantName?: string;
 	propertyName?: string;
 	totalCharged: number;
 	totalPaid: number;
 	/** Outstanding balance (charges minus payments). Negative = credit/overpayment. */
 	balance: number;
-	/** Past-due charges on the whole lease (Scheduled/Partial/Late, due before today) — computed
-	 * server-side, NOT derived from the paged entries. */
+	/** Open past-due charges from the authoritative server-side account view. */
 	pastDueCount: number;
 	/** Opening-balance anchor, returned separately from the paged entries so it stays stable across
 	 * pages. Null when the lease carries no opening balance. */
 	opening: LedgerTransaction | null;
-	/** Ledger rows for the requested page (newest first). A payment may expand to two lines. */
+	/** Immutable ledger rows for the requested page (newest first). */
 	entries: LedgerTransaction[];
-	/** Total payments on the lease (the pageable unit) — drives "load more". */
+	/** Total non-opening ledger entries on the account — drives paging. */
 	totalCount: number;
 	skip: number;
 	take: number;
@@ -731,34 +894,41 @@ export interface MoneySnapshotExplanations {
 
 /**
  * The "Who's behind" list from GET /api/v1/accounting/past-due (PastDueResponse). Shares the snapshot's
- * past-due definition server-side, so `totalCount` always equals the dashboard "tenants behind" KPI.
+ * past-due definition server-side, so `totalCount` always equals the dashboard "tenants behind" KPI
+ * while `items` is one bounded server page.
  */
 export interface PastDueResponse {
 	items: PastDueLease[];
-	/** Number of leases/tenants behind — equals items.length and the snapshot's pastDueCount. */
+	/** Number of leases/tenants behind across every page — equals the snapshot's pastDueCount. */
 	totalCount: number;
 	/** Total amount past due across all behind leases — equals the snapshot's pastDueAmount. */
 	totalPastDueAmount: number;
+	/** Portfolio-local date used by the database to age charges; null only when the scope has no current accounts. */
+	businessDate: string | null;
+	skip: number;
+	take: number;
 }
 
 /** One behind lease/tenant row (PastDueLeaseResponse). */
 export interface PastDueLease {
-	leaseId: number;
+	leaseManagementId: number;
+	tenantAccountId: number;
+	currentAgreementId?: number | null;
 	/** Unit id on the behind lease, so the "open oldest payment" link deep-links into the unit's
 	 * Command Center Rent tab rather than the generic payment detail page. */
 	unitId: number;
 	tenantName?: string | null;
 	/** Tenant phone, for a one-tap reminder text; null when not on file. */
 	tenantPhone?: string | null;
-	leaseNumber?: string | null;
+	relationshipNumber?: string | null;
 	propertyName?: string | null;
 	unitNumber?: string | null;
 	pastDueAmount: number;
 	overduePaymentCount: number;
 	/** Due date of the oldest past-due payment (drives the "N days late" label). */
-	oldestDueDate: string;
+	oldestDueOn: string;
 	/** Id of the oldest past-due payment, so the row can deep-link into its detail. */
-	oldestPaymentId: number;
+	oldestLedgerEntryId: number;
 }
 
 export interface PropertyFinancialSummary {
@@ -817,6 +987,7 @@ export interface BankConnection {
 }
 
 export interface ExchangePlaidPublicTokenRequest {
+	clientOperationId: string;
 	publicToken: string;
 	institutionName: string;
 	accountId: string;
@@ -828,6 +999,8 @@ export interface ExchangePlaidPublicTokenRequest {
 
 export interface BankTransaction {
 	id: number;
+	propertyId?: number;
+	propertyName?: string;
 	bankConnectionId: number;
 	institutionName: string;
 	accountName: string;
@@ -839,11 +1012,13 @@ export interface BankTransaction {
 	amount: number;
 	isoCurrencyCode: string;
 	category?: string;
-	matchedPaymentId?: number;
+	matchedTenantAccountId?: number;
+	matchedTenantLedgerEntryId?: number;
 	matchedExpenseId?: number;
 	matchStatus: string;
 	matchConfidence?: number;
 	notes?: string;
+	updatedAt: string;
 	suggestedMatch?: BankMatchSuggestion;
 }
 
@@ -855,8 +1030,27 @@ export interface BankTransactionListResponse {
 }
 
 export interface BankMatchSuggestion {
-	entityType: 'Payment' | 'Expense' | string;
+	entityType: 'TenantLedgerEntry' | 'Expense' | string;
 	entityId: number;
+	tenantAccountId?: number;
+	confidence: number;
+	label: string;
+	reason: string;
+}
+
+export interface OperationalBankTransaction {
+	id: number;
+	postedAt: string;
+	description: string;
+	merchantName?: string;
+	amount: number;
+	isoCurrencyCode: string;
+	category?: string;
+	matchStatus: string;
+	updatedAt: string;
+}
+
+export interface OperationalBankMatchSuggestion {
 	confidence: number;
 	label: string;
 	reason: string;
@@ -899,18 +1093,30 @@ export interface SyncBankConnectionResponse {
 }
 
 export interface MatchBankTransactionRequest {
-	entityType: string;
-	entityId: number;
+	operationKey: string;
+	expectedUpdatedAtUtc: string;
+	tenantAccountId?: number;
+	tenantLedgerEntryId?: number;
+	expenseId?: number;
+}
+
+export interface RouteBankTransactionRequest {
+	operationKey: string;
+	propertyId?: number;
+	expectedUpdatedAtUtc: string;
 }
 
 export interface ConfirmBankMatchRequest {
-	paymentId?: number;
+	operationKey: string;
+	expectedUpdatedAtUtc: string;
+	tenantAccountId?: number;
+	tenantLedgerEntryId?: number;
 	expenseId?: number;
 }
 
 export interface BankReviewQueueItem {
-	transaction: BankTransaction;
-	suggestion: BankMatchSuggestion;
+	transaction: OperationalBankTransaction;
+	suggestion: OperationalBankMatchSuggestion;
 }
 
 export interface BankReviewQueueResponse {
@@ -922,9 +1128,10 @@ export interface BankReviewQueueResponse {
 
 export interface NoticeDraft {
 	id: number;
-	leaseId: number;
-	paymentId?: number;
-	tenantId: number;
+	leaseManagementId: number;
+	tenantAccountId: number;
+	tenantLedgerEntryId?: number;
+	recipientTenantId: number;
 	propertyId?: number;
 	tenantName: string;
 	propertyName?: string;
@@ -949,9 +1156,10 @@ export interface GenerateNoticeDraftsResponse {
 }
 
 export interface GenerateNoticeDraftsRequest {
-	tenantId?: number;
-	leaseId?: number;
-	paymentId?: number;
+	leaseManagementId?: number;
+	tenantAccountId?: number;
+	tenantLedgerEntryId?: number;
+	recipientTenantId?: number;
 	noticeType?: string;
 }
 
@@ -1064,6 +1272,7 @@ export interface WorkOrder {
 	recurringMaintenanceTaskId?: number;
 	title: string;
 	description: string;
+	technicianAccessInstructions?: string;
 	category: string;
 	priority: WorkOrderPriority;
 	status: WorkOrderStatus;
@@ -1325,83 +1534,6 @@ export interface Dashboard {
 		unitId?: number;
 	}>;
 	recentActivity: DashboardActivity[];
-}
-
-export interface AuthUser {
-	id: number;
-	portfolioId: number;
-	displayName: string;
-	email: string;
-	role: UserRole;
-	ownerId?: number;
-	tenantId?: number;
-	lastLoginAt?: string;
-}
-
-export type SecurityDepositStatus = 'Held' | 'PartiallyReturned' | 'Returned' | 'Withheld';
-
-export interface DepositDeduction {
-	reason: string;
-	amount: number;
-	notes?: string;
-}
-
-export interface SecurityDepositHolding {
-	id: number;
-	leaseId: number;
-	leaseNumber?: string;
-	tenantName?: string;
-	amount: number;
-	status: SecurityDepositStatus;
-	heldAt: string;
-	returnedAt?: string;
-	returnedAmount?: number;
-	deductions: DepositDeduction[];
-	totalDeductions: number;
-	netRefund: number;
-	notes?: string;
-}
-
-export interface PortalMessage {
-	id: number;
-	portfolioId: number;
-	userAccountId: number;
-	author?: string;
-	authorRole?: UserRole;
-	propertyId?: number;
-	unitId?: number;
-	subject: string;
-	body: string;
-	status: PortalMessageStatus;
-	reply?: string;
-	createdAt: string;
-	updatedAt: string;
-}
-
-/** Matches the AdminUsersController TeamMemberDto. */
-export interface TeamMember {
-	id: number;
-	email: string;
-	displayName?: string;
-	role: UserRole;
-	isActive: boolean;
-	ownerId?: number;
-	tenantId?: number;
-	createdAt: string;
-}
-
-/** Page wrapper from GET /api/v1/admin/users/page. */
-export interface TeamMemberListResponse {
-	items: TeamMember[];
-	totalCount: number;
-	skip: number;
-	take: number;
-}
-
-/** Returned from POST /api/v1/admin/users — includes the one-time generated password. */
-export interface CreateTeamMemberResponse {
-	member: TeamMember;
-	generatedPassword?: string;
 }
 
 /** Matches DocumentDto from GET /api/v1/documents and POST /api/v1/documents. */

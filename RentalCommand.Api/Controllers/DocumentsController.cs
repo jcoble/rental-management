@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -6,15 +9,20 @@ using RentalCommand.Api.Imaging;
 using RentalCommand.Api.Scanning;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Documents;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Api.Controllers;
 
 /// <summary>
 /// General-purpose document attachment hub: upload, list, download, and soft-delete
 /// <see cref="Core.Entities.StoredFile"/> rows for any entity type within the caller's portfolio.
-/// All routes are portfolio-scoped via the JWT <c>portfolioId</c> claim.
+/// All routes are scoped through the validated canonical access context.
 ///
 /// <para>
 /// This controller is tenant-reachable on purpose (tenants attach a photo to their own maintenance
@@ -23,7 +31,7 @@ namespace RentalCommand.Api.Controllers;
 /// sufficient for a Tenant principal — every other tenant in the same portfolio shares that scope — so a
 /// tenant caller is additionally constrained to documents on a <c>WorkOrder</c> they own (their only
 /// legitimate document surface). Staff callers keep full portfolio access, even when an example/demo user
-/// also carries a <c>tenantId</c> claim. See <see cref="TenantMayAccessEntityAsync"/>.
+/// also has tenant relationships. See <see cref="TenantMayAccessEntityAsync"/>.
 /// </para>
 /// </summary>
 [ApiController]
@@ -65,10 +73,6 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         ".ppt", ".pptx"
     };
 
-    private static readonly HashSet<string> StaffDocumentRoles = ManagementControllerBase.StaffRoles
-        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-        .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
     private readonly IDocumentService _documents;
     private readonly IFileStorage _storage;
     private readonly RentalCommandDbContext _db;
@@ -100,8 +104,9 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
     public async Task<ActionResult<DocumentDto>> Upload(
         IFormFile file,
         [FromForm] string entityType,
-        [FromForm] int entityId,
+        [FromForm] long entityId,
         [FromForm] string? category,
+        [FromForm] string clientOperationId,
         CancellationToken ct)
     {
         if (file is null || file.Length == 0)
@@ -116,30 +121,80 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
 
         if (string.IsNullOrWhiteSpace(entityType))
             return BadRequest(new { error = "entityType is required." });
+        if (string.IsNullOrWhiteSpace(clientOperationId) || clientOperationId.Trim().Length > 160)
+            return BadRequest(new { error = "clientOperationId is required and cannot exceed 160 characters." });
 
         var portfolioId = GetPortfolioId();
         var normalizedEntityType = entityType.Trim();
-
-        // Cross-tenant attach guard: the referenced entity must exist inside the caller's portfolio.
-        // Without this, a caller could attach a document to another tenant's record by id.
-        var (entityKnown, entityInPortfolio) =
-            await EntityBelongsToPortfolioAsync(normalizedEntityType, entityId, portfolioId, ct);
-        if (!entityKnown)
+        if (!TryParseTarget(normalizedEntityType, out var target))
             return BadRequest(new { error = $"entityType '{normalizedEntityType}' is not a supported document target." });
-        if (!entityInPortfolio)
+        var isStaff = HasWorkspaceMembership();
+        WorkspaceReadScope? staffScope = null;
+        if (isStaff)
+        {
+            if (!TryReadWorkspaceScope(out var scope) ||
+                !await StaffMayAccessTargetAsync(scope, target, entityId, write: true, ct))
+                return NotFound(new { error = "The referenced record was not found in your portfolio." });
+            staffScope = scope;
+        }
+        var tenantId = isStaff ? null : await ResolveTenantIdAsync(portfolioId, ct);
+        if (!isStaff && (!tenantId.HasValue || target != StoredDocumentTarget.WorkOrder))
             return NotFound(new { error = "The referenced record was not found in your portfolio." });
 
-        // Tenant guard: a tenant principal may only attach to a WorkOrder they own (their sole document
-        // surface). Portfolio scope above is shared by every tenant in the portfolio, so without this a
-        // tenant could attach to another tenant's lease/payment/work-order record by id.
-        if (!await TenantMayAccessEntityAsync(normalizedEntityType, entityId, portfolioId, ct))
-            return NotFound(new { error = "The referenced record was not found in your portfolio." });
+        string contentSha256;
+        await using (var hashStream = file.OpenReadStream())
+        {
+            contentSha256 = Convert.ToHexString(await SHA256.HashDataAsync(hashStream, ct)).ToLowerInvariant();
+        }
 
-        // Store the blob.
-        string storageKey;
+        var sanitizedFileName = DiskFileStorage.SanitizeFileName(fileName);
+        var requestFingerprint = Fingerprint(new
+        {
+            portfolioId,
+            actorUserId = GetUserId(),
+            target = target.ToString(),
+            entityId,
+            contentSha256,
+            fileName = sanitizedFileName,
+            contentType,
+            sizeBytes = file.Length,
+            category = category?.Trim(),
+        });
+
+        PendingFileUploadAdmission admission;
         try
         {
-            storageKey = await _storage.UploadAsync(file.OpenReadStream(), fileName, contentType, ct);
+            admission = await _documents.PrepareUploadAsync(
+                portfolioId,
+                GetUserId(),
+                clientOperationId,
+                requestFingerprint,
+                sanitizedFileName,
+                contentType,
+                file.Length,
+                ct);
+        }
+        catch (UploadOperationConflictException ex)
+        {
+            return Conflict(new { error = ex.Message });
+        }
+
+        var finalized = await _documents.GetFinalizedUploadAsync(portfolioId, admission, ct);
+        if (finalized is not null)
+        {
+            finalized.Category = category;
+            return CreatedAtAction(nameof(GetFile), new { id = finalized.Id }, finalized);
+        }
+
+        try
+        {
+            await using var uploadStream = file.OpenReadStream();
+            await _storage.UploadAtAsync(
+                uploadStream,
+                admission.StoragePath,
+                sanitizedFileName,
+                contentType,
+                ct);
         }
         catch (Exception ex)
         {
@@ -147,26 +202,25 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
             return StatusCode(StatusCodes.Status500InternalServerError, new { error = "File storage failed." });
         }
 
-        // Persist the StoredFile row; clean up the blob on DB failure.
-        DocumentDto dto;
-        try
-        {
-            dto = await _documents.CreateAsync(
-                portfolioId,
-                normalizedEntityType,
-                entityId,
-                DiskFileStorage.SanitizeFileName(fileName),
-                contentType,
-                file.Length,
-                storageKey,
-                ct);
-        }
-        catch
-        {
-            // Best-effort orphan blob cleanup.
-            try { await _storage.DeleteAsync(storageKey, ct); } catch { /* swallow */ }
-            throw;
-        }
+        var dto = await _documents.CreateAsync(
+            admission.Id,
+            portfolioId,
+            target,
+            entityId,
+            GetUserId(),
+            tenantId,
+            isStaff,
+            staffScope,
+            clientOperationId,
+            requestFingerprint,
+            contentSha256,
+            sanitizedFileName,
+            contentType,
+            file.Length,
+            admission.StoragePath,
+            ct);
+        if (dto is null)
+            return NotFound(new { error = "The referenced record was not found in your portfolio." });
 
         dto.Category = category;
         return CreatedAtAction(nameof(GetFile), new { id = dto.Id }, dto);
@@ -181,7 +235,7 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<IReadOnlyList<DocumentDto>>> List(
         [FromQuery] string entityType,
-        [FromQuery] int entityId,
+        [FromQuery] long entityId,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(entityType))
@@ -189,11 +243,22 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
 
         var portfolioId = GetPortfolioId();
         var normalizedEntityType = entityType.Trim();
+        if (!TryParseTarget(normalizedEntityType, out var target))
+            return BadRequest(new { error = $"entityType '{normalizedEntityType}' is not a supported document target." });
+        normalizedEntityType = target.ToString();
 
         // Tenant guard: a tenant may only list documents for a WorkOrder they own. Returning an empty
         // list (rather than 403) keeps the response shape identical for any non-owned/foreign entity.
-        if (!await TenantMayAccessEntityAsync(normalizedEntityType, entityId, portfolioId, ct))
+        if (HasWorkspaceMembership())
+        {
+            if (!TryReadWorkspaceScope(out var scope) ||
+                !await StaffMayAccessTargetAsync(scope, target, entityId, write: false, ct))
+                return Ok(Array.Empty<DocumentDto>());
+        }
+        else if (!await TenantMayAccessEntityAsync(normalizedEntityType, entityId, portfolioId, ct))
+        {
             return Ok(Array.Empty<DocumentDto>());
+        }
 
         var docs = await _documents.ListAsync(portfolioId, normalizedEntityType, entityId, ct);
         return Ok(docs);
@@ -216,8 +281,17 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         // Tenant guard: a tenant may only download a document attached to a WorkOrder they own. Without
         // this, any tenant could stream every document in the portfolio by id (other tenants' lease PDFs,
         // ID scans, owner financials). 404 (not 403) so a foreign id is indistinguishable from a missing one.
-        if (!await TenantMayAccessEntityAsync(row.EntityType, row.EntityId, portfolioId, ct))
+        if (HasWorkspaceMembership())
+        {
+            if (!TryParseTarget(row.EntityType ?? string.Empty, out var target) ||
+                !TryReadWorkspaceScope(out var scope) ||
+                !await StaffMayAccessTargetAsync(scope, target, row.EntityId ?? 0, write: false, ct))
+                return NotFound(new { error = "Document not found." });
+        }
+        else if (!await TenantMayAccessEntityAsync(row.EntityType, row.EntityId, portfolioId, ct))
+        {
             return NotFound(new { error = "Document not found." });
+        }
 
         Stream stream;
         try
@@ -271,25 +345,43 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
     }
 
     // -------------------------------------------------------------------------
-    // DELETE /api/v1/documents/{id}  — soft-delete
+    // DELETE /api/v1/documents/{id}  — soft-delete + durable post-commit blob cleanup
     // -------------------------------------------------------------------------
 
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        int id,
+        [FromQuery] string clientOperationId,
+        CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(clientOperationId) || clientOperationId.Trim().Length > 160)
+            return BadRequest(new { error = "clientOperationId is required and cannot exceed 160 characters." });
+
         var portfolioId = GetPortfolioId();
-
-        // Tenant guard: resolve the row first so a tenant can only delete a document on a WorkOrder they
-        // own; a tenant must never soft-delete another tenant's (or the owner's) portfolio documents.
-        var row = await _documents.FindAsync(portfolioId, id, ct);
-        if (row is null)
-            return NotFound(new { error = "Document not found." });
-        if (!await TenantMayAccessEntityAsync(row.EntityType, row.EntityId, portfolioId, ct))
-            return NotFound(new { error = "Document not found." });
-
-        var deleted = await _documents.DeleteAsync(portfolioId, id, ct);
+        var isStaff = HasWorkspaceMembership();
+        WorkspaceReadScope? staffScope = null;
+        if (isStaff)
+        {
+            var row = await _documents.FindAsync(portfolioId, id, ct);
+            if (row is null || !TryParseTarget(row.EntityType ?? string.Empty, out var target) ||
+                !TryReadWorkspaceScope(out var scope) ||
+                !await StaffMayAccessTargetAsync(scope, target, row.EntityId ?? 0, write: true, ct))
+                return NotFound(new { error = "Document not found." });
+            staffScope = scope;
+        }
+        var tenantId = isStaff ? null : await ResolveTenantIdAsync(portfolioId, ct);
+        var deleted = await _documents.DeleteAsync(
+            portfolioId,
+            id,
+            GetUserId(),
+            tenantId,
+            isStaff,
+            staffScope,
+            clientOperationId,
+            ct);
         return deleted ? NoContent() : NotFound(new { error = "Document not found." });
     }
 
@@ -300,23 +392,17 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
     /// <summary>
     /// Whether the CALLER may act on a document attached to <paramref name="entityType"/>/
     /// <paramref name="entityId"/>. Staff callers always may — portfolio scope is enforced elsewhere —
-    /// even if their token also carries a <c>tenantId</c> claim. A tenant-only caller may ONLY when the
+    /// even if the same identity also has tenant relationships. A tenant-only caller may ONLY when the
     /// entity is a <c>WorkOrder</c> that belongs to that tenant (their single legitimate document surface —
     /// a maintenance-request photo). Every other entity type, or a work order owned by a different tenant,
     /// is denied. Fail-closed: an unknown/missing entity reference returns <c>false</c> for a tenant.
     /// </summary>
     private async Task<bool> TenantMayAccessEntityAsync(
-        string? entityType, int? entityId, int portfolioId, CancellationToken ct)
+        string? entityType, long? entityId, int portfolioId, CancellationToken ct)
     {
-        if (GetRoles().Any(role => StaffDocumentRoles.Contains(role)))
+        if (HasWorkspaceMembership())
         {
             // Staff/owner/manager/agent: not tenant-constrained (portfolio scope already applied).
-            return true;
-        }
-
-        var tenantId = GetTenantIdOrNull();
-        if (tenantId is null)
-        {
             return true;
         }
 
@@ -327,69 +413,172 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         if (!string.Equals(entityType.Trim(), "WorkOrder", StringComparison.OrdinalIgnoreCase))
             return false;
 
-        return await _db.WorkOrders.AnyAsync(
-            w => w.Id == entityId.Value && w.PortfolioId == portfolioId && w.TenantId == tenantId.Value, ct);
+        var accessContextId = GetAccessContextId();
+        return await _db.EffectiveTenantAccess.AnyAsync(access =>
+            access.AccessContextId == accessContextId && access.PortfolioId == portfolioId &&
+            _db.WorkOrders.Any(workOrder =>
+                workOrder.Id == entityId.Value && workOrder.PortfolioId == portfolioId &&
+                workOrder.TenantId == access.TenantId &&
+                workOrder.LeaseManagementId == access.LeaseManagementId), ct);
     }
 
-    // -------------------------------------------------------------------------
-    // Cross-tenant attach guard
-    // -------------------------------------------------------------------------
-
-    /// <summary>
-    /// Verifies that <paramref name="entityType"/>/<paramref name="entityId"/> references a row that
-    /// lives in <paramref name="portfolioId"/>. Matching is case-insensitive on the entity type name.
-    /// </summary>
-    /// <returns>
-    /// <c>Known</c> = whether the entity type is a recognised document target;
-    /// <c>InPortfolio</c> = whether the referenced row exists within the caller's portfolio.
-    /// </returns>
-    private async Task<(bool Known, bool InPortfolio)> EntityBelongsToPortfolioAsync(
-        string entityType, int entityId, int portfolioId, CancellationToken ct)
+    private Task<int?> ResolveTenantIdAsync(int portfolioId, CancellationToken ct)
     {
-        // A non-positive entityId can never match a real row, so the AnyAsync checks below
-        // naturally report "not in portfolio" (→ 404) for a recognised type.
-        switch (entityType.ToLowerInvariant())
+        var accessContextId = GetAccessContextId();
+        return _db.EffectiveTenantAccess
+            .Where(access => access.AccessContextId == accessContextId &&
+                access.PortfolioId == portfolioId)
+            .OrderBy(access => access.LeaseManagementPartyId)
+            .Select(access => (int?)access.TenantId)
+            .FirstOrDefaultAsync(ct);
+    }
+
+    private bool TryReadWorkspaceScope(out WorkspaceReadScope scope)
+    {
+        scope = default;
+        if (!TryGetActiveAccessContext(out var active))
         {
-            case "property":
-                return (true, await _db.Properties.AnyAsync(
-                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
-            case "unit":
-                // Unit has no direct PortfolioId; scope through its parent Property.
-                return (true, await _db.Units.AnyAsync(
-                    e => e.Id == entityId && e.Property != null && e.Property.PortfolioId == portfolioId, ct));
-            case "tenant":
-                return (true, await _db.Tenants.AnyAsync(
-                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
-            case "lease":
-                return (true, await _db.Leases.AnyAsync(
-                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
-            case "payment":
-                return (true, await _db.Payments.AnyAsync(
-                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
-            case "expense":
-                return (true, await _db.Expenses.AnyAsync(
-                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
-            case "vendor":
-                return (true, await _db.Vendors.AnyAsync(
-                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
-            case "workorder":
-                return (true, await _db.WorkOrders.AnyAsync(
-                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
-            case "appointment":
-                return (true, await _db.Appointments.AnyAsync(
-                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
-            case "inspection":
-                return (true, await _db.Inspections.AnyAsync(
-                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
-            case "securitydeposit":
-                return (true, await _db.SecurityDepositHoldings.AnyAsync(
-                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
-            case "ownerentity":
-                return (true, await _db.OwnerEntities.AnyAsync(
-                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
-            default:
-                return (false, false);
+            return false;
         }
+
+        scope = new WorkspaceReadScope(
+            active.PortfolioId,
+            active.UserId,
+            active.SessionId,
+            active.AccessContextId,
+            active.AccessRevision);
+        return true;
+    }
+
+    private Task<bool> StaffMayAccessTargetAsync(
+        WorkspaceReadScope scope,
+        StoredDocumentTarget target,
+        long entityId,
+        bool write,
+        CancellationToken ct)
+    {
+        var utcNow = DateTime.UtcNow;
+        if (target == StoredDocumentTarget.WorkOrder)
+        {
+            var workOrderCapabilities = write
+                ? new[] { CapabilityKeys.WorkManage, CapabilityKeys.AssignedWorkUpdate }
+                : new[] { CapabilityKeys.WorkRead, CapabilityKeys.AssignedWorkRead };
+            return _db.WorkOrders.AsNoTracking()
+                .WhereAuthorized(_db, scope, workOrderCapabilities, utcNow)
+                .AnyAsync(workOrder => workOrder.Id == entityId, ct);
+        }
+
+        IReadOnlyCollection<string>? capabilities = target switch
+        {
+            StoredDocumentTarget.Property or StoredDocumentTarget.Unit or StoredDocumentTarget.Tenant =>
+                write ? [CapabilityKeys.RentalsManage] : [CapabilityKeys.RentalsRead],
+            StoredDocumentTarget.LeaseAgreement or StoredDocumentTarget.LegalDocumentArtifact =>
+                write
+                    ? [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingAgreementsPrepare]
+                    : [CapabilityKeys.RentalsRead, CapabilityKeys.LeasingTermsRead],
+            StoredDocumentTarget.TenantAccount or StoredDocumentTarget.TenantLedgerEntry =>
+                write
+                    ? [CapabilityKeys.MoneyChargesManage, CapabilityKeys.MoneyPaymentsManage]
+                    : [CapabilityKeys.MoneyBalancesRead],
+            StoredDocumentTarget.Expense =>
+                write ? [CapabilityKeys.MoneyExpensesManage] : [CapabilityKeys.MoneyBalancesRead],
+            StoredDocumentTarget.WorkOrder or StoredDocumentTarget.Appointment or StoredDocumentTarget.Inspection =>
+                write ? [CapabilityKeys.WorkManage] : [CapabilityKeys.WorkRead],
+            StoredDocumentTarget.Vendor =>
+                write ? [CapabilityKeys.WorkManage] : [CapabilityKeys.WorkRead],
+            StoredDocumentTarget.SecurityDepositAccount =>
+                write
+                    ? [CapabilityKeys.MoneyDepositsManage]
+                    : [CapabilityKeys.MoneyBalancesRead, CapabilityKeys.LeasingDepositsRead],
+            StoredDocumentTarget.OwnerEntity =>
+                write ? [CapabilityKeys.RentalsManage] : [CapabilityKeys.MoneyOwnerReportsRead],
+            _ => null,
+        };
+        if (capabilities is null) return Task.FromResult(false);
+
+        var properties = _db.Properties.AsNoTracking()
+            .WhereAuthorized(_db, scope, capabilities, utcNow);
+        var leaseManagements = _db.LeaseManagements.AsNoTracking()
+            .WhereAuthorized(_db, scope, capabilities, utcNow);
+        return target switch
+        {
+            StoredDocumentTarget.Property => properties.AnyAsync(property => property.Id == entityId, ct),
+            StoredDocumentTarget.Unit => _db.Units.AsNoTracking().AnyAsync(unit =>
+                unit.Id == entityId && properties.Any(property => property.Id == unit.PropertyId), ct),
+            StoredDocumentTarget.Tenant => _db.LeaseManagementParties.AsNoTracking().AnyAsync(party =>
+                party.TenantId == entityId &&
+                properties.Any(property => property.Id == party.LeaseManagement!.PropertyId), ct),
+            StoredDocumentTarget.LeaseAgreement => _db.LeaseAgreements.AsNoTracking().AnyAsync(agreement =>
+                agreement.Id == entityId && agreement.PortfolioId == scope.PortfolioId &&
+                leaseManagements.Any(management => management.Id == agreement.LeaseManagementId), ct),
+            StoredDocumentTarget.LegalDocumentArtifact => _db.LegalDocumentArtifacts.AsNoTracking()
+                .AnyAsync(artifact =>
+                    artifact.Id == entityId && artifact.PortfolioId == scope.PortfolioId &&
+                    (_db.LeaseAgreements.AsNoTracking().Any(agreement =>
+                         agreement.PortfolioId == artifact.PortfolioId &&
+                         (agreement.IssuedArtifactId == artifact.Id ||
+                          agreement.ExecutedArtifactId == artifact.Id) &&
+                         leaseManagements.Any(management => management.Id == agreement.LeaseManagementId)) ||
+                     _db.LeaseAddenda.AsNoTracking().Any(addendum =>
+                         addendum.PortfolioId == artifact.PortfolioId &&
+                         (addendum.IssuedArtifactId == artifact.Id ||
+                          addendum.ExecutedArtifactId == artifact.Id) &&
+                         leaseManagements.Any(management => management.Id == addendum.LeaseManagementId))), ct),
+            StoredDocumentTarget.TenantAccount => _db.TenantAccounts.AsNoTracking().AnyAsync(account =>
+                account.Id == entityId && account.PortfolioId == scope.PortfolioId &&
+                leaseManagements.Any(management => management.Id == account.LeaseManagementId), ct),
+            StoredDocumentTarget.TenantLedgerEntry => _db.TenantLedgerEntries.AsNoTracking().AnyAsync(entry =>
+                entry.Id == entityId && entry.PortfolioId == scope.PortfolioId &&
+                _db.TenantAccounts.AsNoTracking().Any(account =>
+                    account.Id == entry.TenantAccountId && account.PortfolioId == entry.PortfolioId &&
+                    leaseManagements.Any(management => management.Id == account.LeaseManagementId)), ct),
+            StoredDocumentTarget.Expense => _db.Expenses.AsNoTracking().AnyAsync(expense =>
+                expense.Id == entityId && properties.Any(property => property.Id == expense.PropertyId), ct),
+            StoredDocumentTarget.WorkOrder => _db.WorkOrders.AsNoTracking().AnyAsync(workOrder =>
+                workOrder.Id == entityId && properties.Any(property => property.Id == workOrder.PropertyId), ct),
+            StoredDocumentTarget.Appointment => _db.Appointments.AsNoTracking().AnyAsync(appointment =>
+                appointment.Id == entityId && properties.Any(property => property.Id == appointment.PropertyId), ct),
+            StoredDocumentTarget.Inspection => _db.Inspections.AsNoTracking().AnyAsync(inspection =>
+                inspection.Id == entityId && properties.Any(property => property.Id == inspection.PropertyId), ct),
+            StoredDocumentTarget.Vendor => _db.Vendors.AsNoTracking().AnyAsync(vendor =>
+                vendor.Id == entityId && vendor.PortfolioId == scope.PortfolioId &&
+                (vendor.WorkOrders.Any(workOrder =>
+                     workOrder.PortfolioId == vendor.PortfolioId &&
+                     properties.Any(property => property.Id == workOrder.PropertyId)) ||
+                 vendor.Expenses.Any(expense =>
+                     expense.PortfolioId == vendor.PortfolioId && expense.PropertyId != null &&
+                     properties.Any(property => property.Id == expense.PropertyId))), ct),
+            StoredDocumentTarget.SecurityDepositAccount => _db.SecurityDepositAccounts.AsNoTracking()
+                .AnyAsync(deposit =>
+                    deposit.Id == entityId && deposit.PortfolioId == scope.PortfolioId &&
+                    _db.TenantAccounts.AsNoTracking().Any(account =>
+                        account.Id == deposit.TenantAccountId && account.PortfolioId == deposit.PortfolioId &&
+                        leaseManagements.Any(management => management.Id == account.LeaseManagementId)), ct),
+            StoredDocumentTarget.OwnerEntity => _db.OwnerEntities.AsNoTracking().AnyAsync(owner =>
+                owner.Id == entityId && owner.PortfolioId == scope.PortfolioId &&
+                _db.PropertyOwnerships.Any(ownership =>
+                    ownership.PortfolioId == scope.PortfolioId
+                    && ownership.OwnerEntityId == owner.Id
+                    && ownership.EffectiveFromUtc <= DateTime.UtcNow
+                    && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > DateTime.UtcNow)
+                    && properties.Any(property => property.Id == ownership.PropertyId)), ct),
+            _ => Task.FromResult(false),
+        };
+    }
+
+
+    private static string Fingerprint<T>(T request)
+    {
+        var json = JsonSerializer.Serialize(request);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json))).ToLowerInvariant();
+    }
+
+    private static bool TryParseTarget(string value, out StoredDocumentTarget target)
+    {
+        target = default;
+        return !int.TryParse(value, out _)
+            && Enum.TryParse(value, ignoreCase: true, out target)
+            && Enum.IsDefined(target);
     }
 
     // -------------------------------------------------------------------------

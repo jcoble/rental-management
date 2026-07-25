@@ -1,14 +1,17 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import '../../core/models/models.dart';
 
 /// Repository for Appointments.
 ///
 /// Endpoints used:
-///   GET    /appointments                    — list (JWT-scoped, no portfolioId param)
+///   GET    /appointments                    — list (canonical-access-scoped, no portfolioId param)
 ///   GET    /appointments/{id}               — single appointment
 ///   POST   /appointments                    — create
 ///   PATCH  /appointments/{id}              — update / status change
@@ -46,8 +49,9 @@ class AppointmentsRepository {
 
   Future<Appointment> getAppointment(int id) async {
     try {
-      final response =
-          await _dio.get<Map<String, dynamic>>('/appointments/$id');
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/appointments/$id',
+      );
       final data = response.data;
       if (data == null) {
         throw const ApiException(
@@ -68,8 +72,14 @@ class AppointmentsRepository {
   /// [scheduledStart] and [scheduledEnd] must be ISO 8601 strings.
   Future<Appointment> createAppointment(Map<String, dynamic> data) async {
     try {
-      final response =
-          await _dio.post<Map<String, dynamic>>('/appointments', data: data);
+      final response = await IdempotentMutation.run(
+        'appointment:create:${jsonEncode(data)}',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/appointments',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
       final responseData = response.data;
       if (responseData == null) {
         throw const ApiException(
@@ -85,11 +95,17 @@ class AppointmentsRepository {
 
   /// Partial PATCH — send only the fields that changed.
   Future<Appointment> updateAppointment(
-      int id, Map<String, dynamic> data) async {
+    int id,
+    Map<String, dynamic> data,
+  ) async {
     try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/appointments/$id',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'appointment:update:$id:${jsonEncode(data)}',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/appointments/$id',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -111,9 +127,18 @@ class AppointmentsRepository {
   Future<Appointment> updateStatus(int id, String status) =>
       updateAppointment(id, {'status': status});
 
-  Future<void> deleteAppointment(int id) async {
+  Future<void> deleteAppointment(int id, {int? propertyId}) async {
     try {
-      await _dio.delete<dynamic>('/appointments/$id');
+      await IdempotentMutation.run(
+        'appointment:delete:$id:${propertyId ?? 'none'}',
+        (key) => _dio.delete<dynamic>(
+          '/appointments/$id',
+          queryParameters: propertyId == null
+              ? null
+              : {'expectedPropertyId': propertyId},
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -122,8 +147,7 @@ class AppointmentsRepository {
 
 // ── Providers ─────────────────────────────────────────────────────────────────
 
-final appointmentsRepositoryProvider =
-    Provider<AppointmentsRepository>((ref) {
+final appointmentsRepositoryProvider = Provider<AppointmentsRepository>((ref) {
   return AppointmentsRepository(ref.watch(dioProvider));
 });
 
@@ -133,8 +157,7 @@ class AppointmentsNotifier extends Notifier<AsyncValue<List<Appointment>>> {
   @override
   AsyncValue<List<Appointment>> build() => const AsyncValue.loading();
 
-  AppointmentsRepository get _repo =>
-      ref.read(appointmentsRepositoryProvider);
+  AppointmentsRepository get _repo => ref.read(appointmentsRepositoryProvider);
 
   Future<void> load() async {
     state = const AsyncValue.loading();
@@ -151,13 +174,12 @@ class AppointmentsNotifier extends Notifier<AsyncValue<List<Appointment>>> {
 
 final appointmentsProvider =
     NotifierProvider<AppointmentsNotifier, AsyncValue<List<Appointment>>>(
-  AppointmentsNotifier.new,
-);
+      AppointmentsNotifier.new,
+    );
 
 // ── Single appointment notifier (family by id) ────────────────────────────────
 
-class AppointmentDetailNotifier
-    extends Notifier<AsyncValue<Appointment>> {
+class AppointmentDetailNotifier extends Notifier<AsyncValue<Appointment>> {
   AppointmentDetailNotifier(this._id);
 
   final int _id;
@@ -168,8 +190,7 @@ class AppointmentDetailNotifier
     return const AsyncValue.loading();
   }
 
-  AppointmentsRepository get _repo =>
-      ref.read(appointmentsRepositoryProvider);
+  AppointmentsRepository get _repo => ref.read(appointmentsRepositoryProvider);
 
   Future<void> load() async {
     state = const AsyncValue.loading();
@@ -184,9 +205,9 @@ class AppointmentDetailNotifier
   Future<void> refresh() => load();
 }
 
-final appointmentDetailProvider = NotifierProvider.family<
-    AppointmentDetailNotifier,
-    AsyncValue<Appointment>,
-    int>(
-  AppointmentDetailNotifier.new,
-);
+final appointmentDetailProvider =
+    NotifierProvider.family<
+      AppointmentDetailNotifier,
+      AsyncValue<Appointment>,
+      int
+    >(AppointmentDetailNotifier.new);

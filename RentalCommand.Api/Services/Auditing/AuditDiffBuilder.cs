@@ -8,14 +8,14 @@ using RentalCommand.Core.Enums;
 namespace RentalCommand.Api.Services.Auditing;
 
 /// <summary>
-/// Turns an <see cref="AuditLog"/> row's raw <c>OldValues</c>/<c>NewValues</c> JSON into a small,
+/// Turns an <see cref="AtomicAuditLog"/> row's raw <c>OldValues</c>/<c>NewValues</c> JSON into a small,
 /// landlord-safe list of field-level changes ("amount: $32,423 → $23,423", "status: Pending → Paid")
 /// for the per-record History card. This is the customer-facing, *sanitized* projection: friendly
 /// field names + formatted values, with no raw JSON, no IP, and no plumbing/PII fields. The raw
 /// old→new JSON stays on the Admin-only forensic DTO.
 ///
 /// <para>The interceptor serializes the changed scalars as a flat <c>{ PropertyName: value }</c>
-/// JSON object (see <see cref="Data.Auditing.AuditSaveChangesInterceptor"/>). For an <c>Updated</c>
+/// JSON object captured by the atomic audit interceptor. For an <c>Updated</c>
 /// row both dictionaries carry exactly the modified properties, so a diff is the union of their keys.</para>
 /// </summary>
 public sealed class AuditDiffBuilder
@@ -52,7 +52,7 @@ public sealed class AuditDiffBuilder
     /// Created/Deleted carry a full snapshot (not a diff) so they return an empty list — the row's
     /// humanized description already says what happened.
     /// </summary>
-    public IReadOnlyList<AuditFieldChange> Build(AuditLog row)
+    public IReadOnlyList<AuditFieldChange> Build(AtomicAuditLog row)
     {
         if (row.Operation != AuditLogOperation.Updated)
         {
@@ -230,8 +230,8 @@ public sealed class AuditDiffBuilder
     private static IReadOnlyDictionary<string, Type> BuildEnumPropertyTypes()
     {
         var map = new Dictionary<string, Type>(StringComparer.OrdinalIgnoreCase);
-        var entityAssembly = typeof(AuditLog).Assembly;
-        foreach (var type in entityAssembly.GetTypes().Where(t => t.IsClass && t.Namespace == typeof(AuditLog).Namespace))
+        var entityAssembly = typeof(AtomicAuditLog).Assembly;
+        foreach (var type in entityAssembly.GetTypes().Where(t => t.IsClass && t.Namespace == typeof(AtomicAuditLog).Namespace))
         {
             foreach (var prop in type.GetProperties(BindingFlags.Instance | BindingFlags.Public))
             {

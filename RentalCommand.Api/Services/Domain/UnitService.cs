@@ -2,11 +2,14 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -16,188 +19,252 @@ public class UnitService : IUnitService
     private const string EntityType = "Unit";
 
     private readonly RentalCommandDbContext _db;
-    private readonly IDataUpdateService _dataUpdate;
-    private readonly IAuditTrailService _audit;
     private readonly TimeProvider _timeProvider;
+    private readonly IAtomicUnitOfWork _atomic;
 
-    public UnitService(RentalCommandDbContext db, IDataUpdateService dataUpdate, IAuditTrailService audit, TimeProvider timeProvider)
+    public UnitService(
+        RentalCommandDbContext db,
+        IDataUpdateService dataUpdate,
+        IAuditTrailService audit,
+        TimeProvider timeProvider,
+        IAtomicUnitOfWork atomic)
     {
         _db = db;
-        _dataUpdate = dataUpdate;
-        _audit = audit;
         _timeProvider = timeProvider;
+        _atomic = atomic;
     }
 
-    public async Task<IReadOnlyList<UnitResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
+    public async Task<IReadOnlyList<UnitResponse>> ListAsync(
+        WorkspaceReadScope scope, int? propertyId, ListQuery query, CancellationToken ct = default)
     {
-        // Scope through the owning Property's portfolio; Unit has no PortfolioId of its own.
-        var q = _db.Units
-            .AsNoTracking()
-            .Where(u => u.Property != null && u.Property.PortfolioId == portfolioId);
+        var q = BuildListQuery(scope, propertyId, query);
 
-        if (propertyId.HasValue)
-        {
-            q = q.Where(u => u.PropertyId == propertyId.Value);
-        }
+        return await q
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake)
+            .ToListAsync(ct);
+    }
 
-        if (query is UnitListQuery { AvailableForLease: true })
-        {
-            q = q.Where(u =>
-                u.Status == UnitStatus.Vacant &&
-                !u.Leases.Any(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven));
-        }
-
-        if (!string.IsNullOrWhiteSpace(query.Search))
-        {
-            var term = query.Search.Trim();
-            q = q.Where(u =>
-                EF.Functions.ILike(u.UnitNumber, $"%{term}%") ||
-                (u.FloorPlan != null && EF.Functions.ILike(u.FloorPlan, $"%{term}%")));
-        }
-
-        q = query.SortField switch
-        {
-            "unitnumber" => query.SortDescending ? q.OrderByDescending(u => u.UnitNumber) : q.OrderBy(u => u.UnitNumber),
-            "marketrent" => query.SortDescending ? q.OrderByDescending(u => u.MarketRent) : q.OrderBy(u => u.MarketRent),
-            "status" => query.SortDescending ? q.OrderByDescending(u => u.Status) : q.OrderBy(u => u.Status),
-            "updatedat" => query.SortDescending ? q.OrderByDescending(u => u.UpdatedAt) : q.OrderBy(u => u.UpdatedAt),
-            _ => query.SortDescending ? q.OrderByDescending(u => u.CreatedAt) : q.OrderBy(u => u.CreatedAt),
-        };
-
+    public async Task<UnitListResponse> ListPageAsync(
+        WorkspaceReadScope scope, int? propertyId, UnitListQuery query, CancellationToken ct = default)
+    {
+        var q = BuildListQuery(scope, propertyId, query);
+        var totalCount = await q.CountAsync(ct);
         var items = await q
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
-        return items.Select(UnitResponse.FromEntity).ToList();
-    }
-
-    public async Task<IReadOnlyList<UnitHealthResponse>> ListWithHealthAsync(
-        int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
-    {
-        var page = await ListWithHealthPageAsync(portfolioId, ToUnitHealthListQuery(query, propertyId), ct);
-        return page.Items;
-    }
-
-    public async Task<UnitHealthListResponse> ListWithHealthPageAsync(
-        int portfolioId, UnitHealthListQuery query, CancellationToken ct = default)
-    {
-        // Scope through the owning Property's portfolio; Unit has no PortfolioId of its own.
-        var q = _db.Units
-            .AsNoTracking()
-            .Where(u => u.Property != null && u.Property.PortfolioId == portfolioId);
-
-        if (query.PropertyId.HasValue)
+        return new UnitListResponse
         {
-            q = q.Where(u => u.PropertyId == query.PropertyId.Value);
+            Items = items,
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
+    }
+
+    private IQueryable<UnitResponse> BuildListQuery(
+        WorkspaceReadScope scope, int? propertyId, ListQuery query)
+    {
+        var q = BuildCanonicalResponseQuery(scope);
+
+        if (propertyId.HasValue)
+        {
+            q = q.Where(unit => unit.PropertyId == propertyId.Value);
+        }
+
+        if (query is UnitListQuery { ExcludeUnitId: > 0 } unitQuery)
+        {
+            q = q.Where(unit => unit.Id != unitQuery.ExcludeUnitId.Value);
+        }
+
+        if (query is UnitListQuery { AvailableForLease: true })
+        {
+            q = q.Where(unit => unit.Status == DerivedUnitStatus.Vacant);
         }
 
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
             var term = query.Search.Trim();
-            q = q.Where(u =>
-                EF.Functions.ILike(u.UnitNumber, $"%{term}%") ||
-                (u.Property != null && EF.Functions.ILike(u.Property.Name, $"%{term}%")));
+            q = q.Where(unit =>
+                EF.Functions.ILike(unit.UnitNumber, $"%{term}%") ||
+                (unit.FloorPlan != null && EF.Functions.ILike(unit.FloorPlan, $"%{term}%")));
         }
-
-        if (!string.IsNullOrWhiteSpace(query.Status) &&
-            Enum.TryParse<UnitStatus>(query.Status, ignoreCase: true, out var status))
-        {
-            q = q.Where(u => u.Status == status);
-        }
-
-        var now = _timeProvider.UtcNow();
-        q = ApplyStageFilter(q, query.Stage, now);
 
         q = query.SortField switch
         {
-            "unitnumber" => query.SortDescending ? q.OrderByDescending(u => u.UnitNumber) : q.OrderBy(u => u.UnitNumber),
-            "propertyname" => query.SortDescending ? q.OrderByDescending(u => u.Property!.Name) : q.OrderBy(u => u.Property!.Name),
-            "openworkordercount" => query.SortDescending ? q.OrderByDescending(u => u.WorkOrders.Count(w =>
-                w.Status != WorkOrderStatus.Completed &&
-                w.Status != WorkOrderStatus.Cancelled &&
-                w.Status != WorkOrderStatus.Archived)) : q.OrderBy(u => u.WorkOrders.Count(w =>
-                w.Status != WorkOrderStatus.Completed &&
-                w.Status != WorkOrderStatus.Cancelled &&
-                w.Status != WorkOrderStatus.Archived)),
-            "marketrent" => query.SortDescending ? q.OrderByDescending(u => u.MarketRent) : q.OrderBy(u => u.MarketRent),
-            "status" => query.SortDescending ? q.OrderByDescending(u => u.Status) : q.OrderBy(u => u.Status),
-            "updatedat" => query.SortDescending ? q.OrderByDescending(u => u.UpdatedAt) : q.OrderBy(u => u.UpdatedAt),
-            _ => query.SortDescending ? q.OrderByDescending(u => u.UnitNumber) : q.OrderBy(u => u.UnitNumber),
+            "unitnumber" => query.SortDescending ? q.OrderByDescending(unit => unit.UnitNumber) : q.OrderBy(unit => unit.UnitNumber),
+            "marketrent" => query.SortDescending ? q.OrderByDescending(unit => unit.MarketRent) : q.OrderBy(unit => unit.MarketRent),
+            "status" => query.SortDescending ? q.OrderByDescending(unit => unit.Status) : q.OrderBy(unit => unit.Status),
+            "updatedat" => query.SortDescending ? q.OrderByDescending(unit => unit.UpdatedAt) : q.OrderBy(unit => unit.UpdatedAt),
+            _ => query.SortDescending ? q.OrderByDescending(unit => unit.CreatedAt) : q.OrderBy(unit => unit.CreatedAt),
+        };
+
+        return q;
+    }
+
+    /// <summary>
+    /// Basic Unit wire rows with presentation status derived from the canonical occupancy projection.
+    /// The mutable legacy Unit.Status column is intentionally absent from this query.
+    /// </summary>
+    internal IQueryable<UnitResponse> BuildCanonicalResponseQuery(int portfolioId) =>
+        from unit in _db.Units.AsNoTracking()
+        where unit.PortfolioId == portfolioId
+        join occupancy in _db.UnitOccupancyProjections.AsNoTracking()
+            on new { unit.PortfolioId, UnitId = unit.Id }
+            equals new { occupancy.PortfolioId, occupancy.UnitId }
+        select new UnitResponse
+        {
+            Id = unit.Id,
+            PropertyId = unit.PropertyId,
+            UnitNumber = unit.UnitNumber,
+            FloorPlan = unit.FloorPlan,
+            Bedrooms = unit.Bedrooms,
+            Bathrooms = unit.Bathrooms,
+            SquareFeet = unit.SquareFeet,
+            MarketRent = unit.MarketRent,
+            Status = occupancy.IsInTurnover || occupancy.IsOutOfService || occupancy.IsOnManagementHold
+                ? DerivedUnitStatus.Offline
+                : occupancy.IsOccupied
+                    ? DerivedUnitStatus.Occupied
+                    : occupancy.HasScheduledMoveIn
+                        ? DerivedUnitStatus.Reserved
+                        : DerivedUnitStatus.Vacant,
+            Notes = unit.Notes,
+            CreatedAt = unit.CreatedAt,
+            UpdatedAt = unit.UpdatedAt,
+        };
+
+    internal IQueryable<UnitResponse> BuildCanonicalResponseQuery(WorkspaceReadScope scope)
+    {
+        var portfolioId = scope.PortfolioId;
+        var authorizedProperties = _db.Properties
+            .AsNoTracking()
+            .WhereAuthorized(
+                _db,
+                scope,
+                CapabilityKeys.RentalsRead,
+                _timeProvider.GetUtcNow().UtcDateTime);
+
+        return from unit in _db.Units.AsNoTracking()
+            where unit.PortfolioId == portfolioId
+                  && authorizedProperties.Any(property =>
+                      property.Id == unit.PropertyId && property.PortfolioId == unit.PortfolioId)
+            join occupancy in _db.UnitOccupancyProjections.AsNoTracking()
+                on new { unit.PortfolioId, UnitId = unit.Id }
+                equals new { occupancy.PortfolioId, occupancy.UnitId }
+            select new UnitResponse
+            {
+                Id = unit.Id,
+                PropertyId = unit.PropertyId,
+                UnitNumber = unit.UnitNumber,
+                FloorPlan = unit.FloorPlan,
+                Bedrooms = unit.Bedrooms,
+                Bathrooms = unit.Bathrooms,
+                SquareFeet = unit.SquareFeet,
+                MarketRent = unit.MarketRent,
+                Status = occupancy.IsInTurnover || occupancy.IsOutOfService || occupancy.IsOnManagementHold
+                    ? DerivedUnitStatus.Offline
+                    : occupancy.IsOccupied
+                        ? DerivedUnitStatus.Occupied
+                        : occupancy.HasScheduledMoveIn
+                            ? DerivedUnitStatus.Reserved
+                            : DerivedUnitStatus.Vacant,
+                Notes = unit.Notes,
+                CreatedAt = unit.CreatedAt,
+                UpdatedAt = unit.UpdatedAt,
+            };
+    }
+
+    public async Task<IReadOnlyList<UnitHealthResponse>> ListWithHealthAsync(
+        WorkspaceReadScope scope, int? propertyId, ListQuery query, CancellationToken ct = default)
+    {
+        var page = await ListWithHealthPageAsync(scope, ToUnitHealthListQuery(query, propertyId), ct);
+        return page.Items;
+    }
+
+    public async Task<UnitHealthListResponse> ListWithHealthPageAsync(
+        WorkspaceReadScope scope, UnitHealthListQuery query, CancellationToken ct = default)
+    {
+        var portfolioId = scope.PortfolioId;
+        var authorizedProperties = _db.Properties
+            .AsNoTracking()
+            .WhereAuthorized(
+                _db,
+                scope,
+                CapabilityKeys.RentalsRead,
+                _timeProvider.GetUtcNow().UtcDateTime);
+        var q = BuildHealthQuery(portfolioId)
+            .Where(row => authorizedProperties.Any(property =>
+                property.Id == row.PropertyId && property.PortfolioId == portfolioId));
+
+        if (query.PropertyId.HasValue)
+        {
+            q = q.Where(row => row.PropertyId == query.PropertyId.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            var term = query.Search.Trim();
+            q = q.Where(row =>
+                EF.Functions.ILike(row.UnitNumber, $"%{term}%")
+                || EF.Functions.ILike(row.PropertyName, $"%{term}%"));
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Status) &&
+            Enum.TryParse<DerivedUnitStatus>(query.Status, ignoreCase: true, out var status))
+        {
+            q = status switch
+            {
+                DerivedUnitStatus.Occupied => q.Where(row => row.IsOccupied
+                    && !row.IsInTurnover
+                    && !row.IsOutOfService
+                    && !row.IsOnManagementHold),
+                DerivedUnitStatus.Reserved => q.Where(row => !row.IsOccupied
+                    && row.HasScheduledMoveIn
+                    && !row.IsInTurnover
+                    && !row.IsOutOfService
+                    && !row.IsOnManagementHold),
+                DerivedUnitStatus.Offline => q.Where(row => row.IsInTurnover || row.IsOutOfService || row.IsOnManagementHold),
+                _ => q.Where(row => !row.IsOccupied
+                    && !row.HasScheduledMoveIn
+                    && !row.IsInTurnover
+                    && !row.IsOutOfService
+                    && !row.IsOnManagementHold),
+            };
+        }
+
+        q = ApplyStageFilter(q, query.Stage);
+
+        q = query.SortField switch
+        {
+            "unitnumber" => query.SortDescending ? q.OrderByDescending(row => row.UnitNumber) : q.OrderBy(row => row.UnitNumber),
+            "propertyname" => query.SortDescending ? q.OrderByDescending(row => row.PropertyName) : q.OrderBy(row => row.PropertyName),
+            "openworkordercount" => query.SortDescending ? q.OrderByDescending(row => row.OpenWorkOrderCount) : q.OrderBy(row => row.OpenWorkOrderCount),
+            "marketrent" => query.SortDescending ? q.OrderByDescending(row => row.MarketRent) : q.OrderBy(row => row.MarketRent),
+            "status" => query.SortDescending
+                ? q.OrderByDescending(row => row.IsOutOfService || row.IsInTurnover || row.IsOnManagementHold ? 3 : row.IsOccupied ? 2 : row.HasScheduledMoveIn ? 1 : 0)
+                : q.OrderBy(row => row.IsOutOfService || row.IsInTurnover || row.IsOnManagementHold ? 3 : row.IsOccupied ? 2 : row.HasScheduledMoveIn ? 1 : 0),
+            "updatedat" => query.SortDescending ? q.OrderByDescending(row => row.UpdatedAt) : q.OrderBy(row => row.UpdatedAt),
+            _ => query.SortDescending ? q.OrderByDescending(row => row.UnitNumber) : q.OrderBy(row => row.UnitNumber),
         };
 
         var totalCount = await q.CountAsync(ct);
 
-        // One projection query: the health badges are correlated subqueries (grouped counts + the active
-        // lease's scalars). No per-unit dashboard call, no N+1 — the only in-memory step is formatting the
-        // simplified stage label from the already-projected scalars.
         var rows = await q
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
-            .Select(u => new
-            {
-                u.Id,
-                u.PropertyId,
-                PropertyName = u.Property!.Name,
-                u.UnitNumber,
-                u.Status,
-                u.MarketRent,
-                OpenWorkOrderCount = u.WorkOrders.Count(w =>
-                    w.Status != WorkOrderStatus.Completed &&
-                    w.Status != WorkOrderStatus.Cancelled &&
-                    w.Status != WorkOrderStatus.Archived),
-                // Current lease signal for list badges: Active leases, plus NoticeGiven leases that are
-                // still occupied but moving out. Kept as correlated SQL subqueries.
-                CurrentLeaseStatus = u.Leases
-                    .Where(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)
-                    .OrderByDescending(l => l.Status == LeaseStatus.Active)
-                    .ThenByDescending(l => l.StartDate)
-                    .ThenByDescending(l => l.Id)
-                    .Select(l => (LeaseStatus?)l.Status)
-                    .FirstOrDefault(),
-                CurrentLeaseEndDate = u.Leases
-                    .Where(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)
-                    .OrderByDescending(l => l.Status == LeaseStatus.Active)
-                    .ThenByDescending(l => l.StartDate)
-                    .ThenByDescending(l => l.Id)
-                    .Select(l => (DateTime?)l.EndDate)
-                    .FirstOrDefault(),
-                HasDraftOrPendingLease = u.Leases.Any(l =>
-                    l.Status == LeaseStatus.Draft || l.Status == LeaseStatus.PendingSignature),
-                DocsCount = _db.StoredFiles.Count(f =>
-                    f.PortfolioId == portfolioId
-                    && f.EntityId != null
-                    && (
-                        (f.EntityType == "Unit" && f.EntityId == u.Id)
-                        || (f.EntityType == "Lease" && _db.Leases.Any(l =>
-                            l.PortfolioId == portfolioId
-                            && l.UnitId == u.Id
-                            && l.Id == f.EntityId.Value))
-                        || (f.EntityType == "Payment" && _db.Payments.Any(p =>
-                            p.PortfolioId == portfolioId
-                            && p.Id == f.EntityId.Value
-                            && _db.Leases.Any(l =>
-                                l.PortfolioId == portfolioId
-                                && l.UnitId == u.Id
-                                && l.Id == p.LeaseId)))
-                        || (f.EntityType == "Expense" && _db.Expenses.Any(e =>
-                            e.PortfolioId == portfolioId
-                            && e.Id == f.EntityId.Value
-                            && (e.UnitId == u.Id
-                                || (e.WorkOrderId != null && _db.WorkOrders.Any(w =>
-                                    w.PortfolioId == portfolioId
-                                    && w.UnitId == u.Id
-                                    && w.Id == e.WorkOrderId.Value)))))
-                        || (f.EntityType == "WorkOrder" && _db.WorkOrders.Any(w =>
-                            w.PortfolioId == portfolioId
-                            && w.UnitId == u.Id
-                            && w.Id == f.EntityId.Value))
-                        || (f.EntityType == "Inspection" && _db.Inspections.Any(i =>
-                            i.PortfolioId == portfolioId
-                            && i.UnitId == u.Id
-                            && i.Id == f.EntityId.Value)))),
-            })
             .ToListAsync(ct);
+
+        // Documents are aggregated once for the returned page. Keeping this out of the main
+        // health projection avoids executing a deeply correlated StoredFiles subquery once per
+        // Unit while still doing all association resolution and counting in PostgreSQL.
+        var pageUnitIds = rows.Select(row => row.Id).ToArray();
+        var documentCounts = pageUnitIds.Length == 0
+            ? new Dictionary<int, int>()
+            : await BuildUnitDocumentCountsQuery(portfolioId, pageUnitIds)
+                .ToDictionaryAsync(row => row.UnitId, row => row.Count, ct);
 
         return new UnitHealthListResponse
         {
@@ -207,24 +274,183 @@ public class UnitService : IUnitService
                 PropertyId = r.PropertyId,
                 PropertyName = r.PropertyName,
                 UnitNumber = r.UnitNumber,
-                Status = r.Status.ToString(),
+                Status = ResolveUnitStatus(r).ToString(),
+                CurrentLeaseManagementId = r.CurrentLeaseManagementId,
+                CurrentAgreementId = r.CurrentAgreementId,
+                TenantAccountId = r.TenantAccountId,
                 MarketRent = r.MarketRent,
                 OpenWorkOrderCount = r.OpenWorkOrderCount,
-                LeaseEndsInDays = r.CurrentLeaseEndDate is { } end
-                    ? Math.Max(0, (int)Math.Ceiling((end - now).TotalDays))
+                LeaseEndsInDays = r.CurrentAgreementEndOn is { } end && r.BusinessDate is { } businessDate
+                    ? Math.Max(0, end.DayNumber - businessDate.DayNumber)
                     : null,
-                DocsNeedingReviewCount = r.DocsCount,
-                SimpleStage = ComputeSimpleStage(
-                    r.Status,
-                    r.CurrentLeaseStatus,
-                    r.CurrentLeaseEndDate,
-                    r.HasDraftOrPendingLease,
-                    now),
+                DocsNeedingReviewCount = documentCounts.GetValueOrDefault(r.Id),
+                SimpleStage = ComputeSimpleStage(r),
             }).ToList(),
             TotalCount = totalCount,
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,
         };
+    }
+
+    /// <summary>
+    /// Canonical, composable Unit Command Center list query. Keeping this query visible to tests lets
+    /// us inspect the PostgreSQL generated SQL without executing or materializing any domain rows.
+    /// </summary>
+    internal IQueryable<UnitHealthReadRow> BuildHealthQuery(int portfolioId)
+    {
+        // Occupancy, lifecycle, and the governing agreement are database projections over the
+        // canonical LeaseManagement graph. This query deliberately does not consult Unit.Status,
+        // Unit.Leases, Lease.Status, or LeaseTenants: those legacy columns cannot be allowed to
+        // disagree with possession and effective-dated agreement facts.
+        return
+            from unit in _db.Units.AsNoTracking()
+            where unit.PortfolioId == portfolioId
+            join property in _db.Properties.AsNoTracking()
+                on new { unit.PortfolioId, Id = unit.PropertyId }
+                equals new { property.PortfolioId, property.Id }
+            join occupancy in _db.UnitOccupancyProjections.AsNoTracking()
+                on new { unit.PortfolioId, UnitId = unit.Id }
+                equals new { occupancy.PortfolioId, occupancy.UnitId }
+            from lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                .Where(row => row.PortfolioId == unit.PortfolioId
+                    && row.LeaseManagementId == occupancy.CurrentLeaseManagementId)
+                .DefaultIfEmpty()
+            from agreement in _db.LeaseAgreements.AsNoTracking()
+                .Where(row => row.PortfolioId == unit.PortfolioId
+                    && row.Id == lifecycle!.CurrentAgreementId)
+                .DefaultIfEmpty()
+            select new UnitHealthReadRow
+            {
+                Id = unit.Id,
+                PropertyId = unit.PropertyId,
+                PropertyName = property.Name,
+                UnitNumber = unit.UnitNumber,
+                MarketRent = unit.MarketRent,
+                UpdatedAt = unit.UpdatedAt,
+                IsOccupied = occupancy.IsOccupied,
+                HasScheduledMoveIn = occupancy.HasScheduledMoveIn,
+                IsInTurnover = occupancy.IsInTurnover,
+                IsOutOfService = occupancy.IsOutOfService,
+                IsOnManagementHold = occupancy.IsOnManagementHold,
+                CurrentLeaseManagementId = occupancy.CurrentLeaseManagementId,
+                CurrentAgreementId = lifecycle == null ? null : lifecycle.CurrentAgreementId,
+                TenantAccountId = lifecycle == null ? null : lifecycle.TenantAccountId,
+                Lifecycle = lifecycle == null ? null : lifecycle.Lifecycle,
+                BusinessDate = lifecycle == null ? null : lifecycle.BusinessDate,
+                CurrentAgreementEndOn = agreement == null ? null : agreement.TermEndOn,
+                OpenWorkOrderCount = unit.WorkOrders.Count(workOrder =>
+                    workOrder.Status != WorkOrderStatus.Completed
+                    && workOrder.Status != WorkOrderStatus.Cancelled
+                    && workOrder.Status != WorkOrderStatus.Archived),
+            };
+    }
+
+    /// <summary>
+    /// One page-scoped, set-based PostgreSQL aggregate for Unit document badges. UNION removes a
+    /// file that reaches the same Unit through more than one relationship before GROUP BY counts it.
+    /// </summary>
+    internal IQueryable<UnitAggregateCountRow> BuildUnitDocumentCountsQuery(
+        int portfolioId,
+        IReadOnlyCollection<int> unitIds)
+    {
+        var directUnitFiles =
+            from file in _db.StoredFiles.AsNoTracking()
+            join unit in _db.Units.AsNoTracking()
+                on file.EntityId equals (long?)unit.Id
+            where file.PortfolioId == portfolioId
+                && unit.PortfolioId == portfolioId
+                && file.EntityType == EntityType
+                && unitIds.Contains(unit.Id)
+            select new UnitDocumentAssociationRow { UnitId = unit.Id, FileId = file.Id };
+
+        var directExpenseFiles =
+            from file in _db.StoredFiles.AsNoTracking()
+            join expense in _db.Expenses.AsNoTracking()
+                on file.EntityId equals (long?)expense.Id
+            where file.PortfolioId == portfolioId
+                && expense.PortfolioId == portfolioId
+                && file.EntityType == nameof(Expense)
+                && expense.UnitId != null
+                && unitIds.Contains(expense.UnitId.Value)
+            select new UnitDocumentAssociationRow { UnitId = expense.UnitId!.Value, FileId = file.Id };
+
+        var workOrderExpenseFiles =
+            from file in _db.StoredFiles.AsNoTracking()
+            join expense in _db.Expenses.AsNoTracking()
+                on file.EntityId equals (long?)expense.Id
+            join workOrder in _db.WorkOrders.AsNoTracking()
+                on expense.WorkOrderId equals (int?)workOrder.Id
+            where file.PortfolioId == portfolioId
+                && expense.PortfolioId == portfolioId
+                && workOrder.PortfolioId == portfolioId
+                && file.EntityType == nameof(Expense)
+                && workOrder.UnitId != null
+                && unitIds.Contains(workOrder.UnitId.Value)
+            select new UnitDocumentAssociationRow { UnitId = workOrder.UnitId!.Value, FileId = file.Id };
+
+        var workOrderFiles =
+            from file in _db.StoredFiles.AsNoTracking()
+            join workOrder in _db.WorkOrders.AsNoTracking()
+                on file.EntityId equals (long?)workOrder.Id
+            where file.PortfolioId == portfolioId
+                && workOrder.PortfolioId == portfolioId
+                && file.EntityType == nameof(WorkOrder)
+                && workOrder.UnitId != null
+                && unitIds.Contains(workOrder.UnitId.Value)
+            select new UnitDocumentAssociationRow { UnitId = workOrder.UnitId!.Value, FileId = file.Id };
+
+        var inspectionFiles =
+            from file in _db.StoredFiles.AsNoTracking()
+            join inspection in _db.Inspections.AsNoTracking()
+                on file.EntityId equals (long?)inspection.Id
+            where file.PortfolioId == portfolioId
+                && inspection.PortfolioId == portfolioId
+                && file.EntityType == nameof(Inspection)
+                && inspection.UnitId != null
+                && unitIds.Contains(inspection.UnitId.Value)
+            select new UnitDocumentAssociationRow { UnitId = inspection.UnitId!.Value, FileId = file.Id };
+
+        var issuedAgreementFiles =
+            from agreement in _db.LeaseAgreements.AsNoTracking()
+            join management in _db.LeaseManagements.AsNoTracking()
+                on new { agreement.PortfolioId, Id = agreement.LeaseManagementId }
+                equals new { management.PortfolioId, management.Id }
+            join artifact in _db.LegalDocumentArtifacts.AsNoTracking()
+                on agreement.IssuedArtifactId equals (int?)artifact.Id
+            join file in _db.StoredFiles.AsNoTracking()
+                on new { artifact.PortfolioId, Id = artifact.StoredFileId }
+                equals new { file.PortfolioId, file.Id }
+            where agreement.PortfolioId == portfolioId
+                && unitIds.Contains(management.UnitId)
+            select new UnitDocumentAssociationRow { UnitId = management.UnitId, FileId = file.Id };
+
+        var executedAgreementFiles =
+            from agreement in _db.LeaseAgreements.AsNoTracking()
+            join management in _db.LeaseManagements.AsNoTracking()
+                on new { agreement.PortfolioId, Id = agreement.LeaseManagementId }
+                equals new { management.PortfolioId, management.Id }
+            join artifact in _db.LegalDocumentArtifacts.AsNoTracking()
+                on agreement.ExecutedArtifactId equals (int?)artifact.Id
+            join file in _db.StoredFiles.AsNoTracking()
+                on new { artifact.PortfolioId, Id = artifact.StoredFileId }
+                equals new { file.PortfolioId, file.Id }
+            where agreement.PortfolioId == portfolioId
+                && unitIds.Contains(management.UnitId)
+            select new UnitDocumentAssociationRow { UnitId = management.UnitId, FileId = file.Id };
+
+        return directUnitFiles
+            .Union(directExpenseFiles)
+            .Union(workOrderExpenseFiles)
+            .Union(workOrderFiles)
+            .Union(inspectionFiles)
+            .Union(issuedAgreementFiles)
+            .Union(executedAgreementFiles)
+            .GroupBy(row => row.UnitId)
+            .Select(group => new UnitAggregateCountRow
+            {
+                UnitId = group.Key,
+                Count = group.Count(),
+            });
     }
 
     private static UnitHealthListQuery ToUnitHealthListQuery(ListQuery query, int? propertyId) => new()
@@ -236,7 +462,7 @@ public class UnitService : IUnitService
         PropertyId = propertyId,
     };
 
-    private static IQueryable<Unit> ApplyStageFilter(IQueryable<Unit> q, string? stage, DateTime now)
+    private static IQueryable<UnitHealthReadRow> ApplyStageFilter(IQueryable<UnitHealthReadRow> q, string? stage)
     {
         if (string.IsNullOrWhiteSpace(stage))
         {
@@ -244,59 +470,33 @@ public class UnitService : IUnitService
         }
 
         var normalized = stage.Replace("-", string.Empty, StringComparison.Ordinal).Trim().ToLowerInvariant();
-        var renewalCutoff = now.AddDays(90);
-
         return normalized switch
         {
-            "turnover" => q.Where(u => u.Status == UnitStatus.Offline),
-            "moveout" => q.Where(u =>
-                u.Status != UnitStatus.Offline &&
-                !u.Leases.Any(l => l.Status == LeaseStatus.Active) &&
-                u.Leases.Any(l => l.Status == LeaseStatus.NoticeGiven)),
-            "renewal" => q.Where(u =>
-                u.Status != UnitStatus.Offline &&
-                u.Leases.Any(l => l.Status == LeaseStatus.Active) &&
-                u.Leases
-                    .Where(l => l.Status == LeaseStatus.Active)
-                    .OrderByDescending(l => l.StartDate)
-                    .ThenByDescending(l => l.Id)
-                    .Select(l => (DateTime?)l.EndDate)
-                    .FirstOrDefault() >= now &&
-                u.Leases
-                    .Where(l => l.Status == LeaseStatus.Active)
-                    .OrderByDescending(l => l.StartDate)
-                    .ThenByDescending(l => l.Id)
-                    .Select(l => (DateTime?)l.EndDate)
-                    .FirstOrDefault() <= renewalCutoff),
-            "active" => q.Where(u =>
-                u.Status != UnitStatus.Offline &&
-                u.Leases.Any(l => l.Status == LeaseStatus.Active) &&
-                (u.Leases
-                    .Where(l => l.Status == LeaseStatus.Active)
-                    .OrderByDescending(l => l.StartDate)
-                    .ThenByDescending(l => l.Id)
-                    .Select(l => (DateTime?)l.EndDate)
-                    .FirstOrDefault() < now ||
-                 u.Leases
-                    .Where(l => l.Status == LeaseStatus.Active)
-                    .OrderByDescending(l => l.StartDate)
-                    .ThenByDescending(l => l.Id)
-                    .Select(l => (DateTime?)l.EndDate)
-                    .FirstOrDefault() > renewalCutoff ||
-                 u.Leases
-                    .Where(l => l.Status == LeaseStatus.Active)
-                    .OrderByDescending(l => l.StartDate)
-                    .ThenByDescending(l => l.Id)
-                    .Select(l => (DateTime?)l.EndDate)
-                    .FirstOrDefault() == null)),
-            "lease" => q.Where(u =>
-                u.Status != UnitStatus.Offline &&
-                !u.Leases.Any(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven) &&
-                u.Leases.Any(l => l.Status == LeaseStatus.Draft || l.Status == LeaseStatus.PendingSignature)),
-            "vacant" => q.Where(u =>
-                u.Status != UnitStatus.Offline &&
-                !u.Leases.Any(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven) &&
-                !u.Leases.Any(l => l.Status == LeaseStatus.Draft || l.Status == LeaseStatus.PendingSignature)),
+            "turnover" => q.Where(row => row.IsInTurnover || row.IsOutOfService || row.IsOnManagementHold),
+            "moveout" => q.Where(row => row.IsOccupied
+                && row.Lifecycle == "Ending"
+                && !row.IsInTurnover && !row.IsOutOfService && !row.IsOnManagementHold),
+            "renewal" => q.Where(row => row.IsOccupied
+                && row.Lifecycle == "Occupied"
+                && !row.IsInTurnover && !row.IsOutOfService && !row.IsOnManagementHold
+                && row.BusinessDate != null
+                && row.CurrentAgreementEndOn != null
+                && row.CurrentAgreementEndOn >= row.BusinessDate
+                && row.CurrentAgreementEndOn <= row.BusinessDate.Value.AddDays(90)),
+            "active" => q.Where(row => row.IsOccupied
+                && row.Lifecycle == "Occupied"
+                && !row.IsInTurnover && !row.IsOutOfService && !row.IsOnManagementHold
+                && (row.CurrentAgreementEndOn == null
+                    || row.BusinessDate == null
+                    || row.CurrentAgreementEndOn < row.BusinessDate
+                    || row.CurrentAgreementEndOn > row.BusinessDate.Value.AddDays(90))),
+            "lease" => q.Where(row => !row.IsOccupied
+                && (row.HasScheduledMoveIn || row.Lifecycle == "Upcoming" || row.Lifecycle == "Preparing")),
+            "vacant" => q.Where(row => !row.IsOccupied
+                && !row.HasScheduledMoveIn
+                && !row.IsInTurnover
+                && !row.IsOutOfService
+                && !row.IsOnManagementHold),
             _ => q,
         };
     }
@@ -305,333 +505,177 @@ public class UnitService : IUnitService
     /// Simplified list badge (NOT the full 9-stage detail derivation): a cheap label from the unit's
     /// occupancy status + current-lease status, formatted from already-projected scalars (no extra query).
     /// </summary>
-    private static string ComputeSimpleStage(
-        UnitStatus status, LeaseStatus? currentLeaseStatus, DateTime? currentLeaseEnd, bool hasDraftOrPending, DateTime now)
+    private static string ComputeSimpleStage(UnitHealthReadRow row)
     {
-        if (status == UnitStatus.Offline)
+        if (row.IsInTurnover || row.IsOutOfService || row.IsOnManagementHold)
         {
             return "Turnover";
         }
 
-        if (currentLeaseStatus is LeaseStatus.Active or LeaseStatus.NoticeGiven)
+        if (row.IsOccupied && row.Lifecycle == "Ending")
         {
-            if (currentLeaseStatus == LeaseStatus.NoticeGiven)
-            {
-                return "Move-Out";
-            }
-
-            if (currentLeaseEnd is { } end && end >= now && end <= now.AddDays(90))
-            {
-                return "Renewal";
-            }
-
-            return "Active";
+            return "Move-Out";
         }
 
-        if (hasDraftOrPending)
+        if (row.IsOccupied && row.Lifecycle == "Occupied")
         {
-            return "Lease";
+            return row.CurrentAgreementEndOn is { } end
+                && row.BusinessDate is { } businessDate
+                && end >= businessDate
+                && end <= businessDate.AddDays(90)
+                ? "Renewal"
+                : "Active";
         }
 
-        return "Vacant";
+        return row.HasScheduledMoveIn || row.Lifecycle is "Upcoming" or "Preparing"
+            ? "Lease"
+            : "Vacant";
+    }
+
+    private static DerivedUnitStatus ResolveUnitStatus(UnitHealthReadRow row) =>
+        row.IsInTurnover || row.IsOutOfService || row.IsOnManagementHold
+            ? DerivedUnitStatus.Offline
+            : row.IsOccupied
+                ? DerivedUnitStatus.Occupied
+                : row.HasScheduledMoveIn
+                    ? DerivedUnitStatus.Reserved
+                    : DerivedUnitStatus.Vacant;
+
+    internal sealed class UnitHealthReadRow
+    {
+        public int Id { get; init; }
+        public int PropertyId { get; init; }
+        public string PropertyName { get; init; } = string.Empty;
+        public string UnitNumber { get; init; } = string.Empty;
+        public decimal MarketRent { get; init; }
+        public DateTime UpdatedAt { get; init; }
+        public bool IsOccupied { get; init; }
+        public bool HasScheduledMoveIn { get; init; }
+        public bool IsInTurnover { get; init; }
+        public bool IsOutOfService { get; init; }
+        public bool IsOnManagementHold { get; init; }
+        public int? CurrentLeaseManagementId { get; init; }
+        public int? CurrentAgreementId { get; init; }
+        public int? TenantAccountId { get; init; }
+        public string? Lifecycle { get; init; }
+        public DateOnly? BusinessDate { get; init; }
+        public DateOnly? CurrentAgreementEndOn { get; init; }
+        public int OpenWorkOrderCount { get; init; }
+    }
+
+    internal sealed class UnitDocumentAssociationRow
+    {
+        public int UnitId { get; init; }
+        public int FileId { get; init; }
+    }
+
+    internal sealed class UnitAggregateCountRow
+    {
+        public int UnitId { get; init; }
+        public int Count { get; init; }
     }
 
     public async Task<UnitResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {
-        var entity = await _db.Units
+        return await BuildCanonicalResponseQuery(portfolioId)
+            .FirstOrDefaultAsync(unit => unit.Id == id, ct);
+    }
+
+    public async Task<UnitResponse?> CreateAsync(
+        WorkspaceReadScope scope,
+        CreateUnitRequest request,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Unit,
+            AtomicRentalMutationOperation.Create, 0, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        return outcome.Value.Found && outcome.Value.ResponseJson is { Length: > 0 } json
+            ? JsonSerializer.Deserialize<UnitResponse>(json)
+              ?? throw new InvalidOperationException("The Unit receipt snapshot is invalid.")
+            : null;
+    }
+
+    public async Task<UnitResponse?> UpdateAsync(
+        WorkspaceReadScope scope,
+        int id,
+        UpdateUnitRequest request,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Unit,
+            AtomicRentalMutationOperation.Update, id, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        return outcome.Value.Found ? await GetAsync(scope.PortfolioId, id, ct) : null;
+    }
+
+    public async Task<bool> DeleteAsync(
+        WorkspaceReadScope scope,
+        int id,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Unit,
+            AtomicRentalMutationOperation.Delete, id, operationKey, new object());
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        return outcome.Value.Found;
+    }
+
+    private IAtomicUnitOfWork Atomic => _atomic;
+
+    /// <summary>One translated SQL statement containing every Unit delete decision.</summary>
+    internal IQueryable<UnitDeletionGuard> BuildDeletionGuardQuery(int portfolioId, int unitId) =>
+        _db.Units
+            .IgnoreQueryFilters()
             .AsNoTracking()
-            .FirstOrDefaultAsync(u => u.Id == id && u.Property != null && u.Property.PortfolioId == portfolioId, ct);
-
-        return entity == null ? null : UnitResponse.FromEntity(entity);
-    }
-
-    public async Task<UnitResponse?> CreateAsync(int portfolioId, CreateUnitRequest request, CancellationToken ct = default)
-    {
-        // Verify the target property exists within the caller's portfolio before attaching the unit.
-        var propertyInScope = await _db.Properties
-            .AnyAsync(p => p.Id == request.PropertyId && p.PortfolioId == portfolioId, ct);
-        if (!propertyInScope)
-        {
-            return null;
-        }
-
-        // Reject a duplicate unit number up front with a clear, field-specific message instead of letting
-        // it hit the (PropertyId, UnitNumber) unique index and surface as the generic "conflicts with
-        // existing data" 409. Only LIVE units collide (the global query filter excludes soft-deleted
-        // rows); evaluated SQL-side as an EXISTS.
-        if (await _db.Units.AnyAsync(u => u.PropertyId == request.PropertyId && u.UnitNumber == request.UnitNumber, ct))
-        {
-            throw new DomainValidationException(
-                $"Unit number \"{request.UnitNumber}\" already exists on this property.",
-                StatusCodes.Status409Conflict);
-        }
-
-        var now = _timeProvider.UtcNow();
-        var entity = new Unit
-        {
-            PropertyId = request.PropertyId,
-            UnitNumber = request.UnitNumber,
-            FloorPlan = request.FloorPlan,
-            Bedrooms = request.Bedrooms,
-            Bathrooms = request.Bathrooms,
-            SquareFeet = request.SquareFeet,
-            MarketRent = request.MarketRent,
-            Status = request.Status,
-            Notes = request.Notes,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        _db.Units.Add(entity);
-        await _db.SaveChangesAsync(ct);
-
-        await _audit.LogAsync(
-            portfolioId,
-            EntityType,
-            entity.Id,
-            AuditLogOperation.Created,
-            newValues: Snapshot(entity),
-            changeReason: $"Unit {entity.UnitNumber} created",
-            ct: ct);
-
-        var response = UnitResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
-    }
-
-    public async Task<UnitResponse?> UpdateAsync(int portfolioId, int id, UpdateUnitRequest request, CancellationToken ct = default)
-    {
-        var entity = await _db.Units
-            .FirstOrDefaultAsync(u => u.Id == id && u.Property != null && u.Property.PortfolioId == portfolioId, ct);
-        if (entity == null)
-        {
-            return null;
-        }
-
-        // Same duplicate-number guard as create, scoped to a rename: only check when the number is
-        // actually changing, and exclude this unit's own row. Keeps the clear 409 message instead of the
-        // opaque unique-index conflict. Only LIVE units collide (the global query filter excludes
-        // soft-deleted rows).
-        if (request.UnitNumber is not null
-            && !string.Equals(request.UnitNumber, entity.UnitNumber, StringComparison.Ordinal)
-            && await _db.Units.AnyAsync(u =>
-                u.PropertyId == entity.PropertyId
-                && u.UnitNumber == request.UnitNumber
-                && u.Id != entity.Id, ct))
-        {
-            throw new DomainValidationException(
-                $"Unit number \"{request.UnitNumber}\" already exists on this property.",
-                StatusCodes.Status409Conflict);
-        }
-
-        if (request.Status.HasValue
-            && request.Status.Value != entity.Status
-            && request.Status.Value != UnitStatus.Occupied
-            && await _db.Leases.AnyAsync(l =>
-                l.PortfolioId == portfolioId
-                && l.UnitId == entity.Id
-                && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven), ct))
-        {
-            throw new DomainValidationException(
-                "This unit has a current lease. End, move out, or cancel notice on the lease before changing the unit status.",
-                StatusCodes.Status409Conflict);
-        }
-
-        var oldValues = new Dictionary<string, object?>();
-        var newValues = new Dictionary<string, object?>();
-
-        ApplyStringIfChanged(request.UnitNumber, entity.UnitNumber, "UnitNumber", v => entity.UnitNumber = v);
-        ApplyStringIfChanged(request.FloorPlan, entity.FloorPlan, "FloorPlan", v => entity.FloorPlan = v);
-        ApplyValueIfChanged(request.Bedrooms, entity.Bedrooms, "Bedrooms", v => entity.Bedrooms = v);
-        ApplyValueIfChanged(request.Bathrooms, entity.Bathrooms, "Bathrooms", v => entity.Bathrooms = v);
-        ApplyNullableValueIfChanged(request.SquareFeet, entity.SquareFeet, "SquareFeet", v => entity.SquareFeet = v);
-        ApplyValueIfChanged(request.MarketRent, entity.MarketRent, "MarketRent", v => entity.MarketRent = v);
-        ApplyValueIfChanged(request.Status, entity.Status, "Status", v => entity.Status = v);
-        ApplyStringIfChanged(request.Notes, entity.Notes, "Notes", v => entity.Notes = v);
-        entity.UpdatedAt = _timeProvider.UtcNow();
-
-        await _db.SaveChangesAsync(ct);
-
-        if (oldValues.Count > 0)
-        {
-            await _audit.LogAsync(
-                portfolioId,
-                EntityType,
-                entity.Id,
-                AuditLogOperation.Updated,
-                oldValues: Serialize(oldValues),
-                newValues: Serialize(newValues),
-                changeReason: $"Unit {entity.UnitNumber} updated",
-                ct: ct);
-        }
-
-        var response = UnitResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
-
-        void ApplyStringIfChanged(string? requested, string? current, string field, Action<string> apply)
-        {
-            if (requested is null || string.Equals(requested, current, StringComparison.Ordinal))
+            .Where(unit => unit.PortfolioId == portfolioId && unit.Id == unitId)
+            .Select(unit => new UnitDeletionGuard
             {
-                return;
-            }
+                IsOccupied = _db.UnitOccupancyProjections.Any(occupancy =>
+                    occupancy.PortfolioId == portfolioId
+                    && occupancy.UnitId == unit.Id
+                    && occupancy.IsOccupied),
+                HasPlannedOrCurrentRelationship = _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
+                    lifecycle.PortfolioId == portfolioId
+                    && lifecycle.UnitId == unit.Id
+                    && lifecycle.Lifecycle != "Canceled"
+                    && lifecycle.Lifecycle != "Closed"
+                    && lifecycle.Lifecycle != "AccountingCloseout"),
+                HasRentalRelationshipHistory = _db.LeaseManagements.Any(management =>
+                    management.PortfolioId == portfolioId && management.UnitId == unit.Id),
+                HasWorkOrderHistory = _db.WorkOrders.IgnoreQueryFilters().Any(workOrder =>
+                    workOrder.PortfolioId == portfolioId && workOrder.UnitId == unit.Id),
+                HasAppointmentHistory = _db.Appointments.IgnoreQueryFilters().Any(appointment =>
+                    appointment.PortfolioId == portfolioId && appointment.UnitId == unit.Id),
+                HasInspectionHistory = _db.Inspections.IgnoreQueryFilters().Any(inspection =>
+                    inspection.PortfolioId == portfolioId && inspection.UnitId == unit.Id),
+                HasExpenseHistory = _db.Expenses.IgnoreQueryFilters().Any(expense =>
+                    expense.PortfolioId == portfolioId && expense.UnitId == unit.Id),
+                HasApplicationHistory = _db.RentalApplications.IgnoreQueryFilters().Any(application =>
+                    application.PortfolioId == portfolioId && application.UnitId == unit.Id),
+                HasRecurringExpenseHistory = _db.RecurringExpenses.IgnoreQueryFilters().Any(expense =>
+                    expense.PortfolioId == portfolioId && expense.UnitId == unit.Id),
+                HasDocumentHistory = _db.StoredFiles.IgnoreQueryFilters().Any(file =>
+                    file.PortfolioId == portfolioId
+                    && file.EntityType == EntityType
+                    && file.EntityId == unit.Id),
+            });
 
-            oldValues[field] = current;
-            newValues[field] = requested;
-            apply(requested);
-        }
-
-        void ApplyValueIfChanged<T>(T? requested, T current, string field, Action<T> apply)
-            where T : struct
-        {
-            if (!requested.HasValue || EqualityComparer<T>.Default.Equals(requested.Value, current))
-            {
-                return;
-            }
-
-            oldValues[field] = current;
-            newValues[field] = requested.Value;
-            apply(requested.Value);
-        }
-
-        void ApplyNullableValueIfChanged<T>(T? requested, T? current, string field, Action<T?> apply)
-            where T : struct
-        {
-            if (!requested.HasValue || EqualityComparer<T?>.Default.Equals(requested, current))
-            {
-                return;
-            }
-
-            oldValues[field] = current;
-            newValues[field] = requested.Value;
-            apply(requested.Value);
-        }
+    internal sealed class UnitDeletionGuard
+    {
+        public bool IsOccupied { get; init; }
+        public bool HasPlannedOrCurrentRelationship { get; init; }
+        public bool HasRentalRelationshipHistory { get; init; }
+        public bool HasWorkOrderHistory { get; init; }
+        public bool HasAppointmentHistory { get; init; }
+        public bool HasInspectionHistory { get; init; }
+        public bool HasExpenseHistory { get; init; }
+        public bool HasApplicationHistory { get; init; }
+        public bool HasRecurringExpenseHistory { get; init; }
+        public bool HasDocumentHistory { get; init; }
     }
 
-    public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
-    {
-        var entity = await _db.Units
-            .FirstOrDefaultAsync(u => u.Id == id && u.Property != null && u.Property.PortfolioId == portfolioId, ct);
-        if (entity == null)
-        {
-            return false;
-        }
-
-        await EnsureUnitHasNoHistoryAsync(portfolioId, id, ct);
-
-        entity.DeletedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
-
-        await _audit.LogAsync(
-            portfolioId,
-            EntityType,
-            id,
-            AuditLogOperation.Deleted,
-            oldValues: Snapshot(entity),
-            changeReason: $"Unit {entity.UnitNumber} deleted",
-            ct: ct);
-
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
-        return true;
-    }
-
-    private async Task EnsureUnitHasNoHistoryAsync(int portfolioId, int unitId, CancellationToken ct)
-    {
-        if (await _db.Leases
-            .IgnoreQueryFilters()
-            .AsNoTracking()
-            .AnyAsync(l => l.PortfolioId == portfolioId && l.UnitId == unitId, ct))
-        {
-            throw new DomainValidationException(
-                "This unit has lease history. Archive or end the lease history instead of deleting the unit.",
-                statusCode: 409);
-        }
-
-        if (await _db.WorkOrders
-            .IgnoreQueryFilters()
-            .AsNoTracking()
-            .AnyAsync(w => w.PortfolioId == portfolioId && w.UnitId == unitId, ct))
-        {
-            throw new DomainValidationException(
-                "This unit has work order history. Archive the work order history instead of deleting the unit.",
-                statusCode: 409);
-        }
-
-        if (await _db.Appointments
-            .IgnoreQueryFilters()
-            .AsNoTracking()
-            .AnyAsync(a => a.PortfolioId == portfolioId && a.UnitId == unitId, ct))
-        {
-            throw new DomainValidationException(
-                "This unit has appointment history. Archive the appointment history instead of deleting the unit.",
-                statusCode: 409);
-        }
-
-        if (await _db.Inspections
-            .IgnoreQueryFilters()
-            .AsNoTracking()
-            .AnyAsync(i => i.PortfolioId == portfolioId && i.UnitId == unitId, ct))
-        {
-            throw new DomainValidationException(
-                "This unit has inspection history. Archive the inspection history instead of deleting the unit.",
-                statusCode: 409);
-        }
-
-        if (await _db.Expenses
-            .IgnoreQueryFilters()
-            .AsNoTracking()
-            .AnyAsync(e => e.PortfolioId == portfolioId && e.UnitId == unitId, ct))
-        {
-            throw new DomainValidationException(
-                "This unit has expense history. Archive the expense history instead of deleting the unit.",
-                statusCode: 409);
-        }
-
-        if (await _db.RentalApplications
-            .IgnoreQueryFilters()
-            .AsNoTracking()
-            .AnyAsync(a => a.PortfolioId == portfolioId && a.UnitId == unitId, ct))
-        {
-            throw new DomainValidationException(
-                "This unit has application history. Archive the applications instead of deleting the unit.",
-                statusCode: 409);
-        }
-
-        if (await _db.RecurringExpenses
-            .IgnoreQueryFilters()
-            .AsNoTracking()
-            .AnyAsync(e => e.PortfolioId == portfolioId && e.UnitId == unitId, ct))
-        {
-            throw new DomainValidationException(
-                "This unit has recurring expense history. Archive the recurring expense history instead of deleting the unit.",
-                statusCode: 409);
-        }
-
-        if (await _db.StoredFiles
-            .IgnoreQueryFilters()
-            .AsNoTracking()
-            .AnyAsync(f => f.PortfolioId == portfolioId
-                && f.EntityType == EntityType
-                && f.EntityId == unitId, ct))
-        {
-            throw new DomainValidationException(
-                "This unit has document history. Archive the documents instead of deleting the unit.",
-                statusCode: 409);
-        }
-    }
-
-    private static string Snapshot(Unit entity) => Serialize(new Dictionary<string, object?>
-    {
-        ["PropertyId"] = entity.PropertyId,
-        ["UnitNumber"] = entity.UnitNumber,
-        ["FloorPlan"] = entity.FloorPlan,
-        ["Bedrooms"] = entity.Bedrooms,
-        ["Bathrooms"] = entity.Bathrooms,
-        ["SquareFeet"] = entity.SquareFeet,
-        ["MarketRent"] = entity.MarketRent,
-        ["Status"] = entity.Status,
-        ["Notes"] = entity.Notes,
-    });
-
-    private static string Serialize(Dictionary<string, object?> values) => JsonSerializer.Serialize(values);
 }

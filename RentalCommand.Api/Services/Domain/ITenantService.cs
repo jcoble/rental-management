@@ -1,4 +1,5 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -9,10 +10,23 @@ namespace RentalCommand.Api.Services.Domain;
 /// </summary>
 public interface ITenantService
 {
+    Task<IReadOnlyList<TenantResponse>> ListAuthorizedAsync(
+        WorkspaceReadScope scope, TenantListQuery query, CancellationToken ct = default);
+    Task<TenantListResponse> ListPageAuthorizedAsync(
+        WorkspaceReadScope scope, TenantListQuery query, CancellationToken ct = default);
+    Task<TenantResponse?> GetAuthorizedAsync(
+        WorkspaceReadScope scope, int id, CancellationToken ct = default);
+    Task<TenantResponse?> CreateAuthorizedAsync(
+        WorkspaceReadScope scope, CreateTenantRequest request, string operationKey, CancellationToken ct = default);
+    Task<IReadOnlyList<TenantResponse>> CreateGuidedSetupBatchAsync(
+        WorkspaceReadScope scope, GuidedTenantSetupRequest request, string operationKey,
+        CancellationToken ct = default);
+    Task<TenantResponse?> UpdateAuthorizedAsync(
+        WorkspaceReadScope scope, int id, UpdateTenantRequest request, string operationKey, CancellationToken ct = default);
+    Task<bool> DeleteAuthorizedAsync(
+        WorkspaceReadScope scope, int id, string operationKey, CancellationToken ct = default);
+
     Task<IReadOnlyList<TenantResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default);
     Task<TenantListResponse> ListPageAsync(int portfolioId, TenantListQuery query, CancellationToken ct = default);
     Task<TenantResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
-    Task<TenantResponse> CreateAsync(int portfolioId, CreateTenantRequest request, CancellationToken ct = default);
-    Task<TenantResponse?> UpdateAsync(int portfolioId, int id, UpdateTenantRequest request, CancellationToken ct = default);
-    Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default);
 }

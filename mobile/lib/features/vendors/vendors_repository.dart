@@ -1,8 +1,12 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import 'vendors_models.dart';
 
 /// Repository for vendors, their scorecards, ratings, and SMS dispatch.
@@ -70,9 +74,13 @@ class VendorsRepository {
 
   Future<Vendor> createVendor(Map<String, dynamic> data) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/vendors',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'vendors:create:$data',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/vendors',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -89,9 +97,13 @@ class VendorsRepository {
 
   Future<Vendor> updateVendor(int id, Map<String, dynamic> data) async {
     try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/vendors/$id',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'vendors:update:$id:$data',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/vendors/$id',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -108,7 +120,13 @@ class VendorsRepository {
 
   Future<void> deleteVendor(int id) async {
     try {
-      await _dio.delete<dynamic>('/vendors/$id');
+      await IdempotentMutation.run(
+        'vendors:delete:$id',
+        (key) => _dio.delete<dynamic>(
+          '/vendors/$id',
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -141,13 +159,18 @@ class VendorsRepository {
   }) async {
     try {
       final trimmed = comment?.trim();
-      await _dio.post<Map<String, dynamic>>(
-        '/vendors/$vendorId/ratings',
-        data: {
-          'stars': stars,
-          if (trimmed != null && trimmed.isNotEmpty) 'comment': trimmed,
-          'workOrderId': ?workOrderId,
-        },
+      final data = <String, dynamic>{
+        'stars': stars,
+        if (trimmed != null && trimmed.isNotEmpty) 'comment': trimmed,
+        'workOrderId': ?workOrderId,
+      };
+      await IdempotentMutation.run(
+        'vendor:rate:$vendorId:${jsonEncode(data)}',
+        (operationKey) => _dio.post<Map<String, dynamic>>(
+          '/vendors/$vendorId/ratings',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        ),
       );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
@@ -156,10 +179,14 @@ class VendorsRepository {
 
   /// Texts the vendor a request to send back their W-9. Throws [ApiException]
   /// (400) when the vendor has no phone number on file.
-  Future<W9RequestResult> requestW9(int vendorId) async {
+  Future<W9RequestResult> requestW9(
+    int vendorId, {
+    required String clientOperationId,
+  }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
         '/vendors/$vendorId/request-w9',
+        data: {'clientOperationId': clientOperationId},
       );
       return W9RequestResult.fromJson(response.data ?? const {});
     } on DioException catch (e) {
@@ -191,6 +218,7 @@ class VendorsRepository {
       final response = await _dio.post<Map<String, dynamic>>(
         '/work-orders/$workOrderId/dispatch',
         data: {
+          'idempotencyKey': const Uuid().v4(),
           'vendorId': vendorId,
           if (trimmed != null && trimmed.isNotEmpty) 'note': trimmed,
         },

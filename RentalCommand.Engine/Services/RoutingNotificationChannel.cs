@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Outbox;
 
 namespace RentalCommand.Engine.Services;
 
@@ -43,13 +44,23 @@ public sealed class RoutingNotificationChannel : INotificationChannel
 
     // Delegates to the pluggable dispatcher: it resolves the portfolio's own provider (BYO creds)
     // first, then the platform-env fallback, and fail-soft logs when nothing is configured.
-    public Task SendSmsAsync(string toPhoneNumber, string message, int? portfolioId = null, CancellationToken ct = default) =>
-        _sms.SendAsync(portfolioId, toPhoneNumber, message, ct);
+    public Task<NotificationDeliveryReceipt> SendSmsAsync(
+        string toPhoneNumber,
+        string message,
+        NotificationDeliveryContext delivery,
+        int? portfolioId = null,
+        CancellationToken ct = default) =>
+        _sms.SendAsync(portfolioId, toPhoneNumber, message, delivery, ct);
 
     // ------------------------------------------------------------------ Email (SMTP / SendGrid)
 
-    public async Task SendEmailAsync(
-        string toEmail, string subject, string body, string? htmlBody = null, CancellationToken ct = default)
+    public async Task<NotificationDeliveryReceipt> SendEmailAsync(
+        string toEmail,
+        string subject,
+        string body,
+        NotificationDeliveryContext delivery,
+        string? htmlBody = null,
+        CancellationToken ct = default)
     {
         // Transport selection (config-gated):
         //   1. Transport == "Smtp" AND SMTP configured                  → send via SMTP.
@@ -58,14 +69,14 @@ public sealed class RoutingNotificationChannel : INotificationChannel
         var smtp = _cfg.Smtp;
         if (_cfg.Email.UseSmtp && smtp.Enabled)
         {
-            await SendViaSmtpAsync(smtp, toEmail, subject, body, htmlBody, ct);
-            return;
+            var id = await SendViaSmtpAsync(smtp, toEmail, subject, body, delivery, htmlBody, ct);
+            return new NotificationDeliveryReceipt("smtp", id);
         }
 
         if (_cfg.SendGrid.Enabled)
         {
-            await SendViaSendGridAsync(toEmail, subject, body, htmlBody, ct);
-            return;
+            var id = await SendViaSendGridAsync(toEmail, subject, body, htmlBody, ct);
+            return new NotificationDeliveryReceipt("sendgrid", id);
         }
 
         _logger.LogInformation(
@@ -78,12 +89,23 @@ public sealed class RoutingNotificationChannel : INotificationChannel
     // SMTP: delegates the connect/auth/send to ISmtpEmailSender. Logs success/failure
     // consistently with the SendGrid path. The sender throws on failure → propagates so the outbox
     // worker retries (same contract as EnsureSuccessAsync below).
-    private async Task SendViaSmtpAsync(
-        SmtpOptions smtp, string toEmail, string subject, string body, string? htmlBody, CancellationToken ct)
+    private async Task<string?> SendViaSmtpAsync(
+        SmtpOptions smtp,
+        string toEmail,
+        string subject,
+        string body,
+        NotificationDeliveryContext delivery,
+        string? htmlBody,
+        CancellationToken ct)
     {
         try
         {
-            await _smtp.SendAsync(smtp, toEmail, subject, body, htmlBody, ct);
+            var providerMessageId = await _smtp.SendAsync(
+                smtp, toEmail, subject, body, delivery, htmlBody, ct);
+            _logger.LogInformation(
+                "[Email sent via SMTP] To={To} Subject={Subject} Host={Host}",
+                toEmail, subject, smtp.Host);
+            return providerMessageId;
         }
         catch (Exception ex)
         {
@@ -92,15 +114,12 @@ public sealed class RoutingNotificationChannel : INotificationChannel
                 $"SMTP send failed via {smtp.Host}:{smtp.Port}: {ex.Message}", ex);
         }
 
-        _logger.LogInformation(
-            "[Email sent via SMTP] To={To} Subject={Subject} Host={Host}",
-            toEmail, subject, smtp.Host);
     }
 
     // SendGrid HTTP API. When an htmlBody is supplied we send BOTH a text/plain and a text/html
     // part (SendGrid requires text/plain to precede text/html in the content array); otherwise we
     // send text/plain only — unchanged from the original SendGrid-only behaviour.
-    private async Task SendViaSendGridAsync(
+    private async Task<string?> SendViaSendGridAsync(
         string toEmail, string subject, string body, string? htmlBody, CancellationToken ct)
     {
         var sg = _cfg.SendGrid;
@@ -152,6 +171,9 @@ public sealed class RoutingNotificationChannel : INotificationChannel
         _logger.LogInformation(
             "[Email sent via SendGrid] To={To} Subject={Subject} Status={Status}",
             toEmail, subject, (int)response.StatusCode);
+        return response.Headers.TryGetValues("X-Message-Id", out var values)
+            ? values.FirstOrDefault()
+            : null;
     }
 
     // On a non-success response, surface the provider's error body in the thrown exception so the

@@ -1,8 +1,11 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 
 class PropertyLoan {
   const PropertyLoan({
@@ -168,9 +171,14 @@ class PropertyLoansRepository {
     required Map<String, dynamic> data,
   }) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/loans',
-        data: {...data, 'propertyId': propertyId},
+      final payload = {...data, 'propertyId': propertyId};
+      final response = await IdempotentMutation.run(
+        'loans:create:${jsonEncode(payload)}',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/loans',
+          data: payload,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -187,9 +195,13 @@ class PropertyLoansRepository {
 
   Future<PropertyLoan> updateLoan(int id, Map<String, dynamic> data) async {
     try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/loans/$id',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'loans:update:$id:${jsonEncode(data)}',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/loans/$id',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -206,7 +218,13 @@ class PropertyLoansRepository {
 
   Future<void> deleteLoan(int id) async {
     try {
-      await _dio.delete<dynamic>('/loans/$id');
+      await IdempotentMutation.run(
+        'loans:delete:$id',
+        (key) => _dio.delete<dynamic>(
+          '/loans/$id',
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

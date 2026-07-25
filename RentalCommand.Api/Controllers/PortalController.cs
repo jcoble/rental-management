@@ -2,13 +2,15 @@ using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Payments;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Api.Controllers;
 
 /// <summary>
-/// Tenant-facing portal: read-only views of the signed-in tenant's own leases, balance, payments, work
-/// orders, and messages. Scope is taken entirely from JWT claims (<c>portfolioId</c> + <c>tenantId</c>),
-/// never from request parameters. A caller without a <c>tenantId</c> claim (e.g. staff/admin) gets 403 —
+/// Tenant-facing portal: read-only views of the signed-in tenant's relationships, agreements, tenant
+/// accounts, work orders, and messages. Scope comes from the validated context and its effective tenant relationship,
+/// never from request parameters or a tenant-id token claim. A context without that relationship gets 403 —
 /// those users manage data through the staff-facing controllers instead.
 /// </summary>
 [ApiController]
@@ -19,67 +21,143 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     private readonly IPortalService _service;
     private readonly IConversationService _conversations;
     private readonly IStripePaymentService _stripe;
+    private readonly IFileStorage _files;
 
     public PortalController(
         IPortalService service,
         IConversationService conversations,
-        IStripePaymentService stripe)
+        IStripePaymentService stripe,
+        IFileStorage files)
     {
         _service = service;
         _conversations = conversations;
         _stripe = stripe;
+        _files = files;
     }
 
-    /// <summary>Tenant id from the <c>tenantId</c> JWT claim, or null when the caller is not a tenant.</summary>
-    private int? GetTenantId()
+    private Task<int?> GetTenantIdAsync(CancellationToken ct) =>
+        _service.ResolveTenantIdAsync(GetPortfolioId(), GetAccessContextId(), ct);
+
+    private PortalTenantReadScope GetTenantReadScope()
     {
-        var claim = User.FindFirst("tenantId");
-        return claim != null && int.TryParse(claim.Value, out var id) ? id : null;
+        var active = GetActiveAccessContext();
+        return new PortalTenantReadScope(
+            active.PortfolioId,
+            active.UserId,
+            active.AccessContextId,
+            active.AccessRevision);
     }
 
     [HttpGet("leases")]
-    [ProducesResponseType(typeof(IReadOnlyList<LeaseResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(IReadOnlyList<PortalLeaseRelationshipResponse>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
-    public async Task<ActionResult<IReadOnlyList<LeaseResponse>>> Leases(CancellationToken ct)
+    public async Task<ActionResult<IReadOnlyList<PortalLeaseRelationshipResponse>>> Leases(CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
         }
 
-        var items = await _service.GetLeasesAsync(GetPortfolioId(), tenantId.Value, ct);
+        var items = await _service.GetLeasesAsync(
+            GetPortfolioId(), GetAccessContextId(), tenantId.Value, ct);
         return Ok(items);
     }
 
-    [HttpGet("balance")]
-    [ProducesResponseType(typeof(PortalBalanceResponse), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status403Forbidden)]
-    public async Task<ActionResult<PortalBalanceResponse>> Balance(CancellationToken ct)
+    [HttpGet("leases/{leaseManagementId:int}/agreements/{leaseAgreementId:int}/executed-document")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DownloadExecutedAgreement(
+        int leaseManagementId,
+        int leaseAgreementId,
+        CancellationToken ct)
     {
-        var tenantId = GetTenantId();
-        if (tenantId == null)
+        var reference = await _service.GetExecutedAgreementArtifactAsync(
+            GetTenantReadScope(), leaseManagementId, leaseAgreementId, ct);
+        if (reference is null)
         {
-            return Forbid();
+            return NotFound(new { error = "Executed Agreement not found" });
         }
 
-        var balance = await _service.GetBalanceAsync(GetPortfolioId(), tenantId.Value, ct);
-        return Ok(balance);
+        Stream stream;
+        try
+        {
+            stream = await _files.DownloadAsync(reference.StorageKey, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return NotFound(new { error = "Executed Agreement file not found on storage" });
+        }
+
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        return File(stream, reference.ContentType, reference.FileName, enableRangeProcessing: true);
     }
 
-    [HttpGet("payments")]
-    [ProducesResponseType(typeof(IReadOnlyList<PortalPaymentResponse>), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status403Forbidden)]
-    public async Task<ActionResult<IReadOnlyList<PortalPaymentResponse>>> Payments(CancellationToken ct)
-    {
-        var tenantId = GetTenantId();
-        if (tenantId == null)
-        {
-            return Forbid();
-        }
+    [HttpGet("tenant-accounts/page")]
+    [ProducesResponseType(typeof(PortalTenantAccountPageResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<PortalTenantAccountPageResponse>> TenantAccountsPage(
+        [FromQuery] PortalTenantAccountListQuery query,
+        CancellationToken ct) =>
+        Ok(await _service.ListTenantAccountsPageAsync(GetTenantReadScope(), query, ct));
 
-        var items = await _service.GetPaymentsAsync(GetPortfolioId(), tenantId.Value, ct);
-        return Ok(items);
+    [HttpGet("tenant-accounts/{id:int}")]
+    [ProducesResponseType(typeof(PortalTenantAccountResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<PortalTenantAccountResponse>> TenantAccount(
+        int id,
+        CancellationToken ct)
+    {
+        var account = await _service.GetTenantAccountAsync(GetTenantReadScope(), id, ct);
+        return account is null
+            ? NotFound(new { error = "Tenant account not found" })
+            : Ok(account);
+    }
+
+    [HttpGet("tenant-accounts/{id:int}/entries/page")]
+    [ProducesResponseType(typeof(PortalTenantLedgerEntryPageResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<PortalTenantLedgerEntryPageResponse>> TenantAccountEntriesPage(
+        int id,
+        [FromQuery] PortalTenantLedgerEntryListQuery query,
+        CancellationToken ct)
+    {
+        var page = await _service.ListTenantAccountEntriesPageAsync(
+            GetTenantReadScope(), id, query, ct);
+        return page is null
+            ? NotFound(new { error = "Tenant account not found" })
+            : Ok(page);
+    }
+
+    [HttpGet("tenant-accounts/{id:int}/charges/page")]
+    [ProducesResponseType(typeof(PortalTenantChargePageResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<PortalTenantChargePageResponse>> TenantAccountChargesPage(
+        int id,
+        [FromQuery] PortalTenantChargeListQuery query,
+        CancellationToken ct)
+    {
+        var page = await _service.ListTenantAccountChargesPageAsync(
+            GetTenantReadScope(), id, query, ct);
+        return page is null
+            ? NotFound(new { error = "Tenant account not found" })
+            : Ok(page);
+    }
+
+    [HttpGet("tenant-accounts/{id:int}/deposit")]
+    [ProducesResponseType(typeof(PortalTenantAccountDepositResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<PortalTenantAccountDepositResponse>> TenantAccountDeposit(
+        int id,
+        CancellationToken ct)
+    {
+        var deposit = await _service.GetTenantAccountDepositAsync(GetTenantReadScope(), id, ct);
+        return deposit is null
+            ? NotFound(new { error = "Tenant account deposit not found" })
+            : Ok(deposit);
     }
 
     [HttpGet("appointments")]
@@ -87,36 +165,43 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult<IReadOnlyList<AppointmentResponse>>> Appointments(CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
         }
 
-        var items = await _service.GetAppointmentsAsync(GetPortfolioId(), tenantId.Value, ct);
+        var items = await _service.GetAppointmentsAsync(
+            GetPortfolioId(), GetAccessContextId(), tenantId.Value, ct);
         return Ok(items);
     }
 
     /// <summary>
-    /// Answers a tenant's plain-English question grounded in their OWN lease (rent, dates, deposit,
-    /// late fee, notes). Scope is the tenant's lease only: an explicit <c>leaseId</c> that isn't theirs
-    /// — or no lease at all — returns 404, never another tenant's lease. Falls back to a deterministic
-    /// answer when no LLM key is configured.
+    /// Answers a tenant's plain-English question from the governing executed agreement on one of
+    /// their effective rental relationships. The optional selector is a LeaseManagement id.
     /// </summary>
     [HttpPost("lease/ask")]
     [ProducesResponseType(typeof(LeaseQuestionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<LeaseQuestionResponse>> AskLease(
-        [FromQuery] int? leaseId, [FromBody] LeaseQuestionRequest request, CancellationToken ct)
+        [FromQuery] int? leaseManagementId,
+        [FromBody] LeaseQuestionRequest request,
+        CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
         }
 
-        var answer = await _service.AskLeaseAsync(GetPortfolioId(), tenantId.Value, leaseId, request.Question, ct);
+        var answer = await _service.AskLeaseAsync(
+            GetPortfolioId(),
+            GetAccessContextId(),
+            tenantId.Value,
+            leaseManagementId,
+            request.Question,
+            ct);
         return answer == null
             ? NotFound(new { error = "No lease was found for this tenant, or the question was empty." })
             : Ok(answer);
@@ -129,58 +214,58 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     // -----------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// Starts a hosted Stripe Checkout session (card or ACH) for ONE of the signed-in tenant's own
-    /// rent payments and returns <c>{ checkoutUrl }</c> to redirect to. A payment that isn't on this
-    /// tenant's lease returns 404 (never reveals another tenant's payment). 503 when Stripe is off.
+    /// Starts hosted Stripe Checkout for one open charge on the signed-in tenant's canonical account.
+    /// A charge outside that account relationship returns 404. 503 when Stripe is off.
     /// </summary>
-    [HttpPost("payments/{paymentId:int}/checkout")]
+    [HttpPost("tenant-accounts/{tenantAccountId:int}/charges/{chargeLedgerEntryId:long}/checkout")]
     [ProducesResponseType(typeof(CheckoutSessionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
     public async Task<IActionResult> CreatePaymentCheckout(
-        int paymentId, [FromBody] PortalCheckoutRequest? request, CancellationToken ct)
+        int tenantAccountId, long chargeLedgerEntryId,
+        [FromBody] PortalCheckoutRequest? request, CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
         }
 
         var result = await _stripe.CreatePaymentCheckoutSessionAsync(
-            GetPortfolioId(), tenantId.Value, paymentId, request?.SuccessUrl, request?.CancelUrl, ct);
+            GetPortfolioId(), tenantId.Value, tenantAccountId, chargeLedgerEntryId, GetUserId(),
+            request?.SuccessUrl, request?.CancelUrl, ct);
 
         return result.Result switch
         {
             CheckoutResult.Outcome.NotEnabled =>
                 StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Online payments are not enabled." }),
             CheckoutResult.Outcome.NotFound =>
-                NotFound(new { error = "Payment not found" }),
+                NotFound(new { error = "Tenant account charge not found" }),
             _ => Ok(new CheckoutSessionResponse { CheckoutUrl = result.CheckoutUrl! }),
         };
     }
 
     /// <summary>
-    /// Tenant's autopay enrollment status for a lease (defaults to their most relevant lease when
-    /// <c>leaseId</c> is omitted). Returns Active=false when not enrolled.
+    /// Tenant's autopay enrollment status for one canonical tenant account.
     /// </summary>
-    [HttpGet("autopay")]
+    [HttpGet("tenant-accounts/{tenantAccountId:int}/autopay")]
     [ProducesResponseType(typeof(AutopayStatusResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> GetAutopay([FromQuery] int? leaseId, CancellationToken ct)
+    public async Task<IActionResult> GetAutopay(int tenantAccountId, CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
         }
 
         var portfolioId = GetPortfolioId();
-        var status = await _service.GetAutopayStatusAsync(portfolioId, tenantId.Value, leaseId, ct);
+        var status = await _service.GetAutopayStatusAsync(portfolioId, tenantId.Value, tenantAccountId, ct);
         if (status == null)
         {
-            return NotFound(new { error = "Lease not found" });
+            return NotFound(new { error = "Tenant account not found" });
         }
 
         status.OnlinePaymentsAvailable = await _stripe.IsOnlinePaymentsAvailableAsync(portfolioId, ct);
@@ -188,58 +273,72 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     }
 
     /// <summary>
-    /// Enrolls one of the tenant's own leases in autopay: starts a setup-mode Checkout session that
+    /// Enrolls one of the tenant's own canonical accounts in autopay: starts setup Checkout that
     /// saves a reusable payment method, and returns <c>{ checkoutUrl }</c>. The enrollment is only
-    /// recorded once the setup session completes (webhook). 404 if the lease isn't the tenant's;
+    /// recorded once the setup session completes (webhook). 404 if the account isn't the tenant's;
     /// 503 when Stripe is off.
     /// </summary>
-    [HttpPost("autopay/enroll")]
+    [HttpPost("tenant-accounts/{tenantAccountId:int}/autopay/enroll")]
     [ProducesResponseType(typeof(CheckoutSessionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
-    public async Task<IActionResult> EnrollAutopay([FromBody] AutopayEnrollRequest request, CancellationToken ct)
+    public async Task<IActionResult> EnrollAutopay(
+        int tenantAccountId, [FromBody] AutopayEnrollRequest request, CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
         }
 
         var result = await _stripe.CreateAutopaySetupSessionAsync(
-            GetPortfolioId(), tenantId.Value, request.LeaseId, request.SuccessUrl, request.CancelUrl, ct);
+            GetPortfolioId(), tenantId.Value, tenantAccountId, GetUserId(), request.OperationKey,
+            request.SuccessUrl, request.CancelUrl, ct);
 
         return result.Result switch
         {
             CheckoutResult.Outcome.NotEnabled =>
                 StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Online payments are not enabled." }),
             CheckoutResult.Outcome.NotFound =>
-                NotFound(new { error = "Lease not found" }),
+                NotFound(new { error = "Tenant account not found" }),
             _ => Ok(new CheckoutSessionResponse { CheckoutUrl = result.CheckoutUrl! }),
         };
     }
 
     /// <summary>
-    /// Cancels autopay on one of the tenant's own leases (deactivates the enrollment so the Engine
-    /// stops charging). 404 if the lease isn't the tenant's. Not Stripe-gated — purely local state.
+    /// Cancels autopay on one of the tenant's own canonical accounts.
     /// </summary>
-    [HttpPost("autopay/cancel")]
+    [HttpPost("tenant-accounts/{tenantAccountId:int}/autopay/cancel")]
     [ProducesResponseType(typeof(AutopayStatusResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> CancelAutopay([FromBody] AutopayCancelRequest request, CancellationToken ct)
+    public async Task<IActionResult> CancelAutopay(
+        int tenantAccountId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var operationKey = idempotencyKey?.Trim() ?? string.Empty;
+        if (operationKey.Length is <= 0 or > 128)
+        {
+            return BadRequest(new
+            {
+                error = "Idempotency-Key is required and must be at most 128 characters.",
+            });
+        }
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
         }
 
-        var portfolioId = GetPortfolioId();
-        var status = await _service.CancelAutopayAsync(portfolioId, tenantId.Value, request.LeaseId, ct);
+        var active = GetActiveAccessContext();
+        var portfolioId = active.PortfolioId;
+        var status = await _service.CancelAutopayAsync(
+            active, tenantId.Value, tenantAccountId, operationKey, ct);
         if (status == null)
         {
-            return NotFound(new { error = "Lease not found" });
+            return NotFound(new { error = "Tenant account not found" });
         }
 
         status.OnlinePaymentsAvailable = await _stripe.IsOnlinePaymentsAvailableAsync(portfolioId, ct);
@@ -247,18 +346,20 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     }
 
     [HttpGet("work-orders")]
-    [ProducesResponseType(typeof(IReadOnlyList<WorkOrderResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(PortalTenantWorkOrderPageResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
-    public async Task<ActionResult<IReadOnlyList<WorkOrderResponse>>> WorkOrders(CancellationToken ct)
+    public async Task<ActionResult<PortalTenantWorkOrderPageResponse>> WorkOrders(
+        [FromQuery] PortalTenantWorkOrderListQuery query,
+        CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
         }
 
-        var items = await _service.GetWorkOrdersAsync(GetPortfolioId(), tenantId.Value, ct);
-        return Ok(items);
+        return Ok(await _service.ListWorkOrdersPageAsync(
+            GetTenantReadScope(), tenantId.Value, query, ct));
     }
 
     /// <summary>
@@ -272,13 +373,14 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<WorkOrderDetailResponse>> WorkOrder(int id, CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
         }
 
-        var item = await _service.GetWorkOrderDetailAsync(GetPortfolioId(), tenantId.Value, id, ct);
+        var item = await _service.GetWorkOrderDetailAsync(
+            GetTenantReadScope(), tenantId.Value, id, ct);
         return item == null ? NotFound(new { error = "Work order not found" }) : Ok(item);
     }
 
@@ -288,15 +390,14 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult<WorkOrderResponse>> CreateTenantWorkOrder(
         [FromBody] CreateTenantWorkOrderRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
-        var tenantId = GetTenantId();
-        if (tenantId == null)
-        {
-            return Forbid();
-        }
-
-        var created = await _service.CreateTenantWorkOrderAsync(GetPortfolioId(), tenantId.Value, request, ct);
+        var operationKey = idempotencyKey?.Trim() ?? string.Empty;
+        if (operationKey.Length is <= 0 or > 128)
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var created = await _service.CreateTenantWorkOrderAsync(
+            GetActiveAccessContext(), request, operationKey, ct);
         return created == null
             ? BadRequest(new { error = "No lease was found for this tenant." })
             : Created($"/api/v1/portal/work-orders/{created.Id}", created);
@@ -313,7 +414,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<ActionResult<IReadOnlyList<ConversationSummary>>> Conversations(CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
@@ -323,14 +424,36 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         return Ok(items);
     }
 
-    /// <summary>Fetch one of the tenant's conversations with its full history; resets the tenant's unread count.</summary>
+    /// <summary>
+    /// Searchable, filterable tenant inbox page. The tenant boundary, filters, sort, count, and
+    /// requested window are all applied by the database query.
+    /// </summary>
+    [HttpGet("conversations/page")]
+    [ProducesResponseType(typeof(ConversationListResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<ActionResult<ConversationListResponse>> ConversationPage(
+        [FromQuery] ConversationListQuery query,
+        CancellationToken ct)
+    {
+        var tenantId = await GetTenantIdAsync(ct);
+        if (tenantId == null)
+        {
+            return Forbid();
+        }
+
+        var page = await _conversations.ListPageForTenantAsync(
+            GetPortfolioId(), tenantId.Value, query, ct);
+        return Ok(page);
+    }
+
+    /// <summary>Fetch one of the tenant's conversations with its full history.</summary>
     [HttpGet("conversations/{id:int}")]
     [ProducesResponseType(typeof(ConversationDetail), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<ConversationDetail>> Conversation(int id, CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
@@ -338,6 +461,28 @@ public class PortalController : AuthenticatedPortfolioControllerBase
 
         var item = await _conversations.GetForTenantAsync(GetPortfolioId(), tenantId.Value, id, ct);
         return item == null ? NotFound(new { error = "Conversation not found" }) : Ok(item);
+    }
+
+    [HttpPost("conversations/{id:int}/read")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> MarkConversationRead(
+        int id,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        var tenantId = await GetTenantIdAsync(ct);
+        if (tenantId == null) return Forbid();
+        var operationKey = idempotencyKey?.Trim() ?? string.Empty;
+        if (operationKey.Length is <= 0 or > 128)
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var active = GetActiveAccessContext();
+        var scope = new WorkspaceReadScope(active.PortfolioId, active.UserId, active.SessionId,
+            active.AccessContextId, active.AccessRevision);
+        var found = await _conversations.MarkReadForTenantAsync(
+            scope, tenantId.Value, id, operationKey, ct);
+        return found ? NoContent() : NotFound(new { error = "Conversation not found" });
     }
 
     /// <summary>Tenant opens a new topic thread with the landlord.</summary>
@@ -349,14 +494,14 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     public async Task<ActionResult<ConversationDetail>> StartConversation(
         [FromBody] TenantStartConversationRequest request, CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
         }
 
         var created = await _conversations.TenantStartAsync(
-            GetPortfolioId(), tenantId.Value, request.Subject, request.Body, ct);
+            GetPortfolioId(), tenantId.Value, request.Subject, request.Body, request.OperationKey, ct);
 
         return created == null
             ? NotFound(new { error = "Tenant not found" })
@@ -372,13 +517,14 @@ public class PortalController : AuthenticatedPortfolioControllerBase
     public async Task<ActionResult<ConversationDetail>> PostConversationMessage(
         int id, [FromBody] TenantPostMessageRequest request, CancellationToken ct)
     {
-        var tenantId = GetTenantId();
+        var tenantId = await GetTenantIdAsync(ct);
         if (tenantId == null)
         {
             return Forbid();
         }
 
-        var result = await _conversations.TenantPostAsync(GetPortfolioId(), tenantId.Value, id, request.Body, ct);
+        var result = await _conversations.TenantPostAsync(
+            GetPortfolioId(), tenantId.Value, id, request.Body, request.OperationKey, ct);
         return result == null ? NotFound(new { error = "Conversation not found" }) : Ok(result);
     }
 }

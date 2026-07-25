@@ -4,7 +4,7 @@ namespace RentalCommand.Core.Interfaces;
 /// Abstraction over a payment processor (e.g. Stripe). Phase 0 defines the contract only;
 /// a concrete integration lands in a later phase.
 /// </summary>
-public interface IPaymentProvider
+public interface IPaymentProvider : RentalCommand.Core.Atomic.IAtomicRemoteDependency
 {
     /// <summary>Charge an amount (minor units) in the given currency and return the result.</summary>
     Task<PaymentResult> ChargeAsync(

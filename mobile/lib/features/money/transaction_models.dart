@@ -12,6 +12,7 @@ class AccountingTransaction {
     required this.category,
     required this.status,
     required this.amount,
+    this.tenantAccountId,
     this.propertyId,
     this.propertyName,
     this.counterparty,
@@ -29,6 +30,7 @@ class AccountingTransaction {
   final String category;
   final String status;
   final double amount;
+  final int? tenantAccountId;
   final int? propertyId;
   final String? propertyName;
   final String? counterparty;
@@ -38,6 +40,8 @@ class AccountingTransaction {
   final bool reconciled;
 
   bool get isPayment => kind.toLowerCase() == 'payment';
+  bool get isTenantLedger => kind.toLowerCase() == 'tenantledger';
+  bool get isTenantAccountEntry => isPayment || isTenantLedger;
   bool get isExpense => kind.toLowerCase() == 'expense';
 
   factory AccountingTransaction.fromJson(Map<String, dynamic> json) {
@@ -49,6 +53,7 @@ class AccountingTransaction {
       category: json['category'] as String? ?? '',
       status: json['status'] as String? ?? '',
       amount: (json['amount'] as num?)?.toDouble() ?? 0,
+      tenantAccountId: (json['tenantAccountId'] as num?)?.toInt(),
       propertyId: (json['propertyId'] as num?)?.toInt(),
       propertyName: json['propertyName'] as String?,
       counterparty: json['counterparty'] as String?,

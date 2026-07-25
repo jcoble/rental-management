@@ -184,9 +184,11 @@
 
 	function noticeLabel(type: string) {
 		switch (type) {
-			case 'RenewalOffer': return 'Renewal offer';
-			case 'LateRentNotice': return 'Late rent';
-			case 'MoveOutReminder': return 'Move-out';
+			case 'rent-reminder': return 'Rent reminder';
+			case 'lease-renewal-offer': return 'Lease renewal offer';
+			case 'month-to-month-offer': return 'Month-to-month offer';
+			case 'lease-non-renewal': return 'Lease expiration / non-renewal';
+			case 'late-rent-late-fee': return 'Past-due rent / late fee';
 			default: return type;
 		}
 	}
@@ -195,9 +197,11 @@
 	// positive (blue), late rent reads urgent (red), move-out reads warning (amber).
 	function noticeAccent(type: string) {
 		switch (type) {
-			case 'RenewalOffer': return { bar: 'bg-primary', icon: 'text-primary' };
-			case 'LateRentNotice': return { bar: 'bg-destructive', icon: 'text-destructive' };
-			case 'MoveOutReminder': return { bar: 'bg-warning', icon: 'text-warning' };
+			case 'rent-reminder': return { bar: 'bg-primary', icon: 'text-primary' };
+			case 'lease-renewal-offer': return { bar: 'bg-primary', icon: 'text-primary' };
+			case 'month-to-month-offer': return { bar: 'bg-primary', icon: 'text-primary' };
+			case 'lease-non-renewal': return { bar: 'bg-warning', icon: 'text-warning' };
+			case 'late-rent-late-fee': return { bar: 'bg-destructive', icon: 'text-destructive' };
 			default: return { bar: 'bg-muted-foreground/40', icon: 'text-muted-foreground' };
 		}
 	}

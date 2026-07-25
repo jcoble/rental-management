@@ -4,7 +4,7 @@ namespace RentalCommand.Core.Interfaces;
 /// Abstraction over an LLM provider. Phase 0 defines the contract only; a concrete
 /// Anthropic/OpenAI implementation lands in Phase 2/3.
 /// </summary>
-public interface ILlmProvider
+public interface ILlmProvider : RentalCommand.Core.Atomic.IAtomicRemoteDependency
 {
     /// <summary>Single-shot chat completion.</summary>
     Task<string> ChatAsync(string prompt, CancellationToken ct = default);
@@ -33,6 +33,80 @@ public interface ILlmProvider
         IReadOnlyList<LlmToolSpec> tools,
         CancellationToken ct = default);
 }
+
+/// <summary>
+/// A decrypted workspace credential that exists only for the duration of one provider call.
+/// Callers must not log, cache, serialize, or persist this value.
+/// </summary>
+public sealed record WorkspaceLlmRuntimeCredential(
+    int PortfolioId,
+    string Provider,
+    string ModelId,
+    string ApiKey);
+
+/// <summary>
+/// Resolves the active provider credential at request/job execution time. Missing configuration
+/// is explicit and never falls back to a Rental Command-funded provider.
+/// </summary>
+public interface IWorkspaceLlmCredentialResolver
+{
+    Task<WorkspaceLlmRuntimeCredential?> ResolveActiveAsync(
+        int portfolioId,
+        CancellationToken ct = default);
+}
+
+/// <summary>
+/// A provider extraction endpoint that requires an explicit workspace credential for every call.
+/// Implementations must never substitute a shared or process-level provider key.
+/// </summary>
+public interface IWorkspaceLlmExtractionProvider
+{
+    string ProviderKey { get; }
+
+    Task<ExtractedFields> ExtractWorkspaceAsync(
+        WorkspaceLlmRuntimeCredential credential,
+        byte[] documentBytes,
+        string contentType,
+        string instructions,
+        IReadOnlyList<ExtractionFieldSpec> fields,
+        string? groundingContext = null,
+        CancellationToken ct = default);
+}
+
+/// <summary>
+/// Persists one secret-free usage receipt after a workspace-funded provider invocation.
+/// Prompts, document bytes, responses, and credentials are not accepted by this boundary.
+/// </summary>
+public interface ILlmUsageEvidenceRecorder
+{
+    Task RecordUsageAsync(
+        int portfolioId,
+        string provider,
+        string modelId,
+        string feature,
+        int latencyMilliseconds,
+        int inputUnits,
+        int outputUnits,
+        decimal estimatedCostUsd,
+        CancellationToken ct = default);
+}
+
+/// <summary>Provider-specific, side-effect-free credential validation.</summary>
+public interface ILlmCredentialProbe
+{
+    string ProviderKey { get; }
+
+    Task<LlmCredentialProbeResult> TestCredentialAsync(
+        string apiKey,
+        string modelId,
+        CancellationToken ct = default);
+}
+
+public sealed record LlmCredentialProbeResult(
+    bool Succeeded,
+    string Provider,
+    string ModelId,
+    string? Error = null);
 
 // ---------------------------------------------------------------------------
 // Tool-calling records

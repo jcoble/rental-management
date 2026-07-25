@@ -23,8 +23,7 @@ export type WizardStepKey =
 	| 'property'
 	| 'tenants'
 	| 'lease'
-	| 'notifications'
-	| 'texting';
+	| 'notifications';
 
 export interface WizardStepMeta {
 	key: WizardStepKey;
@@ -33,14 +32,7 @@ export interface WizardStepMeta {
 	/** Plain-English title shown at the top of the step panel. */
 	title: string;
 	/** Lucide icon name imported by the wizard (kept as a string so this module stays icon-free). */
-	icon:
-		| 'Building'
-		| 'UserCircle2'
-		| 'Home'
-		| 'Users'
-		| 'FileText'
-		| 'Bell'
-		| 'MessageSquare';
+	icon: 'Building' | 'UserCircle2' | 'Home' | 'Users' | 'FileText' | 'Bell';
 	/** WHAT this is + WHY we need it, for a non-technical landlord. */
 	explanation: string;
 	/** "Where do I find this?" hint — where the value lives on paper / in a provider account. */
@@ -48,8 +40,8 @@ export interface WizardStepMeta {
 	/** Docs article slug → `/docs/<slug>`. Must be a real, published Knowledge Base article (A12). */
 	docsSlug: string;
 	/**
-	 * Whether this step is part of the *core* first-run flow (portfolio → lease). The two
-	 * provider-setup steps (notifications, texting) are optional add-ons reached from Settings
+	 * Whether this step is part of the *core* first-run flow (portfolio → lease). Personal
+	 * notification preferences are an optional add-on reached from Settings
 	 * or the optional tail of the wizard, and are clearly marked skippable.
 	 */
 	core: boolean;
@@ -89,7 +81,7 @@ export const WIZARD_STEPS: WizardStepMeta[] = [
 		title: "Scan a lease — we'll build the rest",
 		icon: 'FileText',
 		explanation:
-			"Have a signed lease? Snap a photo or upload it and the computer reads it — then creates the property, the unit, and the tenant, and ties the lease to them, all at once. You just confirm what it found. No lease handy? Skip this and add things by hand.",
+			'Have a signed lease? Snap a photo or upload it and the computer reads it — then creates the property, the unit, and the tenant, and ties the lease to them, all at once. You just confirm what it found. No lease handy? Skip this and add things by hand.',
 		whereToFind:
 			'Any signed lease agreement works — a phone photo or a PDF. We pull the address, the tenant, the rent, the dates, and the deposit straight off the page.',
 		docsSlug: 'leases',
@@ -113,7 +105,7 @@ export const WIZARD_STEPS: WizardStepMeta[] = [
 		title: 'Add your tenants',
 		icon: 'Users',
 		explanation:
-			"Tenants are the people who rent from you. Adding their email or phone lets the app send rent reminders and let them into the tenant portal — both are optional, so add what you have.",
+			'Tenants are the people who rent from you. Adding their email or phone lets the app send rent reminders and let them into the tenant portal — both are optional, so add what you have.',
 		whereToFind:
 			"Names are on the signed lease. Email and phone are on the rental application or wherever you usually text them. It's fine to leave contact info blank for now.",
 		docsSlug: 'tenants-and-applications',
@@ -133,29 +125,16 @@ export const WIZARD_STEPS: WizardStepMeta[] = [
 	},
 	{
 		key: 'notifications',
-		label: 'Email alerts',
-		title: 'Where should alerts go?',
+		label: 'My alerts',
+		title: 'How should Rental Command alert you?',
 		icon: 'Bell',
 		explanation:
-			"This is the email address where the app sends you rent reminders, late-fee notices, and your daily briefing. Leave it blank to use your login email — most landlords do.",
+			'These choices control alerts for your signed-in account only. Team responsibilities and tenant notices are configured separately.',
 		whereToFind:
-			'Just your own email inbox — the one you check most. This is for alerts to YOU, not to your tenants.',
+			'Email and SMS use the contact details on your account. Mobile push goes to devices registered to your login.',
 		docsSlug: 'settings-and-notifications',
 		core: false,
-		settingsAnchor: 'settings-notification-email',
-	},
-	{
-		key: 'texting',
-		label: 'Text messages',
-		title: 'Turn on text messages (optional)',
-		icon: 'MessageSquare',
-		explanation:
-			"Texting your tenants needs a SignalWire account — a service that sends the SMS for you. This step is completely optional; everything works on email and in-app alerts without it.",
-		whereToFind:
-			"Sign in at signalwire.com. The Project ID and Space URL are on your SignalWire dashboard; create an API Token under “API → Credentials”; the From Number is a phone number you buy in “Phone Numbers”. Copy each value over exactly.",
-		docsSlug: 'settings-and-notifications',
-		core: false,
-		settingsAnchor: 'settings-notification-delivery',
+		settingsAnchor: 'notifications',
 	},
 ];
 
@@ -174,7 +153,8 @@ export const ONBOARDING_SETUP_SHORTCUTS: OnboardingSetupShortcut[] = [
 	{
 		key: 'scan-new-rental',
 		label: 'Scan a lease',
-		description: 'Start from a signed lease photo or PDF and confirm the property, unit, tenant, and lease it finds.',
+		description:
+			'Start from a signed lease photo or PDF and confirm the property, unit, tenant, and lease it finds.',
 		href: '/scan/new-rental',
 		primary: true,
 	},
@@ -264,12 +244,12 @@ export const SETTINGS_SECTIONS: SettingsSectionMeta[] = [
 		key: 'notifications',
 		label: 'Notifications',
 		icon: 'Bell',
-		title: 'How you hear from the app',
+		title: 'Who should hear from the app?',
 		intro:
-			'Choose where alerts go and how you want to hear about each kind of update — in the app, by email, or by text.',
-		why: 'This is how the app keeps you in the loop on rent, late fees, renewals, and your daily summary, without you having to go looking.',
+			'Set your own alert channels, route work to named team members, and control every tenant notice independently.',
+		why: 'Separating personal alerts, team responsibility, and tenant delivery makes it clear who receives each message and why.',
 		whereToFind:
-			'Just your own email inbox — the one you check most. These alerts go to YOU, not to your tenants.',
+			'Your account contact details are under My alerts. SMS also requires a workspace provider connection, managed separately from personal alert choices.',
 		docsSlug: 'settings-and-notifications',
 		walkThrough: 'notifications',
 	},
@@ -289,12 +269,11 @@ export const SETTINGS_SECTIONS: SettingsSectionMeta[] = [
 		icon: 'MessageSquare',
 		title: 'Talking to your tenants',
 		intro:
-			'Set how new messages reach tenants by default (email and text), and connect a text-messaging account if you want to send SMS.',
-		why: 'The tenant portal inbox always gets the message; these settings just pre-pick email and text so you don’t have to choose every time.',
+			'Set how new messages reach tenants by default (email and text). SMS-provider setup is separate from notification preferences.',
+		why: 'The tenant portal inbox always gets the message; these settings just pre-pick email and text so you don’t have to choose every time. SMS stays unavailable until a workspace provider is connected.',
 		whereToFind:
-			'Texting needs an account with an SMS provider (like SignalWire or Twilio). Your IDs and keys are on that provider’s dashboard — copy each value over exactly.',
+			'Texting needs an account with an SMS provider (like SignalWire or Twilio). A Workspace Administrator connects that provider separately from these message defaults.',
 		docsSlug: 'settings-and-notifications',
-		walkThrough: 'texting',
 	},
 	{
 		key: 'team',
@@ -340,8 +319,7 @@ export const SETTINGS_SECTIONS: SettingsSectionMeta[] = [
 		label: 'Activity history',
 		icon: 'History',
 		title: 'A record of what happened',
-		intro:
-			'A searchable log of every change in your account — who did what, and when.',
+		intro: 'A searchable log of every change in your account — who did what, and when.',
 		why: 'If you ever wonder “wait, when did that change?”, this is where you look. It’s also your paper trail if a tenant or co-owner ever disputes something.',
 		docsSlug: 'getting-started',
 		linkTo: '/audit',

@@ -1,36 +1,52 @@
 ---
-title: Notices (Renewals, Late Rent, Move-Out)
+title: Tenant Notices (Reminders, Renewals, and Lease End)
 category: Tenants & Leases
 slug: notices
 order: 4
-summary: Review auto-drafted lease notices, run the fair-housing check, then approve and send.
-keywords: notices, renewal offer, late rent notice, move-out reminder, fair housing, approve and send, draft notice, tenant notice, lease lifecycle
+summary: Understand independent tenant-notice automations, recipients, templates, review, and delivery evidence.
+keywords: notices, renewal offer, rent reminder, late rent, non-renewal, tenant notice, template, recipient, delivery evidence
 ---
 
-The **Notices** page drafts the routine letters that come with a lease's lifecycle so you don't have to write them from scratch — then lets you review, edit, and send them.
+Tenant notices are driven by independent saved policies. They do not use the staff alert matrix and there is no master tenant-delivery switch. Turning off a rent reminder does not turn off a renewal offer, and changing a staff member's email alerts never changes tenant delivery.
 
-## What gets drafted
+## The five supplied automations
 
-Rental Command looks at your leases and creates draft notices when they're due:
+Every new workspace starts with complete editable copy for:
 
-- **Renewal offer** — when a lease is approaching its end.
-- **Late rent** — when rent is past due.
-- **Move-out reminder** — when a lease is winding down.
+- rent reminders;
+- lease renewal offers;
+- month-to-month offers;
+- lease expiration or non-renewal; and
+- past-due rent or late-fee notices.
 
-Click **Generate drafts** to have it scan your leases and create any new drafts that are needed. Each draft is tied to a tenant, property, and unit and shows the reason it was triggered.
+Each automation chooses its own mode: **Off**, **Create draft for review**, or **Send automatically where permitted**. It also owns its timing, tenant portal/mobile/email/SMS channels, recipient roles, immutable template version, and failure behavior. Lease-ending automations run only after the LeaseManagement relationship has an explicit ending disposition.
+
+## Confirm who will receive it
+
+Before enabling or sending an automation, use its recipient preview for the relevant LeaseManagement relationship. The preview reads the effective relationship parties on the current business date and shows:
+
+- the primary tenant, co-tenant, guarantor, or occupant role;
+- whether that person is eligible;
+- the exact channels with valid destinations; and
+- a plain-language reason for every exclusion.
+
+Primary tenants and co-tenants are eligible by default. A guarantor receives a legal notice only when specifically designated as legally eligible. An occupant never receives financial or legal material solely because the person resides in the unit. Rental Command does not invent an email address, phone number, portal login, or mobile device when one is missing.
 
 ## Review and edit
 
-1. Open **Notices** (drafts are shown by default).
-2. Click **Edit** on a draft to adjust the subject and message.
+1. Open **Tenant notices** and choose the automation.
+2. Confirm its mode, timing, recipients, channels, and template version.
+3. Open a generated draft and adjust the subject or message when review is required.
 
-## Check for fair-housing issues
+## Templates and legal review
 
-Before sending, click **Check for fair-housing issues**. The app reviews your wording and either confirms it looks compliant or flags specific phrases that could be a problem, with a **suggested rewrite** you can apply with one click. This helps you avoid language that could violate fair-housing rules. (If AI review isn't set up, it tells you it couldn't check the copy.)
+Editing or restoring a template creates a new workspace version; it never rewrites the content used by an older draft or sent notice. Merge-field help explains every supported token and shows realistic sample data. When a newer supplied template exists, Rental Command reports the update without overwriting customized copy.
+
+Courtesy, operational, and legal notices are classified separately. A legal template retains jurisdiction and review facts. Automatic legal delivery remains unavailable until the applicable jurisdiction and template version have been explicitly reviewed. This safeguard is not legal advice; the workspace remains responsible for the content and timing required in its jurisdiction.
 
 ## Approve and send
 
-1. Choose how to deliver it — **Portal**, **Email**, **SMS**, or any combination.
+1. Confirm the recipients and allowed channels from the saved policy.
 2. Click **Approve & send**.
 
-Sent notices can be opened as a conversation in **Messages**. You can also **Dismiss** a draft you don't want to send.
+Approval freezes the rendered subject, body, content hash, workspace/system template provenance, jurisdiction, approver, and recipient destinations. Every channel receives its own idempotent outbox delivery and evidence row. Delivery status distinguishes **Queued**, **Accepted**, **Retrying**, **Sent**, and **Permanently failed**, including attempts, next retry, provider reference, destination, and last error. You can dismiss a draft you do not want to send without changing the automation policy.

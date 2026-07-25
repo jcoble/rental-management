@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/files/document_opener.dart';
-import '../../core/models/models.dart';
 import '../activity/activity_history_screen.dart';
 import '../home/mobile_domain_navigation.dart';
-import '../money/money_format.dart';
-import '../payments/payments_repository.dart';
+import '../leases/prepare_move_in_sheet.dart';
 import '../tenants/tenant_detail_screen.dart';
 import '../units/unit_command_center_screen.dart';
 import '../units/unit_navigation.dart';
@@ -39,13 +38,18 @@ class _ApplicationDetailScreenState
 
   // Set after generating an adverse-action notice so we can surface it inline.
   AdverseActionNotice? _adverseAction;
+  String? _integratedScreeningOperationKey;
+  String? _externalScreeningOperationKey;
+  String? _completeExternalOperationKey;
+  String? _screeningDecisionOperationKey;
+  String? _updateScreeningAgencyOperationKey;
+  String? _adverseActionOperationKey;
 
   int get _id => widget.applicationId;
 
   Future<void> _refresh() async {
     ref.invalidate(applicationDetailProvider(_id));
     ref.invalidate(applicationScreeningProvider(_id));
-    ref.invalidate(applicationPaymentsProvider(_id));
   }
 
   void _snack(String message) {
@@ -96,6 +100,23 @@ class _ApplicationDetailScreenState
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<void> _prepareMoveIn(RentalApplication application) async {
+    final result = await showPrepareMoveInSheet(
+      context,
+      ref: ref,
+      application: application,
+    );
+    if (result == null || !mounted) return;
+    _snack('Move-in prepared.');
+    openUnitCommandCenter(
+      context,
+      unitId: application.unitId!,
+      initialTab: UnitCommandCenterTab.tenantLease,
+      initialView: UnitCommandCenterView.agreements,
+      leaseManagementId: result.leaseManagementId,
+    );
   }
 
   Future<void> _decline() async {
@@ -163,16 +184,21 @@ class _ApplicationDetailScreenState
 
     setState(() => _busy = true);
     try {
-      await ref
+      final result = await ref
           .read(applicationsRepositoryProvider)
           .recordFee(
             _id,
+            operationKey: input.operationKey,
             amount: input.amount,
             method: input.method,
-            paidDate: input.paidDate,
+            effectiveOn: input.effectiveOn,
           );
       await _refresh();
-      _snack('Application fee recorded.');
+      _snack(
+        result.replayed
+            ? 'Application fee was already recorded.'
+            : 'Application fee recorded.',
+      );
     } on ApiException catch (e) {
       _snack(e.message);
     } finally {
@@ -259,12 +285,23 @@ class _ApplicationDetailScreenState
 
   // ── Screening ─────────────────────────────────────────────────────────────
 
-  Future<void> _runScreening() async {
+  Future<void> _runIntegratedScreening() async {
     setState(() => _busy = true);
     try {
-      await ref.read(applicationsRepositoryProvider).screen(_id);
+      final screening = await ref
+          .read(applicationsRepositoryProvider)
+          .startIntegratedScreening(
+            _id,
+            operationKey: _integratedScreeningOperationKey ??=
+                ApplicationsRepository.newOperationKey(),
+          );
+      _integratedScreeningOperationKey = null;
       ref.invalidate(applicationScreeningProvider(_id));
-      _snack('Screening requested.');
+      await _refresh();
+      _snack('Secure screening invitation created.');
+      if (screening.providerHostedUrl != null && mounted) {
+        await _openProvider(screening.providerHostedUrl!);
+      }
     } on ApiException catch (e) {
       // Screening isn't configured (dormant provider) — gentle, not an error.
       if (e.statusCode == 503) {
@@ -274,6 +311,129 @@ class _ApplicationDetailScreenState
       }
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _trackExternalScreening() async {
+    final input = await showDialog<_ExternalScreeningInput>(
+      context: context,
+      builder: (_) => const _ExternalScreeningDialog(),
+    );
+    if (input == null || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      await ref
+          .read(applicationsRepositoryProvider)
+          .trackExternalScreening(
+            _id,
+            operationKey: _externalScreeningOperationKey ??=
+                ApplicationsRepository.newOperationKey(),
+            providerDisplayName: input.provider,
+            providerReference: input.reference,
+            providerHostedUrl: input.url,
+            creditReportingAgencyName: input.agencyName,
+            creditReportingAgencyAddress: input.agencyAddress,
+            creditReportingAgencyPhone: input.agencyPhone,
+          );
+      _externalScreeningOperationKey = null;
+      ref.invalidate(applicationScreeningProvider(_id));
+      await _refresh();
+      _snack('Outside screening added.');
+    } on ApiException catch (e) {
+      _snack(e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _markExternalScreeningComplete(int screeningId) async {
+    setState(() => _busy = true);
+    try {
+      await ref
+          .read(applicationsRepositoryProvider)
+          .markExternalScreeningComplete(
+            _id,
+            screeningId,
+            operationKey: _completeExternalOperationKey ??=
+                ApplicationsRepository.newOperationKey(),
+          );
+      _completeExternalOperationKey = null;
+      ref.invalidate(applicationScreeningProvider(_id));
+      _snack('Outside screening marked complete.');
+    } on ApiException catch (e) {
+      _snack(e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _recordScreeningDecision(ApplicantScreening screening) async {
+    final input = await showDialog<_ScreeningDecisionInput>(
+      context: context,
+      builder: (_) => _ScreeningDecisionDialog(screening: screening),
+    );
+    if (input == null || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      await ref
+          .read(applicationsRepositoryProvider)
+          .recordScreeningDecision(
+            _id,
+            screening.id,
+            operationKey: _screeningDecisionOperationKey ??=
+                ApplicationsRepository.newOperationKey(),
+            decision: input.decision,
+            consumerReportUsed: input.consumerReportUsed,
+            reason: input.reason,
+          );
+      _screeningDecisionOperationKey = null;
+      ref.invalidate(applicationScreeningProvider(_id));
+      _snack('Screening decision recorded.');
+    } on ApiException catch (e) {
+      _snack(e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _updateScreeningAgency(ApplicantScreening screening) async {
+    final input = await showDialog<_CraContactInput>(
+      context: context,
+      builder: (_) => _CraContactDialog(initial: screening),
+    );
+    if (input == null || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      await ref
+          .read(applicationsRepositoryProvider)
+          .updateExternalScreeningAgency(
+            _id,
+            screening.id,
+            operationKey: _updateScreeningAgencyOperationKey ??=
+                ApplicationsRepository.newOperationKey(),
+            creditReportingAgencyName: input.name,
+            creditReportingAgencyAddress: input.address,
+            creditReportingAgencyPhone: input.phone,
+          );
+      _updateScreeningAgencyOperationKey = null;
+      ref.invalidate(applicationScreeningProvider(_id));
+      _snack('Consumer reporting agency contact saved.');
+    } on ApiException catch (e) {
+      _snack(e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _openProvider(String rawUrl) async {
+    final uri = Uri.tryParse(rawUrl);
+    if (uri == null ||
+        (uri.scheme != 'https' && uri.scheme != 'http') ||
+        !await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+      _snack("Couldn't open the screening provider.");
     }
   }
 
@@ -291,11 +451,16 @@ class _ApplicationDetailScreenState
           .read(applicationsRepositoryProvider)
           .adverseAction(
             _id,
+            operationKey: _adverseActionOperationKey ??=
+                ApplicationsRepository.newOperationKey(),
             reason: result.reason.isEmpty ? null : result.reason,
             sendToApplicant: result.sendToApplicant,
           );
       if (!mounted) return;
-      setState(() => _adverseAction = notice);
+      setState(() {
+        _adverseAction = notice;
+        _adverseActionOperationKey = null;
+      });
       _snack(
         notice.sentAtUtc != null
             ? 'Adverse-action notice generated and sent.'
@@ -334,7 +499,6 @@ class _ApplicationDetailScreenState
   Widget build(BuildContext context) {
     final detailAsync = ref.watch(applicationDetailProvider(_id));
     final screeningAsync = ref.watch(applicationScreeningProvider(_id));
-    final feesAsync = ref.watch(applicationPaymentsProvider(_id));
     final theme = Theme.of(context);
 
     return Scaffold(
@@ -380,15 +544,20 @@ class _ApplicationDetailScreenState
             busy: _busy,
             createdTenantId: _createdTenantId ?? app.approvedTenantId,
             screeningAsync: screeningAsync,
-            feesAsync: feesAsync,
             adverseAction: _adverseAction,
             onApprove: _approve,
             onDecline: _decline,
             onWithdraw: _withdraw,
             onRecordFee: _recordFee,
-            onRunScreening: _runScreening,
+            onRunIntegratedScreening: _runIntegratedScreening,
+            onTrackExternalScreening: _trackExternalScreening,
+            onMarkExternalComplete: _markExternalScreeningComplete,
+            onRecordScreeningDecision: _recordScreeningDecision,
+            onUpdateScreeningAgency: _updateScreeningAgency,
+            onOpenProvider: _openProvider,
             onGenerateAdverseAction: () => _generateAdverseAction(app),
             onViewNotice: _viewNotice,
+            onPrepareMoveIn: () => _prepareMoveIn(app),
           ),
         ),
       ),
@@ -405,31 +574,41 @@ class _DetailBody extends StatelessWidget {
     required this.busy,
     required this.createdTenantId,
     required this.screeningAsync,
-    required this.feesAsync,
     required this.adverseAction,
     required this.onApprove,
     required this.onDecline,
     required this.onWithdraw,
     required this.onRecordFee,
-    required this.onRunScreening,
+    required this.onRunIntegratedScreening,
+    required this.onTrackExternalScreening,
+    required this.onMarkExternalComplete,
+    required this.onRecordScreeningDecision,
+    required this.onUpdateScreeningAgency,
+    required this.onOpenProvider,
     required this.onGenerateAdverseAction,
     required this.onViewNotice,
+    required this.onPrepareMoveIn,
   });
 
   final RentalApplication application;
   final ThemeData theme;
   final bool busy;
   final int? createdTenantId;
-  final AsyncValue<List<ScreeningResult>> screeningAsync;
-  final AsyncValue<List<Payment>> feesAsync;
+  final AsyncValue<ScreeningWorkspace> screeningAsync;
   final AdverseActionNotice? adverseAction;
   final VoidCallback onApprove;
   final VoidCallback onDecline;
   final VoidCallback onWithdraw;
   final VoidCallback onRecordFee;
-  final VoidCallback onRunScreening;
+  final VoidCallback onRunIntegratedScreening;
+  final VoidCallback onTrackExternalScreening;
+  final void Function(int screeningId) onMarkExternalComplete;
+  final void Function(ApplicantScreening screening) onRecordScreeningDecision;
+  final void Function(ApplicantScreening screening) onUpdateScreeningAgency;
+  final void Function(String url) onOpenProvider;
   final VoidCallback onGenerateAdverseAction;
   final void Function(int storedFileId) onViewNotice;
+  final VoidCallback onPrepareMoveIn;
 
   @override
   Widget build(BuildContext context) {
@@ -495,7 +674,7 @@ class _DetailBody extends StatelessWidget {
                       Expanded(
                         child: Text(
                           'Approved — tenant #$createdTenantId created. '
-                          'Open the tenant to set up a lease.',
+                          'Prepare the move-in and initial agreement.',
                           style: theme.textTheme.bodyMedium?.copyWith(
                             color: cs.onTertiaryContainer,
                           ),
@@ -504,54 +683,64 @@ class _DetailBody extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 10),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: FilledButton.tonalIcon(
-                      onPressed: () {
-                        if (app.unitId != null) {
-                          openUnitCommandCenter(
-                            context,
-                            unitId: app.unitId!,
-                            initialTab: UnitCommandCenterTab.tenants,
-                            application: app,
-                            tenantId: createdTenantId,
-                          );
-                          return;
-                        }
-
-                        Widget detailBuilder(BuildContext _) =>
-                            TenantDetailLoaderScreen(
-                              tenantId: createdTenantId!,
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      FilledButton.icon(
+                        onPressed: onPrepareMoveIn,
+                        icon: const Icon(Icons.login_outlined, size: 18),
+                        label: const Text('Prepare move-in'),
+                      ),
+                      FilledButton.tonalIcon(
+                        onPressed: () {
+                          if (app.unitId != null) {
+                            openUnitCommandCenter(
+                              context,
+                              unitId: app.unitId!,
+                              initialTab: UnitCommandCenterTab.tenantLease,
+                              initialView: UnitCommandCenterView.residents,
+                              application: app,
+                              tenantId: createdTenantId,
                             );
-                        final shellNavigator = mobileShellNavigatorOf(context);
-                        if (shellNavigator != null) {
-                          shellNavigator.openTab(
-                            MobileShellTabId.rentals,
-                            destination: MobileDestinationId.tenants,
-                            detailBuilder: detailBuilder,
-                          );
-                          revealMobileShellIfDetached(context);
-                          return;
-                        }
+                            return;
+                          }
 
-                        final domainNavigator = MobileDomainNavigation.maybeOf(
-                          context,
-                        );
-                        if (domainNavigator != null) {
-                          domainNavigator.openDestination(
-                            MobileDestinationId.tenants,
-                            detailBuilder: detailBuilder,
+                          Widget detailBuilder(BuildContext _) =>
+                              TenantDetailLoaderScreen(
+                                tenantId: createdTenantId!,
+                              );
+                          final shellNavigator = mobileShellNavigatorOf(
+                            context,
                           );
-                          return;
-                        }
+                          if (shellNavigator != null) {
+                            shellNavigator.openTab(
+                              MobileShellTabId.rentals,
+                              destination: MobileDestinationId.tenants,
+                              detailBuilder: detailBuilder,
+                            );
+                            revealMobileShellIfDetached(context);
+                            return;
+                          }
 
-                        Navigator.of(context).push<void>(
-                          MaterialPageRoute<void>(builder: detailBuilder),
-                        );
-                      },
-                      icon: const Icon(Icons.person_outline, size: 18),
-                      label: const Text('View tenant'),
-                    ),
+                          final domainNavigator =
+                              MobileDomainNavigation.maybeOf(context);
+                          if (domainNavigator != null) {
+                            domainNavigator.openDestination(
+                              MobileDestinationId.tenants,
+                              detailBuilder: detailBuilder,
+                            );
+                            return;
+                          }
+
+                          Navigator.of(context).push<void>(
+                            MaterialPageRoute<void>(builder: detailBuilder),
+                          );
+                        },
+                        icon: const Icon(Icons.person_outline, size: 18),
+                        label: const Text('View tenant'),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -642,10 +831,6 @@ class _DetailBody extends StatelessWidget {
           const SizedBox(height: 12),
         ],
 
-        // ── Application fees ──────────────────────────────────────────────
-        _ApplicationFeesSection(feesAsync: feesAsync),
-        const SizedBox(height: 12),
-
         // ── Consent ────────────────────────────────────────────────────────
         _SectionCard(
           title: 'Consent',
@@ -680,7 +865,12 @@ class _DetailBody extends StatelessWidget {
           busy: busy,
           screeningAsync: screeningAsync,
           adverseAction: adverseAction,
-          onRunScreening: onRunScreening,
+          onRunIntegratedScreening: onRunIntegratedScreening,
+          onTrackExternalScreening: onTrackExternalScreening,
+          onMarkExternalComplete: onMarkExternalComplete,
+          onRecordScreeningDecision: onRecordScreeningDecision,
+          onUpdateScreeningAgency: onUpdateScreeningAgency,
+          onOpenProvider: onOpenProvider,
           onGenerateAdverseAction: onGenerateAdverseAction,
           onViewNotice: onViewNotice,
         ),
@@ -734,97 +924,6 @@ class _DetailBody extends StatelessWidget {
           ),
         ],
         const SizedBox(height: 24),
-      ],
-    );
-  }
-}
-
-class _ApplicationFeesSection extends StatelessWidget {
-  const _ApplicationFeesSection({required this.feesAsync});
-
-  final AsyncValue<List<Payment>> feesAsync;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-
-    return _SectionCard(
-      title: 'Application fees',
-      child: feesAsync.when(
-        loading: () => const LinearProgressIndicator(),
-        error: (e, _) => Text(
-          e is ApiException ? e.message : 'Could not load application fees.',
-          style: theme.textTheme.bodyMedium?.copyWith(color: cs.error),
-        ),
-        data: (fees) {
-          if (fees.isEmpty) {
-            return const _EmptyHint(text: 'No application fees recorded.');
-          }
-
-          return Column(
-            children: [
-              for (var i = 0; i < fees.length; i++) ...[
-                _ApplicationFeeRow(payment: fees[i]),
-                if (i < fees.length - 1) const Divider(height: 16),
-              ],
-            ],
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _ApplicationFeeRow extends StatelessWidget {
-  const _ApplicationFeeRow({required this.payment});
-
-  final Payment payment;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    final date = payment.paidDate ?? payment.dueDate;
-    final dateLabel = date.year > 1
-        ? formatApplicationDate(date.toLocal())
-        : '—';
-    final method = payment.method?.trim();
-
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                paymentTypeLabel(payment.type),
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                [
-                  if (payment.status.isNotEmpty) payment.status,
-                  dateLabel,
-                  if (method != null && method.isNotEmpty) method,
-                ].join(' · '),
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: cs.onSurfaceVariant,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 12),
-        Text(
-          moneyFmt(payment.amount),
-          style: theme.textTheme.bodyMedium?.copyWith(
-            fontWeight: FontWeight.w700,
-          ),
-        ),
       ],
     );
   }
@@ -1156,10 +1255,16 @@ class _DeclineDialogState extends State<_DeclineDialog> {
 // ── Record application fee dialog ─────────────────────────────────────────────
 
 class _RecordFeeInput {
-  const _RecordFeeInput({required this.amount, this.method, this.paidDate});
+  const _RecordFeeInput({
+    required this.operationKey,
+    required this.amount,
+    this.method,
+    this.effectiveOn,
+  });
+  final String operationKey;
   final double amount;
   final String? method;
-  final DateTime? paidDate;
+  final DateTime? effectiveOn;
 }
 
 class _RecordFeeDialog extends StatefulWidget {
@@ -1172,7 +1277,7 @@ class _RecordFeeDialog extends StatefulWidget {
 class _RecordFeeDialogState extends State<_RecordFeeDialog> {
   final _amountController = TextEditingController();
   final _methodController = TextEditingController();
-  DateTime? _paidDate;
+  DateTime? _effectiveOn;
   String? _amountError;
 
   @override
@@ -1186,11 +1291,11 @@ class _RecordFeeDialogState extends State<_RecordFeeDialog> {
     final now = DateTime.now();
     final picked = await showDatePicker(
       context: context,
-      initialDate: _paidDate ?? now,
+      initialDate: _effectiveOn ?? now,
       firstDate: DateTime(now.year - 5),
       lastDate: DateTime(now.year + 1),
     );
-    if (picked != null) setState(() => _paidDate = picked);
+    if (picked != null) setState(() => _effectiveOn = picked);
   }
 
   void _submit() {
@@ -1202,9 +1307,10 @@ class _RecordFeeDialogState extends State<_RecordFeeDialog> {
     final method = _methodController.text.trim();
     Navigator.of(context).pop(
       _RecordFeeInput(
+        operationKey: ApplicationsRepository.newOperationKey(),
         amount: amount,
         method: method.isEmpty ? null : method,
-        paidDate: _paidDate,
+        effectiveOn: _effectiveOn,
       ),
     );
   }
@@ -1219,8 +1325,8 @@ class _RecordFeeDialogState extends State<_RecordFeeDialog> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Records a paid application/screening fee as income for this '
-            "application's property. No lease required.",
+            'Records a collected application or screening fee in this '
+            "application's financial account.",
             style: Theme.of(
               context,
             ).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
@@ -1255,9 +1361,9 @@ class _RecordFeeDialogState extends State<_RecordFeeDialog> {
             children: [
               Expanded(
                 child: Text(
-                  _paidDate == null
-                      ? 'Paid date: today'
-                      : 'Paid date: ${_paidDate!.toIso8601String().split('T').first}',
+                  _effectiveOn == null
+                      ? 'Received date: today'
+                      : 'Received date: ${_effectiveOn!.toIso8601String().split('T').first}',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
               ),
@@ -1285,16 +1391,26 @@ class _ScreeningSection extends StatelessWidget {
     required this.busy,
     required this.screeningAsync,
     required this.adverseAction,
-    required this.onRunScreening,
+    required this.onRunIntegratedScreening,
+    required this.onTrackExternalScreening,
+    required this.onMarkExternalComplete,
+    required this.onRecordScreeningDecision,
+    required this.onUpdateScreeningAgency,
+    required this.onOpenProvider,
     required this.onGenerateAdverseAction,
     required this.onViewNotice,
   });
 
   final RentalApplication application;
   final bool busy;
-  final AsyncValue<List<ScreeningResult>> screeningAsync;
+  final AsyncValue<ScreeningWorkspace> screeningAsync;
   final AdverseActionNotice? adverseAction;
-  final VoidCallback onRunScreening;
+  final VoidCallback onRunIntegratedScreening;
+  final VoidCallback onTrackExternalScreening;
+  final void Function(int screeningId) onMarkExternalComplete;
+  final void Function(ApplicantScreening screening) onRecordScreeningDecision;
+  final void Function(ApplicantScreening screening) onUpdateScreeningAgency;
+  final void Function(String url) onOpenProvider;
   final VoidCallback onGenerateAdverseAction;
   final void Function(int storedFileId) onViewNotice;
 
@@ -1304,15 +1420,12 @@ class _ScreeningSection extends StatelessWidget {
     final cs = theme.colorScheme;
     final app = application;
     final hasConsent = app.consentGiven;
+    final applicationOpen = isApplicationOpen(app.status);
 
-    // The most recent result drives the summary (list is newest-first).
-    final latest = screeningAsync.maybeWhen(
-      data: (results) => results.isEmpty ? null : results.first,
+    final latestScreening = screeningAsync.maybeWhen<ApplicantScreening?>(
+      data: (workspace) =>
+          workspace.screenings.isEmpty ? null : workspace.screenings.first,
       orElse: () => null,
-    );
-    final hasCompletedScreening = screeningAsync.maybeWhen(
-      data: (results) => results.any((r) => r.isCompleted),
-      orElse: () => false,
     );
 
     return _SectionCard(
@@ -1320,7 +1433,13 @@ class _ScreeningSection extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── Latest result summary ──────────────────────────────────────
+          Text(
+            'Choose how this applicant is screened. Sensitive identity details and report contents stay on the provider’s secure site.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: cs.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 16),
           screeningAsync.when(
             loading: () => const Padding(
               padding: EdgeInsets.symmetric(vertical: 4),
@@ -1336,35 +1455,67 @@ class _ScreeningSection extends StatelessWidget {
             error: (e, _) => _EmptyHint(
               text: e is ApiException ? e.message : "Couldn't load screening.",
             ),
-            data: (results) {
-              if (results.isEmpty) {
-                return _EmptyHint(text: 'No screening has been run yet.');
-              }
-              return _ScreeningResultView(result: results.first);
+            data: (workspace) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _ScreeningPathCard(
+                    icon: Icons.verified_user_outlined,
+                    title: 'Screen through Rental Command',
+                    body: workspace.integratedProvider.isConfigured
+                        ? 'Create a secure invitation for the applicant. They enter sensitive information on the provider’s site.'
+                        : 'Provider selection is still being finalized. Use an outside screening for now.',
+                    actionLabel: workspace.integratedProvider.isConfigured
+                        ? 'Invite applicant'
+                        : 'Not configured yet',
+                    onPressed:
+                        busy ||
+                            !applicationOpen ||
+                            !hasConsent ||
+                            !workspace.integratedProvider.isConfigured
+                        ? null
+                        : onRunIntegratedScreening,
+                  ),
+                  const SizedBox(height: 10),
+                  _ScreeningPathCard(
+                    icon: Icons.open_in_new_outlined,
+                    title: 'Screened elsewhere',
+                    body:
+                        'Track a Zillow or other outside screening without copying Social Security numbers or report contents into Rental Command.',
+                    actionLabel: 'Add outside screening',
+                    onPressed: busy || !applicationOpen
+                        ? null
+                        : onTrackExternalScreening,
+                  ),
+                  if (!hasConsent) ...[
+                    const SizedBox(height: 8),
+                    const _EmptyHint(
+                      text:
+                          'Applicant consent is required before an integrated screening can start.',
+                    ),
+                  ],
+                  const Divider(height: 28),
+                  if (workspace.screenings.isEmpty)
+                    const _EmptyHint(
+                      text:
+                          'No screening has been added yet. Choose either path above.',
+                    )
+                  else
+                    _ScreeningResultView(
+                      result: workspace.screenings.first,
+                      busy: busy,
+                      onMarkExternalComplete: onMarkExternalComplete,
+                      onRecordScreeningDecision: onRecordScreeningDecision,
+                      onUpdateScreeningAgency: onUpdateScreeningAgency,
+                      onOpenProvider: onOpenProvider,
+                    ),
+                ],
+              );
             },
           ),
-          const SizedBox(height: 12),
-
-          // ── Run screening ──────────────────────────────────────────────
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: (busy || !hasConsent) ? null : onRunScreening,
-              icon: const Icon(Icons.fact_check_outlined, size: 18),
-              label: Text(
-                latest == null ? 'Run screening' : 'Re-run screening',
-              ),
-            ),
-          ),
-          if (!hasConsent) ...[
-            const SizedBox(height: 6),
-            _EmptyHint(
-              text: 'Screening needs the applicant’s FCRA consent on file.',
-            ),
-          ],
 
           // ── Adverse-action (declined + screened) ───────────────────────
-          if (app.status == 'Declined' && hasCompletedScreening) ...[
+          if (app.status == 'Declined' && latestScreening != null) ...[
             const Divider(height: 28),
             Text(
               'Adverse action',
@@ -1374,9 +1525,9 @@ class _ScreeningSection extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text(
-              'When you decline based on a screening report, the FCRA requires '
-              'giving the applicant an adverse-action notice naming the credit '
-              'reporting agency and their right to dispute it.',
+              latestScreening.consumerReportUsedForDecision
+                  ? 'When a consumer report influences a decline, the FCRA requires giving the applicant an adverse-action notice naming the consumer reporting agency and their right to dispute it.'
+                  : 'No adverse-action notice is offered unless you record that a consumer report influenced the decline.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: cs.onSurfaceVariant,
               ),
@@ -1394,7 +1545,7 @@ class _ScreeningSection extends StatelessWidget {
                     label: const Text('View notice (PDF)'),
                   ),
                 ),
-            ] else
+            ] else if (latestScreening.canGenerateAdverseAction)
               SizedBox(
                 width: double.infinity,
                 child: OutlinedButton.icon(
@@ -1410,12 +1561,23 @@ class _ScreeningSection extends StatelessWidget {
   }
 }
 
-/// Summary of a single screening result — status, credit band, criminal /
-/// eviction in plain language, and a recommendation chip.
+/// Content-free summary of one screening workflow and the landlord's decision.
 class _ScreeningResultView extends StatelessWidget {
-  const _ScreeningResultView({required this.result});
+  const _ScreeningResultView({
+    required this.result,
+    required this.busy,
+    required this.onMarkExternalComplete,
+    required this.onRecordScreeningDecision,
+    required this.onUpdateScreeningAgency,
+    required this.onOpenProvider,
+  });
 
-  final ScreeningResult result;
+  final ApplicantScreening result;
+  final bool busy;
+  final void Function(int screeningId) onMarkExternalComplete;
+  final void Function(ApplicantScreening screening) onRecordScreeningDecision;
+  final void Function(ApplicantScreening screening) onUpdateScreeningAgency;
+  final void Function(String url) onOpenProvider;
 
   @override
   Widget build(BuildContext context) {
@@ -1436,39 +1598,126 @@ class _ScreeningResultView extends StatelessWidget {
                 ),
               ),
             ),
-            if (r.recommendation != null)
-              _RecommendationChip(recommendation: r.recommendation!),
+            if (r.decision != null)
+              _RecommendationChip(recommendation: r.decision!),
           ],
         ),
         const SizedBox(height: 8),
-        if (r.creditScoreBand != null)
-          _DetailRow(label: 'Credit band', value: r.creditScoreBand!),
+        if (r.statusSummary.isNotEmpty || r.nextAction.isNotEmpty) ...[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: cs.surfaceContainerHighest.withValues(alpha: 0.45),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (r.statusSummary.isNotEmpty)
+                  Text(r.statusSummary, style: theme.textTheme.bodyMedium),
+                if (r.nextAction.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Next: ${r.nextAction}',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: cs.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
         _DetailRow(
-          label: 'Criminal',
-          value: r.hasCriminalRecord == null
-              ? 'Not reported'
-              : (r.hasCriminalRecord! ? 'Record found' : 'None found'),
+          label: 'Path',
+          value: r.mode == 'Integrated' ? 'Rental Command' : 'Outside service',
         ),
-        _DetailRow(
-          label: 'Eviction',
-          value: r.hasEvictionRecord == null
-              ? 'Not reported'
-              : (r.hasEvictionRecord! ? 'Record found' : 'None found'),
-        ),
+        _DetailRow(label: 'Provider', value: r.providerDisplayName),
+        if (r.providerReference != null)
+          _DetailRow(label: 'Reference', value: r.providerReference!),
         if (r.completedAtUtc != null)
           _DetailRow(
             label: 'Completed',
             value: formatApplicationDateTime(r.completedAtUtc!),
           )
-        else if (r.requestedAtUtc != null)
+        else if (r.invitedAtUtc != null)
           _DetailRow(
-            label: 'Requested',
-            value: formatApplicationDateTime(r.requestedAtUtc!),
+            label: 'Invited',
+            value: formatApplicationDateTime(r.invitedAtUtc!),
           ),
+        _DetailRow(
+          label: 'Updated',
+          value: formatApplicationDateTime(r.lastStatusAtUtc),
+        ),
+        _DetailRow(
+          label: 'Consumer report used',
+          value: r.decision == null
+              ? 'Not recorded yet'
+              : (r.consumerReportUsedForDecision ? 'Yes' : 'No'),
+        ),
+        _DetailRow(
+          label: 'Agency contact',
+          value: r.hasCompleteCreditReportingAgencyContact
+              ? 'Complete'
+              : (r.decision != null && !r.consumerReportUsedForDecision
+                    ? 'Not required for this decision'
+                    : 'Missing'),
+        ),
+        if (r.decisionReason != null)
+          _DetailRow(label: 'Decision reason', value: r.decisionReason!),
+        if (r.providerHostedUrl != null) ...[
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: busy ? null : () => onOpenProvider(r.providerHostedUrl!),
+            icon: const Icon(Icons.open_in_new, size: 18),
+            label: const Text('Open provider'),
+          ),
+        ],
+        if (r.canMarkExternalComplete) ...[
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: busy ? null : () => onMarkExternalComplete(r.id),
+            icon: const Icon(Icons.check_circle_outline, size: 18),
+            label: const Text('Mark outside screening complete'),
+          ),
+        ],
+        if (r.mode == 'External') ...[
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: busy ? null : () => onUpdateScreeningAgency(r),
+            icon: const Icon(Icons.contact_phone_outlined, size: 18),
+            label: Text(
+              r.hasCompleteCreditReportingAgencyContact
+                  ? 'Update agency contact'
+                  : 'Add agency contact',
+            ),
+          ),
+        ],
+        if (r.isCompleted) ...[
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: busy ? null : () => onRecordScreeningDecision(r),
+            icon: const Icon(Icons.how_to_reg_outlined, size: 18),
+            label: Text(
+              r.decision == null ? 'Record decision' : 'Update decision',
+            ),
+          ),
+        ],
         if (r.status == 'Failed') ...[
           const SizedBox(height: 4),
           Text(
             'This screening request failed. Try running it again.',
+            style: theme.textTheme.bodySmall?.copyWith(color: cs.error),
+          ),
+        ],
+        if (r.decision != null &&
+            r.consumerReportUsedForDecision &&
+            !r.hasCompleteCreditReportingAgencyContact) ...[
+          const SizedBox(height: 6),
+          Text(
+            'Agency name, mailing address, and phone are required for a report-based decision.',
             style: theme.textTheme.bodySmall?.copyWith(color: cs.error),
           ),
         ],
@@ -1477,7 +1726,466 @@ class _ScreeningResultView extends StatelessWidget {
   }
 }
 
-/// Accept / Conditional / Decline chip for a screening recommendation.
+class _ScreeningPathCard extends StatelessWidget {
+  const _ScreeningPathCard({
+    required this.icon,
+    required this.title,
+    required this.body,
+    required this.actionLabel,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String title;
+  final String body;
+  final String actionLabel;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card.outlined(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(icon, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(body, style: theme.textTheme.bodySmall),
+            const SizedBox(height: 10),
+            OutlinedButton(onPressed: onPressed, child: Text(actionLabel)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ExternalScreeningInput {
+  const _ExternalScreeningInput({
+    required this.provider,
+    this.reference,
+    this.url,
+    this.agencyName,
+    this.agencyAddress,
+    this.agencyPhone,
+  });
+
+  final String provider;
+  final String? reference;
+  final String? url;
+  final String? agencyName;
+  final String? agencyAddress;
+  final String? agencyPhone;
+}
+
+class _ScreeningDecisionInput {
+  const _ScreeningDecisionInput({
+    required this.decision,
+    required this.consumerReportUsed,
+    this.reason,
+  });
+
+  final String decision;
+  final bool consumerReportUsed;
+  final String? reason;
+}
+
+class _CraContactInput {
+  const _CraContactInput({
+    required this.name,
+    required this.address,
+    required this.phone,
+  });
+
+  final String name;
+  final String address;
+  final String phone;
+}
+
+class _CraContactDialog extends StatefulWidget {
+  const _CraContactDialog({required this.initial});
+
+  final ApplicantScreening initial;
+
+  @override
+  State<_CraContactDialog> createState() => _CraContactDialogState();
+}
+
+class _CraContactDialogState extends State<_CraContactDialog> {
+  late final TextEditingController _name;
+  late final TextEditingController _address;
+  late final TextEditingController _phone;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _name = TextEditingController(
+      text: widget.initial.creditReportingAgencyName,
+    );
+    _address = TextEditingController(
+      text: widget.initial.creditReportingAgencyAddress,
+    );
+    _phone = TextEditingController(
+      text: widget.initial.creditReportingAgencyPhone,
+    );
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _address.dispose();
+    _phone.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final name = _name.text.trim();
+    final address = _address.text.trim();
+    final phone = _phone.text.trim();
+    if (name.isEmpty || address.isEmpty || phone.isEmpty) {
+      setState(
+        () => _error =
+            'Enter the agency name, mailing address, and phone number.',
+      );
+      return;
+    }
+    Navigator.of(
+      context,
+    ).pop(_CraContactInput(name: name, address: address, phone: phone));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Consumer reporting agency contact'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Required only when a consumer report influences the decision. Saving here updates this screening; it does not create another one.',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _name,
+              decoration: const InputDecoration(labelText: 'Agency name'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _address,
+              decoration: const InputDecoration(labelText: 'Mailing address'),
+              maxLines: 2,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _phone,
+              decoration: const InputDecoration(labelText: 'Phone'),
+              keyboardType: TextInputType.phone,
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _error!,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.error,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Save contact')),
+      ],
+    );
+  }
+}
+
+class _ScreeningDecisionDialog extends StatefulWidget {
+  const _ScreeningDecisionDialog({required this.screening});
+
+  final ApplicantScreening screening;
+
+  @override
+  State<_ScreeningDecisionDialog> createState() =>
+      _ScreeningDecisionDialogState();
+}
+
+class _ScreeningDecisionDialogState extends State<_ScreeningDecisionDialog> {
+  late String _decision;
+  late bool _consumerReportUsed;
+  final _reason = TextEditingController();
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _decision = widget.screening.decision ?? 'Accept';
+    _consumerReportUsed = widget.screening.consumerReportUsedForDecision;
+    _reason.text = widget.screening.decisionReason ?? '';
+  }
+
+  @override
+  void dispose() {
+    _reason.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final reason = _reason.text.trim();
+    if (_consumerReportUsed && reason.isEmpty) {
+      setState(() => _error = 'Enter the principal decision reason.');
+      return;
+    }
+    if (_consumerReportUsed &&
+        !widget.screening.hasCompleteCreditReportingAgencyContact) {
+      setState(
+        () => _error =
+            'Save the agency name, mailing address, and phone before recording a report-based decision.',
+      );
+      return;
+    }
+    Navigator.of(context).pop(
+      _ScreeningDecisionInput(
+        decision: _decision,
+        consumerReportUsed: _consumerReportUsed,
+        reason: reason.isEmpty ? null : reason,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Record screening decision'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            DropdownButtonFormField<String>(
+              initialValue: _decision,
+              decoration: const InputDecoration(labelText: 'Decision'),
+              items: const [
+                DropdownMenuItem(value: 'Accept', child: Text('Accept')),
+                DropdownMenuItem(
+                  value: 'Conditional',
+                  child: Text('Conditional'),
+                ),
+                DropdownMenuItem(value: 'Decline', child: Text('Decline')),
+              ],
+              onChanged: (value) {
+                if (value != null) setState(() => _decision = value);
+              },
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _reason,
+              decoration: const InputDecoration(labelText: 'Reason (optional)'),
+              maxLines: 3,
+            ),
+            const SizedBox(height: 8),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Consumer report influenced this decision'),
+              subtitle: const Text(
+                'Turn this on when the outside or integrated report affected the decision. Rental Command can then guide adverse-action steps.',
+              ),
+              value: _consumerReportUsed,
+              onChanged: (value) => setState(() => _consumerReportUsed = value),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _error!,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.error,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Save decision')),
+      ],
+    );
+  }
+}
+
+class _ExternalScreeningDialog extends StatefulWidget {
+  const _ExternalScreeningDialog();
+
+  @override
+  State<_ExternalScreeningDialog> createState() =>
+      _ExternalScreeningDialogState();
+}
+
+class _ExternalScreeningDialogState extends State<_ExternalScreeningDialog> {
+  final _provider = TextEditingController(text: 'Zillow');
+  final _reference = TextEditingController();
+  final _url = TextEditingController();
+  final _agencyName = TextEditingController();
+  final _agencyAddress = TextEditingController();
+  final _agencyPhone = TextEditingController();
+  String? _error;
+
+  @override
+  void dispose() {
+    _provider.dispose();
+    _reference.dispose();
+    _url.dispose();
+    _agencyName.dispose();
+    _agencyAddress.dispose();
+    _agencyPhone.dispose();
+    super.dispose();
+  }
+
+  String? _optional(TextEditingController controller) {
+    final value = controller.text.trim();
+    return value.isEmpty ? null : value;
+  }
+
+  void _submit() {
+    final provider = _provider.text.trim();
+    if (provider.isEmpty) {
+      setState(() => _error = 'Enter the screening service.');
+      return;
+    }
+    final url = _url.text.trim();
+    if (url.isNotEmpty) {
+      final uri = Uri.tryParse(url);
+      if (uri == null ||
+          (uri.scheme != 'https' && uri.scheme != 'http') ||
+          !uri.hasAuthority) {
+        setState(() => _error = 'Enter a complete provider link.');
+        return;
+      }
+    }
+    Navigator.of(context).pop(
+      _ExternalScreeningInput(
+        provider: provider,
+        reference: _optional(_reference),
+        url: _optional(_url),
+        agencyName: _optional(_agencyName),
+        agencyAddress: _optional(_agencyAddress),
+        agencyPhone: _optional(_agencyPhone),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Add outside screening'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Track progress only. Do not enter Social Security numbers, identity answers, or report contents.',
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _provider,
+              decoration: const InputDecoration(labelText: 'Screening service'),
+              textInputAction: TextInputAction.next,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _reference,
+              decoration: const InputDecoration(
+                labelText: 'Reference (optional)',
+              ),
+              textInputAction: TextInputAction.next,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _url,
+              decoration: const InputDecoration(
+                labelText: 'Provider link (optional)',
+                hintText: 'https://…',
+              ),
+              keyboardType: TextInputType.url,
+              textInputAction: TextInputAction.next,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Consumer reporting agency contact',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Add the agency name, mailing address, and phone if its report may influence your decision. These are not required when no consumer report is used.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _agencyName,
+              decoration: const InputDecoration(labelText: 'Agency name'),
+              textInputAction: TextInputAction.next,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _agencyAddress,
+              decoration: const InputDecoration(labelText: 'Agency address'),
+              textInputAction: TextInputAction.next,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _agencyPhone,
+              decoration: const InputDecoration(labelText: 'Agency phone'),
+              keyboardType: TextInputType.phone,
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _error!,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Add screening')),
+      ],
+    );
+  }
+}
+
+/// Accept / Conditional / Decline chip for the landlord's recorded decision.
 class _RecommendationChip extends StatelessWidget {
   const _RecommendationChip({required this.recommendation});
 

@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Outbox;
 
 namespace RentalCommand.Api.Services.Sms;
 
@@ -17,7 +18,12 @@ public sealed class SignalWireSmsProvider : ISmsProvider
 
     public SmsProviderKey Key => SmsProviderKey.SignalWire;
 
-    public async Task SendAsync(SmsCredentials credentials, string toPhoneNumber, string message, CancellationToken ct = default)
+    public async Task<SmsProviderReceipt> SendAsync(
+        SmsCredentials credentials,
+        string toPhoneNumber,
+        string message,
+        NotificationDeliveryContext delivery,
+        CancellationToken ct = default)
     {
         var projectId = credentials.CredentialA!;
         var token = credentials.CredentialB!;
@@ -40,5 +46,7 @@ public sealed class SignalWireSmsProvider : ISmsProvider
 
         var response = await _http.SendAsync(request, ct);
         await SmsProviderHttp.EnsureSuccessAsync(response, "SignalWire", ct);
+        var body = await response.Content.ReadAsStringAsync(ct);
+        return new SmsProviderReceipt(SmsProviderHttp.TryReadString(body, "sid"));
     }
 }

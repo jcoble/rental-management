@@ -12,7 +12,7 @@ namespace RentalCommand.Core.Entities;
 ///
 /// <para>
 /// Generalizes EdiPlatform's stamp-external-id-on-the-row approach; RC's
-/// <c>Payment</c>/<c>Expense</c> have no external-id column, so a side ledger is
+/// <c>TenantLedgerEntry</c>/<c>Expense</c> have no external-id column, so a side ledger is
 /// cleaner. Portfolio-scoped (RLS). Deliberately NOT <c>IAuditable</c>: this is
 /// high-volume per-transaction sync bookkeeping, not a business decision — keeping
 /// it out of the audit trail prevents flooding it (the audit-marker guidance).
@@ -34,10 +34,14 @@ public class AccountingSyncMap : IPortfolioScoped
 
     public string ExternalId { get; set; } = string.Empty;
 
-    /// <summary>"Payment" | "Expense" — the kind of RC row this maps to.</summary>
+    /// <summary>"TenantLedgerEntry" | "Expense" — the kind of RC row this maps to.</summary>
     public string? LocalEntityType { get; set; }
 
-    public int? LocalEntityId { get; set; }
+    /// <summary>
+    /// Canonical financial targets use bigint keys. Keeping this pointer wide also supports the
+    /// existing int-keyed targets without narrowing or overflow risk.
+    /// </summary>
+    public long? LocalEntityId { get; set; }
 
     /// <summary>"Imported" | "Pushed" | "NeedsReview" | "Unmatched" | "Failed".</summary>
     public string Status { get; set; } = string.Empty;

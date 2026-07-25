@@ -92,6 +92,10 @@ public static class ReportParamKeys
 
     /// <summary>Forward-looking window in days, bound from query <c>days</c> (lease expirations).</summary>
     public const string Days = "days";
+
+    public const string Skip = "skip";
+    public const string Take = "take";
+    public const string Sort = "sort";
 }
 
 // ── Shared param binding ─────────────────────────────────────────────────────────────────────────
@@ -104,6 +108,9 @@ public static class ReportParamKeys
 /// </summary>
 public class ReportRangeQuery
 {
+    public const int DefaultTake = 20;
+    public const int MaxTake = 100;
+
     [Microsoft.AspNetCore.Mvc.FromQuery(Name = "from")]
     public DateTime? From { get; set; }
 
@@ -115,6 +122,25 @@ public class ReportRangeQuery
 
     [Microsoft.AspNetCore.Mvc.FromQuery(Name = "propertyIds")]
     public List<int>? PropertyIds { get; set; }
+
+    [Microsoft.AspNetCore.Mvc.FromQuery(Name = "skip")]
+    public int Skip { get; set; }
+
+    [Microsoft.AspNetCore.Mvc.FromQuery(Name = "take")]
+    public int Take { get; set; } = DefaultTake;
+
+    [Microsoft.AspNetCore.Mvc.FromQuery(Name = "sort")]
+    public string? Sort { get; set; }
+
+    public int NormalizedSkip => Math.Max(0, Skip);
+
+    public int NormalizedTake => Take <= 0 ? DefaultTake : Math.Min(Take, MaxTake);
+
+    public string NormalizedSort => string.IsNullOrWhiteSpace(Sort) ? "property" : Sort.Trim();
+
+    public string SortField => NormalizedSort.TrimStart('-').Replace("_", string.Empty, StringComparison.Ordinal).ToLowerInvariant();
+
+    public bool SortDescending => NormalizedSort.StartsWith("-", StringComparison.Ordinal);
 }
 
 // ── Rent Roll ────────────────────────────────────────────────────────────────────────────────────
@@ -137,19 +163,21 @@ public class RentRollResponse
 
 public class RentRollRow
 {
-    public int LeaseId { get; set; }
-    public string LeaseNumber { get; set; } = string.Empty;
+    public int LeaseManagementId { get; set; }
+    public int TenantAccountId { get; set; }
+    public int AgreementId { get; set; }
+    public string RelationshipNumber { get; set; } = string.Empty;
+    public string AgreementNumber { get; set; } = string.Empty;
     public int PropertyId { get; set; }
     public string PropertyName { get; set; } = string.Empty;
     public int UnitId { get; set; }
     public string UnitNumber { get; set; } = string.Empty;
-    public int TenantId { get; set; }
+    public int? TenantId { get; set; }
     public string TenantName { get; set; } = string.Empty;
     public decimal MonthlyRent { get; set; }
     public decimal SecurityDeposit { get; set; }
-    public DateTime StartDate { get; set; }
-    public DateTime EndDate { get; set; }
-    public LeaseStatus Status { get; set; }
+    public DateOnly StartOn { get; set; }
+    public DateOnly? EndOn { get; set; }
     public string StatusName { get; set; } = string.Empty;
 }
 
@@ -157,7 +185,8 @@ public class RentRollRow
 
 /// <summary>
 /// Accrual rent ledger across the portfolio for a date range: charges due vs. payments received,
-/// grouped by lease, with a running balance per lease. A positive balance means the tenant owes.
+/// grouped by continuous lease-management relationship, with a running balance per tenant account.
+/// A positive balance means the tenant owes.
 /// </summary>
 public class RentLedgerResponse
 {
@@ -169,26 +198,26 @@ public class RentLedgerResponse
     public decimal TotalCharged { get; set; }
 
     /// <summary>Sum of all payments received in the range across every lease.</summary>
-    public decimal TotalPaid { get; set; }
+    public decimal TotalCredits { get; set; }
 
-    /// <summary>Closing balance across every lease (TotalCharged − TotalPaid).</summary>
+    /// <summary>Closing balance across every tenant account (TotalCharged minus TotalCredits).</summary>
     public decimal TotalBalance { get; set; }
 }
 
-/// <summary>One lease's ledger over the range: ordered entries plus the lease's running totals.</summary>
+/// <summary>One lease-management relationship's ordered ledger entries and running totals.</summary>
 public class RentLedgerLease
 {
-    public int LeaseId { get; set; }
-    public string LeaseNumber { get; set; } = string.Empty;
+    public int LeaseManagementId { get; set; }
+    public string RelationshipNumber { get; set; } = string.Empty;
     public int PropertyId { get; set; }
     public string PropertyName { get; set; } = string.Empty;
     public string UnitNumber { get; set; } = string.Empty;
     public string TenantName { get; set; } = string.Empty;
     public IReadOnlyList<RentLedgerEntry> Entries { get; set; } = [];
     public decimal TotalCharged { get; set; }
-    public decimal TotalPaid { get; set; }
+    public decimal TotalCredits { get; set; }
 
-    /// <summary>Closing running balance for this lease (TotalCharged − TotalPaid). Positive = owed.</summary>
+    /// <summary>Closing running balance for this tenant account. Positive means owed.</summary>
     public decimal Balance { get; set; }
 }
 
@@ -197,7 +226,7 @@ public class RentLedgerEntry
 {
     public DateTime Date { get; set; }
 
-    /// <summary>"Charge" (rent/fee due) or "Payment" (cash received).</summary>
+    /// <summary>"Charge", "Receipt", or another explicit ledger credit type.</summary>
     public string Type { get; set; } = string.Empty;
 
     public string Description { get; set; } = string.Empty;
@@ -206,7 +235,7 @@ public class RentLedgerEntry
     public decimal Charge { get; set; }
 
     /// <summary>The amount paid on this entry (0 for a charge).</summary>
-    public decimal Payment { get; set; }
+    public decimal Credit { get; set; }
 
     /// <summary>Running balance owed after this entry (Σcharges − Σpayments up to and including this row).</summary>
     public decimal Balance { get; set; }
@@ -214,7 +243,7 @@ public class RentLedgerEntry
 
 // ── Delinquency / Overdue Aging ──────────────────────────────────────────────────────────────────
 
-/// <summary>Outstanding balances aged into 0-30 / 31-60 / 61-90 / 90+ buckets, per lease plus totals.</summary>
+/// <summary>Outstanding balances aged into buckets per lease-management relationship plus totals.</summary>
 public class DelinquencyResponse
 {
     public DateTime AsOf { get; set; }
@@ -225,11 +254,11 @@ public class DelinquencyResponse
     public decimal TotalOutstanding { get; set; }
 }
 
-/// <summary>One delinquent lease/tenant aged into buckets.</summary>
+/// <summary>One delinquent lease-management relationship/tenant aged into buckets.</summary>
 public class DelinquencyRow
 {
-    public int LeaseId { get; set; }
-    public string LeaseNumber { get; set; } = string.Empty;
+    public int LeaseManagementId { get; set; }
+    public string RelationshipNumber { get; set; } = string.Empty;
     public int PropertyId { get; set; }
     public string PropertyName { get; set; } = string.Empty;
     public string UnitNumber { get; set; } = string.Empty;
@@ -268,6 +297,10 @@ public class CashFlowResponse
     public DateTime From { get; set; }
     public DateTime To { get; set; }
     public IReadOnlyList<CashFlowMonth> Months { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
+    public string Sort { get; set; } = "month";
     public decimal TotalIncome { get; set; }
     public decimal TotalExpense { get; set; }
     public decimal TotalNet { get; set; }
@@ -296,7 +329,7 @@ public class CashFlowMonth
 // ── General Ledger / Account Transactions (running balance) ──────────────────────────────────────
 
 /// <summary>
-/// General ledger: every payment and expense over the range in date order with a running balance.
+/// General ledger: every recognized tenant receipt and expense over the range in date order.
 /// Income is positive, expense is negative; the running balance is the cumulative net.
 /// </summary>
 public class GeneralLedgerResponse
@@ -315,10 +348,10 @@ public class GeneralLedgerEntry
 {
     public DateTime Date { get; set; }
 
-    /// <summary>"Payment" or "Expense".</summary>
+    /// <summary>"Receipt" or "Expense".</summary>
     public string Type { get; set; } = string.Empty;
 
-    public int Id { get; set; }
+    public long Id { get; set; }
     public string Description { get; set; } = string.Empty;
     public string Category { get; set; } = string.Empty;
     public int? PropertyId { get; set; }
@@ -386,7 +419,7 @@ public class OccupancyRow
 /// <summary>Active/under-notice leases whose end date falls within the next N days.</summary>
 public class LeaseExpirationsResponse
 {
-    public DateTime AsOf { get; set; }
+    public DateOnly AsOf { get; set; }
 
     /// <summary>The forward-looking window in days that was applied.</summary>
     public int WindowDays { get; set; }
@@ -398,30 +431,35 @@ public class LeaseExpirationsResponse
 
 public class LeaseExpirationRow
 {
-    public int LeaseId { get; set; }
-    public string LeaseNumber { get; set; } = string.Empty;
+    public int LeaseManagementId { get; set; }
+    public int AgreementId { get; set; }
+    public string RelationshipNumber { get; set; } = string.Empty;
+    public string AgreementNumber { get; set; } = string.Empty;
     public int PropertyId { get; set; }
     public string PropertyName { get; set; } = string.Empty;
     public string UnitNumber { get; set; } = string.Empty;
-    public int TenantId { get; set; }
+    public int? TenantId { get; set; }
     public string TenantName { get; set; } = string.Empty;
     public decimal MonthlyRent { get; set; }
-    public DateTime EndDate { get; set; }
+    public DateOnly EndOn { get; set; }
 
     /// <summary>Days from "now" until the lease ends (negative if already past, which can happen for NoticeGiven leases).</summary>
     public int DaysUntilExpiry { get; set; }
 
-    public LeaseStatus Status { get; set; }
     public string StatusName { get; set; } = string.Empty;
 }
 
 // ── Security Deposit Register ─────────────────────────────────────────────────────────────────────
 
-/// <summary>Per-lease security-deposit holdings: held, deductions, returned, current balance + totals.</summary>
+/// <summary>Per-relationship security-deposit holdings: held, deductions, returned, current balance + totals.</summary>
 public class SecurityDepositRegisterResponse
 {
     public DateTime GeneratedAt { get; set; }
     public IReadOnlyList<SecurityDepositRegisterRow> Rows { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
+    public string Sort { get; set; } = "property";
     public decimal TotalHeld { get; set; }
     public decimal TotalDeductions { get; set; }
     public decimal TotalReturned { get; set; }
@@ -433,8 +471,8 @@ public class SecurityDepositRegisterResponse
 public class SecurityDepositRegisterRow
 {
     public int DepositId { get; set; }
-    public int LeaseId { get; set; }
-    public string LeaseNumber { get; set; } = string.Empty;
+    public int LeaseManagementId { get; set; }
+    public string RelationshipNumber { get; set; } = string.Empty;
     public int PropertyId { get; set; }
     public string PropertyName { get; set; } = string.Empty;
     public string UnitNumber { get; set; } = string.Empty;
@@ -452,7 +490,8 @@ public class SecurityDepositRegisterRow
     /// <summary>What is still held in trust right now: Held − Deductions − Returned (floored at 0).</summary>
     public decimal CurrentBalance { get; set; }
 
-    public SecurityDepositStatus Status { get; set; }
+    /// <summary>Database-derived status: NotFunded, Held, Withheld, PartiallyReturned, or Returned.</summary>
+    public string Status { get; set; } = string.Empty;
     public string StatusName { get; set; } = string.Empty;
     public DateTime HeldAt { get; set; }
     public DateTime? ReturnedAt { get; set; }
@@ -468,6 +507,9 @@ public class Vendor1099Response
 
     /// <summary>Sum of <see cref="Vendor1099Row.TotalPaid"/> across all rows.</summary>
     public decimal TotalPaid { get; set; }
+
+    /// <summary>Count of paid, 1099-eligible vendors that do not have a W-9 on file.</summary>
+    public int NeedsW9Count { get; set; }
 
     /// <summary>The IRS 1099 reporting threshold applied to flag "needs review" (currently $600).</summary>
     public decimal Threshold { get; set; }

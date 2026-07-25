@@ -9,8 +9,10 @@ import type {
 	ImportBankTransactionsRequest,
 	ImportBankTransactionsResponse,
 	MatchBankTransactionRequest,
+	OperationalBankTransaction,
 	PlaidLinkTokenResponse,
 	PlaidSettings,
+	RouteBankTransactionRequest,
 	SyncBankConnectionResponse
 } from '$lib/types';
 import { api } from '../client';
@@ -35,9 +37,13 @@ export const banking = {
 	importTransactions: (request: ImportBankTransactionsRequest) =>
 		api.post<ImportBankTransactionsResponse>('/banking/transactions/import', request),
 	match: (id: number, request: MatchBankTransactionRequest) =>
-		api.post<BankTransaction>(`/banking/transactions/${id}/match`, request),
-	clearMatch: (id: number) =>
-		api.post<BankTransaction>(`/banking/transactions/${id}/clear-match`, {}),
+		api.post<OperationalBankTransaction>(`/banking/transactions/${id}/match`, request),
+	routeTransaction: (id: number, request: RouteBankTransactionRequest) =>
+		api.put<OperationalBankTransaction>(`/banking/transactions/${id}/route`, request),
+	clearMatch: (
+		id: number,
+		request: Pick<ConfirmBankMatchRequest, 'operationKey' | 'expectedUpdatedAtUtc'>
+	) => api.post<BankTransaction>(`/banking/transactions/${id}/clear-match`, request),
 	reviewQueue: (params: { skip?: number; take?: number } = {}) => {
 		const query = new URLSearchParams();
 		if (params.skip !== undefined) query.set('skip', String(params.skip));
@@ -45,13 +51,17 @@ export const banking = {
 		const suffix = query.toString();
 		return api.get<BankReviewQueueResponse>(`/banking/review-queue${suffix ? `?${suffix}` : ''}`);
 	},
-	confirmMatch: (id: number, request: ConfirmBankMatchRequest = {}) =>
-		api.post<BankTransaction>(`/banking/transactions/${id}/confirm-match`, request),
-	dismissMatch: (id: number) =>
-		api.post<BankTransaction>(`/banking/transactions/${id}/dismiss-match`, {}),
+	confirmMatch: (id: number, request: ConfirmBankMatchRequest) =>
+		api.post<OperationalBankTransaction>(`/banking/transactions/${id}/confirm-match`, request),
+	dismissMatch: (
+		id: number,
+		request: Pick<ConfirmBankMatchRequest, 'operationKey' | 'expectedUpdatedAtUtc'>
+	) => api.post<BankTransaction>(`/banking/transactions/${id}/dismiss-match`, request),
 	// Mark a bank line as personal / not business money. It leaves the unmatched review queue and is
 	// excluded from the books (server sets MatchStatus="Removed"), but stays listable via ?status=Removed.
 	// Un-ignore by calling clearMatch (resets it back to Unmatched).
-	ignore: (id: number) =>
-		api.post<BankTransaction>(`/banking/transactions/${id}/ignore`, {})
+	ignore: (
+		id: number,
+		request: Pick<ConfirmBankMatchRequest, 'operationKey' | 'expectedUpdatedAtUtc'>
+	) => api.post<BankTransaction>(`/banking/transactions/${id}/ignore`, request)
 };

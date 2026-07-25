@@ -1,14 +1,17 @@
 using System.Text;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using RentalCommand.Api.Auth;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Time;
 
 namespace RentalCommand.Api.Controllers;
 
 /// <summary>
-/// Read-only accounting rollups for the caller's portfolio. Scope comes from the JWT <c>portfolioId</c>
-/// claim. There are no create/update/delete operations here.
+/// Read-only accounting rollups for the caller's portfolio. Scope comes from the server-validated
+/// workspace context. There are no create/update/delete operations here.
 /// </summary>
 [ApiController]
 [Route("api/v1/accounting")]
@@ -48,7 +51,7 @@ public class AccountingController : ManagementControllerBase
     [ProducesResponseType(typeof(CashFlowSummaryResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<CashFlowSummaryResponse>> CashFlow([FromQuery] ReportRangeQuery query, CancellationToken ct)
     {
-        var result = await _reports.GetTrueCashFlowAsync(GetPortfolioId(), query, ct);
+        var result = await _reports.GetTrueCashFlowAsync(GetWorkspaceReadScope(), query, ct);
         return Ok(result);
     }
 
@@ -65,7 +68,7 @@ public class AccountingController : ManagementControllerBase
         CancellationToken ct)
     {
         var reportYear = year ?? _timeProvider.UtcNow().Year - 1;
-        var result = await _reports.GetYearEndAsync(GetPortfolioId(), reportYear, propertyId, ct);
+        var result = await _reports.GetYearEndAsync(GetWorkspaceReadScope(), reportYear, propertyId, ct);
         return Ok(result);
     }
 
@@ -74,7 +77,7 @@ public class AccountingController : ManagementControllerBase
     [ProducesResponseType(typeof(AccountingSummaryResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<AccountingSummaryResponse>> Summary(CancellationToken ct)
     {
-        var summary = await _service.GetSummaryAsync(GetPortfolioId(), ct);
+        var summary = await _service.GetSummaryAsync(GetWorkspaceReadScope(), ct);
         return Ok(summary);
     }
 
@@ -87,20 +90,22 @@ public class AccountingController : ManagementControllerBase
     [ProducesResponseType(typeof(MoneySnapshotResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<MoneySnapshotResponse>> Snapshot(CancellationToken ct)
     {
-        var snapshot = await _service.GetSnapshotAsync(GetPortfolioId(), ct);
+        var snapshot = await _service.GetSnapshotAsync(GetWorkspaceReadScope(), ct);
         return Ok(snapshot);
     }
 
     /// <summary>
-    /// The "Who's behind" list: one actionable row per lease/tenant currently behind on rent. This is
+    /// The "Who's behind" list: one actionable row per tenant account currently behind on rent. This is
     /// the destination behind the dashboard "tenants behind" KPI — both come from the same past-due
     /// definition, so the returned <c>TotalCount</c> always equals that KPI count.
     /// </summary>
     [HttpGet("past-due")]
     [ProducesResponseType(typeof(PastDueResponse), StatusCodes.Status200OK)]
-    public async Task<ActionResult<PastDueResponse>> PastDue(CancellationToken ct)
+    public async Task<ActionResult<PastDueResponse>> PastDue(
+        [FromQuery] PastDueQuery query,
+        CancellationToken ct)
     {
-        var pastDue = await _service.GetPastDueAsync(GetPortfolioId(), ct);
+        var pastDue = await _service.GetPastDueAsync(GetWorkspaceReadScope(), query, ct);
         return Ok(pastDue);
     }
 
@@ -109,7 +114,7 @@ public class AccountingController : ManagementControllerBase
     [ProducesResponseType(typeof(AccountingReportsResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<AccountingReportsResponse>> Reports(CancellationToken ct)
     {
-        var reports = await _service.GetReportsAsync(GetPortfolioId(), ct);
+        var reports = await _service.GetReportsAsync(GetWorkspaceReadScope(), ct);
         return Ok(reports);
     }
 
@@ -120,7 +125,7 @@ public class AccountingController : ManagementControllerBase
         [FromQuery] AccountingTransactionsQuery query,
         CancellationToken ct)
     {
-        var transactions = await _service.GetTransactionsAsync(GetPortfolioId(), query, ct);
+        var transactions = await _service.GetTransactionsAsync(GetWorkspaceReadScope(), query, ct);
         return Ok(transactions);
     }
 
@@ -136,7 +141,7 @@ public class AccountingController : ManagementControllerBase
         CancellationToken ct)
     {
         var reportYear = year ?? _timeProvider.UtcNow().Year;
-        var report = await _scheduleE.GetReportAsync(GetPortfolioId(), reportYear, propertyId, ct);
+        var report = await _scheduleE.GetReportAsync(GetWorkspaceReadScope(), reportYear, propertyId, ct);
         return Ok(report);
     }
 
@@ -146,12 +151,13 @@ public class AccountingController : ManagementControllerBase
     /// the end. Defaults to the current UTC year when <paramref name="year"/> is omitted.
     /// </summary>
     [HttpGet("schedule-e/export")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.DataExport)]
     [Produces("text/csv")]
     [ProducesResponseType(typeof(FileResult), StatusCodes.Status200OK)]
     public async Task<IActionResult> ScheduleEExport([FromQuery] int? year, CancellationToken ct)
     {
         var reportYear = year ?? _timeProvider.UtcNow().Year;
-        var report = await _scheduleE.GetReportAsync(GetPortfolioId(), reportYear, ct: ct);
+        var report = await _scheduleE.GetReportAsync(GetWorkspaceReadScope(), reportYear, ct: ct);
 
         var csv = BuildCsv(report);
         var bytes = Encoding.UTF8.GetBytes(csv);
@@ -165,12 +171,13 @@ public class AccountingController : ManagementControllerBase
     /// when <paramref name="year"/> is omitted (that's the year you file for).
     /// </summary>
     [HttpGet("year-end-packet")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.DataExport)]
     [Produces("application/pdf")]
     [ProducesResponseType(typeof(FileResult), StatusCodes.Status200OK)]
     public async Task<IActionResult> YearEndPacket([FromQuery] int? year, CancellationToken ct)
     {
         var reportYear = year ?? _timeProvider.UtcNow().Year - 1;
-        var pdf = await _service.GetYearEndPacketAsync(GetPortfolioId(), reportYear, ct);
+        var pdf = await _service.GetYearEndPacketAsync(GetWorkspaceReadScope(), reportYear, ct);
         // Inline so it previews in the browser; the filename still applies on download/save.
         return File(pdf, "application/pdf", $"year-end-{reportYear}.pdf");
     }
@@ -187,7 +194,7 @@ public class AccountingController : ManagementControllerBase
         [FromQuery] int? year, CancellationToken ct)
     {
         var reportYear = year ?? _timeProvider.UtcNow().Year;
-        var summaries = await _ownerStatements.ListOwnersWithNetAsync(GetPortfolioId(), reportYear, ct);
+        var summaries = await _ownerStatements.ListOwnersWithNetAsync(GetWorkspaceReadScope(), reportYear, ct);
         return Ok(summaries);
     }
 
@@ -203,7 +210,7 @@ public class AccountingController : ManagementControllerBase
         [FromQuery] int ownerId, [FromQuery] int? year, CancellationToken ct)
     {
         var reportYear = year ?? _timeProvider.UtcNow().Year;
-        var report = await _ownerStatements.GetForOwnerAsync(GetPortfolioId(), ownerId, reportYear, ct);
+        var report = await _ownerStatements.GetForOwnerAsync(GetWorkspaceReadScope(), ownerId, reportYear, ct);
         if (report is null)
             return NotFound();
         return Ok(report);
@@ -216,6 +223,7 @@ public class AccountingController : ManagementControllerBase
     /// Defaults to the current UTC year when <paramref name="year"/> is omitted.
     /// </summary>
     [HttpGet("owner-statement/export")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.DataExport)]
     [Produces("text/csv")]
     [ProducesResponseType(typeof(FileResult), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -223,7 +231,7 @@ public class AccountingController : ManagementControllerBase
         [FromQuery] int ownerId, [FromQuery] int? year, CancellationToken ct)
     {
         var reportYear = year ?? _timeProvider.UtcNow().Year;
-        var report = await _ownerStatements.GetForOwnerAsync(GetPortfolioId(), ownerId, reportYear, ct);
+        var report = await _ownerStatements.GetForOwnerAsync(GetWorkspaceReadScope(), ownerId, reportYear, ct);
         if (report is null)
             return NotFound();
 
@@ -241,15 +249,30 @@ public class AccountingController : ManagementControllerBase
     /// Defaults to the current UTC year when <paramref name="year"/> is omitted.
     /// </summary>
     [HttpPost("owner-statements/{ownerId:int}/email")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.DataExport)]
     [ProducesResponseType(typeof(object), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(object), StatusCodes.Status400BadRequest)]
-    public async Task<IActionResult> EmailOwnerStatement(int ownerId, [FromQuery] int? year, CancellationToken ct)
+    public async Task<IActionResult> EmailOwnerStatement(
+        int ownerId,
+        [FromQuery] int? year,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
         var reportYear = year ?? _timeProvider.UtcNow().Year;
-        var result = await _ownerStatementEmail.SendOwnerStatementAsync(GetPortfolioId(), ownerId, reportYear, ct);
-        if (!result.Sent)
-            return BadRequest(new { error = result.Reason });
-        return Ok(new { queued = true });
+        try
+        {
+            var result = await _ownerStatementEmail.SendOwnerStatementAsync(
+                GetWorkspaceReadScope(), ownerId, reportYear, operationKey, ct);
+            if (!result.Sent)
+                return BadRequest(new { error = result.Reason });
+            return Ok(new { queued = true });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
+        }
     }
 
     // ── CSV helpers ─────────────────────────────────────────────────────────────────────────────
@@ -319,6 +342,21 @@ public class AccountingController : ManagementControllerBase
         sb.AppendLine($"{CsvField("TOTAL")},Rental Income,{CsvField(report.TotalRentalIncome.ToString("F2"))}");
         sb.AppendLine($"{CsvField("TOTAL")},Total Expenses,{CsvField(report.TotalExpenses.ToString("F2"))}");
         sb.AppendLine($"{CsvField("TOTAL")},Net Income,{CsvField(report.NetIncome.ToString("F2"))}");
+
+        if (report.UnallocatedActivity.RequiresAllocation)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"{CsvField("NEEDS ALLOCATION")},Income entries,{report.UnallocatedActivity.IncomeEntryCount}");
+            sb.AppendLine($"{CsvField("NEEDS ALLOCATION")},Rental Income,{CsvField(report.UnallocatedActivity.RentalIncome.ToString("F2"))}");
+            foreach (var category in report.UnallocatedActivity.ExpensesByCategory)
+            {
+                sb.AppendLine($"{CsvField("NEEDS ALLOCATION")},{CsvField(category.Category)},{CsvField(category.Amount.ToString("F2"))}");
+            }
+            sb.AppendLine($"{CsvField("NEEDS ALLOCATION")},Expense count,{report.UnallocatedActivity.ExpenseCount}");
+            sb.AppendLine($"{CsvField("RECONCILED")},Rental Income,{CsvField(report.ReconciledTotalRentalIncome.ToString("F2"))}");
+            sb.AppendLine($"{CsvField("RECONCILED")},Total Expenses,{CsvField(report.ReconciledTotalExpenses.ToString("F2"))}");
+            sb.AppendLine($"{CsvField("RECONCILED")},Net Income,{CsvField(report.ReconciledNetIncome.ToString("F2"))}");
+        }
 
         return sb.ToString();
     }

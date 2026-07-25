@@ -5,10 +5,11 @@
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { setOnAuthCleared, isTokenExpired } from '$lib/stores/auth.svelte';
 	import { initPortfolio } from '$lib/stores/portfolio.svelte';
-	import { refreshToken } from '$lib/api/client';
+	import { refreshToken, setAccessRecoveryCallback } from '$lib/api/client';
 	import { signalRService } from '$lib/realtime/signalr';
 	import { useInvalidateOnSignalR } from '$lib/realtime/invalidate';
 	import { CLIENT_HUB_URL } from '$lib/config';
+	import { resetAccessDependentClientState } from '$lib/auth/access-transition';
 	import AppShell from '$lib/components/AppShell.svelte';
 	import CoachOverlay from '$lib/components/onboarding/CoachOverlay.svelte';
 	import CoachTrigger from '$lib/components/onboarding/CoachTrigger.svelte';
@@ -19,19 +20,35 @@
 	// Reconcile before child route queries are created. Doing this only in an effect lets the first
 	// protected page briefly query the SSR placeholder portfolio id before the authenticated id wins.
 	// svelte-ignore state_referenced_locally
-	const initialPortfolioId = data.user?.portfolioId ?? undefined;
+	const initialPortfolioId = data.access?.selectedContext.portfolioId;
 	if (browser) {
 		initPortfolio(initialPortfolioId);
 	}
 
 	// Reconcile again when layout data changes during client navigation.
 	$effect(() => {
-		initPortfolio(data.user?.portfolioId ?? undefined);
+		initPortfolio(data.access?.selectedContext.portfolioId);
 	});
 
 	// Bridge SignalR data-update events to TanStack Query invalidation (wired once).
 	const queryClient = useQueryClient();
 	const disconnectQueryBridge = useInvalidateOnSignalR(queryClient);
+	setAccessRecoveryCallback(async (access, reason) => {
+		if (reason === 'refresh-signalr') {
+			// The in-progress handshake is already binding the refreshed token. Purge and refresh page
+			// data, but do not stop/start that same connection recursively.
+			resetAccessDependentClientState(queryClient, access);
+			await invalidateAll();
+			return;
+		}
+		await signalRService.disconnect();
+		resetAccessDependentClientState(queryClient, access);
+		// Experience switching owns its navigation so the current, newly forbidden route is never
+		// reloaded between the access mutation and its capability-safe landing.
+		if (reason !== 'refresh') return;
+		await invalidateAll();
+		await signalRService.connect(CLIENT_HUB_URL);
+	});
 
 	// Tear down the realtime connection when auth is cleared (logout / expiry),
 	// before the login redirect fires.
@@ -89,6 +106,7 @@
 
 	onDestroy(() => {
 		setOnAuthCleared(null);
+		setAccessRecoveryCallback(null);
 		disconnectQueryBridge();
 		signalRService.disconnect();
 	});

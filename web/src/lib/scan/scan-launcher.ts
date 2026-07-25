@@ -4,7 +4,7 @@ const CONTEXTUAL_TITLES: Record<ScanDocType, string> = {
 	Expense: 'Scan an expense',
 	Payment: 'Scan a payment',
 	WorkOrder: 'Scan a work order',
-	Lease: 'Scan a lease agreement',
+	LeaseAgreement: 'Scan a lease agreement',
 	Application: 'Scan an application',
 	Loan: 'Scan a loan document'
 };

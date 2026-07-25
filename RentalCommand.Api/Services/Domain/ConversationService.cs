@@ -1,13 +1,18 @@
-using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Conversations;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -15,26 +20,33 @@ namespace RentalCommand.Api.Services.Domain;
 public class ConversationService : IConversationService
 {
     private const string EntityType = "Conversation";
-    private const int PreviewMaxLength = 280;
+    private static readonly string[] ConversationReadCapabilities = [CapabilityKeys.RentalsRead];
+    private static readonly string[] ConversationWriteCapabilities =
+        [CapabilityKeys.RentalsManage, CapabilityKeys.LeasingOnboardingManage];
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
     private readonly IFairHousingReviewService _fairHousing;
     private readonly ILogger<ConversationService> _logger;
     private readonly TimeProvider _timeProvider;
+    private readonly IAtomicUnitOfWork _atomic;
+    private static readonly AtomicJsonResultCodec<SendConversationMessageResult> SendCodec =
+        new("conversation-message-result.v1");
 
     public ConversationService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
         IFairHousingReviewService fairHousing,
         ILogger<ConversationService> logger,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IAtomicUnitOfWork atomic)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _fairHousing = fairHousing;
         _logger = logger;
         _timeProvider = timeProvider;
+        _atomic = atomic;
     }
 
     // ===========================================================================================
@@ -43,19 +55,78 @@ public class ConversationService : IConversationService
 
     public async Task<IReadOnlyList<ConversationSummary>> ListAsync(int portfolioId, CancellationToken ct = default)
     {
-        var page = await ListPageAsync(portfolioId, new ListQuery(), ct);
+        var page = await ListPageAsync(portfolioId, new ConversationListQuery(), ct);
         return page.Items;
     }
 
-    public async Task<ConversationListResponse> ListPageAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
+    public async Task<IReadOnlyList<ConversationSummary>> ListAuthorizedAsync(
+        WorkspaceReadScope scope,
+        CancellationToken ct = default)
     {
-        var summaries = ProjectSummaries(
-            _db.Conversations
-                .AsNoTracking()
-                .Where(c => c.PortfolioId == portfolioId),
-            tenantViewer: false);
+        var page = await ListPageAuthorizedAsync(scope, new ConversationListQuery(), ct);
+        return page.Items;
+    }
 
-        summaries = query.SortField switch
+    public async Task<ConversationListResponse> ListPageAsync(
+        int portfolioId,
+        ConversationListQuery query,
+        CancellationToken ct = default)
+    {
+        var conversations = _db.Conversations
+            .AsNoTracking()
+            .Where(c => c.PortfolioId == portfolioId);
+        return await ListPageFromQueryAsync(
+            conversations, query, tenantViewer: false, ct: ct);
+    }
+
+    public Task<ConversationListResponse> ListPageAuthorizedAsync(
+        WorkspaceReadScope scope,
+        ConversationListQuery query,
+        CancellationToken ct = default)
+    {
+        var conversations = _db.Conversations
+            .AsNoTracking()
+            .WhereAuthorized(
+                _db,
+                scope,
+                ConversationReadCapabilities,
+                _timeProvider.UtcNow());
+        return ListPageFromQueryAsync(
+            conversations, query, tenantViewer: false, ct: ct);
+    }
+
+    private static async Task<ConversationListResponse> ListPageFromQueryAsync(
+        IQueryable<Conversation> conversations,
+        ConversationListQuery query,
+        bool tenantViewer,
+        CancellationToken ct)
+    {
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            var term = query.Search.Trim();
+            conversations = conversations.Where(c =>
+                EF.Functions.ILike(c.Subject, $"%{term}%") ||
+                (c.LastMessagePreview != null &&
+                    EF.Functions.ILike(c.LastMessagePreview, $"%{term}%")) ||
+                (c.Tenant != null &&
+                    (EF.Functions.ILike(c.Tenant.FirstName, $"%{term}%") ||
+                     EF.Functions.ILike(c.Tenant.LastName, $"%{term}%") ||
+                     EF.Functions.ILike(c.Tenant.FirstName + " " + c.Tenant.LastName, $"%{term}%"))) ||
+                (c.Property != null && EF.Functions.ILike(c.Property.Name, $"%{term}%")));
+        }
+
+        if (query.UnreadOnly == true)
+        {
+            conversations = tenantViewer
+                ? conversations.Where(c => c.TenantUnreadCount > 0)
+                : conversations.Where(c => c.LandlordUnreadCount > 0);
+        }
+
+        var summaries = ProjectSummaries(conversations, tenantViewer);
+
+        var totalCount = await summaries.CountAsync(ct);
+
+        IOrderedQueryable<ConversationSummary> ordered = query.SortField switch
         {
             "tenantname" => query.SortDescending ? summaries.OrderByDescending(c => c.TenantName) : summaries.OrderBy(c => c.TenantName),
             "subject" => query.SortDescending ? summaries.OrderByDescending(c => c.Subject) : summaries.OrderBy(c => c.Subject),
@@ -65,9 +136,8 @@ public class ConversationService : IConversationService
             _ => summaries.OrderByDescending(c => c.LastMessageAt),
         };
 
-        var totalCount = await summaries.CountAsync(ct);
-
-        var items = await summaries
+        var items = await ordered
+            .ThenBy(c => c.Id)
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
@@ -87,24 +157,52 @@ public class ConversationService : IConversationService
             .Where(c => c.PortfolioId == portfolioId)
             .SumAsync(c => (int?)c.LandlordUnreadCount, ct) ?? 0;
 
+    public async Task<int> GetUnreadCountAuthorizedAsync(
+        WorkspaceReadScope scope,
+        CancellationToken ct = default) =>
+        await _db.Conversations
+            .AsNoTracking()
+            .WhereAuthorized(
+                _db,
+                scope,
+                ConversationReadCapabilities,
+                _timeProvider.UtcNow())
+            .SumAsync(c => (int?)c.LandlordUnreadCount, ct) ?? 0;
+
     public async Task<ConversationDetail?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
+        => await LoadDetailAsync(portfolioId, id, tenantId: null, tenantViewer: false, ct);
+
+    public async Task<ConversationDetail?> GetAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        CancellationToken ct = default)
     {
-        var entity = await _db.Conversations
-            .FirstOrDefaultAsync(c => c.Id == id && c.PortfolioId == portfolioId, ct);
+        var found = await _db.Conversations
+            .AsNoTracking()
+            .Where(c => c.Id == id)
+            .WhereAuthorized(
+                _db,
+                scope,
+                ConversationReadCapabilities,
+                _timeProvider.UtcNow())
+            .AnyAsync(ct);
+        return found
+            ? await LoadDetailAsync(scope.PortfolioId, id, tenantId: null, tenantViewer: false, ct)
+            : null;
+    }
 
-        if (entity == null)
-        {
-            return null;
-        }
-
-        // Mark read for the landlord.
-        if (entity.LandlordUnreadCount != 0)
-        {
-            entity.LandlordUnreadCount = 0;
-            await _db.SaveChangesAsync(ct);
-        }
-
-        return await LoadDetailAsync(portfolioId, id, tenantId: null, tenantViewer: false, ct);
+    public async Task<bool> MarkReadAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicNotificationMutation.Command(scope,
+            AtomicNotificationMutationDomain.LandlordConversationRead, id, string.Empty,
+            operationKey, new AtomicConversationReadRequest(0));
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        return outcome.Value.Found;
     }
 
     private async Task<ConversationDetail?> LoadDetailAsync(
@@ -165,7 +263,8 @@ public class ConversationService : IConversationService
                 .Select(m => new ConversationMessageDto
                 {
                     Id = m.Id,
-                    SenderRole = m.SenderRole == ConversationSenderRole.Landlord ? "Landlord" : "Tenant",
+                    SenderRole = m.SenderRole == ConversationSenderRole.Landlord ? "Landlord" :
+                        m.SenderRole == ConversationSenderRole.Technician ? "Technician" : "Tenant",
                     Body = m.Body,
                     Channels = m.Channels,
                     CreatedAt = m.CreatedAt,
@@ -176,12 +275,81 @@ public class ConversationService : IConversationService
 
     public async Task<ConversationDetail?> StartAsync(
         int portfolioId, int tenantId, string subject, string body, List<string> channels,
-        bool acknowledgedFairHousingReview = false, CancellationToken ct = default)
+        string operationKey, bool acknowledgedFairHousingReview = false, CancellationToken ct = default)
     {
-        var tenant = await _db.Tenants
-            .FirstOrDefaultAsync(t => t.Id == tenantId && t.PortfolioId == portfolioId && t.DeletedAt == null, ct);
+        return await StartCoreAsync(
+            portfolioId,
+            tenantId,
+            propertyId: null,
+            subject,
+            body,
+            channels,
+            operationKey,
+            acknowledgedFairHousingReview,
+            managementAccess: null,
+            ct: ct);
+    }
 
-        if (tenant == null)
+    public async Task<ConversationDetail?> StartAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int tenantId,
+        int? propertyId,
+        string subject,
+        string body,
+        List<string> channels,
+        string operationKey,
+        bool acknowledgedFairHousingReview = false,
+        CancellationToken ct = default)
+    {
+        var resolution = await ResolveAuthorizedConversationPropertyAsync(
+            scope, tenantId, propertyId, ct);
+        if (!resolution.Allowed)
+        {
+            return null;
+        }
+
+        return await StartCoreAsync(
+            scope.PortfolioId,
+            tenantId,
+            resolution.PropertyId,
+            subject,
+            body,
+            channels,
+            operationKey,
+            acknowledgedFairHousingReview,
+            new ConversationManagementAccess(
+                scope.SessionId,
+                scope.UserId,
+                scope.AccessContextId,
+                scope.AccessRevision),
+            ct);
+    }
+
+    private async Task<ConversationDetail?> StartCoreAsync(
+        int portfolioId,
+        int tenantId,
+        int? propertyId,
+        string subject,
+        string body,
+        List<string> channels,
+        string operationKey,
+        bool acknowledgedFairHousingReview,
+        ConversationManagementAccess? managementAccess,
+        CancellationToken ct)
+    {
+        var identity = new AtomicCommandIdentity(
+            "conversation.start",
+            ScopedOperationKey(portfolioId, tenantId, operationKey, propertyId));
+        var completedReceiptExists = await _db.AtomicCommandReceipts
+            .AsNoTracking()
+            .AnyAsync(receipt => receipt.CommandType == identity.CommandType
+                && receipt.IdempotencyKey == identity.IdempotencyKey, ct);
+
+        var tenantExists = completedReceiptExists
+            || await _db.Tenants.AsNoTracking()
+                .AnyAsync(t => t.Id == tenantId && t.PortfolioId == portfolioId && t.DeletedAt == null, ct);
+
+        if (!tenantExists)
         {
             return null; // → controller 404
         }
@@ -189,121 +357,209 @@ public class ConversationService : IConversationService
         // Fair Housing gate: screen the outgoing copy before it leaves the building. Throws a
         // FairHousingBlockedException (→ 422) when flagged and not acknowledged; otherwise (clean,
         // acknowledged-override, or review-unavailable) falls through and the send proceeds.
-        await EnforceFairHousingGateAsync(
-            portfolioId, tenantId, conversationId: null, subject, body, acknowledgedFairHousingReview, ct);
-
-        var now = _timeProvider.UtcNow();
-        var preview = Preview(body);
-
-        var conversation = new Conversation
+        if (!completedReceiptExists)
         {
-            PortfolioId = portfolioId,
-            TenantId = tenant.Id,
-            Subject = subject,
-            StartedByLandlord = true,
-            CreatedAt = now,
-            LastMessageAt = now,
-            LastMessagePreview = preview,
-            LandlordUnreadCount = 0,
-            TenantUnreadCount = 1,
-        };
-
-        await using var tx = await _db.Database.BeginTransactionAsync(ct);
-
-        var actualChannels = FanOut(portfolioId, tenant, subject, body, channels, now);
-
-        var message = new ConversationMessage
-        {
-            SenderRole = ConversationSenderRole.Landlord,
-            Body = body,
-            Channels = actualChannels,
-            CreatedAt = now,
-        };
-        conversation.Messages.Add(message);
-
-        _db.Conversations.Add(conversation);
-        await _db.SaveChangesAsync(ct);
-
-        var tenantNotification = await CreateLandlordMessageNotificationAsync(
-            portfolioId, tenant.Id, conversation, subject, body, actualChannels, now, ct);
-        if (tenantNotification is not null)
-        {
-            _db.Notifications.Add(tenantNotification);
-            await _db.SaveChangesAsync(ct);
+            await EnforceFairHousingGateAsync(
+                portfolioId, tenantId, conversationId: null, subject, body, acknowledgedFairHousingReview, ct);
         }
-        await tx.CommitAsync(ct);
 
-        conversation.Tenant = tenant;
-        var detail = await LoadDetailAsync(portfolioId, conversation.Id, tenantId: null, tenantViewer: false, ct);
-        if (detail is null)
-        {
-            return null;
-        }
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, conversation.Id, detail, ct);
-        if (tenantNotification is not null)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(
-                portfolioId, "Notification", tenantNotification.Id, NotificationResponse.FromEntity(tenantNotification), ct);
-        }
-        return detail;
+        return await ExecuteLandlordSendAsync(
+            identity,
+            new SendConversationMessageCommand(
+                portfolioId, null, tenantId, subject, body, ConversationSenderRole.Landlord,
+                channels, _timeProvider.UtcNow(), propertyId, managementAccess),
+            ct);
     }
 
-    public async Task<ConversationDetail?> PostMessageAsync(
-        int portfolioId, int id, string body, List<string> channels, CancellationToken ct = default)
+    private async Task<ConversationPropertyResolution> ResolveAuthorizedConversationPropertyAsync(
+        WorkspaceReadScope scope,
+        int tenantId,
+        int? requestedPropertyId,
+        CancellationToken ct)
     {
-        var conversation = await _db.Conversations
-            .Include(c => c.Tenant)
-            .Include(c => c.Property)
-            .Include(c => c.Messages)
-            .FirstOrDefaultAsync(c => c.Id == id && c.PortfolioId == portfolioId, ct);
+        var utcNow = _timeProvider.UtcNow();
+        var authorizedProperties = _db.Properties
+            .AsNoTracking()
+            .WhereAuthorized(_db, scope, ConversationWriteCapabilities, utcNow);
+        var currentPropertyIds = _db.LeaseManagementParties
+            .AsNoTracking()
+            .Where(party =>
+                party.PortfolioId == scope.PortfolioId &&
+                party.TenantId == tenantId &&
+                party.Role != LeaseManagementPartyRole.Guarantor &&
+                party.LeaseManagement != null &&
+                party.LeaseManagement.CanceledAtUtc == null &&
+                party.LeaseManagement.PossessionReturnedAtUtc == null &&
+                _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
+                    lifecycle.PortfolioId == scope.PortfolioId &&
+                    lifecycle.LeaseManagementId == party.LeaseManagementId &&
+                    party.EffectiveFrom <= lifecycle.BusinessDate &&
+                    (party.EffectiveThrough == null ||
+                     party.EffectiveThrough >= lifecycle.BusinessDate)))
+            .Select(party => party.LeaseManagement!.PropertyId)
+            .Distinct()
+            .Where(propertyId => authorizedProperties.Any(property => property.Id == propertyId));
 
-        if (conversation == null)
+        if (requestedPropertyId is > 0)
+        {
+            var allowed = await currentPropertyIds.AnyAsync(
+                propertyId => propertyId == requestedPropertyId.Value,
+                ct);
+            return new ConversationPropertyResolution(allowed, allowed ? requestedPropertyId : null);
+        }
+
+        var currentProperty = await currentPropertyIds
+            .GroupBy(_ => 1)
+            .Select(group => new
+            {
+                Count = group.Count(),
+                PropertyId = group.Min(),
+            })
+            .FirstOrDefaultAsync(ct);
+
+        if (currentProperty?.Count == 1)
+        {
+            return new ConversationPropertyResolution(true, currentProperty.PropertyId);
+        }
+
+        if (currentProperty is { Count: > 1 })
+        {
+            throw new DomainValidationException(
+                "Select which property this conversation is about because the tenant has more than one current rental relationship.");
+        }
+
+        var canUseUnattachedTenant = await _db.Tenants
+            .AsNoTracking()
+            .Where(tenant => tenant.Id == tenantId && tenant.PortfolioId == scope.PortfolioId)
+            .Where(tenant => _db.AuthorizedAllPropertyAssignments(
+                scope,
+                ConversationWriteCapabilities,
+                CapabilityAuthorizationTargetKind.Property,
+                utcNow).Any())
+            .AnyAsync(ct);
+
+        return new ConversationPropertyResolution(canUseUnattachedTenant, PropertyId: null);
+    }
+
+    private sealed record ConversationPropertyResolution(bool Allowed, int? PropertyId);
+
+    public async Task<ConversationDetail?> PostMessageAsync(
+        int portfolioId, int id, string body, List<string> channels, string operationKey,
+        CancellationToken ct = default)
+    {
+        return await ExecuteLandlordSendAsync(
+            new AtomicCommandIdentity(
+                "conversation.post-message",
+                ScopedOperationKey(portfolioId, id, operationKey)),
+            new SendConversationMessageCommand(
+                portfolioId, id, 0, string.Empty, body, ConversationSenderRole.Landlord,
+                channels, _timeProvider.UtcNow()),
+            ct);
+    }
+
+    public Task<ConversationDetail?> PostMessageAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        string body,
+        List<string> channels,
+        string operationKey,
+        CancellationToken ct = default) =>
+        PostMessageAuthorizedCoreAsync(
+            scope, id, body, channels, operationKey, requiredCapabilityKey: null, ct: ct);
+
+    public Task<ConversationDetail?> PostMessageAuthorizedForCapabilityAsync(
+        WorkspaceReadScope scope,
+        int id,
+        string body,
+        List<string> channels,
+        string operationKey,
+        string requiredCapabilityKey,
+        CancellationToken ct = default)
+    {
+        if (!ConversationWriteCapabilities.Contains(requiredCapabilityKey, StringComparer.Ordinal))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(requiredCapabilityKey), requiredCapabilityKey, "Unsupported conversation capability.");
+        }
+
+        return PostMessageAuthorizedCoreAsync(
+            scope, id, body, channels, operationKey, requiredCapabilityKey, ct);
+    }
+
+    private async Task<ConversationDetail?> PostMessageAuthorizedCoreAsync(
+        WorkspaceReadScope scope,
+        int id,
+        string body,
+        List<string> channels,
+        string operationKey,
+        string? requiredCapabilityKey,
+        CancellationToken ct)
+    {
+        return await ExecuteLandlordSendAsync(
+            new AtomicCommandIdentity(
+                "conversation.post-message",
+                ScopedOperationKey(scope.PortfolioId, id, operationKey)),
+            new SendConversationMessageCommand(
+                scope.PortfolioId, id, 0, string.Empty, body, ConversationSenderRole.Landlord,
+                channels, _timeProvider.UtcNow(), PropertyId: null,
+                ManagementAccess: new ConversationManagementAccess(
+                    scope.SessionId,
+                    scope.UserId,
+                    scope.AccessContextId,
+                    scope.AccessRevision,
+                    requiredCapabilityKey)),
+            ct);
+    }
+
+    private static string ScopedOperationKey(
+        int portfolioId,
+        int targetId,
+        string operationKey,
+        int? propertyId = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationKey);
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(operationKey.Trim())))
+            .ToLowerInvariant();
+        return $"conversation:{portfolioId}:{targetId}:{propertyId?.ToString() ?? "none"}:{hash}";
+    }
+
+    private async Task<ConversationDetail?> ExecuteLandlordSendAsync(
+        AtomicCommandIdentity identity,
+        SendConversationMessageCommand command,
+        CancellationToken ct)
+    {
+        var outcome = await _atomic.ExecuteAsync(identity, command, SendCodec, ct);
+        if (outcome.Value.Outcome == SendConversationMessageOutcome.NotFound)
         {
             return null;
         }
 
-        var now = _timeProvider.UtcNow();
-
-        await using var tx = await _db.Database.BeginTransactionAsync(ct);
-
-        var actualChannels = conversation.Tenant != null
-            ? FanOut(portfolioId, conversation.Tenant, conversation.Subject, body, channels, now)
-            : string.Empty;
-
-        conversation.Messages.Add(new ConversationMessage
-        {
-            ConversationId = conversation.Id,
-            SenderRole = ConversationSenderRole.Landlord,
-            Body = body,
-            Channels = actualChannels,
-            CreatedAt = now,
-        });
-        conversation.LastMessageAt = now;
-        conversation.LastMessagePreview = Preview(body);
-        conversation.TenantUnreadCount += 1;
-        var tenantNotification = conversation.Tenant is not null
-            ? await CreateLandlordMessageNotificationAsync(
-                portfolioId, conversation.Tenant.Id, conversation, conversation.Subject, body, actualChannels, now, ct)
-            : null;
-        if (tenantNotification is not null)
-        {
-            _db.Notifications.Add(tenantNotification);
-        }
-
-        await _db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
-
-        var detail = await LoadDetailAsync(portfolioId, conversation.Id, tenantId: null, tenantViewer: false, ct);
+        var detail = await LoadDetailAsync(
+            command.PortfolioId, outcome.Value.ConversationId, tenantId: null, tenantViewer: false, ct);
         if (detail is null)
         {
             return null;
         }
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, conversation.Id, detail, ct);
-        if (tenantNotification is not null)
+
+        // Remote broadcasts happen only after the atomic command has committed (or replayed its receipt).
+        await _dataUpdate.BroadcastEntityUpdateAsync(
+            command.PortfolioId, EntityType, detail.Id, detail, ct);
+        if (outcome.Value.NotificationIds.Count > 0)
         {
-            await _dataUpdate.BroadcastEntityUpdateAsync(
-                portfolioId, "Notification", tenantNotification.Id, NotificationResponse.FromEntity(tenantNotification), ct);
+            var notifications = await _db.Notifications
+                .AsNoTracking()
+                .Where(notification => notification.PortfolioId == command.PortfolioId
+                    && outcome.Value.NotificationIds.Contains(notification.Id))
+                .OrderBy(notification => notification.Id)
+                .ToListAsync(ct);
+            foreach (var notification in notifications)
+            {
+                await _dataUpdate.BroadcastEntityUpdateAsync(
+                    command.PortfolioId, "Notification", notification.Id,
+                    NotificationResponse.FromEntity(notification), ct);
+            }
         }
+
         return detail;
     }
 
@@ -314,140 +570,138 @@ public class ConversationService : IConversationService
     public async Task<IReadOnlyList<ConversationSummary>> ListForTenantAsync(
         int portfolioId, int tenantId, CancellationToken ct = default)
     {
-        return await ProjectSummaries(
-                _db.Conversations
-                    .AsNoTracking()
-                    .Where(c => c.PortfolioId == portfolioId && c.TenantId == tenantId),
-                tenantViewer: true)
-            .OrderByDescending(c => c.LastMessageAt)
-            .ToListAsync(ct);
+        var page = await ListPageForTenantAsync(
+            portfolioId, tenantId, new ConversationListQuery(), ct);
+        return page.Items;
+    }
+
+    public Task<ConversationListResponse> ListPageForTenantAsync(
+        int portfolioId,
+        int tenantId,
+        ConversationListQuery query,
+        CancellationToken ct = default)
+    {
+        var conversations = _db.Conversations
+            .AsNoTracking()
+            .Where(c => c.PortfolioId == portfolioId && c.TenantId == tenantId);
+        return ListPageFromQueryAsync(
+            conversations, query, tenantViewer: true, ct: ct);
     }
 
     public async Task<ConversationDetail?> GetForTenantAsync(
         int portfolioId, int tenantId, int id, CancellationToken ct = default)
+        => await LoadDetailAsync(portfolioId, id, tenantId, tenantViewer: true, ct);
+
+    public async Task<bool> MarkReadForTenantAsync(
+        WorkspaceReadScope scope,
+        int tenantId,
+        int id,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        var entity = await _db.Conversations
-            .Include(c => c.Tenant)
-            .Include(c => c.Property)
-            .Include(c => c.Messages)
-            .FirstOrDefaultAsync(c => c.Id == id && c.PortfolioId == portfolioId && c.TenantId == tenantId, ct);
-
-        if (entity == null)
-        {
-            return null;
-        }
-
-        if (entity.TenantUnreadCount != 0)
-        {
-            entity.TenantUnreadCount = 0;
-            await _db.SaveChangesAsync(ct);
-        }
-
-        return await LoadDetailAsync(portfolioId, id, tenantId, tenantViewer: true, ct);
+        var command = AtomicNotificationMutation.Command(scope,
+            AtomicNotificationMutationDomain.TenantConversationRead, id, string.Empty,
+            operationKey, new AtomicConversationReadRequest(tenantId));
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        return outcome.Value.Found;
     }
 
     public async Task<ConversationDetail?> TenantStartAsync(
-        int portfolioId, int tenantId, string subject, string body, CancellationToken ct = default)
+        int portfolioId, int tenantId, string subject, string body, string operationKey,
+        CancellationToken ct = default)
     {
-        var tenant = await _db.Tenants
-            .FirstOrDefaultAsync(t => t.Id == tenantId && t.PortfolioId == portfolioId && t.DeletedAt == null, ct);
+        var propertyId = await ResolveTenantConversationPropertyAsync(portfolioId, tenantId, ct);
+        return await ExecuteTenantSendAsync(
+            new AtomicCommandIdentity(
+                "conversation.tenant-start",
+                ScopedOperationKey(portfolioId, tenantId, operationKey, propertyId)),
+            new SendConversationMessageCommand(
+                portfolioId, null, tenantId, subject, body, ConversationSenderRole.Tenant,
+                [], _timeProvider.UtcNow(), propertyId),
+            tenantId,
+            ct);
+    }
 
-        if (tenant == null)
-        {
-            return null;
-        }
+    private async Task<int?> ResolveTenantConversationPropertyAsync(
+        int portfolioId,
+        int tenantId,
+        CancellationToken ct)
+    {
+        var currentProperty = await _db.LeaseManagementParties
+            .AsNoTracking()
+            .Where(party =>
+                party.PortfolioId == portfolioId &&
+                party.TenantId == tenantId &&
+                party.Role != LeaseManagementPartyRole.Guarantor &&
+                party.LeaseManagement != null &&
+                party.LeaseManagement.CanceledAtUtc == null &&
+                party.LeaseManagement.PossessionReturnedAtUtc == null &&
+                _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
+                    lifecycle.PortfolioId == portfolioId &&
+                    lifecycle.LeaseManagementId == party.LeaseManagementId &&
+                    party.EffectiveFrom <= lifecycle.BusinessDate &&
+                    (party.EffectiveThrough == null ||
+                     party.EffectiveThrough >= lifecycle.BusinessDate)))
+            .Select(party => party.LeaseManagement!.PropertyId)
+            .Distinct()
+            .GroupBy(_ => 1)
+            .Select(group => new
+            {
+                Count = group.Count(),
+                PropertyId = group.Min(),
+            })
+            .FirstOrDefaultAsync(ct);
 
-        var now = _timeProvider.UtcNow();
-        var conversation = new Conversation
-        {
-            PortfolioId = portfolioId,
-            TenantId = tenant.Id,
-            Subject = subject,
-            StartedByLandlord = false,
-            CreatedAt = now,
-            LastMessageAt = now,
-            LastMessagePreview = Preview(body),
-            LandlordUnreadCount = 1,
-            TenantUnreadCount = 0,
-        };
-
-        await using var tx = await _db.Database.BeginTransactionAsync(ct);
-
-        conversation.Messages.Add(new ConversationMessage
-        {
-            SenderRole = ConversationSenderRole.Tenant,
-            Body = body,
-            Channels = null, // tenant messages are in-app only
-            CreatedAt = now,
-        });
-
-        _db.Conversations.Add(conversation);
-        await _db.SaveChangesAsync(ct);
-
-        var notifications = await CreateTenantMessageNotificationsAsync(portfolioId, conversation, tenant, now, ct);
-        _db.Notifications.AddRange(notifications);
-        await _db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
-
-        conversation.Tenant = tenant;
-        var detail = await LoadDetailAsync(portfolioId, conversation.Id, tenantId, tenantViewer: true, ct);
-        if (detail is null)
-        {
-            return null;
-        }
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, conversation.Id, detail, ct);
-        foreach (var notification in notifications)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, "Notification", notification.Id, NotificationResponse.FromEntity(notification), ct);
-        }
-        return detail;
+        return currentProperty?.Count == 1 ? currentProperty.PropertyId : null;
     }
 
     public async Task<ConversationDetail?> TenantPostAsync(
-        int portfolioId, int tenantId, int id, string body, CancellationToken ct = default)
+        int portfolioId, int tenantId, int id, string body, string operationKey,
+        CancellationToken ct = default)
     {
-        var conversation = await _db.Conversations
-            .Include(c => c.Tenant)
-            .Include(c => c.Property)
-            .Include(c => c.Messages)
-            .FirstOrDefaultAsync(c => c.Id == id && c.PortfolioId == portfolioId && c.TenantId == tenantId, ct);
+        return await ExecuteTenantSendAsync(
+            new AtomicCommandIdentity(
+                "conversation.tenant-post-message",
+                ScopedOperationKey(portfolioId, id, operationKey)),
+            new SendConversationMessageCommand(
+                portfolioId, id, tenantId, string.Empty, body, ConversationSenderRole.Tenant,
+                [], _timeProvider.UtcNow()),
+            tenantId,
+            ct);
+    }
 
-        if (conversation == null)
+    private async Task<ConversationDetail?> ExecuteTenantSendAsync(
+        AtomicCommandIdentity identity,
+        SendConversationMessageCommand command,
+        int tenantId,
+        CancellationToken ct)
+    {
+        var outcome = await _atomic.ExecuteAsync(identity, command, SendCodec, ct);
+        if (outcome.Value.Outcome == SendConversationMessageOutcome.NotFound) return null;
+
+        var detail = await LoadDetailAsync(
+            command.PortfolioId, outcome.Value.ConversationId, tenantId, tenantViewer: true, ct);
+        if (detail is null) return null;
+
+        await _dataUpdate.BroadcastEntityUpdateAsync(
+            command.PortfolioId, EntityType, detail.Id, detail, ct);
+        if (outcome.Value.NotificationIds.Count > 0)
         {
-            return null;
+            var notifications = await _db.Notifications
+                .AsNoTracking()
+                .Where(notification => notification.PortfolioId == command.PortfolioId
+                    && outcome.Value.NotificationIds.Contains(notification.Id))
+                .OrderBy(notification => notification.Id)
+                .ToListAsync(ct);
+            foreach (var notification in notifications)
+            {
+                await _dataUpdate.BroadcastEntityUpdateAsync(
+                    command.PortfolioId, "Notification", notification.Id,
+                    NotificationResponse.FromEntity(notification), ct);
+            }
         }
 
-        var now = _timeProvider.UtcNow();
-
-        await using var tx = await _db.Database.BeginTransactionAsync(ct);
-
-        conversation.Messages.Add(new ConversationMessage
-        {
-            ConversationId = conversation.Id,
-            SenderRole = ConversationSenderRole.Tenant,
-            Body = body,
-            Channels = null,
-            CreatedAt = now,
-        });
-        conversation.LastMessageAt = now;
-        conversation.LastMessagePreview = Preview(body);
-        conversation.LandlordUnreadCount += 1;
-        var notifications = await CreateTenantMessageNotificationsAsync(portfolioId, conversation, conversation.Tenant, now, ct);
-        _db.Notifications.AddRange(notifications);
-
-        await _db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
-
-        var detail = await LoadDetailAsync(portfolioId, conversation.Id, tenantId, tenantViewer: true, ct);
-        if (detail is null)
-        {
-            return null;
-        }
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, conversation.Id, detail, ct);
-        foreach (var notification in notifications)
-        {
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, "Notification", notification.Id, NotificationResponse.FromEntity(notification), ct);
-        }
         return detail;
     }
 
@@ -505,162 +759,6 @@ public class ConversationService : IConversationService
             "Fair Housing-flagged message SENT via acknowledged override (portfolio {PortfolioId}, tenant {TenantId}, conversation {ConversationId}). Flagged phrases: {Phrases}",
             portfolioId, tenantId, conversationId,
             string.Join(" | ", concerns.Select(c => c.Phrase)));
-    }
-
-    /// <summary>
-    /// Queues email/SMS outbox rows for the requested channels the tenant has contact info for and
-    /// returns the comma-separated list of channels actually used (always includes "Portal" when
-    /// requested, since the in-app record IS the portal delivery). Mirrors the existing outbox payload
-    /// shapes exactly: email = { to, subject, body }, sms = { to, message }.
-    /// </summary>
-    private string FanOut(
-        int portfolioId, Tenant tenant, string subject, string body, List<string> channels, DateTime now)
-    {
-        var requested = (channels ?? [])
-            .Where(c => !string.IsNullOrWhiteSpace(c))
-            .Select(NormalizeChannel)
-            .Where(c => c != null)
-            .Select(c => c!)
-            .Distinct()
-            .ToList();
-
-        var actual = new List<string>();
-
-        if (requested.Contains("Portal"))
-        {
-            actual.Add("Portal");
-        }
-
-        if (requested.Contains("Email") && !string.IsNullOrWhiteSpace(tenant.Email))
-        {
-            _db.OutboxMessages.Add(new OutboxMessage
-            {
-                PortfolioId = portfolioId,
-                MessageType = "email",
-                Payload = JsonSerializer.Serialize(new { to = tenant.Email, subject, body }),
-                CreatedAt = now,
-            });
-            actual.Add("Email");
-        }
-
-        if (requested.Contains("Sms") && !string.IsNullOrWhiteSpace(tenant.Phone))
-        {
-            _db.OutboxMessages.Add(new OutboxMessage
-            {
-                PortfolioId = portfolioId,
-                MessageType = "sms",
-                Payload = JsonSerializer.Serialize(new { to = tenant.Phone, message = body }),
-                CreatedAt = now,
-            });
-            actual.Add("Sms");
-        }
-
-        return string.Join(",", actual);
-    }
-
-    private static string? NormalizeChannel(string channel) => channel.Trim().ToLowerInvariant() switch
-    {
-        "portal" => "Portal",
-        "email" => "Email",
-        "sms" => "Sms",
-        _ => null,
-    };
-
-    private async Task<IReadOnlyList<Notification>> CreateTenantMessageNotificationsAsync(
-        int portfolioId,
-        Conversation conversation,
-        Tenant? tenant,
-        DateTime now,
-        CancellationToken ct)
-    {
-        var tenantName = tenant != null ? $"{tenant.FirstName} {tenant.LastName}".Trim() : "Tenant";
-        if (string.IsNullOrWhiteSpace(tenantName)) tenantName = "Tenant";
-
-        var staffUserIds = await StaffUserIdsAsync(portfolioId, ct);
-
-        return staffUserIds.Select(userId => new Notification
-            {
-                PortfolioId = portfolioId,
-                UserId = userId,
-                Type = "TenantMessage",
-                Title = $"New message from {tenantName}",
-                Message = conversation.LastMessagePreview ?? conversation.Subject,
-                Severity = "Info",
-                ActionUrl = $"/messages?conversationId={conversation.Id}",
-                RelatedEntityType = "Conversation",
-                RelatedEntityId = conversation.Id,
-                CreatedAt = now,
-            })
-            .ToList();
-    }
-
-    private async Task<IReadOnlyList<int>> StaffUserIdsAsync(int portfolioId, CancellationToken ct)
-    {
-        var staffRoles = new[] { nameof(UserRole.Admin), nameof(UserRole.Manager), nameof(UserRole.Agent) };
-
-        return await (
-                from user in _db.Users.AsNoTracking()
-                join userRole in _db.UserRoles.AsNoTracking() on user.Id equals userRole.UserId
-                join role in _db.Roles.AsNoTracking() on userRole.RoleId equals role.Id
-                where user.PortfolioId == portfolioId && role.Name != null && staffRoles.Contains(role.Name)
-                select user.Id)
-            .Distinct()
-            .ToListAsync(ct);
-    }
-
-    private async Task<Notification?> CreateLandlordMessageNotificationAsync(
-        int portfolioId,
-        int tenantId,
-        Conversation conversation,
-        string subject,
-        string body,
-        string actualChannels,
-        DateTime now,
-        CancellationToken ct)
-    {
-        if (!actualChannels.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Contains("Portal", StringComparer.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        var tenantUserId = await _db.Users
-            .AsNoTracking()
-            .Where(u => u.PortfolioId == portfolioId && u.TenantId == tenantId)
-            .OrderBy(u => u.Id)
-            .Select(u => (int?)u.Id)
-            .FirstOrDefaultAsync(ct);
-
-        if (tenantUserId is null)
-        {
-            return null;
-        }
-
-        var preview = Preview(body) ?? subject;
-
-        return new Notification
-        {
-            PortfolioId = portfolioId,
-            UserId = tenantUserId,
-            Type = "TenantNotice",
-            Title = subject,
-            Message = preview,
-            Severity = "Info",
-            ActionUrl = $"/portal/messages?conversation={conversation.Id}",
-            RelatedEntityType = "Conversation",
-            RelatedEntityId = conversation.Id,
-            CreatedAt = now,
-        };
-    }
-
-    private static string? Preview(string body)
-    {
-        if (string.IsNullOrEmpty(body))
-        {
-            return null;
-        }
-
-        return body.Length <= PreviewMaxLength ? body : body[..PreviewMaxLength];
     }
 
 }

@@ -7,18 +7,25 @@
 	import AuthBrandPanel from '$lib/components/auth/AuthBrandPanel.svelte';
 	import BrandMark from '$lib/components/BrandMark.svelte';
 	import { auth } from '$lib/api/endpoints/auth';
+	import type { EffectiveAccessContextOption } from '$lib/types/user';
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	let submitting = $state(false);
+	let submissionError = $state('');
 
 	// Field values are bound so the dev quick-fill button below can populate them.
 	let email = $state('');
 	let password = $state('');
+	let accessContextId = $state('');
+	const contextChoices: EffectiveAccessContextOption[] = $derived(
+		form && 'contexts' in form && Array.isArray(form.contexts) ? form.contexts : []
+	);
 
 	// "Resend verification" affordance, shown only when the API flags the login as EMAIL_NOT_VERIFIED.
 	let resendingVerification = $state(false);
 	let resendSuccess = $state(false);
 	const emailNotVerified = $derived(form?.emailNotVerified === true);
+	const visibleLoginError = $derived(submissionError || form?.error || '');
 
 	// Repopulate the email after a failed submit (the action echoes it back).
 	$effect(() => {
@@ -78,15 +85,49 @@
 				data-testid="login-form"
 				use:enhance={() => {
 					submitting = true;
-					return async ({ update }) => {
-						await update();
-						submitting = false;
+					submissionError = '';
+					return async ({ result, update }) => {
+						try {
+							if (result.type === 'error') {
+								submissionError =
+									'Rental Command could not complete sign-in. Please try again or contact support.';
+								return;
+							}
+							await update();
+						} catch {
+							submissionError =
+								'Rental Command could not complete sign-in. Please try again or contact support.';
+						} finally {
+							submitting = false;
+						}
 					};
 				}}
 				class="space-y-4"
 			>
 				{#if data.redirectTo}
 					<input type="hidden" name="redirectTo" value={data.redirectTo} />
+				{/if}
+				{#if contextChoices.length > 1}
+					<div class="rounded-lg border border-border bg-card/60 p-3">
+						<label for="login-context" class="mb-1.5 block text-sm font-medium text-foreground">
+							Which workspace do you want to open?
+						</label>
+						<select
+							id="login-context"
+							name="accessContextId"
+							bind:value={accessContextId}
+							required
+							class="h-11 w-full rounded-md border border-input bg-background px-3 text-sm"
+						>
+							<option value="" disabled>Select a workspace</option>
+							{#each contextChoices as context}
+								<option value={context.accessContextId}>{context.workspaceName}</option>
+							{/each}
+						</select>
+						<p class="mt-1.5 text-xs text-muted-foreground">
+							You can switch workspaces later from the app menu.
+						</p>
+					</div>
 				{/if}
 
 				<div>
@@ -128,7 +169,7 @@
 					/>
 				</div>
 
-				{#if form?.error}
+				{#if visibleLoginError}
 					{#if emailNotVerified}
 						<div
 							class="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-3 text-sm"
@@ -167,9 +208,10 @@
 						<div
 							class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
 							role="alert"
+							aria-live="polite"
 							data-testid="login-error"
 						>
-							{form.error}
+							{visibleLoginError}
 						</div>
 					{/if}
 				{/if}

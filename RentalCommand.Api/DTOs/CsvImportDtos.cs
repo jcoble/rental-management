@@ -39,7 +39,7 @@ public sealed class CsvImportRowResult
     public IReadOnlyList<string> Errors { get; init; } = [];
 
     /// <summary>Id of the created entity when committed; null on dry run or for skipped/invalid rows.</summary>
-    public int? CreatedId { get; init; }
+    public long? CreatedId { get; init; }
 
     /// <summary>True when this row matched an existing record and was intentionally skipped.</summary>
     public bool IsDuplicate { get; init; }

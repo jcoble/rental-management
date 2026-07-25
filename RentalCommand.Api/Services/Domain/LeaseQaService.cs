@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
@@ -9,42 +10,87 @@ public class LeaseQaService : ILeaseQaService
 {
     private readonly RentalCommandDbContext _db;
     private readonly ILlmProvider _llm;
+    private readonly ILeaseManagementQueryService _leaseManagements;
 
-    public LeaseQaService(RentalCommandDbContext db, ILlmProvider llm)
+    public LeaseQaService(
+        RentalCommandDbContext db,
+        ILlmProvider llm,
+        ILeaseManagementQueryService leaseManagements)
     {
         _db = db;
         _llm = llm;
+        _leaseManagements = leaseManagements;
     }
 
-    public async Task<LeaseQuestionResponse?> AskAsync(
-        int portfolioId,
-        int leaseId,
+    /// <summary>
+    /// Staff-facing Q&amp;A. Agreement facts and current capability/property scope are admitted by
+    /// one SQL statement; this path never performs an authorization precheck followed by a broader
+    /// Agreement read.
+    /// </summary>
+    public async Task<LeaseQuestionResponse?> AskManagementAsync(
+        LeaseManagementReadContext access,
+        int leaseManagementId,
         string question,
         CancellationToken ct = default)
     {
         question = question.Trim();
         if (question.Length == 0) return null;
 
-        var lease = await _db.Leases
-            .AsNoTracking()
-            .Include(l => l.Tenant)
-            .Include(l => l.Property)
-            .Include(l => l.Unit)
-            .FirstOrDefaultAsync(l => l.Id == leaseId && l.PortfolioId == portfolioId, ct);
-        if (lease == null) return null;
+        var agreement = await _leaseManagements.GetLeaseQaAgreementAsync(
+            access, leaseManagementId, ct);
+        return agreement is null
+            ? null
+            : await AnswerAsync(agreement, question, ct);
+    }
 
+    public async Task<LeaseQuestionResponse?> AskAsync(
+        int portfolioId,
+        int leaseManagementId,
+        string question,
+        CancellationToken ct = default)
+    {
+        question = question.Trim();
+        if (question.Length == 0) return null;
+
+        var agreement = await BuildGoverningAgreementQuery(portfolioId, leaseManagementId)
+            .SingleOrDefaultAsync(ct);
+        if (agreement == null) return null;
+
+        return await AnswerAsync(new LeaseQaAgreementFacts(
+            agreement.LeaseAgreementId,
+            agreement.LeaseManagementId,
+            agreement.AgreementNumber,
+            agreement.TermStartOn,
+            agreement.TermEndOn,
+            agreement.BaseRentAmount,
+            agreement.SecurityDepositObligation,
+            agreement.LateFeeAmount,
+            agreement.RentDueDay,
+            agreement.TermsPayload,
+            agreement.ExecutedStoredFileId,
+            agreement.ExecutedFileName), question, ct);
+    }
+
+    private async Task<LeaseQuestionResponse> AnswerAsync(
+        LeaseQaAgreementFacts agreement,
+        string question,
+        CancellationToken ct)
+    {
         var sources = new List<string>
         {
-            $"Lease number: {lease.LeaseNumber}",
-            $"Dates: {lease.StartDate:MMMM d, yyyy} through {lease.EndDate:MMMM d, yyyy}",
-            $"Monthly rent: {lease.MonthlyRent:C}",
-            $"Security deposit: {lease.SecurityDeposit:C}",
-            $"Late fee: {lease.LateFeeAmount:C}",
-            $"Rent due day: {lease.RentDueDay}",
+            $"Agreement number: {agreement.AgreementNumber}",
+            agreement.TermEndOn.HasValue
+                ? $"Dates: {agreement.TermStartOn:MMMM d, yyyy} through {agreement.TermEndOn:MMMM d, yyyy}"
+                : $"Dates: month-to-month beginning {agreement.TermStartOn:MMMM d, yyyy}",
+            $"Monthly rent: {agreement.BaseRentAmount:C}",
+            $"Security deposit: {agreement.SecurityDepositObligation:C}",
+            $"Late fee: {agreement.LateFeeAmount:C}",
+            $"Rent due day: {agreement.RentDueDay}",
+            $"Executed document: {agreement.ExecutedFileName} (stored file {agreement.ExecutedStoredFileId})",
         };
-        if (!string.IsNullOrWhiteSpace(lease.Notes))
+        if (!string.IsNullOrWhiteSpace(agreement.TermsPayload) && agreement.TermsPayload != "{}")
         {
-            sources.Add($"Lease notes: {lease.Notes}");
+            sources.Add($"Agreement terms: {agreement.TermsPayload}");
         }
 
         var fallback = BuildFallbackAnswer(question, sources);
@@ -105,7 +151,7 @@ public class LeaseQaService : ILeaseQaService
 
         if (q.Contains("dog") || q.Contains("cat") || q.Contains("pet") || q.Contains("smok") || q.Contains("parking"))
         {
-            var notes = sources.FirstOrDefault(s => s.StartsWith("Lease notes:", StringComparison.OrdinalIgnoreCase));
+            var notes = sources.FirstOrDefault(s => s.StartsWith("Agreement terms:", StringComparison.OrdinalIgnoreCase));
             if (!string.IsNullOrWhiteSpace(notes))
             {
                 return notes;
@@ -125,4 +171,49 @@ public class LeaseQaService : ILeaseQaService
             ? "The stored lease fields do not specify that."
             : string.Join(" ", matches);
     }
+
+    internal IQueryable<GoverningAgreementReadRow> BuildGoverningAgreementQuery(
+        int portfolioId,
+        int leaseManagementId) =>
+        from status in _db.LeaseAgreementStatusProjections.AsNoTracking()
+        join agreement in _db.LeaseAgreements.AsNoTracking()
+            on new { status.PortfolioId, AgreementId = status.AgreementId }
+            equals new { agreement.PortfolioId, AgreementId = agreement.Id }
+        where status.PortfolioId == portfolioId
+            && status.LeaseManagementId == leaseManagementId
+            && status.IsGoverning
+            && agreement.FullyExecutedAtUtc != null
+            && agreement.VoidedAtUtc == null
+            && agreement.ExecutedArtifact != null
+            && agreement.ExecutedArtifact.ArtifactKind == LegalDocumentArtifactKind.ExecutedAgreement
+            && agreement.ExecutedArtifact.StoredFile != null
+            && agreement.ExecutedArtifact.StoredFile.PortfolioId == portfolioId
+            && agreement.ExecutedArtifact.StoredFile.DeletedAt == null
+        select new GoverningAgreementReadRow(
+            agreement.Id,
+            agreement.LeaseManagementId,
+            agreement.AgreementNumber,
+            agreement.TermStartOn,
+            agreement.TermEndOn,
+            agreement.BaseRentAmount,
+            agreement.SecurityDepositObligation,
+            agreement.LateFeeAmount,
+            agreement.RentDueDay,
+            agreement.TermsPayload,
+            agreement.ExecutedArtifact!.StoredFileId,
+            agreement.ExecutedArtifact.StoredFile!.FileName);
+
+    internal sealed record GoverningAgreementReadRow(
+        int LeaseAgreementId,
+        int LeaseManagementId,
+        string AgreementNumber,
+        DateOnly TermStartOn,
+        DateOnly? TermEndOn,
+        decimal BaseRentAmount,
+        decimal SecurityDepositObligation,
+        decimal LateFeeAmount,
+        short RentDueDay,
+        string TermsPayload,
+        int ExecutedStoredFileId,
+        string ExecutedFileName);
 }

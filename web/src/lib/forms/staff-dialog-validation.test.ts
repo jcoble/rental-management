@@ -19,15 +19,10 @@ describe('staff create dialog validation clearing', () => {
 		assert.match(tenantsPage, /clearTenantError\('email'\)/);
 	});
 
-	it('clears lease, work-order, inspection, and recurring task errors as corrected fields change', () => {
-		const leasesPage = source('../../routes/(protected)/leases/+page.svelte');
+	it('clears work-order, inspection, and recurring task errors as corrected fields change', () => {
 		const maintenancePage = source('../../routes/(protected)/maintenance/+page.svelte');
 		const recurringPage = source('../../routes/(protected)/maintenance/recurring/+page.svelte');
 
-		assert.match(leasesPage, /function clearLeaseError\(field: string\)/);
-		assert.match(leasesPage, /clearLeaseError\('propertyId'\)/);
-		assert.match(leasesPage, /clearLeaseError\('tenantId'\)/);
-		assert.match(leasesPage, /clearLeaseError\('monthlyRent'\)/);
 		assert.match(maintenancePage, /function clearWoError\(field: string\)/);
 		assert.match(maintenancePage, /clearWoError\('title'\)/);
 		assert.match(maintenancePage, /clearInspectionError\('scheduledFor'\)/);
@@ -48,6 +43,8 @@ describe('staff create dialog validation clearing', () => {
 		assert.match(accountingPage, /clearExpenseError\('amount'\)/);
 		assert.match(rentTab, /function clearCreateError\(field: string\)/);
 		assert.match(rentTab, /clearCreateError\('amount'\)/);
-		assert.match(rentTab, /clearCreateError\('dueDate'\)/);
+		assert.match(rentTab, /clearCreateError\('effectiveOn'\)/);
+		assert.match(rentTab, /clearCreateError\('method'\)/);
+		assert.match(rentTab, /clearCreateError\('dueOn'\)/);
 	});
 });

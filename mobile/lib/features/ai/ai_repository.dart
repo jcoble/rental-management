@@ -1,8 +1,11 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import 'ai_models.dart';
 
 /// Repository for the AI endpoints.
@@ -92,13 +95,18 @@ class AiRepository {
     bool writeModeEnabled,
   ) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/ai/actions/execute',
-        data: {
-          'draft': draft.toJson(),
-          'writeModeEnabled': writeModeEnabled,
-          'confirmed': true,
-        },
+      final draftJson = draft.toJson();
+      final response = await IdempotentMutation.run(
+        'assistant:expense:${jsonEncode(draftJson)}',
+        (operationKey) => _dio.post<Map<String, dynamic>>(
+          '/ai/actions/execute',
+          data: {
+            'draft': draftJson,
+            'writeModeEnabled': writeModeEnabled,
+            'confirmed': true,
+          },
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        ),
       );
       final data = response.data;
       if (data == null) {

@@ -14,6 +14,8 @@
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import {
 		EXPENSE_CATEGORY_OPTIONS,
 		formatExpenseCategory
@@ -120,8 +122,30 @@
 	);
 
 	const expenseQuery = createQuery(() => ({ queryKey: ['expense', expenseId], queryFn: () => expenses.get(expenseId), enabled: expenseId > 0 }));
-	const propertiesQuery = createQuery(() => ({ queryKey: ['properties', portfolioId], queryFn: () => properties.list(portfolioId, { take: 200 }) }));
-	const vendorsQuery = createQuery(() => ({ queryKey: ['vendors', portfolioId], queryFn: () => vendors.list(portfolioId, { take: 200 }) }));
+
+	async function loadPropertyOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await properties.listPage(portfolioId, { ...params, sort: 'name' });
+		return {
+			...result,
+			items: result.items.map((property) => ({
+				id: property.id,
+				label: property.name,
+				description: `${property.addressLine1}, ${property.city}, ${property.state}`
+			}))
+		};
+	}
+
+	async function loadVendorOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await vendors.listPage(portfolioId, { ...params, sort: 'name' });
+		return {
+			...result,
+			items: result.items.map((vendor) => ({
+				id: vendor.id,
+				label: vendor.name,
+				description: vendor.serviceType || vendor.email || vendor.phone || null
+			}))
+		};
+	}
 
 	const expense = $derived(expenseQuery.data);
 
@@ -215,8 +239,8 @@
 
 	const statusOptions = $derived(STATUSES.map((value) => ({ value, label: value })));
 	const categoryOptions = $derived(EXPENSE_CATEGORY_OPTIONS);
-	const propertyOptions = $derived([{ value: '', label: 'No property' }, ...(propertiesQuery.data ?? []).map((p) => ({ value: String(p.id), label: p.name }))]);
-	const vendorOptions = $derived([{ value: '', label: 'No vendor' }, ...(vendorsQuery.data ?? []).map((v) => ({ value: String(v.id), label: v.name }))]);
+	let selectedPropertyLabel = $state<string | null>(null);
+	let selectedVendorLabel = $state<string | null>(null);
 	const depreciationMethodOptions = [
 		{ value: 'StraightLine', label: 'Straight-line' },
 		{ value: 'Macrs', label: 'MACRS' }
@@ -260,12 +284,16 @@
 			unitPrice: li.unitPrice != null ? String(li.unitPrice) : '',
 			amount: li.amount != null ? String(li.amount) : '',
 		}));
+		selectedPropertyLabel = expense.propertyName ?? null;
+		selectedVendorLabel = expense.vendorName ?? null;
 		formErrors = {};
 		editing = true;
 	}
 
 	function cancelEditing() {
 		editing = false;
+		selectedPropertyLabel = null;
+		selectedVendorLabel = null;
 		formErrors = {};
 	}
 
@@ -274,6 +302,8 @@
 		onSuccess: () => {
 			showSuccess('Expense updated.');
 			editing = false;
+			selectedPropertyLabel = null;
+			selectedVendorLabel = null;
 			queryClient.invalidateQueries({ queryKey: ['expense', expenseId] });
 			queryClient.invalidateQueries({ queryKey: ['expenses', portfolioId] });
 			queryClient.invalidateQueries({ queryKey: ['accounting-summary', portfolioId] });
@@ -448,7 +478,13 @@
 	{/if}
 
 	{#if expenseQuery.isLoading}
-		<div class="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">Loading expense...</div>
+		<LoadingState label="Loading expense details" testid="expense-detail-loading" />
+	{:else if expenseQuery.isError}
+		<div class="rounded-lg border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="expense-detail-error">
+			<p class="font-medium text-destructive">Could not load this expense.</p>
+			<p class="mt-1 text-sm text-muted-foreground">Try again. No expense changes have been made.</p>
+			<Button class="mt-4" variant="outline" onclick={() => expenseQuery.refetch()}>Try again</Button>
+		</div>
 	{:else if !expense}
 		<div class="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">Expense not found.</div>
 	{:else}
@@ -464,12 +500,28 @@
 
 			<DetailCard title="Categorization & references" icon={Tags} accent="muted" testid="expense-card-references" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Category" bind:value={form.category} display={formatExpenseCategory(expense.category)} {editing} type="select" options={categoryOptions} testid="expense-detail-category" />
-				<InlineField label="Property" bind:value={form.propertyId} display={expense.propertyName ?? 'General'} {editing} type="select" options={propertyOptions} testid="expense-detail-property" />
+				{#if editing}
+					<RemoteRecordSelect
+						queryKey={['expense-detail-property', portfolioId]}
+						label="Property"
+						bind:value={form.propertyId}
+						selectedLabel={selectedPropertyLabel}
+						placeholder="General"
+						clearLabel="General"
+						searchPlaceholder="Search properties…"
+						emptyLabel="No matching properties"
+						loadPage={loadPropertyOptions}
+						onValueChange={(_value, option) => (selectedPropertyLabel = option?.label ?? null)}
+						testid="expense-detail-property"
+					/>
+				{:else}
+					<InlineField label="Property" bind:value={form.propertyId} display={expense.propertyName ?? 'General'} editing={false} testid="expense-detail-property" />
+				{/if}
 				<div data-testid="expense-detail-unit-field">
 					<p class="mb-1 text-xs font-medium text-muted-foreground">Unit</p>
 					{#if expense.unitId}
 						<a
-							href="/units/{expense.unitId}?tab=ledger&ledger=expenses"
+							href="/units/{expense.unitId}?tab=money&ledger=expenses"
 							class="block min-h-10 rounded-md py-2 text-sm font-medium text-primary underline-offset-4 hover:underline"
 							data-testid="expense-detail-unit-link"
 						>
@@ -481,7 +533,23 @@
 						</p>
 					{/if}
 				</div>
-				<InlineField label="Vendor" bind:value={form.vendorId} display={expense.vendorName ?? 'No vendor'} {editing} type="select" options={vendorOptions} testid="expense-detail-vendor" />
+				{#if editing}
+					<RemoteRecordSelect
+						queryKey={['expense-detail-vendor', portfolioId]}
+						label="Vendor"
+						bind:value={form.vendorId}
+						selectedLabel={selectedVendorLabel}
+						placeholder="No vendor"
+						clearLabel="No vendor"
+						searchPlaceholder="Search vendors…"
+						emptyLabel="No matching vendors"
+						loadPage={loadVendorOptions}
+						onValueChange={(_value, option) => (selectedVendorLabel = option?.label ?? null)}
+						testid="expense-detail-vendor"
+					/>
+				{:else}
+					<InlineField label="Vendor" bind:value={form.vendorId} display={expense.vendorName ?? 'No vendor'} editing={false} testid="expense-detail-vendor" />
+				{/if}
 				<div data-testid="expense-detail-billable-field">
 					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="expense-detail-billable-input">Billable to owner</label>
 					{#if editing}

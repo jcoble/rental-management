@@ -16,7 +16,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
 
-	let { propertyId }: { propertyId: number } = $props();
+	let { propertyId, canManage = false }: { propertyId: number; canManage?: boolean } = $props();
 
 	const queryClient = useQueryClient();
 	const PAGE_SIZE = 10;
@@ -75,6 +75,7 @@
 	let formErrors = $state<Record<string, string>>({});
 
 	function openAdd() {
+		if (!canManage) return;
 		editingId = null;
 		form = { ...emptyForm };
 		formErrors = {};
@@ -82,6 +83,7 @@
 	}
 
 	function openEdit(t: RecurringExpense) {
+		if (!canManage) return;
 		editingId = t.id;
 		form = {
 			category: t.category,
@@ -163,6 +165,7 @@
 </script>
 
 {#snippet actionsCell(t: RecurringExpense)}
+	{#if canManage}
 	<div class="flex items-center justify-end gap-1">
 		<Button variant="ghost" size="sm" class="h-7 w-7 p-0" onclick={(e) => { e.stopPropagation(); openEdit(t); }} aria-label="Edit recurring expense">
 			<Pencil class="h-4 w-4" />
@@ -171,6 +174,7 @@
 			<Trash2 class="h-4 w-4" />
 		</Button>
 	</div>
+	{/if}
 {/snippet}
 
 <div class="mb-6" data-testid="property-detail-recurring-expenses">
@@ -182,7 +186,7 @@
 		loading={query.isLoading || query.isFetching}
 		emptyMessage="No recurring expenses yet."
 		getRowKey={(t) => t.id}
-		onRowClick={(t) => openEdit(t)}
+		onRowClick={canManage ? (t) => openEdit(t) : undefined}
 		pageSize={PAGE_SIZE}
 		page={recurringPage}
 		totalCount={totalCount}
@@ -202,15 +206,17 @@
 				align="end"
 				testid="property-recurring-expenses-date-range"
 			/>
+			{#if canManage}
 			<Button class="gap-2 shrink-0" onclick={openAdd} data-testid="recurring-expense-add-button">
 				<Plus class="h-4 w-4" />
 				Add Recurring Expense
 			</Button>
+			{/if}
 		{/snippet}
 	</DataGrid>
 </div>
 
-<Dialog.Root open={showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
+<Dialog.Root open={canManage && showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
 	<Dialog.Content class="max-w-sm">
 		<Dialog.Header>
 			<Dialog.Title>{editingId == null ? 'Add Recurring Expense' : 'Edit Recurring Expense'}</Dialog.Title>
@@ -234,7 +240,7 @@
 </Dialog.Root>
 
 <ConfirmDialog
-	open={deleteTarget !== null}
+	open={canManage && deleteTarget !== null}
 	title="Remove recurring expense"
 	message={deleteTarget ? `Remove "${deleteTarget.description}"? Already-generated expenses are kept.` : ''}
 	busy={deleteMut.isPending}

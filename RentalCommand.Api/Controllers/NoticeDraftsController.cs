@@ -1,12 +1,12 @@
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.Controllers;
 
 /// <summary>
-/// Lease Lifecycle Autopilot: drafts renewal offers, late-rent notices, and move-out reminders
-/// for landlord review. Approval sends through the existing tenant conversation channel fanout.
+/// Tenant-notice drafts generated from enabled policies and canonical lease/account facts.
 /// </summary>
 [ApiController]
 [Route("api/v1/notices")]
@@ -14,72 +14,156 @@ namespace RentalCommand.Api.Controllers;
 public class NoticeDraftsController : ManagementControllerBase
 {
     private readonly INoticeDraftService _service;
+    private readonly INotificationFoundationService _foundation;
 
-    public NoticeDraftsController(INoticeDraftService service)
+    public NoticeDraftsController(
+        INoticeDraftService service,
+        INotificationFoundationService foundation)
     {
         _service = service;
+        _foundation = foundation;
     }
 
     [HttpGet]
     [ProducesResponseType(typeof(IReadOnlyList<NoticeDraftResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<NoticeDraftResponse>>> List(
         [FromQuery] string? status,
+        [FromQuery] ListQuery query,
         CancellationToken ct)
     {
-        return Ok(await _service.ListAsync(GetPortfolioId(), status, ct));
+        return Ok(await _service.ListAsync(GetWorkspaceReadScope(), status, query, ct));
+    }
+
+    [HttpGet("{id:int}")]
+    [ProducesResponseType(typeof(NoticeDraftResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<NoticeDraftResponse>> Get(int id, CancellationToken ct)
+    {
+        var draft = await _service.GetAsync(GetWorkspaceReadScope(), id, ct);
+        return draft == null ? NotFound(new { error = "Draft notice not found" }) : Ok(draft);
     }
 
     /// <summary>
-    /// Generates notice drafts for the caller's portfolio. With an empty/absent body this runs
-    /// portfolio-wide (every applicable lease + late payment). Supply <c>tenantId</c> to scope to one
-    /// tenant — the primary path from a tenant's page — and optionally <c>noticeType</c> to generate just
-    /// that kind. The body is optional so existing callers keep working unchanged.
+    /// Runs one PostgreSQL set command for the caller's portfolio. An empty body evaluates every due
+    /// enabled policy; canonical relationship/account/ledger identifiers and <c>noticeType</c> narrow
+    /// the same command without loading candidate ids into application memory.
     /// </summary>
     [HttpPost("generate")]
     [ProducesResponseType(typeof(GenerateNoticeDraftsResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<GenerateNoticeDraftsResponse>> Generate(
         [FromBody] GenerateNoticeDraftsRequest? request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
-        return Ok(await _service.GenerateAsync(GetPortfolioId(), request, ct));
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+        {
+            return BadRequest(new { error = "Idempotency-Key header is required (max 128 characters)." });
+        }
+
+        return Ok(await _service.GenerateAsync(GetWorkspaceReadScope(), request, operationKey, ct));
     }
 
     [HttpPatch("{id:int}")]
     [ProducesResponseType(typeof(NoticeDraftResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<NoticeDraftResponse>> Update(
         int id,
         [FromBody] UpdateNoticeDraftRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
-        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+        {
+            return BadRequest(new { error = "Idempotency-Key header is required (max 128 characters)." });
+        }
+
+        var updated = await _service.UpdateAsync(
+            GetWorkspaceReadScope(), id, request, operationKey, ct);
         return updated == null ? NotFound(new { error = "Draft notice not found or no longer editable" }) : Ok(updated);
     }
 
-    /// <summary>
-    /// Approves a draft notice and sends it through the tenant conversation channel fan-out. Returns 422
-    /// when the Fair Housing review flags the copy and <c>acknowledgedFairHousingReview</c> is false; the
-    /// body carries a <c>fairHousingConcerns</c> list and the draft remains editable.
-    /// </summary>
     [HttpPost("{id:int}/approve")]
     [ProducesResponseType(typeof(NoticeDraftResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
     public async Task<ActionResult<NoticeDraftResponse>> Approve(
         int id,
         [FromBody] ApproveNoticeDraftRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
-        var updated = await _service.ApproveAsync(GetPortfolioId(), id, request, ct);
-        return updated == null ? NotFound(new { error = "Draft notice not found or cannot be approved" }) : Ok(updated);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+        {
+            return BadRequest(new { error = "Idempotency-Key header is required (max 128 characters)." });
+        }
+        if (!TryMapChannels(request.Channels, out var channels))
+        {
+            return BadRequest(new { error = "Choose at least one valid delivery channel." });
+        }
+
+        var scope = GetWorkspaceReadScope();
+        await _foundation.ApproveAndQueueAsync(
+            NoticeApprovalExecutionContext.ForWorkspace(scope),
+            id,
+            new ApproveAndQueueNoticeRequest(channels),
+            null,
+            operationKey,
+            ct);
+        var approved = await _service.GetAsync(scope, id, ct);
+        return approved is null
+            ? NotFound(new { error = "Approved notice could not be read in the current scope" })
+            : Ok(approved);
     }
 
     [HttpPost("{id:int}/dismiss")]
     [ProducesResponseType(typeof(NoticeDraftResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<NoticeDraftResponse>> Dismiss(int id, CancellationToken ct)
+    public async Task<ActionResult<NoticeDraftResponse>> Dismiss(
+        int id,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var updated = await _service.DismissAsync(GetPortfolioId(), id, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+        {
+            return BadRequest(new { error = "Idempotency-Key header is required (max 128 characters)." });
+        }
+
+        var updated = await _service.DismissAsync(GetWorkspaceReadScope(), id, operationKey, ct);
         return updated == null ? NotFound(new { error = "Draft notice not found or cannot be dismissed" }) : Ok(updated);
+    }
+
+    private static bool TryMapChannels(
+        IReadOnlyList<string> requested,
+        out IReadOnlyList<NoticeDeliveryChannel> channels)
+    {
+        var mapped = new List<NoticeDeliveryChannel>(requested.Count);
+        foreach (var raw in requested)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                channels = [];
+                return false;
+            }
+            var channel = raw.Trim().ToLowerInvariant() switch
+            {
+                "portal" or "tenantportal" or "tenant portal" => NoticeDeliveryChannel.TenantPortal,
+                "push" or "mobilepush" or "mobile push" => NoticeDeliveryChannel.MobilePush,
+                "email" => NoticeDeliveryChannel.Email,
+                "sms" or "text" => NoticeDeliveryChannel.Sms,
+                _ => (NoticeDeliveryChannel?)null,
+            };
+            if (channel is null)
+            {
+                channels = [];
+                return false;
+            }
+            mapped.Add(channel.Value);
+        }
+
+        channels = mapped.Distinct().OrderBy(channel => channel).ToArray();
+        return channels.Count > 0;
     }
 }

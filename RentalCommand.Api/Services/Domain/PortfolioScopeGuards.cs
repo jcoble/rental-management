@@ -32,9 +32,11 @@ internal static class PortfolioScopeGuards
     public static Task<bool> EnsureTenantInPortfolioAsync(this RentalCommandDbContext db, int portfolioId, int tenantId, CancellationToken ct)
         => db.Tenants.AnyAsync(t => t.Id == tenantId && t.PortfolioId == portfolioId, ct);
 
-    /// <summary>The referenced lease must live in the caller's portfolio.</summary>
-    public static Task<bool> EnsureLeaseInPortfolioAsync(this RentalCommandDbContext db, int portfolioId, int leaseId, CancellationToken ct)
-        => db.Leases.AnyAsync(l => l.Id == leaseId && l.PortfolioId == portfolioId, ct);
+    public static Task<bool> EnsureLeaseManagementInPortfolioAsync(this RentalCommandDbContext db, int portfolioId, int leaseManagementId, CancellationToken ct)
+        => db.LeaseManagements.AnyAsync(l => l.Id == leaseManagementId && l.PortfolioId == portfolioId, ct);
+
+    public static Task<bool> EnsureLeaseAgreementInManagementAsync(this RentalCommandDbContext db, int portfolioId, int leaseManagementId, int leaseAgreementId, CancellationToken ct)
+        => db.LeaseAgreements.AnyAsync(a => a.Id == leaseAgreementId && a.PortfolioId == portfolioId && a.LeaseManagementId == leaseManagementId, ct);
 
     /// <summary>The referenced rental application must live in the caller's portfolio.</summary>
     public static Task<bool> EnsureApplicationInPortfolioAsync(this RentalCommandDbContext db, int portfolioId, int applicationId, CancellationToken ct)
@@ -49,9 +51,6 @@ internal static class PortfolioScopeGuards
         => db.WorkOrders.AnyAsync(w => w.Id == workOrderId && w.PortfolioId == portfolioId, ct);
 
     /// <summary>The referenced owner (legacy contact) must live in the caller's portfolio.</summary>
-    public static Task<bool> EnsureOwnerInPortfolioAsync(this RentalCommandDbContext db, int portfolioId, int ownerId, CancellationToken ct)
-        => db.Owners.AnyAsync(o => o.Id == ownerId && o.PortfolioId == portfolioId, ct);
-
     /// <summary>The referenced owner entity (legal owner) must live in the caller's portfolio.</summary>
     public static Task<bool> EnsureOwnerEntityInPortfolioAsync(this RentalCommandDbContext db, int portfolioId, int ownerEntityId, CancellationToken ct)
         => db.OwnerEntities.AnyAsync(e => e.Id == ownerEntityId && e.PortfolioId == portfolioId, ct);

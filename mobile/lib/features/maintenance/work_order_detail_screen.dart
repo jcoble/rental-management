@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/auth/auth_controller.dart';
 import '../../core/models/models.dart' hide Vendor;
 import '../../core/utils/date_wire.dart';
 import '../activity/activity_history_screen.dart';
@@ -50,10 +52,7 @@ String _fmtCost(double cost) {
   return '\$$buf.${parts[1]}';
 }
 
-/// All valid status transitions, in display order.
-///
-/// WorkOrderStatus values: New | Scheduled | InProgress | WaitingParts |
-/// Completed | Cancelled
+/// Manager-visible statuses, in display order.
 const _allStatuses = [
   'New',
   'Scheduled',
@@ -62,6 +61,38 @@ const _allStatuses = [
   'Completed',
   'Cancelled',
 ];
+
+const _assignedTechnicianStatusTargets = <String, List<String>>{
+  'New': ['Scheduled', 'InProgress', 'OnHold', 'Cancelled', 'Completed'],
+  'Scheduled': [
+    'InProgress',
+    'WaitingParts',
+    'OnHold',
+    'Cancelled',
+    'Completed',
+  ],
+  'InProgress': ['WaitingParts', 'OnHold', 'Completed'],
+  'WaitingParts': ['InProgress', 'OnHold', 'Completed'],
+  'OnHold': [
+    'Scheduled',
+    'InProgress',
+    'WaitingParts',
+    'Cancelled',
+    'Completed',
+  ],
+  'Completed': [],
+  'Cancelled': [],
+};
+
+List<String> _statusActionTargets(
+  String currentStatus, {
+  required bool restrictToAssignedTechnicianTransitions,
+}) {
+  if (restrictToAssignedTechnicianTransitions) {
+    return _assignedTechnicianStatusTargets[currentStatus] ?? const [];
+  }
+  return _allStatuses.where((status) => status != currentStatus).toList();
+}
 
 /// Human-readable labels for status values (delegates to the shared helper).
 String _statusLabel(String s) => workOrderStatusLabel(s);
@@ -184,6 +215,123 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
     }
   }
 
+  Future<void> _showResponsibilitySheet() async {
+    final repository = ref.read(workOrdersRepositoryProvider);
+    try {
+      final results = await Future.wait([
+        repository.listResponsibilities(widget.workOrderId),
+        repository.listResponsibilityCandidates(widget.workOrderId),
+      ]);
+      if (!mounted) return;
+      final responsibilities = results[0];
+      final candidates = results[1];
+      Map<String, dynamic>? currentMatch;
+      for (final item in responsibilities) {
+        if (item['kind'] == 'Primary' && item['effectiveToUtc'] == null) {
+          currentMatch = item;
+          break;
+        }
+      }
+      final current = currentMatch;
+      int? selectedAssignmentId;
+      var reason = 'Assigned by property manager';
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        builder: (sheetContext) => StatefulBuilder(
+          builder: (context, setSheetState) => Padding(
+            padding: EdgeInsets.fromLTRB(
+              24,
+              24,
+              24,
+              MediaQuery.viewInsetsOf(context).bottom + 24,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('Technician responsibility', style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 8),
+                Text(current == null
+                    ? 'No technician is currently assigned.'
+                    : '${current['memberDisplayName']} is currently responsible.'),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<int>(
+                  value: selectedAssignmentId,
+                  decoration: const InputDecoration(labelText: 'Technician'),
+                  items: candidates.map((candidate) => DropdownMenuItem<int>(
+                    value: (candidate['membershipRoleAssignmentId'] as num).toInt(),
+                    child: Text(candidate['memberDisplayName'] as String),
+                  )).toList(growable: false),
+                  onChanged: (value) => setSheetState(() => selectedAssignmentId = value),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  initialValue: reason,
+                  maxLength: 1000,
+                  decoration: const InputDecoration(labelText: 'Reason'),
+                  onChanged: (value) => reason = value,
+                ),
+                const SizedBox(height: 12),
+                FilledButton(
+                  onPressed: selectedAssignmentId == null ? null : () async {
+                    final selected = candidates.firstWhere((candidate) =>
+                        (candidate['membershipRoleAssignmentId'] as num).toInt() == selectedAssignmentId);
+                    final contextIds = <int>{(selected['accessContextId'] as num).toInt()};
+                    if (current?['accessContextId'] case final num currentId) {
+                      contextIds.add(currentId.toInt());
+                    }
+                    final expectations = contextIds.map((contextId) {
+                      final candidate = candidates.firstWhere((item) =>
+                          (item['accessContextId'] as num).toInt() == contextId);
+                      return {
+                        'accessContextId': contextId,
+                        'expectedRevision': (candidate['accessRevision'] as num).toInt(),
+                      };
+                    }).toList(growable: false);
+                    await repository.assignResponsibility(widget.workOrderId, {
+                      'workspaceMembershipId': (selected['workspaceMembershipId'] as num).toInt(),
+                      'membershipRoleAssignmentId': selectedAssignmentId,
+                      'kind': 'Primary',
+                      'expectedCurrentPrimaryResponsibilityId': current?['id'],
+                      'accessRevisionExpectations': expectations,
+                      'reason': reason.trim(),
+                    });
+                    if (sheetContext.mounted) Navigator.pop(sheetContext);
+                    await _refresh();
+                  },
+                  child: Text(current == null ? 'Assign' : 'Reassign'),
+                ),
+                if (current != null) ...[
+                  const SizedBox(height: 8),
+                  OutlinedButton(
+                    onPressed: () async {
+                      final contextId = (current['accessContextId'] as num).toInt();
+                      final candidate = candidates.firstWhere((item) =>
+                          (item['accessContextId'] as num).toInt() == contextId);
+                      await repository.closeResponsibility(widget.workOrderId, current['id'] as String, {
+                        'accessRevisionExpectations': [{
+                          'accessContextId': contextId,
+                          'expectedRevision': (candidate['accessRevision'] as num).toInt(),
+                        }],
+                        'reason': 'Unassigned by property manager',
+                      });
+                      if (sheetContext.mounted) Navigator.pop(sheetContext);
+                      await _refresh();
+                    },
+                    child: const Text('Unassign'),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      );
+    } catch (error) {
+      _showError(error);
+    }
+  }
+
   Future<void> _addPhoto(ImageSource source) async {
     final picked = await ImagePicker().pickImage(
       source: source,
@@ -203,6 +351,7 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
             bytes: bytes,
             fileName: picked.name,
             contentType: _mimeFromExtension(picked.name),
+            clientOperationId: const Uuid().v4(),
           );
       if (!mounted) return;
       ref.invalidate(workOrderDocumentsProvider(widget.workOrderId));
@@ -382,18 +531,28 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
     final detail = detailAsync.asData?.value;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final auth = ref.watch(authControllerProvider);
+    final canManageWork = auth is AuthStateAuthenticated &&
+        auth.capabilities.contains('work.manage');
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Work Order'),
         actions: [
+          if (auth is AuthStateAuthenticated &&
+              auth.capabilities.contains('responsibility.assign-existing-member'))
+            IconButton(
+              icon: const Icon(Icons.engineering_outlined),
+              tooltip: 'Assign technician',
+              onPressed: _showResponsibilitySheet,
+            ),
           IconButton(
             icon: const Icon(Icons.history_outlined),
             tooltip: 'View work order activity',
             onPressed: () =>
                 _showActivityHistory(subtitle: detail?.workOrder.title),
           ),
-          detailAsync.whenOrNull(
+          if (canManageWork) detailAsync.whenOrNull(
                 data: (detail) => IconButton(
                   icon: const Icon(Icons.edit_outlined),
                   tooltip: 'Edit',
@@ -433,6 +592,7 @@ class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
             detail: detail,
             colorScheme: colorScheme,
             theme: theme,
+            canManageWork: canManageWork,
             statusUpdating: _statusUpdating,
             uploadingPhoto: _uploadingPhoto,
             onTransition: _changeStatus,
@@ -455,6 +615,7 @@ class _DetailBody extends StatelessWidget {
     required this.detail,
     required this.colorScheme,
     required this.theme,
+    required this.canManageWork,
     required this.statusUpdating,
     required this.uploadingPhoto,
     required this.onTransition,
@@ -468,6 +629,7 @@ class _DetailBody extends StatelessWidget {
   final WorkOrderDetail detail;
   final ColorScheme colorScheme;
   final ThemeData theme;
+  final bool canManageWork;
   final bool statusUpdating;
   final bool uploadingPhoto;
   final void Function(String) onTransition;
@@ -480,9 +642,10 @@ class _DetailBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final workOrder = detail.workOrder;
-    final otherStatuses = _allStatuses
-        .where((s) => s != workOrder.status)
-        .toList();
+    final otherStatuses = _statusActionTargets(
+      workOrder.status,
+      restrictToAssignedTechnicianTransitions: !canManageWork,
+    );
     final isCompleted = workOrder.status.toLowerCase() == 'completed';
     final hasVendor = workOrder.vendorId != null;
 
@@ -527,19 +690,22 @@ class _DetailBody extends StatelessWidget {
               label: const Text('Open in Maps'),
             ),
             // Dispatch is hidden once the job is closed out.
-            if (!isCompleted && workOrder.status.toLowerCase() != 'cancelled')
+            if (canManageWork &&
+                !isCompleted &&
+                workOrder.status.toLowerCase() != 'cancelled')
               FilledButton.icon(
                 onPressed: onDispatchVendor,
                 icon: const Icon(Icons.sms_outlined),
                 label: const Text('Text a vendor'),
               ),
             // Call works regardless of status (e.g. follow-up on a completed job).
-            FilledButton.tonalIcon(
-              onPressed: onCallVendor,
-              icon: const Icon(Icons.call_outlined),
-              label: const Text('Call a vendor'),
-            ),
-            if (isCompleted && hasVendor)
+            if (canManageWork)
+              FilledButton.tonalIcon(
+                onPressed: onCallVendor,
+                icon: const Icon(Icons.call_outlined),
+                label: const Text('Call a vendor'),
+              ),
+            if (canManageWork && isCompleted && hasVendor)
               OutlinedButton.icon(
                 onPressed: onRateVendor,
                 icon: const Icon(Icons.star_outline_rounded),
@@ -1103,6 +1269,7 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _titleCtrl;
   late final TextEditingController _descCtrl;
+  late final TextEditingController _technicianAccessCtrl;
   late final TextEditingController _estCostCtrl;
   late final TextEditingController _actualCostCtrl;
   late int _selectedPropertyId;
@@ -1138,6 +1305,9 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
     super.initState();
     _titleCtrl = TextEditingController(text: widget.workOrder.title);
     _descCtrl = TextEditingController(text: widget.workOrder.description);
+    _technicianAccessCtrl = TextEditingController(
+      text: widget.workOrder.technicianAccessInstructions ?? '',
+    );
     _estCostCtrl = TextEditingController(
       text: widget.workOrder.estimatedCost?.toStringAsFixed(2) ?? '',
     );
@@ -1184,6 +1354,7 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
   void dispose() {
     _titleCtrl.dispose();
     _descCtrl.dispose();
+    _technicianAccessCtrl.dispose();
     _estCostCtrl.dispose();
     _actualCostCtrl.dispose();
     super.dispose();
@@ -1309,6 +1480,7 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
           .updateWorkOrder(widget.workOrder.id, {
             'title': _titleCtrl.text.trim(),
             'description': _descCtrl.text.trim(),
+            'technicianAccessInstructions': _technicianAccessCtrl.text.trim(),
             'priority': _priority,
             'category': _category,
             'unitId': ?_selectedUnitId,
@@ -1528,6 +1700,19 @@ class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
                   validator: (value) => (value == null || value.trim().isEmpty)
                       ? 'Description is required'
                       : null,
+                ),
+                gap,
+                TextFormField(
+                  key: const Key('work-order-technician-access-field'),
+                  controller: _technicianAccessCtrl,
+                  maxLines: 3,
+                  maxLength: 2000,
+                  textInputAction: TextInputAction.newline,
+                  decoration: const InputDecoration(
+                    labelText: 'Safe technician access (optional)',
+                    helperText:
+                        'Entry, lockbox, pet, or contact guidance safe for the assigned technician.',
+                  ),
                 ),
               ],
             ),

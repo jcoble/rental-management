@@ -1,26 +1,37 @@
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
-import '../../core/models/lease.dart';
+import '../../core/auth/auth_controller.dart';
+import '../../core/auth/auth_models.dart';
+import '../../core/auth/mobile_access_policy.dart';
 import '../../core/models/work_order.dart';
+import '../../core/models/property.dart';
+import '../../core/navigation/mobile_restoration_state.dart';
+import '../activity/activity_history_screen.dart';
 import '../applications/application_detail_screen.dart';
 import '../applications/applications_models.dart';
+import '../applications/applications_repository.dart';
+import '../applications/applications_shared.dart';
 import '../home/mobile_domain_navigation.dart';
 import '../home/mobile_quick_action_fab.dart';
 import '../home/mobile_quick_action_helpers.dart';
-import '../leases/lease_form_defaults.dart';
 import '../leases/lease_detail_screen.dart';
-import '../leases/leases_list_screen.dart';
-import '../leases/leases_repository.dart';
+import '../inspections/inspections_repository.dart';
+import '../recurring_maintenance/recurring_maintenance_repository.dart';
 import '../maintenance/create_work_order_sheet.dart';
 import '../maintenance/work_order_detail_screen.dart';
 import '../money/expense_detail_screen.dart';
 import '../money/expense_models.dart';
 import '../money/money_repository.dart';
+import '../payments/payment_detail_screen.dart';
+import '../payments/payments_screen.dart';
 import '../properties/properties_repository.dart';
 import '../tenants/tenant_detail_screen.dart';
 import 'unit_command_center_tabs.dart';
@@ -33,8 +44,9 @@ class UnitCommandCenterLoaderScreen extends ConsumerWidget {
   const UnitCommandCenterLoaderScreen({
     super.key,
     required this.unitId,
-    this.initialTab = UnitCommandCenterTab.overview,
-    this.initialLease,
+    this.initialTab = UnitCommandCenterTab.summary,
+    this.initialView,
+    this.initialLeaseManagementId,
     this.initialApplication,
     this.initialWorkOrder,
     this.selectedTenantId,
@@ -42,7 +54,8 @@ class UnitCommandCenterLoaderScreen extends ConsumerWidget {
 
   final int unitId;
   final UnitCommandCenterTab initialTab;
-  final Lease? initialLease;
+  final UnitCommandCenterView? initialView;
+  final int? initialLeaseManagementId;
   final RentalApplication? initialApplication;
   final WorkOrder? initialWorkOrder;
   final int? selectedTenantId;
@@ -71,7 +84,8 @@ class UnitCommandCenterLoaderScreen extends ConsumerWidget {
         final screen = UnitCommandCenterScreen(
           dashboard: dashboard,
           initialTab: initialTab,
-          initialLease: initialLease,
+          initialView: initialView,
+          initialLeaseManagementId: initialLeaseManagementId,
           initialApplication: initialApplication,
           initialWorkOrder: initialWorkOrder,
           selectedTenantId: selectedTenantId,
@@ -87,12 +101,13 @@ class UnitCommandCenterLoaderScreen extends ConsumerWidget {
   }
 }
 
-class UnitCommandCenterScreen extends StatelessWidget {
+class UnitCommandCenterScreen extends StatefulWidget {
   const UnitCommandCenterScreen({
     super.key,
     required this.dashboard,
-    this.initialTab = UnitCommandCenterTab.overview,
-    this.initialLease,
+    this.initialTab = UnitCommandCenterTab.summary,
+    this.initialView,
+    this.initialLeaseManagementId,
     this.initialApplication,
     this.initialWorkOrder,
     this.selectedTenantId,
@@ -100,91 +115,423 @@ class UnitCommandCenterScreen extends StatelessWidget {
 
   final UnitDashboard dashboard;
   final UnitCommandCenterTab initialTab;
-  final Lease? initialLease;
+  final UnitCommandCenterView? initialView;
+  final int? initialLeaseManagementId;
   final RentalApplication? initialApplication;
   final WorkOrder? initialWorkOrder;
   final int? selectedTenantId;
 
   @override
+  State<UnitCommandCenterScreen> createState() =>
+      _UnitCommandCenterScreenState();
+}
+
+class _UnitCommandCenterScreenState extends State<UnitCommandCenterScreen> {
+  late final ValueNotifier<UnitCommandCenterView?> _activeView;
+  late UnitCommandCenterTab _activeTab;
+  final Map<UnitCommandCenterTab, UnitCommandCenterView?>
+  _activeViewsByDestination = {};
+  RestorableMobileRestorationState? _restoration;
+  TabController? _topController;
+
+  @override
+  void initState() {
+    super.initState();
+    _activeTab = widget.initialTab;
+    _activeView = ValueNotifier(_startingView);
+    _activeViewsByDestination[_activeTab] = _activeView.value;
+    _activeView.addListener(_saveRestoration);
+  }
+
+  UnitCommandCenterView? get _startingView {
+    if (widget.initialView != null) return widget.initialView;
+    if (widget.initialApplication != null) {
+      return UnitCommandCenterView.applications;
+    }
+    if (widget.selectedTenantId != null) {
+      return UnitCommandCenterView.residents;
+    }
+    if (widget.initialWorkOrder != null) {
+      return UnitCommandCenterView.workOrders;
+    }
+    return switch (widget.initialTab) {
+      UnitCommandCenterTab.leasing => UnitCommandCenterView.listing,
+      UnitCommandCenterTab.tenantLease => UnitCommandCenterView.agreements,
+      UnitCommandCenterTab.money => UnitCommandCenterView.tenantAccount,
+      UnitCommandCenterTab.maintenance => UnitCommandCenterView.workOrders,
+      UnitCommandCenterTab.documentsHistory => UnitCommandCenterView.documents,
+      _ => null,
+    };
+  }
+
+  @override
+  void dispose() {
+    _topController?.removeListener(_handleTopTabChanged);
+    _activeView.removeListener(_saveRestoration);
+    _activeView.dispose();
+    super.dispose();
+  }
+
+  void _bindTopController(TabController controller) {
+    if (identical(controller, _topController)) return;
+    _topController?.removeListener(_handleTopTabChanged);
+    _topController = controller..addListener(_handleTopTabChanged);
+    _restoration ??= MobileRestorationScope.maybeOf(context);
+    _saveRestoration();
+  }
+
+  void _handleTopTabChanged() {
+    final controller = _topController;
+    if (controller == null || controller.indexIsChanging) return;
+    final tab = UnitCommandCenterTab.values[controller.index];
+    _activeViewsByDestination[_activeTab] = _activeView.value;
+    final allowed = switch (tab) {
+      UnitCommandCenterTab.leasing => const {
+        UnitCommandCenterView.listing,
+        UnitCommandCenterView.applications,
+      },
+      UnitCommandCenterTab.tenantLease => const {
+        UnitCommandCenterView.agreements,
+        UnitCommandCenterView.residents,
+      },
+      UnitCommandCenterTab.money => const {
+        UnitCommandCenterView.tenantAccount,
+        UnitCommandCenterView.operatingCosts,
+      },
+      UnitCommandCenterTab.maintenance => const {
+        UnitCommandCenterView.workOrders,
+        UnitCommandCenterView.inspections,
+        UnitCommandCenterView.recurring,
+        UnitCommandCenterView.turnover,
+      },
+      UnitCommandCenterTab.documentsHistory => const {
+        UnitCommandCenterView.documents,
+        UnitCommandCenterView.history,
+      },
+      UnitCommandCenterTab.summary => const <UnitCommandCenterView>{},
+    };
+    final requested = _activeViewsByDestination[tab];
+    final next = allowed.isEmpty
+        ? null
+        : allowed.contains(requested)
+        ? requested
+        : allowed.first;
+    _activeTab = tab;
+    if (_activeView.value != next) _activeView.value = next;
+    _saveRestoration();
+  }
+
+  void _saveRestoration() {
+    _activeViewsByDestination[_activeTab] = _activeView.value;
+    final restoration = _restoration;
+    if (restoration == null) return;
+    final tab = UnitCommandCenterTab
+        .values[_topController?.index ?? widget.initialTab.index];
+    restoration.value = restoration.value.updateUnit(
+      unitId: widget.dashboard.unit.id,
+      destination: tab.name,
+      anchor: _activeView.value?.name,
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final unit = dashboard.unit;
-    final property = dashboard.propertyName.trim().isEmpty
+    final unit = widget.dashboard.unit;
+    final property = widget.dashboard.propertyName.trim().isEmpty
         ? 'Property'
-        : dashboard.propertyName.trim();
+        : widget.dashboard.propertyName.trim();
     final usesDomainHeader = MobileDomainHeaderScope.maybeOf(context) != null;
     const unitTabs = TabBar(
       isScrollable: true,
       tabAlignment: TabAlignment.start,
       tabs: [
-        Tab(text: 'Overview'),
-        Tab(text: 'Listing'),
-        Tab(text: 'Lease'),
-        Tab(text: 'Apps'),
-        Tab(text: 'Ledger'),
-        Tab(text: 'Tenants'),
-        Tab(text: 'Turnover'),
-        Tab(text: 'Work'),
+        Tab(text: 'Summary'),
+        Tab(text: 'Leasing'),
+        Tab(text: 'Tenant & lease'),
+        Tab(text: 'Money'),
+        Tab(text: 'Maintenance'),
+        Tab(text: 'Documents & history'),
       ],
     );
     final tabView = TabBarView(
       children: [
-        _UnitOverviewTab(dashboard: dashboard),
-        _UnitListingTab(dashboard: dashboard),
-        _UnitLeaseTab(dashboard: dashboard, selectedLease: initialLease),
-        _UnitApplicationsTab(application: initialApplication),
-        _UnitLedgerTab(dashboard: dashboard),
-        _UnitTenantsTab(
-          dashboard: dashboard,
-          selectedTenantId: selectedTenantId,
+        _UnitOverviewTab(dashboard: widget.dashboard),
+        _UnitAreaSurface(
+          area: UnitCommandCenterTab.leasing,
+          labels: const ['Listing', 'Applications'],
+          views: const [
+            UnitCommandCenterView.listing,
+            UnitCommandCenterView.applications,
+          ],
+          initialView: _startingView,
+          activeView: _activeView,
+          children: [
+            _UnitListingTab(dashboard: widget.dashboard),
+            _UnitApplicationsTab(
+              unitId: widget.dashboard.unit.id,
+              application: widget.initialApplication,
+            ),
+          ],
         ),
-        _UnitTurnoverTab(dashboard: dashboard),
-        _UnitWorkTab(dashboard: dashboard, selectedWorkOrder: initialWorkOrder),
+        _UnitTenantLeaseSurface(
+          dashboard: widget.dashboard,
+          selectedLeaseManagementId: widget.initialLeaseManagementId,
+          selectedTenantId: widget.selectedTenantId,
+          activeView: _activeView,
+        ),
+        _UnitLedgerTab(dashboard: widget.dashboard, activeView: _activeView),
+        _UnitAreaSurface(
+          area: UnitCommandCenterTab.maintenance,
+          labels: const [
+            'Work orders',
+            'Inspections',
+            'Recurring maintenance',
+            'Turnover/make-ready',
+          ],
+          views: const [
+            UnitCommandCenterView.workOrders,
+            UnitCommandCenterView.inspections,
+            UnitCommandCenterView.recurring,
+            UnitCommandCenterView.turnover,
+          ],
+          initialView: _startingView,
+          activeView: _activeView,
+          children: [
+            _UnitWorkTab(
+              dashboard: widget.dashboard,
+              selectedWorkOrder: widget.initialWorkOrder,
+            ),
+            _UnitInspectionsTab(unitId: widget.dashboard.unit.id),
+            _UnitRecurringMaintenanceTab(unitId: widget.dashboard.unit.id),
+            _UnitTurnoverTab(dashboard: widget.dashboard),
+          ],
+        ),
+        _UnitAreaSurface(
+          area: UnitCommandCenterTab.documentsHistory,
+          labels: const ['Documents', 'History'],
+          views: const [
+            UnitCommandCenterView.documents,
+            UnitCommandCenterView.history,
+          ],
+          fillViewport: const [false, true],
+          initialView: _startingView,
+          activeView: _activeView,
+          children: [
+            _UnitDocumentsTab(dashboard: widget.dashboard),
+            ActivityHistoryScreen(
+              entityType: 'Unit',
+              entityId: widget.dashboard.unit.id,
+              title: 'Unit history',
+              subtitle: _unitLabel(widget.dashboard.unit.unitNumber),
+              embedded: true,
+            ),
+          ],
+        ),
       ],
     );
 
     return DefaultTabController(
       length: UnitCommandCenterTab.values.length,
-      initialIndex: initialTab.index,
-      child: Scaffold(
-        appBar: usesDomainHeader
-            ? null
-            : AppBar(
-                title: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(_unitLabel(unit.unitNumber)),
-                    Text(
-                      property,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      initialIndex: widget.initialTab.index,
+      child: Builder(
+        builder: (tabContext) {
+          _bindTopController(DefaultTabController.of(tabContext));
+          return _UnitViewScope(
+            activeView: _activeView,
+            child: Scaffold(
+              appBar: usesDomainHeader
+                  ? null
+                  : AppBar(
+                      title: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(_unitLabel(unit.unitNumber)),
+                          Text(
+                            property,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
+                                ),
+                          ),
+                        ],
                       ),
+                      bottom: unitTabs,
                     ),
-                  ],
-                ),
-                bottom: unitTabs,
+              body: usesDomainHeader
+                  ? Column(
+                      children: [
+                        Material(
+                          color: Theme.of(context).colorScheme.surface,
+                          child: const Align(
+                            alignment: Alignment.centerLeft,
+                            child: unitTabs,
+                          ),
+                        ),
+                        Expanded(child: tabView),
+                      ],
+                    )
+                  : tabView,
+              floatingActionButton: _UnitWorkOrderQuickActionFab(
+                dashboard: widget.dashboard,
+                selectedWorkOrder: widget.initialWorkOrder,
+                activeView: _activeView,
               ),
-        body: usesDomainHeader
-            ? Column(
-                children: [
-                  Material(
-                    color: Theme.of(context).colorScheme.surface,
-                    child: const Align(
-                      alignment: Alignment.centerLeft,
-                      child: unitTabs,
-                    ),
+              floatingActionButtonLocation:
+                  FloatingActionButtonLocation.endFloat,
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _UnitViewScope extends InheritedWidget {
+  const _UnitViewScope({required this.activeView, required super.child});
+
+  final ValueNotifier<UnitCommandCenterView?> activeView;
+
+  static ValueNotifier<UnitCommandCenterView?>? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<_UnitViewScope>()?.activeView;
+
+  @override
+  bool updateShouldNotify(_UnitViewScope oldWidget) =>
+      !identical(activeView, oldWidget.activeView);
+}
+
+class _UnitAreaSurface extends StatefulWidget {
+  const _UnitAreaSurface({
+    required this.area,
+    required this.labels,
+    required this.views,
+    required this.children,
+    required this.activeView,
+    this.initialView,
+    this.header,
+    this.fillViewport,
+  }) : assert(labels.length == views.length),
+       assert(views.length == children.length),
+       assert(fillViewport == null || fillViewport.length == children.length);
+
+  final UnitCommandCenterTab area;
+  final List<String> labels;
+  final List<UnitCommandCenterView> views;
+  final List<Widget> children;
+  final ValueNotifier<UnitCommandCenterView?> activeView;
+  final UnitCommandCenterView? initialView;
+  final Widget? header;
+  final List<bool>? fillViewport;
+
+  @override
+  State<_UnitAreaSurface> createState() => _UnitAreaSurfaceState();
+}
+
+class _UnitAreaSurfaceState extends State<_UnitAreaSurface> {
+  ScrollController? _scrollController;
+  late final List<GlobalKey> _sectionKeys;
+  TabController? _outerController;
+
+  @override
+  void initState() {
+    super.initState();
+    _sectionKeys = List.generate(widget.views.length, (_) => GlobalKey());
+    widget.activeView.addListener(_applyRequestedView);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final requestedView = widget.activeView.value;
+    final requestedIndex = requestedView == null
+        ? -1
+        : widget.views.indexOf(requestedView);
+    _scrollController ??= ScrollController(
+      initialScrollOffset: requestedIndex > 0
+          ? MediaQuery.sizeOf(context).height * requestedIndex
+          : 0,
+    );
+    final outer = DefaultTabController.maybeOf(context);
+    if (identical(outer, _outerController)) return;
+    _outerController?.removeListener(_syncActiveView);
+    _outerController = outer;
+    _outerController?.addListener(_syncActiveView);
+    _syncActiveView();
+  }
+
+  @override
+  void dispose() {
+    _outerController?.removeListener(_syncActiveView);
+    widget.activeView.removeListener(_applyRequestedView);
+    _scrollController?.dispose();
+    super.dispose();
+  }
+
+  void _syncActiveView() {
+    if (_outerController?.index != widget.area.index) return;
+    final requested = widget.activeView.value;
+    final next = requested != null && widget.views.contains(requested)
+        ? requested
+        : widget.views.first;
+    if (widget.activeView.value != next) widget.activeView.value = next;
+    _applyRequestedView();
+  }
+
+  void _applyRequestedView() {
+    final activeView = widget.activeView.value;
+    if (activeView == null) return;
+    final requested = widget.views.indexOf(activeView);
+    if (requested < 0 || _outerController?.index != widget.area.index) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final sectionContext = _sectionKeys[requested].currentContext;
+      if (sectionContext != null) {
+        Scrollable.ensureVisible(
+          sectionContext,
+          duration: Duration.zero,
+          alignment: 0,
+        );
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) => ListView(
+        controller: _scrollController,
+        cacheExtent: constraints.maxHeight * widget.children.length,
+        padding: const EdgeInsets.only(bottom: 32),
+        children: [
+          for (var index = 0; index < widget.children.length; index++)
+            Column(
+              key: _sectionKeys[index],
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (index == 0 && widget.header != null) widget.header!,
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Text(
+                    widget.labels[index],
+                    style: Theme.of(context).textTheme.titleLarge,
                   ),
-                  Expanded(child: tabView),
-                ],
-              )
-            : tabView,
-        floatingActionButton: _UnitWorkOrderQuickActionFab(
-          dashboard: dashboard,
-          selectedWorkOrder: initialWorkOrder,
-        ),
-        floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+                ),
+                if (widget.fillViewport?[index] ?? true)
+                  SizedBox(
+                    height: constraints.maxHeight,
+                    child: widget.children[index],
+                  )
+                else
+                  widget.children[index],
+                if (index < widget.children.length - 1)
+                  const Divider(height: 32),
+              ],
+            ),
+        ],
       ),
     );
   }
@@ -193,10 +540,12 @@ class UnitCommandCenterScreen extends StatelessWidget {
 class _UnitWorkOrderQuickActionFab extends ConsumerStatefulWidget {
   const _UnitWorkOrderQuickActionFab({
     required this.dashboard,
+    required this.activeView,
     this.selectedWorkOrder,
   });
 
   final UnitDashboard dashboard;
+  final ValueListenable<UnitCommandCenterView?> activeView;
   final WorkOrder? selectedWorkOrder;
 
   @override
@@ -206,15 +555,12 @@ class _UnitWorkOrderQuickActionFab extends ConsumerStatefulWidget {
 
 class _UnitWorkOrderQuickActionFabState
     extends ConsumerState<_UnitWorkOrderQuickActionFab> {
-  final Object _quickActionOwner = Object();
   TabController? _tabController;
-  MobileQuickActionController? _scopeController;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     final nextController = DefaultTabController.maybeOf(context);
-    final nextScope = MobileQuickActionScope.maybeOf(context);
 
     if (!identical(_tabController, nextController)) {
       _tabController?.removeListener(_handleTabChanged);
@@ -222,16 +568,14 @@ class _UnitWorkOrderQuickActionFabState
       _tabController?.addListener(_handleTabChanged);
     }
 
-    if (!identical(_scopeController, nextScope)) {
-      _scopeController?.clearPrimaryAction(_quickActionOwner);
-      _scopeController = nextScope;
-    }
+    widget.activeView.removeListener(_handleTabChanged);
+    widget.activeView.addListener(_handleTabChanged);
   }
 
   @override
   void dispose() {
     _tabController?.removeListener(_handleTabChanged);
-    _scopeController?.clearPrimaryAction(_quickActionOwner);
+    widget.activeView.removeListener(_handleTabChanged);
     super.dispose();
   }
 
@@ -245,10 +589,26 @@ class _UnitWorkOrderQuickActionFabState
   }
 
   MobileQuickAction? _currentAction() {
+    final auth = ref.watch(authControllerProvider);
+    if (auth is! AuthStateAuthenticated) return null;
+    final canManageWork = canUseMobileCapabilityAction(
+      experience: auth.activeExperience,
+      capabilities: auth.capabilities,
+      capability: 'work.manage',
+      experiences: const {WorkspaceExperience.management},
+    );
+    final canRecordReceipts = canUseMobileCapabilityAction(
+      experience: auth.activeExperience,
+      capabilities: auth.capabilities,
+      capability: 'money.payments.manage',
+      experiences: const {WorkspaceExperience.management},
+    );
     final index =
         _tabController?.index ?? DefaultTabController.of(context).index;
-    if (index == UnitCommandCenterTab.work.index &&
-        widget.selectedWorkOrder == null) {
+    if (index == UnitCommandCenterTab.maintenance.index &&
+        widget.activeView.value == UnitCommandCenterView.workOrders &&
+        widget.selectedWorkOrder == null &&
+        canManageWork) {
       return MobileQuickAction(
         label: 'New work order',
         icon: Icons.add,
@@ -256,11 +616,23 @@ class _UnitWorkOrderQuickActionFabState
       );
     }
 
-    if (index == UnitCommandCenterTab.turnover.index) {
+    if (index == UnitCommandCenterTab.maintenance.index &&
+        widget.activeView.value == UnitCommandCenterView.turnover &&
+        canManageWork) {
       return MobileQuickAction(
         label: 'New turnover task',
         icon: Icons.add,
         onPressed: _showWorkOrderSheet,
+      );
+    }
+
+    if (index == UnitCommandCenterTab.money.index &&
+        widget.dashboard.tenantAccountId != null &&
+        canRecordReceipts) {
+      return MobileQuickAction(
+        label: 'Record receipt',
+        icon: Icons.add_card_outlined,
+        onPressed: _showReceiptSheet,
       );
     }
 
@@ -280,22 +652,45 @@ class _UnitWorkOrderQuickActionFabState
     );
   }
 
+  Future<void> _showReceiptSheet() async {
+    final tenantAccountId = widget.dashboard.tenantAccountId;
+    final leaseManagementId = widget.dashboard.leaseManagementId;
+    if (tenantAccountId == null || leaseManagementId == null) return;
+    final result = await showRecordTenantReceiptSheet(
+      context,
+      ref,
+      tenantAccountId: tenantAccountId,
+      leaseManagementId: leaseManagementId,
+      tenantName: widget.dashboard.header.currentTenantName,
+      rentalLabel:
+          '$_propertyLabel · ${_unitLabel(widget.dashboard.unit.unitNumber)}',
+    );
+    if (result != null) {
+      ref.invalidate(unitDashboardProvider(widget.dashboard.unit.id));
+    }
+  }
+
+  Future<void> _openUnitScan() {
+    return openMobileScan(
+      context,
+      propertyId: widget.dashboard.unit.propertyId,
+      unitId: widget.dashboard.unit.id,
+      leaseManagementId: widget.dashboard.leaseManagementId,
+      leaseAgreementId: widget.dashboard.currentLease?.id,
+      tenantAccountId: widget.dashboard.tenantAccountId,
+      sourceLabel: 'Unit command center',
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final action = _currentAction();
-    final scope = _scopeController;
-    if (scope != null) {
-      scope.setPrimaryAction(_quickActionOwner, action);
-      return const SizedBox.shrink();
-    }
-
-    if (action == null) return const SizedBox.shrink();
     return MobileQuickActionFab(
       heroTag: 'unit-work-order-quick-action-fab',
       primaryAction: action,
       onChat: () => openMobileAssistant(context),
       onRecord: () => openMobileRecord(context),
-      onScan: () => openMobileScan(context),
+      onScan: _openUnitScan,
     );
   }
 }
@@ -309,11 +704,57 @@ class _UnitOverviewTab extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final header = dashboard.header;
     final unit = dashboard.unit;
-    final statusLocked = _hasCurrentOccupyingLease(dashboard.currentLease);
+    final auth = ref.watch(authControllerProvider);
+    final canManageRentals =
+        auth is AuthStateAuthenticated &&
+        canUseMobileCapabilityAction(
+          experience: auth.activeExperience,
+          capabilities: auth.capabilities,
+          capability: 'rentals.manage',
+          experiences: const {WorkspaceExperience.management},
+        );
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
       children: [
+        if (dashboard.nextBestAction.label.trim().isNotEmpty) ...[
+          _ActionPanel(
+            label: dashboard.nextBestAction.label.trim(),
+            href: dashboard.nextBestAction.href,
+            currentUnitId: dashboard.unit.id,
+          ),
+          const SizedBox(height: 14),
+        ],
+        _SurfacePanel(
+          children: [
+            _MetricRow(
+              icon: Symbols.home_work_rounded,
+              label: 'Occupancy / possession',
+              value: dashboard.occupancyPossession.status,
+            ),
+            _MetricRow(
+              icon: Symbols.campaign_rounded,
+              label: 'Marketing availability',
+              value: dashboard.marketingAvailability.status,
+            ),
+            _MetricRow(
+              icon: Symbols.account_balance_wallet_rounded,
+              label: 'TenantAccount',
+              value: dashboard.tenantAccountCondition.status,
+            ),
+            _MetricRow(
+              icon: Symbols.gavel_rounded,
+              label: 'Legal / notice',
+              value: dashboard.legalNoticeCondition.status,
+            ),
+            _MetricRow(
+              icon: Symbols.build_rounded,
+              label: 'Maintenance / turnover',
+              value: dashboard.maintenanceTurnover.status,
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
         _SurfacePanel(
           children: [
             _MetricRow(
@@ -344,15 +785,17 @@ class _UnitOverviewTab extends ConsumerWidget {
           ],
         ),
         const SizedBox(height: 12),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: FilledButton.icon(
-            icon: const Icon(Icons.edit_outlined),
-            label: const Text('Edit unit'),
-            onPressed: () => _showEditUnitSheet(context, ref, statusLocked),
+        if (canManageRentals) ...[
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FilledButton.icon(
+              icon: const Icon(Icons.edit_outlined),
+              label: const Text('Edit unit'),
+              onPressed: () => _showEditUnitSheet(context, ref),
+            ),
           ),
-        ),
-        const SizedBox(height: 14),
+          const SizedBox(height: 14),
+        ],
         Wrap(
           spacing: 8,
           runSpacing: 8,
@@ -383,14 +826,6 @@ class _UnitOverviewTab extends ConsumerWidget {
               ),
           ],
         ),
-        if (dashboard.nextBestAction.label.trim().isNotEmpty) ...[
-          const SizedBox(height: 14),
-          _ActionPanel(
-            label: dashboard.nextBestAction.label.trim(),
-            href: dashboard.nextBestAction.href,
-            currentUnitId: dashboard.unit.id,
-          ),
-        ],
         const SizedBox(height: 18),
         _PaymentsSection(items: dashboard.overview.recentPayments),
         const SizedBox(height: 14),
@@ -403,23 +838,11 @@ class _UnitOverviewTab extends ConsumerWidget {
     );
   }
 
-  bool _hasCurrentOccupyingLease(UnitLeaseSummary? lease) {
-    final status = lease?.status.toLowerCase();
-    return status == 'active' || status == 'noticegiven';
-  }
-
-  void _showEditUnitSheet(
-    BuildContext context,
-    WidgetRef ref,
-    bool statusLocked,
-  ) {
+  void _showEditUnitSheet(BuildContext context, WidgetRef ref) {
     showUnitFormSheet(
       context,
       propertyId: dashboard.unit.propertyId,
       unit: dashboard.unit,
-      statusLocked: statusLocked,
-      statusLockMessage:
-          'End, move out, or cancel notice on the current lease before changing unit status.',
       onSaved: (_) {
         ref.invalidate(unitDashboardProvider(dashboard.unit.id));
         ref.invalidate(unitsProvider(dashboard.unit.propertyId));
@@ -440,13 +863,20 @@ class _UnitListingTab extends ConsumerStatefulWidget {
 class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
   static const _zillowRentalManagerUrl =
       'https://www.zillow.com/rental-manager/properties';
-  static const _statusOptions = [
+  static const _workspaceStatusOptions = [
     'Draft',
-    'ReadyToPost',
-    'Posted',
+    'ReadyToPublish',
+    'Published',
     'Paused',
     'Filled',
     'Archived',
+  ];
+  static const _publicationStatusOptions = [
+    'Draft',
+    'Ready',
+    'Published',
+    'Paused',
+    'Removed',
   ];
 
   final _headlineController = TextEditingController();
@@ -458,12 +888,17 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
   final _utilitiesController = TextEditingController();
   final _parkingController = TextEditingController();
   final _amenitiesController = TextEditingController();
-  final _photoNotesController = TextEditingController();
+  final _externalListingIdController = TextEditingController();
   final _zillowListingUrlController = TextEditingController();
   final _zillowApplicationUrlController = TextEditingController();
+  final _externalStatusController = TextEditingController();
 
-  int? _loadedListingId;
+  int? _loadedContentVersion;
   String _status = 'Draft';
+  String _publicationStatus = 'Draft';
+  bool _copyConfirmed = false;
+  bool _termsConfirmed = false;
+  bool _photosConfirmed = false;
   bool _isGenerating = false;
   bool _isSaving = false;
   bool _isSyncingForm = false;
@@ -495,9 +930,10 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
     _utilitiesController,
     _parkingController,
     _amenitiesController,
-    _photoNotesController,
+    _externalListingIdController,
     _zillowListingUrlController,
     _zillowApplicationUrlController,
+    _externalStatusController,
   ];
 
   void _onFormChanged() {
@@ -507,22 +943,41 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
   @override
   Widget build(BuildContext context) {
     final unitId = widget.dashboard.unit.id;
-    final listingAsync = ref.watch(unitListingProvider(unitId));
+    final auth = ref.watch(authControllerProvider);
+    final canManageListings =
+        auth is AuthStateAuthenticated &&
+        canUseMobileCapabilityAction(
+          experience: auth.activeExperience,
+          capabilities: auth.capabilities,
+          capability: 'leasing.listings.manage',
+          experiences: const {
+            WorkspaceExperience.management,
+            WorkspaceExperience.leasing,
+          },
+        );
+    if (!canManageListings) {
+      return const _EmptyTab(
+        icon: Symbols.lock_outline_rounded,
+        title: 'Listing access unavailable',
+        body: 'Your current workspace experience cannot manage this listing.',
+      );
+    }
+    final listingAsync = ref.watch(unitListingWorkspaceProvider(unitId));
 
     return listingAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => _UnitErrorBody(
         message: e is ApiException ? e.message : e.toString(),
-        onRetry: () => ref.invalidate(unitListingProvider(unitId)),
+        onRetry: () => ref.invalidate(unitListingWorkspaceProvider(unitId)),
       ),
       data: (listing) {
         _syncFromListing(listing);
         if (listing == null) {
           return _EmptyTab(
             icon: Symbols.real_estate_agent_rounded,
-            title: 'No listing packet',
+            title: 'No listing workspace',
             body:
-                'Generate a Zillow-ready packet, then copy it into Zillow Rental Manager.',
+                'Prepare reusable listing copy, terms, and an ordered photo package for this unit.',
             action: FilledButton.icon(
               icon: _isGenerating
                   ? const SizedBox.square(
@@ -530,7 +985,7 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Symbols.auto_awesome_rounded),
-              label: Text(_isGenerating ? 'Generating...' : 'Generate packet'),
+              label: Text(_isGenerating ? 'Preparing...' : 'Prepare listing'),
               onPressed: _isGenerating ? null : _generateListing,
             ),
           );
@@ -543,15 +998,28 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
               status: _status,
               updatedAt: listing.updatedAt,
               onGenerate: _isGenerating ? null : _generateListing,
-              onSave: _canSave ? _saveListing : null,
+              onSave: _canSave ? () => _saveListing() : null,
               isGenerating: _isGenerating,
               isSaving: _isSaving,
             ),
+            if (_guidedPublication(listing)?.needsRepublish == true) ...[
+              const SizedBox(height: 14),
+              _ListingWarning(
+                message:
+                    'Changes need republishing. Rental Command has listing version ${listing.contentVersion}, but Zillow was last confirmed at version ${_guidedPublication(listing)?.publishedContentVersion ?? 'an earlier version'}.',
+              ),
+            ],
             const SizedBox(height: 14),
             _Section(
-              title: 'Zillow packet',
-              empty: 'No packet fields',
+              title: 'Listing copy',
+              empty: 'No listing fields',
               children: [
+                _ListingStatusRow(
+                  label: 'Workspace state',
+                  value: _status,
+                  options: _workspaceStatusOptions,
+                  onChanged: (value) => setState(() => _status = value),
+                ),
                 _ListingField(
                   label: 'Headline',
                   controller: _headlineController,
@@ -599,28 +1067,56 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
                   controller: _amenitiesController,
                   maxLines: 3,
                 ),
-                _ListingField(
-                  label: 'Photo notes',
-                  controller: _photoNotesController,
-                  maxLines: 3,
-                ),
               ],
             ),
             const SizedBox(height: 14),
+            _ListingPhotoPackage(
+              photos: listing.photoManifest,
+              busy: _isSaving,
+              onAddOrReplace: _pickListingPhoto,
+              onRemove: _removeListingPhoto,
+              onMove: _moveListingPhoto,
+            ),
+            const SizedBox(height: 14),
             _Section(
-              title: 'Manual handoff',
-              empty: 'No handoff fields',
+              title: 'Zillow Guided',
+              empty: 'No guided publication fields',
               children: [
-                _ListingStatusRow(
-                  value: _status,
-                  options: _statusOptions,
-                  onChanged: (value) => setState(() => _status = value),
-                ),
                 _CompactRow(
                   icon: Symbols.open_in_new_rounded,
                   title: 'Open Zillow Rental Manager',
-                  subtitle: 'Post the copied packet manually',
-                  onTap: () => _openExternalUrl(_zillowRentalManagerUrl),
+                  subtitle: 'You stay signed in and publish there',
+                  onTap: _openZillowWorkspace,
+                ),
+                _CompactRow(
+                  icon: Symbols.search_rounded,
+                  title: 'Search Zillow rentals',
+                  subtitle: 'Compare nearby listings in a browser',
+                  onTap: () => _openExternalUrl(
+                    'https://www.zillow.com/homes/for_rent/',
+                  ),
+                ),
+                _ListingStatusRow(
+                  label: 'Publication state',
+                  value: _publicationStatus,
+                  options: _publicationStatusOptions,
+                  onChanged: (value) =>
+                      setState(() => _publicationStatus = value),
+                ),
+                _ListingChecklist(
+                  copyConfirmed: _copyConfirmed,
+                  termsConfirmed: _termsConfirmed,
+                  photosConfirmed: _photosConfirmed,
+                  onCopyChanged: (value) =>
+                      setState(() => _copyConfirmed = value),
+                  onTermsChanged: (value) =>
+                      setState(() => _termsConfirmed = value),
+                  onPhotosChanged: (value) =>
+                      setState(() => _photosConfirmed = value),
+                ),
+                _ListingField(
+                  label: 'Zillow listing ID',
+                  controller: _externalListingIdController,
                 ),
                 _ListingField(
                   label: 'Zillow listing URL',
@@ -638,12 +1134,137 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
                   onAction: () =>
                       _openExternalUrl(_zillowApplicationUrlController.text),
                 ),
+                _ListingField(
+                  label: 'Last status you confirmed',
+                  controller: _externalStatusController,
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Symbols.publish_rounded),
+                    label: const Text('Save as published in Zillow'),
+                    onPressed: _isSaving
+                        ? null
+                        : () => _saveListing(markPublished: true),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            _ListingConnectedCard(
+              publication: _connectedPublication(listing),
+              busy: _isSaving,
+              onAction: _runConnectedAction,
+            ),
+            if (_guidedPublication(listing)?.unconfirmedSignals.isNotEmpty ==
+                true) ...[
+              const SizedBox(height: 14),
+              _ListingSignalsSection(
+                signals: _guidedPublication(listing)!.unconfirmedSignals,
+                onDecision: _confirmSignal,
+              ),
+            ],
+            const SizedBox(height: 14),
+            _SurfacePanel(
+              children: [
+                _CompactRow(
+                  icon: Symbols.document_scanner_rounded,
+                  title: 'Import a signed Zillow lease',
+                  subtitle:
+                      'Scan or upload the lease; Rental Command fills the unit context for review.',
+                  onTap: _importSignedLease,
+                ),
               ],
             ),
           ],
         );
       },
     );
+  }
+
+  Future<void> _pickListingPhoto(ListingPhoto photo) async {
+    final picked = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 90,
+    );
+    if (picked == null) return;
+    setState(() => _isSaving = true);
+    try {
+      final bytes = await picked.readAsBytes();
+      final extension = picked.name.toLowerCase().split('.').last;
+      final contentType = switch (extension) {
+        'png' => 'image/png',
+        'heic' || 'heif' => 'image/heic',
+        _ => 'image/jpeg',
+      };
+      final workspace = await ref
+          .read(unitsRepositoryProvider)
+          .attachListingPhoto(
+            unitId: widget.dashboard.unit.id,
+            photoId: photo.id,
+            bytes: bytes,
+            fileName: picked.name,
+            contentType: contentType,
+            clientOperationId: const Uuid().v4(),
+          );
+      ref.invalidate(unitListingWorkspaceProvider(widget.dashboard.unit.id));
+      _loadedContentVersion = null;
+      _syncFromListing(workspace);
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _removeListingPhoto(ListingPhoto photo) async {
+    setState(() => _isSaving = true);
+    try {
+      await ref
+          .read(unitsRepositoryProvider)
+          .removeListingPhoto(widget.dashboard.unit.id, photo.id);
+      ref.invalidate(unitListingWorkspaceProvider(widget.dashboard.unit.id));
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _moveListingPhoto(ListingPhoto photo, int direction) async {
+    final listing = ref
+        .read(unitListingWorkspaceProvider(widget.dashboard.unit.id))
+        .value;
+    if (listing == null) return;
+    final ids = listing.photoManifest.map((item) => item.id).toList();
+    final index = ids.indexOf(photo.id);
+    final destination = index + direction;
+    if (index < 0 || destination < 0 || destination >= ids.length) return;
+    final moved = ids.removeAt(index);
+    ids.insert(destination, moved);
+    setState(() => _isSaving = true);
+    try {
+      await ref
+          .read(unitsRepositoryProvider)
+          .reorderListingPhotos(widget.dashboard.unit.id, ids);
+      ref.invalidate(unitListingWorkspaceProvider(widget.dashboard.unit.id));
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
   }
 
   bool get _canSave =>
@@ -653,20 +1274,37 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
       _isOptionalNumber(_rentController.text) &&
       _isOptionalNumber(_depositController.text);
 
-  void _syncFromListing(UnitListing? listing) {
+  ListingPublication? _guidedPublication(ListingWorkspace listing) => listing
+      .publications
+      .where((item) => item.providerKey == 'Zillow' && item.mode == 'Guided')
+      .firstOrNull;
+
+  ListingPublication? _connectedPublication(ListingWorkspace listing) => listing
+      .publications
+      .where((item) => item.providerKey == 'Zillow' && item.mode == 'Connected')
+      .firstOrNull;
+
+  void _syncFromListing(ListingWorkspace? listing) {
     if (listing == null) {
-      if (_loadedListingId != null) {
-        _loadedListingId = null;
+      if (_loadedContentVersion != null) {
+        _loadedContentVersion = null;
         _setFormToBlank();
       }
       return;
     }
-    if (_loadedListingId == listing.id) return;
-    _loadedListingId = listing.id;
+    if (_loadedContentVersion == listing.contentVersion) return;
+    _loadedContentVersion = listing.contentVersion;
+    final guided = _guidedPublication(listing);
     _isSyncingForm = true;
-    _status = _statusOptions.contains(listing.status)
+    _status = _workspaceStatusOptions.contains(listing.status)
         ? listing.status
         : 'Draft';
+    _publicationStatus = _publicationStatusOptions.contains(guided?.status)
+        ? guided!.status
+        : 'Draft';
+    _copyConfirmed = guided?.copyConfirmed ?? false;
+    _termsConfirmed = guided?.termsConfirmed ?? false;
+    _photosConfirmed = guided?.photosConfirmed ?? false;
     _headlineController.text = listing.headline;
     _descriptionController.text = listing.description;
     _rentController.text = _numberToText(listing.rent);
@@ -676,15 +1314,20 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
     _utilitiesController.text = listing.utilities ?? '';
     _parkingController.text = listing.parking ?? '';
     _amenitiesController.text = listing.amenities ?? '';
-    _photoNotesController.text = listing.photoNotes ?? '';
-    _zillowListingUrlController.text = listing.zillowListingUrl ?? '';
-    _zillowApplicationUrlController.text = listing.zillowApplicationUrl ?? '';
+    _externalListingIdController.text = guided?.externalListingId ?? '';
+    _zillowListingUrlController.text = guided?.listingUrl ?? '';
+    _zillowApplicationUrlController.text = guided?.applicationUrl ?? '';
+    _externalStatusController.text = guided?.lastConfirmedExternalStatus ?? '';
     _isSyncingForm = false;
   }
 
   void _setFormToBlank() {
     _isSyncingForm = true;
     _status = 'Draft';
+    _publicationStatus = 'Draft';
+    _copyConfirmed = false;
+    _termsConfirmed = false;
+    _photosConfirmed = false;
     for (final controller in _formControllers) {
       controller.clear();
     }
@@ -696,11 +1339,11 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
     try {
       final listing = await ref
           .read(unitsRepositoryProvider)
-          .generateListing(widget.dashboard.unit.id);
-      _loadedListingId = null;
+          .generateListingWorkspace(widget.dashboard.unit.id);
+      _loadedContentVersion = null;
       _syncFromListing(listing);
-      ref.invalidate(unitListingProvider(widget.dashboard.unit.id));
-      _showSnack('Listing packet generated.');
+      ref.invalidate(unitListingWorkspaceProvider(widget.dashboard.unit.id));
+      _showSnack('Listing workspace prepared.');
     } catch (e) {
       _showSnack(e is ApiException ? e.message : e.toString());
     } finally {
@@ -708,7 +1351,7 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
     }
   }
 
-  Future<void> _saveListing() async {
+  Future<void> _saveListing({bool markPublished = false}) async {
     if (!_canSave) {
       _showSnack('Headline, description, rent, and deposit must be valid.');
       return;
@@ -717,12 +1360,19 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
     try {
       final listing = await ref
           .read(unitsRepositoryProvider)
-          .saveListing(widget.dashboard.unit.id, _buildSaveRequest());
-      _loadedListingId = null;
+          .saveListingWorkspace(
+            widget.dashboard.unit.id,
+            _buildSaveRequest(markPublished: markPublished),
+          );
+      _loadedContentVersion = null;
       _syncFromListing(listing);
-      ref.invalidate(unitListingProvider(widget.dashboard.unit.id));
+      ref.invalidate(unitListingWorkspaceProvider(widget.dashboard.unit.id));
       ref.invalidate(unitDashboardProvider(widget.dashboard.unit.id));
-      _showSnack('Listing packet saved.');
+      _showSnack(
+        markPublished
+            ? 'Current version marked published in Zillow.'
+            : 'Listing workspace saved.',
+      );
     } catch (e) {
       _showSnack(e is ApiException ? e.message : e.toString());
     } finally {
@@ -730,8 +1380,14 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
     }
   }
 
-  SaveUnitListingRequest _buildSaveRequest() {
-    return SaveUnitListingRequest(
+  SaveListingWorkspaceRequest _buildSaveRequest({bool markPublished = false}) {
+    final workspace = ref
+        .read(unitListingWorkspaceProvider(widget.dashboard.unit.id))
+        .value;
+    final guided = workspace == null ? null : _guidedPublication(workspace);
+    final currentExternalStatus = guided?.lastConfirmedExternalStatus ?? '';
+    final enteredExternalStatus = _externalStatusController.text.trim();
+    return SaveListingWorkspaceRequest(
       status: _status,
       headline: _headlineController.text.trim(),
       description: _descriptionController.text.trim(),
@@ -742,9 +1398,115 @@ class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
       utilities: _utilitiesController.text.trim(),
       parking: _parkingController.text.trim(),
       amenities: _amenitiesController.text.trim(),
-      photoNotes: _photoNotesController.text.trim(),
-      zillowListingUrl: _zillowListingUrlController.text.trim(),
-      zillowApplicationUrl: _zillowApplicationUrlController.text.trim(),
+      zillowGuided: SaveGuidedPublicationRequest(
+        status: _publicationStatus,
+        externalListingId: _externalListingIdController.text.trim(),
+        listingUrl: _zillowListingUrlController.text.trim(),
+        applicationUrl: _zillowApplicationUrlController.text.trim(),
+        lastConfirmedExternalStatus: enteredExternalStatus,
+        lastConfirmedAtUtc:
+            enteredExternalStatus.isNotEmpty &&
+                enteredExternalStatus != currentExternalStatus
+            ? DateTime.now().toUtc()
+            : null,
+        copyConfirmed: _copyConfirmed,
+        termsConfirmed: _termsConfirmed,
+        photosConfirmed: _photosConfirmed,
+        providerWorkspaceOpened: guided?.providerWorkspaceOpened ?? false,
+        markCurrentVersionPublished: markPublished,
+      ),
+    );
+  }
+
+  Future<void> _openZillowWorkspace() async {
+    final listing = ref
+        .read(unitListingWorkspaceProvider(widget.dashboard.unit.id))
+        .value;
+    final guided = listing == null ? null : _guidedPublication(listing);
+    await _openExternalUrl(guided?.managementUrl ?? _zillowRentalManagerUrl);
+    if (listing == null) return;
+    try {
+      final saved = await ref
+          .read(unitsRepositoryProvider)
+          .saveListingWorkspace(
+            widget.dashboard.unit.id,
+            const SaveListingWorkspaceRequest(
+              zillowGuided: SaveGuidedPublicationRequest(
+                providerWorkspaceOpened: true,
+              ),
+            ),
+          );
+      _loadedContentVersion = null;
+      _syncFromListing(saved);
+      ref.invalidate(unitListingWorkspaceProvider(widget.dashboard.unit.id));
+    } catch (_) {
+      // Opening Zillow remains useful if recording the checklist step fails.
+    }
+  }
+
+  Future<void> _confirmSignal(int signalId, bool accept) async {
+    try {
+      final saved = await ref
+          .read(unitsRepositoryProvider)
+          .confirmListingSignal(
+            widget.dashboard.unit.id,
+            signalId,
+            accept: accept,
+          );
+      _loadedContentVersion = null;
+      _syncFromListing(saved);
+      ref.invalidate(unitListingWorkspaceProvider(widget.dashboard.unit.id));
+      _showSnack(
+        accept ? 'External update confirmed.' : 'External update ignored.',
+      );
+    } catch (e) {
+      _showSnack(e is ApiException ? e.message : e.toString());
+    }
+  }
+
+  Future<void> _runConnectedAction(String action) async {
+    final listing = ref
+        .read(unitListingWorkspaceProvider(widget.dashboard.unit.id))
+        .value;
+    final publication = listing == null ? null : _connectedPublication(listing);
+    if (publication == null || !publication.channelAvailable) return;
+    setState(() => _isSaving = true);
+    try {
+      final repository = ref.read(unitsRepositoryProvider);
+      final saved = action == 'prepare'
+          ? await repository.prepareConnectedListing(
+              widget.dashboard.unit.id,
+              publication.id,
+            )
+          : await repository.runConnectedListingCommand(
+              widget.dashboard.unit.id,
+              publication.id,
+              action,
+              '${DateTime.now().toUtc().microsecondsSinceEpoch}-${publication.id}',
+            );
+      _loadedContentVersion = null;
+      _syncFromListing(saved);
+      ref.invalidate(unitListingWorkspaceProvider(widget.dashboard.unit.id));
+      _showSnack('Connected listing state updated.');
+    } catch (e) {
+      _showSnack(e is ApiException ? e.message : e.toString());
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _importSignedLease() {
+    final listing = ref
+        .read(unitListingWorkspaceProvider(widget.dashboard.unit.id))
+        .value;
+    return openMobileScan(
+      context,
+      initialTargetEntityType: 'LeaseAgreement',
+      lockTargetEntityType: true,
+      propertyId: widget.dashboard.unit.propertyId,
+      unitId: widget.dashboard.unit.id,
+      rentalListingId: listing?.id,
+      sourceLabel: 'Zillow signed lease import',
     );
   }
 
@@ -836,7 +1598,7 @@ class _ListingHeader extends StatelessWidget {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'Zillow listing assistant',
+                    'Listing workspace',
                     style: theme.textTheme.titleMedium?.copyWith(
                       color: colorScheme.onPrimaryContainer,
                       fontWeight: FontWeight.w800,
@@ -848,9 +1610,16 @@ class _ListingHeader extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Prepare listing copy here, then post it manually in Zillow Rental Manager.',
+              'Keep one listing for this unit, then use Guided Zillow now or Connected publishing after provider approval.',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: colorScheme.onPrimaryContainer,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Sync updates bedrooms, bathrooms, and square footage without replacing your copy, rent, deposit, or lease terms.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onPrimaryContainer.withValues(alpha: 0.78),
               ),
             ),
             const SizedBox(height: 4),
@@ -872,7 +1641,9 @@ class _ListingHeader extends StatelessWidget {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Symbols.auto_awesome_rounded),
-                  label: Text(isGenerating ? 'Generating...' : 'Regenerate'),
+                  label: Text(
+                    isGenerating ? 'Syncing...' : 'Sync unit details',
+                  ),
                   onPressed: onGenerate,
                 ),
                 FilledButton.icon(
@@ -882,7 +1653,7 @@ class _ListingHeader extends StatelessWidget {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Symbols.save_rounded),
-                  label: Text(isSaving ? 'Saving...' : 'Save packet'),
+                  label: Text(isSaving ? 'Saving...' : 'Save listing'),
                   onPressed: onSave,
                 ),
               ],
@@ -942,11 +1713,13 @@ class _ListingField extends StatelessWidget {
 
 class _ListingStatusRow extends StatelessWidget {
   const _ListingStatusRow({
+    required this.label,
     required this.value,
     required this.options,
     required this.onChanged,
   });
 
+  final String label;
   final String value;
   final List<String> options;
   final ValueChanged<String> onChanged;
@@ -957,7 +1730,7 @@ class _ListingStatusRow extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
       child: DropdownButtonFormField<String>(
         initialValue: options.contains(value) ? value : options.first,
-        decoration: const InputDecoration(labelText: 'Status'),
+        decoration: InputDecoration(labelText: label),
         items: [
           for (final option in options)
             DropdownMenuItem<String>(value: option, child: Text(option)),
@@ -970,83 +1743,440 @@ class _ListingStatusRow extends StatelessWidget {
   }
 }
 
-class _UnitLeaseTab extends ConsumerWidget {
-  const _UnitLeaseTab({required this.dashboard, this.selectedLease});
+class _ListingWarning extends StatelessWidget {
+  const _ListingWarning({required this.message});
 
-  final UnitDashboard dashboard;
-  final Lease? selectedLease;
+  final String message;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final lease = selectedLease;
-    final summary = dashboard.currentLease;
-    final property = dashboard.propertyName.trim().isEmpty
-        ? 'Property'
-        : dashboard.propertyName.trim();
-    final leaseDefaults = buildUnitLeaseFormDefaults(
-      unit: dashboard.unit,
-      propertyName: property,
-    );
-    final hasOccupyingLease =
-        dashboard.unit.status != 'Vacant' ||
-        summary?.status == 'Active' ||
-        summary?.status == 'NoticeGiven';
-    final addLease = hasOccupyingLease
-        ? null
-        : () => _showLeaseSheet(context, ref, leaseDefaults);
-
-    if (lease != null) {
-      return LeaseDetailScreen(
-        lease: lease,
-        leadingContent: _UnitLeaseAddAction(onPressed: addLease),
-      );
-    }
-
-    if (summary == null) {
-      return _EmptyTab(
-        icon: Symbols.description_rounded,
-        title: 'No lease',
-        body: 'This unit has no current lease.',
-        action: _UnitLeaseAddAction(onPressed: addLease),
-      );
-    }
-
-    final leaseAsync = ref.watch(leaseDetailProvider(summary.id));
-    return leaseAsync.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => _UnitErrorBody(
-        message: e is ApiException ? e.message : e.toString(),
-        onRetry: () =>
-            ref.read(leaseDetailProvider(summary.id).notifier).refresh(),
-      ),
-      data: (loadedLease) => LeaseDetailScreen(
-        lease: loadedLease,
-        leadingContent: _UnitLeaseAddAction(onPressed: addLease),
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Material(
+      color: colors.tertiaryContainer,
+      borderRadius: BorderRadius.circular(16),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Symbols.warning_rounded, color: colors.onTertiaryContainer),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                message,
+                style: TextStyle(color: colors.onTertiaryContainer),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
+}
 
-  void _showLeaseSheet(
-    BuildContext context,
-    WidgetRef ref,
-    UnitLeaseFormDefaults defaults,
-  ) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      isDismissible: false,
-      enableDrag: false,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) => LeaseFormSheet(
-        unitDefaults: defaults,
-        onSaved: () {
-          ref.invalidate(unitDashboardProvider(dashboard.unit.id));
-          ref.read(leasesProvider.notifier).refresh();
-        },
-      ),
+class _ListingPhotoPackage extends StatelessWidget {
+  const _ListingPhotoPackage({
+    required this.photos,
+    required this.busy,
+    required this.onAddOrReplace,
+    required this.onRemove,
+    required this.onMove,
+  });
+
+  final List<ListingPhoto> photos;
+  final bool busy;
+  final ValueChanged<ListingPhoto> onAddOrReplace;
+  final ValueChanged<ListingPhoto> onRemove;
+  final void Function(ListingPhoto, int) onMove;
+
+  @override
+  Widget build(BuildContext context) {
+    return _Section(
+      title: 'Ordered photo package',
+      empty: 'No photo checklist was prepared',
+      children: [
+        // The API returns this manifest ordered DB-side by Position.
+        for (var index = 0; index < photos.length; index++)
+          ListTile(
+            leading: Icon(
+              photos[index].storedFileId == null
+                  ? Symbols.add_a_photo_rounded
+                  : Symbols.check_circle_rounded,
+            ),
+            title: Text('${photos[index].position}. ${photos[index].category}'),
+            subtitle: Text(
+              photos[index].fileName ??
+                  photos[index].caption ??
+                  'Photo needed in this position',
+            ),
+            trailing: Wrap(
+              children: [
+                IconButton(
+                  onPressed: busy || index == 0
+                      ? null
+                      : () => onMove(photos[index], -1),
+                  icon: const Icon(Symbols.arrow_upward_rounded),
+                ),
+                IconButton(
+                  onPressed: busy || index == photos.length - 1
+                      ? null
+                      : () => onMove(photos[index], 1),
+                  icon: const Icon(Symbols.arrow_downward_rounded),
+                ),
+                IconButton(
+                  onPressed: busy ? null : () => onAddOrReplace(photos[index]),
+                  icon: const Icon(Symbols.add_a_photo_rounded),
+                ),
+                if (photos[index].storedFileId != null)
+                  IconButton(
+                    onPressed: busy ? null : () => onRemove(photos[index]),
+                    icon: const Icon(Symbols.delete_outline_rounded),
+                  ),
+              ],
+            ),
+          ),
+      ],
     );
+  }
+}
+
+class _ListingChecklist extends StatelessWidget {
+  const _ListingChecklist({
+    required this.copyConfirmed,
+    required this.termsConfirmed,
+    required this.photosConfirmed,
+    required this.onCopyChanged,
+    required this.onTermsChanged,
+    required this.onPhotosChanged,
+  });
+
+  final bool copyConfirmed;
+  final bool termsConfirmed;
+  final bool photosConfirmed;
+  final ValueChanged<bool> onCopyChanged;
+  final ValueChanged<bool> onTermsChanged;
+  final ValueChanged<bool> onPhotosChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        CheckboxListTile(
+          value: copyConfirmed,
+          onChanged: (value) => onCopyChanged(value ?? false),
+          title: const Text('Listing copy entered in Zillow'),
+          controlAffinity: ListTileControlAffinity.leading,
+        ),
+        CheckboxListTile(
+          value: termsConfirmed,
+          onChanged: (value) => onTermsChanged(value ?? false),
+          title: const Text('Rent and terms reviewed in Zillow'),
+          controlAffinity: ListTileControlAffinity.leading,
+        ),
+        CheckboxListTile(
+          value: photosConfirmed,
+          onChanged: (value) => onPhotosChanged(value ?? false),
+          title: const Text('Photos uploaded in the prepared order'),
+          controlAffinity: ListTileControlAffinity.leading,
+        ),
+      ],
+    );
+  }
+}
+
+class _ListingConnectedCard extends StatelessWidget {
+  const _ListingConnectedCard({
+    required this.publication,
+    required this.busy,
+    required this.onAction,
+  });
+
+  final ListingPublication? publication;
+  final bool busy;
+  final Future<void> Function(String action) onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    return _Section(
+      title: 'Zillow Connected',
+      empty: 'No connection status',
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 14, 16, 8),
+          child: Text(
+            'An approved provider adapter publishes the same canonical listing used by Guided mode. It never creates a second listing.',
+          ),
+        ),
+        _CompactRow(
+          icon: publication?.channelAvailable == true
+              ? Symbols.check_circle_rounded
+              : Symbols.cloud_off_rounded,
+          title: publication?.channelState ?? 'Unavailable',
+          subtitle:
+              publication?.lastDeliveryError ??
+              publication?.channelUnavailableReason ??
+              'Guided publishing remains available.',
+        ),
+        if (publication?.channelAvailable == true)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: busy ? null : () => onAction('prepare'),
+                  icon: const Icon(Symbols.description_rounded),
+                  label: const Text('Prepare'),
+                ),
+                if (publication?.status == 'Ready')
+                  FilledButton.icon(
+                    onPressed: busy ? null : () => onAction('publish'),
+                    icon: const Icon(Symbols.publish_rounded),
+                    label: const Text('Publish'),
+                  ),
+                if (publication?.status == 'Published') ...[
+                  OutlinedButton.icon(
+                    onPressed: busy || publication?.needsRepublish != true
+                        ? null
+                        : () => onAction('update'),
+                    icon: const Icon(Symbols.sync_rounded),
+                    label: const Text('Send updates'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: busy ? null : () => onAction('unpublish'),
+                    icon: const Icon(Symbols.delete_outline_rounded),
+                    label: const Text('Remove'),
+                  ),
+                ],
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _ListingSignalsSection extends StatelessWidget {
+  const _ListingSignalsSection({
+    required this.signals,
+    required this.onDecision,
+  });
+
+  final List<ExternalListingSignal> signals;
+  final Future<void> Function(int signalId, bool accept) onDecision;
+
+  @override
+  Widget build(BuildContext context) {
+    return _Section(
+      title: 'External updates to confirm',
+      empty: 'No external updates',
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 14, 16, 4),
+          child: Text(
+            'These are untrusted hints. Rental Command will not change the listing until you confirm one.',
+          ),
+        ),
+        for (final signal in signals)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: Material(
+              color: Theme.of(context).colorScheme.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(14),
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      signal.signalType,
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      signal.suggestedExternalStatus ??
+                          signal.suggestedListingUrl ??
+                          signal.suggestedExternalListingId ??
+                          'External listing metadata changed.',
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        FilledButton(
+                          onPressed: () => onDecision(signal.id, true),
+                          child: const Text('Confirm'),
+                        ),
+                        OutlinedButton(
+                          onPressed: () => onDecision(signal.id, false),
+                          child: const Text('Ignore'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _UnitTenantLeaseSurface extends StatelessWidget {
+  const _UnitTenantLeaseSurface({
+    required this.dashboard,
+    required this.activeView,
+    this.selectedLeaseManagementId,
+    this.selectedTenantId,
+  });
+
+  final UnitDashboard dashboard;
+  final ValueListenable<UnitCommandCenterView?> activeView;
+  final int? selectedLeaseManagementId;
+  final int? selectedTenantId;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<UnitCommandCenterView?>(
+      valueListenable: activeView,
+      builder: (context, requestedView, _) =>
+          _buildSurface(context, requestedView),
+    );
+  }
+
+  Widget _buildSurface(
+    BuildContext context,
+    UnitCommandCenterView? requestedView,
+  ) {
+    final summary = dashboard.currentLease;
+    final managementId =
+        selectedLeaseManagementId ??
+        dashboard.leaseManagementId ??
+        (summary == null || summary.leaseManagementId <= 0
+            ? null
+            : summary.leaseManagementId);
+
+    final residentsFirst = requestedView == UnitCommandCenterView.residents;
+    final agreementSection = _UnitAgreementSection(dashboard: dashboard);
+    final residentsSection = _UnitResidentsSection(
+      dashboard: dashboard,
+      selectedTenantId: selectedTenantId,
+    );
+
+    if (managementId == null) {
+      return ListView(
+        key: ValueKey('unit-tenant-lease-${dashboard.unit.id}-$requestedView'),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+        children: residentsFirst
+            ? [residentsSection, const SizedBox(height: 20), agreementSection]
+            : [agreementSection, const SizedBox(height: 20), residentsSection],
+      );
+    }
+
+    const agreementHeading = _UnitTenantLeaseSectionHeading(
+      key: ValueKey('unit-agreement-section'),
+      title: 'Agreement',
+    );
+    final residentsContent = KeyedSubtree(
+      key: const ValueKey('unit-residents-section'),
+      child: residentsSection,
+    );
+    return LeaseManagementDetailScreen(
+      key: ValueKey('unit-tenant-lease-$managementId-$requestedView'),
+      leaseManagementId: managementId,
+      leadingContent: residentsFirst
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                residentsContent,
+                const SizedBox(height: 20),
+                agreementHeading,
+              ],
+            )
+          : agreementHeading,
+      trailingContent: residentsFirst ? null : residentsContent,
+    );
+  }
+}
+
+class _UnitAgreementSection extends ConsumerWidget {
+  const _UnitAgreementSection({required this.dashboard});
+
+  final UnitDashboard dashboard;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final auth = ref.watch(authControllerProvider);
+    final canPrepareAgreement =
+        auth is AuthStateAuthenticated &&
+        canUseMobileCapabilityAction(
+          experience: auth.activeExperience,
+          capabilities: auth.capabilities,
+          capability: 'leasing.agreements.prepare',
+          experiences: const {
+            WorkspaceExperience.management,
+            WorkspaceExperience.leasing,
+          },
+        );
+
+    return Column(
+      key: const ValueKey('unit-agreement-section'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _UnitTenantLeaseSectionHeading(title: 'Agreement'),
+        const SizedBox(height: 10),
+        _SurfacePanel(
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Text(
+                'No tenant relationship',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Text(
+                'Approve an application and prepare move-in, or scan an existing signed agreement.',
+              ),
+            ),
+            if (canPrepareAgreement)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: _UnitLeaseAddAction(
+                    onPressed: () => openMobileScan(
+                      context,
+                      initialTargetEntityType: 'LeaseAgreement',
+                      lockTargetEntityType: true,
+                      propertyId: dashboard.unit.propertyId,
+                      unitId: dashboard.unit.id,
+                      leaseManagementId: dashboard.leaseManagementId,
+                      leaseAgreementId: dashboard.currentLease?.id,
+                      tenantAccountId: dashboard.tenantAccountId,
+                      sourceLabel: 'Unit · Tenant & lease',
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _UnitTenantLeaseSectionHeading extends StatelessWidget {
+  const _UnitTenantLeaseSectionHeading({super.key, required this.title});
+
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(title, style: Theme.of(context).textTheme.titleLarge);
   }
 }
 
@@ -1060,16 +2190,562 @@ class _UnitLeaseAddAction extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        FilledButton.icon(
-          icon: const Icon(Icons.add),
-          label: const Text('Add lease'),
-          onPressed: onPressed,
+        if (onPressed != null)
+          FilledButton.icon(
+            icon: const Icon(Icons.add),
+            label: const Text('Scan signed lease'),
+            onPressed: onPressed,
+          ),
+      ],
+    );
+  }
+}
+
+class _UnitApplicationsTab extends ConsumerStatefulWidget {
+  const _UnitApplicationsTab({required this.unitId, this.application});
+
+  final int unitId;
+  final RentalApplication? application;
+
+  @override
+  ConsumerState<_UnitApplicationsTab> createState() =>
+      _UnitApplicationsTabState();
+}
+
+class _UnitApplicationsTabState extends ConsumerState<_UnitApplicationsTab> {
+  static const _pageSize = 20;
+  final _searchController = TextEditingController();
+  String? _search;
+  String _sort = '-submittedAt';
+  int _skip = 0;
+  int? _selectedApplicationId;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedApplicationId = widget.application?.id;
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  ApplicationListQuery get _query => ApplicationListQuery(
+    skip: _skip,
+    take: _pageSize,
+    unitId: widget.unitId,
+    search: _search,
+    sort: _sort,
+  );
+
+  void _submitSearch([String? value]) {
+    final next = (value ?? _searchController.text).trim();
+    setState(() {
+      _search = next.isEmpty ? null : next;
+      _skip = 0;
+    });
+  }
+
+  void _openDetail(int applicationId) {
+    setState(() => _selectedApplicationId = applicationId);
+  }
+
+  Future<void> _retry() async {
+    ref.invalidate(applicationsPageProvider(_query));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedApplicationId = _selectedApplicationId;
+    if (selectedApplicationId != null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              key: const ValueKey('unit-applications-back'),
+              onPressed: () => setState(() => _selectedApplicationId = null),
+              icon: const Icon(Icons.arrow_back),
+              label: const Text('Back to applications'),
+            ),
+          ),
+          Expanded(
+            child: ApplicationDetailScreen(
+              applicationId: selectedApplicationId,
+            ),
+          ),
+        ],
+      );
+    }
+
+    final pageAsync = ref.watch(applicationsPageProvider(_query));
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final searchField = TextField(
+                key: const ValueKey('unit-applications-search'),
+                controller: _searchController,
+                decoration: InputDecoration(
+                  labelText: 'Search applications',
+                  suffixIcon: IconButton(
+                    tooltip: 'Search',
+                    onPressed: _submitSearch,
+                    icon: const Icon(Icons.search),
+                  ),
+                ),
+                textInputAction: TextInputAction.search,
+                onSubmitted: _submitSearch,
+              );
+              final sortControl = DropdownButton<String>(
+                key: const ValueKey('unit-applications-sort'),
+                value: _sort,
+                items: const [
+                  DropdownMenuItem(
+                    value: '-submittedAt',
+                    child: Text('Newest'),
+                  ),
+                  DropdownMenuItem(value: 'submittedAt', child: Text('Oldest')),
+                  DropdownMenuItem(value: 'name', child: Text('Name')),
+                  DropdownMenuItem(value: 'status', child: Text('Status')),
+                ],
+                onChanged: (value) {
+                  if (value == null) return;
+                  setState(() {
+                    _sort = value;
+                    _skip = 0;
+                  });
+                },
+              );
+
+              if (constraints.maxWidth < 360) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    searchField,
+                    const SizedBox(height: 8),
+                    Align(alignment: Alignment.centerRight, child: sortControl),
+                  ],
+                );
+              }
+
+              return Row(
+                children: [
+                  Expanded(child: searchField),
+                  const SizedBox(width: 12),
+                  sortControl,
+                ],
+              );
+            },
+          ),
         ),
-        if (onPressed == null) ...[
-          const SizedBox(height: 6),
-          const Text(
-            'End or terminate the active lease before adding another.',
-            textAlign: TextAlign.right,
+        Expanded(
+          child: pageAsync.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (error, _) => _UnitErrorBody(
+              message: error is ApiException ? error.message : error.toString(),
+              onRetry: _retry,
+            ),
+            data: (page) {
+              if (page.items.isEmpty) {
+                return _EmptyTab(
+                  icon: Symbols.assignment_ind_rounded,
+                  title: 'No applications',
+                  body: _search == null
+                      ? 'No applications are tied to this Unit.'
+                      : 'No applications match "$_search".',
+                );
+              }
+              return ListView(
+                key: const PageStorageKey('unit-applications-page'),
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                children: [
+                  for (final app in page.items)
+                    Card(
+                      child: ListTile(
+                        key: ValueKey('unit-application-${app.id}'),
+                        leading: const Icon(Symbols.assignment_ind_rounded),
+                        title: Text(app.fullName),
+                        subtitle: Text(
+                          app.submittedAtUtc == null
+                              ? 'Not yet submitted'
+                              : 'Submitted ${formatApplicationDate(app.submittedAtUtc!.toLocal())}',
+                        ),
+                        trailing: ApplicationStatusChip(status: app.status),
+                        onTap: () => _openDetail(app.id),
+                      ),
+                    ),
+                  Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton(
+                        onPressed: page.hasPrevious
+                            ? () => setState(() {
+                                _skip = _skip <= _pageSize
+                                    ? 0
+                                    : _skip - _pageSize;
+                              })
+                            : null,
+                        child: const Text('Previous'),
+                      ),
+                      Text(
+                        'Page ${page.skip ~/ _pageSize + 1} · ${page.totalCount} total',
+                      ),
+                      OutlinedButton(
+                        onPressed: page.hasNext
+                            ? () => setState(() => _skip += _pageSize)
+                            : null,
+                        child: const Text('Next'),
+                      ),
+                    ],
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _UnitLedgerTab extends ConsumerStatefulWidget {
+  const _UnitLedgerTab({required this.dashboard, required this.activeView});
+
+  final UnitDashboard dashboard;
+  final ValueListenable<UnitCommandCenterView?> activeView;
+
+  @override
+  ConsumerState<_UnitLedgerTab> createState() => _UnitLedgerTabState();
+}
+
+class _UnitLedgerTabState extends ConsumerState<_UnitLedgerTab> {
+  static const _pageSize = 10;
+  final _tenantAccountKey = GlobalKey();
+  final _operatingCostsKey = GlobalKey();
+  int _activityPage = 0;
+  int _chargePage = 0;
+  int _depositPage = 0;
+  int _unitExpensePage = 0;
+  int _propertyExpensePage = 0;
+  int _financingPage = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.activeView.addListener(_landOnAnchor);
+  }
+
+  @override
+  void dispose() {
+    widget.activeView.removeListener(_landOnAnchor);
+    super.dispose();
+  }
+
+  void _landOnAnchor() {
+    final key = widget.activeView.value == UnitCommandCenterView.operatingCosts
+        ? _operatingCostsKey
+        : _tenantAccountKey;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final target = key.currentContext;
+      if (mounted && target != null) {
+        Scrollable.ensureVisible(target, duration: Duration.zero, alignment: 0);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dashboard = widget.dashboard;
+    final lease = dashboard.currentLease;
+    final accountId = dashboard.tenantAccountId;
+    final propertyAsync = ref.watch(
+      propertyDetailProvider(dashboard.unit.propertyId),
+    );
+    final isSingleRental =
+        propertyAsync.value?.rentalStructure == RentalStructure.singleRental;
+    final key = accountId == null
+        ? null
+        : (
+            tenantAccountId: accountId,
+            propertyId: dashboard.unit.propertyId,
+            unitId: dashboard.unit.id,
+            skip: _activityPage * _pageSize,
+            take: _pageSize,
+          );
+    final activityAsync = key == null
+        ? null
+        : ref.watch(unitMoneyActivityPageProvider(key));
+    final chargesAsync = key == null
+        ? null
+        : ref.watch(
+            unitMoneyChargesPageProvider((
+              tenantAccountId: accountId!,
+              propertyId: dashboard.unit.propertyId,
+              unitId: dashboard.unit.id,
+              skip: _chargePage * _pageSize,
+              take: _pageSize,
+            )),
+          );
+    final depositsAsync = key == null
+        ? null
+        : ref.watch(
+            unitMoneyDepositsPageProvider((
+              tenantAccountId: accountId!,
+              propertyId: dashboard.unit.propertyId,
+              unitId: dashboard.unit.id,
+              skip: _depositPage * _pageSize,
+              take: _pageSize,
+            )),
+          );
+    final unitExpensesAsync = ref.watch(
+      expensesPageProvider(
+        ExpenseListQuery(
+          unitId: dashboard.unit.id,
+          skip: _unitExpensePage * _pageSize,
+          take: _pageSize,
+        ),
+      ),
+    );
+    final propertyExpensesAsync = isSingleRental
+        ? ref.watch(
+            expensesPageProvider(
+              ExpenseListQuery(
+                operationalScope: 'Property',
+                propertyId: dashboard.unit.propertyId,
+                skip: _propertyExpensePage * _pageSize,
+                take: _pageSize,
+              ),
+            ),
+          )
+        : null;
+    final financingAsync = isSingleRental
+        ? ref.watch(
+            unitMoneyFinancingPageProvider((
+              propertyId: dashboard.unit.propertyId,
+              skip: _financingPage * _pageSize,
+              take: _pageSize,
+            )),
+          )
+        : null;
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+      children: [
+        KeyedSubtree(
+          key: _tenantAccountKey,
+          child: _SurfacePanel(
+            children: [
+              _MetricRow(
+                icon: Symbols.account_balance_wallet_rounded,
+                label: 'Tenant balance',
+                value: _formatCurrency(dashboard.header.outstandingRentBalance),
+              ),
+              _MetricRow(
+                icon: Symbols.payments_rounded,
+                label: 'Market rent',
+                value: '${_formatCurrency(dashboard.unit.marketRent)}/mo',
+              ),
+              if (lease != null)
+                _MetricRow(
+                  icon: Symbols.description_rounded,
+                  label: 'Tenant account',
+                  value: lease.leaseNumber,
+                ),
+              if (lease == null && dashboard.tenantAccountId != null)
+                _MetricRow(
+                  icon: Symbols.description_rounded,
+                  label: 'Tenant account',
+                  value: '#${dashboard.tenantAccountId}',
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        _PaymentsSection(items: dashboard.overview.recentPayments),
+        const SizedBox(height: 14),
+        if (activityAsync == null)
+          const _Section(
+            title: 'Account activity',
+            empty: 'No tenant account exists for this rental.',
+            children: [],
+          )
+        else
+          activityAsync.when(
+            loading: () => const _LoadingSection(title: 'Account activity'),
+            error: (e, _) => _RetrySection(
+              title: 'Account activity',
+              message: e is ApiException ? e.message : e.toString(),
+              onRetry: () => ref.invalidate(unitMoneyActivityPageProvider(key!)),
+            ),
+            data: (page) => _Section(
+              title: 'Account activity',
+              empty: 'No account activity',
+              children: [
+                for (final entry in page.items)
+                  _CompactRow(
+                    icon: Symbols.receipt_long_rounded,
+                    title: entry.description,
+                    subtitle:
+                        '${entry.entryType} · ${_formatDate(entry.effectiveOn)} · ${_formatCurrency(entry.amount)}',
+                  ),
+                _MoneyPager(
+                  page: _activityPage,
+                  hasPrevious: page.hasPrevious,
+                  hasNext: page.hasNext,
+                  onPrevious: () => setState(() => _activityPage--),
+                  onNext: () => setState(() => _activityPage++),
+                ),
+              ],
+            ),
+          ),
+        const SizedBox(height: 14),
+        if (chargesAsync != null)
+          chargesAsync.when(
+            loading: () => const _LoadingSection(
+              title: 'Charge allocation and open amount',
+            ),
+            error: (e, _) => _RetrySection(
+              title: 'Charge allocation and open amount',
+              message: e is ApiException ? e.message : e.toString(),
+              onRetry: () => setState(() {}),
+            ),
+            data: (page) => _Section(
+              title: 'Charge allocation and open amount',
+              empty: 'No charges',
+              children: [
+                for (final charge in page.items)
+                  _CompactRow(
+                    icon: Symbols.request_quote_rounded,
+                    title: charge.description,
+                    subtitle:
+                        '${_formatCurrency(charge.netAllocations)} allocated of '
+                        '${_formatCurrency(charge.originalAmount)} · '
+                        '${_formatCurrency(charge.openAmount)} open',
+                  ),
+                _MoneyPager(
+                  page: _chargePage,
+                  hasPrevious: page.hasPrevious,
+                  hasNext: page.hasNext,
+                  onPrevious: () => setState(() => _chargePage--),
+                  onNext: () => setState(() => _chargePage++),
+                ),
+              ],
+            ),
+          ),
+        const SizedBox(height: 14),
+        if (depositsAsync != null)
+          depositsAsync.when(
+            loading: () => const _LoadingSection(title: 'Deposits'),
+            error: (e, _) => _RetrySection(
+              title: 'Deposits',
+              message: e is ApiException ? e.message : e.toString(),
+              onRetry: () => setState(() {}),
+            ),
+            data: (page) => _Section(
+              title: 'Deposits',
+              empty: 'No deposits',
+              children: [
+                for (final deposit in page.items)
+                  _CompactRow(
+                    icon: Symbols.savings_rounded,
+                    title: deposit.accountNumber,
+                    subtitle:
+                        '${deposit.status} · ${_formatCurrency(deposit.heldBalance)} held',
+                  ),
+                _MoneyPager(
+                  page: _depositPage,
+                  hasPrevious: page.hasPrevious,
+                  hasNext: page.hasNext,
+                  onPrevious: () => setState(() => _depositPage--),
+                  onNext: () => setState(() => _depositPage++),
+                ),
+              ],
+            ),
+          ),
+        const SizedBox(height: 14),
+        KeyedSubtree(
+          key: _operatingCostsKey,
+          child: unitExpensesAsync.when(
+            loading: () => const _LoadingSection(title: 'Operating costs'),
+            error: (e, _) => _RetrySection(
+              title: 'Operating costs',
+              message: e is ApiException ? e.message : e.toString(),
+              onRetry: () => setState(() {}),
+            ),
+            data: (page) => _UnitExpensesSection(
+              title: 'Operating costs',
+              items: page.items,
+              pager: _MoneyPager(
+                page: _unitExpensePage,
+                hasPrevious: page.hasPrevious,
+                hasNext: page.hasNext,
+                onPrevious: () => setState(() => _unitExpensePage--),
+                onNext: () => setState(() => _unitExpensePage++),
+              ),
+            ),
+          ),
+        ),
+        if (isSingleRental && propertyExpensesAsync != null) ...[
+          const SizedBox(height: 14),
+          propertyExpensesAsync.when(
+            loading: () => const _LoadingSection(title: 'Property expenses'),
+            error: (e, _) => _RetrySection(
+              title: 'Property expenses',
+              message: e is ApiException ? e.message : e.toString(),
+              onRetry: () => setState(() {}),
+            ),
+            data: (page) => _UnitExpensesSection(
+              title: 'Property expenses',
+              items: page.items,
+              pager: _MoneyPager(
+                page: _propertyExpensePage,
+                hasPrevious: page.hasPrevious,
+                hasNext: page.hasNext,
+                onPrevious: () => setState(() => _propertyExpensePage--),
+                onNext: () => setState(() => _propertyExpensePage++),
+              ),
+            ),
+          ),
+        ],
+        if (isSingleRental && financingAsync != null) ...[
+          const SizedBox(height: 14),
+          financingAsync.when(
+            loading: () => const _LoadingSection(title: 'Financing'),
+            error: (e, _) => _RetrySection(
+              title: 'Financing',
+              message: e is ApiException ? e.message : e.toString(),
+              onRetry: () => setState(() {}),
+            ),
+            data: (page) => _Section(
+              title: 'Financing',
+              empty: 'No financing recorded',
+              children: [
+                for (final loan in page.items)
+                  _CompactRow(
+                    icon: Symbols.account_balance_rounded,
+                    title: loan.lender,
+                    subtitle:
+                        '${_formatCurrency(loan.currentBalance)} balance · '
+                        '${_formatCurrency(loan.monthlyPrincipalInterest + loan.monthlyEscrow)}/month',
+                  ),
+                _MoneyPager(
+                  page: _financingPage,
+                  hasPrevious: page.hasPrevious,
+                  hasNext: page.hasNext,
+                  onPrevious: () => setState(() => _financingPage--),
+                  onNext: () => setState(() => _financingPage++),
+                ),
+              ],
+            ),
           ),
         ],
       ],
@@ -1077,86 +2753,21 @@ class _UnitLeaseAddAction extends StatelessWidget {
   }
 }
 
-class _UnitApplicationsTab extends StatelessWidget {
-  const _UnitApplicationsTab({this.application});
-
-  final RentalApplication? application;
-
-  @override
-  Widget build(BuildContext context) {
-    final app = application;
-    if (app == null) {
-      return const _EmptyTab(
-        icon: Symbols.assignment_ind_rounded,
-        title: 'No application selected',
-        body: 'Open-ended applications stay in the Applications list.',
-      );
-    }
-
-    return ApplicationDetailScreen(applicationId: app.id);
-  }
-}
-
-class _UnitLedgerTab extends ConsumerWidget {
-  const _UnitLedgerTab({required this.dashboard});
-
-  final UnitDashboard dashboard;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final lease = dashboard.currentLease;
-    final expensesAsync = ref.watch(unitExpensesProvider(dashboard.unit.id));
-
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-      children: [
-        _SurfacePanel(
-          children: [
-            _MetricRow(
-              icon: Symbols.account_balance_wallet_rounded,
-              label: 'Tenant balance',
-              value: _formatCurrency(dashboard.header.outstandingRentBalance),
-            ),
-            _MetricRow(
-              icon: Symbols.payments_rounded,
-              label: 'Market rent',
-              value: '${_formatCurrency(dashboard.unit.marketRent)}/mo',
-            ),
-            if (lease != null)
-              _MetricRow(
-                icon: Symbols.description_rounded,
-                label: 'Tenant account',
-                value: lease.leaseNumber,
-              ),
-          ],
-        ),
-        const SizedBox(height: 14),
-        _PaymentsSection(items: dashboard.overview.recentPayments),
-        const SizedBox(height: 14),
-        expensesAsync.when(
-          loading: () => const _LoadingSection(title: 'Operating costs'),
-          error: (e, _) => _RetrySection(
-            title: 'Operating costs',
-            message: e is ApiException ? e.message : e.toString(),
-            onRetry: () =>
-                ref.invalidate(unitExpensesProvider(dashboard.unit.id)),
-          ),
-          data: (expenses) => _UnitExpensesSection(items: expenses),
-        ),
-      ],
-    );
-  }
-}
-
 class _UnitExpensesSection extends StatelessWidget {
-  const _UnitExpensesSection({required this.items});
+  const _UnitExpensesSection({
+    required this.title,
+    required this.items,
+    required this.pager,
+  });
 
+  final String title;
   final List<Expense> items;
+  final Widget pager;
 
   @override
   Widget build(BuildContext context) {
     return _Section(
-      title: 'Operating costs',
+      title: title,
       empty: 'No unit expenses',
       children: [
         for (final item in items)
@@ -1173,13 +2784,51 @@ class _UnitExpensesSection extends StatelessWidget {
               ),
             ),
           ),
+        pager,
       ],
     );
   }
 }
 
-class _UnitTenantsTab extends StatelessWidget {
-  const _UnitTenantsTab({required this.dashboard, this.selectedTenantId});
+class _MoneyPager extends StatelessWidget {
+  const _MoneyPager({
+    required this.page,
+    required this.hasPrevious,
+    required this.hasNext,
+    required this.onPrevious,
+    required this.onNext,
+  });
+
+  final int page;
+  final bool hasPrevious;
+  final bool hasNext;
+  final VoidCallback onPrevious;
+  final VoidCallback onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!hasPrevious && !hasNext) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: Row(
+        children: [
+          OutlinedButton(
+            onPressed: hasPrevious ? onPrevious : null,
+            child: const Text('Previous'),
+          ),
+          Expanded(child: Text('Page ${page + 1}', textAlign: TextAlign.center)),
+          OutlinedButton(
+            onPressed: hasNext ? onNext : null,
+            child: const Text('Next'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _UnitResidentsSection extends StatelessWidget {
+  const _UnitResidentsSection({required this.dashboard, this.selectedTenantId});
 
   final UnitDashboard dashboard;
   final int? selectedTenantId;
@@ -1191,55 +2840,272 @@ class _UnitTenantsTab extends StatelessWidget {
         : <UnitTenantSummary>[
             if (dashboard.currentTenant != null) dashboard.currentTenant!,
           ];
-    final tenantId = selectedTenantId;
-    if (tenantId != null && tenantId > 0) {
-      return TenantDetailLoaderScreen(tenantId: tenantId);
-    }
+    final selected = selectedTenantId;
+    final orderedTenants = [...currentTenants]
+      ..sort((left, right) {
+        if (left.id == selected) return -1;
+        if (right.id == selected) return 1;
+        return left.name.compareTo(right.name);
+      });
+    final selectedIsMissing =
+        selected != null &&
+        selected > 0 &&
+        !orderedTenants.any((tenant) => tenant.id == selected);
 
-    if (currentTenants.length > 1) {
-      return ListView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-        children: [
-          _Section(
-            title: 'Tenants',
-            empty: 'This unit is currently vacant.',
-            children: [
-              for (final tenant in currentTenants)
-                _CompactRow(
-                  icon: Symbols.person_rounded,
-                  title: tenant.name.isEmpty
-                      ? 'Tenant #${tenant.id}'
-                      : tenant.name,
-                  subtitle: tenant.email?.trim().isNotEmpty == true
-                      ? tenant.email!.trim()
-                      : (tenant.phone?.trim().isNotEmpty == true
-                            ? tenant.phone!.trim()
-                            : 'Tenant'),
-                  onTap: () => Navigator.of(context).push<void>(
-                    MaterialPageRoute<void>(
-                      builder: (_) =>
-                          TenantDetailLoaderScreen(tenantId: tenant.id),
-                    ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const _UnitTenantLeaseSectionHeading(title: 'Residents'),
+        const SizedBox(height: 10),
+        _Section(
+          title: 'Tenants',
+          empty: 'This unit is currently vacant.',
+          children: [
+            for (final tenant in orderedTenants)
+              _CompactRow(
+                icon: Symbols.person_rounded,
+                title: tenant.name.isEmpty
+                    ? 'Tenant #${tenant.id}'
+                    : tenant.name,
+                subtitle: tenant.email?.trim().isNotEmpty == true
+                    ? tenant.email!.trim()
+                    : (tenant.phone?.trim().isNotEmpty == true
+                          ? tenant.phone!.trim()
+                          : 'Tenant'),
+                onTap: () => Navigator.of(context).push<void>(
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        TenantDetailLoaderScreen(tenantId: tenant.id),
                   ),
                 ),
+              ),
+            if (selectedIsMissing)
+              _CompactRow(
+                icon: Symbols.person_rounded,
+                title: 'Tenant #$selected',
+                subtitle: 'Tenant',
+                onTap: () => Navigator.of(context).push<void>(
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        TenantDetailLoaderScreen(tenantId: selected!),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _UnitInspectionsTab extends ConsumerStatefulWidget {
+  const _UnitInspectionsTab({required this.unitId});
+  final int unitId;
+
+  @override
+  ConsumerState<_UnitInspectionsTab> createState() =>
+      _UnitInspectionsTabState();
+}
+
+class _UnitInspectionsTabState extends ConsumerState<_UnitInspectionsTab> {
+  static const _take = 20;
+  var _skip = 0;
+  var _search = '';
+  var _sort = '-scheduledFor';
+
+  @override
+  Widget build(BuildContext context) {
+    final query = InspectionListQuery(
+      unitId: widget.unitId,
+      skip: _skip,
+      take: _take,
+      search: _search,
+      sort: _sort,
+    );
+    final page = ref.watch(inspectionsPageProvider(query));
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        TextField(
+          decoration: const InputDecoration(
+            labelText: 'Search Unit inspections',
+            prefixIcon: Icon(Icons.search),
+          ),
+          onChanged: (value) => setState(() {
+            _search = value.trim();
+            _skip = 0;
+          }),
+        ),
+        const SizedBox(height: 8),
+        DropdownButtonFormField<String>(
+          initialValue: _sort,
+          decoration: const InputDecoration(labelText: 'Sort'),
+          items: const [
+            DropdownMenuItem(
+              value: '-scheduledFor',
+              child: Text('Newest scheduled'),
+            ),
+            DropdownMenuItem(
+              value: 'scheduledFor',
+              child: Text('Oldest scheduled'),
+            ),
+            DropdownMenuItem(value: 'status', child: Text('Status')),
+          ],
+          onChanged: (value) => setState(() {
+            _sort = value ?? '-scheduledFor';
+            _skip = 0;
+          }),
+        ),
+        const SizedBox(height: 12),
+        page.when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (error, _) => Text('Inspections could not be loaded: $error'),
+          data: (result) => Column(
+            children: [
+              if (result.items.isEmpty)
+                const ListTile(title: Text('No inspections for this Unit.'))
+              else
+                for (final inspection in result.items)
+                  ListTile(
+                    key: ValueKey('unit-inspection-${inspection.id}'),
+                    title: Text(inspection.type),
+                    subtitle: Text(
+                      '${inspection.status} · ${_formatDate(inspection.scheduledFor)}',
+                    ),
+                  ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  OutlinedButton(
+                    onPressed: _skip == 0
+                        ? null
+                        : () => setState(
+                            () => _skip = (_skip - _take)
+                                .clamp(0, 100000)
+                                .toInt(),
+                          ),
+                    child: const Text('Previous'),
+                  ),
+                  Text('${result.totalCount} total'),
+                  OutlinedButton(
+                    onPressed: _skip + result.items.length >= result.totalCount
+                        ? null
+                        : () => setState(() => _skip += _take),
+                    child: const Text('Next'),
+                  ),
+                ],
+              ),
             ],
           ),
-        ],
-      );
-    }
+        ),
+      ],
+    );
+  }
+}
 
-    final singleTenantId = currentTenants.isNotEmpty
-        ? currentTenants.first.id
-        : null;
-    if (singleTenantId == null || singleTenantId <= 0) {
-      return const _EmptyTab(
-        icon: Symbols.group_rounded,
-        title: 'No tenant',
-        body: 'This unit is currently vacant.',
-      );
-    }
+class _UnitRecurringMaintenanceTab extends ConsumerStatefulWidget {
+  const _UnitRecurringMaintenanceTab({required this.unitId});
+  final int unitId;
 
-    return TenantDetailLoaderScreen(tenantId: singleTenantId);
+  @override
+  ConsumerState<_UnitRecurringMaintenanceTab> createState() =>
+      _UnitRecurringMaintenanceTabState();
+}
+
+class _UnitRecurringMaintenanceTabState
+    extends ConsumerState<_UnitRecurringMaintenanceTab> {
+  static const _take = 20;
+  var _skip = 0;
+  var _search = '';
+  var _sort = 'nextDueDate';
+
+  @override
+  Widget build(BuildContext context) {
+    final query = RecurringMaintenanceListQuery(
+      unitId: widget.unitId,
+      skip: _skip,
+      take: _take,
+      search: _search,
+      sort: _sort,
+    );
+    final page = ref.watch(unitRecurringMaintenancePageProvider(query));
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        TextField(
+          decoration: const InputDecoration(
+            labelText: 'Search Unit recurring maintenance',
+            prefixIcon: Icon(Icons.search),
+          ),
+          onChanged: (value) => setState(() {
+            _search = value.trim();
+            _skip = 0;
+          }),
+        ),
+        const SizedBox(height: 8),
+        DropdownButtonFormField<String>(
+          initialValue: _sort,
+          decoration: const InputDecoration(labelText: 'Sort'),
+          items: const [
+            DropdownMenuItem(value: 'nextDueDate', child: Text('Next due')),
+            DropdownMenuItem(
+              value: '-nextDueDate',
+              child: Text('Latest due'),
+            ),
+            DropdownMenuItem(value: 'title', child: Text('Title')),
+          ],
+          onChanged: (value) => setState(() {
+            _sort = value ?? 'nextDueDate';
+            _skip = 0;
+          }),
+        ),
+        const SizedBox(height: 12),
+        page.when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (error, _) =>
+              Text('Recurring maintenance could not be loaded: $error'),
+          data: (result) => Column(
+            children: [
+              if (result.items.isEmpty)
+                const ListTile(
+                  title: Text('No recurring maintenance for this Unit.'),
+                )
+              else
+                for (final task in result.items)
+                  ListTile(
+                    key: ValueKey('unit-recurring-${task.id}'),
+                    title: Text(task.title),
+                    subtitle: Text(
+                      '${task.recurrenceInterval} · Due ${_formatDate(task.nextDueDate)}',
+                    ),
+                  ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  OutlinedButton(
+                    onPressed: _skip == 0
+                        ? null
+                        : () => setState(
+                            () => _skip = (_skip - _take)
+                                .clamp(0, 100000)
+                                .toInt(),
+                          ),
+                    child: const Text('Previous'),
+                  ),
+                  Text('${result.totalCount} total'),
+                  OutlinedButton(
+                    onPressed: _skip + result.items.length >= result.totalCount
+                        ? null
+                        : () => setState(() => _skip += _take),
+                    child: const Text('Next'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 }
 
@@ -1252,77 +3118,82 @@ class _UnitTurnoverTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final turnover = dashboard.turnover;
 
-    return ListView(
+    return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-      children: [
-        _SurfacePanel(
-          children: [
-            _MetricRow(
-              icon: Symbols.construction_rounded,
-              label: 'Status',
-              value: _turnoverStatusLabel(turnover.status),
-            ),
-            _MetricRow(
-              icon: Symbols.task_alt_rounded,
-              label: 'Punch list',
-              value:
-                  '${turnover.openTaskCount} open / ${turnover.completedTaskCount} done',
-            ),
-            _MetricRow(
-              icon: Symbols.schedule_rounded,
-              label: 'Turn time',
-              value: turnover.daysInTurnover == null
-                  ? 'Not started'
-                  : '${turnover.daysInTurnover}d',
-            ),
-            _MetricRow(
-              icon: Symbols.event_available_rounded,
-              label: 'Target ready',
-              value: turnover.targetReadyDate == null
-                  ? 'Not set'
-                  : _formatDate(turnover.targetReadyDate!),
-            ),
-            _MetricRow(
-              icon: Symbols.receipt_long_rounded,
-              label: 'Budget / actual',
-              value:
-                  '${_formatCurrency(turnover.estimatedCost)} / ${_formatCurrency(turnover.actualCost)}',
-            ),
-            _MetricRow(
-              icon: Symbols.folder_open_rounded,
-              label: 'Receipts',
-              value: '${turnover.receiptCount}',
-            ),
-          ],
-        ),
-        const SizedBox(height: 14),
-        _Section(
-          title: 'Make-ready plan',
-          empty: '',
-          children: const [
-            _CompactRow(
-              icon: Symbols.logout_rounded,
-              title: 'Move-out',
-              subtitle: 'Walkthrough, photos, keys, and vacancy handoff',
-            ),
-            _CompactRow(
-              icon: Symbols.format_list_bulleted_rounded,
-              title: 'Punch list',
-              subtitle: 'Cleanout, paint, repairs, re-key, appliances',
-            ),
-            _CompactRow(
-              icon: Symbols.verified_rounded,
-              title: 'Rent-ready',
-              subtitle: 'Close jobs, attach receipts, then list the unit',
-            ),
-          ],
-        ),
-        const SizedBox(height: 14),
-        _WorkOrdersSection(
-          items: dashboard.overview.openWorkOrders,
-          openFullDetail: true,
-        ),
-      ],
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Turnover', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 12),
+          _SurfacePanel(
+            children: [
+              _MetricRow(
+                icon: Symbols.construction_rounded,
+                label: 'Status',
+                value: _turnoverStatusLabel(turnover.status),
+              ),
+              _MetricRow(
+                icon: Symbols.task_alt_rounded,
+                label: 'Punch list',
+                value:
+                    '${turnover.openTaskCount} open / ${turnover.completedTaskCount} done',
+              ),
+              _MetricRow(
+                icon: Symbols.schedule_rounded,
+                label: 'Turn time',
+                value: turnover.daysInTurnover == null
+                    ? 'Not started'
+                    : '${turnover.daysInTurnover}d',
+              ),
+              _MetricRow(
+                icon: Symbols.event_available_rounded,
+                label: 'Target ready',
+                value: turnover.targetReadyDate == null
+                    ? 'Not set'
+                    : _formatDate(turnover.targetReadyDate!),
+              ),
+              _MetricRow(
+                icon: Symbols.receipt_long_rounded,
+                label: 'Budget / actual',
+                value:
+                    '${_formatCurrency(turnover.estimatedCost)} / ${_formatCurrency(turnover.actualCost)}',
+              ),
+              _MetricRow(
+                icon: Symbols.folder_open_rounded,
+                label: 'Receipts',
+                value: '${turnover.receiptCount}',
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          _Section(
+            title: 'Make-ready plan',
+            empty: '',
+            children: const [
+              _CompactRow(
+                icon: Symbols.logout_rounded,
+                title: 'Move-out',
+                subtitle: 'Walkthrough, photos, keys, and vacancy handoff',
+              ),
+              _CompactRow(
+                icon: Symbols.format_list_bulleted_rounded,
+                title: 'Punch list',
+                subtitle: 'Cleanout, paint, repairs, re-key, appliances',
+              ),
+              _CompactRow(
+                icon: Symbols.verified_rounded,
+                title: 'Rent-ready',
+                subtitle: 'Close jobs, attach receipts, then list the unit',
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          _WorkOrdersSection(
+            items: dashboard.overview.openWorkOrders,
+            openFullDetail: true,
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1341,14 +3212,52 @@ class _UnitWorkTab extends StatelessWidget {
       return WorkOrderDetailScreen(workOrderId: selected.id);
     }
 
-    return ListView(
+    return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-      children: [
-        _WorkOrdersSection(
-          items: dashboard.overview.openWorkOrders,
-          openFullDetail: true,
-        ),
-      ],
+      child: Column(
+        children: [
+          _WorkOrdersSection(
+            items: dashboard.overview.openWorkOrders,
+            openFullDetail: true,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _UnitDocumentsTab extends StatelessWidget {
+  const _UnitDocumentsTab({required this.dashboard});
+
+  final UnitDashboard dashboard;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FilledButton.icon(
+              icon: const Icon(Symbols.document_scanner_rounded),
+              label: const Text('Scan document'),
+              onPressed: () => openMobileScan(
+                context,
+                propertyId: dashboard.unit.propertyId,
+                unitId: dashboard.unit.id,
+                leaseManagementId: dashboard.leaseManagementId,
+                leaseAgreementId: dashboard.currentLease?.id,
+                tenantAccountId: dashboard.tenantAccountId,
+                sourceLabel: 'Unit · Documents',
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          _DocumentsSection(items: dashboard.overview.pendingDocs),
+        ],
+      ),
     );
   }
 }
@@ -1369,6 +3278,14 @@ class _PaymentsSection extends StatelessWidget {
             icon: Symbols.receipt_long_rounded,
             title: '${item.type} · ${_formatCurrency(item.amount)}',
             subtitle: '${item.status} · Due ${_formatDate(item.dueDate)}',
+            onTap: () => Navigator.of(context).push<void>(
+              MaterialPageRoute<void>(
+                builder: (_) => PaymentDetailScreen(
+                  tenantAccountId: item.tenantAccountId,
+                  tenantLedgerEntryId: item.id,
+                ),
+              ),
+            ),
           ),
       ],
     );
@@ -1508,6 +3425,7 @@ class _ActionPanel extends StatelessWidget {
     if (target == null) return;
 
     if (target.unitId == currentUnitId) {
+      _UnitViewScope.maybeOf(context)?.value = target.initialView;
       DefaultTabController.of(context).animateTo(target.initialTab.index);
       return;
     }
@@ -1515,6 +3433,7 @@ class _ActionPanel extends StatelessWidget {
     Widget detailBuilder(BuildContext _) => UnitCommandCenterLoaderScreen(
       unitId: target.unitId,
       initialTab: target.initialTab,
+      initialView: target.initialView,
     );
 
     final shellNavigator = mobileShellNavigatorOf(context);

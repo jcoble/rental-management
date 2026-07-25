@@ -9,6 +9,7 @@
  */
 
 import { fail, type RequestEvent } from '@sveltejs/kit';
+import { randomUUID } from 'node:crypto';
 import { serverPost } from '$lib/api/server-fetch';
 
 export async function changePassword({ request, locals }: RequestEvent) {
@@ -37,10 +38,13 @@ export async function changePassword({ request, locals }: RequestEvent) {
 		return fail(400, { error: 'Your new password must be different from your current one.', changed: false });
 	}
 
-	const result = await serverPost<{ message: string }>('/auth/change-password', locals.accessToken, {
-		currentPassword,
-		newPassword
-	});
+	const operationKey = randomUUID();
+	const result = await serverPost<{ message: string }>(
+		'/auth/change-password',
+		locals.accessToken,
+		{ currentPassword, newPassword },
+		{ headers: { 'Idempotency-Key': operationKey } }
+	);
 
 	if (result.error) {
 		return fail(result.status || 400, { error: result.error, changed: false });

@@ -16,7 +16,9 @@ describe('buildOnboardingLeaseScanOverrides', () => {
 				monthlyRent: 975,
 				securityDeposit: 975,
 				lateFeeAmount: 50,
-				rentDueDay: 1
+				rentDueDay: 1,
+				reviewDisposition: 'AlreadyFullySigned',
+				documentTemplateId: null
 			})
 		);
 
@@ -30,7 +32,8 @@ describe('buildOnboardingLeaseScanOverrides', () => {
 			monthlyRent: 975,
 			securityDeposit: 975,
 			lateFee: 50,
-			rentDueDay: 1
+			rentDueDay: 1,
+			reviewDisposition: 'AlreadyFullySigned'
 		});
 	});
 
@@ -46,37 +49,38 @@ describe('buildOnboardingLeaseScanOverrides', () => {
 				monthlyRent: 1200,
 				securityDeposit: 1200,
 				lateFeeAmount: 65,
-				rentDueDay: 5
+				rentDueDay: 5,
+				reviewDisposition: 'NeedsSignatures',
+				documentTemplateId: 42
 			})
 		);
 
 		assert.equal(overrides.lateFee, 65);
 		assert.equal('lateFeeAmount' in overrides, false);
+		assert.equal(overrides.reviewDisposition, 'NeedsSignatures');
+		assert.equal(overrides.documentTemplateId, 42);
 	});
 
-	it('includes opening-balance import choices when supplied', () => {
+	it('does not send a template id for an already executed agreement', () => {
 		const overrides = JSON.parse(
 			buildOnboardingLeaseScanOverrides({
 				leaseNumber: 'L-2026-003',
 				propertyId: 1,
 				unitId: 2,
 				tenantId: 3,
-				startDate: '2026-01-01',
-				endDate: '2026-12-31',
+				startDate: '2026-07-01',
+				endDate: '2027-07-01',
 				monthlyRent: 1200,
 				securityDeposit: 1200,
-				lateFeeAmount: 75,
-				rentDueDay: 1,
-				rentTrackingStartMode: 'OpeningBalanceOnly',
-				openingBalanceAmount: 2400,
-				openingBalanceAsOfDate: '2026-06-30',
-				openingBalanceNote: 'Imported current balance'
+				lateFeeAmount: 65,
+				rentDueDay: 5,
+				reviewDisposition: 'AlreadyFullySigned',
+				documentTemplateId: 42
 			})
 		);
 
-		assert.equal(overrides.rentTrackingStartMode, 'OpeningBalanceOnly');
-		assert.equal(overrides.openingBalanceAmount, 2400);
-		assert.equal(overrides.openingBalanceAsOfDate, '2026-06-30');
-		assert.equal(overrides.openingBalanceNote, 'Imported current balance');
+		assert.equal(overrides.reviewDisposition, 'AlreadyFullySigned');
+		assert.equal('documentTemplateId' in overrides, false);
 	});
+
 });

@@ -16,7 +16,7 @@ function isPositiveInteger(value: number | undefined): value is number {
 /**
  * Resolve the client-side portfolio selection during authenticated layout hydration.
  *
- * Phase 0 users are claim-scoped to one portfolio server-side, so the authenticated fallback is
+ * The canonical access envelope selects one workspace server-side, so its fallback is
  * authoritative. A stale localStorage value can come from a previous localhost account and must not
  * win, or pages can briefly query another portfolio id before the selector list corrects it.
  */

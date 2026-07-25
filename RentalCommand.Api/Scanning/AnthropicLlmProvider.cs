@@ -15,7 +15,10 @@ namespace RentalCommand.Api.Scanning;
 /// 0–1 confidence per field. Falls back to a deterministic no-op (no network call, all confidence 0)
 /// when no API key is configured, so the app runs offline.
 /// </summary>
-public sealed class AnthropicLlmProvider : ILlmProvider
+public sealed class AnthropicLlmProvider :
+    ILlmProvider,
+    ILlmCredentialProbe,
+    IWorkspaceLlmExtractionProvider
 {
     private const string AnthropicVersion = "2023-06-01";
     private const string ToolName = "record_extraction";
@@ -25,6 +28,8 @@ public sealed class AnthropicLlmProvider : ILlmProvider
     private readonly ILogger<AnthropicLlmProvider> _logger;
     private readonly IImageTextExtractor _imageTextExtractor;
     private bool _warnedNoKey;
+
+    public string ProviderKey => "anthropic";
 
     public AnthropicLlmProvider(
         HttpClient http,
@@ -58,7 +63,49 @@ public sealed class AnthropicLlmProvider : ILlmProvider
         return text ?? string.Empty;
     }
 
-    public async Task<ExtractedFields> ExtractAsync(
+    public async Task<LlmCredentialProbeResult> TestCredentialAsync(
+        string apiKey,
+        string modelId,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(modelId))
+        {
+            return new(false, ProviderKey, modelId, "API key and model are required.");
+        }
+
+        var body = new
+        {
+            model = modelId.Trim(),
+            max_tokens = 1,
+            messages = new[] { new { role = "user", content = "Reply OK." } }
+        };
+        using var request = BuildRequest(body, apiKey.Trim());
+        using var response = await _http.SendAsync(request, ct);
+        return response.IsSuccessStatusCode
+            ? new(true, ProviderKey, modelId.Trim())
+            : new(false, ProviderKey, modelId.Trim(),
+                $"Anthropic rejected the credential ({(int)response.StatusCode}).");
+    }
+
+    public Task<ExtractedFields> ExtractAsync(
+        byte[] documentBytes,
+        string contentType,
+        string instructions,
+        IReadOnlyList<ExtractionFieldSpec> fields,
+        string? groundingContext = null,
+        CancellationToken ct = default) =>
+        ExtractCoreAsync(
+            _config.ApiKey,
+            _config.ModelId,
+            documentBytes,
+            contentType,
+            instructions,
+            fields,
+            groundingContext,
+            ct);
+
+    public Task<ExtractedFields> ExtractWorkspaceAsync(
+        WorkspaceLlmRuntimeCredential credential,
         byte[] documentBytes,
         string contentType,
         string instructions,
@@ -66,8 +113,36 @@ public sealed class AnthropicLlmProvider : ILlmProvider
         string? groundingContext = null,
         CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(credential);
+        if (!string.Equals(credential.Provider, ProviderKey, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"The workspace credential selects {credential.Provider}, not {ProviderKey}.");
+        }
+
+        return ExtractCoreAsync(
+            credential.ApiKey,
+            credential.ModelId,
+            documentBytes,
+            contentType,
+            instructions,
+            fields,
+            groundingContext,
+            ct);
+    }
+
+    private async Task<ExtractedFields> ExtractCoreAsync(
+        string? apiKey,
+        string? modelId,
+        byte[] documentBytes,
+        string contentType,
+        string instructions,
+        IReadOnlyList<ExtractionFieldSpec> fields,
+        string? groundingContext,
+        CancellationToken ct)
+    {
         // --- Deterministic no-op fallback (offline / unconfigured) ---
-        if (string.IsNullOrWhiteSpace(_config.ApiKey))
+        if (string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(modelId))
         {
             WarnNoKeyOnce();
             return new ExtractedFields
@@ -147,7 +222,7 @@ public sealed class AnthropicLlmProvider : ILlmProvider
 
         var body = new
         {
-            model = _config.ModelId,
+            model = modelId,
             // The receipt schema asks for ~24 fields, a confidence per field, AND a line-items
             // array — at 1500 the tool_use JSON gets truncated (the model hits the cap before
             // finishing the tool call), yielding an empty extraction. 4096 gives ample room.
@@ -158,7 +233,8 @@ public sealed class AnthropicLlmProvider : ILlmProvider
             messages = new[] { new { role = "user", content = userContent } }
         };
 
-        using var resp = await SendAsync(body, ct);
+        using var request = BuildRequest(body, apiKey);
+        using var resp = await SendChecked(request, ct);
         var json = await resp.Content.ReadAsStringAsync(ct);
         return ParseToolResult(json, fields);
     }
@@ -473,14 +549,19 @@ public sealed class AnthropicLlmProvider : ILlmProvider
 
     private Task<HttpResponseMessage> SendAsync(object body, CancellationToken ct)
     {
+        return SendChecked(BuildRequest(body), ct);
+    }
+
+    private HttpRequestMessage BuildRequest(object body, string? apiKey = null)
+    {
         var req = new HttpRequestMessage(HttpMethod.Post, "v1/messages")
         {
             Content = JsonContent.Create(body)
         };
-        req.Headers.TryAddWithoutValidation("x-api-key", _config.ApiKey);
+        req.Headers.TryAddWithoutValidation("x-api-key", apiKey ?? _config.ApiKey);
         req.Headers.TryAddWithoutValidation("anthropic-version", AnthropicVersion);
         req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        return SendChecked(req, ct);
+        return req;
     }
 
     private async Task<HttpResponseMessage> SendChecked(HttpRequestMessage req, CancellationToken ct)

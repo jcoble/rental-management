@@ -1,4 +1,5 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -16,12 +17,23 @@ public interface IVendorDispatchService
     /// failure (work order / vendor out of scope, or the vendor has no phone on file).
     /// </summary>
     Task<DispatchResult> DispatchAsync(int portfolioId, int workOrderId, DispatchWorkOrderRequest request, int? changedByUserId, CancellationToken ct = default);
+    Task<DispatchResult> DispatchAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int workOrderId,
+        DispatchWorkOrderRequest request,
+        int? changedByUserId,
+        CancellationToken ct = default);
 
     /// <summary>Record a 1–5 star rating and refresh the vendor's cached aggregates. Null when out of scope.</summary>
-    Task<VendorRatingResponse?> RateAsync(int portfolioId, int vendorId, CreateVendorRatingRequest request, CancellationToken ct = default);
+    Task<VendorRatingResponse?> RateAsync(
+        WorkspaceReadScope scope,
+        int vendorId,
+        CreateVendorRatingRequest request,
+        string idempotencyKey,
+        CancellationToken ct = default);
 
     /// <summary>Vendor performance scorecard, or null when the vendor is not in the caller's portfolio.</summary>
-    Task<VendorScorecardResponse?> GetScorecardAsync(int portfolioId, int vendorId, CancellationToken ct = default);
+    Task<VendorScorecardResponse?> GetScorecardAsync(WorkspaceReadScope scope, int vendorId, CancellationToken ct = default);
 }
 
 /// <summary>Outcome of a dispatch attempt; <see cref="DispatchOutcome"/> drives the HTTP mapping.</summary>

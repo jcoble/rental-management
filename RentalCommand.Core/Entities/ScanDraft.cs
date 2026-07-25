@@ -1,3 +1,6 @@
+using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Enums;
+
 namespace RentalCommand.Core.Entities;
 
 /// <summary>
@@ -5,7 +8,7 @@ namespace RentalCommand.Core.Entities;
 /// extraction is Phase 2). <see cref="ExtractedFields"/> holds JSON of
 /// {value, confidence, sourceBox} per field.
 /// </summary>
-public class ScanDraft
+public class ScanDraft : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
@@ -18,6 +21,33 @@ public class ScanDraft
 
     public string FilePath { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Exact uploaded source owned by this draft. Null is valid for transcript-only voice intake;
+    /// confirmation never infers a source row from <see cref="FilePath"/>.
+    /// </summary>
+    public int? SourceStoredFileId { get; set; }
+
+    /// <summary>SHA-256 of the exact user-supplied source bytes, captured before blob upload.</summary>
+    public string? SourceContentSha256 { get; set; }
+
+    /// <summary>Optional human-facing provenance only (for example, "Zillow").</summary>
+    public string? SourceLabel { get; set; }
+
+    // Typed capture scope. Global capture intentionally leaves business-record ids null; capture
+    // launched from a record carries them so review does not have to rediscover its origin.
+    public WorkspaceExperience? CaptureExperience { get; set; }
+    public int? CaptureAccessContextId { get; set; }
+    public long? CaptureAccessRevision { get; set; }
+    public int? CapturePropertyId { get; set; }
+    public int? CaptureUnitId { get; set; }
+    public int? CaptureLeaseManagementId { get; set; }
+    public int? CaptureLeaseAgreementId { get; set; }
+    public int? CaptureTenantAccountId { get; set; }
+    public long? CaptureTenantLedgerEntryId { get; set; }
+    public int? CaptureWorkOrderId { get; set; }
+    public int? CaptureApplicationId { get; set; }
+    public int? CaptureRentalListingId { get; set; }
+
     /// <summary>Storage key of a small downscaled JPEG preview; null until generated (or for
     /// non-image uploads like PDFs). Served to clients by default so phones never fetch the
     /// full-resolution original just to render the review thumbnail.</summary>
@@ -25,6 +55,13 @@ public class ScanDraft
 
     public string TargetEntityType { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
+
+    /// <summary>Worker lease metadata. Completion is accepted only for the current claim token.</summary>
+    public string? ProcessingClaimOwner { get; set; }
+    public Guid? ProcessingClaimToken { get; set; }
+    public DateTime? ProcessingClaimExpiresAtUtc { get; set; }
+    public int ProcessingAttemptCount { get; set; }
+    public DateTime? ProcessingLastAttemptAtUtc { get; set; }
 
     /// <summary>JSON: per-field {value, confidence, sourceBox}.</summary>
     public string? ExtractedFields { get; set; }
@@ -43,7 +80,19 @@ public class ScanDraft
     public DateTime? ReviewedAt { get; set; }
     public string? ReviewedBy { get; set; }
     public DateTime? ConfirmedAt { get; set; }
+    /// <summary>Canonical business record created by atomic confirmation, including no-source voice drafts.</summary>
+    public int? ConfirmedEntityId { get; set; }
 
     public Portfolio? Portfolio { get; set; }
     public ScanBatch? Batch { get; set; }
+    public StoredFile? SourceStoredFile { get; set; }
+    public Property? CaptureProperty { get; set; }
+    public Unit? CaptureUnit { get; set; }
+    public LeaseManagement? CaptureLeaseManagement { get; set; }
+    public LeaseAgreement? CaptureLeaseAgreement { get; set; }
+    public TenantAccount? CaptureTenantAccount { get; set; }
+    public TenantLedgerEntry? CaptureTenantLedgerEntry { get; set; }
+    public WorkOrder? CaptureWorkOrder { get; set; }
+    public RentalApplication? CaptureApplication { get; set; }
+    public RentalListing? CaptureRentalListing { get; set; }
 }

@@ -1,0 +1,201 @@
+using FluentAssertions;
+using Microsoft.AspNetCore.Mvc;
+using RentalCommand.Api.Controllers;
+using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Enums;
+
+namespace RentalCommand.Api.Tests.Auth;
+
+public sealed class LeasingExperienceContractTests
+{
+    [Fact]
+    public void LeasingWorkspaceExposesOnlyPurposeBuiltRoutes()
+    {
+        var routes = typeof(LeasingWorkspaceController)
+            .GetMethods()
+            .SelectMany(method => method.GetCustomAttributes(typeof(HttpGetAttribute), inherit: true)
+                .Cast<HttpGetAttribute>())
+            .Select(attribute => attribute.Template)
+            .ToArray();
+
+        routes.Should().BeEquivalentTo(
+            "today", "pipeline/page", "rentals/page", "calendar/page", "inbox/page",
+            "rentals/{unitId:int}", "applications/{id:int}", "appointments/{id:int}",
+            "conversations/{id:int}", "move-ins/{id:int}");
+        typeof(LeasingWorkspaceController).BaseType.Should().Be(typeof(ManagementControllerBase));
+    }
+
+    [Fact]
+    public void LeasingProjectionsRemainDatabaseSideAndCapabilityScoped()
+    {
+        var source = ReadSource(
+            "RentalCommand.Api", "Services", "Domain", "LeasingWorkspaceService.cs");
+
+        source.Should().Contain(nameof(CapabilityKeys.LeasingApplicationsManage));
+        source.Should().Contain(nameof(CapabilityKeys.LeasingListingsManage));
+        source.Should().Contain(nameof(CapabilityKeys.LeasingShowingsManage));
+        source.Should().Contain(nameof(CapabilityKeys.LeasingOnboardingManage));
+        source.Should().Contain("WhereAuthorized");
+        source.Should().Contain("CountAsync");
+        source.Should().Contain("Skip(query.NormalizedSkip).Take(query.NormalizedTake)");
+        source.Should().Contain("applicationProperties.Any(property => property.Id == application.PropertyId)");
+        source.Should().Contain("showingProperties.Any(property => property.Id == appointment.PropertyId)");
+        source.Should().Contain("scope, CapabilityKeys.LeasingApplicationsManage, now");
+        source.Should().Contain("scope, CapabilityKeys.LeasingShowingsManage, now");
+        source.Should().Contain("CanViewApplications = applicationProperties.Any(property => property.Id == unit.PropertyId)");
+        source.Should().Contain("CanViewShowings = showingProperties.Any(property => property.Id == unit.PropertyId)");
+        source.Should().Contain("_db, scope, [CapabilityKeys.LeasingOnboardingManage], now");
+        source.Should().NotContain("[CapabilityKeys.LeasingOnboardingManage, CapabilityKeys.LeasingApplicationsManage]");
+        source.Should().Contain("_db.LeaseManagementLifecycleProjections.Any(lifecycle =>");
+        source.Should().Contain(
+            "agreement.Id == (lifecycle.CurrentAgreementId ?? lifecycle.UpcomingAgreementId)");
+        source.Should().Contain("agreement.FullyExecutedAtUtc != null");
+        source.Should().Contain("agreement.VoidedAtUtc == null");
+        source.Should().NotContain("AgreementFullyExecuted = management.Agreements.Any");
+        source.Should().NotContain("AsEnumerable");
+        source.Should().NotContain("GroupBy(");
+    }
+
+    [Fact]
+    public void LeasingDetailsStayOnPurposeBuiltRoutesAndManagementRecordsAreDenied()
+    {
+        var listPage = ReadSource(
+            "web", "src", "lib", "components", "leasing", "LeasingListPage.svelte");
+        var routePolicy = ReadSource(
+            "web", "src", "lib", "auth", "experience-policy.ts");
+        var detailPage = ReadSource(
+            "web", "src", "routes", "(protected)", "leasing", "[record]", "[id]", "+page.svelte");
+        var workspaceTypes = ReadSource(
+            "web", "src", "lib", "api", "endpoints", "leasing-workspace.ts");
+
+        listPage.Should().Contain("/leasing/rentals/");
+        listPage.Should().Contain("/leasing/applications/");
+        listPage.Should().Contain("/leasing/appointments/");
+        listPage.Should().Contain("/leasing/conversations/");
+        listPage.Should().Contain("/leasing/move-ins/");
+        listPage.Should().NotContain("`/units/");
+        listPage.Should().NotContain("`/properties/");
+        listPage.Should().NotContain("`/messages");
+        detailPage.Should().Contain("leasingWorkspace.rental(id)");
+        detailPage.Should().Contain("<ListingTab unitId={detail.unitId} />");
+        detailPage.Should().Contain("{#if detail.canViewApplications}");
+        detailPage.Should().Contain("{#if detail.canViewShowings}");
+        detailPage.Should().NotContain("units.");
+        detailPage.Should().NotContain("properties.");
+        listPage.Should().Contain("{#if item.canViewApplications || item.canViewShowings}");
+        workspaceTypes.Should().Contain("canViewApplications: boolean;");
+        workspaceTypes.Should().Contain("canViewShowings: boolean;");
+        routePolicy.Should().Contain("prefix: '/units', experiences: ['Management']");
+        routePolicy.Should().Contain("prefix: '/properties', experiences: ['Management']");
+
+        var listingTab = ReadSource(
+            "web", "src", "lib", "components", "unit", "tabs", "ListingTab.svelte");
+        listingTab.Should().Contain("let { unitId }: { unitId: number } = $props();");
+        listingTab.Should().NotContain("UnitDashboard");
+    }
+
+    [Fact]
+    public void ManagementUnitAndPropertyDtosRequireTheManagementExperience()
+    {
+        var controllerBase = ReadSource(
+            "RentalCommand.Api", "Controllers", "ManagementControllerBase.cs");
+        var units = ReadSource("RentalCommand.Api", "Controllers", "UnitController.cs");
+        var properties = ReadSource("RentalCommand.Api", "Controllers", "PropertyController.cs");
+
+        controllerBase.Should().Contain("active.LastAuthorizedExperience != WorkspaceExperience.Management");
+        units.Should().Contain("TryReadManagementScope");
+        units.Should().Contain("if (!IsManagementExperience()) return Forbid();");
+        units.Should().Contain(
+            "active.LastAuthorizedExperience is not (WorkspaceExperience.Management or WorkspaceExperience.Leasing)");
+        properties.Should().Contain("TryReadManagementScope");
+        properties.Should().NotContain("TryReadWorkspaceScope");
+    }
+
+    [Fact]
+    public void LeasingAppointmentDetailIncludesTheCalendarTypeContract()
+    {
+        typeof(LeasingAppointmentDetailResponse).GetProperty(nameof(LeasingAppointmentDetailResponse.Type))!
+            .PropertyType.Should().Be(typeof(AppointmentType));
+    }
+
+    [Fact]
+    public void LeasingRentalDtosDistinguishHiddenFactsFromEmptyFacts()
+    {
+        typeof(LeasingRentalResponse).GetProperty(nameof(LeasingRentalResponse.CanViewApplications))!
+            .PropertyType.Should().Be(typeof(bool));
+        typeof(LeasingRentalResponse).GetProperty(nameof(LeasingRentalResponse.CanViewShowings))!
+            .PropertyType.Should().Be(typeof(bool));
+        typeof(LeasingRentalDetailResponse).GetProperty(nameof(LeasingRentalDetailResponse.CanViewApplications))!
+            .PropertyType.Should().Be(typeof(bool));
+        typeof(LeasingRentalDetailResponse).GetProperty(nameof(LeasingRentalDetailResponse.CanViewShowings))!
+            .PropertyType.Should().Be(typeof(bool));
+    }
+
+    [Fact]
+    public void LeasingConversationReplyUsesALightweightOnboardingScopedAccessCheck()
+    {
+        var controller = ReadSource(
+            "RentalCommand.Api", "Controllers", "LeasingWorkspaceController.cs");
+        var service = ReadSource(
+            "RentalCommand.Api", "Services", "Domain", "LeasingWorkspaceService.cs");
+
+        var conversationService = ReadSource(
+            "RentalCommand.Api", "Services", "Domain", "ConversationService.cs");
+        var atomicHandler = ReadSource(
+            "RentalCommand.Data", "Conversations", "SendConversationMessageHandler.cs");
+
+        controller.Should().Contain("_workspace.CanAccessConversationAsync(scope, id, ct)");
+        controller.Should().NotContain("_workspace.GetConversationAsync(scope, id, ct) is null");
+        controller.Should().Contain("PostMessageAuthorizedForCapabilityAsync");
+        controller.Should().Contain("CapabilityKeys.LeasingOnboardingManage, ct");
+        service.Should().Contain("AnyAsync(conversation => conversation.Id == id, ct)");
+        service.Should().Contain("_db, scope, [CapabilityKeys.LeasingOnboardingManage], now");
+        conversationService.Should().Contain("requiredCapabilityKey");
+        atomicHandler.Should().Contain("profileCapability.CapabilityDefinition.Key == access.RequiredCapabilityKey");
+    }
+
+    [Fact]
+    public void AuthorizedLandlordConversationWritesLockAuthorityBeforeTheConversation()
+    {
+        var handler = ReadSource(
+            "RentalCommand.Data", "Conversations", "SendConversationMessageHandler.cs");
+
+        var sessionLock = handler.IndexOf(
+            "AtomicLockResource.AuthSession, managementAccess.SessionId", StringComparison.Ordinal);
+        var contextLock = handler.IndexOf(
+            "AtomicLockResource.WorkspaceAccessContext, managementAccess.AccessContextId",
+            StringComparison.Ordinal);
+        var conversationLock = handler.IndexOf(
+            "AtomicLockResource.Conversation, conversationId", StringComparison.Ordinal);
+
+        sessionLock.Should().BeGreaterThan(0);
+        contextLock.Should().BeGreaterThan(sessionLock);
+        conversationLock.Should().BeGreaterThan(contextLock);
+    }
+
+    [Fact]
+    public void OwnerDistributionControlsFollowExactMutationCapabilities()
+    {
+        var page = ReadSource(
+            "web", "src", "routes", "(protected)", "owners-report", "+page.svelte");
+
+        page.Should().Contain("hasCapability('money.disbursements.manage')");
+        page.Should().Contain("hasCapability('money.reconciliation.destructive')");
+        page.Should().Contain("{#if canCreateDistribution}");
+        page.Should().Contain("{#if canDeleteDistribution}");
+    }
+
+    private static string ReadSource(params string[] path)
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "RentalCommand.sln")))
+        {
+            directory = directory.Parent;
+        }
+
+        var root = directory?.FullName
+            ?? throw new DirectoryNotFoundException("Could not locate the Rental Command repository root.");
+        return File.ReadAllText(Path.Combine(new[] { root }.Concat(path).ToArray()));
+    }
+}

@@ -8,6 +8,10 @@ namespace RentalCommand.Api.DTOs;
 public class DispatchWorkOrderRequest
 {
     [Required]
+    [MaxLength(100)]
+    public string IdempotencyKey { get; set; } = string.Empty;
+
+    [Required]
     [Range(1, int.MaxValue)]
     public int VendorId { get; set; }
 

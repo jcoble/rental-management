@@ -7,10 +7,9 @@ public class Property : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
-    public int? OwnerId { get; set; }
-    public int? OwnerEntityId { get; set; }
     public string Name { get; set; } = string.Empty;
     public PropertyType PropertyType { get; set; } = PropertyType.MultiFamily;
+    public RentalStructure RentalStructure { get; set; } = RentalStructure.MultiRental;
     public PropertyStatus Status { get; set; } = PropertyStatus.Active;
     public string AddressLine1 { get; set; } = string.Empty;
     public string? AddressLine2 { get; set; }
@@ -50,10 +49,10 @@ public class Property : IAuditable, IPortfolioScoped
     public DateTime? DeletedAt { get; set; }
 
     public Portfolio? Portfolio { get; set; }
-    public Owner? Owner { get; set; }
-    public OwnerEntity? OwnerEntity { get; set; }
+    public List<PropertyOwnership> Ownerships { get; set; } = [];
     public List<Unit> Units { get; set; } = [];
-    public List<Lease> Leases { get; set; } = [];
+    public List<LeaseManagement> LeaseManagements { get; set; } = [];
+    public List<UnitOperationalPeriod> UnitOperationalPeriods { get; set; } = [];
     public List<WorkOrder> WorkOrders { get; set; } = [];
     public List<Appointment> Appointments { get; set; } = [];
     public List<Inspection> Inspections { get; set; } = [];

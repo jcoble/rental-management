@@ -2,30 +2,23 @@
 	import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { untrack } from 'svelte';
-	import type { UnitDashboard, Payment } from '$lib/types';
-	import { payments as paymentsApi } from '$lib/api/endpoints/payments';
-	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { paymentSchema, parseForm } from '$lib/schemas';
+	import type { UnitDashboard } from '$lib/types';
+	import { tenantAccounts } from '$lib/api/endpoints/tenant-accounts';
+	import { payments } from '$lib/api/endpoints/payments';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
-	import { money } from '../money';
+	import { money, unitMoneyIdentity } from '../money';
 	import { formatDateOnly } from '$lib/utils/date';
-	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import PaymentDetail from '$lib/components/records/PaymentDetail.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
-	import { clearFieldError } from '$lib/forms/form-errors';
 	import { PAYMENT_METHODS } from '$lib/constants/payments';
-	import { Plus, X, ScanLine, ArrowLeft } from '@lucide/svelte';
+	import { clearFieldError } from '$lib/forms/form-errors';
+	import { X, ScanLine, ArrowLeft, Receipt, FilePlus2 } from '@lucide/svelte';
 
-	let {
-		dashboard,
-		onScan,
-		tabQuery = 'rent',
-		ledgerQuery,
-	}: {
+	let { dashboard, onScan, tabQuery = 'rent', ledgerQuery }: {
 		dashboard: UnitDashboard;
 		onScan: () => void;
 		tabQuery?: string;
@@ -33,287 +26,331 @@
 	} = $props();
 
 	const queryClient = useQueryClient();
-	const portfolioId = $derived(getCurrentPortfolioId());
-	const leaseId = $derived(dashboard.currentLease?.id);
+	const moneyIdentity = $derived(unitMoneyIdentity({
+		tenantAccountId: dashboard.tenantAccountId,
+		leaseManagementId: dashboard.leaseManagementId
+	}));
+	const tenantAccountId = $derived(moneyIdentity.tenantAccountId);
+	const selectedReceipt = $derived(Number(page.url.searchParams.get('payment')) || null);
+	const PAGE_SIZE = 20;
+	const today = () => new Date().toISOString().slice(0, 10);
 
-	// A selected payment folds its full detail inline (?payment=<id> on the unit URL); otherwise the list shows.
-	const selectedPayment = $derived(Number(page.url.searchParams.get('payment')) || null);
-
-	function unitUrl(params: Record<string, string | number | null | undefined> = {}) {
+	function unitUrl(payment?: number) {
 		const url = new URL(`/units/${dashboard.unit.id}`, page.url.origin);
 		url.searchParams.set('tab', tabQuery);
 		if (ledgerQuery) url.searchParams.set('ledger', ledgerQuery);
-		for (const [key, value] of Object.entries(params)) {
-			if (value !== null && value !== undefined && value !== '') {
-				url.searchParams.set(key, String(value));
-			}
-		}
+		if (payment) url.searchParams.set('payment', String(payment));
 		return `${url.pathname}${url.search}`;
 	}
 
-	// Selecting a row is a real navigation step (no replaceState) so Back returns to the list.
-	function openPayment(id: number) {
-		goto(unitUrl({ payment: id }), { keepFocus: true, noScroll: true });
+	function openReceipt(id: number) {
+		goto(unitUrl(id), { keepFocus: true, noScroll: true });
 	}
-
-	// Clearing the selection drops ?payment= (replaceState — peer of the list, not a new history step).
 	function clearSelection() {
 		goto(unitUrl(), { replaceState: true, keepFocus: true, noScroll: true });
 	}
 
-	const PAYMENT_TYPES = ['Rent', 'SecurityDeposit', 'LateFee', 'Utility', 'Other'];
-	// 'Partial' is intentionally omitted here: this quick form has no "Amount paid" field, so a Partial
-	// can never satisfy the payment schema's 0 < amountPaid < amount rule and would fail silently. Record
-	// partial payments from the Money page's New Payment dialog, which has the "Amount paid" input.
-	const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Late', 'Waived', 'Failed', 'Refunded'];
-	const PAYMENT_PAGE_SIZE = 20;
-	const today = () => new Date().toISOString().slice(0, 10);
-
-	// Payments for the unit's current lease (the dominant case). The filter is DB-side (?leaseId=).
-	let paymentPage = $state(1);
-	let paymentItems = $state<Payment[]>([]);
-	const paymentsQuery = createQuery(() => ({
-		queryKey: ['payments', portfolioId, { leaseId }, paymentPage, PAYMENT_PAGE_SIZE],
-		enabled: !!leaseId && portfolioId > 0,
-		queryFn: () => paymentsApi.listPage(portfolioId, {
-			leaseId,
-			skip: (paymentPage - 1) * PAYMENT_PAGE_SIZE,
-			take: PAYMENT_PAGE_SIZE,
-			sort: '-dueDate',
-		}),
+	let receiptPage = $state(1);
+	let activityPage = $state(1);
+	let chargePage = $state(1);
+	let depositPage = $state(1);
+	const activityQuery = createQuery(() => ({
+		queryKey: ['tenant-account-entries', tenantAccountId, 'activity', activityPage, PAGE_SIZE],
+		enabled: !!tenantAccountId,
+		queryFn: () => tenantAccounts.accountEntriesPage(tenantAccountId as number, {
+			skip: (activityPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+			sort: '-postedAtUtc'
+		})
+	}));
+	const chargesQuery = createQuery(() => ({
+		queryKey: ['tenant-account-charges', tenantAccountId, chargePage, PAGE_SIZE],
+		enabled: !!tenantAccountId,
+		queryFn: () => tenantAccounts.chargesPage(tenantAccountId as number, {
+			skip: (chargePage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+			sort: '-effectiveOn'
+		})
+	}));
+	const depositsQuery = createQuery(() => ({
+		queryKey: ['tenant-account-deposits', tenantAccountId, depositPage, PAGE_SIZE],
+		enabled: !!tenantAccountId,
+		queryFn: () => tenantAccounts.depositsPage({
+			tenantAccountId: tenantAccountId as number,
+			skip: (depositPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+			sort: '-createdAtUtc'
+		})
+	}));
+	const receiptsQuery = createQuery(() => ({
+		queryKey: ['tenant-account-entries', tenantAccountId, 'receipts', receiptPage, PAGE_SIZE],
+		enabled: !!tenantAccountId,
+		queryFn: () => tenantAccounts.accountEntriesPage(tenantAccountId as number, {
+			entryType: 'PaymentReceipt',
+			skip: (receiptPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+			sort: '-effectiveOn'
+		})
 	}));
 
 	$effect(() => {
-		void leaseId;
-		paymentPage = 1;
-		paymentItems = [];
+		void tenantAccountId;
+		receiptPage = 1;
+		activityPage = 1;
+		chargePage = 1;
+		depositPage = 1;
 	});
 
-	$effect(() => {
-		const page = paymentsQuery.data;
-		if (!page) return;
-		if (page.skip === 0) {
-			paymentItems = page.items;
-			return;
-		}
-		const currentItems = untrack(() => paymentItems);
-		const seen = new Set(currentItems.map((p) => p.id));
-		paymentItems = [...currentItems, ...page.items.filter((p) => !seen.has(p.id))];
-	});
+	const receiptItems = $derived(receiptsQuery.data?.items ?? []);
 
-	const list = $derived(paymentItems);
-	const totalPayments = $derived(paymentsQuery.data?.totalCount ?? paymentItems.length);
-	const hasMorePayments = $derived(paymentItems.length < totalPayments);
-
-	function invalidate({ resetPayments = true }: { resetPayments?: boolean } = {}) {
-		if (resetPayments) {
-			paymentItems = [];
-			paymentPage = 1;
-		}
-		queryClient.invalidateQueries({ queryKey: ['payments', portfolioId] });
+	function invalidateMoney() {
+		receiptPage = 1;
+		queryClient.invalidateQueries({ queryKey: ['tenant-account-entries', tenantAccountId] });
+		queryClient.invalidateQueries({ queryKey: ['tenant-account-charges', tenantAccountId] });
+		queryClient.invalidateQueries({ queryKey: ['tenant-account-deposits', tenantAccountId] });
 		queryClient.invalidateQueries({ queryKey: ['unit-dashboard', dashboard.unit.id] });
 		queryClient.invalidateQueries({ queryKey: ['unit-timeline', dashboard.unit.id] });
+		queryClient.invalidateQueries({ queryKey: ['accounting'] });
 	}
 
-	function loadMorePayments() {
-		if (paymentsQuery.isFetching || !hasMorePayments) return;
-		paymentPage += 1;
-	}
-
-	// ── Inline "post payment" create form (reuses the app's paymentSchema + form conventions) ──
-	const emptyCreate = () => ({
-		amount: '',
-		dueDate: today(),
-		paymentType: 'Rent',
-		status: 'Paid',
-		method: '',
-		externalReference: '',
-		notes: '',
-	});
-	let showCreate = $state(false);
-	let createForm = $state(emptyCreate());
-	let createErrors = $state<Record<string, string>>({});
+	type FormKind = 'receipt' | 'charge' | null;
+	let formKind = $state<FormKind>(null);
+	let operationKey = $state<string | null>(null);
+	let errors = $state<Record<string, string>>({});
+	let receiptForm = $state({ amount: '', effectiveOn: today(), description: 'Tenant payment', method: '', reference: '', payerName: '' });
+	let chargeForm = $state({ amount: '', effectiveOn: today(), dueOn: today(), description: '' });
 
 	function clearCreateError(field: string) {
-		const next = clearFieldError(createErrors, field);
-		if (next !== createErrors) createErrors = next;
+		const next = clearFieldError(errors, field);
+		if (next !== errors) errors = next;
 	}
 
 	$effect(() => {
-		if (createForm.amount) clearCreateError('amount');
+		if (formKind === 'receipt' && Number(receiptForm.amount) > 0) clearCreateError('amount');
 	});
 	$effect(() => {
-		if (createForm.dueDate) clearCreateError('dueDate');
+		if (formKind === 'receipt' && receiptForm.effectiveOn) clearCreateError('effectiveOn');
+	});
+	$effect(() => {
+		if (formKind === 'receipt' && receiptForm.description.trim()) clearCreateError('description');
+	});
+	$effect(() => {
+		if (formKind === 'receipt' && receiptForm.method) clearCreateError('method');
+	});
+	$effect(() => {
+		if (formKind === 'charge' && Number(chargeForm.amount) > 0) clearCreateError('amount');
+	});
+	$effect(() => {
+		if (formKind === 'charge' && chargeForm.effectiveOn) clearCreateError('effectiveOn');
+	});
+	$effect(() => {
+		if (formKind === 'charge' && chargeForm.dueOn) clearCreateError('dueOn');
+	});
+	$effect(() => {
+		if (formKind === 'charge' && chargeForm.description.trim()) clearCreateError('description');
 	});
 
-	function openCreate() {
-		createForm = emptyCreate();
-		createErrors = {};
-		showCreate = true;
+	function openForm(kind: Exclude<FormKind, null>) {
+		formKind = kind;
+		operationKey = null;
+		errors = {};
+		if (kind === 'receipt') receiptForm = { amount: '', effectiveOn: today(), description: 'Tenant payment', method: '', reference: '', payerName: '' };
+		else chargeForm = { amount: '', effectiveOn: today(), dueOn: today(), description: '' };
 	}
-	function closeCreate() {
-		showCreate = false;
-		createErrors = {};
+	function closeForm() {
+		formKind = null;
+		operationKey = null;
+		errors = {};
 	}
 
-	const createMut = createMutation(() => ({
-		mutationFn: (data: Record<string, unknown>) => paymentsApi.create(data),
-		onSuccess: (payment: Payment) => {
-			showSuccess('Payment posted.');
-			closeCreate();
-			paymentPage = 1;
-			paymentItems = [payment, ...paymentItems.filter((item) => item.id !== payment.id)];
-			invalidate({ resetPayments: false });
+	const receiptMutation = createMutation(() => ({
+		mutationFn: () => {
+			if (!tenantAccountId) throw new Error('This rental does not have a tenant account.');
+			operationKey ??= crypto.randomUUID();
+			return payments.recordReceipt(tenantAccountId, operationKey, {
+				amount: Number(receiptForm.amount),
+				effectiveOn: receiptForm.effectiveOn,
+				description: receiptForm.description.trim(),
+				paymentMethodSummary: receiptForm.method,
+				externalReference: receiptForm.reference.trim() || undefined,
+				payerName: receiptForm.payerName.trim() || undefined,
+				allocateOldestCharges: true
+			});
 		},
-		onError: (e) => showError(apiErrorMessage(e)),
+		onSuccess: () => { showSuccess('Receipt recorded.'); closeForm(); invalidateMoney(); },
+		onError: (error) => showError(apiErrorMessage(error))
 	}));
 
-	function submitCreate() {
-		if (!leaseId) return;
-		const result = parseForm(paymentSchema, { ...createForm, leaseId: String(leaseId) });
-		if (result.errors) {
-			createErrors = result.errors;
-			return;
-		}
-		createErrors = {};
-		// result.data already carries leaseId (validated by the schema); add the portfolio scope.
-		const data: Record<string, unknown> = { portfolioId, ...result.data };
-		// A payment marked Paid with no explicit paid date defaults to its due date.
-		if (createForm.status === 'Paid' && !data.paidDate) data.paidDate = createForm.dueDate;
-		createMut.mutate(data);
+	const chargeMutation = createMutation(() => ({
+		mutationFn: () => {
+			if (!tenantAccountId) throw new Error('This rental does not have a tenant account.');
+			operationKey ??= crypto.randomUUID();
+			return payments.postCharge(tenantAccountId, operationKey, {
+				amount: Number(chargeForm.amount),
+				effectiveOn: chargeForm.effectiveOn,
+				dueOn: chargeForm.dueOn,
+				description: chargeForm.description.trim()
+			});
+		},
+		onSuccess: () => { showSuccess('Manual charge added.'); closeForm(); invalidateMoney(); },
+		onError: (error) => showError(apiErrorMessage(error))
+	}));
+
+	function submitReceipt() {
+		errors = {};
+		if (!(Number(receiptForm.amount) > 0)) errors.amount = 'Enter an amount greater than zero.';
+		if (!receiptForm.effectiveOn) errors.effectiveOn = 'Pick the date received.';
+		if (!receiptForm.description.trim()) errors.description = 'Describe this receipt.';
+		if (!receiptForm.method) errors.method = 'Choose a payment method.';
+		if (Object.keys(errors).length === 0) receiptMutation.mutate();
+	}
+	function submitCharge() {
+		errors = {};
+		if (!(Number(chargeForm.amount) > 0)) errors.amount = 'Enter an amount greater than zero.';
+		if (!chargeForm.effectiveOn) errors.effectiveOn = 'Pick the effective date.';
+		if (!chargeForm.dueOn) errors.dueOn = 'Pick the due date.';
+		if (!chargeForm.description.trim()) errors.description = 'Describe this charge.';
+		if (Object.keys(errors).length === 0) chargeMutation.mutate();
 	}
 </script>
 
 <div class="space-y-4" data-testid="unit-rent-tab">
-{#if selectedPayment}
-	<!-- Folded payment detail: the same <PaymentDetail> the generic /accounting/payments/[id] page mounts. -->
-	<Button variant="outline" size="sm" class="gap-1" onclick={clearSelection} data-testid="payment-back-to-list">
-		<ArrowLeft class="h-4 w-4" /> Back to payments
-	</Button>
-	<PaymentDetail
-		paymentId={selectedPayment}
-		onDeleted={clearSelection}
-		expectedUnitId={dashboard.unit.id}
-		onUnitMismatch={clearSelection}
-	/>
+{#if selectedReceipt && tenantAccountId}
+	<Button variant="outline" size="sm" class="gap-1" onclick={clearSelection} data-testid="payment-back-to-list"><ArrowLeft class="h-4 w-4" /> Back to receipts</Button>
+	<PaymentDetail tenantAccountId={tenantAccountId} tenantLedgerEntryId={selectedReceipt} expectedUnitId={dashboard.unit.id} onUnitMismatch={clearSelection} />
 {:else}
 	<div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4">
-		<div>
-			<p class="text-sm text-muted-foreground">Outstanding balance</p>
-			<p class="text-2xl font-bold">{money(dashboard.header.outstandingRentBalance)}</p>
-		</div>
+		<div><p class="text-sm text-muted-foreground">Outstanding balance</p><p class="text-2xl font-bold">{money(dashboard.header.outstandingRentBalance)}</p></div>
 		<div class="flex flex-wrap gap-2">
-			{#if leaseId}
-				<Button class="gap-2" onclick={() => (showCreate ? closeCreate() : openCreate())} data-testid="rent-post-payment">
-					{#if showCreate}<X class="h-4 w-4" /> Cancel{:else}<Plus class="h-4 w-4" /> Post payment{/if}
-				</Button>
+			{#if tenantAccountId}
+				<Button class="gap-2" onclick={() => formKind === 'receipt' ? closeForm() : openForm('receipt')} data-testid="rent-post-payment"><Receipt class="h-4 w-4" /> Record receipt</Button>
+				<Button variant="outline" class="gap-2" onclick={() => formKind === 'charge' ? closeForm() : openForm('charge')} data-testid="rent-post-charge"><FilePlus2 class="h-4 w-4" /> Add charge</Button>
 			{/if}
-			<Button variant="outline" class="gap-2" onclick={() => onScan()} data-testid="rent-scan">
-				<ScanLine class="h-4 w-4" /> Scan receipt
-			</Button>
+			<Button variant="outline" class="gap-2" onclick={onScan} data-testid="rent-scan"><ScanLine class="h-4 w-4" /> Scan payment</Button>
 		</div>
 	</div>
 
-	<!-- Inline post-payment form (revealed below the header, not a drawer/modal). -->
-	{#if showCreate && leaseId}
+	{#if formKind && tenantAccountId}
 		<div class="rounded-xl border border-border bg-muted/20 p-4" data-testid="rent-create-form">
-			<h3 class="mb-3 text-sm font-semibold">Post a payment</h3>
-			<div class="grid gap-3 sm:grid-cols-2">
-				<div>
-					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="rent-amount">Amount</label>
-					<Input id="rent-amount" data-testid="rent-amount-input" type="text" inputmode="decimal" mask="currency" bind:value={createForm.amount} placeholder="0.00" />
-					{#if createErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="rent-amount-error">{createErrors.amount}</p>{/if}
+			<div class="mb-3 flex items-center justify-between"><h3 class="text-sm font-semibold">{formKind === 'receipt' ? 'Record payment receipt' : 'Add a manual charge'}</h3><Button variant="ghost" size="icon" onclick={closeForm}><X class="h-4 w-4" /></Button></div>
+			{#if formKind === 'receipt'}
+				<div class="grid gap-3 sm:grid-cols-2">
+					<label class="text-xs font-medium text-muted-foreground">Amount<Input type="text" inputmode="decimal" mask="currency" bind:value={receiptForm.amount} />{#if errors.amount}<span class="text-destructive">{errors.amount}</span>{/if}</label>
+					<label class="text-xs font-medium text-muted-foreground">Date received<DatePicker bind:value={receiptForm.effectiveOn} />{#if errors.effectiveOn}<span class="text-destructive">{errors.effectiveOn}</span>{/if}</label>
+					<label class="text-xs font-medium text-muted-foreground">Method<Select.Root type="single" bind:value={receiptForm.method}><Select.Trigger class="w-full">{receiptForm.method || 'Select method'}</Select.Trigger><Select.Content>{#each PAYMENT_METHODS as method}<Select.Item value={method} label={method}>{method}</Select.Item>{/each}</Select.Content></Select.Root>{#if errors.method}<span class="text-destructive">{errors.method}</span>{/if}</label>
+					<label class="text-xs font-medium text-muted-foreground">Reference<Input bind:value={receiptForm.reference} placeholder="Check or confirmation number" /></label>
+					<label class="text-xs font-medium text-muted-foreground">Payer<Input bind:value={receiptForm.payerName} placeholder="Optional" /></label>
+					<label class="text-xs font-medium text-muted-foreground sm:col-span-2">Description<Input bind:value={receiptForm.description} />{#if errors.description}<span class="text-destructive">{errors.description}</span>{/if}</label>
 				</div>
-				<div>
-					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="rent-due">Date</label>
-					<DatePicker id="rent-due" testid="rent-due-input" bind:value={createForm.dueDate} />
-					{#if createErrors.dueDate}<p class="mt-1 text-xs text-destructive" data-testid="rent-due-error">{createErrors.dueDate}</p>{/if}
+				<div class="mt-3 flex justify-end"><Button onclick={submitReceipt} disabled={receiptMutation.isPending}>{receiptMutation.isPending ? 'Recording…' : 'Record receipt'}</Button></div>
+			{:else}
+				<div class="grid gap-3 sm:grid-cols-2">
+					<label class="text-xs font-medium text-muted-foreground">Amount<Input type="text" inputmode="decimal" mask="currency" bind:value={chargeForm.amount} />{#if errors.amount}<span class="text-destructive">{errors.amount}</span>{/if}</label>
+					<label class="text-xs font-medium text-muted-foreground">Effective date<DatePicker bind:value={chargeForm.effectiveOn} />{#if errors.effectiveOn}<span class="text-destructive">{errors.effectiveOn}</span>{/if}</label>
+					<label class="text-xs font-medium text-muted-foreground">Due date<DatePicker bind:value={chargeForm.dueOn} />{#if errors.dueOn}<span class="text-destructive">{errors.dueOn}</span>{/if}</label>
+					<label class="text-xs font-medium text-muted-foreground">Description<Input bind:value={chargeForm.description} placeholder="One-time fee or correction" />{#if errors.description}<span class="text-destructive">{errors.description}</span>{/if}</label>
 				</div>
-				<div>
-					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="rent-type">Type</label>
-					<Select.Root type="single" bind:value={createForm.paymentType}>
-						<Select.Trigger id="rent-type" class="w-full" data-testid="rent-type-input">{createForm.paymentType}</Select.Trigger>
-						<Select.Content>
-							{#each PAYMENT_TYPES as t}<Select.Item value={t} label={t}>{t}</Select.Item>{/each}
-						</Select.Content>
-					</Select.Root>
-				</div>
-				<div>
-					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="rent-status">Status</label>
-					<Select.Root type="single" bind:value={createForm.status}>
-						<Select.Trigger id="rent-status" class="w-full" data-testid="rent-status-input">{createForm.status}</Select.Trigger>
-						<Select.Content>
-							{#each PAYMENT_STATUSES as s}<Select.Item value={s} label={s}>{s}</Select.Item>{/each}
-						</Select.Content>
-					</Select.Root>
-				</div>
-				<div>
-					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="rent-method">Method</label>
-					<Select.Root type="single" bind:value={createForm.method}>
-						<Select.Trigger id="rent-method" class="w-full" data-testid="rent-method-input">
-							{createForm.method || 'Select method'}
-						</Select.Trigger>
-						<Select.Content>
-							<Select.Item value="" label="No method">No method</Select.Item>
-							{#each PAYMENT_METHODS as m}<Select.Item value={m} label={m}>{m}</Select.Item>{/each}
-						</Select.Content>
-					</Select.Root>
-				</div>
-				<div>
-					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="rent-reference">Reference</label>
-					<Input id="rent-reference" data-testid="rent-reference-input" bind:value={createForm.externalReference} placeholder="Check #, transaction id, memo" />
-				</div>
-				<div class="sm:col-span-2">
-					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="rent-notes">Notes</label>
-					<textarea
-						id="rent-notes"
-						data-testid="rent-notes-input"
-						bind:value={createForm.notes}
-						rows="2"
-						class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-						placeholder="Optional payment note"
-					></textarea>
-				</div>
-			</div>
-			<div class="mt-3 flex justify-end gap-2">
-				<Button variant="outline" size="sm" onclick={closeCreate}>Cancel</Button>
-				<Button size="sm" disabled={createMut.isPending} onclick={submitCreate} data-testid="rent-create-submit">
-					{createMut.isPending ? 'Posting…' : 'Post payment'}
-				</Button>
-			</div>
+				<p class="mt-2 text-xs text-muted-foreground">Rent, late fees, deposits, and addenda come from their own workflows. Use this only for a true one-off charge.</p>
+				<div class="mt-3 flex justify-end"><Button onclick={submitCharge} disabled={chargeMutation.isPending}>{chargeMutation.isPending ? 'Adding…' : 'Add charge'}</Button></div>
+			{/if}
 		</div>
 	{/if}
 
-	{#if !leaseId}
-		<p class="rounded-xl border bg-card p-6 text-center text-sm text-muted-foreground">
-			No lease on this unit yet — rent activity appears once a lease exists.
-		</p>
-	{:else if paymentsQuery.isLoading}
-		<p class="rounded-xl border bg-card p-6 text-center text-sm text-muted-foreground">Loading payments…</p>
-	{:else if list.length === 0}
-		<p class="rounded-xl border bg-card p-6 text-center text-sm text-muted-foreground">No payments yet. Post a payment or scan a rent check.</p>
+	{#if !tenantAccountId}
+		<p class="rounded-xl border bg-card p-6 text-center text-sm text-muted-foreground">No tenant account exists for this rental yet. Receipts and charges begin when the tenancy is created.</p>
 	{:else}
-		<!-- Payment list: each row selects (folds in its full detail) rather than expanding. -->
-		<ul class="space-y-2" data-testid="rent-payments">
-			{#each list as p (p.id)}
-				<li class="rounded-xl border bg-card" data-testid="rent-payment-{p.id}">
-					<button type="button" class="flex w-full items-center justify-between gap-2 p-3 text-left" onclick={() => openPayment(p.id)} data-testid="rent-payment-open-{p.id}">
-						<span class="flex min-w-0 items-center gap-2 text-sm">
-							<span class="font-medium">{formatDateOnly(p.dueDate)}</span>
-							<span class="shrink-0 text-muted-foreground">· {p.paymentType}</span>
-						</span>
-						<span class="flex shrink-0 items-center gap-2"><StatusBadge status={p.status} /><span class="font-semibold">{money(p.amount)}</span></span>
-					</button>
-				</li>
-			{/each}
-		</ul>
-		{#if hasMorePayments}
-			<div class="flex justify-center">
-				<Button variant="outline" size="sm" onclick={loadMorePayments} disabled={paymentsQuery.isFetching} data-testid="rent-load-more">
-					{paymentsQuery.isFetching ? 'Loading…' : 'Load more'}
-				</Button>
-			</div>
-		{/if}
+		<section class="space-y-2" data-testid="account-activity-section">
+			<h3 class="text-sm font-semibold">Account activity</h3>
+			{#if activityQuery.isLoading}
+				<LoadingState label="Loading account activity" testid="account-activity-loading" />
+			{:else if activityQuery.isError}
+				<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="account-activity-error">
+					<p class="text-sm font-medium text-destructive">Account activity could not be loaded.</p>
+					<Button class="mt-3" variant="outline" size="sm" onclick={() => activityQuery.refetch()}>Try again</Button>
+				</div>
+			{:else if (activityQuery.data?.items.length ?? 0) === 0}
+				<p class="rounded-xl border bg-card p-4 text-sm text-muted-foreground">No account activity.</p>
+			{:else}
+				<ul class="space-y-2">
+					{#each activityQuery.data?.items ?? [] as entry (entry.tenantLedgerEntryId)}
+						<li class="flex items-center justify-between gap-3 rounded-xl border bg-card p-3 text-sm">
+							<span><span class="font-medium">{entry.entryType}</span><span class="ml-2 text-muted-foreground">{entry.description}</span></span>
+							<span class="font-semibold">{money(entry.amount)}</span>
+						</li>
+					{/each}
+				</ul>
+				{#if activityQuery.data && activityQuery.data.totalCount > PAGE_SIZE}<div class="flex items-center justify-between"><Button variant="outline" size="sm" onclick={() => (activityPage -= 1)} disabled={activityPage === 1 || activityQuery.isFetching}>Previous</Button><span class="text-sm text-muted-foreground">{activityQuery.data.totalCount} entries</span><Button variant="outline" size="sm" onclick={() => (activityPage += 1)} disabled={activityPage * PAGE_SIZE >= activityQuery.data.totalCount || activityQuery.isFetching}>Next</Button></div>{/if}
+			{/if}
+		</section>
+
+		<section class="space-y-2 border-t pt-4" data-testid="charge-allocation-section">
+			<h3 class="text-sm font-semibold">Charge allocation and open amount</h3>
+			{#if chargesQuery.isLoading}
+				<LoadingState label="Loading charges" testid="charges-loading" />
+			{:else if chargesQuery.isError}
+				<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="charges-error">
+					<p class="text-sm font-medium text-destructive">Charges could not be loaded.</p>
+					<Button class="mt-3" variant="outline" size="sm" onclick={() => chargesQuery.refetch()}>Try again</Button>
+				</div>
+			{:else if (chargesQuery.data?.items.length ?? 0) === 0}
+				<p class="rounded-xl border bg-card p-4 text-sm text-muted-foreground">No charges.</p>
+			{:else}
+				<ul class="space-y-2">
+					{#each chargesQuery.data?.items ?? [] as charge (charge.tenantLedgerEntryId)}
+						<li class="rounded-xl border bg-card p-3 text-sm">
+							<div class="flex items-center justify-between gap-3"><span class="font-medium">{charge.description}</span><span class="font-semibold">{money(charge.openAmount)} open</span></div>
+							<p class="text-xs text-muted-foreground">{money(charge.netAllocations)} allocated of {money(charge.originalAmount)}</p>
+						</li>
+					{/each}
+				</ul>
+				{#if chargesQuery.data && chargesQuery.data.totalCount > PAGE_SIZE}<div class="flex items-center justify-between"><Button variant="outline" size="sm" onclick={() => (chargePage -= 1)} disabled={chargePage === 1 || chargesQuery.isFetching}>Previous</Button><span class="text-sm text-muted-foreground">{chargesQuery.data.totalCount} charges</span><Button variant="outline" size="sm" onclick={() => (chargePage += 1)} disabled={chargePage * PAGE_SIZE >= chargesQuery.data.totalCount || chargesQuery.isFetching}>Next</Button></div>{/if}
+			{/if}
+		</section>
+
+		<section class="space-y-2 border-t pt-4" data-testid="deposits-section">
+			<h3 class="text-sm font-semibold">Deposits</h3>
+			{#if depositsQuery.isLoading}
+				<LoadingState label="Loading deposits" testid="deposits-loading" />
+			{:else if depositsQuery.isError}
+				<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="deposits-error">
+					<p class="text-sm font-medium text-destructive">Deposits could not be loaded.</p>
+					<Button class="mt-3" variant="outline" size="sm" onclick={() => depositsQuery.refetch()}>Try again</Button>
+				</div>
+			{:else if (depositsQuery.data?.items.length ?? 0) === 0}
+				<p class="rounded-xl border bg-card p-4 text-sm text-muted-foreground">No deposits.</p>
+			{:else}
+				<ul class="space-y-2">
+					{#each depositsQuery.data?.items ?? [] as deposit (deposit.securityDepositAccountId)}
+						<li class="flex items-center justify-between gap-3 rounded-xl border bg-card p-3 text-sm">
+							<span><span class="font-medium">{deposit.status}</span><span class="ml-2 text-muted-foreground">{deposit.accountNumber}</span></span>
+							<span class="font-semibold">{money(deposit.heldBalance)} held</span>
+						</li>
+					{/each}
+				</ul>
+				{#if depositsQuery.data && depositsQuery.data.totalCount > PAGE_SIZE}<div class="flex items-center justify-between"><Button variant="outline" size="sm" onclick={() => (depositPage -= 1)} disabled={depositPage === 1 || depositsQuery.isFetching}>Previous</Button><span class="text-sm text-muted-foreground">{depositsQuery.data.totalCount} deposits</span><Button variant="outline" size="sm" onclick={() => (depositPage += 1)} disabled={depositPage * PAGE_SIZE >= depositsQuery.data.totalCount || depositsQuery.isFetching}>Next</Button></div>{/if}
+			{/if}
+		</section>
+
+		<section class="space-y-2 border-t pt-4" data-testid="rent-payments">
+			<h3 class="text-sm font-semibold">Payment receipts</h3>
+			{#if receiptsQuery.isLoading}
+				<LoadingState label="Loading payment receipts" testid="rent-receipts-loading" />
+			{:else if receiptsQuery.isError}
+				<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="rent-receipts-error">
+					<p class="text-sm font-medium text-destructive">Could not load payment receipts.</p>
+					<Button class="mt-3" variant="outline" size="sm" onclick={() => receiptsQuery.refetch()}>Try again</Button>
+				</div>
+			{:else if receiptItems.length === 0}
+				<p class="rounded-xl border bg-card p-4 text-sm text-muted-foreground">No receipts yet. Record one manually or scan a payment.</p>
+			{:else}
+				<ul class="space-y-2">
+					{#each receiptItems as receipt (receipt.tenantLedgerEntryId)}
+						<li class="rounded-xl border bg-card"><button type="button" class="flex w-full items-center justify-between gap-2 p-3 text-left" onclick={() => openReceipt(receipt.tenantLedgerEntryId)}><span><span class="font-medium">{formatDateOnly(receipt.effectiveOn)}</span><span class="ml-2 text-muted-foreground">{receipt.description}</span></span><span class="font-semibold">{money(receipt.amount)}</span></button></li>
+					{/each}
+				</ul>
+				{#if receiptsQuery.data && receiptsQuery.data.totalCount > PAGE_SIZE}<div class="flex items-center justify-between"><Button variant="outline" size="sm" onclick={() => (receiptPage -= 1)} disabled={receiptPage === 1 || receiptsQuery.isFetching}>Previous</Button><span class="text-sm text-muted-foreground">{receiptsQuery.data.totalCount} receipts</span><Button variant="outline" size="sm" onclick={() => (receiptPage += 1)} disabled={receiptPage * PAGE_SIZE >= receiptsQuery.data.totalCount || receiptsQuery.isFetching}>Next</Button></div>{/if}
+			{/if}
+		</section>
 	{/if}
 {/if}
 </div>

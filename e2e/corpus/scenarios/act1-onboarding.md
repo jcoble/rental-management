@@ -133,19 +133,16 @@ real screen; assertions are read primarily from the UI, with GET endpoints as se
 
 ---
 
-## ONB-04 — Confirm 19 active leases via scan→draft→confirm (rent back-fill) — FLAGSHIP
+## ONB-04 — Confirm 19 active agreements via scan→draft→confirm — FLAGSHIP
 - **Goal / exercises:** the flagship *"the computer types for you"* path — upload a lease document, let the
-  LLM extract fields into a **draft**, confirm with overrides, and create the lease. Critically, creating
-  each lease with **`RentTrackingStartMode=BackfillFromLeaseStart`** back-fills every monthly `Payment(Rent,
-  Scheduled)` from lease start through T0 **synchronously** (no worker needed). Also exercises the
-  **multi-photo stitch** path on 3 leases.
+  LLM extract fields into a **draft**, review the proposed agreement, and confirm it against explicit
+  LeaseManagement, Agreement, and TenantAccount targets. Historical account entries are loaded separately
+  in ONB-08; agreement confirmation never selects a rent-generation mode. Also exercises the **multi-photo
+  stitch** path on 3 leases.
 - **Preconditions:** `ONB-03` done (properties/units exist to map onto); clock 2025-01-01.
 - **Actor:** Priya (does the scanning/confirming), with Dana available to approve.
 - **Surfaces:** `[UI]` — the flagship scan→draft→confirm via **`/scan/new-rental`** (`LeaseFirstImport`),
-  which exposes the rent-tracking control **and** links to the existing property/unit from ONB-03.
-  **⚠ Product-gap PG-1:** the *generic* `/scan/[draftId]` lease-confirm does **not** surface the
-  rent-tracking control — so it must NOT be used for these back-filled leases (routing them through
-  `/scan/new-rental` is the true-to-life path that keeps the control on-screen; see README PG-1).
+  which links to the existing property/unit from ONB-03 and confirms the reviewed agreement facts.
 - **Steps:**
   1. **`[UI]`** For each of the **19 active leases** (L01–L07, L09–L15, L17, L18, L19, L21, L22), upload the
      born-digital lease PDF from `generated/leases/` and run scan→draft→confirm **through `/scan/new-rental`**:
@@ -156,9 +153,8 @@ real screen; assertions are read primarily from the UI, with GET endpoints as se
   2. **`[UI]`** On each new-rental review screen: verify the extracted **tenant, property/unit, monthly
      rent, deposit, term dates, due-day** against `scenario/scenario.json → leases`, correct any
      low-confidence field, **link to the existing property + unit** (the duplicate-guard "link existing"
-     choice — do NOT create a duplicate of the ONB-03 records), select the rent-tracking control
-     **"Backfill from lease start"** (exact on-screen label; = `RentTrackingStartMode=BackfillFromLeaseStart`),
-     set `Status=Active`, then confirm. Add co-tenants where present (L04 Mary Abernathy, L11 Minh Pham,
+     choice — do NOT create a duplicate of the ONB-03 records), review the Agreement and TenantAccount
+     targets, then confirm. Add co-tenants where present (L04 Mary Abernathy, L11 Minh Pham,
      L19 Dana Malloy).
   3. **`[UI]` Stitch path (3 leases):** for **L01, L11, L14** instead upload the per-page phone photos to
      exercise client-side multi-photo stitch → ONE draft: `generated/leases/photos/L01_p1.jpg`+`L01_p2.jpg`;
@@ -167,16 +163,11 @@ real screen; assertions are read primarily from the UI, with GET endpoints as se
   - **19 leases** created, all `Active`, each mapped to the right property/unit with the exact rent/deposit/
     due-day from `scenario.json` (spot-check: **L01** rent 1250 due-day 1; **L07** rent 850 **due-day 5**;
     **L10** rent 1100 **due-day 15**; **L17** rent 1525; **L19** rent 1600 co-tenant Dana Malloy).
-  - **Rent back-fill materialized:** each lease shows `Payment(Rent, Scheduled)` rows from
-    `max(start, RentTrackingStartDate)` through T0. Spot-check **L01** (start 2024-04-01) → ~9 monthly rent
-    rows Apr–Dec 2024 present; **L21/L22** (P13, tenants since 2023) → rows back to 2023 (they have the
-    longest history; cf. `events.csv` E00012/E00013 at 2023-01-01).
-  - Rent-tracking dates never precede lease `StartDate`; `RentTrackingStartMode` did not persist (only the
-    resolved `RentTrackingStartDate` did).
+  - Each confirmation creates one relationship, one reviewed agreement version, and the intended tenant
+    account context; historical rent entries are absent until the bounded ONB-08 seed posts them.
   - Stitch: L01/L11/L14 each produced exactly **one** lease from **two** photos (not two drafts).
   - Occupancy now 19/21 (P05·3, P09·4 still vacant).
-- **Worker fires:** none (back-fill is synchronous inside `POST /leases`). Rows are **Scheduled** here;
-  they become **Paid** in `ONB-08`.
+- **Worker fires:** none. Historical account entries are posted in `ONB-08`.
 - **Idempotency/cleanup:** re-confirming the same lease double-creates — confirm each draft once. If a draft
   mis-maps the unit, fix on the draft before confirming (post-confirm requires deleting the lease).
 
@@ -274,39 +265,38 @@ real screen; assertions are read primarily from the UI, with GET endpoints as se
 
 ---
 
-## ONB-08 — Import CY2023–24 transaction history & mark rent Paid  ·  [PENDING GAP1]
+## ONB-08 — Import CY2023–24 tenant-account history  ·  [PENDING GAP1]
 - **Goal / exercises:** bring **2 full tax years** of transactions into the books so 2023/2024 reports are
-  reconstructable. The back-filled rent rows from `ONB-04` are `Scheduled`; income reports bucket by
-  **PaidDate year**, so each historical rent must be marked **Paid** with its historical date + method.
+  reconstructable. Each tenancy receives historical rent charges plus the corresponding append-only
+  receipts, dated in the year the money was received.
 - **Preconditions:** `ONB-04/05/06` done (leases, loans, recurring templates back-filled); clock
   2025-01-01.
 - **Actor:** Priya (spine path) / Dana (import).
-- **Surfaces:** `[SEED]` for the bulk 2-year mark-paid (justified — clicking ~500 rows through the UI is
+- **Surfaces:** `[SEED]` for the bulk 2-year posting (justified — clicking ~500 rows through the UI is
   impractical; the real path is GAP1 bulk import) **paired with a required representative `[UI]` sample** so
   the manual pay path is genuinely tested at least once (README PG-5).
 - **Steps — a required UI sample + two bulk paths:**
-  - **`[UI]` (required representative sample):** on **`/leases/[id]`** (`LeaseDetail` ledger), mark a handful
-    of back-filled **2024** rent rows **Paid** by hand via the **"Mark paid"** control — e.g. L01's 2024
-    rows — so the manual mark-paid path is exercised through the real screen; read the ledger to confirm
-    they flip Scheduled→Paid.
+  - **`[UI]` (required representative sample):** on the unit **Rent** view, record a handful of **2024**
+    receipts by hand — e.g. L01's 2024 receipts — so the real receipt path is exercised; open each exact
+    tenant-account entry detail and confirm the date, amount, method, and reference.
   - **`[PENDING GAP1]` Intended (bulk import):** use the **bulk transaction import** to load the CY2023–24
     rent payments and one-off expenses in one pass (CSV/spreadsheet keyed by lease/property, amount, date,
     method, category). `PENDING GAP1 — confirm exact import UI / file format / field mapping when the
     feature lands (Notion 390394b0689d8145a6b7db2fd605f004).`
-  - **`[SEED]` (bulk, current app):** for the remaining ~500 rows, mark each back-filled 2023–24 rent row
-    **Paid** with its historical `PaidDate` (≈ due+2, cf. `events.csv`) and the lease's `Method` — scripted
-    via `POST /api/v1/payments/{id}/mark-paid`, a **bounded seeding shortcut, not a user action**, retired
-    when GAP1 lands. Loans need no mark-paid; recurring/one-off expenses count by `IncurredAt`.
+  - **`[SEED]` (bulk, current app):** for the remaining ~500 rows, post each historical receipt to its
+    tenant account with `POST /api/v1/tenant-accounts/{tenantAccountId}/receipts`, a unique idempotency key,
+    its historical effective date (≈ due+2, cf. `events.csv`), and the lease's method. Recurring and
+    one-off expenses count by `IncurredAt`.
 - **Expected results / assertions (spot-check only — history is held-flat, not cent-exact):**
   - **CY2023 Schedule E:** income **221995.00**, total expenses **171276.20**, net **50718.80**
     (`expected/spotcheck-2023-2024.json → spotcheck.2023.scheduleE`).
   - **CY2024 Schedule E:** income **248820.00**, total expenses **197646.47**, net **51173.53**
     (`…2024.scheduleE`).
-  - The 2023/2024 rent rows now show as **Paid** in each tenant ledger (not Scheduled), dated in the
-    correct year.
-- **Worker fires:** none (mark-paid / import only).
-- **Idempotency/cleanup:** mark-paid is not re-entrant in a way that changes totals if re-applied with the
-  same date, but avoid double-marking. **GAP1 note:** when bulk import lands, this scenario's spine path is
+  - The 2023/2024 charges and receipts appear as distinct entries in each tenant-account ledger, dated
+    in the correct year, with balances matching the expected history.
+- **Worker fires:** none (receipt posting / import only).
+- **Idempotency/cleanup:** reuse the same operation key for retries so a receipt is never double-posted.
+  **GAP1 note:** when bulk import lands, this scenario's spine path is
   retired in favor of the import; the CY2023–24 corpus figures may be regenerated (`scenario.json` re-run)
   — a corpus-revision trigger, not a spine bug.
 

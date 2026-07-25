@@ -25,7 +25,9 @@
 	const ENTITY_TYPES = [
 		'Payment',
 		'Expense',
-		'Lease',
+		'LeaseManagement',
+		'LeaseAgreement',
+		'LeaseAddendum',
 		'SecurityDeposit',
 		'Tenant',
 		'Property',

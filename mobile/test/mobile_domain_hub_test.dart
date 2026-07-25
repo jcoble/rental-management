@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_symbols_icons/symbols.dart';
+import 'package:rental_command/core/auth/auth_controller.dart';
+import 'package:rental_command/core/auth/auth_models.dart';
 import 'package:rental_command/features/home/mobile_destination.dart';
 import 'package:rental_command/features/home/mobile_domain_chrome.dart';
 import 'package:rental_command/features/home/mobile_domain_hub.dart';
@@ -197,6 +199,7 @@ void main() {
     );
 
     expect(find.text('Command centers'), findsOneWidget);
+    expect(find.text('Units'), findsNWidgets(2));
 
     await tester.tap(find.text('Open unit'));
     await tester.pumpAndSettle();
@@ -205,12 +208,14 @@ void main() {
     expect(find.text('Unit 2'), findsOneWidget);
     expect(find.text('123 Main St'), findsOneWidget);
     expect(find.byTooltip('Back'), findsOneWidget);
+    expect(find.text('Units'), findsNothing);
 
     await tester.tap(find.byTooltip('Back'));
     await tester.pumpAndSettle();
 
     expect(find.text('Command centers'), findsOneWidget);
     expect(find.text('Open unit'), findsOneWidget);
+    expect(find.text('Units'), findsNWidgets(2));
   });
 
   testWidgets('embedded root app bars are hidden and hub header collapses', (
@@ -262,6 +267,11 @@ void main() {
   ) async {
     await tester.pumpWidget(
       ProviderScope(
+        overrides: [
+          authControllerProvider.overrideWith(
+            () => _StaticAuthController(_authenticatedState),
+          ),
+        ],
         child: MaterialApp(
           home: MobileDomainHubScreen(
             title: 'Rentals',
@@ -284,14 +294,14 @@ void main() {
     await tester.pump();
 
     expect(find.text('Units root'), findsOneWidget);
-    expect(find.byTooltip('Open quick actions'), findsOneWidget);
+    expect(find.byTooltip('Scan / Add'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('Open quick actions'));
+    await tester.tap(find.byTooltip('Scan / Add'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Chat'), findsOneWidget);
+    expect(find.text('Assistant'), findsOneWidget);
     expect(find.text('Record'), findsOneWidget);
-    expect(find.text('Scan'), findsOneWidget);
+    expect(find.text('Scan / Add'), findsOneWidget);
   });
 
   testWidgets('domain hub does not duplicate destination quick action FABs', (
@@ -299,6 +309,11 @@ void main() {
   ) async {
     await tester.pumpWidget(
       ProviderScope(
+        overrides: [
+          authControllerProvider.overrideWith(
+            () => _StaticAuthController(_authenticatedState),
+          ),
+        ],
         child: MaterialApp(
           home: MobileDomainHubScreen(
             title: 'Work',
@@ -332,15 +347,15 @@ void main() {
     await tester.pump();
 
     expect(find.text('Work orders root'), findsOneWidget);
-    expect(find.byTooltip('Open quick actions'), findsOneWidget);
+    expect(find.byTooltip('Scan / Add'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('Open quick actions'));
+    await tester.tap(find.byTooltip('Scan / Add'));
     await tester.pumpAndSettle();
 
     expect(find.text('New work order'), findsOneWidget);
-    expect(find.text('Chat'), findsOneWidget);
+    expect(find.text('Assistant'), findsOneWidget);
     expect(find.text('Record'), findsOneWidget);
-    expect(find.text('Scan'), findsOneWidget);
+    expect(find.text('Scan / Add'), findsOneWidget);
   });
 
   testWidgets('browse destinations prefer registered shell tabs', (
@@ -445,4 +460,46 @@ void main() {
 
 Widget _standaloneBuilder(BuildContext context) {
   return const Scaffold(body: Text('Standalone payments'));
+}
+
+final _authenticatedState = AuthStateAuthenticated(
+  const AuthUser(
+    id: 1,
+    email: 'test@example.test',
+    displayName: 'Test user',
+    emailVerified: true,
+  ),
+  const AccessEnvelope(
+    identity: AccessIdentity(userId: 1, displayName: 'Test user'),
+    selectedContext: SelectedAccessContext(
+      accessContextId: 1,
+      portfolioId: 1,
+      workspaceName: 'Test workspace',
+      accessRevision: 1,
+      activeExperience: WorkspaceExperience.management,
+    ),
+    defaultExperience: WorkspaceExperience.management,
+    availableExperiences: [WorkspaceExperience.management],
+    assignments: [],
+    navigation: [
+      NavigationCapabilities(
+        experience: WorkspaceExperience.management,
+        capabilityKeys: [
+          'money.expenses.manage',
+          'rentals.manage',
+          'reports.read',
+        ],
+      ),
+    ],
+  ),
+  activeExperience: WorkspaceExperience.management,
+);
+
+class _StaticAuthController extends AuthController {
+  _StaticAuthController(this.initialState);
+
+  final AuthState initialState;
+
+  @override
+  AuthState build() => initialState;
 }

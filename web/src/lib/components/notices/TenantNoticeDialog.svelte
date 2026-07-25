@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { createMutation, useQueryClient } from '@tanstack/svelte-query';
 	import { notices } from '$lib/api/endpoints/notices';
+	import { notifications } from '$lib/api/endpoints/notifications';
+	import type { TenantNoticeRecipientPreviewResponse } from '$lib/api/types/notification';
 	import type { NoticeDraft } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
@@ -9,21 +11,17 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { AlertCircle, BellRing, Send, Trash2 } from '@lucide/svelte';
+	import { AlertCircle, BellRing, Eye, Send, Trash2 } from '@lucide/svelte';
 
 	let {
 		open = $bindable(false),
-		tenantId = 0,
-		leaseId,
-		paymentId,
+		recipientTenantId = 0,
 		tenantName = 'this tenant',
 		activeLeaseCount = 0,
 		initialNoticeType,
 	}: {
 		open: boolean;
-		tenantId?: number;
-		leaseId?: number;
-		paymentId?: number;
+		recipientTenantId?: number;
 		tenantName?: string;
 		activeLeaseCount?: number;
 		initialNoticeType?: string;
@@ -36,42 +34,35 @@
 	let forcedNoticeLabel = $state<string | null>(null);
 	let noticeChannels = $state<Record<number, { portal: boolean; email: boolean; sms: boolean }>>({});
 	let noticeEdits = $state<Record<number, { subject: string; body: string }>>({});
+	let recipientPreviews = $state<Record<number, TenantNoticeRecipientPreviewResponse[]>>({});
+	let previewingDraftId = $state<number | null>(null);
 	let lastOpenKey: string | null = null;
 
-	const isPaymentScoped = $derived((paymentId ?? 0) > 0);
-	const hasNoticeScope = $derived(tenantId > 0 || (leaseId ?? 0) > 0 || isPaymentScoped);
+	const hasNoticeScope = $derived(recipientTenantId > 0);
 
 	const noticeEmptyState = $derived(
-		isPaymentScoped
-			? {
-					message: 'No notice is needed for this payment.',
-					description: 'The selected payment is not eligible for a new notice, or an existing notice already covers it.',
-					showForceControls: false,
-					leaseActionHref: undefined,
-					leaseActionLabel: undefined,
-				}
-			: getTenantNoticeEmptyState({
-					forcedNoticeLabel,
-					activeLeaseCount,
-					tenantId,
-				})
+		getTenantNoticeEmptyState({
+			forcedNoticeLabel,
+			activeLeaseCount,
+			tenantId: recipientTenantId,
+		})
 	);
 
 	const FORCEABLE_NOTICE_TYPES: { type: string; label: string }[] = [
-		{ type: 'RentReminder', label: 'Rent reminder (coming due)' },
-		{ type: 'RenewalOffer', label: 'Lease renewal offer' },
-		{ type: 'MonthToMonthConversion', label: 'Convert to month-to-month' },
-		{ type: 'MoveOutReminder', label: 'Lease expiration / move-out' },
-		{ type: 'LateRentNotice', label: 'Late rent / late fee' },
+		{ type: 'rent-reminder', label: 'Rent reminder (coming due)' },
+		{ type: 'lease-renewal-offer', label: 'Lease renewal offer' },
+		{ type: 'month-to-month-offer', label: 'Offer month-to-month' },
+		{ type: 'lease-non-renewal', label: 'Lease expiration / non-renewal' },
+		{ type: 'late-rent-late-fee', label: 'Past-due rent / late fee' },
 	];
 
 	function noticeTypeLabel(type: string) {
 		switch (type) {
-			case 'RentReminder': return 'Rent reminder';
-			case 'RenewalOffer': return 'Renewal offer';
-			case 'MonthToMonthConversion': return 'Month-to-month conversion';
-			case 'MoveOutReminder': return 'Move-out reminder';
-			case 'LateRentNotice': return 'Late rent / late fee';
+			case 'rent-reminder': return 'Rent reminder';
+			case 'lease-renewal-offer': return 'Lease renewal offer';
+			case 'month-to-month-offer': return 'Month-to-month offer';
+			case 'lease-non-renewal': return 'Lease expiration / non-renewal';
+			case 'late-rent-late-fee': return 'Past-due rent / late fee';
 			default: return type;
 		}
 	}
@@ -122,14 +113,31 @@
 		noticeDrafts = [];
 		noticeChannels = {};
 		noticeEdits = {};
+		recipientPreviews = {};
+		previewingDraftId = null;
 		forcedNoticeLabel = null;
+	}
+
+	async function previewRecipients(draft: NoticeDraft) {
+		previewingDraftId = draft.id;
+		try {
+			recipientPreviews = {
+				...recipientPreviews,
+				[draft.id]: await notifications.tenantNotices.previewRecipients(
+					draft.noticeType,
+					draft.leaseManagementId
+				)
+			};
+		} catch (error) {
+			showError(apiErrorMessage(error));
+		} finally {
+			previewingDraftId = null;
+		}
 	}
 
 	function generateRequest(noticeType?: string) {
 		return {
-			...(tenantId > 0 ? { tenantId } : {}),
-			...(leaseId != null ? { leaseId } : {}),
-			...(paymentId != null ? { paymentId } : {}),
+			...(recipientTenantId > 0 ? { recipientTenantId } : {}),
 			...(noticeType ? { noticeType } : {}),
 		};
 	}
@@ -145,7 +153,7 @@
 			return;
 		}
 
-		const openKey = `${tenantId}:${leaseId ?? 0}:${paymentId ?? 0}:${initialNoticeType ?? 'due'}`;
+		const openKey = `${recipientTenantId}:${initialNoticeType ?? 'due'}`;
 		if (lastOpenKey === openKey) return;
 		lastOpenKey = openKey;
 		generateNoticeDrafts(initialNoticeType);
@@ -170,13 +178,11 @@
 			queryClient.invalidateQueries({ queryKey: ['notice-drafts', portfolioId] });
 			if (noticeDrafts.length === 0) {
 				showSuccess(
-					isPaymentScoped
-						? noticeEmptyState.message
-						: getTenantNoticeEmptyState({
-								forcedNoticeLabel: selectedForcedNoticeLabel,
-								activeLeaseCount,
-								tenantId,
-							}).message
+					getTenantNoticeEmptyState({
+						forcedNoticeLabel: selectedForcedNoticeLabel,
+						activeLeaseCount,
+						tenantId: recipientTenantId,
+					}).message
 				);
 			}
 		},
@@ -245,7 +251,7 @@
 				<p class="mt-1 text-xs text-muted-foreground">
 					{noticeEmptyState.description}
 				</p>
-				{#if noticeEmptyState.showForceControls && !isPaymentScoped}
+				{#if noticeEmptyState.showForceControls}
 					<p class="mt-4 text-xs font-medium uppercase tracking-wide text-muted-foreground">Create one anyway</p>
 					<div class="mt-2 flex flex-wrap items-center justify-center gap-2">
 						{#each FORCEABLE_NOTICE_TYPES as nt (nt.type)}
@@ -311,6 +317,19 @@
 						</div>
 
 						{#if editable}
+							<div class="mt-3 rounded-md border border-border/70 bg-muted/30 p-3">
+								<div class="flex flex-wrap items-center justify-between gap-2">
+									<div><p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Effective recipients</p><p class="mt-1 text-xs text-muted-foreground">Preview who is currently eligible and which destinations are actually available.</p></div>
+									<Button variant="outline" size="sm" disabled={previewingDraftId === draft.id} onclick={() => previewRecipients(draft)}><Eye class="h-4 w-4" />{previewingDraftId === draft.id ? 'Loading…' : 'Preview recipients'}</Button>
+								</div>
+								{#if recipientPreviews[draft.id]}
+									<div class="mt-3 space-y-2">
+										{#each recipientPreviews[draft.id] as recipient (recipient.leaseManagementPartyId)}
+											<div class="rounded-md bg-background p-3"><div class="flex flex-wrap items-center justify-between gap-2"><p class="text-sm font-medium">{recipient.displayName} · {recipient.role}</p><span class={`text-xs font-medium ${recipient.eligible ? 'text-emerald-700 dark:text-emerald-300' : 'text-muted-foreground'}`}>{recipient.eligible ? 'Eligible' : 'Excluded'}</span></div><p class="mt-1 text-xs">Available channels: {recipient.availableChannels.length > 0 ? recipient.availableChannels.join(', ') : 'None'}</p><p class="mt-1 text-xs text-muted-foreground">Email: {recipient.email || 'Not available'} · Phone: {recipient.phone || 'Not available'}</p><p class="mt-1 text-xs text-muted-foreground">{recipient.reason}</p></div>
+										{/each}
+									</div>
+								{/if}
+							</div>
 							<div class="mt-3 flex flex-wrap items-center gap-4">
 								<span class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Send via</span>
 								<label class="flex items-center gap-2 text-sm" data-testid="tenant-notice-channel-portal-{draft.id}">

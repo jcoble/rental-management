@@ -67,7 +67,7 @@
 - **Anchor timeline:** history CY2023–2024 · onboarding/books-start T0 = **2025-01-01** · live ops CY2025 · reconcile **2025-12-31**. CY2025 is the cent-exact reconciliation spine.
 
 ## Verified mechanism cheat-sheet (source-checked — the load-bearing facts for Phase 2)
-- **Rent history back-fill:** create lease with `RentTrackingStartMode=BackfillFromLeaseStart` (default `ForwardOnly`=~1mo only); back-fill runs **synchronously in `POST /leases`**. Then **per-payment** `POST /payments/{id}/mark-paid` with historical `PaidDate`+`Method` (income buckets by PaidDate year; bulk endpoint stamps one shared date). `PayerName/CheckNumber/BankName` only settable at `POST /payments` create.
+- **Rent history:** confirm the Agreement against explicit LeaseManagement and TenantAccount targets, then post the bounded historical account-entry corpus separately. Scan confirmation never selects a rent-generation mode or silently creates history.
 - **Loans:** `DebtServiceService.GenerateAsync` back-fills all `LoanPayment` rows (Scheduled; reports ignore status, sum by DueDate). **No create-time/HTTP trigger** — call the service via TSK-615 dev worker-trigger.
 - **Recurring expenses:** back-fill ≤36 periods from template StartDate; Pending rows count (Schedule E buckets by IncurredAt). Same "no create-time trigger" caveat.
 - **Enable workers:** `PUT /api/v1/notifications/settings` (on `NotificationsController`) — **full-object overwrite**, GET→mutate→PUT. Turn on `EnableRentCharges`, `EnableLateFees`, `NotifyTenants`. `NoticeAutopilot`+`RecurringMaintenance` always on.
@@ -165,9 +165,8 @@ assertions. **This is NOT the paused Phase-2 DATA regen** — it consumes what's
   `[UI]` (drive the real screen; default for user actions), `[DEV-CLOCK]`/`[WORKER]` (dev time-travel /
   worker-fire scaffolding — legit, no user equivalent), `[SEED]` (bounded bulk shortcut). README has an
   "Execution surfaces" section (tags + principle + the verified action→screen map + 5 product-gap findings
-  PG-1..5). Converted the API-shortcut steps to `[UI]`: ONB-02 worker-enable→Settings; ONB-04 rent
-  back-fill→`/scan/new-rental` "Backfill from lease start" control (**PG-1:** the generic `/scan/[draftId]`
-  lease-confirm lacks that control); all CY2025 operational payments→lease-detail "Mark paid"/`/accounting/
+  PG-2..5). Converted the API-shortcut steps to `[UI]`: ONB-02 worker-enable→Settings; ONB-04 agreement
+  review→`/scan/new-rental` with explicit management/account context; all CY2025 operational payments→lease-detail "Mark paid"/`/accounting/
   past-due`/`/scan`. ONB-08 2-yr history stays `[SEED]` (GAP1) + a required representative `[UI]` mark-paid.
   `scenarios.json`: every scenario+template now carries a **`surfaces`** array (62 pure UI, 26 dev-clock+worker,
   12 UI+dev-clock (B2), 10 worker+UI (notices), 4 UI+worker, 3 UI+dev-clock+worker, 1 UI+seed). Verified

@@ -1,0 +1,578 @@
+using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
+
+namespace RentalCommand.Api.Services.Domain;
+
+public interface IAccountingLifecycleWorkspaceCommand : IAtomicCommandData
+{
+    int PortfolioId { get; }
+    int ActorUserId { get; }
+    Guid AuthSessionId { get; }
+    int AccessContextId { get; }
+    long ExpectedAccessRevision { get; }
+    AccountingProvider Provider { get; }
+    string DeliveryIdempotencyKey { get; }
+}
+
+public sealed record PrepareAccountingDisconnectCommand(
+    int PortfolioId,
+    int ActorUserId,
+    Guid AuthSessionId,
+    int AccessContextId,
+    long ExpectedAccessRevision,
+    AccountingProvider Provider,
+    string DeliveryIdempotencyKey) : IAccountingLifecycleWorkspaceCommand;
+
+public enum PrepareAccountingDisconnectOutcome
+{
+    NotFound,
+    Prepared,
+    AlreadyDisconnected,
+}
+
+public sealed record PrepareAccountingDisconnectResult(
+    PrepareAccountingDisconnectOutcome Outcome,
+    int ConnectionId,
+    long TokenGeneration,
+    DateTime? PreparedAtUtc,
+    string? RefreshTokenCipherText) : IAtomicResultData;
+
+public sealed record FinalizeAccountingDisconnectCommand(
+    int PortfolioId,
+    int ActorUserId,
+    Guid AuthSessionId,
+    int AccessContextId,
+    long ExpectedAccessRevision,
+    AccountingProvider Provider,
+    int ConnectionId,
+    long PreparedTokenGeneration,
+    DateTime PreparedAtUtc,
+    string DeliveryIdempotencyKey) : IAccountingLifecycleWorkspaceCommand;
+
+public enum FinalizeAccountingDisconnectOutcome
+{
+    NotFound,
+    Applied,
+    AlreadyFinalized,
+    Superseded,
+}
+
+public sealed record FinalizeAccountingDisconnectResult(
+    FinalizeAccountingDisconnectOutcome Outcome,
+    int ConnectionId,
+    long TokenGeneration,
+    DateTime? DisconnectedAtUtc) : IAtomicResultData;
+
+public sealed record SetAccountingDirectionCommand(
+    int PortfolioId,
+    int ActorUserId,
+    Guid AuthSessionId,
+    int AccessContextId,
+    long ExpectedAccessRevision,
+    AccountingProvider Provider,
+    bool? PullEnabled,
+    bool? PushEnabled,
+    string DeliveryIdempotencyKey) : IAccountingLifecycleWorkspaceCommand;
+
+public sealed record SetAccountingDirectionResult(
+    bool Found,
+    int ConnectionId,
+    bool PullEnabled,
+    bool PushEnabled,
+    DateTime? UpdatedAtUtc) : IAtomicResultData;
+
+public sealed class PrepareAccountingDisconnectHandler
+    : IAtomicCommandHandler<PrepareAccountingDisconnectCommand, PrepareAccountingDisconnectResult>,
+      IAtomicReplayAuthorizer<PrepareAccountingDisconnectCommand>
+{
+    public async Task<PrepareAccountingDisconnectResult> HandleAsync(
+        PrepareAccountingDisconnectCommand command,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        AccountingLifecycleCommandSupport.Validate(command);
+        await AccountingLifecycleCommandSupport.AcquireWorkspaceLocksAsync(command, attempt, ct);
+        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        await AccountingLifecycleCommandSupport.RequireAuthorizationAsync(command, attempt.Persistence, now, ct);
+
+        var connectionId = await AccountingLifecycleCommandSupport.ResolveAndLockConnectionIdAsync(
+            command, attempt, ct);
+        if (connectionId is null)
+        {
+            return new PrepareAccountingDisconnectResult(
+                PrepareAccountingDisconnectOutcome.NotFound, 0, 0, null, null);
+        }
+
+        var connection = await attempt.Persistence.Query<AccountingConnection>()
+            .SingleAsync(row => row.Id == connectionId.Value
+                && row.PortfolioId == command.PortfolioId
+                && row.Provider == command.Provider, ct);
+        if (AccountingLifecycleCommandSupport.IsFullyDisconnected(connection))
+        {
+            return new PrepareAccountingDisconnectResult(
+                PrepareAccountingDisconnectOutcome.AlreadyDisconnected,
+                connection.Id,
+                connection.TokenGeneration,
+                connection.DisconnectedAt,
+                null);
+        }
+
+        var refreshTokenCipherText = connection.RefreshTokenCipherText;
+        var oldValues = JsonSerializer.Serialize(new
+        {
+            connection.Status,
+            HadAccessToken = connection.AccessTokenCipherText != null,
+            HadRefreshToken = refreshTokenCipherText != null,
+            connection.TokenGeneration,
+        });
+
+        connection.Status = AccountingConnectionStatus.Disconnected;
+        connection.AccessTokenCipherText = null;
+        connection.TokenExpiresAt = null;
+        connection.PullClaimOwner = null;
+        connection.PullClaimToken = null;
+        connection.PullClaimExpiresAtUtc = null;
+        connection.TokenRotationState = AccountingTokenRotationState.Idle;
+        connection.TokenRotationClaimOwner = null;
+        connection.TokenRotationClaimToken = null;
+        connection.TokenRotationClaimExpiresAtUtc = null;
+        connection.TokenGeneration++;
+        connection.DisconnectedAt = now;
+        connection.UpdatedAt = now;
+
+        attempt.UseDatabaseWallClockForAudit(now);
+        attempt.BindSemanticAudit(connection, new AtomicSemanticAudit(
+            command.PortfolioId,
+            nameof(AccountingConnection),
+            connection.Id,
+            AuditLogOperation.Updated,
+            command.ActorUserId,
+            OldValues: oldValues,
+            NewValues: JsonSerializer.Serialize(new
+            {
+                connection.Status,
+                HadAccessToken = false,
+                ProviderRevokePending = refreshTokenCipherText != null,
+                connection.TokenGeneration,
+                connection.DisconnectedAt,
+            }),
+            ChangeReason: "Accounting provider disconnect prepared; local access and worker claims disabled."));
+        await attempt.FlushBusinessAsync(ct);
+
+        AccountingLifecycleCommandSupport.StageDataUpdate(
+            attempt, command, connection, now, "disconnect-prepare");
+        return new PrepareAccountingDisconnectResult(
+            PrepareAccountingDisconnectOutcome.Prepared,
+            connection.Id,
+            connection.TokenGeneration,
+            now,
+            refreshTokenCipherText);
+    }
+
+    public Task AuthorizeReplayAsync(
+        PrepareAccountingDisconnectCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct) =>
+        AccountingLifecycleCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+}
+
+public sealed class FinalizeAccountingDisconnectHandler
+    : IAtomicCommandHandler<FinalizeAccountingDisconnectCommand, FinalizeAccountingDisconnectResult>,
+      IAtomicReplayAuthorizer<FinalizeAccountingDisconnectCommand>
+{
+    public async Task<FinalizeAccountingDisconnectResult> HandleAsync(
+        FinalizeAccountingDisconnectCommand command,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        AccountingLifecycleCommandSupport.Validate(command);
+        if (command.ConnectionId <= 0 || command.PreparedTokenGeneration <= 0)
+        {
+            throw new ArgumentException("A prepared accounting connection and token generation are required.");
+        }
+
+        await AccountingLifecycleCommandSupport.AcquireWorkspaceLocksAsync(command, attempt, ct);
+        await attempt.Locking.AcquireAsync(
+            AtomicLockResource.AccountingConnection, command.ConnectionId, ct);
+        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        await AccountingLifecycleCommandSupport.RequireAuthorizationAsync(command, attempt.Persistence, now, ct);
+
+        var connection = await attempt.Persistence.Query<AccountingConnection>()
+            .SingleOrDefaultAsync(row => row.Id == command.ConnectionId
+                && row.PortfolioId == command.PortfolioId
+                && row.Provider == command.Provider, ct);
+        if (connection is null)
+        {
+            return new FinalizeAccountingDisconnectResult(
+                FinalizeAccountingDisconnectOutcome.NotFound,
+                command.ConnectionId,
+                command.PreparedTokenGeneration,
+                null);
+        }
+
+        if (connection.Status != AccountingConnectionStatus.Disconnected
+            || connection.TokenGeneration != command.PreparedTokenGeneration
+            || connection.DisconnectedAt != command.PreparedAtUtc)
+        {
+            return new FinalizeAccountingDisconnectResult(
+                FinalizeAccountingDisconnectOutcome.Superseded,
+                connection.Id,
+                connection.TokenGeneration,
+                connection.DisconnectedAt);
+        }
+
+        if (connection.RefreshTokenCipherText is null)
+        {
+            return new FinalizeAccountingDisconnectResult(
+                FinalizeAccountingDisconnectOutcome.AlreadyFinalized,
+                connection.Id,
+                connection.TokenGeneration,
+                connection.DisconnectedAt);
+        }
+
+        connection.RefreshTokenCipherText = null;
+        connection.UpdatedAt = now;
+        attempt.UseDatabaseWallClockForAudit(now);
+        attempt.BindSemanticAudit(connection, new AtomicSemanticAudit(
+            command.PortfolioId,
+            nameof(AccountingConnection),
+            connection.Id,
+            AuditLogOperation.Updated,
+            command.ActorUserId,
+            NewValues: JsonSerializer.Serialize(new
+            {
+                connection.Status,
+                RefreshCredentialRetained = false,
+                connection.TokenGeneration,
+                connection.DisconnectedAt,
+            }),
+            ChangeReason: "Accounting provider disconnect finalized; retained revoke credential cleared."));
+        await attempt.FlushBusinessAsync(ct);
+
+        return new FinalizeAccountingDisconnectResult(
+            FinalizeAccountingDisconnectOutcome.Applied,
+            connection.Id,
+            connection.TokenGeneration,
+            connection.DisconnectedAt);
+    }
+
+    public Task AuthorizeReplayAsync(
+        FinalizeAccountingDisconnectCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct) =>
+        AccountingLifecycleCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+}
+
+public sealed class SetAccountingDirectionHandler
+    : IAtomicCommandHandler<SetAccountingDirectionCommand, SetAccountingDirectionResult>,
+      IAtomicReplayAuthorizer<SetAccountingDirectionCommand>
+{
+    public async Task<SetAccountingDirectionResult> HandleAsync(
+        SetAccountingDirectionCommand command,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        AccountingLifecycleCommandSupport.Validate(command);
+        if (command.PullEnabled is null && command.PushEnabled is null)
+        {
+            throw new ArgumentException("At least one accounting direction must be specified.");
+        }
+
+        await AccountingLifecycleCommandSupport.AcquireWorkspaceLocksAsync(command, attempt, ct);
+        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        await AccountingLifecycleCommandSupport.RequireAuthorizationAsync(command, attempt.Persistence, now, ct);
+
+        var connectionId = await AccountingLifecycleCommandSupport.ResolveAndLockConnectionIdAsync(
+            command, attempt, ct);
+        if (connectionId is null)
+        {
+            return new SetAccountingDirectionResult(false, 0, false, false, null);
+        }
+
+        var connection = await attempt.Persistence.Query<AccountingConnection>()
+            .SingleAsync(row => row.Id == connectionId.Value
+                && row.PortfolioId == command.PortfolioId
+                && row.Provider == command.Provider, ct);
+        var oldValues = JsonSerializer.Serialize(new
+        {
+            connection.PullEnabled,
+            connection.PushEnabled,
+        });
+        if (command.PullEnabled.HasValue)
+        {
+            connection.PullEnabled = command.PullEnabled.Value;
+        }
+        if (command.PushEnabled.HasValue)
+        {
+            connection.PushEnabled = command.PushEnabled.Value;
+        }
+        if (command.PullEnabled == false)
+        {
+            connection.PullClaimOwner = null;
+            connection.PullClaimToken = null;
+            connection.PullClaimExpiresAtUtc = null;
+        }
+        connection.UpdatedAt = now;
+
+        attempt.UseDatabaseWallClockForAudit(now);
+        attempt.BindSemanticAudit(connection, new AtomicSemanticAudit(
+            command.PortfolioId,
+            nameof(AccountingConnection),
+            connection.Id,
+            AuditLogOperation.Updated,
+            command.ActorUserId,
+            OldValues: oldValues,
+            NewValues: JsonSerializer.Serialize(new
+            {
+                connection.PullEnabled,
+                connection.PushEnabled,
+            }),
+            ChangeReason: "Accounting synchronization direction updated."));
+        await attempt.FlushBusinessAsync(ct);
+
+        AccountingLifecycleCommandSupport.StageDataUpdate(
+            attempt, command, connection, now, "direction");
+        return new SetAccountingDirectionResult(
+            true,
+            connection.Id,
+            connection.PullEnabled,
+            connection.PushEnabled,
+            now);
+    }
+
+    public Task AuthorizeReplayAsync(
+        SetAccountingDirectionCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct) =>
+        AccountingLifecycleCommandSupport.AuthorizeReplayAsync(command, persistence, ct);
+}
+
+internal static class AccountingLifecycleCommandSupport
+{
+    public static async Task AcquireWorkspaceLocksAsync(
+        IAccountingLifecycleWorkspaceCommand command,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        await attempt.Locking.AcquireAsync(AtomicLockResource.AuthSession, command.AuthSessionId, ct);
+        await attempt.Locking.AcquireAsync(
+            AtomicLockResource.WorkspaceAccessContext, command.AccessContextId, ct);
+        // A portfolio owns at most one row per provider. This lock serializes provider-row
+        // resolution with connect/disconnect/direction commands before the exact row lock is known.
+        await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
+    }
+
+    public static async Task<int?> ResolveAndLockConnectionIdAsync(
+        IAccountingLifecycleWorkspaceCommand command,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        var connectionId = await attempt.Persistence.Query<AccountingConnection>().AsNoTracking()
+            .Where(row => row.PortfolioId == command.PortfolioId
+                && row.Provider == command.Provider)
+            .Select(row => (int?)row.Id)
+            .SingleOrDefaultAsync(ct);
+        if (connectionId.HasValue)
+        {
+            await attempt.Locking.AcquireAsync(
+                AtomicLockResource.AccountingConnection, connectionId.Value, ct);
+        }
+        return connectionId;
+    }
+
+    public static async Task RequireAuthorizationAsync(
+        IAccountingLifecycleWorkspaceCommand command,
+        IAtomicPersistenceSession persistence,
+        DateTime now,
+        CancellationToken ct)
+    {
+        if (!await IsAuthorizedAsync(command, persistence, now, ct))
+        {
+            throw new UnauthorizedAccessException(
+                "Workspace access changed or no longer permits accounting integrations.");
+        }
+    }
+
+    public static async Task AuthorizeReplayAsync(
+        IAccountingLifecycleWorkspaceCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        Validate(command);
+        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        await RequireAuthorizationAsync(command, persistence, now, ct);
+    }
+
+    public static void Validate(IAccountingLifecycleWorkspaceCommand command)
+    {
+        if (command.PortfolioId <= 0
+            || command.ActorUserId <= 0
+            || command.AuthSessionId == Guid.Empty
+            || command.AccessContextId <= 0
+            || command.ExpectedAccessRevision <= 0
+            || !Enum.IsDefined(command.Provider)
+            || string.IsNullOrWhiteSpace(command.DeliveryIdempotencyKey)
+            || command.DeliveryIdempotencyKey.Length > 128)
+        {
+            throw new ArgumentException(
+                "Portfolio, actor, provider, access revision, and delivery identifier are required.");
+        }
+    }
+
+    public static bool IsFullyDisconnected(AccountingConnection connection) =>
+        connection.Status == AccountingConnectionStatus.Disconnected
+        && connection.AccessTokenCipherText is null
+        && connection.RefreshTokenCipherText is null
+        && connection.TokenExpiresAt is null
+        && connection.PullClaimOwner is null
+        && connection.PullClaimToken is null
+        && connection.PullClaimExpiresAtUtc is null
+        && connection.TokenRotationState == AccountingTokenRotationState.Idle
+        && connection.TokenRotationClaimOwner is null
+        && connection.TokenRotationClaimToken is null
+        && connection.TokenRotationClaimExpiresAtUtc is null;
+
+    public static void StageDataUpdate(
+        IAtomicWriteAttempt attempt,
+        IAccountingLifecycleWorkspaceCommand command,
+        AccountingConnection connection,
+        DateTime now,
+        string suffix) =>
+        attempt.StageOutbox(new OutboxMessage
+        {
+            PortfolioId = command.PortfolioId,
+            MessageType = "data-update",
+            Payload = JsonSerializer.Serialize(new
+            {
+                entityType = nameof(AccountingConnection),
+                entityId = connection.Id,
+                operation = "update",
+                data = new
+                {
+                    provider = connection.Provider,
+                    status = connection.Status,
+                    pullEnabled = connection.PullEnabled,
+                    pushEnabled = connection.PushEnabled,
+                },
+            }),
+            IdempotencyKey = $"{command.DeliveryIdempotencyKey}:{suffix}:data-update",
+            CreatedAtUtc = now,
+            NextAttemptAtUtc = now,
+        });
+
+    private static Task<bool> IsAuthorizedAsync(
+        IAccountingLifecycleWorkspaceCommand command,
+        IAtomicPersistenceSession persistence,
+        DateTime now,
+        CancellationToken ct) =>
+        persistence.Query<MembershipRoleAssignment>().AsNoTracking().AnyAsync(assignment =>
+            assignment.PortfolioId == command.PortfolioId
+            && assignment.Status == MembershipRoleAssignmentStatus.Active
+            && assignment.SuspendedAtUtc == null
+            && assignment.RevokedAtUtc == null
+            && assignment.EffectiveFromUtc <= now
+            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > now)
+            && assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties
+            && assignment.WorkspaceMembership!.AccessContextId == command.AccessContextId
+            && assignment.WorkspaceMembership.PortfolioId == command.PortfolioId
+            && assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active
+            && assignment.WorkspaceMembership.SuspendedAtUtc == null
+            && assignment.WorkspaceMembership.RevokedAtUtc == null
+            && assignment.WorkspaceMembership.EffectiveFromUtc <= now
+            && (assignment.WorkspaceMembership.EffectiveToUtc == null
+                || assignment.WorkspaceMembership.EffectiveToUtc > now)
+            && persistence.Query<WorkspaceAccessContext>().Any(context =>
+                context.Id == command.AccessContextId
+                && context.UserId == command.ActorUserId
+                && context.PortfolioId == command.PortfolioId
+                && context.AccessRevision == command.ExpectedAccessRevision
+                && context.Status == WorkspaceAccessContextStatus.Active
+                && context.SuspendedAtUtc == null
+                && context.RevokedAtUtc == null)
+            && persistence.Query<AuthSession>().Any(session =>
+                session.Id == command.AuthSessionId
+                && session.UserId == command.ActorUserId
+                && session.ActiveAccessContextId == command.AccessContextId
+                && session.Status == AuthSessionStatus.Active
+                && session.RevokedAtUtc == null
+                && session.ExpiresAtUtc > now)
+            && assignment.RoleProfile!.Capabilities.Any(grant =>
+                grant.CapabilityDefinition!.Key == CapabilityKeys.IntegrationsManage
+                && grant.CapabilityDefinition.AuthorizationTargetKind
+                    == CapabilityAuthorizationTargetKind.Workspace), ct);
+}
+
+public static class AtomicAccountingLifecycle
+{
+    public static readonly AtomicJsonResultCodec<PrepareAccountingDisconnectResult> DisconnectPrepareCodec =
+        new("rental.accounting-disconnect.prepare.v1");
+    public static readonly AtomicJsonResultCodec<FinalizeAccountingDisconnectResult> DisconnectFinalizeCodec =
+        new("rental.accounting-disconnect.finalize.v1");
+    public static readonly AtomicJsonResultCodec<SetAccountingDirectionResult> DirectionCodec =
+        new("rental.accounting-direction.set.v1");
+
+    public static PrepareAccountingDisconnectCommand PrepareDisconnectCommand(
+        WorkspaceReadScope scope,
+        AccountingProvider provider,
+        string operationKey) => new(
+            scope.PortfolioId,
+            scope.UserId,
+            scope.SessionId,
+            scope.AccessContextId,
+            scope.AccessRevision,
+            provider,
+            operationKey.Trim());
+
+    public static AtomicCommandIdentity PrepareDisconnectIdentity(
+        PrepareAccountingDisconnectCommand command) => new(
+            "accounting.connection.disconnect.prepare",
+            $"{command.PortfolioId}:{command.AccessContextId}:{command.Provider}:" +
+            command.DeliveryIdempotencyKey);
+
+    public static FinalizeAccountingDisconnectCommand FinalizeDisconnectCommand(
+        PrepareAccountingDisconnectCommand prepare,
+        PrepareAccountingDisconnectResult prepared) => new(
+            prepare.PortfolioId,
+            prepare.ActorUserId,
+            prepare.AuthSessionId,
+            prepare.AccessContextId,
+            prepare.ExpectedAccessRevision,
+            prepare.Provider,
+            prepared.ConnectionId,
+            prepared.TokenGeneration,
+            prepared.PreparedAtUtc
+                ?? throw new AtomicReceiptInvariantException(
+                    "A prepared accounting disconnect must include its database timestamp."),
+            prepare.DeliveryIdempotencyKey);
+
+    public static AtomicCommandIdentity FinalizeDisconnectIdentity(
+        FinalizeAccountingDisconnectCommand command) => new(
+            "accounting.connection.disconnect.finalize",
+            $"{command.PortfolioId}:{command.AccessContextId}:{command.Provider}:" +
+            command.DeliveryIdempotencyKey);
+
+    public static SetAccountingDirectionCommand DirectionCommand(
+        WorkspaceReadScope scope,
+        AccountingProvider provider,
+        bool? pull,
+        bool? push,
+        string operationKey) => new(
+            scope.PortfolioId,
+            scope.UserId,
+            scope.SessionId,
+            scope.AccessContextId,
+            scope.AccessRevision,
+            provider,
+            pull,
+            push,
+            operationKey.Trim());
+
+    public static AtomicCommandIdentity DirectionIdentity(SetAccountingDirectionCommand command) => new(
+        "accounting.connection.direction.set",
+        $"{command.PortfolioId}:{command.AccessContextId}:{command.Provider}:" +
+        command.DeliveryIdempotencyKey);
+}

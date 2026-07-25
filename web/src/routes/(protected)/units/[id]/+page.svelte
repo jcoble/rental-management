@@ -1,20 +1,23 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
+	import { tick, untrack } from 'svelte';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { units } from '$lib/api/endpoints/units';
-	import { securityDeposits } from '$lib/api/endpoints/securityDeposits';
-	import { appointments } from '$lib/api/endpoints/appointments';
-	import * as Tabs from '$lib/components/ui/tabs';
+	import { inspections } from '$lib/api/endpoints/inspections';
+	import { recurringMaintenance } from '$lib/api/endpoints/recurring-maintenance';
+	import { leaseManagements } from '$lib/api/endpoints/lease-managements';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 	import UnitHeader from '$lib/components/unit/UnitHeader.svelte';
 	import ScanLauncher from '$lib/components/scan/ScanLauncher.svelte';
-	import LifecycleRail from '$lib/components/unit/LifecycleRail.svelte';
 	import UnitTimelineRail from '$lib/components/unit/UnitTimelineRail.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import OverviewTab from '$lib/components/unit/tabs/OverviewTab.svelte';
 	import ListingTab from '$lib/components/unit/tabs/ListingTab.svelte';
 	import LeaseTab from '$lib/components/unit/tabs/LeaseTab.svelte';
+	import ResidentsTab from '$lib/components/unit/tabs/ResidentsTab.svelte';
 	import ApplicationsTab from '$lib/components/unit/tabs/ApplicationsTab.svelte';
 	import LedgerTab from '$lib/components/unit/tabs/LedgerTab.svelte';
 	import MaintenanceTab from '$lib/components/unit/tabs/MaintenanceTab.svelte';
@@ -22,7 +25,10 @@
 	import DocumentsTab from '$lib/components/unit/tabs/DocumentsTab.svelte';
 	import TimelineTab from '$lib/components/unit/tabs/TimelineTab.svelte';
 	import UnitFields from '$lib/components/forms/UnitFields.svelte';
-	import { resolveUnitTab } from '$lib/components/unit/unit-tabs';
+	import {
+		resolveUnitDestination,
+		type UnitView,
+	} from '$lib/components/unit/unit-tabs';
 	import { createUnitEditForm, type UnitEditForm } from '$lib/components/unit/unit-edit-form';
 	import type { ScanContext } from '$lib/scan/scan-context';
 	import { unitSchema, parseForm } from '$lib/schemas';
@@ -34,28 +40,92 @@
 	const id = $derived(Number(page.params.id));
 	const emptyUnitForm: UnitEditForm = { unitNumber: '', bedrooms: '', bathrooms: '', marketRent: '' };
 
-	// Active tab is driven by ?tab= (default overview) so deep links land on the right tab.
-	let activeTab = $state(resolveUnitTab(page.url.searchParams.get('tab')));
+	const activeDestination = $derived(resolveUnitDestination(
+		page.url.searchParams.get('tab'),
+		page.url.searchParams.get('view'),
+	));
+	const activeTab = $derived(activeDestination.tab);
+	const activeView = $derived(activeDestination.view);
 	let showEditUnit = $state(false);
 	let showMoveInDialog = $state(false);
+	let moveInDepositEffectiveOn = $state(new Date().toISOString().slice(0, 10));
+	let moveInDepositPaymentMethod = $state('');
+	let moveInDepositReference = $state('');
+	let moveInDepositErrors = $state<Record<string, string>>({});
+	let moveInOperation = $state({ fingerprint: '', operationKey: '' });
 	let showScanLauncher = $state(false);
 	let scanLauncherContext = $state<ScanContext>({});
 	let handledMoveInActionKey = $state('');
+	let handledUnitLanding = '';
 	let unitForm = $state({ ...emptyUnitForm });
 	let unitFormErrors = $state<Record<string, string>>({});
+	let inspectionSearch = $state('');
+	let inspectionSort = $state('-scheduledFor');
+	let inspectionSkip = $state(0);
+	let recurringSearch = $state('');
+	let recurringSort = $state('nextDueDate');
+	let recurringSkip = $state(0);
+	const maintenancePageSize = 10;
+	const unitSectionTestIds: Partial<Record<UnitView, string>> = {
+		listing: 'unit-listing-section',
+		applications: 'unit-applications-section',
+		agreements: 'unit-agreement-section',
+		residents: 'unit-residents-section',
+		'work-orders': 'unit-work-orders-section',
+		inspections: 'unit-inspections-section',
+		recurring: 'unit-recurring-section',
+		turnover: 'unit-turnover-section',
+		documents: 'unit-documents-section',
+		history: 'unit-history-section',
+	};
 
 	$effect(() => {
-		const tabFromUrl = resolveUnitTab(page.url.searchParams.get('tab'));
-		if (tabFromUrl !== activeTab) activeTab = tabFromUrl;
+		if (!activeView) return;
+		const landingKey = `${id}:${activeTab}:${activeView}`;
+		if (handledUnitLanding === landingKey) return;
+		handledUnitLanding = landingKey;
+		void landOnUnitSection(activeView);
 	});
 
-	// Keep the URL in sync when the user switches tabs (replace, no history spam), so a refresh/back stays put.
-	function setTab(tab: string) {
-		const nextTab = resolveUnitTab(tab);
-		activeTab = nextTab;
+	async function landOnUnitSection(view: UnitView) {
+		await tick();
+		const testId = unitSectionTestIds[view];
+		if (!testId) return;
+		const section = document.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
+		if (!section) return;
+		section.scrollIntoView({ behavior: 'auto', block: 'start' });
+		section.focus({ preventScroll: true });
+	}
+
+	const contextualParams = [
+		'view',
+		'wo',
+		'app',
+		'payment',
+		'expense',
+		'tenantAccount',
+		'leaseManagement',
+		'agreement',
+		'ledger',
+		'action',
+	] as const;
+
+	function setTab(tab: string, view?: UnitView) {
+		const destination = resolveUnitDestination(tab, view);
 		const url = new URL(page.url);
-		url.searchParams.set('tab', nextTab);
-		goto(url, { replaceState: true, keepFocus: true, noScroll: true });
+		for (const param of contextualParams) url.searchParams.delete(param);
+		url.searchParams.set('tab', destination.tab);
+		if (destination.view) url.searchParams.set('view', destination.view);
+		if (`${url.pathname}${url.search}` === `${page.url.pathname}${page.url.search}`) return;
+		goto(url, { keepFocus: true, noScroll: true });
+	}
+
+	function tabState(tab: string) {
+		return activeTab === tab ? 'active' : 'inactive';
+	}
+
+	function currentUnitReturnTo() {
+		return `${page.url.pathname}${page.url.search}`;
 	}
 
 	const dashboardQuery = createQuery(() => ({
@@ -65,6 +135,28 @@
 	}));
 
 	const dashboard = $derived(dashboardQuery.data);
+	const unitInspectionsQuery = createQuery(() => ({
+		queryKey: ['unit-inspections', id, inspectionSearch, inspectionSort, inspectionSkip, maintenancePageSize],
+		enabled: !isNaN(id) && id > 0,
+		queryFn: () => inspections.listUnitPage({
+			unitId: id,
+			search: inspectionSearch || undefined,
+			sort: inspectionSort,
+			skip: inspectionSkip,
+			take: maintenancePageSize,
+		}),
+	}));
+	const unitRecurringQuery = createQuery(() => ({
+		queryKey: ['unit-recurring-maintenance', id, recurringSearch, recurringSort, recurringSkip, maintenancePageSize],
+		enabled: !isNaN(id) && id > 0,
+		queryFn: () => recurringMaintenance.listPage({
+			unitId: id,
+			search: recurringSearch || undefined,
+			sort: recurringSort,
+			skip: recurringSkip,
+			take: maintenancePageSize,
+		}),
+	}));
 	const moveInAppointment = $derived(
 		dashboard?.overview.upcomingAppointments.find((appointment) =>
 			appointment.type === 'MoveIn'
@@ -79,10 +171,23 @@
 		const isConfirmMoveInAction = page.url.searchParams.get('action') === 'confirm-move-in';
 		if (!dashboard || !isConfirmMoveInAction) return;
 
+		if (activeTab !== 'tenant-lease' || activeView !== 'agreements') {
+			const url = new URL(page.url);
+			url.searchParams.set('tab', 'tenant-lease');
+			url.searchParams.set('view', 'agreements');
+			url.searchParams.set('action', 'confirm-move-in');
+			goto(url, { replaceState: true, keepFocus: true, noScroll: true });
+			return;
+		}
+
 		const actionKey = `${id}:${dashboard.currentLease?.id ?? 'no-lease'}:${page.url.search}`;
-		if (handledMoveInActionKey !== actionKey) {
+		if (untrack(() => handledMoveInActionKey) !== actionKey) {
 			handledMoveInActionKey = actionKey;
-			activeTab = 'lease';
+			moveInDepositEffectiveOn = new Date().toISOString().slice(0, 10);
+			moveInDepositPaymentMethod = '';
+			moveInDepositReference = '';
+			moveInDepositErrors = {};
+			moveInOperation = { fingerprint: '', operationKey: '' };
 			showMoveInDialog = true;
 		}
 	});
@@ -100,26 +205,34 @@
 
 	function closeMoveInDialog() {
 		showMoveInDialog = false;
+		moveInDepositErrors = {};
 		clearMoveInActionUrl();
 	}
 
 	const moveInMutation = createMutation(() => ({
-		mutationFn: async (lease: UnitLeaseSummary) => {
-			const deposit = lease.securityDeposit > 0
-				? await securityDeposits.create({
-					leaseId: lease.id,
-					notes: 'Confirmed from Unit Command Center move-in workflow.'
-				})
-				: null;
-
-			if (moveInAppointment) {
-				await appointments.update(moveInAppointment.id, { status: 'Completed' });
-			}
-
-			return deposit;
+		mutationFn: async ({
+			lease,
+			operationKey
+		}: {
+			lease: UnitLeaseSummary;
+			operationKey: string;
+		}) => {
+			return leaseManagements.confirmMoveIn(
+				lease.leaseManagementId,
+				{
+					unitId: id,
+					depositEffectiveOn: lease.securityDeposit > 0 ? moveInDepositEffectiveOn : null,
+					depositPaymentMethodSummary:
+						lease.securityDeposit > 0 ? moveInDepositPaymentMethod.trim() : null,
+					depositExternalReference: moveInDepositReference.trim() || null,
+					moveInAppointmentId: moveInAppointment?.id ?? null,
+				},
+				operationKey
+			);
 		},
 		onSuccess: () => {
-			showSuccess('Move-in confirmed.');
+			showSuccess('Possession given. Move-in confirmed.');
+			moveInOperation = { fingerprint: '', operationKey: '' };
 			closeMoveInDialog();
 			queryClient.invalidateQueries({ queryKey: ['unit-dashboard', id] });
 			queryClient.invalidateQueries({ queryKey: ['unit-timeline', id] });
@@ -128,6 +241,41 @@
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
+
+	function submitMoveIn(lease: UnitLeaseSummary) {
+		const errors: Record<string, string> = {};
+		if (lease.securityDeposit > 0 && !moveInDepositEffectiveOn) {
+			errors.effectiveOn = 'Received date is required.';
+		}
+		if (lease.securityDeposit > 0 && !moveInDepositPaymentMethod.trim()) {
+			errors.paymentMethod = 'Payment method is required.';
+		}
+		moveInDepositErrors = errors;
+		if (Object.keys(errors).length > 0) return;
+
+		const fingerprint = JSON.stringify({
+			leaseManagementId: lease.leaseManagementId,
+			unitId: id,
+			amount: lease.securityDeposit,
+			effectiveOn: moveInDepositEffectiveOn,
+			paymentMethod: moveInDepositPaymentMethod.trim(),
+			reference: moveInDepositReference.trim(),
+			appointmentId: moveInAppointment?.id ?? null,
+		});
+		if (
+			moveInOperation.fingerprint !== fingerprint ||
+			!moveInOperation.operationKey
+		) {
+			moveInOperation = {
+				fingerprint,
+				operationKey: crypto.randomUUID()
+			};
+		}
+		moveInMutation.mutate({
+			lease,
+			operationKey: moveInOperation.operationKey
+		});
+	}
 
 	function openEditUnit() {
 		if (!dashboard) return;
@@ -179,7 +327,11 @@
 			type: context.type ?? 'Expense',
 			propertyId: context.propertyId ?? unit.propertyId,
 			unitId: context.unitId ?? unit.id,
-			returnTo: context.returnTo ?? `/units/${unit.id}?tab=${activeTab}`
+			leaseManagementId: context.leaseManagementId ?? dashboard.leaseManagementId ?? undefined,
+			leaseAgreementId: context.leaseAgreementId ?? dashboard.currentLease?.id ?? undefined,
+			tenantAccountId: context.tenantAccountId ?? dashboard.tenantAccountId ?? undefined,
+			sourceLabel: context.sourceLabel ?? `${dashboard.propertyName} · Unit ${unit.unitNumber}`,
+			returnTo: context.returnTo ?? currentUnitReturnTo()
 		};
 		showScanLauncher = true;
 	}
@@ -191,73 +343,175 @@
 
 <div class="box-border h-full overflow-y-auto p-4 pb-20 sm:p-6" data-testid="unit-page">
 	{#if dashboardQuery.isLoading}
-		<div class="space-y-4" data-testid="unit-loading">
-			<div class="h-32 animate-pulse rounded-xl bg-muted"></div>
-			<div class="h-16 animate-pulse rounded-xl bg-muted"></div>
-			<div class="h-64 animate-pulse rounded-xl bg-muted"></div>
-		</div>
+		<LoadingState label="Loading Unit details" variant="page" testid="unit-loading" />
 	{:else if dashboardQuery.isError || !dashboard}
 		<div class="rounded-xl border bg-card p-8 text-center" data-testid="unit-error">
 			<p class="text-sm text-muted-foreground">This unit could not be loaded.</p>
-			<a href="/units" class="mt-2 inline-flex items-center gap-1 text-sm text-primary hover:underline">
-				<ArrowLeft class="h-4 w-4" /> Back to units
-			</a>
+			<div class="mt-4 flex flex-wrap justify-center gap-2">
+				<Button variant="outline" onclick={() => dashboardQuery.refetch()}>Try again</Button>
+				<Button href="/units" variant="ghost" class="gap-1"><ArrowLeft class="h-4 w-4" /> Back to units</Button>
+			</div>
 		</div>
 	{:else}
 		<div class="space-y-4">
 			<UnitHeader {dashboard} onEdit={openEditUnit} onScan={() => goScan()} />
-			<LifecycleRail stage={dashboard.lifecycleStage} nextBestAction={dashboard.nextBestAction} onStageClick={setTab} />
-
 			<div class="min-w-0">
-				<Tabs.Root value={activeTab} onValueChange={setTab}>
+				<div class="flex flex-col gap-2">
 					<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-						<Tabs.List class="flex w-full flex-wrap sm:flex-1" data-testid="unit-tabs">
-							<Tabs.Trigger value="overview" data-testid="tab-overview">Overview</Tabs.Trigger>
-							<Tabs.Trigger value="listing" data-testid="tab-listing">Listing</Tabs.Trigger>
-							<Tabs.Trigger value="lease" data-testid="tab-lease">Lease</Tabs.Trigger>
-							<Tabs.Trigger value="applications" data-testid="tab-applications">Applications</Tabs.Trigger>
-							<Tabs.Trigger value="ledger" data-testid="tab-ledger">Ledger</Tabs.Trigger>
-							<Tabs.Trigger value="maintenance" data-testid="tab-maintenance">Maintenance</Tabs.Trigger>
-							<Tabs.Trigger value="turnover" data-testid="tab-turnover">Turnover</Tabs.Trigger>
-							<Tabs.Trigger value="documents" data-testid="tab-documents">Documents</Tabs.Trigger>
-							<Tabs.Trigger value="timeline" data-testid="tab-timeline">Timeline</Tabs.Trigger>
-						</Tabs.List>
-						<UnitTimelineRail activities={dashboard.recentTimeline} onViewAll={() => setTab('timeline')} />
+						<div class="min-w-0 overflow-x-auto sm:flex-1">
+							<div class="m3-tabs-list min-w-max" role="tablist" data-testid="unit-tabs">
+								<button type="button" role="tab" aria-selected={activeTab === 'summary'} data-state={tabState('summary')} class="m3-tabs-trigger" onclick={() => setTab('summary')} data-testid="tab-summary">Summary</button>
+								<button type="button" role="tab" aria-selected={activeTab === 'leasing'} data-state={tabState('leasing')} class="m3-tabs-trigger" onclick={() => setTab('leasing')} data-testid="tab-leasing">Leasing</button>
+								<button type="button" role="tab" aria-selected={activeTab === 'tenant-lease'} data-state={tabState('tenant-lease')} class="m3-tabs-trigger" onclick={() => setTab('tenant-lease')} data-testid="tab-tenant-lease">Tenant &amp; lease</button>
+								<button type="button" role="tab" aria-selected={activeTab === 'money'} data-state={tabState('money')} class="m3-tabs-trigger" onclick={() => setTab('money')} data-testid="tab-money">Money</button>
+								<button type="button" role="tab" aria-selected={activeTab === 'maintenance'} data-state={tabState('maintenance')} class="m3-tabs-trigger" onclick={() => setTab('maintenance')} data-testid="tab-maintenance">Maintenance</button>
+								<button type="button" role="tab" aria-selected={activeTab === 'documents-history'} data-state={tabState('documents-history')} class="m3-tabs-trigger" onclick={() => setTab('documents-history')} data-testid="tab-documents-history">Documents &amp; history</button>
+							</div>
+						</div>
+						<UnitTimelineRail activities={dashboard.recentTimeline} onViewAll={() => setTab('documents-history', 'history')} />
 					</div>
 
-					<Tabs.Content value="overview" class="mt-4">
+					{#if activeTab === 'summary'}
+					<div class="mt-4 flex-1 outline-none" role="tabpanel" aria-label="Summary">
 						<OverviewTab {dashboard} onOpenTab={setTab} />
-					</Tabs.Content>
-					<Tabs.Content value="listing" class="mt-4">
-						<ListingTab {dashboard} />
-					</Tabs.Content>
-					<Tabs.Content value="lease" class="mt-4">
-						<LeaseTab {dashboard} onScan={() => goScan({ type: 'Lease', returnTo: `/units/${dashboard.unit.id}?tab=lease` })} />
-					</Tabs.Content>
-					<Tabs.Content value="applications" class="mt-4">
-						<ApplicationsTab {dashboard} />
-					</Tabs.Content>
-					<Tabs.Content value="ledger" class="mt-4">
+					</div>
+					{:else if activeTab === 'leasing'}
+					<div class="mt-4 flex-1 outline-none" role="tabpanel" aria-label="Leasing">
+						<div class="space-y-8" data-testid="unit-leasing-surface">
+							<section tabindex="-1" class="scroll-mt-4 outline-none" data-testid="unit-listing-section">
+								<ListingTab unitId={dashboard.unit.id} />
+							</section>
+							<section tabindex="-1" class="scroll-mt-4 border-t pt-8 outline-none" data-testid="unit-applications-section">
+								<ApplicationsTab {dashboard} />
+							</section>
+						</div>
+					</div>
+					{:else if activeTab === 'tenant-lease'}
+					<div class="mt-4 flex-1 outline-none" role="tabpanel" aria-label="Tenant & lease">
+						<div class="space-y-8" data-testid="unit-tenant-lease-surface">
+							<section
+								tabindex="-1"
+								class="scroll-mt-4 outline-none"
+								data-testid="unit-agreement-section"
+							>
+								<LeaseTab
+									{dashboard}
+									onScan={() => goScan({
+										type: 'LeaseAgreement',
+										returnTo: `/units/${dashboard.unit.id}?tab=tenant-lease&view=agreements`
+									})}
+								/>
+							</section>
+							<section
+								tabindex="-1"
+								class="scroll-mt-4 border-t pt-8 outline-none"
+								data-testid="unit-residents-section"
+							>
+								<ResidentsTab {dashboard} />
+							</section>
+						</div>
+					</div>
+					{:else if activeTab === 'money'}
+					<div class="mt-4 flex-1 outline-none" role="tabpanel" aria-label="Money">
 						<LedgerTab {dashboard} onScan={goScan} />
-					</Tabs.Content>
-					<Tabs.Content value="maintenance" class="mt-4">
-						<MaintenanceTab {dashboard} onScan={goScan} />
-					</Tabs.Content>
-					<Tabs.Content value="turnover" class="mt-4">
-						<TurnoverTab {dashboard} onScan={goScan} />
-					</Tabs.Content>
-					<Tabs.Content value="documents" class="mt-4">
-						<DocumentsTab
-							unitId={dashboard.unit.id}
-							docs={dashboard.overview.pendingDocs}
-							onScan={() => goScan({ returnTo: `/units/${dashboard.unit.id}?tab=documents` })}
-							onDocumentsChanged={refreshUnitDashboard}
-						/>
-					</Tabs.Content>
-					<Tabs.Content value="timeline" class="mt-4">
-						<TimelineTab unitId={id} />
-					</Tabs.Content>
-				</Tabs.Root>
+					</div>
+					{:else if activeTab === 'maintenance'}
+					<div class="mt-4 flex-1 outline-none" role="tabpanel" aria-label="Maintenance">
+						<div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+							<div class="flex flex-wrap gap-2">
+								<Button variant="outline" size="sm" onclick={() => setTab('maintenance', 'work-orders')}>Work orders</Button>
+								<Button variant="outline" size="sm" onclick={() => setTab('maintenance', 'inspections')}>Inspections</Button>
+								<Button variant="outline" size="sm" onclick={() => setTab('maintenance', 'recurring')}>Recurring maintenance</Button>
+								<Button variant="outline" size="sm" onclick={() => setTab('maintenance', 'turnover')}>Turnover/make-ready</Button>
+							</div>
+						</div>
+						<div class="space-y-8" data-testid="unit-maintenance-surface">
+							<section tabindex="-1" class="scroll-mt-4 outline-none" data-testid="unit-work-orders-section"><MaintenanceTab {dashboard} onScan={goScan} /></section>
+							<section tabindex="-1" class="scroll-mt-4 border-t pt-8 outline-none" data-testid="unit-inspections-section">
+								<div class="space-y-3">
+									<div><h2 class="text-lg font-semibold">Inspections</h2><p class="text-sm text-muted-foreground">Inspection records for this Unit.</p></div>
+									<div class="flex flex-wrap gap-2">
+										<Input bind:value={inspectionSearch} oninput={() => inspectionSkip = 0} placeholder="Search inspections" aria-label="Search Unit inspections" class="max-w-xs" />
+										<select bind:value={inspectionSort} onchange={() => inspectionSkip = 0} class="rounded-md border bg-background px-3 text-sm" aria-label="Sort Unit inspections">
+											<option value="-scheduledFor">Newest scheduled</option>
+											<option value="scheduledFor">Oldest scheduled</option>
+											<option value="status">Status</option>
+										</select>
+									</div>
+									{#if unitInspectionsQuery.isLoading}
+										<LoadingState label="Loading inspections" testid="unit-inspections-loading" />
+									{:else if unitInspectionsQuery.isError}
+										<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="unit-inspections-error">
+											<p class="text-sm font-medium text-destructive">Inspections could not be loaded.</p>
+											<Button class="mt-3" variant="outline" size="sm" onclick={() => unitInspectionsQuery.refetch()}>Try again</Button>
+										</div>
+									{:else if !unitInspectionsQuery.data?.items.length}<p class="text-sm text-muted-foreground">No inspections for this Unit.</p>
+									{:else}
+										<ul class="divide-y rounded-lg border">
+											{#each unitInspectionsQuery.data.items as inspection (inspection.id)}
+												<li class="flex items-center justify-between gap-3 p-3 text-sm" data-testid={`inspection-${inspection.id}`}><span class="font-medium">{inspection.type}</span><span class="text-muted-foreground">{inspection.status} · {new Date(inspection.scheduledFor).toLocaleDateString()}</span></li>
+											{/each}
+										</ul>
+									{/if}
+									<div class="flex items-center justify-between">
+										<Button variant="outline" size="sm" disabled={inspectionSkip === 0} onclick={() => inspectionSkip = Math.max(0, inspectionSkip - maintenancePageSize)}>Previous</Button>
+										<span class="text-xs text-muted-foreground">{unitInspectionsQuery.data?.totalCount ?? 0} total</span>
+										<Button variant="outline" size="sm" disabled={!unitInspectionsQuery.data || inspectionSkip + maintenancePageSize >= unitInspectionsQuery.data.totalCount} onclick={() => inspectionSkip += maintenancePageSize}>Next</Button>
+									</div>
+								</div>
+							</section>
+							<section tabindex="-1" class="scroll-mt-4 border-t pt-8 outline-none" data-testid="unit-recurring-section">
+								<div class="space-y-3">
+									<div><h2 class="text-lg font-semibold">Recurring maintenance</h2><p class="text-sm text-muted-foreground">Standing maintenance schedules for this Unit.</p></div>
+									<div class="flex flex-wrap gap-2">
+										<Input bind:value={recurringSearch} oninput={() => recurringSkip = 0} placeholder="Search recurring maintenance" aria-label="Search Unit recurring maintenance" class="max-w-xs" />
+										<select bind:value={recurringSort} onchange={() => recurringSkip = 0} class="rounded-md border bg-background px-3 text-sm" aria-label="Sort Unit recurring maintenance">
+											<option value="nextDueDate">Next due</option>
+											<option value="-nextDueDate">Latest due</option>
+											<option value="title">Title</option>
+										</select>
+									</div>
+									{#if unitRecurringQuery.isLoading}
+										<LoadingState label="Loading recurring maintenance" testid="unit-recurring-loading" />
+									{:else if unitRecurringQuery.isError}
+										<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="unit-recurring-error">
+											<p class="text-sm font-medium text-destructive">Recurring maintenance could not be loaded.</p>
+											<Button class="mt-3" variant="outline" size="sm" onclick={() => unitRecurringQuery.refetch()}>Try again</Button>
+										</div>
+									{:else if !unitRecurringQuery.data?.items.length}<p class="text-sm text-muted-foreground">No recurring maintenance for this Unit.</p>
+									{:else}
+										<ul class="divide-y rounded-lg border">
+											{#each unitRecurringQuery.data.items as task (task.id)}
+												<li class="flex items-center justify-between gap-3 p-3 text-sm" data-testid={task.testId}><span class="font-medium">{task.title}</span><span class="text-muted-foreground">{task.recurrenceInterval} · {new Date(task.nextDueDate).toLocaleDateString()}</span></li>
+											{/each}
+										</ul>
+									{/if}
+									<div class="flex items-center justify-between">
+										<Button variant="outline" size="sm" disabled={recurringSkip === 0} onclick={() => recurringSkip = Math.max(0, recurringSkip - maintenancePageSize)}>Previous</Button>
+										<span class="text-xs text-muted-foreground">{unitRecurringQuery.data?.totalCount ?? 0} total</span>
+										<Button variant="outline" size="sm" disabled={!unitRecurringQuery.data || recurringSkip + maintenancePageSize >= unitRecurringQuery.data.totalCount} onclick={() => recurringSkip += maintenancePageSize}>Next</Button>
+									</div>
+								</div>
+							</section>
+							<section tabindex="-1" class="scroll-mt-4 border-t pt-8 outline-none" data-testid="unit-turnover-section"><TurnoverTab {dashboard} onScan={goScan} /></section>
+						</div>
+					</div>
+					{:else}
+					<div class="mt-4 flex-1 outline-none" role="tabpanel" aria-label="Documents & history">
+						<div class="space-y-8" data-testid="unit-documents-history-surface">
+							<section tabindex="-1" class="scroll-mt-4 outline-none" data-testid="unit-documents-section">
+								<DocumentsTab
+									unitId={dashboard.unit.id}
+									docs={dashboard.overview.pendingDocs}
+									onScan={() => goScan({ returnTo: `/units/${dashboard.unit.id}?tab=documents-history&view=documents` })}
+									onDocumentsChanged={refreshUnitDashboard}
+								/>
+							</section>
+							<section tabindex="-1" class="scroll-mt-4 border-t pt-8 outline-none" data-testid="unit-history-section"><TimelineTab unitId={id} /></section>
+						</div>
+					</div>
+					{/if}
+				</div>
 			</div>
 		</div>
 	{/if}
@@ -299,15 +553,34 @@
 				{/if}
 			</div>
 			<p class="text-sm text-muted-foreground">
-				Use this after keys are handed over and the deposit has been received.
+				Use this after keys are handed over. Deposit money is recorded in the account prepared
+				from the approved application; this does not create another holding.
 			</p>
+			{#if moveInDialogLease.securityDeposit > 0}
+				<div class="space-y-3 border-t pt-3">
+					<div>
+						<span class="mb-1 block text-xs text-muted-foreground">Deposit received date</span>
+						<Input bind:value={moveInDepositEffectiveOn} type="date" data-testid="unit-move-in-deposit-date" />
+						{#if moveInDepositErrors.effectiveOn}<p class="mt-1 text-xs text-destructive">{moveInDepositErrors.effectiveOn}</p>{/if}
+					</div>
+					<div>
+						<span class="mb-1 block text-xs text-muted-foreground">Payment method</span>
+						<Input bind:value={moveInDepositPaymentMethod} placeholder="Check, cash, ACH…" data-testid="unit-move-in-deposit-method" />
+						{#if moveInDepositErrors.paymentMethod}<p class="mt-1 text-xs text-destructive">{moveInDepositErrors.paymentMethod}</p>{/if}
+					</div>
+					<div>
+						<span class="mb-1 block text-xs text-muted-foreground">Reference (optional)</span>
+						<Input bind:value={moveInDepositReference} placeholder="Check or confirmation number" />
+					</div>
+				</div>
+			{/if}
 		{:else}
 			<p class="text-sm text-muted-foreground">This unit does not have a current lease to confirm.</p>
 		{/if}
 		<Dialog.Footer class="mt-4">
 			<Button variant="outline" onclick={closeMoveInDialog}>Cancel</Button>
 			<Button
-				onclick={() => moveInDialogLease && moveInMutation.mutate(moveInDialogLease)}
+				onclick={() => moveInDialogLease && submitMoveIn(moveInDialogLease)}
 				disabled={!moveInDialogLease || moveInMutation.isPending}
 				data-testid="unit-move-in-confirm"
 			>

@@ -7,7 +7,7 @@ namespace RentalCommand.Api.Controllers;
 
 /// <summary>
 /// Read-only access to the caller's portfolio audit trail (append-only
-/// <see cref="Core.Entities.AuditLog"/>). Scope comes from the JWT <c>portfolioId</c> claim; the
+/// <see cref="Core.Entities.AtomicAuditLog"/>). Scope comes from the server-validated workspace context; the
 /// list supports <c>?operation&amp;entityType&amp;entityId&amp;skip&amp;take&amp;search&amp;sort</c>
 /// and defaults to newest-first. There are no create/update/delete operations.
 /// </summary>
@@ -32,7 +32,7 @@ public class AuditController : ManagementControllerBase
         [FromQuery] int? entityId,
         CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), operation, entityType, entityId, query, ct);
+        var items = await _service.ListAsync(GetWorkspaceReadScope(), operation, entityType, entityId, query, ct);
         return Ok(items);
     }
 }

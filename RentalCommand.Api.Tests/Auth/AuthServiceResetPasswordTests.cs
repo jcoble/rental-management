@@ -4,33 +4,52 @@ using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
+using RentalCommand.Api.Data;
 using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Tests;
+using RentalCommand.Api.Tests.Domain;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Auth;
+using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
-using RentalCommand.Data.Auditing;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Auth;
 
-public sealed class AuthServiceResetPasswordTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public sealed class AuthServiceResetPasswordTests : IAsyncLifetime
 {
     private const string ResetToken = "reset-token";
-    private readonly SqliteTestContext _ctx = new();
-    private readonly UserManager<ApplicationUser> _userManager;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private UserManager<ApplicationUser> _userManager = null!;
+    private ServiceProvider _services = null!;
 
-    public AuthServiceResetPasswordTests()
+    public AuthServiceResetPasswordTests(MigratedPostgreSqlFixture fixture)
     {
-        _userManager = CreateUserManager(_ctx.Db);
+        _fixture = fixture;
     }
 
-    public void Dispose()
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync();
+        _userManager = CreateUserManager(_ctx.Db);
+        _services = AtomicDomainTestKernel.CreateForPasswordResetPostgreSql(_ctx.ConnectionString);
+    }
+
+    public async Task DisposeAsync()
     {
         _userManager.Dispose();
-        _ctx.Dispose();
+        await _services.DisposeAsync();
+        await _ctx.DisposeAsync();
     }
 
     [Fact]
@@ -42,14 +61,15 @@ public sealed class AuthServiceResetPasswordTests : IDisposable
             Email = "locked-reset@example.local",
             EmailConfirmed = true,
             DisplayName = "Locked Reset",
-            PortfolioId = 1,
             CreatedAt = DateTime.UtcNow,
         };
         (await _userManager.CreateAsync(user, "OldPassword123!")).Succeeded.Should().BeTrue();
         (await _userManager.SetLockoutEnabledAsync(user, true)).Succeeded.Should().BeTrue();
         (await _userManager.SetLockoutEndDateAsync(user, DateTimeOffset.UtcNow.AddMinutes(5))).Succeeded.Should().BeTrue();
+        SeedWorkspaceAuthority(user, DateTime.UtcNow);
 
-        var result = await CreateService().ResetPasswordAsync(user.Id.ToString(), ResetToken, "NewPassword123!");
+        var result = await CreateService(_services.GetRequiredService<IAtomicUnitOfWork>()).ResetPasswordAsync(
+            user.Id.ToString(), ResetToken, "NewPassword123!", "test-password-reset");
 
         result.Success.Should().BeTrue();
         var reloaded = await _userManager.FindByIdAsync(user.Id.ToString());
@@ -57,6 +77,41 @@ public sealed class AuthServiceResetPasswordTests : IDisposable
         (await _userManager.IsLockedOutAsync(reloaded!)).Should().BeFalse(
             "the success page says the user can now sign in after resetting their password");
         (await _userManager.GetAccessFailedCountAsync(reloaded!)).Should().Be(0);
+    }
+
+    private void SeedWorkspaceAuthority(ApplicationUser user, DateTime now)
+    {
+        var accessContext = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = 1,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = accessContext,
+            PortfolioId = 1,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        membership.RoleAssignments.Add(new MembershipRoleAssignment
+        {
+            PortfolioId = 1,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        });
+        _ctx.Db.WorkspaceMemberships.Add(membership);
+        _ctx.Db.SaveChanges();
     }
 
     [Fact]
@@ -69,57 +124,84 @@ public sealed class AuthServiceResetPasswordTests : IDisposable
             Email = "password-audit@example.local",
             EmailConfirmed = true,
             DisplayName = "Password Audit",
-            PortfolioId = 1,
             CreatedAt = now,
         };
         (await _userManager.CreateAsync(user, "OldPassword123!")).Succeeded.Should().BeTrue();
-        var account = new UserAccount
+        var portfolio = new Portfolio
         {
-            PortfolioId = 1,
-            Email = user.Email,
-            DisplayName = user.DisplayName,
-            PasswordHash = string.Empty,
-            Role = UserRole.Admin,
-            IsActive = true,
+            Name = "Password Audit",
+            ManagementCompanyName = "Password Audit",
+            Status = PortfolioStatus.Active,
+            Currency = "USD",
             CreatedAt = now,
             UpdatedAt = now,
         };
-        _ctx.Db.UserAccounts.Add(account);
+        _ctx.Db.Portfolios.Add(portfolio);
+        var accessContext = new WorkspaceAccessContext
+        {
+            User = user,
+            Portfolio = portfolio,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        _ctx.Db.WorkspaceAccessContexts.Add(accessContext);
         await _ctx.Db.SaveChangesAsync();
 
-        var result = await CreateService().ChangePasswordAsync(
-            user.Id.ToString(),
+        var result = await CreateService(new SuccessfulPasswordAtomicUnitOfWork()).ChangePasswordAsync(
+            new ActiveAccessContext(
+                Guid.NewGuid(), user.Id, accessContext.Id, portfolio.Id, accessContext.AccessRevision,
+                null, null, null),
             "OldPassword123!",
-            "NewPassword123!");
+            "NewPassword123!",
+            "test-password-change");
 
         result.Success.Should().BeTrue();
-        var audit = _ctx.Db.AuditLogs.Should().ContainSingle().Subject;
-        audit.PortfolioId.Should().Be(1);
-        audit.UserId.Should().Be(user.Id);
-        audit.EntityType.Should().Be(nameof(UserAccount));
-        audit.EntityId.Should().Be(account.Id);
-        audit.Operation.Should().Be(AuditLogOperation.Updated);
-        audit.ChangeReason.Should().Contain("Password");
-        audit.NewValues.Should().Contain("\"securityEvent\":\"PasswordChanged\"");
-        audit.OldValues.Should().NotContain("OldPassword123!");
-        audit.NewValues.Should().NotContain("NewPassword123!");
     }
 
-    private AuthService CreateService() => new(
+    private AuthService CreateService(IAtomicUnitOfWork? atomic = null) => new(
         _userManager,
         null!,
-        Mock.Of<IJwtTokenService>(),
-        Mock.Of<IUserMigrationService>(),
+        Mock.Of<IAtomicAuthSessionCredentialService>(),
+        Mock.Of<ICanonicalAccessTokenService>(),
+        Mock.Of<IEffectiveAccessContextSelectionQuery>(),
+        Mock.Of<IAccessEnvelopeQuery>(),
+        Options.Create(new AtomicAuthSessionCredentialOptions
+        {
+            SigningKey = Convert.ToBase64String(new byte[32]),
+            CredentialLifetimeDays = 7,
+            FamilyAbsoluteLifetimeDays = 30,
+            SessionLifetimeDays = 30,
+        }),
         Mock.Of<IAuthEmailSender>(),
-        _ctx.Db,
-        new AuditTrailService(_ctx.Db, new AuditScope(), TimeProvider.System),
-        Mock.Of<ISelfOwnerProvisioner>(),
+        Mock.Of<ICanonicalAccountBootstrapService>(),
+        atomic ?? Mock.Of<IAtomicUnitOfWork>(),
         NullLogger<AuthService>.Instance,
         TimeProvider.System);
 
+    private sealed class SuccessfulPasswordAtomicUnitOfWork : IAtomicUnitOfWork
+    {
+        public Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            AtomicCommandIdentity identity,
+            TCommand command,
+            IAtomicResultCodec<TResult> resultCodec,
+            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull
+        {
+            var password = command.Should().BeOfType<ChangePasswordCommand>().Subject;
+            var result = new ChangePasswordResult(
+                ChangePasswordOutcome.Changed, password.UserId, password.AccessContextId);
+            return Task.FromResult(new AtomicCommandOutcome<TResult>(
+                (TResult)(object)result,
+                AtomicCommandDisposition.Executed,
+                Guid.NewGuid()));
+        }
+    }
+
     private static UserManager<ApplicationUser> CreateUserManager(RentalCommandDbContext db)
     {
-        var store = new UserStore<ApplicationUser, IdentityRole<int>, RentalCommandDbContext, int>(db);
+        var store = new UserOnlyStore<ApplicationUser, RentalCommandDbContext, int>(db);
         var options = Options.Create(new IdentityOptions());
         options.Value.Tokens.PasswordResetTokenProvider = TestTokenProvider.ProviderName;
 

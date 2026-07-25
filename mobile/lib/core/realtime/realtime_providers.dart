@@ -1,28 +1,43 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../auth/auth_controller.dart';
+import '../auth/auth_repository.dart';
 import '../auth/token_store.dart';
+import '../../features/accounting/accounting_repository.dart';
+import '../../features/analytics/analytics_repository.dart';
 import '../../features/appointments/appointments_repository.dart';
 import '../../features/applications/applications_repository.dart';
 import '../../features/activity/activity_repository.dart';
+import '../../features/banking/banking_repository.dart';
+import '../../features/deposits/deposits_repository.dart';
+import '../../features/home/home_access_providers.dart';
 import '../../features/inspections/inspections_repository.dart';
-import '../../features/leases/eviction_cases_repository.dart';
 import '../../features/leases/leases_repository.dart';
 import '../../features/maintenance/work_orders_repository.dart';
 import '../../features/messages/messages_repository.dart';
 import '../../features/money/money_repository.dart';
+import '../../features/money/transactions_controller.dart';
+import '../../features/notices/notices_repository.dart';
 import '../../features/notifications/notifications_repository.dart';
 import '../../features/onboarding/getting_started_provider.dart';
+import '../../features/onboarding/onboarding_repository.dart';
 import '../../features/owner_reports/owner_reports_repository.dart';
 import '../../features/owners/owners_repository.dart';
+import '../../features/payments/payment_detail_screen.dart';
 import '../../features/payments/payments_repository.dart';
+import '../../features/portal/tenant_portal_repository.dart';
 import '../../features/properties/capital_assets_repository.dart';
 import '../../features/properties/property_dispositions_repository.dart';
 import '../../features/properties/property_loans_repository.dart';
 import '../../features/properties/properties_repository.dart';
+import '../../features/recurring_maintenance/recurring_maintenance_repository.dart';
 import '../../features/scan/scan_repository.dart';
+import '../../features/settings/notification_foundation_repository.dart';
+import '../../features/team/team_repository.dart';
 import '../../features/tenants/tenants_repository.dart';
+import '../../features/units/units_repository.dart';
 import '../../features/vendors/vendors_repository.dart';
+import '../../features/voice/voice_intake_controller.dart';
 import 'signalr_service.dart';
 
 // ---------------------------------------------------------------------------
@@ -62,6 +77,114 @@ final realtimeWatcherProvider = Provider<void>((ref) {
   }
 });
 
+/// Clears every access-scoped cache and reconnects SignalR with the token that
+/// carries the replacement context/revision. Called only after the auth
+/// controller has installed a different canonical access boundary.
+Future<void> resetAccessScopedClient(WidgetRef ref) async {
+  ref.invalidate(accessContextsProvider);
+  ref.invalidate(sandboxStateProvider);
+  ref.invalidate(homeBriefingProvider);
+  ref.invalidate(homeLatestMessagesProvider);
+  ref.invalidate(homeFieldQueueProvider);
+  ref.invalidate(activityHistoryScopedProvider);
+  ref.invalidate(activityHistoryProvider);
+  ref.invalidate(analyticsOverviewProvider);
+  ref.invalidate(moneySnapshotProvider);
+  ref.invalidate(pastDueProvider);
+  ref.invalidate(tenantLedgerEntriesPageProvider);
+  ref.invalidate(paymentDetailProvider);
+  ref.invalidate(accountingSummaryProvider);
+  ref.invalidate(transactionsProvider);
+  ref.invalidate(expensesPageProvider);
+  ref.invalidate(expensesListProvider);
+  ref.invalidate(unitExpensesProvider);
+  ref.invalidate(expenseDetailProvider);
+  ref.invalidate(expenseReceiptProvider);
+  ref.invalidate(bankingSummaryProvider);
+  ref.invalidate(bankingTransactionsProvider);
+  ref.invalidate(bankingReviewQueueProvider);
+  ref.invalidate(depositsProvider);
+  ref.invalidate(leaseManagementsPageProvider);
+  ref.invalidate(propertyLeaseManagementsProvider);
+  ref.invalidate(tenantLeaseManagementsProvider);
+  ref.invalidate(leaseManagementDetailProvider);
+  ref.invalidate(leaseAgreementHistoryProvider);
+  ref.invalidate(leaseAddendumHistoryProvider);
+  ref.invalidate(leaseLedgerProvider);
+  ref.invalidate(propertiesProvider);
+  ref.invalidate(propertiesPageProvider);
+  ref.invalidate(availableForLeasePropertiesProvider);
+  ref.invalidate(propertyDetailProvider);
+  ref.invalidate(unitsProvider);
+  ref.invalidate(availableForLeaseUnitsProvider);
+  ref.invalidate(unitHealthPageProvider);
+  ref.invalidate(unitDashboardProvider);
+  ref.invalidate(unitListingWorkspaceProvider);
+  ref.invalidate(tenantsProvider);
+  ref.invalidate(availableForLeaseTenantsProvider);
+  ref.invalidate(tenantsPageProvider);
+  ref.invalidate(tenantDetailProvider);
+  ref.invalidate(workOrdersProvider);
+  ref.invalidate(workOrdersPageProvider);
+  ref.invalidate(workOrderDetailProvider);
+  ref.invalidate(workOrderDocumentsProvider);
+  ref.invalidate(documentBytesProvider);
+  ref.invalidate(propertiesForWoProvider);
+  ref.invalidate(applicationsProvider);
+  ref.invalidate(applicationsPageProvider);
+  ref.invalidate(applicationDetailProvider);
+  ref.invalidate(applicationScreeningProvider);
+  ref.invalidate(inspectionsProvider);
+  ref.invalidate(inspectionsPageProvider);
+  ref.invalidate(inspectionDetailProvider);
+  ref.invalidate(inspectionTemplatesProvider);
+  ref.invalidate(inspectionPropertiesProvider);
+  ref.invalidate(inspectionUnitsProvider);
+  ref.invalidate(inspectionPhotoBytesProvider);
+  ref.invalidate(ownersPageProvider);
+  ref.invalidate(ownerDetailProvider);
+  ref.invalidate(ownerSummariesProvider);
+  ref.invalidate(ownerStatementProvider);
+  ref.invalidate(ownerDistributionsProvider);
+  ref.invalidate(propertyLoansProvider);
+  ref.invalidate(loanPaymentsProvider);
+  ref.invalidate(propertyCapitalAssetsProvider);
+  ref.invalidate(propertyDispositionsProvider);
+  ref.invalidate(vendorsProvider);
+  ref.invalidate(vendorsBySortProvider);
+  ref.invalidate(vendorsPageProvider);
+  ref.invalidate(vendorScorecardProvider);
+  ref.invalidate(appointmentsProvider);
+  ref.invalidate(appointmentDetailProvider);
+  ref.invalidate(scanListFamilyProvider);
+  ref.invalidate(conversationsProvider);
+  ref.invalidate(conversationsPageProvider);
+  ref.invalidate(conversationProvider);
+  ref.invalidate(unreadCountProvider);
+  ref.invalidate(inboxProvider);
+  ref.invalidate(gettingStartedSignalsProvider);
+  ref.invalidate(gettingStartedProgressProvider);
+  ref.invalidate(noticeDraftsProvider);
+  ref.invalidate(recurringMaintenanceProvider);
+  ref.invalidate(recurringPropertiesProvider);
+  ref.invalidate(recurringUnitsProvider);
+  ref.invalidate(recurringVendorsProvider);
+  ref.invalidate(myAlertsProvider);
+  ref.invalidate(teamRoleProfilesProvider);
+  ref.invalidate(teamProvider);
+  ref.invalidate(tenantPortalSnapshotProvider);
+  ref.invalidate(tenantPortalAccountProvider);
+  ref.invalidate(tenantPortalChargesPageProvider);
+  ref.invalidate(tenantPortalEntriesPageProvider);
+  ref.invalidate(tenantWorkOrderDetailProvider);
+  ref.invalidate(tenantAutopayStatusProvider);
+  ref.invalidate(voiceConversationProvider);
+
+  final service = ref.read(signalrServiceProvider);
+  await service.disconnect();
+  await service.connect();
+}
+
 // ---------------------------------------------------------------------------
 // Entity → provider invalidation map
 // ---------------------------------------------------------------------------
@@ -79,28 +202,30 @@ void _invalidateForEntity(Ref ref, String entityType) {
 
   switch (entityType) {
     case 'Payment':
-      _refreshIfAlive(ref, paymentsProvider);
-      ref.invalidate(paymentsPageProvider);
+    case 'TenantLedgerEntry':
+      ref.invalidate(tenantLedgerEntriesPageProvider);
+      ref.invalidate(moneySnapshotProvider);
+      _refreshIfAlive(ref, pastDueProvider);
       _refreshIfAlive(ref, accountingSummaryProvider);
-      _refreshIfAlive(ref, leasesForPaymentProvider);
 
     case 'Expense':
       ref.invalidate(expensesPageProvider);
       ref.invalidate(expensesListProvider);
       _refreshIfAlive(ref, accountingSummaryProvider);
 
-    case 'Lease':
-      _refreshIfAlive(ref, leasesProvider);
-      ref.invalidate(leasesPageProvider);
-      _refreshIfAlive(ref, leasesForPaymentProvider);
+    case 'LeaseManagement':
+    case 'LeaseAgreement':
       ref.invalidate(gettingStartedSignalsProvider);
-      // Family providers: invalidate all live instances.
-      ref.invalidate(propertyLeasesProvider);
-      ref.invalidate(tenantLeasesProvider);
-      ref.invalidate(leaseDetailProvider);
+      ref.invalidate(leaseManagementsPageProvider);
+      ref.invalidate(propertyLeaseManagementsProvider);
+      ref.invalidate(tenantLeaseManagementsProvider);
+      ref.invalidate(leaseManagementDetailProvider);
+      ref.invalidate(leaseAgreementHistoryProvider);
+      ref.invalidate(leaseLedgerProvider);
 
     case 'Property':
       _refreshIfAlive(ref, propertiesProvider);
+      ref.invalidate(propertiesPageProvider);
       ref.invalidate(gettingStartedSignalsProvider);
 
     case 'Unit':
@@ -149,22 +274,14 @@ void _invalidateForEntity(Ref ref, String entityType) {
     case 'PropertyDisposition':
       ref.invalidate(propertyDispositionsProvider);
       _refreshIfAlive(ref, propertiesProvider);
+      ref.invalidate(propertiesPageProvider);
       ref.invalidate(propertyDetailProvider);
       ref.invalidate(unitsProvider);
-      ref.invalidate(propertyLeasesProvider);
-      ref.invalidate(leaseDetailProvider);
-      ref.invalidate(leasesPageProvider);
+      ref.invalidate(propertyLeaseManagementsProvider);
+      ref.invalidate(leaseManagementDetailProvider);
+      ref.invalidate(leaseManagementsPageProvider);
       ref.invalidate(propertyCapitalAssetsProvider);
       _refreshIfAlive(ref, accountingSummaryProvider);
-
-    case 'EvictionCase':
-    case 'EvictionCaseEvent':
-      ref.invalidate(leaseEvictionCasesProvider);
-      _refreshIfAlive(ref, leasesProvider);
-      ref.invalidate(leasesPageProvider);
-      ref.invalidate(leaseDetailProvider);
-      ref.invalidate(propertyLeasesProvider);
-      ref.invalidate(unitsProvider);
 
     case 'Portfolio':
       ref.invalidate(gettingStartedSignalsProvider);
@@ -186,14 +303,16 @@ void _invalidateForEntity(Ref ref, String entityType) {
       // Refresh the thread list (unread counts + ordering) and invalidate the
       // open-thread family so a message sent from web/portal appears live.
       _refreshIfAlive(ref, conversationsProvider);
+      ref.invalidate(conversationsPageProvider);
       ref.invalidate(conversationProvider);
 
     case 'Notification':
       // In-app Notification rows are broadcast over THIS (updates) hub by the
       // API/Engine (RentChargeService, ConversationService, LateFeeService,
       // LeaseExpiryReminderService, the SMS-inbound services, ...). Refresh the
-      // unread badge and, if the inbox screen is open, its list — so a new
-      // notification appears live without a manual reload.
+      // tenant dashboard snapshot, unread badge, and (when open) inbox list so
+      // a new notification appears live without a manual reload.
+      ref.invalidate(tenantPortalSnapshotProvider);
       _refreshIfAlive(ref, unreadCountProvider);
       _refreshIfAlive(ref, inboxProvider);
 

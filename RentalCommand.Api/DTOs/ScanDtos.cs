@@ -9,13 +9,28 @@ namespace RentalCommand.Api.DTOs;
 /// <summary>One extracted field surfaced to the review UI.</summary>
 public sealed record ScanFieldDto(string Name, string Value, decimal Confidence);
 
+public sealed record ScanCaptureContextDto(
+    string? Experience,
+    int? AccessContextId,
+    long? AccessRevision,
+    int? PropertyId,
+    int? UnitId,
+    int? LeaseManagementId,
+    int? LeaseAgreementId,
+    int? TenantAccountId,
+    long? TenantLedgerEntryId,
+    int? WorkOrderId,
+    int? ApplicationId,
+    int? RentalListingId,
+    string? SourceLabel);
+
 /// <summary>Draft as seen by the review page.</summary>
 public sealed record ScanDraftResponse(
     int Id, int PortfolioId, string TargetEntityType, string Status,
     string FileUrl, IReadOnlyList<ScanFieldDto> Fields,
     string? ModelId, int? TokensUsed, decimal? CostUsd, string? FailureReason,
     DateTime CreatedAt, DateTime? ReviewedAt, DateTime? ConfirmedAt,
-    string? CreatedEntityType = null, int? CreatedEntityId = null, int? CreatedUnitId = null,
+    string? CreatedEntityType = null, long? CreatedEntityId = null, int? CreatedUnitId = null,
     // Conversational-voice ("Tell me") slot state. Populated only via
     // WithVoiceSlots() for the voice endpoints; left at complete/empty defaults
     // for scanned documents (which the scan review screen never reads).
@@ -23,10 +38,12 @@ public sealed record ScanDraftResponse(
     string? NextPrompt = null,
     bool Complete = true,
     bool Ambiguous = false,
-    // Lease-import preview: for a lease draft, what confirm would do with the property/unit
-    // (link-existing vs create-new). Null for non-lease drafts. Populated by the controller via
+    // Lease-import preview: for a lease draft, whether the Property/Unit resolved or still needs
+    // an explicit selection. Null for non-lease drafts. Populated by the controller via
     // WithLeaseProposal() so the review UI can show + let the user correct before committing.
-    LeaseImportProposal? LeaseProposal = null)
+    LeaseImportProposal? LeaseProposal = null,
+    ScanCaptureContextDto? CaptureContext = null,
+    string? SourceContentSha256 = null)
 {
     /// <summary>Returns a copy carrying the lease-import property/unit proposal for the review UI.</summary>
     public ScanDraftResponse WithLeaseProposal(LeaseImportProposal? proposal) =>
@@ -41,7 +58,7 @@ public sealed record ScanDraftResponse(
     public static ScanDraftResponse FromEntity(
         ScanDraft d,
         string? createdEntityType = null,
-        int? createdEntityId = null,
+        long? createdEntityId = null,
         int? createdUnitId = null)
     {
         var fields = ParseFields(d.ExtractedFields);
@@ -52,8 +69,17 @@ public sealed record ScanDraftResponse(
             fileUrl, fields,
             d.ModelId, d.TokensUsed, d.CostUsd, d.FailureReason,
             d.CreatedAt, d.ReviewedAt, d.ConfirmedAt,
-            createdEntityType, createdEntityId, createdUnitId);
+            createdEntityType, createdEntityId, createdUnitId,
+            CaptureContext: ToCaptureContext(d),
+            SourceContentSha256: d.SourceContentSha256);
     }
+
+    internal static ScanCaptureContextDto ToCaptureContext(ScanDraft d) => new(
+        d.CaptureExperience?.ToString(), d.CaptureAccessContextId, d.CaptureAccessRevision,
+        d.CapturePropertyId, d.CaptureUnitId, d.CaptureLeaseManagementId,
+        d.CaptureLeaseAgreementId, d.CaptureTenantAccountId, d.CaptureTenantLedgerEntryId,
+        d.CaptureWorkOrderId, d.CaptureApplicationId, d.CaptureRentalListingId,
+        d.SourceLabel);
 
     /// <summary>
     /// Returns a copy with the conversational-voice slot fields
@@ -80,7 +106,7 @@ public sealed record ScanDraftResponse(
         };
     }
 
-    private static IReadOnlyList<ScanFieldDto> ParseFields(string? json)
+    internal static IReadOnlyList<ScanFieldDto> ParseFields(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))
             return [];
@@ -157,11 +183,17 @@ public sealed record ScanBatchDraftResponse(
 /// <summary>Full batch detail: the batch, its rollup counts, and its drafts for the review queue.</summary>
 public sealed record ScanBatchDetailResponse(
     int Id, string? Name, string TargetEntityType, string Status, int FileCount,
-    DateTime CreatedAtUtc, ScanBatchCounts Counts, IReadOnlyList<ScanBatchDraftResponse> Drafts);
+    DateTime CreatedAtUtc, ScanBatchCounts Counts, IReadOnlyList<ScanBatchDraftResponse> Drafts,
+    int DraftTotalCount, int Skip, int Take);
 
-/// <summary>Optional field override JSON applied when confirming a scan draft.</summary>
+/// <summary>Stable operation identity plus optional reviewed field overrides for scan confirmation.</summary>
 public sealed class ConfirmScanRequest
 {
+    [Required]
+    [MaxLength(160)]
+    [RegularExpression(@".*\S.*", ErrorMessage = "ClientOperationId cannot be blank.")]
+    public string ClientOperationId { get; set; } = string.Empty;
+
     public string? OverridesJson { get; set; }
 }
 

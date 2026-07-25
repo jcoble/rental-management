@@ -1,21 +1,19 @@
 using System.Data.Common;
 using FluentAssertions;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
-using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
 /// <summary>
-/// Covers portfolio-scoped CRUD for recurring-maintenance tasks: create validates the property
-/// in-portfolio (and rejects out-of-portfolio refs), update/toggle/soft-delete behave, and the
-/// active filter + soft-delete query filter are honored on reads.
+/// Covers the receipt-backed mutation contract and verifies recurring-maintenance list work stays
+/// translated to database count, projection, sorting, and paging queries.
 /// </summary>
 public class RecurringMaintenanceTaskServiceTests : IDisposable
 {
@@ -28,7 +26,8 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
     public RecurringMaintenanceTaskServiceTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
-        _sut = new RecurringMaintenanceTaskService(_ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
+        _sut = new RecurringMaintenanceTaskService(
+            _ctx.Db, TimeProvider.System, Mock.Of<IAtomicUnitOfWork>());
     }
 
     public void Dispose() => _ctx.Dispose();
@@ -36,101 +35,18 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
     // -----------------------------------------------------------------------
 
     [Fact]
-    public async Task CreateAsync_PersistsTask_WithNormalizedDate()
+    public void MutationsExposeOnlyScopedReceiptBackedOverloads()
     {
-        var property = SeedProperty();
+        var mutationMethods = typeof(IRecurringMaintenanceTaskService).GetMethods()
+            .Where(method => method.Name is "CreateAuthorizedAsync" or "UpdateAuthorizedAsync"
+                or "SetActiveAuthorizedAsync" or "DeleteAuthorizedAsync")
+            .ToArray();
 
-        var result = await _sut.CreateAsync(PortfolioId, new CreateRecurringMaintenanceTaskRequest
-        {
-            PropertyId = property.Id,
-            Title = "Quarterly gutter cleaning",
-            Description = "Clear gutters and downspouts",
-            Category = "Landscaping",
-            RecurrenceInterval = RecurrenceInterval.Quarterly,
-            NextDueDate = new DateTime(2026, 7, 1, 14, 30, 0, DateTimeKind.Utc),
-            ScheduledTime = new TimeOnly(9, 15),
-            EstimatedCost = 180m,
-            Priority = WorkOrderPriority.Normal,
-        });
-
-        result.Should().NotBeNull();
-        result!.Title.Should().Be("Quarterly gutter cleaning");
-        result.RecurrenceInterval.Should().Be(RecurrenceInterval.Quarterly);
-        result.ScheduledTime.Should().Be(new TimeOnly(9, 15));
-        result.EstimatedCost.Should().Be(180m);
-        result.MonthlyEstimatedCost.Should().Be(60m);
-        result.IsActive.Should().BeTrue();
-        // Time-of-day is dropped (it's a calendar date).
-        result.NextDueDate.Date.Should().Be(new DateTime(2026, 7, 1));
-
-        _ctx.Db.RecurringMaintenanceTasks.Should().HaveCount(1);
-    }
-
-    [Fact]
-    public async Task CreateAsync_RejectsPropertyOutsidePortfolio()
-    {
-        // Property exists but belongs to a different portfolio → cross-tenant guard returns null.
-        SeedPortfolio(999);
-        var foreignProperty = SeedProperty(portfolioId: 999);
-
-        var result = await _sut.CreateAsync(PortfolioId, new CreateRecurringMaintenanceTaskRequest
-        {
-            PropertyId = foreignProperty.Id,
-            Title = "Should not be created",
-            NextDueDate = DateTime.UtcNow.Date,
-        });
-
-        result.Should().BeNull();
-        _ctx.Db.RecurringMaintenanceTasks.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task UpdateAsync_ChangesFields()
-    {
-        var property = SeedProperty();
-        var task = SeedTask(property.Id);
-
-        var result = await _sut.UpdateAsync(PortfolioId, task.Id, new UpdateRecurringMaintenanceTaskRequest
-        {
-            Title = "Renamed chore",
-            RecurrenceInterval = RecurrenceInterval.SemiAnnually,
-            Priority = WorkOrderPriority.High,
-        });
-
-        result.Should().NotBeNull();
-        result!.Title.Should().Be("Renamed chore");
-        result.RecurrenceInterval.Should().Be(RecurrenceInterval.SemiAnnually);
-        result.Priority.Should().Be(WorkOrderPriority.High);
-    }
-
-    [Fact]
-    public async Task SetActiveAsync_TogglesFlag()
-    {
-        var property = SeedProperty();
-        var task = SeedTask(property.Id);
-
-        var off = await _sut.SetActiveAsync(PortfolioId, task.Id, isActive: false);
-        off!.IsActive.Should().BeFalse();
-
-        var on = await _sut.SetActiveAsync(PortfolioId, task.Id, isActive: true);
-        on!.IsActive.Should().BeTrue();
-    }
-
-    [Fact]
-    public async Task DeleteAsync_SoftDeletes_AndHidesFromReads()
-    {
-        var property = SeedProperty();
-        var task = SeedTask(property.Id);
-
-        var deleted = await _sut.DeleteAsync(PortfolioId, task.Id);
-        deleted.Should().BeTrue();
-
-        // Hidden from get + list (global query filter on DeletedAt).
-        (await _sut.GetAsync(PortfolioId, task.Id)).Should().BeNull();
-        (await _sut.ListAsync(PortfolioId, propertyId: null, activeOnly: null, new ListQuery())).Should().BeEmpty();
-
-        // Row still present (soft, not hard, delete).
-        _ctx.Db.RecurringMaintenanceTasks.IgnoreQueryFilters().Should().HaveCount(1);
+        mutationMethods.Should().HaveCount(4);
+        mutationMethods.Should().OnlyContain(method =>
+            method.GetParameters().First().ParameterType ==
+                typeof(RentalCommand.Core.Authorization.WorkspaceReadScope)
+            && method.GetParameters().Any(parameter => parameter.Name == "idempotencyKey"));
     }
 
     [Fact]
@@ -197,23 +113,43 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
             sql.Contains("RecurringMaintenanceTaskId", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task ListPageAsync_UnitQueryFiltersSortsAndPagesInTwoSqlCommands()
+    {
+        var property = SeedProperty();
+        var firstUnit = SeedUnit(property.Id, "1A");
+        var secondUnit = SeedUnit(property.Id, "1B");
+        SeedTask(property.Id, title: "Alpha First Unit", unitId: firstUnit.Id);
+        SeedTask(property.Id, title: "Bravo First Unit", unitId: firstUnit.Id);
+        SeedTask(property.Id, title: "Aardvark Second Unit", unitId: secondUnit.Id);
+
+        _commands.Clear();
+        var result = await _sut.ListPageAsync(
+            PortfolioId,
+            propertyId: null,
+            activeOnly: null,
+            new RecurringMaintenanceTaskListQuery
+            {
+                UnitId = firstUnit.Id,
+                Sort = "title",
+                Skip = 1,
+                Take = 1,
+            });
+
+        result.TotalCount.Should().Be(2);
+        result.Skip.Should().Be(1);
+        result.Take.Should().Be(1);
+        result.Items.Should().ContainSingle(item =>
+            item.UnitId == firstUnit.Id && item.Title == "Bravo First Unit");
+        var listCommands = _commands.Where(sql =>
+            sql.Contains("FROM \"RecurringMaintenanceTasks\"", StringComparison.OrdinalIgnoreCase)).ToList();
+        listCommands.Should().HaveCount(2);
+        listCommands.Should().OnlyContain(sql =>
+            sql.Contains("UnitId", StringComparison.OrdinalIgnoreCase));
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
-
-    private void SeedPortfolio(int id)
-    {
-        var now = DateTime.UtcNow;
-        _ctx.Db.Portfolios.Add(new Portfolio
-        {
-            Id = id,
-            Name = $"Portfolio {id}",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
-        _ctx.Db.SaveChanges();
-    }
 
     private Property SeedProperty(int portfolioId = PortfolioId)
     {
@@ -240,13 +176,15 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
         string title = "Recurring chore",
         RecurrenceInterval interval = RecurrenceInterval.Monthly,
         TimeOnly? scheduledTime = null,
-        decimal? estimatedCost = null)
+        decimal? estimatedCost = null,
+        int? unitId = null)
     {
         var now = DateTime.UtcNow;
         var task = new RecurringMaintenanceTask
         {
             PortfolioId = PortfolioId,
             PropertyId = propertyId,
+            UnitId = unitId,
             Title = title,
             RecurrenceInterval = interval,
             NextDueDate = DateTime.SpecifyKind(now.Date, DateTimeKind.Utc),
@@ -260,6 +198,25 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
         _ctx.Db.RecurringMaintenanceTasks.Add(task);
         _ctx.Db.SaveChanges();
         return task;
+    }
+
+    private Unit SeedUnit(int propertyId, string unitNumber)
+    {
+        var now = DateTime.UtcNow;
+        var unit = new Unit
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = propertyId,
+            UnitNumber = unitNumber,
+            Bedrooms = 1,
+            Bathrooms = 1,
+            MarketRent = 1000m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Units.Add(unit);
+        _ctx.Db.SaveChanges();
+        return unit;
     }
 
     private WorkOrder SeedGeneratedWorkOrder(RecurringMaintenanceTask task, string title)

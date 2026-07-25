@@ -111,8 +111,13 @@ public sealed class EntityChangeListener : BackgroundService
         try
         {
             await conn.OpenAsync(stoppingToken);
+            await RentalCommand.Data.Security.DatabaseRuntimeIdentity.ValidateOpenedConnectionAsync(
+                conn,
+                RentalCommand.Data.Security.DatabaseRuntimeIdentity.ApiRole,
+                stoppingToken);
 
-            await using (var cmd = new NpgsqlCommand($"LISTEN {DataUpdateNotification.ChannelName}", conn))
+            await using (var cmd = new NpgsqlCommand(
+                $"LISTEN {DataUpdateNotification.ChannelName}", conn))
             {
                 await cmd.ExecuteNonQueryAsync(stoppingToken);
             }
@@ -171,8 +176,9 @@ public sealed class EntityChangeListener : BackgroundService
 
         try
         {
-            // Reuse the real hub-backed broadcaster so the wire payload/group naming is identical to
-            // API-originated updates. It swallows its own hub errors, so this scope stays clean.
+            // Reuse the real hub-backed broadcaster so database recipient authorization and the
+            // minimal invalidation payload are identical to API-originated updates. It swallows its
+            // own hub errors, so this scope stays clean.
             using var scope = _scopeFactory.CreateScope();
             var dataUpdate = scope.ServiceProvider.GetRequiredService<IDataUpdateService>();
 

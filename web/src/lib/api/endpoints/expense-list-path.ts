@@ -1,6 +1,7 @@
 import { buildListQuery, type ListParams } from '../list-params.ts';
 
 export interface ExpenseListParams extends ListParams {
+	operationalScope?: 'Portfolio' | 'Property' | 'Unit' | 'WorkOrder';
 	propertyId?: number;
 	unitId?: number;
 	workOrderId?: number;
@@ -15,6 +16,7 @@ export interface ExpenseListParams extends ListParams {
 
 export function buildExpenseListPagePath(portfolioId: number, params?: ExpenseListParams): string {
 	const {
+		operationalScope,
 		propertyId,
 		unitId,
 		workOrderId,
@@ -29,6 +31,7 @@ export function buildExpenseListPagePath(portfolioId: number, params?: ExpenseLi
 	} = params ?? {};
 	return `/expenses/page${buildListQuery(list, {
 		portfolioId,
+		operationalScope,
 		propertyId,
 		unitId,
 		workOrderId,

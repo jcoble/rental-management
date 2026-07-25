@@ -3,8 +3,8 @@
 	import { goto } from '$app/navigation';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { tenants } from '$lib/api/endpoints/tenants';
-	import { leases } from '$lib/api/endpoints/leases';
-	import type { Lease, Tenant } from '$lib/types';
+	import { leaseManagements } from '$lib/api/endpoints/lease-managements';
+	import type { LeaseManagementSummary, Tenant } from '$lib/types';
 	import { recordHref } from '$lib/navigation/record-href';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { tenantSchema, parseForm } from '$lib/schemas';
@@ -21,17 +21,23 @@
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import TenantNoticeDialog from '$lib/components/notices/TenantNoticeDialog.svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { Mail, Phone, AlertCircle, Pencil, Save, Trash2, User, X, Contact, FileClock, BellRing, Send, ToggleLeft, ToggleRight } from '@lucide/svelte';
+	import { Mail, Phone, AlertCircle, Pencil, Save, Trash2, User, X, Contact, FileClock, BellRing } from '@lucide/svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
+	import { debounced } from '$lib/utils/debounce.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const id = $derived(Number(page.params.id));
+	const RELATED_PAGE_SIZE = 20;
+	let leaseSearch = $state('');
+	let leasePage = $state(1);
+	const debouncedLeaseSearch = debounced(() => leaseSearch, 300);
 
 	const tenantQuery = createQuery(() => ({
 		queryKey: ['tenant', id],
@@ -40,13 +46,24 @@
 	}));
 
 	const leasesQuery = createQuery(() => ({
-		queryKey: ['leases', portfolioId, { tenantId: id }],
-		queryFn: () => leases.list(portfolioId, { tenantId: id, take: 100 }),
+		queryKey: ['lease-managements', { tenantId: id, search: debouncedLeaseSearch.value, page: leasePage }],
+		queryFn: () => leaseManagements.listPage({
+			tenantId: id,
+			search: debouncedLeaseSearch.value || undefined,
+			skip: (leasePage - 1) * RELATED_PAGE_SIZE,
+			take: RELATED_PAGE_SIZE,
+			sort: '-updatedAtUtc'
+		}),
 		enabled: !isNaN(id) && id > 0 && portfolioId > 0,
 	}));
 
+	$effect(() => {
+		debouncedLeaseSearch.value;
+		leasePage = 1;
+	});
+
 	const tenant = $derived(tenantQuery.data);
-	const tenantLeases = $derived(leasesQuery.data ?? []);
+	const tenantLeases = $derived(leasesQuery.data?.items ?? []);
 	const activeTenantLeaseCount = $derived(tenant?.activeLeaseCount ?? 0);
 	const fullName = $derived(
 		tenant ? (tenant.fullName ?? `${tenant.firstName} ${tenant.lastName}`) : ''
@@ -110,36 +127,6 @@
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
-	// ── Send / resend portal invite ──────────────────────────────────────────────
-	// Email the tenant their resident-portal sign-in details on demand. Ensures the login exists, then
-	// sends the invite. Only available once the tenant has an email on file. This is the only place an
-	// invite email goes out (the login itself is provisioned silently when the tenant is created).
-	const sendPortalInviteMutation = createMutation(() => ({
-		mutationFn: (tid: number) => tenants.sendPortalInvite(tid),
-		onSuccess: (result) => {
-			const to = result.email || fullName || 'the tenant';
-			showSuccess(
-				result.alreadyExisted ? `Portal invite resent to ${to}.` : `Portal invite sent to ${to}.`
-			);
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	// ── Portal access toggle ─────────────────────────────────────────────────────
-	// On by default (provisioned at tenant creation); turn OFF to block the tenant's sign-in (e.g. when
-	// their lease ends), back ON to restore it. Reflects tenant.portalAccess and re-fetches after.
-	const setPortalAccessMutation = createMutation(() => ({
-		mutationFn: ({ tid, enabled }: { tid: number; enabled: boolean }) =>
-			tenants.setPortalAccess(tid, enabled),
-		onSuccess: (result) => {
-			showSuccess(
-				result.portalAccess === 'active' ? 'Portal access turned on.' : 'Portal access turned off.'
-			);
-			queryClient.invalidateQueries({ queryKey: ['tenant', id] });
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
 	// ── Per-tenant notice: Create / Send ─────────────────────────────────────────
 	// Generate the notice draft(s) due for THIS tenant (POST /notices/generate { tenantId }, owned by a
 	// sibling lane), review them in a dialog, then send each on the chosen channels (reusing the notice
@@ -172,10 +159,11 @@
 	});
 
 	// ── Lease columns ──────────────────────────────────────────────────────────
-	const leaseColumns: ColumnDef<Lease>[] = [
+	const leaseColumns: ColumnDef<LeaseManagementSummary>[] = [
 		{
-			key: 'leaseNumber',
-			title: 'Lease #',
+			key: 'agreementNumber',
+			title: 'Agreement',
+			accessor: (relationship) => relationship.agreementNumber ?? 'No governing agreement',
 			sortable: true,
 			mobileRole: 'title',
 		},
@@ -187,37 +175,37 @@
 			accessor: (l) => l.unitNumber ?? '–',
 		},
 		{
-			key: 'monthlyRent',
+			key: 'baseRentAmount',
 			title: 'Rent',
 			format: 'currency',
 			sortable: true,
 			mobileRole: 'metric',
 		},
 		{
-			key: 'startDate',
+			key: 'termStartOn',
 			title: 'Start',
 			format: 'date',
 			sortable: true,
 			mobileRole: 'meta',
 		},
 		{
-			key: 'endDate',
+			key: 'termEndOn',
 			title: 'End',
 			format: 'date',
 			sortable: true,
 			mobileRole: 'meta',
 		},
 		{
-			key: 'status',
-			title: 'Status',
+			key: 'lifecycle',
+			title: 'Relationship',
 			mobileRole: 'badge',
 			cell: leaseStatusCell,
 		},
 	];
 </script>
 
-{#snippet leaseStatusCell(lease: Lease)}
-	<StatusBadge status={lease.status} />
+{#snippet leaseStatusCell(relationship: LeaseManagementSummary)}
+	<StatusBadge status={relationship.lifecycle} />
 {/snippet}
 
 <svelte:head>
@@ -296,49 +284,6 @@
 						<BellRing class="h-4 w-4" />
 						Create / Send notice
 					</Button>
-					{#if tenant.portalAccess === 'active' || tenant.portalAccess === 'disabled'}
-						<div class="flex items-center gap-2" data-testid="tenant-portal-access">
-							<span class="text-xs font-medium text-muted-foreground">Portal access</span>
-							<Button
-								variant={tenant.portalAccess === 'active' ? 'outline' : 'secondary'}
-								size="sm"
-								class="h-9 gap-2"
-								disabled={setPortalAccessMutation.isPending}
-								onclick={() =>
-									setPortalAccessMutation.mutate({
-										tid: tenant.id,
-										enabled: tenant.portalAccess !== 'active',
-									})}
-								title={tenant.portalAccess === 'active'
-									? 'Turn off this tenant’s portal sign-in.'
-									: 'Turn this tenant’s portal sign-in back on.'}
-								data-testid="tenant-portal-access-toggle"
-							>
-								{#if tenant.portalAccess === 'active'}
-									<ToggleRight class="h-4 w-4" /> On
-								{:else}
-									<ToggleLeft class="h-4 w-4" /> Off
-								{/if}
-							</Button>
-						</div>
-					{/if}
-					<Button
-						variant="outline"
-						class="gap-2"
-						onclick={() => sendPortalInviteMutation.mutate(tenant.id)}
-						disabled={!tenant.email || sendPortalInviteMutation.isPending}
-						title={tenant.email
-							? 'Email this tenant their portal sign-in details.'
-							: 'Add an email to this tenant before sending a portal invite.'}
-						data-testid="tenant-detail-send-portal-invite"
-					>
-						<Send class="h-4 w-4" />
-						{sendPortalInviteMutation.isPending
-							? 'Sending…'
-							: tenant.portalAccess === 'active'
-								? 'Resend invite'
-								: 'Send portal invite'}
-					</Button>
 					<Button variant="outline" class="gap-2" onclick={startEditing} data-testid="tenant-detail-edit">
 						<Pencil class="h-4 w-4" />
 						Edit
@@ -399,16 +344,31 @@
 		<!-- Leases section -->
 		<div data-testid="tenant-detail-leases">
 			<h2 class="mb-3 text-lg font-semibold">Leases</h2>
+			{#if leasesQuery.isError}
+				<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="tenant-leases-error">
+					<p class="text-sm font-medium text-destructive">Could not load this tenant’s leases.</p>
+					<Button class="mt-3" variant="outline" size="sm" onclick={() => leasesQuery.refetch()}>Try again</Button>
+				</div>
+			{:else}
 			<DataGrid
 				data={tenantLeases}
 				columns={leaseColumns}
 				loading={leasesQuery.isLoading}
 				emptyMessage="No leases found for this tenant."
-				onRowClick={(lease) => goto(recordHref('lease', lease))}
-				getRowKey={(l) => l.id}
-				pageSize={10}
+				onRowClick={(relationship) => goto(`/leases/${relationship.leaseManagementId}`)}
+				getRowKey={(relationship) => relationship.leaseManagementId}
+				pageSize={RELATED_PAGE_SIZE}
+				page={leasePage}
+				totalCount={leasesQuery.data?.totalCount ?? 0}
+				serverSide
+				onPageChange={(next) => (leasePage = next)}
 				data-testid="tenant-leases-grid"
-			/>
+			>
+				{#snippet toolbar()}
+					<SearchInput bind:value={leaseSearch} placeholder="Search this tenant’s leases…" testid="tenant-lease-search" />
+				{/snippet}
+			</DataGrid>
+			{/if}
 		</div>
 
 		<!-- Documents section -->
@@ -441,7 +401,7 @@
 
 <TenantNoticeDialog
 	bind:open={showNoticeDialog}
-	tenantId={id}
+	recipientTenantId={id}
 	tenantName={fullName}
 	activeLeaseCount={activeTenantLeaseCount}
 	initialNoticeType={noticeDialogType}

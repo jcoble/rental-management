@@ -1,13 +1,16 @@
 using System.Text;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -17,29 +20,86 @@ public class TenantService : ITenantService
     private const string EntityType = "Tenant";
     private const int MaxSearchTokens = 8;
     private const string ActiveLeaseDeleteBlockedReason =
-        "This tenant has an active or notice-given lease; end or reassign it first.";
+        "This tenant is a current resident in an occupied rental; return possession or change the household first.";
     private const string LeaseHistoryDeleteBlockedReason =
-        "This tenant has lease history; keep the tenant record to preserve past leases and payments.";
+        "This tenant has rental relationship history; keep the tenant record to preserve agreements and account history.";
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly ITenantPortalProvisioningService _portalProvisioning;
-    private readonly ILogger<TenantService> _logger;
+    private readonly IAtomicUnitOfWork? _atomic;
     private readonly TimeProvider _timeProvider;
 
     public TenantService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
-        ITenantPortalProvisioningService portalProvisioning,
-        ILogger<TenantService> logger,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IAtomicUnitOfWork? atomic = null)
     {
         _db = db;
         _dataUpdate = dataUpdate;
-        _portalProvisioning = portalProvisioning;
-        _logger = logger;
         _timeProvider = timeProvider;
+        _atomic = atomic;
+}
+    public async Task<TenantResponse?> CreateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        CreateTenantRequest request,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Tenant,
+            AtomicCoreCrudMutationOperation.Create, 0, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
+        return DeserializeSnapshot<TenantResponse>(outcome.Value);
     }
+
+    public async Task<IReadOnlyList<TenantResponse>> CreateGuidedSetupBatchAsync(
+        WorkspaceReadScope scope,
+        GuidedTenantSetupRequest request,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicGuidedTenantSetup.Command(scope, request, operationKey);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicGuidedTenantSetup.Identity(command), command, AtomicGuidedTenantSetup.Codec, ct);
+        return JsonSerializer.Deserialize<List<TenantResponse>>(outcome.Value.TenantsJson) ?? [];
+    }
+
+    public async Task<TenantResponse?> UpdateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        UpdateTenantRequest request,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Tenant,
+            AtomicCoreCrudMutationOperation.Update, id, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
+        return DeserializeSnapshot<TenantResponse>(outcome.Value);
+    }
+
+    public async Task<bool> DeleteAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicCoreCrudMutation.Command(scope, AtomicCoreCrudMutationDomain.Tenant,
+            AtomicCoreCrudMutationOperation.Delete, id, operationKey, new object());
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicCoreCrudMutation.Identity(command), command, AtomicCoreCrudMutation.Codec, ct);
+        return outcome.Value.Found;
+    }
+
+    private IAtomicUnitOfWork Atomic => _atomic ?? throw new InvalidOperationException(
+        "Scoped tenant mutations require the atomic persistence kernel.");
+
+    private static TResponse? DeserializeSnapshot<TResponse>(AtomicCoreCrudMutationResult result)
+        where TResponse : class =>
+        result.Found && result.ResponseJson is not null
+            ? JsonSerializer.Deserialize<TResponse>(result.ResponseJson)
+            : null;
 
     public async Task<IReadOnlyList<TenantResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
     {
@@ -47,51 +107,101 @@ public class TenantService : ITenantService
         return page.Items;
     }
 
-    public async Task<TenantListResponse> ListPageAsync(int portfolioId, TenantListQuery query, CancellationToken ct = default)
+    public async Task<IReadOnlyList<TenantResponse>> ListAuthorizedAsync(
+        WorkspaceReadScope scope,
+        TenantListQuery query,
+        CancellationToken ct = default)
+    {
+        var page = await ListPageAuthorizedAsync(scope, query, ct);
+        return page.Items;
+    }
+
+    public Task<TenantListResponse> ListPageAuthorizedAsync(
+        WorkspaceReadScope scope,
+        TenantListQuery query,
+        CancellationToken ct = default)
+    {
+        var tenants = _db.Tenants
+            .AsNoTracking()
+            .WhereAuthorized(
+                _db,
+                scope,
+                [CapabilityKeys.RentalsRead, CapabilityKeys.LeasingOnboardingManage],
+                _timeProvider.UtcNow());
+        return ListPageFromQueryAsync(tenants, scope.PortfolioId, query, ct);
+    }
+
+    public Task<TenantListResponse> ListPageAsync(int portfolioId, TenantListQuery query, CancellationToken ct = default)
     {
         var q = _db.Tenants
             .AsNoTracking()
             .Where(t => t.PortfolioId == portfolioId);
 
+        return ListPageFromQueryAsync(q, portfolioId, query, ct);
+    }
+
+    private async Task<TenantListResponse> ListPageFromQueryAsync(
+        IQueryable<Tenant> q,
+        int portfolioId,
+        TenantListQuery query,
+        CancellationToken ct)
+    {
+
         if (query.UnitId.HasValue)
         {
             var unitId = query.UnitId.Value;
-            q = q.Where(t =>
-                t.Leases.Any(l => l.PortfolioId == portfolioId
-                    && l.UnitId == unitId
-                    && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)) ||
-                t.LeaseTenants.Any(lt => lt.PortfolioId == portfolioId
-                    && lt.Lease != null
-                    && lt.Lease.PortfolioId == portfolioId
-                    && lt.Lease.UnitId == unitId
-                    && (lt.Lease.Status == LeaseStatus.Active || lt.Lease.Status == LeaseStatus.NoticeGiven)));
+            q = q.Where(tenant => _db.LeaseManagementParties.Any(party =>
+                party.PortfolioId == portfolioId
+                && party.TenantId == tenant.Id
+                && party.Role != LeaseManagementPartyRole.Guarantor
+                && _db.UnitOccupancyProjections.Any(occupancy =>
+                    occupancy.PortfolioId == portfolioId
+                    && occupancy.UnitId == unitId
+                    && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
+                && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
+                    lifecycle.PortfolioId == portfolioId
+                    && lifecycle.LeaseManagementId == party.LeaseManagementId
+                    && party.EffectiveFrom <= lifecycle.BusinessDate
+                    && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate))));
         }
         else if (query.PropertyId.HasValue)
         {
             var propertyId = query.PropertyId.Value;
-            q = q.Where(t =>
-                t.Leases.Any(l => l.PortfolioId == portfolioId
-                    && l.PropertyId == propertyId
-                    && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)) ||
-                t.LeaseTenants.Any(lt => lt.PortfolioId == portfolioId
-                    && lt.Lease != null
-                    && lt.Lease.PortfolioId == portfolioId
-                    && lt.Lease.PropertyId == propertyId
-                    && (lt.Lease.Status == LeaseStatus.Active || lt.Lease.Status == LeaseStatus.NoticeGiven)));
+            q = q.Where(tenant => _db.LeaseManagementParties.Any(party =>
+                party.PortfolioId == portfolioId
+                && party.TenantId == tenant.Id
+                && party.Role != LeaseManagementPartyRole.Guarantor
+                && _db.UnitOccupancyProjections.Any(occupancy =>
+                    occupancy.PortfolioId == portfolioId
+                    && occupancy.PropertyId == propertyId
+                    && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
+                && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
+                    lifecycle.PortfolioId == portfolioId
+                    && lifecycle.LeaseManagementId == party.LeaseManagementId
+                    && party.EffectiveFrom <= lifecycle.BusinessDate
+                    && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate))));
         }
 
         if (query.AvailableForLease == true)
         {
-            var includeLeaseId = query.IncludeLeaseId;
-            q = q.Where(t =>
-                (includeLeaseId.HasValue && _db.Leases.Any(l =>
-                    l.PortfolioId == portfolioId
-                    && l.Id == includeLeaseId.Value
-                    && (l.TenantId == t.Id || l.LeaseTenants.Any(lt => lt.TenantId == t.Id)))) ||
-                !_db.Leases.Any(l =>
-                    l.PortfolioId == portfolioId
-                    && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)
-                    && (l.TenantId == t.Id || l.LeaseTenants.Any(lt => lt.TenantId == t.Id))));
+            var includeLeaseManagementId = query.IncludeLeaseManagementId;
+            q = q.Where(tenant =>
+                (includeLeaseManagementId.HasValue && _db.LeaseManagementParties.Any(party =>
+                    party.PortfolioId == portfolioId
+                    && party.LeaseManagementId == includeLeaseManagementId.Value
+                    && party.TenantId == tenant.Id))
+                || !_db.LeaseManagementParties.Any(party =>
+                    party.PortfolioId == portfolioId
+                    && party.TenantId == tenant.Id
+                    && party.Role != LeaseManagementPartyRole.Guarantor
+                    && _db.UnitOccupancyProjections.Any(occupancy =>
+                        occupancy.PortfolioId == portfolioId
+                        && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
+                    && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
+                        lifecycle.PortfolioId == portfolioId
+                        && lifecycle.LeaseManagementId == party.LeaseManagementId
+                        && party.EffectiveFrom <= lifecycle.BusinessDate
+                        && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate))));
         }
 
         if (!string.IsNullOrWhiteSpace(query.Search))
@@ -123,7 +233,37 @@ public class TenantService : ITenantService
             "lastname" => query.SortDescending ? q.OrderByDescending(t => t.LastName) : q.OrderBy(t => t.LastName),
             "email" => query.SortDescending ? q.OrderByDescending(t => t.Email) : q.OrderBy(t => t.Email),
             "phone" => query.SortDescending ? q.OrderByDescending(t => t.Phone) : q.OrderBy(t => t.Phone),
-            "activeleasecount" => query.SortDescending ? q.OrderByDescending(t => _db.Leases.Count(l => l.PortfolioId == portfolioId && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven) && (l.TenantId == t.Id || l.LeaseTenants.Any(lt => lt.TenantId == t.Id)))).ThenBy(t => t.LastName).ThenBy(t => t.FirstName) : q.OrderBy(t => _db.Leases.Count(l => l.PortfolioId == portfolioId && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven) && (l.TenantId == t.Id || l.LeaseTenants.Any(lt => lt.TenantId == t.Id)))).ThenBy(t => t.LastName).ThenBy(t => t.FirstName),
+            "activeleasecount" => query.SortDescending
+                ? q.OrderByDescending(tenant => _db.LeaseManagementParties
+                    .Where(party => party.PortfolioId == portfolioId
+                        && party.TenantId == tenant.Id
+                        && party.Role != LeaseManagementPartyRole.Guarantor
+                        && _db.UnitOccupancyProjections.Any(occupancy =>
+                            occupancy.PortfolioId == portfolioId
+                            && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
+                        && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
+                            lifecycle.PortfolioId == portfolioId
+                            && lifecycle.LeaseManagementId == party.LeaseManagementId
+                            && party.EffectiveFrom <= lifecycle.BusinessDate
+                            && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
+                    .Select(party => party.LeaseManagementId)
+                    .Distinct()
+                    .Count()).ThenBy(tenant => tenant.LastName).ThenBy(tenant => tenant.FirstName)
+                : q.OrderBy(tenant => _db.LeaseManagementParties
+                    .Where(party => party.PortfolioId == portfolioId
+                        && party.TenantId == tenant.Id
+                        && party.Role != LeaseManagementPartyRole.Guarantor
+                        && _db.UnitOccupancyProjections.Any(occupancy =>
+                            occupancy.PortfolioId == portfolioId
+                            && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
+                        && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
+                            lifecycle.PortfolioId == portfolioId
+                            && lifecycle.LeaseManagementId == party.LeaseManagementId
+                            && party.EffectiveFrom <= lifecycle.BusinessDate
+                            && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
+                    .Select(party => party.LeaseManagementId)
+                    .Distinct()
+                    .Count()).ThenBy(tenant => tenant.LastName).ThenBy(tenant => tenant.FirstName),
             "createdat" => query.SortDescending ? q.OrderByDescending(t => t.CreatedAt) : q.OrderBy(t => t.CreatedAt),
             "updatedat" => query.SortDescending ? q.OrderByDescending(t => t.UpdatedAt) : q.OrderBy(t => t.UpdatedAt),
             _ => query.SortDescending ? q.OrderByDescending(t => t.CreatedAt) : q.OrderBy(t => t.CreatedAt),
@@ -131,38 +271,13 @@ public class TenantService : ITenantService
 
         var totalCount = await q.CountAsync(ct);
 
-        // Project the occupying-lease count (Active + NoticeGiven — a lease in notice is still in force
-        // and occupies its unit, treated as the current lease elsewhere) as a correlated subquery in the
-        // SAME page query (EF-translated), so the count comes back per-row from Postgres — never
-        // load-then-count in C#. This is the same occupancy signal the delete guard uses, so the UI can
-        // disable delete for a tenant who still occupies a unit (including a notice-given-only tenant).
-        var rows = await q
-            .Skip(query.NormalizedSkip)
-            .Take(query.NormalizedTake)
-            .Select(t => new
-            {
-                Entity = t,
-                ActiveLeaseCount = _db.Leases.Count(l =>
-                    l.PortfolioId == portfolioId
-                    && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)
-                    && (l.TenantId == t.Id || l.LeaseTenants.Any(lt => lt.TenantId == t.Id))),
-            })
+        // Both counts are correlated, DISTINCT LeaseManagement aggregates in this page statement.
+        // Agreement versions never inflate relationship history and no IDs are materialized for a
+        // follow-up IN query.
+        var rows = await BuildRelationshipCountQuery(
+                q.Skip(query.NormalizedSkip).Take(query.NormalizedTake),
+                portfolioId)
             .ToListAsync(ct);
-        var rowTenantIds = rows.Select(r => r.Entity.Id).ToArray();
-        var leaseHistoryCounts = rowTenantIds.Length == 0
-            ? new Dictionary<int, int>()
-            : await _db.Leases
-                .IgnoreQueryFilters()
-                .Where(l => l.PortfolioId == portfolioId && rowTenantIds.Contains(l.TenantId))
-                .Select(l => new { l.TenantId, LeaseId = l.Id })
-                .Concat(_db.LeaseTenants
-                    .IgnoreQueryFilters()
-                    .Where(lt => rowTenantIds.Contains(lt.TenantId) && lt.Lease != null && lt.Lease.PortfolioId == portfolioId)
-                    .Select(lt => new { lt.TenantId, lt.LeaseId }))
-                .Distinct()
-                .GroupBy(x => x.TenantId)
-                .Select(g => new { TenantId = g.Key, Count = g.Count() })
-                .ToDictionaryAsync(x => x.TenantId, x => x.Count, ct);
 
         return new TenantListResponse
         {
@@ -172,13 +287,53 @@ public class TenantService : ITenantService
                 ApplyDeleteState(
                     response,
                     r.ActiveLeaseCount,
-                    leaseHistoryCounts.GetValueOrDefault(r.Entity.Id));
+                    r.LeaseHistoryCount);
                 return response;
             }).ToList(),
             TotalCount = totalCount,
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,
         };
+    }
+
+    /// <summary>
+    /// Adds canonical relationship counts as correlated PostgreSQL subqueries. Agreement versions
+    /// do not inflate history; an active count requires current effective resident membership in a
+    /// LeaseManagement that the occupancy projection identifies as possessing its Unit.
+    /// </summary>
+    internal IQueryable<TenantRelationshipReadRow> BuildRelationshipCountQuery(
+        IQueryable<Tenant> tenants,
+        int portfolioId) =>
+        tenants.Select(t => new TenantRelationshipReadRow
+        {
+            Entity = t,
+            ActiveLeaseCount = _db.LeaseManagementParties
+                .Where(party => party.PortfolioId == portfolioId
+                    && party.TenantId == t.Id
+                    && party.Role != LeaseManagementPartyRole.Guarantor
+                    && _db.UnitOccupancyProjections.Any(occupancy =>
+                        occupancy.PortfolioId == portfolioId
+                        && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
+                    && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
+                        lifecycle.PortfolioId == portfolioId
+                        && lifecycle.LeaseManagementId == party.LeaseManagementId
+                        && party.EffectiveFrom <= lifecycle.BusinessDate
+                        && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
+                .Select(party => party.LeaseManagementId)
+                .Distinct()
+                .Count(),
+            LeaseHistoryCount = _db.LeaseManagementParties
+                .Where(party => party.PortfolioId == portfolioId && party.TenantId == t.Id)
+                .Select(party => party.LeaseManagementId)
+                .Distinct()
+                .Count(),
+        });
+
+    internal sealed class TenantRelationshipReadRow
+    {
+        public Tenant Entity { get; init; } = null!;
+        public int ActiveLeaseCount { get; init; }
+        public int LeaseHistoryCount { get; init; }
     }
 
     private static TenantListQuery ToTenantListQuery(ListQuery query) => new()
@@ -190,7 +345,7 @@ public class TenantService : ITenantService
         AvailableForLease = (query as TenantListQuery)?.AvailableForLease,
         PropertyId = (query as TenantListQuery)?.PropertyId,
         UnitId = (query as TenantListQuery)?.UnitId,
-        IncludeLeaseId = (query as TenantListQuery)?.IncludeLeaseId,
+        IncludeLeaseManagementId = (query as TenantListQuery)?.IncludeLeaseManagementId,
     };
 
     private static void ApplyDeleteState(TenantResponse response, int activeLeaseCount, int leaseHistoryCount)
@@ -254,23 +409,57 @@ public class TenantService : ITenantService
 
     public async Task<TenantResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {
-        var row = await _db.Tenants
+        var tenants = _db.Tenants
             .AsNoTracking()
-            .Where(t => t.Id == id && t.PortfolioId == portfolioId)
+            .Where(t => t.Id == id && t.PortfolioId == portfolioId);
+        return await GetFromQueryAsync(tenants, portfolioId, ct);
+    }
+
+    public Task<TenantResponse?> GetAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        CancellationToken ct = default)
+    {
+        var tenants = _db.Tenants
+            .AsNoTracking()
+            .Where(t => t.Id == id)
+            .WhereAuthorized(
+                _db,
+                scope,
+                [CapabilityKeys.RentalsRead, CapabilityKeys.LeasingOnboardingManage],
+                _timeProvider.UtcNow());
+        return GetFromQueryAsync(tenants, scope.PortfolioId, ct);
+    }
+
+    private async Task<TenantResponse?> GetFromQueryAsync(
+        IQueryable<Tenant> tenants,
+        int portfolioId,
+        CancellationToken ct)
+    {
+        var row = await tenants
             .Select(t => new
             {
                 Entity = t,
-                ActiveLeaseCount = _db.Leases.Count(l =>
-                    l.PortfolioId == portfolioId
-                    && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)
-                    && (l.TenantId == t.Id || l.LeaseTenants.Any(lt => lt.TenantId == t.Id))),
-                // Portal-login state: existence + lockout of the Identity user linked to this tenant,
-                // fetched DB-side as correlated subqueries in the SAME query (no follow-up round trip).
-                HasPortalUser = _db.Users.Any(u => u.TenantId == t.Id && u.PortfolioId == portfolioId),
-                PortalLockoutEnd = _db.Users
-                    .Where(u => u.TenantId == t.Id && u.PortfolioId == portfolioId)
-                    .Select(u => u.LockoutEnd)
-                    .FirstOrDefault(),
+                ActiveLeaseCount = _db.LeaseManagementParties
+                    .Where(party => party.PortfolioId == portfolioId
+                        && party.TenantId == t.Id
+                        && party.Role != LeaseManagementPartyRole.Guarantor
+                        && _db.UnitOccupancyProjections.Any(occupancy =>
+                            occupancy.PortfolioId == portfolioId
+                            && occupancy.CurrentLeaseManagementId == party.LeaseManagementId)
+                        && _db.LeaseManagementLifecycleProjections.Any(lifecycle =>
+                            lifecycle.PortfolioId == portfolioId
+                            && lifecycle.LeaseManagementId == party.LeaseManagementId
+                            && party.EffectiveFrom <= lifecycle.BusinessDate
+                            && (party.EffectiveThrough == null || party.EffectiveThrough >= lifecycle.BusinessDate)))
+                    .Select(party => party.LeaseManagementId)
+                    .Distinct()
+                    .Count(),
+                LeaseHistoryCount = _db.LeaseManagementParties
+                    .Where(party => party.PortfolioId == portfolioId && party.TenantId == t.Id)
+                    .Select(party => party.LeaseManagementId)
+                    .Distinct()
+                    .Count(),
             })
             .FirstOrDefaultAsync(ct);
 
@@ -279,128 +468,9 @@ public class TenantService : ITenantService
             return null;
         }
 
-        var leaseHistoryCount = await _db.Leases
-            .IgnoreQueryFilters()
-            .CountAsync(l => l.PortfolioId == portfolioId
-                && (l.TenantId == id || l.LeaseTenants.Any(lt => lt.TenantId == id)), ct);
         var response = TenantResponse.FromEntity(row.Entity);
-        ApplyDeleteState(response, row.ActiveLeaseCount, leaseHistoryCount);
-        // Classify the single fetched row (no cross-row work): no user → none; locked-off → disabled.
-        response.PortalAccess = !row.HasPortalUser
-            ? "none"
-            : TenantPortalProvisioningService.IsPortalDisabled(row.PortalLockoutEnd) ? "disabled" : "active";
+        ApplyDeleteState(response, row.ActiveLeaseCount, row.LeaseHistoryCount);
         return response;
     }
 
-    public async Task<TenantResponse> CreateAsync(int portfolioId, CreateTenantRequest request, CancellationToken ct = default)
-    {
-        var now = _timeProvider.UtcNow();
-        var entity = new Tenant
-        {
-            PortfolioId = portfolioId,
-            FirstName = request.FirstName,
-            LastName = request.LastName,
-            Email = request.Email,
-            Phone = request.Phone,
-            EmergencyContact = request.EmergencyContact,
-            DateOfBirth = request.DateOfBirth.ToUtc(),
-            Notes = request.Notes,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        _db.Tenants.Add(entity);
-        await _db.SaveChangesAsync(ct);
-
-        // A tenant is a first-class portal user: provision their Identity login the moment they're
-        // created. Silent — no email goes out here (staff send the invite on demand). Best-effort: a
-        // tenant with no email yet is a normal no-op (NoEmail), and a provisioning hiccup must never
-        // fail tenant creation.
-        await TryProvisionPortalAccessAsync(entity.Id, portfolioId, ct);
-
-        var response = await GetAsync(portfolioId, entity.Id, ct) ?? TenantResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
-    }
-
-    /// <summary>
-    /// Best-effort: ensure a freshly created tenant has a portal login. A failure is logged and
-    /// swallowed so it can never fail the tenant creation that already succeeded.
-    /// </summary>
-    private async Task TryProvisionPortalAccessAsync(int tenantId, int portfolioId, CancellationToken ct)
-    {
-        try
-        {
-            await _portalProvisioning.EnsurePortalAccountForTenantAsync(tenantId, portfolioId, ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Failed to provision portal access for new tenant {TenantId} in portfolio {PortfolioId}; tenant creation still succeeds.",
-                tenantId, portfolioId);
-        }
-    }
-
-    public async Task<TenantResponse?> UpdateAsync(int portfolioId, int id, UpdateTenantRequest request, CancellationToken ct = default)
-    {
-        var entity = await _db.Tenants
-            .FirstOrDefaultAsync(t => t.Id == id && t.PortfolioId == portfolioId, ct);
-        if (entity == null)
-        {
-            return null;
-        }
-
-        if (request.FirstName != null) entity.FirstName = request.FirstName;
-        if (request.LastName != null) entity.LastName = request.LastName;
-        if (request.Email != null) entity.Email = request.Email;
-        if (request.Phone != null) entity.Phone = request.Phone;
-        if (request.EmergencyContact != null) entity.EmergencyContact = request.EmergencyContact;
-        if (request.DateOfBirth.HasValue) entity.DateOfBirth = request.DateOfBirth.ToUtc();
-        if (request.Notes != null) entity.Notes = request.Notes;
-        entity.UpdatedAt = _timeProvider.UtcNow();
-
-        await _db.SaveChangesAsync(ct);
-
-        var response = await GetAsync(portfolioId, entity.Id, ct) ?? TenantResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
-    }
-
-    public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
-    {
-        var entity = await _db.Tenants
-            .FirstOrDefaultAsync(t => t.Id == id && t.PortfolioId == portfolioId, ct);
-        if (entity == null)
-        {
-            return false;
-        }
-
-        var hasOccupyingLease = await _db.Leases
-            .AnyAsync(l => l.PortfolioId == portfolioId
-                && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)
-                && (l.TenantId == id || l.LeaseTenants.Any(lt => lt.TenantId == id)), ct);
-        if (hasOccupyingLease)
-        {
-            throw new DomainValidationException(
-                ActiveLeaseDeleteBlockedReason,
-                StatusCodes.Status409Conflict);
-        }
-
-        var hasLeaseHistory = await _db.Leases
-            .IgnoreQueryFilters()
-            .AnyAsync(l => l.PortfolioId == portfolioId
-                && (l.TenantId == id || l.LeaseTenants.Any(lt => lt.TenantId == id)), ct);
-        if (hasLeaseHistory)
-        {
-            throw new DomainValidationException(
-                LeaseHistoryDeleteBlockedReason,
-                StatusCodes.Status409Conflict);
-        }
-
-        entity.DeletedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
-
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
-        return true;
-    }
 }

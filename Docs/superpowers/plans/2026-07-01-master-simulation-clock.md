@@ -348,8 +348,8 @@ These **supersede** the affected task text. Full detail: `Docs/e2e/investigation
 - **M6 (D2-D4) — additional keep-real sites:** `Esign/NativeSigningService.cs:505`,
   `Esign/NativeEsignProvider.cs:73,102`, `Domain/LeaseEsignService.cs:633,639` (e-sign link expiry);
   `AccountingTokenRefreshWorker.cs:43,51,74` (OAuth refresh horizon); `AccountingConnectionService.cs:124`
-  (OAuth state-TTL **write** — the :164/:362 reads were already excluded); `TenantPortalProvisioningService.cs:315`
-  (portal-disabled sentinel); `OutboxDispatchWorker.cs:82,91,115,143,158` (backoff `FailedAt`, real).
+  (OAuth state-TTL **write** — the :164/:362 reads were already excluded); `OutboxDispatchWorker.cs:82,91,115,143,158`
+  (backoff `FailedAt`, real).
 - **B3 registry method names (per service, hardcode per key):** `GenerateAsync`
   (RentCharge/DebtService/RecurringExpense/RecurringMaintenance), `AssessAsync` (LateFee),
   `ChargeDueAsync` (Autopay), `RemindAsync` (LeaseExpiry), `GenerateAllAsync` (NoticeDraft),

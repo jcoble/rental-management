@@ -33,3 +33,11 @@ public record OwnerStatementSummary(
     decimal NetToOwner,
     decimal TotalDistributed = 0m,
     decimal Undistributed = 0m);
+
+public sealed class OwnerStatementSummaryPageResponse
+{
+    public IReadOnlyList<OwnerStatementSummary> Items { get; init; } = [];
+    public int TotalCount { get; init; }
+    public int Skip { get; init; }
+    public int Take { get; init; }
+}

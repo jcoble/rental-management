@@ -351,6 +351,10 @@
 			onRowClick?.(item);
 		}
 	}
+
+	function stopRowNavigation(event: MouseEvent | KeyboardEvent) {
+		event.stopPropagation();
+	}
 </script>
 
 <div class={cn('space-y-3', className)} data-testid={dataTestId}>
@@ -390,12 +394,11 @@
 								class={cn(
 									'select-none whitespace-nowrap px-2.5 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground',
 									alignClass[align],
-									col.sortable && 'cursor-pointer hover:text-foreground',
+									col.sortable && 'hover:text-foreground',
 									pinnedHeadClass(col),
 									col.class
 								)}
 								style={colStyle(col)}
-								onclick={col.sortable ? () => toggleSort(col) : undefined}
 								aria-sort={col.sortable
 									? sortKey === col.key
 										? sortDir === 'asc'
@@ -404,9 +407,14 @@
 										: 'none'
 									: undefined}
 							>
-								<span class="inline-flex items-center gap-1">
-									{col.title}
-									{#if col.sortable}
+								{#if col.sortable}
+									<button
+										type="button"
+										class="datagrid-sort-control"
+										aria-label={`Sort by ${col.title}`}
+										onclick={() => toggleSort(col)}
+									>
+										<span>{col.title}</span>
 										{#if sortKey === col.key && sortDir === 'asc'}
 											<ChevronUp class="h-3.5 w-3.5 shrink-0" />
 										{:else if sortKey === col.key && sortDir === 'desc'}
@@ -414,14 +422,16 @@
 										{:else}
 											<ChevronsUpDown class="h-3.5 w-3.5 shrink-0 opacity-40" />
 										{/if}
-									{/if}
-								</span>
+									</button>
+								{:else}
+									{col.title}
+								{/if}
 							</Table.Head>
 						{/each}
 					</Table.Row>
 				</Table.Header>
 
-				<Table.Body>
+				<Table.Body class="m3-motion-reveal-list">
 					{#if loading && pagedData.length === 0}
 						<!-- Initial loading skeleton -->
 						<Table.Row>
@@ -485,6 +495,8 @@
 											col.class
 										)}
 										style={colStyle(col)}
+										onclick={col.isAction ? stopRowNavigation : undefined}
+										onkeydown={col.isAction ? stopRowNavigation : undefined}
 									>
 										{#if col.maxWidth}
 											<!-- Inner block so max-width + ellipsis truncate reliably in an auto-layout table cell. -->
@@ -546,7 +558,7 @@
 	</div>
 
 	<!-- ── Mobile/tablet card list (visible below lg) ──────────────────────────── -->
-	<div class="space-y-3 lg:hidden" data-testid="datagrid-mobile">
+	<div class="m3-motion-reveal-list space-y-3 lg:hidden" data-testid="datagrid-mobile">
 		{#if loading && pagedData.length === 0}
 			<div class="flex flex-col items-center gap-2 rounded-lg border border-border p-8 text-muted-foreground" data-testid="datagrid-mobile-loading">
 				<Loader2 class="h-6 w-6 animate-spin" />
@@ -579,7 +591,7 @@
 					data-testid={getRowTestId ? getRowTestId(item) : 'datagrid-mobile-card'}
 				>
 					<!-- Title + subtitle -->
-					<div class="flex items-start justify-between gap-3">
+						<div class="flex items-start justify-between gap-3">
 						<div class="min-w-0 space-y-1">
 							{#each mobileGroups.title as col}
 								<div class="break-words text-sm font-semibold text-foreground">
@@ -599,17 +611,20 @@
 									{/if}
 								</div>
 							{/each}
-						</div>
-						{#if mobileActions}
-							<div
-								class="shrink-0"
-								role="group"
-								aria-label="Row actions"
-								data-testid="datagrid-mobile-actions"
-							>
-								{@render mobileActions(item)}
 							</div>
-						{/if}
+							{#if mobileActions}
+								<!-- svelte-ignore a11y_no_noninteractive_element_interactions -- action group stops row/card activation -->
+								<div
+									class="shrink-0"
+									role="group"
+									aria-label="Row actions"
+									data-testid="datagrid-mobile-actions"
+									onclick={stopRowNavigation}
+									onkeydown={stopRowNavigation}
+								>
+									{@render mobileActions(item)}
+								</div>
+							{/if}
 					</div>
 
 					<!-- Badges + metrics row -->

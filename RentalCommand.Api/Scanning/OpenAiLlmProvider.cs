@@ -17,7 +17,10 @@ namespace RentalCommand.Api.Scanning;
 /// Falls back to a deterministic no-op (no network call, all confidence 0) when no API key is
 /// configured, so the app runs offline.
 /// </summary>
-public sealed class OpenAiLlmProvider : ILlmProvider
+public sealed class OpenAiLlmProvider :
+    ILlmProvider,
+    ILlmCredentialProbe,
+    IWorkspaceLlmExtractionProvider
 {
     private const string ToolName = "record_extraction";
 
@@ -26,6 +29,8 @@ public sealed class OpenAiLlmProvider : ILlmProvider
     private readonly ILogger<OpenAiLlmProvider> _logger;
     private readonly IImageTextExtractor _imageTextExtractor;
     private bool _warnedNoKey;
+
+    public string ProviderKey => "openai";
 
     public OpenAiLlmProvider(
         HttpClient http,
@@ -63,7 +68,48 @@ public sealed class OpenAiLlmProvider : ILlmProvider
         return text ?? string.Empty;
     }
 
-    public async Task<ExtractedFields> ExtractAsync(
+    public async Task<LlmCredentialProbeResult> TestCredentialAsync(
+        string apiKey,
+        string modelId,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(modelId))
+        {
+            return new(false, ProviderKey, modelId, "API key and model are required.");
+        }
+
+        var body = new
+        {
+            model = modelId.Trim(),
+            max_completion_tokens = 1,
+            messages = new[] { new { role = "user", content = "Reply OK." } }
+        };
+        using var response = await _http.SendAsync(BuildRequest(body, apiKey.Trim()), ct);
+        return response.IsSuccessStatusCode
+            ? new(true, ProviderKey, modelId.Trim())
+            : new(false, ProviderKey, modelId.Trim(),
+                $"OpenAI rejected the credential ({(int)response.StatusCode}).");
+    }
+
+    public Task<ExtractedFields> ExtractAsync(
+        byte[] documentBytes,
+        string contentType,
+        string instructions,
+        IReadOnlyList<ExtractionFieldSpec> fields,
+        string? groundingContext = null,
+        CancellationToken ct = default) =>
+        ExtractCoreAsync(
+            _config.ApiKey,
+            _config.ModelId,
+            documentBytes,
+            contentType,
+            instructions,
+            fields,
+            groundingContext,
+            ct);
+
+    public Task<ExtractedFields> ExtractWorkspaceAsync(
+        WorkspaceLlmRuntimeCredential credential,
         byte[] documentBytes,
         string contentType,
         string instructions,
@@ -71,8 +117,36 @@ public sealed class OpenAiLlmProvider : ILlmProvider
         string? groundingContext = null,
         CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(credential);
+        if (!string.Equals(credential.Provider, ProviderKey, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"The workspace credential selects {credential.Provider}, not {ProviderKey}.");
+        }
+
+        return ExtractCoreAsync(
+            credential.ApiKey,
+            credential.ModelId,
+            documentBytes,
+            contentType,
+            instructions,
+            fields,
+            groundingContext,
+            ct);
+    }
+
+    private async Task<ExtractedFields> ExtractCoreAsync(
+        string? apiKey,
+        string? modelId,
+        byte[] documentBytes,
+        string contentType,
+        string instructions,
+        IReadOnlyList<ExtractionFieldSpec> fields,
+        string? groundingContext,
+        CancellationToken ct)
+    {
         // --- Deterministic no-op fallback (offline / unconfigured) ---
-        if (string.IsNullOrWhiteSpace(_config.ApiKey))
+        if (string.IsNullOrWhiteSpace(apiKey) || string.IsNullOrWhiteSpace(modelId))
         {
             WarnNoKeyOnce();
             return new ExtractedFields
@@ -170,7 +244,7 @@ public sealed class OpenAiLlmProvider : ILlmProvider
 
         var body = new
         {
-            model = _config.ModelId,
+            model = modelId,
             // The receipt schema asks for ~20 fields, a confidence per field, AND a line-items
             // array — at 1500 the tool-call JSON gets truncated (the model hits the cap before
             // finishing the function call), yielding an empty extraction. 4096 gives ample room.
@@ -184,7 +258,7 @@ public sealed class OpenAiLlmProvider : ILlmProvider
             tool_choice = new { type = "function", function = new { name = ToolName } }
         };
 
-        using var resp = await SendChecked(BuildRequest(body), ct);
+        using var resp = await SendChecked(BuildRequest(body, apiKey), ct);
         var json = await resp.Content.ReadAsStringAsync(ct);
         return ParseToolResult(json, fields);
     }
@@ -482,13 +556,15 @@ public sealed class OpenAiLlmProvider : ILlmProvider
         return result;
     }
 
-    private HttpRequestMessage BuildRequest(object body)
+    private HttpRequestMessage BuildRequest(object body, string? apiKey = null)
     {
         var req = new HttpRequestMessage(HttpMethod.Post, "v1/chat/completions")
         {
             Content = JsonContent.Create(body)
         };
-        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _config.ApiKey);
+        req.Headers.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            apiKey ?? _config.ApiKey);
         req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         return req;
     }

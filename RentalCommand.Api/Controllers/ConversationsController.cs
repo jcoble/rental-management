@@ -6,8 +6,8 @@ namespace RentalCommand.Api.Controllers;
 
 /// <summary>
 /// Landlord-facing threaded messenger. Conversations are scoped by topic — a tenant can have multiple
-/// threads, each with its own back-and-forth history. All operations are portfolio-scoped via the JWT
-/// <c>portfolioId</c> claim. Tenants use the conversation endpoints on <see cref="PortalController"/>.
+/// threads, each with its own back-and-forth history. All operations use the server-validated
+/// canonical workspace context. Tenants use the conversation endpoints on <see cref="PortalController"/>.
 /// </summary>
 [ApiController]
 [Route("api/v1/conversations")]
@@ -26,15 +26,17 @@ public class ConversationsController : ManagementControllerBase
     [ProducesResponseType(typeof(IReadOnlyList<ConversationSummary>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<ConversationSummary>>> List(CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), ct);
+        var items = await _service.ListAuthorizedAsync(GetWorkspaceReadScope(), ct);
         return Ok(items);
     }
 
     [HttpGet("page")]
     [ProducesResponseType(typeof(ConversationListResponse), StatusCodes.Status200OK)]
-    public async Task<ActionResult<ConversationListResponse>> ListPage([FromQuery] ListQuery query, CancellationToken ct)
+    public async Task<ActionResult<ConversationListResponse>> ListPage(
+        [FromQuery] ConversationListQuery query,
+        CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), query, ct);
+        var page = await _service.ListPageAuthorizedAsync(GetWorkspaceReadScope(), query, ct);
         return Ok(page);
     }
 
@@ -42,18 +44,32 @@ public class ConversationsController : ManagementControllerBase
     [ProducesResponseType(typeof(ConversationUnreadCountResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<ConversationUnreadCountResponse>> UnreadCount(CancellationToken ct)
     {
-        var count = await _service.GetUnreadCountAsync(GetPortfolioId(), ct);
+        var count = await _service.GetUnreadCountAuthorizedAsync(GetWorkspaceReadScope(), ct);
         return Ok(new ConversationUnreadCountResponse(count));
     }
 
-    /// <summary>Fetch a conversation with its full message history; resets the landlord's unread count.</summary>
+    /// <summary>Fetch a conversation with its full message history.</summary>
     [HttpGet("{id:int}")]
     [ProducesResponseType(typeof(ConversationDetail), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<ConversationDetail>> Get(int id, CancellationToken ct)
     {
-        var item = await _service.GetAsync(GetPortfolioId(), id, ct);
+        var item = await _service.GetAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
         return item == null ? NotFound(new { error = "Conversation not found" }) : Ok(item);
+    }
+
+    [HttpPost("{id:int}/read")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> MarkRead(
+        int id,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var found = await _service.MarkReadAuthorizedAsync(GetWorkspaceReadScope(), id, operationKey, ct);
+        return found ? NoContent() : NotFound(new { error = "Conversation not found" });
     }
 
     /// <summary>
@@ -70,9 +86,10 @@ public class ConversationsController : ManagementControllerBase
     public async Task<ActionResult<ConversationDetail>> Start(
         [FromBody] StartConversationRequest request, CancellationToken ct)
     {
-        var result = await _service.StartAsync(
-            GetPortfolioId(), request.TenantId, request.Subject, request.Body, request.Channels,
-            request.AcknowledgedFairHousingReview, ct);
+        var result = await _service.StartAuthorizedAsync(
+            GetWorkspaceReadScope(), request.TenantId, request.PropertyId,
+            request.Subject, request.Body, request.Channels,
+            request.OperationKey, request.AcknowledgedFairHousingReview, ct);
 
         return result == null
             ? NotFound(new { error = "Tenant not found" })
@@ -87,7 +104,8 @@ public class ConversationsController : ManagementControllerBase
     public async Task<ActionResult<ConversationDetail>> PostMessage(
         int id, [FromBody] PostMessageRequest request, CancellationToken ct)
     {
-        var result = await _service.PostMessageAsync(GetPortfolioId(), id, request.Body, request.Channels, ct);
+        var result = await _service.PostMessageAuthorizedAsync(
+            GetWorkspaceReadScope(), id, request.Body, request.Channels, request.OperationKey, ct);
         return result == null ? NotFound(new { error = "Conversation not found" }) : Ok(result);
     }
 }

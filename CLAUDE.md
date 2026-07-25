@@ -55,6 +55,11 @@ Engine + API + web. Requires `dotnet`, `pnpm`, `docker`, and `mkcert` (`mkcert -
 - **DB connection** comes from **.NET User Secrets** in Development (not committed). Do
   NOT export `ConnectionStrings__DefaultConnection` in the dev script — it would override
   the secret. Set it via `dotnet user-secrets set "ConnectionStrings:DefaultConnection" "<conn>" --project RentalCommand.Api`.
+  `DefaultConnection` supplies the credential, but steady-state API/Engine connections immediately
+  assume the NOLOGIN `rentalcommand_api` / `rentalcommand_engine` roles. Startup migrations use
+  `ConnectionStrings:MigratorConnection` without a runtime-role interceptor; it defaults to
+  `DefaultConnection` for local development. In deployed environments set both explicitly to the
+  owner/migrator credential. Never put a runtime-role password in configuration—the roles are NOLOGIN.
 - **HTTPS** is real mkcert TLS for both web and API; Node trusts the API cert via
   `NODE_EXTRA_CA_CERTS` (set by the dev script). **Never disable TLS verification**
   (`NODE_TLS_REJECT_UNAUTHORIZED=0`) — use the mkcert CA instead.
@@ -89,7 +94,8 @@ Live at **https://rentalcommand.net** on a small Hetzner box (`/opt/rental-comma
 
 - ASP.NET Identity with **int keys** (`ApplicationUser : IdentityUser<int>`), matching the
   int-keyed domain entities. JWT access tokens (~15 min) + single-use **rotated** refresh
-  tokens. `ApiKeyAuthenticationHandler` covers webhook/server callers.
+  tokens. Machine callers require a future canonical service-principal authority; the removed
+  portfolio-claim API-key scheme is not a supported authentication path.
 - The web app stores tokens in **app-namespaced httpOnly cookies first-party to the SvelteKit origin**.
   Current names are `rc_access_token`, `rc_access_token_expiration`, and `rc_refresh_token`;
   avoid generic names like `access_token`/`refresh_token` because localhost cookies are shared

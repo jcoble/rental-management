@@ -26,7 +26,7 @@ public static class ListDateRange
          to.HasValue ? to.Value.ToUtc().Date.AddDays(1) : null);
 
     /// <summary>
-    /// For true-instant columns with a real time-of-day (<c>AuditLog.Timestamp</c>,
+    /// For true-instant columns with a real time-of-day (<c>AtomicAuditLog.Timestamp</c>,
     /// <c>Appointment.ScheduledStart</c>, <c>CreatedAt</c>): convert the picked <c>[from, to]</c> day
     /// boundaries from the business timezone to UTC instants, half-open
     /// <c>[startOfDay(from), startOfDay(to + 1 day))</c>. So "this month" means the landlord's LOCAL

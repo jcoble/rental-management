@@ -22,16 +22,20 @@
 	import { recordHref } from '$lib/navigation/record-href';
 	import {
 		buildApplicationLinkUrl,
-		readUnitListingLinkContext,
-		type UnitListingLinkContext,
+		readRentalListingLinkContext,
+		type RentalListingLinkContext,
 	} from '$lib/applications/application-link';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
+	import PrepareMoveInDialog from '$lib/components/applications/PrepareMoveInDialog.svelte';
+	import { readPrepareMoveInPrefill } from '$lib/leases/prepare-move-in-prefill';
+	import type { PrepareMoveInResponse } from '$lib/api/endpoints/lease-managements';
 
 	const PAGE_SIZE = 20;
 
 	// Search + status filter + sort + page persisted in the URL so they survive navigating away and back.
 	// Sort/page seed the server-side DataGrid query so applications are filtered/sorted/paged in SQL.
 	const initialParams = page.url.searchParams;
+	const prepareMoveInPrefill = $derived(readPrepareMoveInPrefill(page.url.searchParams));
 	let search = $state(readGridParam(initialParams, 'q'));
 	const debouncedSearch = debounced(() => search, 300);
 
@@ -96,9 +100,9 @@
 	let showLinkDialog = $state(false);
 	let applyUrl = $state('');
 	let copied = $state(false);
-	let activeLinkContext = $state<UnitListingLinkContext | null>(null);
+	let activeLinkContext = $state<RentalListingLinkContext | null>(null);
 	let listUnitActionHandled = false;
-	const listUnitContext = $derived(readUnitListingLinkContext(page.url.searchParams));
+	const listUnitContext = $derived(readRentalListingLinkContext(page.url.searchParams));
 	const linkDialogTitle = $derived(
 		activeLinkContext ? 'Application link for this unit' : 'Your application link'
 	);
@@ -109,7 +113,7 @@
 	);
 
 	const linkMutation = createMutation(() => ({
-		mutationFn: async (context?: UnitListingLinkContext | null) => ({
+		mutationFn: async (context?: RentalListingLinkContext | null) => ({
 			result: await applications.createLink(),
 			context: context ?? null,
 		}),
@@ -138,6 +142,23 @@
 		} catch {
 			showError('Could not copy. Select the link and copy it manually.');
 		}
+	}
+
+	function closePrepareMoveIn() {
+		const url = new URL(page.url);
+		url.searchParams.delete('prepareMoveIn');
+		url.searchParams.delete('applicationId');
+		url.searchParams.delete('unitId');
+		url.searchParams.delete('tenantId');
+		void goto(`${url.pathname}${url.search}`, {
+			replaceState: true,
+			keepFocus: true,
+			noScroll: true
+		});
+	}
+
+	function finishPrepareMoveIn(result: PrepareMoveInResponse) {
+		void goto(`/leases/${result.leaseManagementId}`);
 	}
 
 	const columns: ColumnDef<ApplicationResponse>[] = [
@@ -205,6 +226,13 @@
 		data-testid="applications-header"
 	/>
 
+	{#if applicationsQuery.isError}
+		<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="applications-list-error">
+			<p class="font-medium text-destructive">Could not load applications.</p>
+			<p class="mt-1 text-sm text-muted-foreground">Try again. An unavailable list is not an empty application queue.</p>
+			<Button class="mt-4" variant="outline" onclick={() => applicationsQuery.refetch()}>Try again</Button>
+		</div>
+	{:else}
 	<DataGrid
 		data={list}
 		{columns}
@@ -247,6 +275,7 @@
 			</Button>
 		{/snippet}
 	</DataGrid>
+	{/if}
 </div>
 
 <!-- Application link dialog -->
@@ -281,3 +310,11 @@
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
+
+{#if prepareMoveInPrefill}
+	<PrepareMoveInDialog
+		prefill={prepareMoveInPrefill}
+		onclose={closePrepareMoveIn}
+		onprepared={finishPrepareMoveIn}
+	/>
+{/if}

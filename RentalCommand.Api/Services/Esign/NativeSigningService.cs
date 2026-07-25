@@ -1,12 +1,14 @@
 using System.Security.Cryptography;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Esign;
 using RentalCommand.Core.Interfaces;
-using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Api.Services.Esign;
 
@@ -14,82 +16,91 @@ namespace RentalCommand.Api.Services.Esign;
 public sealed class NativeSigningService : INativeSigningService
 {
     private readonly RentalCommandDbContext _db;
+    private readonly IAtomicUnitOfWork _atomic;
     private readonly IFileStorage _storage;
-    private readonly IExecutedLeasePdfGenerator _executedPdf;
-    private readonly ILeaseEsignService _leaseEsign;
-    private readonly TimeProvider _timeProvider;
     private readonly ILogger<NativeSigningService> _logger;
+    private readonly IPendingFileUploadStore _pendingUploads;
 
     public NativeSigningService(
         RentalCommandDbContext db,
+        IAtomicUnitOfWork atomic,
         IFileStorage storage,
-        IExecutedLeasePdfGenerator executedPdf,
-        ILeaseEsignService leaseEsign,
-        TimeProvider timeProvider,
+        IPendingFileUploadStore pendingUploads,
         ILogger<NativeSigningService> logger)
     {
         _db = db;
+        _atomic = atomic;
         _storage = storage;
-        _executedPdf = executedPdf;
-        _leaseEsign = leaseEsign;
-        _timeProvider = timeProvider;
+        _pendingUploads = pendingUploads;
         _logger = logger;
     }
 
     public async Task<SignTokenResult<SignPackageResponse>> GetPackageAsync(
         string token, string? ipAddress, string? userAgent, CancellationToken ct = default)
     {
-        var (signer, request, error) = await ResolveAsync(token, requireActive: false, ct);
-        if (error is not null)
+        if (string.IsNullOrWhiteSpace(token))
         {
-            return error.Cast<SignPackageResponse>();
+            return SignTokenResult<SignPackageResponse>.NotFound();
         }
 
-        var now = _timeProvider.UtcNow();
-
-        // Mark Viewed + audit on the first open. Only meaningful while the signer is still pending.
-        if (signer!.Status == SignatureSignerStatus.Pending)
+        var now = DateTime.UtcNow;
+        // Public tokens are attacker-controlled. Reject unknown tokens with one indexed DB query
+        // before entering the atomic kernel so random probes cannot create durable receipts or
+        // audit rows. The handler still resolves the request and rechecks state under its aggregate
+        // lock; this preflight is only an admission boundary and does not replace that protection.
+        var tokenExists = await _db.SignatureSigners.AsNoTracking()
+            .AnyAsync(signer => signer.TokenHash == TokenHash(token), ct);
+        if (!tokenExists)
         {
-            signer.Status = SignatureSignerStatus.Viewed;
-            signer.ViewedAtUtc ??= now;
-            signer.IpAddress ??= ipAddress;
-            signer.UserAgent ??= userAgent;
-
-            if (request!.Status == SignatureRequestStatus.Sent)
-            {
-                request.Status = SignatureRequestStatus.Viewed;
-            }
-
-            _db.SignatureAuditEvents.Add(new SignatureAuditEvent
-            {
-                SignatureRequestId = request!.Id,
-                SignerId = signer.Id,
-                Type = SignatureAuditEventType.Viewed,
-                AtUtc = now,
-                IpAddress = ipAddress,
-                UserAgent = userAgent,
-                Detail = $"{signer.Name} opened the signing page.",
-            });
-
-            await _db.SaveChangesAsync(ct);
-
-            // Best-effort: surface the "viewed" status onto the lease workflow if it tracks it.
-            await SafeAsync("lease viewed sync", () => _leaseEsign.GetSignatureStatusAsync(request.PortfolioId, request.LeaseId, ct));
+            return SignTokenResult<SignPackageResponse>.NotFound();
         }
 
-        var portfolio = await _db.Portfolios.AsNoTracking()
-            .FirstOrDefaultAsync(p => p.Id == request!.PortfolioId, ct);
+        await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity("native-esign.view", TokenIdentity(token)),
+            new RecordNativeEsignViewCommand(TokenHash(token), ipAddress, userAgent, now),
+            new AtomicJsonResultCodec<RecordNativeEsignViewResult>("native-esign.view.v1"),
+            ct);
+        // The durable receipt proves only that the first-view command ran. Always project current state
+        // after commit so later opens never replay stale status or stale expiry decisions.
+        var current = await _db.SignatureSigners.AsNoTracking()
+            .Where(signer => signer.TokenHash == TokenHash(token))
+            .Select(signer => new
+            {
+                signer.NameSnapshot,
+                signer.EmailSnapshot,
+                signer.TokenExpiresAtUtc,
+                SignerStatus = signer.Status,
+                RequestStatus = signer.SignatureRequest!.Status,
+                signer.SignatureRequest.Subject,
+                DocumentName = signer.SignatureRequest.IssuedArtifact!.FileName,
+                SenderName = signer.SignatureRequest.Portfolio!.ManagementCompanyName
+                    ?? signer.SignatureRequest.Portfolio.Name,
+            })
+            .SingleOrDefaultAsync(ct);
+        if (current is null)
+        {
+            return SignTokenResult<SignPackageResponse>.NotFound();
+        }
+        if (current.TokenExpiresAtUtc <= now
+            && current.SignerStatus is not (SignatureSignerStatus.Signed or SignatureSignerStatus.Declined)
+            && current.RequestStatus is not (SignatureRequestStatus.Completed
+                or SignatureRequestStatus.Declined
+                or SignatureRequestStatus.Voided))
+        {
+            return SignTokenResult<SignPackageResponse>.Expired(
+                "This signing link has expired. Please ask the sender for a new one.");
+        }
 
         var package = new SignPackageResponse
         {
-            SignerName = signer.Name,
-            SignerEmail = signer.Email,
-            Subject = request!.Subject,
-            DocumentName = request.DocumentName,
-            SenderName = portfolio?.ManagementCompanyName ?? portfolio?.Name ?? "Rental Command",
-            SignerStatus = signer.Status.ToString(),
-            RequestStatus = request.Status.ToString(),
-            AlreadySigned = signer.Status == SignatureSignerStatus.Signed,
+            SignerName = current.NameSnapshot,
+            SignerEmail = current.EmailSnapshot,
+            Subject = current.Subject,
+            DocumentName = current.DocumentName,
+            SenderName = current.SenderName ?? "Rental Command",
+            SignerStatus = current.SignerStatus.ToString(),
+            RequestStatus = current.RequestStatus.ToString(),
+            AlreadySigned = current.SignerStatus == SignatureSignerStatus.Signed,
             DocumentUrl = $"/api/v1/sign/{token}/document",
             ConsentDisclosure = EsignConsentText.ConsentDisclosure,
         };
@@ -108,7 +119,11 @@ public sealed class NativeSigningService : INativeSigningService
         }
 
         // Once executed, show the signed document; otherwise the original under review.
-        var fileId = request!.SignedStoredFileId ?? request.OriginalStoredFileId;
+        var artifactId = request!.ExecutedArtifactId ?? request.IssuedArtifactId;
+        var fileId = await _db.LegalDocumentArtifacts.AsNoTracking()
+            .Where(artifact => artifact.Id == artifactId && artifact.PortfolioId == request.PortfolioId)
+            .Select(artifact => artifact.StoredFileId)
+            .SingleAsync(ct);
         var file = await _db.StoredFiles.AsNoTracking()
             .FirstOrDefaultAsync(f => f.Id == fileId && f.PortfolioId == request.PortfolioId && f.DeletedAt == null, ct);
         if (file is null)
@@ -160,322 +175,89 @@ public sealed class NativeSigningService : INativeSigningService
             }
         }
 
-        var (signer, sigRequest, error) = await ResolveAsync(token, requireActive: true, ct);
-        if (error is not null)
+        var now = DateTime.UtcNow;
+        var operationKey = string.IsNullOrWhiteSpace(request.IdempotencyKey)
+            ? Guid.NewGuid().ToString("N")
+            : request.IdempotencyKey;
+        Guid? drawnAdmissionId = null;
+        string? drawnFingerprint = null;
+        string? drawnStorageKey = null;
+        long? drawnFileSize = null;
+        if (drawnBytes is not null)
         {
-            return error.Cast<SignActionResponse>();
+            var portfolioId = await _db.SignatureSigners.AsNoTracking()
+                .Where(signer => signer.TokenHash == TokenHash(token))
+                .Select(signer => (int?)signer.PortfolioId)
+                .SingleOrDefaultAsync(ct);
+            if (!portfolioId.HasValue) return SignTokenResult<SignActionResponse>.NotFound();
+            drawnFingerprint = Convert.ToHexString(SHA256.HashData(drawnBytes)).ToLowerInvariant();
+            var admission = await _pendingUploads.PrepareAsync(portfolioId.Value, 0,
+                "native-esign-drawn-signature", $"{TokenHash(token)}:{operationKey}", drawnFingerprint,
+                "drawn-signature.png", "image/png", drawnBytes.LongLength, now, ct);
+            drawnAdmissionId = admission.Id;
+            drawnStorageKey = admission.StoragePath;
+            drawnFileSize = drawnBytes.LongLength;
+            if (admission.State == PendingFileUploadState.Prepared)
+            {
+                await using var stream = new MemoryStream(drawnBytes);
+                await _storage.UploadAtAsync(stream, admission.StoragePath, "drawn-signature.png", "image/png", ct);
+            }
         }
-
-        var now = _timeProvider.UtcNow();
-
-        signer!.Status = SignatureSignerStatus.Signed;
-        signer.SignatureType = typed ? SignatureSignatureType.Typed : SignatureSignatureType.Drawn;
-        signer.TypedName = typed ? request.TypedName!.Trim() : null;
-        signer.DrawnSignatureImage = drawnBytes;
-        signer.ConsentGiven = true;
-        signer.SignedAtUtc = now;
-        // Signing IP/UA take precedence over the earlier view capture.
-        signer.IpAddress = ipAddress ?? signer.IpAddress;
-        signer.UserAgent = userAgent ?? signer.UserAgent;
-        signer.ViewedAtUtc ??= now;
-
-        _db.SignatureAuditEvents.Add(new SignatureAuditEvent
+        var outcome = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity("native-esign.sign", OperationIdentity(token, operationKey)),
+            new RecordNativeSignatureCommand(
+                TokenHash(token),
+                typed ? SignatureSignatureType.Typed : SignatureSignatureType.Drawn,
+                typed ? request.TypedName!.Trim() : null,
+                drawnAdmissionId,
+                drawnFingerprint,
+                drawnStorageKey,
+                drawnFileSize,
+                ipAddress,
+                userAgent,
+                now),
+            new AtomicJsonResultCodec<NativeSignerActionResult>("native-esign.sign.v1"),
+            ct);
+        if (outcome.Value.Outcome != NativeSignerActionOutcome.Applied)
         {
-            SignatureRequestId = sigRequest!.Id,
-            SignerId = signer.Id,
-            Type = SignatureAuditEventType.Signed,
-            AtUtc = now,
-            IpAddress = ipAddress,
-            UserAgent = userAgent,
-            Detail = $"{signer.Name} signed ({signer.SignatureType}).",
-        });
-
-        // All signers signed? -> complete the request + execute the document + update the lease.
-        var allSigned = sigRequest.Signers.All(s => s.Status == SignatureSignerStatus.Signed);
-        sigRequest.Status = allSigned ? SignatureRequestStatus.Completed : SignatureRequestStatus.PartiallySigned;
-
-        await _db.SaveChangesAsync(ct);
-
-        var completed = false;
-        if (allSigned)
-        {
-            await CompleteRequestAsync(sigRequest, now, ct);
-            completed = true;
+            return MapSignerActionError(outcome.Value);
         }
 
         return SignTokenResult<SignActionResponse>.Ok(new SignActionResponse
         {
-            SignerStatus = signer.Status.ToString(),
-            RequestStatus = sigRequest.Status.ToString(),
-            RequestCompleted = completed,
+            SignerStatus = outcome.Value.SignerStatus.ToString(),
+            RequestStatus = outcome.Value.RequestStatus.ToString(),
+            // Executed-PDF generation is deliberately reconciled by the Engine after the signer
+            // transaction commits. The signature page can safely report success immediately while
+            // the durable ExecutionPending packet is finalized without widening anonymous RLS to
+            // the complete lease graph.
+            RequestCompleted = outcome.Value.RequestStatus == SignatureRequestStatus.Completed,
         });
     }
 
     public async Task<SignTokenResult<SignActionResponse>> DeclineAsync(
         string token, DeclineSignatureRequest request, string? ipAddress, string? userAgent, CancellationToken ct = default)
     {
-        var (signer, sigRequest, error) = await ResolveAsync(token, requireActive: true, ct);
-        if (error is not null)
+        var now = DateTime.UtcNow;
+        var operationKey = string.IsNullOrWhiteSpace(request.IdempotencyKey)
+            ? Guid.NewGuid().ToString("N")
+            : request.IdempotencyKey;
+        var outcome = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity("native-esign.decline", OperationIdentity(token, operationKey)),
+            new RecordNativeDeclineCommand(TokenHash(token), request.Reason?.Trim(), ipAddress, userAgent, now),
+            new AtomicJsonResultCodec<NativeSignerActionResult>("native-esign.decline.v1"),
+            ct);
+        if (outcome.Value.Outcome != NativeSignerActionOutcome.Applied)
         {
-            return error.Cast<SignActionResponse>();
+            return MapSignerActionError(outcome.Value);
         }
-
-        var now = _timeProvider.UtcNow();
-
-        signer!.Status = SignatureSignerStatus.Declined;
-        signer.IpAddress = ipAddress ?? signer.IpAddress;
-        signer.UserAgent = userAgent ?? signer.UserAgent;
-
-        sigRequest!.Status = SignatureRequestStatus.Declined;
-
-        _db.SignatureAuditEvents.Add(new SignatureAuditEvent
-        {
-            SignatureRequestId = sigRequest.Id,
-            SignerId = signer.Id,
-            Type = SignatureAuditEventType.Declined,
-            AtUtc = now,
-            IpAddress = ipAddress,
-            UserAgent = userAgent,
-            Detail = string.IsNullOrWhiteSpace(request.Reason)
-                ? $"{signer.Name} declined to sign."
-                : $"{signer.Name} declined to sign: {request.Reason!.Trim()}",
-        });
-
-        // Ensure the lease ↔ envelope link exists so the decline reliably resolves the lease.
-        var declinedLease = await _db.Leases.FirstOrDefaultAsync(
-            l => l.Id == sigRequest.LeaseId && l.PortfolioId == sigRequest.PortfolioId, ct);
-        if (declinedLease is not null && declinedLease.EsignEnvelopeId != sigRequest.PublicId)
-        {
-            declinedLease.EsignEnvelopeId = sigRequest.PublicId;
-        }
-
-        await _db.SaveChangesAsync(ct);
-
-        // Reflect the decline on the lease (EsignStatus=Declined) via the existing webhook-equivalent path.
-        await SafeAsync("lease decline sync", () => _leaseEsign.HandleDeclinedEventAsync(sigRequest.PublicId, ct));
 
         return SignTokenResult<SignActionResponse>.Ok(new SignActionResponse
         {
-            SignerStatus = signer.Status.ToString(),
-            RequestStatus = sigRequest.Status.ToString(),
+            SignerStatus = outcome.Value.SignerStatus.ToString(),
+            RequestStatus = outcome.Value.RequestStatus.ToString(),
             RequestCompleted = false,
         });
-    }
-
-    // -------------------------------------------------------------------------
-    // Completion: render executed PDF + certificate, hash, store, update lease.
-    // -------------------------------------------------------------------------
-
-    private async Task CompleteRequestAsync(SignatureRequest sigRequest, DateTime now, CancellationToken ct)
-    {
-        var data = await BuildExecutedDataAsync(sigRequest, now, ct);
-        if (data is null)
-        {
-            _logger.LogWarning("Native e-sign: could not build executed document for request {PublicId} (lease graph missing).", sigRequest.PublicId);
-            return;
-        }
-
-        // Render once; hash the exact stored bytes (the certificate references the hash as computed on
-        // storage so there is no chicken-and-egg between the bytes and their own hash).
-        var executedBytes = _executedPdf.Generate(data, contentSha256: string.Empty);
-        var sha256 = Convert.ToHexString(SHA256.HashData(executedBytes)).ToLowerInvariant();
-
-        var fileName = $"lease-{sigRequest.LeaseId}-executed.pdf";
-        var storedFileId = await StoreDocumentAsync(sigRequest.PortfolioId, sigRequest.LeaseId, executedBytes, fileName, ct);
-
-        sigRequest.SignedStoredFileId = storedFileId;
-        sigRequest.ContentSha256 = sha256;
-        sigRequest.CompletedAtUtc = now;
-        sigRequest.Status = SignatureRequestStatus.Completed;
-
-        _db.SignatureAuditEvents.Add(new SignatureAuditEvent
-        {
-            SignatureRequestId = sigRequest.Id,
-            Type = SignatureAuditEventType.Completed,
-            AtUtc = now,
-            Detail = $"All signers signed. Executed document SHA-256 {sha256}.",
-        });
-
-        await _db.SaveChangesAsync(ct);
-
-        // The lease e-sign service resolves the lease by its EsignEnvelopeId. Ensure that link exists
-        // (it is normally set by LeaseEsignService.SendForSignatureAsync, but native requests created via
-        // other paths may not have stamped it) so completion reliably advances the lease.
-        var lease = await _db.Leases.FirstOrDefaultAsync(
-            l => l.Id == sigRequest.LeaseId && l.PortfolioId == sigRequest.PortfolioId, ct);
-        if (lease is not null && lease.EsignEnvelopeId != sigRequest.PublicId)
-        {
-            lease.EsignEnvelopeId = sigRequest.PublicId;
-            await _db.SaveChangesAsync(ct);
-        }
-
-        // Hand off to the lease e-sign service: it downloads the executed PDF via the native provider's
-        // DownloadSignedDocumentAsync (now that SignedStoredFileId is set), stores it on the lease, sets
-        // EsignStatus=Signed, and flips a PendingSignature lease to Active. Resolved by envelope id only.
-        await SafeAsync("lease signed sync", () => _leaseEsign.HandleSignedEventAsync(sigRequest.PublicId, ct));
-    }
-
-    private async Task<ExecutedLeaseData?> BuildExecutedDataAsync(SignatureRequest sigRequest, DateTime now, CancellationToken ct)
-    {
-        var lease = await _db.Leases.AsNoTracking()
-            .Include(l => l.Tenant)
-            .Include(l => l.Unit)
-            .Include(l => l.Property)
-            .FirstOrDefaultAsync(l => l.Id == sigRequest.LeaseId && l.PortfolioId == sigRequest.PortfolioId, ct);
-        if (lease is null)
-        {
-            return null;
-        }
-
-        var portfolio = await _db.Portfolios.AsNoTracking()
-            .FirstOrDefaultAsync(p => p.Id == sigRequest.PortfolioId, ct);
-
-        var landlordName = !string.IsNullOrWhiteSpace(portfolio?.ManagementCompanyName)
-            ? portfolio!.ManagementCompanyName
-            : portfolio?.Name ?? "Landlord";
-
-        var tenantName = lease.Tenant is null
-            ? string.Empty
-            : $"{lease.Tenant.FirstName} {lease.Tenant.LastName}".Trim();
-
-        var property = lease.Property;
-        var propertyAddress = property is null
-            ? string.Empty
-            : string.Join(", ", new[]
-            {
-                property.AddressLine1,
-                property.AddressLine2,
-                $"{property.City}, {property.State} {property.PostalCode}".Trim(),
-            }.Where(s => !string.IsNullOrWhiteSpace(s)));
-
-        var agreement = new LeaseAgreementData
-        {
-            Lease = lease,
-            LandlordName = landlordName,
-            TenantName = tenantName,
-            PropertyName = property?.Name ?? string.Empty,
-            PropertyAddress = propertyAddress,
-            UnitNumber = lease.Unit?.UnitNumber,
-            State = property?.State ?? string.Empty,
-            YearBuilt = property?.YearBuilt,
-        };
-
-        var originalDocumentBytes = sigRequest.DocumentTemplateId.HasValue
-            ? await TryLoadOriginalDocumentBytesAsync(sigRequest, ct)
-            : null;
-
-        var signers = BuildExecutedSigners(sigRequest.Signers.OrderBy(s => s.Id).ToList(), tenantName, lease.Tenant?.Email);
-
-        return new ExecutedLeaseData
-        {
-            Agreement = agreement,
-            Signers = signers,
-            LandlordName = landlordName,
-            EnvelopeId = sigRequest.PublicId,
-            DocumentName = sigRequest.DocumentName,
-            OriginalDocumentBytes = originalDocumentBytes,
-            TemplateFieldSnapshotJson = sigRequest.TemplateFieldSnapshotJson,
-            CompletedAtUtc = now,
-        };
-    }
-
-    private async Task<byte[]?> TryLoadOriginalDocumentBytesAsync(SignatureRequest sigRequest, CancellationToken ct)
-    {
-        var file = await _db.StoredFiles.AsNoTracking()
-            .FirstOrDefaultAsync(f => f.Id == sigRequest.OriginalStoredFileId
-                && f.PortfolioId == sigRequest.PortfolioId
-                && f.DeletedAt == null, ct);
-        if (file is null)
-        {
-            return null;
-        }
-
-        try
-        {
-            await using var stream = await _storage.DownloadAsync(file.FilePath, ct);
-            using var ms = new MemoryStream();
-            await stream.CopyToAsync(ms, ct);
-            return ms.ToArray();
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            _logger.LogWarning(
-                ex,
-                "Native e-sign: original template document missing for request {PublicId}.",
-                sigRequest.PublicId);
-            return null;
-        }
-    }
-
-    private static List<ExecutedSigner> BuildExecutedSigners(
-        IReadOnlyList<SignatureSigner> source,
-        string tenantName,
-        string? tenantEmail)
-    {
-        var roles = new DocumentTemplateSignerRole[source.Count];
-        var signers = new List<ExecutedSigner>(source.Count);
-        var tenantAssigned = false;
-        var landlordAssigned = false;
-
-        for (var i = 0; i < source.Count; i++)
-        {
-            var signer = source[i];
-            var role = DocumentTemplateSignerRole.None;
-            if (!tenantAssigned && IsTenantSigner(signer, tenantName, tenantEmail))
-            {
-                role = DocumentTemplateSignerRole.Tenant;
-                tenantAssigned = true;
-            }
-            else if (!landlordAssigned)
-            {
-                role = DocumentTemplateSignerRole.Landlord;
-                landlordAssigned = true;
-            }
-
-            roles[i] = role;
-        }
-
-        if (!tenantAssigned && source.Count > 0)
-        {
-            roles[0] = DocumentTemplateSignerRole.Tenant;
-            if (!roles.Contains(DocumentTemplateSignerRole.Landlord) && source.Count > 1)
-            {
-                roles[1] = DocumentTemplateSignerRole.Landlord;
-            }
-        }
-
-        for (var i = 0; i < source.Count; i++)
-        {
-            var signer = source[i];
-            signers.Add(new ExecutedSigner
-            {
-                Name = signer.Name,
-                Email = signer.Email,
-                SignerRole = roles[i],
-                SignatureType = signer.SignatureType,
-                TypedName = signer.TypedName,
-                DrawnSignatureImage = signer.DrawnSignatureImage,
-                SignedAtUtc = signer.SignedAtUtc,
-                IpAddress = signer.IpAddress,
-                UserAgent = signer.UserAgent,
-                ViewedAtUtc = signer.ViewedAtUtc,
-                ConsentGiven = signer.ConsentGiven,
-            });
-        }
-
-        return signers;
-    }
-
-    private static bool IsTenantSigner(SignatureSigner signer, string tenantName, string? tenantEmail)
-    {
-        if (!string.IsNullOrWhiteSpace(tenantEmail)
-            && string.Equals(signer.Email.Trim(), tenantEmail.Trim(), StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        return !string.IsNullOrWhiteSpace(tenantName)
-            && string.Equals(signer.Name.Trim(), tenantName.Trim(), StringComparison.OrdinalIgnoreCase);
     }
 
     // -------------------------------------------------------------------------
@@ -495,10 +277,9 @@ public sealed class NativeSigningService : INativeSigningService
             return (null, null, SignTokenError.NotFound());
         }
 
-        // Tracked load (we mutate signer/request). Include sibling signers so completion can check "all signed".
-        var signer = await _db.SignatureSigners
-            .Include(s => s.SignatureRequest!).ThenInclude(r => r.Signers)
-            .FirstOrDefaultAsync(s => s.Token == token, ct);
+        var signer = await _db.SignatureSigners.AsNoTracking()
+            .Include(s => s.SignatureRequest!)
+            .FirstOrDefaultAsync(s => s.TokenHash == TokenHash(token), ct);
         if (signer?.SignatureRequest is null)
         {
             return (null, null, SignTokenError.NotFound());
@@ -506,7 +287,7 @@ public sealed class NativeSigningService : INativeSigningService
 
         var request = signer.SignatureRequest;
 
-        if (signer.ExpiresAtUtc <= DateTime.UtcNow
+        if (signer.TokenExpiresAtUtc <= DateTime.UtcNow
             && signer.Status is not (SignatureSignerStatus.Signed or SignatureSignerStatus.Declined)
             && request.Status is not (SignatureRequestStatus.Completed or SignatureRequestStatus.Declined or SignatureRequestStatus.Voided))
         {
@@ -530,40 +311,6 @@ public sealed class NativeSigningService : INativeSigningService
         }
 
         return (signer, request, null);
-    }
-
-    private async Task<int> StoreDocumentAsync(int portfolioId, int leaseId, byte[] bytes, string fileName, CancellationToken ct)
-    {
-        string storageKey;
-        await using (var ms = new MemoryStream(bytes))
-        {
-            storageKey = await _storage.UploadAsync(ms, fileName, "application/pdf", ct);
-        }
-
-        var stored = new StoredFile
-        {
-            PortfolioId = portfolioId,
-            FileName = fileName,
-            FilePath = storageKey,
-            ContentType = "application/pdf",
-            FileSize = bytes.Length,
-            EntityType = "Lease",
-            EntityId = leaseId,
-            UploadedAt = _timeProvider.UtcNow(),
-        };
-
-        try
-        {
-            _db.StoredFiles.Add(stored);
-            await _db.SaveChangesAsync(ct);
-        }
-        catch
-        {
-            try { await _storage.DeleteAsync(storageKey, ct); } catch { /* best-effort */ }
-            throw;
-        }
-
-        return stored.Id;
     }
 
     /// <summary>Decodes a PNG data URL ("data:image/png;base64,...") or a bare base64 string to bytes.</summary>
@@ -591,17 +338,21 @@ public sealed class NativeSigningService : INativeSigningService
         }
     }
 
-    private async Task SafeAsync(string label, Func<Task> action)
-    {
-        try
+    private static string OperationIdentity(string token, string operationKey) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{token}:{operationKey}"))).ToLowerInvariant();
+
+    private static string TokenIdentity(string token) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
+
+    private static string TokenHash(string token) => TokenIdentity(token);
+
+    private static SignTokenResult<SignActionResponse> MapSignerActionError(NativeSignerActionResult result) =>
+        result.Outcome switch
         {
-            await action();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Native e-sign side effect '{Label}' failed (continuing).", label);
-        }
-    }
+            NativeSignerActionOutcome.NotFound => SignTokenResult<SignActionResponse>.NotFound(),
+            _ => SignTokenResult<SignActionResponse>.Expired(
+                result.Error ?? "This signing request is no longer active."),
+        };
 
     /// <summary>Internal error carrier so a single resolve can serve multiple result types.</summary>
     private sealed class SignTokenError
