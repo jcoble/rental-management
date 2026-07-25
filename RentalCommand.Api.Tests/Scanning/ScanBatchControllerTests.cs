@@ -323,11 +323,16 @@ public class ScanBatchControllerTests : IDisposable
         detail.Counts.Reviewing.Should().Be(1);
         detail.Counts.Confirmed.Should().Be(1);
         detail.Counts.Failed.Should().Be(1);
+        detail.DraftTotalCount.Should().Be(5);
+        detail.Skip.Should().Be(0);
+        detail.Take.Should().Be(20);
 
         _executedSql.Should().HaveCount(2,
             "batch detail must use one SQL summary query plus one filtered, sorted draft projection");
         _executedSql[0].Should().ContainEquivalentOf("COUNT");
         _executedSql[1].Should().ContainEquivalentOf("ORDER BY");
+        _executedSql[1].Should().ContainEquivalentOf("LIMIT");
+        _executedSql[1].Should().ContainEquivalentOf("OFFSET");
         _executedSql.Should().NotContain(sql =>
             sql.Contains("StoredFiles", StringComparison.OrdinalIgnoreCase),
             "confirmed entity ids come directly from ScanDraft.ConfirmedEntityId");

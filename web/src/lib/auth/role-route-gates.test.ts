@@ -175,9 +175,17 @@ test('Tenant keeps relationship projections while management routes fail closed'
 		'work.read'
 	]);
 
+	assert.doesNotMatch(
+		protectedLayout,
+		/activeExperience === 'Tenant'\)[\s\S]{0,80}redirect\(303, '\/portal'\)/
+	);
 	assert.equal(canAccessRoute('/portal', 'Tenant', leakedManagementCapabilities), true);
 	assert.equal(canAccessRoute('/portal/account', 'Tenant', leakedManagementCapabilities), true);
 	assert.equal(canAccessRoute('/portal/maintenance', 'Tenant', leakedManagementCapabilities), true);
+	assert.equal(
+		canAccessRoute('/settings/notifications/my-alerts', 'Tenant', leakedManagementCapabilities),
+		true
+	);
 	assert.equal(canAccessRoute('/units', 'Tenant', leakedManagementCapabilities), false);
 	assert.equal(canAccessRoute('/units/42', 'Tenant', leakedManagementCapabilities), false);
 	assert.equal(

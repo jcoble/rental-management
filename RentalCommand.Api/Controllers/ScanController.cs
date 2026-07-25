@@ -372,9 +372,15 @@ public class ScanController : ManagementControllerBase
     [HttpGet("batches/{id:int}", Name = nameof(GetBatch))]
     [ProducesResponseType(typeof(ScanBatchDetailResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<ScanBatchDetailResponse>> GetBatch(int id, CancellationToken ct)
+    public async Task<ActionResult<ScanBatchDetailResponse>> GetBatch(
+        int id,
+        CancellationToken ct,
+        [FromQuery] int skip = 0,
+        [FromQuery] int take = 20)
     {
         var scope = GetWorkspaceReadScope();
+        skip = Math.Max(0, skip);
+        take = Math.Clamp(take, 1, 100);
 
         var batch = await QueryBatchSummaryRows(scope)
             .Where(b => b.Id == id)
@@ -401,6 +407,8 @@ public class ScanController : ManagementControllerBase
                 CreatedAt = d.CreatedAt,
                 FailureReason = d.FailureReason,
             })
+            .Skip(skip)
+            .Take(take)
             .ToListAsync(ct);
 
         var draftDtos = new List<ScanBatchDraftResponse>(drafts.Count);
@@ -417,7 +425,8 @@ public class ScanController : ManagementControllerBase
 
         return Ok(new ScanBatchDetailResponse(
             batch.Id, batch.Name, batch.TargetEntityType, batch.Status,
-            batch.FileCount, batch.CreatedAtUtc, batch.Counts, draftDtos));
+            batch.FileCount, batch.CreatedAtUtc, batch.Counts, draftDtos,
+            batch.Counts.Total, skip, take));
     }
 
     // -------------------------------------------------------------------------
