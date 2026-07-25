@@ -660,7 +660,7 @@ class _LedgerTabState extends ConsumerState<_LedgerTab> {
           : ListView.separated(
               controller: _scroll,
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-              itemCount: state.items.length + (state.hasMore ? 1 : 0),
+              itemCount: state.items.length + (state.loadingMore ? 1 : 0),
               separatorBuilder: (_, index) {
                 if (index >= state.items.length - 1) {
                   return const SizedBox(height: 12);

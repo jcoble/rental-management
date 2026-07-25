@@ -126,6 +126,12 @@ void main() {
     await tester.pump();
     await tester.pump();
 
+    expect(
+      find.byKey(const Key('ledger-append-progress')),
+      findsNothing,
+      reason: 'More pages alone must not look like an active request.',
+    );
+
     final append = container.read(transactionsProvider.notifier).loadMore();
     await tester.pump();
 
