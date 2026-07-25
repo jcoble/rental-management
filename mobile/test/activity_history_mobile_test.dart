@@ -209,6 +209,92 @@ void main() {
     },
   );
 
+  testWidgets(
+    'activity cold entry shows contextual loading before an empty response',
+    (tester) async {
+      final pending = Completer<List<ActivityEntry>>();
+      final repo = _ControlledActivityRepository((request) => pending.future);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [activityRepositoryProvider.overrideWithValue(repo)],
+          child: const MaterialApp(home: ActivityHistoryScreen()),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byKey(const Key('activity-controls-button')), findsOneWidget);
+      expect(find.byKey(const Key('activity-loading')), findsOneWidget);
+      expect(find.text('Loading activity'), findsOneWidget);
+      expect(
+        find.text('Recent changes and who made them'),
+        findsOneWidget,
+      );
+      expect(find.text('No activity yet.'), findsNothing);
+
+      pending.complete(const []);
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.byKey(const Key('activity-loading')), findsNothing);
+      expect(find.text('No activity yet.'), findsOneWidget);
+    },
+  );
+
+  testWidgets('activity append retains rows with compact list-end progress', (
+    tester,
+  ) async {
+    final nextPage = Completer<List<ActivityEntry>>();
+    final repo = _ControlledActivityRepository((request) {
+      if (request.skip == 0) {
+        return Future.value([
+          for (var i = 1; i <= 20; i++)
+            ActivityEntry.fromJson(_auditJson(id: i)),
+        ]);
+      }
+      if (request.skip == 20) return nextPage.future;
+      fail('Unexpected request: $request');
+    });
+    final container = ProviderContainer(
+      overrides: [activityRepositoryProvider.overrideWithValue(repo)],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: ActivityHistoryScreen()),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    final append = container.read(activityHistoryProvider.notifier).loadMore();
+    await tester.pump();
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('activity-append-progress')),
+      600,
+      scrollable: find.byType(Scrollable).last,
+    );
+
+    expect(container.read(activityHistoryProvider).items, hasLength(20));
+    expect(find.byKey(const Key('activity-entry-20')), findsOneWidget);
+    final progress = tester.widget<SizedBox>(
+      find.byKey(const Key('activity-append-progress')),
+    );
+    expect(progress.width, 22);
+    expect(progress.height, 22);
+    expect(repo.requests.last.skip, 20);
+    expect(repo.requests.last.take, 20);
+
+    nextPage.complete([ActivityEntry.fromJson(_auditJson(id: 21))]);
+    await append;
+    await tester.pump();
+
+    expect(container.read(activityHistoryProvider).items, hasLength(21));
+    expect(find.byKey(const Key('activity-append-progress')), findsNothing);
+  });
+
   testWidgets('activity history screen renders global audit entries', (
     tester,
   ) async {
@@ -242,6 +328,51 @@ void main() {
     expect(find.text('Sort and filter'), findsOneWidget);
     expect(find.text('Newest first'), findsOneWidget);
   });
+
+  testWidgets(
+    'activity row allows long description and entity context to wrap twice',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(360, 800));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      const description =
+          'Quarterly rent payment correction for the downtown apartment';
+      const entityType = 'TenantAccountReconciliationRecord';
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            activityRepositoryProvider.overrideWithValue(
+              _FakeActivityRepository(
+                pages: [
+                  [
+                    ActivityEntry.fromJson(
+                      _auditJson(
+                        description: description,
+                        entityType: entityType,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+          child: const MaterialApp(home: ActivityHistoryScreen()),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      final descriptionText = tester.widget<Text>(find.text(description));
+      final entityText = tester.widget<Text>(
+        find.text('Updated · Alex Manager · $entityType #42'),
+      );
+
+      expect(descriptionText.maxLines, 2);
+      expect(entityText.maxLines, 2);
+      expect(find.byIcon(Icons.chevron_right), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('activity history opens a detail card with back navigation', (
     tester,
