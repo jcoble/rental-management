@@ -384,11 +384,17 @@ class _MobileDomainHubScreenState extends ConsumerState<MobileDomainHubScreen> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         if (!showingDetailHeader)
-                          _HubSegmentBar(
-                            destinations: widget.destinations,
-                            selectedIndex: _selectedIndex,
-                            onSelected: _selectIndex,
-                          ),
+                          widget.destinations.length >= 4
+                              ? _HubSectionSelector(
+                                  destinations: widget.destinations,
+                                  selectedIndex: _selectedIndex,
+                                  onSelected: _selectIndex,
+                                )
+                              : _HubSegmentBar(
+                                  destinations: widget.destinations,
+                                  selectedIndex: _selectedIndex,
+                                  onSelected: _selectIndex,
+                                ),
                         Expanded(
                           child: PopScope<void>(
                             canPop: false,
@@ -510,6 +516,74 @@ class _DomainScrollCollapseObserverState
   Widget build(BuildContext context) => widget.child;
 }
 
+class _HubSectionSelector extends StatelessWidget {
+  const _HubSectionSelector({
+    required this.destinations,
+    required this.selectedIndex,
+    required this.onSelected,
+  });
+
+  final List<MobileDestination> destinations;
+  final int selectedIndex;
+  final ValueChanged<int> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = destinations[selectedIndex];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
+      child: MenuAnchor(
+        crossAxisUnconstrained: false,
+        menuChildren: [
+          for (var index = 0; index < destinations.length; index++)
+            MenuItemButton(
+              key: ValueKey('hub-section-${destinations[index].id.name}'),
+              leadingIcon: Icon(destinations[index].icon),
+              trailingIcon: index == selectedIndex
+                  ? const Icon(Icons.check_rounded)
+                  : null,
+              onPressed: () {
+                if (index != selectedIndex) onSelected(index);
+              },
+              child: Text(destinations[index].label),
+            ),
+        ],
+        builder: (context, controller, _) => Tooltip(
+          message: 'Choose section',
+          child: SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: FilledButton.tonal(
+              key: const Key('hub-section-selector'),
+              onPressed: () {
+                controller.isOpen ? controller.close() : controller.open();
+              },
+              child: Row(
+                children: [
+                  Icon(selected.icon),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      selected.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  Icon(
+                    controller.isOpen
+                        ? Icons.keyboard_arrow_up_rounded
+                        : Icons.keyboard_arrow_down_rounded,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _HubSegmentBar extends StatefulWidget {
   const _HubSegmentBar({
     required this.destinations,
@@ -582,6 +656,7 @@ class _HubSegmentBarState extends State<_HubSegmentBar> {
           _lastViewportWidth = viewportWidth;
 
           return SingleChildScrollView(
+            key: const Key('hub-segment-scroll'),
             controller: _scrollController,
             scrollDirection: Axis.horizontal,
             physics: const BouncingScrollPhysics(),

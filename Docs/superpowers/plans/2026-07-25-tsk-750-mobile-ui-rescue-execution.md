@@ -28,7 +28,7 @@ inspected for every changed query.
 Every write belonging to one user action remains inside one explicit transaction.
 External effects happen after commit or through the outbox.
 
-## Active contract: Step 1 — stop the global FAB from blocking the UI
+## Completed contract: Step 1 — stop the global FAB from blocking the UI
 
 ### Evidence
 
@@ -168,15 +168,111 @@ Step 1 completes only when FAB-07 is evidenced on the Azure emulator.
 After that proof, close and verify `TSK-751`; keep parent rescue `TSK-750` open
 for the remaining roadmap boundaries.
 
+## Active contract: Step 2A — make every hub section discoverable
+
+### Evidence
+
+The shared hub segment bar shows only about three destinations at once and gives
+no explicit indication that more sections exist off-screen. In Rentals, the
+authorized set is Properties, Owners, Units, Tenants, Leases, and Applications.
+Audit captures `52-rentals-return.png`, `53-rentals-tabs-scroll.png`, and
+`57-rentals-tabs-end.png` prove that users must guess at horizontal scrolling to
+find the first or last destinations.
+
+### Allowed source files
+
+- `mobile/lib/features/home/mobile_domain_hub.dart`
+
+### Allowed test files
+
+- `mobile/test/mobile_domain_hub_test.dart`
+
+No authorization, destination construction, router, content screen, unit command
+center, Today, or work-order file is in this active boundary.
+
+### Required change
+
+- For a hub with four or more authorized destinations, replace the mystery
+  horizontal segment track with one full-width Material 3 anchored section
+  selector.
+- The closed selector identifies the currently selected section and has a
+  discoverable section-switching label/tooltip.
+- Opening it presents every authorized destination in one menu, with destination
+  iconography and a selected-state check; no horizontal gesture is needed.
+- Selecting a destination must call the existing `_selectIndex` path so content
+  root replacement, nested detail behavior, authorization filtering, state
+  restoration, quick actions, and deep-link handling remain unchanged.
+- Hubs with three or fewer destinations retain the existing compact segment
+  presentation.
+
+### Acceptance criteria
+
+- **HUB-01:** A six-destination Rentals hub renders one explicit section selector
+  and no horizontal `SingleChildScrollView`.
+- **HUB-02:** Opening the selector exposes Properties, Owners, Units, Tenants,
+  Leases, and Applications together, with the current destination marked.
+- **HUB-03:** Selecting Applications closes the menu, changes the selected label
+  and root content, and selecting Units again restores Units root through the
+  same navigation controller path.
+- **HUB-04:** A three-destination hub retains three directly tappable segment
+  labels and does not render the anchored selector.
+- **HUB-05:** The authorized destination list is not copied, reordered, expanded,
+  or filtered by the selector.
+- **HUB-06:** Azure emulator proof shows the Rentals selector closed on Units,
+  open with all six sections discoverable, and closed on Applications, with no
+  clipped section label or FAB/action overlap. The existing three-destination
+  Inbox hub still shows Messages, Notifications, and Activity History as three
+  directly tappable segments with no anchored selector.
+
+### Targeted commands
+
+Run serially from `mobile/`:
+
+```bash
+dart format lib/features/home/mobile_domain_hub.dart \
+  test/mobile_domain_hub_test.dart
+flutter test test/mobile_domain_hub_test.dart
+flutter analyze lib/features/home/mobile_domain_hub.dart \
+  test/mobile_domain_hub_test.dart
+git diff --check
+```
+
+### Relevance gate
+
+After implementation, a read-only reviewer checks only:
+
+1. the two allowed-file diffs;
+2. HUB-01 through HUB-05 test evidence;
+3. preservation of the existing destination/navigation path;
+4. absence of authorization, router, content, or other roadmap changes.
+
+### Emulator proof gate
+
+The sole emulator tester captures PNG and matching hierarchy XML under:
+
+`Docs/Reviews/artifacts/tsk-750/post-hub-selector/`
+
+- `rentals-units-closed`
+- `rentals-selector-open`
+- `rentals-applications-closed`
+- `inbox-three-segments`
+
+The proof report is:
+
+`Docs/Reviews/2026-07-25-tsk-750-mobile-hub-selector-proof.md`
+
+Step 2A completes only when HUB-06 is evidenced on an exact-SHA Azure emulator
+build.
+
 ## Pending roadmap boundaries
 
 These are evidence-backed but inactive. Each receives its own exact-file contract
 and relevance gate only after the active step closes.
 
-### Step 2 — visible, unit-centered navigation
+### Step 2B — visible, unit-centered navigation
 
-- Replace clipped/mystery horizontal navigation in Rentals and the Unit Command
-  Center with an explicit section affordance.
+- Replace clipped/mystery horizontal navigation in the Unit Command Center with
+  an explicit section affordance.
 - Preserve unit/property context, destination restoration, and deep links.
 - Restore Today as the Back destination for work orders opened from Today.
 - Evidence: 00, 05–07, 42, 52, 53, 57.
