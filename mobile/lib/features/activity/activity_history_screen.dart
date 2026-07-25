@@ -35,6 +35,7 @@ class _ActivityHistoryScreenState extends ConsumerState<ActivityHistoryScreen> {
   final _scrollController = ScrollController();
   final _searchController = TextEditingController();
   ActivityEntry? _focusedEntry;
+  bool _initialRefreshPending = true;
 
   ActivityHistoryScope? get _scope {
     final entityType = widget.entityType;
@@ -51,9 +52,15 @@ class _ActivityHistoryScreenState extends ConsumerState<ActivityHistoryScreen> {
     final scope = _scope;
     _searchController.text = _readState(scope).filter.search ?? '';
     _scrollController.addListener(_onScroll);
-    Future.microtask(() {
+    Future.microtask(() async {
       if (!mounted) return;
-      _readNotifier(scope).refresh();
+      try {
+        await _readNotifier(scope).refresh();
+      } finally {
+        if (mounted) {
+          setState(() => _initialRefreshPending = false);
+        }
+      }
     });
   }
 
@@ -142,6 +149,7 @@ class _ActivityHistoryScreenState extends ConsumerState<ActivityHistoryScreen> {
             onRefresh: _refresh,
             child: _ActivityBody(
               state: state,
+              initialRefreshPending: _initialRefreshPending,
               controller: _scrollController,
               focusedEntryId: _focusedEntry?.id,
               onOpenEntry: _openActivityDetail,
@@ -313,6 +321,7 @@ class _ActivityFilters extends StatelessWidget {
 class _ActivityBody extends StatelessWidget {
   const _ActivityBody({
     required this.state,
+    required this.initialRefreshPending,
     required this.controller,
     required this.focusedEntryId,
     required this.onOpenEntry,
@@ -320,6 +329,7 @@ class _ActivityBody extends StatelessWidget {
   });
 
   final ActivityHistoryState state;
+  final bool initialRefreshPending;
   final ScrollController controller;
   final int? focusedEntryId;
   final ValueChanged<ActivityEntry> onOpenEntry;
@@ -327,8 +337,8 @@ class _ActivityBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (state.loading && state.items.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
+    if ((state.loading || initialRefreshPending) && state.items.isEmpty) {
+      return const _ActivityLoadingBody();
     }
 
     if (state.error != null && state.items.isEmpty) {
@@ -357,7 +367,13 @@ class _ActivityBody extends StatelessWidget {
         if (index >= state.items.length) {
           return const Padding(
             padding: EdgeInsets.all(16),
-            child: Center(child: CircularProgressIndicator()),
+            child: Center(
+              child: SizedBox.square(
+                key: Key('activity-append-progress'),
+                dimension: 22,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
           );
         }
         final entry = state.items[index];
@@ -372,6 +388,50 @@ class _ActivityBody extends StatelessWidget {
           onClose: onCloseEntry,
         );
       },
+    );
+  }
+}
+
+class _ActivityLoadingBody extends StatelessWidget {
+  const _ActivityLoadingBody();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+
+    return ListView(
+      key: const Key('activity-loading'),
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+      children: [
+        MobileM3ListItem(
+          position: MobileM3ListItemPosition.single,
+          leading: MobileM3LeadingIcon(
+            icon: Icons.history_outlined,
+            backgroundColor: colors.tertiaryContainer,
+            foregroundColor: colors.onTertiaryContainer,
+          ),
+          title: Text(
+            'Loading activity',
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          supporting: [
+            Text(
+              'Recent changes and who made them',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colors.onSurfaceVariant,
+              ),
+            ),
+          ],
+          trailing: const SizedBox.square(
+            dimension: 22,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -531,13 +591,13 @@ class _ActivityCompactRowContent extends StatelessWidget {
                 style: theme.textTheme.titleSmall?.copyWith(
                   fontWeight: FontWeight.w700,
                 ),
-                maxLines: 1,
+                maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
               const SizedBox(height: 2),
               Text(
                 '${entry.operationName} · ${entry.actor} · ${entry.entityType} #${entry.entityId}',
-                maxLines: 1,
+                maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: subtitleStyle,
               ),
