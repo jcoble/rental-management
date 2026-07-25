@@ -2558,6 +2558,12 @@ class _MessageCard extends StatelessWidget {
   }
 }
 
+void _pushTodayDetail(BuildContext context, WidgetBuilder detailBuilder) {
+  Navigator.of(
+    context,
+  ).push<void>(MaterialPageRoute<void>(builder: detailBuilder));
+}
+
 class _FieldQueueCard extends StatelessWidget {
   const _FieldQueueCard({required this.workOrder});
 
@@ -2574,20 +2580,7 @@ class _FieldQueueCard extends StatelessWidget {
         onTap: () {
           Widget detailBuilder(BuildContext _) =>
               WorkOrderUnitAwareLoaderScreen(workOrderId: workOrder.id);
-          final shellNavigator = mobileShellNavigatorOf(context);
-          if (shellNavigator != null) {
-            shellNavigator.openTab(
-              MobileShellTabId.work,
-              destination: MobileDestinationId.workOrders,
-              detailBuilder: detailBuilder,
-            );
-            revealMobileShellIfDetached(context);
-            return;
-          }
-
-          Navigator.of(
-            context,
-          ).push<void>(MaterialPageRoute<void>(builder: detailBuilder));
+          _pushTodayDetail(context, detailBuilder);
         },
         leading: CircleAvatar(
           backgroundColor: _priorityBg(workOrder.priority, cs),
@@ -3150,6 +3143,11 @@ class _BulletRow extends StatelessWidget {
   }
 
   void _openTarget(BuildContext context, _BriefingTarget target) {
+    if (target.preserveTodayOrigin && target.detailBuilder != null) {
+      _pushTodayDetail(context, target.detailBuilder!);
+      return;
+    }
+
     final shellNavigator = mobileShellNavigatorOf(context);
     if (shellNavigator != null) {
       shellNavigator.openTab(
@@ -3197,6 +3195,7 @@ class _BulletRow extends StatelessWidget {
           tab: MobileShellTabId.work,
           destination: MobileDestinationId.workOrders,
           detailBuilder: (_) => WorkOrderUnitAwareLoaderScreen(workOrderId: id),
+          preserveTodayOrigin: true,
         );
       case 'Payment':
         return _BriefingTarget(
@@ -3275,12 +3274,14 @@ class _BriefingTarget {
     required this.destination,
     this.detailBuilder,
     this.fallbackBuilder,
+    this.preserveTodayOrigin = false,
   });
 
   final MobileShellTabId tab;
   final MobileDestinationId destination;
   final MobileDetailBuilder? detailBuilder;
   final WidgetBuilder? fallbackBuilder;
+  final bool preserveTodayOrigin;
 }
 
 // ---------------------------------------------------------------------------
