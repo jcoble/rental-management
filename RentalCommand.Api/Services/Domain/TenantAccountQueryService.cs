@@ -69,12 +69,8 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
         TenantAccountDepositListQuery query,
         CancellationToken ct = default)
     {
-        var rows = BuildDepositListQuery(scope, query);
         var totalCount = await BuildDepositCountQuery(scope, query).CountAsync(ct);
-        var items = await ApplyDepositSort(rows, query)
-            .Skip(query.NormalizedSkip)
-            .Take(query.NormalizedTake)
-            .ToListAsync(ct);
+        var items = await BuildDepositPageQuery(scope, query).ToListAsync(ct);
 
         return new TenantAccountDepositPageResponse
         {
@@ -399,10 +395,108 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
 
     internal IQueryable<TenantAccountDepositListItemResponse> BuildDepositPageQuery(
         WorkspaceReadScope scope,
-        TenantAccountDepositListQuery query) =>
-        ApplyDepositSort(BuildDepositListQuery(scope, query), query)
+        TenantAccountDepositListQuery query)
+    {
+        if (query.SortField == "createdatutc"
+            && string.IsNullOrWhiteSpace(query.Status)
+            && string.IsNullOrWhiteSpace(query.Search))
+        {
+            return BuildCreatedAtDepositPageQuery(scope, query);
+        }
+
+        return ApplyDepositSort(BuildDepositListQuery(scope, query), query)
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake);
+    }
+
+    private IQueryable<TenantAccountDepositListItemResponse> BuildCreatedAtDepositPageQuery(
+        WorkspaceReadScope scope,
+        TenantAccountDepositListQuery query)
+    {
+        var seeds =
+            from account in BuildAuthorizedDepositAccountQuery(scope)
+            join management in _db.LeaseManagements.AsNoTracking()
+                on new { account.PortfolioId, Id = account.LeaseManagementId }
+                equals new { management.PortfolioId, management.Id }
+            join deposit in _db.SecurityDepositAccounts.AsNoTracking()
+                on new { account.PortfolioId, TenantAccountId = account.Id }
+                equals new { deposit.PortfolioId, deposit.TenantAccountId }
+            select new DepositPageSeed
+            {
+                PortfolioId = account.PortfolioId,
+                SecurityDepositAccountId = deposit.Id,
+                TenantAccountId = account.Id,
+                LeaseManagementId = management.Id,
+                OriginatingAgreementId = deposit.OriginatingAgreementId,
+                PropertyId = management.PropertyId,
+                UnitId = management.UnitId,
+                AccountNumber = account.AccountNumber,
+                RelationshipNumber = management.RelationshipNumber,
+                CreatedAtUtc = deposit.CreatedAtUtc,
+            };
+
+        if (query.TenantAccountId.HasValue)
+        {
+            seeds = seeds.Where(row => row.TenantAccountId == query.TenantAccountId.Value);
+        }
+        if (query.PropertyId.HasValue)
+        {
+            seeds = seeds.Where(row => row.PropertyId == query.PropertyId.Value);
+        }
+
+        var pagedSeeds = query.SortDescending
+            ? seeds.OrderByDescending(row => row.CreatedAtUtc)
+                .ThenByDescending(row => row.SecurityDepositAccountId)
+                .Skip(query.NormalizedSkip)
+                .Take(query.NormalizedTake)
+            : seeds.OrderBy(row => row.CreatedAtUtc)
+                .ThenBy(row => row.SecurityDepositAccountId)
+                .Skip(query.NormalizedSkip)
+                .Take(query.NormalizedTake);
+
+        var rows =
+            from seed in pagedSeeds
+            join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                on new { seed.PortfolioId, seed.LeaseManagementId }
+                equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+            join balance in _db.SecurityDepositBalanceProjections.AsNoTracking()
+                on new { seed.PortfolioId, seed.SecurityDepositAccountId }
+                equals new { balance.PortfolioId, balance.SecurityDepositAccountId }
+            join property in _db.Properties.AsNoTracking()
+                on new { seed.PortfolioId, Id = seed.PropertyId }
+                equals new { property.PortfolioId, property.Id }
+            join unit in _db.Units.AsNoTracking()
+                on new { seed.PortfolioId, seed.PropertyId, Id = seed.UnitId }
+                equals new { unit.PortfolioId, unit.PropertyId, unit.Id }
+            select new TenantAccountDepositListItemResponse
+            {
+                SecurityDepositAccountId = seed.SecurityDepositAccountId,
+                TenantAccountId = seed.TenantAccountId,
+                LeaseManagementId = seed.LeaseManagementId,
+                OriginatingAgreementId = seed.OriginatingAgreementId,
+                PropertyId = seed.PropertyId,
+                PropertyName = property.Name,
+                UnitId = seed.UnitId,
+                UnitNumber = unit.UnitNumber,
+                AccountNumber = seed.AccountNumber,
+                RelationshipNumber = seed.RelationshipNumber,
+                PrimaryTenantName = lifecycle.CurrentPrimaryTenantName,
+                Currency = balance.Currency,
+                CreatedAtUtc = seed.CreatedAtUtc,
+                EffectiveNowUtc = balance.EffectiveNowUtc,
+                BusinessDate = balance.BusinessDate,
+                TotalReceived = balance.TotalReceived,
+                TotalDeductions = balance.TotalDeductions,
+                TotalRefunded = balance.TotalRefunded,
+                TotalTransferredIn = balance.TotalTransferredIn,
+                TotalTransferredOut = balance.TotalTransferredOut,
+                NetAdjustments = balance.NetAdjustments,
+                HeldBalance = balance.HeldBalance,
+                Status = balance.DepositStatus,
+            };
+
+        return ApplyDepositSort(rows, query);
+    }
 
     internal IQueryable<int> BuildDepositCountQuery(
         WorkspaceReadScope scope,
@@ -1048,5 +1142,19 @@ public sealed class TenantAccountQueryService : ITenantAccountQueryService
     {
         public int TenantAccountId { get; init; }
         public int LeaseManagementId { get; init; }
+    }
+
+    private sealed class DepositPageSeed
+    {
+        public int PortfolioId { get; init; }
+        public int SecurityDepositAccountId { get; init; }
+        public int TenantAccountId { get; init; }
+        public int LeaseManagementId { get; init; }
+        public int OriginatingAgreementId { get; init; }
+        public int PropertyId { get; init; }
+        public int UnitId { get; init; }
+        public string AccountNumber { get; init; } = string.Empty;
+        public string RelationshipNumber { get; init; } = string.Empty;
+        public DateTime CreatedAtUtc { get; init; }
     }
 }
