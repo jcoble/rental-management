@@ -76,6 +76,8 @@ public sealed class AtomicNoticeDeliveryHandler
         var draft = await draftQuery.SingleOrDefaultAsync(ct)
             ?? throw new KeyNotFoundException("Draft does not exist or is no longer editable.");
 
+        NoticeDeliveryContentSafety.RequireSafe(draft.Subject, draft.Body);
+
         var foundation = await (
             from policy in attempt.Persistence.Query<TenantNoticePolicy>().AsNoTracking()
             join template in attempt.Persistence.Query<WorkspaceNoticeTemplateVersion>().AsNoTracking()

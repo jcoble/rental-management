@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../home/mobile_domain_chrome.dart';
+import 'notice_content_safety.dart';
 import 'notices_models.dart';
 import 'notices_repository.dart';
 
@@ -90,6 +91,9 @@ class _NoticeCardState extends ConsumerState<_NoticeCard> {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final channels = _selectedChannels;
+    final contentIssue = draft.status == 'Draft'
+        ? noticeContentSafetyIssue(subject: draft.subject, body: draft.body)
+        : null;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(14),
@@ -169,12 +173,22 @@ class _NoticeCardState extends ConsumerState<_NoticeCard> {
                 ],
               ),
             ],
+            if (contentIssue != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                contentIssue,
+                style: theme.textTheme.bodySmall?.copyWith(color: cs.error),
+              ),
+            ],
             const SizedBox(height: 12),
             Row(
               children: [
                 Expanded(
                   child: FilledButton.tonalIcon(
-                    onPressed: (_busy || channels.isEmpty) ? null : _approve,
+                    onPressed:
+                        (_busy || channels.isEmpty || contentIssue != null)
+                        ? null
+                        : _approve,
                     icon: const Icon(Icons.send_outlined),
                     label: const Text('Approve'),
                   ),
