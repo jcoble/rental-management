@@ -20,7 +20,7 @@ final paymentDetailProvider = FutureProvider.autoDispose
           .getTenantLedgerEntry(key.accountId, key.entryId);
     });
 
-/// Read-only detail for one immutable tenant-account receipt.
+/// Read-only detail for one permanent tenant-account receipt.
 class PaymentDetailScreen extends ConsumerWidget {
   const PaymentDetailScreen({
     super.key,
@@ -126,8 +126,8 @@ class _ReceiptBody extends StatelessWidget {
         ),
         _DetailRow(label: 'Rental', value: home.isEmpty ? '—' : home),
         _DetailRow(label: 'Description', value: receipt.description),
-        _DetailRow(label: 'Account', value: receipt.accountNumber),
-        _DetailRow(label: 'Relationship', value: receipt.relationshipNumber),
+        _DetailRow(label: 'Account number', value: receipt.accountNumber),
+        _DetailRow(label: 'Lease number', value: receipt.relationshipNumber),
         if (receipt.paymentMethodSummary?.trim().isNotEmpty == true)
           _DetailRow(label: 'Method', value: receipt.paymentMethodSummary!),
         if (receipt.providerReference?.trim().isNotEmpty == true)
@@ -140,8 +140,9 @@ class _ReceiptBody extends StatelessWidget {
           _DetailRow(label: 'Bank', value: receipt.bankName!),
         const SizedBox(height: 20),
         Text(
-          'This receipt is an immutable posted record. Corrections are made '
-          'with a linked refund and compensating allocation history.',
+          'This receipt is a permanent account record. If it needs a '
+          'correction, Rental Command creates a linked refund and keeps both '
+          'records in the account history.',
           style: theme.textTheme.bodySmall?.copyWith(
             color: cs.onSurfaceVariant,
           ),
@@ -174,7 +175,7 @@ class _PaymentCorrectionSheetState
     extends ConsumerState<_PaymentCorrectionSheet> {
   late final TextEditingController _reason;
   late final TextEditingController _method;
-  late final TextEditingController _provenance;
+  late final TextEditingController _paymentReference;
   DateTime _effectiveOn = DateTime.now();
   bool _submitting = false;
   String? _error;
@@ -185,12 +186,12 @@ class _PaymentCorrectionSheetState
     super.initState();
     final receipt = widget.receipt;
     _reason = TextEditingController(
-      text: 'Correction of immutable payment receipt: ${receipt.description}',
+      text: 'Correction for ${receipt.description}',
     );
     _method = TextEditingController(
       text: receipt.paymentMethodSummary?.trim() ?? '',
     );
-    _provenance = TextEditingController(
+    _paymentReference = TextEditingController(
       text: receipt.providerReference?.trim() ?? '',
     );
   }
@@ -199,16 +200,17 @@ class _PaymentCorrectionSheetState
   void dispose() {
     _reason.dispose();
     _method.dispose();
-    _provenance.dispose();
+    _paymentReference.dispose();
     super.dispose();
   }
 
   Future<void> _submit() async {
     if (_reason.text.trim().isEmpty ||
         _method.text.trim().isEmpty ||
-        _provenance.text.trim().isEmpty) {
+        _paymentReference.text.trim().isEmpty) {
       setState(
-        () => _error = 'Reason, method, and payout provenance are required.',
+        () => _error =
+            'Reason, payment method, and payment reference are required.',
       );
       return;
     }
@@ -227,7 +229,7 @@ class _PaymentCorrectionSheetState
               effectiveOn: _effectiveOn,
               reason: _reason.text,
               paymentMethodSummary: _method.text,
-              externalReference: _provenance.text,
+              externalReference: _paymentReference.text,
               sourceStoredFileId: widget.receipt.sourceStoredFileId,
             ),
           );
@@ -242,7 +244,7 @@ class _PaymentCorrectionSheetState
     } on ApiException catch (error) {
       if (!mounted) return;
       setState(() {
-        _error = '${error.message} No financial write was made.';
+        _error = '${error.message} Nothing was changed.';
       });
     } finally {
       if (mounted) setState(() => _submitting = false);
@@ -274,20 +276,17 @@ class _PaymentCorrectionSheetState
               ),
               const SizedBox(height: 6),
               const Text(
-                'The original posting remains permanent. This appends a linked refund and compensating allocations.',
+                'The original receipt stays in the account history. Saving '
+                'this correction creates a linked refund.',
               ),
               const SizedBox(height: 16),
-              _DetailRow(label: 'Account', value: receipt.accountNumber),
+              _DetailRow(label: 'Account number', value: receipt.accountNumber),
               _DetailRow(
                 label: 'Unit',
                 value: '${receipt.propertyName} · Unit ${receipt.unitNumber}',
               ),
               _DetailRow(label: 'Tenant', value: tenant),
-              _DetailRow(
-                label: 'Payment',
-                value:
-                    '${moneyFmt(receipt.amount)} · entry #${receipt.tenantLedgerEntryId}',
-              ),
+              _DetailRow(label: 'Payment', value: moneyFmt(receipt.amount)),
               const SizedBox(height: 12),
               TextField(
                 controller: _reason,
@@ -300,9 +299,9 @@ class _PaymentCorrectionSheetState
               ),
               const SizedBox(height: 12),
               TextField(
-                controller: _provenance,
+                controller: _paymentReference,
                 decoration: const InputDecoration(
-                  labelText: 'Payout provenance',
+                  labelText: 'Payment reference',
                 ),
               ),
               const SizedBox(height: 12),
@@ -329,8 +328,8 @@ class _PaymentCorrectionSheetState
               if (_result != null) ...[
                 const SizedBox(height: 12),
                 Text(
-                  'Linked refund entry #${_result!.refundEntryId}; '
-                  '${_result!.compensatedAllocationCount} allocation(s) compensated.',
+                  'Refund recorded. '
+                  '${_result!.compensatedAllocationCount == 1 ? '1 related balance was updated.' : '${_result!.compensatedAllocationCount} related balances were updated.'}',
                   key: const Key('payment-correction-result'),
                 ),
               ],
