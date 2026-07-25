@@ -54,10 +54,10 @@ database, seed, or emulator state was reset.
 
 ## Required re-test after implementation
 
-- [ ] Closed quick-action control never obscures a primary action, final row, or form field.
-- [ ] Appointment Save Changes, Inspection Complete, Notice SMS, Append correction,
+- [x] Closed quick-action control never obscures a primary action, final row, or form field.
+- [x] Appointment Save Changes, Inspection Complete, Notice SMS, Append correction,
       and Record receipt remain fully tappable.
-- [ ] Unit and Rentals section navigation exposes every destination without clipped
+- [x] Unit and Rentals section navigation exposes every destination without clipped
       labels or guesswork.
 - [ ] Unit Money uses plain-English transaction and balance language.
 - [ ] Money ledger contains no internal enum values such as `PaymentReceipt`.
