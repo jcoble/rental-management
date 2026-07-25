@@ -901,7 +901,7 @@ The proof report is
 - `RentalCommand.Api.Tests/Notices/NoticeDeliveryContentSafetyTests.cs` (new)
 - `RentalCommand.IntegrationTests/SuppliedNoticeTemplateBaselineTests.cs`
 - `mobile/test/notice_content_safety_test.dart` (new)
-- `mobile/test/create_tenant_notice_test.dart`
+- `mobile/test/notice_review_edit_test.dart`
 
 Supplied-template version correction is a separate Step 4C boundary. No
 controller route, DTO, repository, delivery-channel selection, recipient
@@ -976,14 +976,14 @@ dart format lib/features/notices/notice_content_safety.dart \
   lib/features/notices/notices_screen.dart \
   lib/features/notices/create_tenant_notice.dart \
   test/notice_content_safety_test.dart \
-  test/create_tenant_notice_test.dart
+  test/notice_review_edit_test.dart
 flutter test test/notice_content_safety_test.dart \
-  test/create_tenant_notice_test.dart
+  test/notice_review_edit_test.dart
 flutter analyze lib/features/notices/notice_content_safety.dart \
   lib/features/notices/notices_screen.dart \
   lib/features/notices/create_tenant_notice.dart \
   test/notice_content_safety_test.dart \
-  test/create_tenant_notice_test.dart
+  test/notice_review_edit_test.dart
 git diff --check
 ```
 
