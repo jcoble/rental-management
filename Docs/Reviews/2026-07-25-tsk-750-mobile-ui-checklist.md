@@ -61,7 +61,7 @@ database, seed, or emulator state was reset.
       labels or guesswork.
 - [ ] Unit Money uses plain-English transaction and balance language.
 - [ ] Money ledger contains no internal enum values such as `PaymentReceipt`.
-- [ ] Work order opened from Today returns to Today at its prior position.
+- [x] Work order opened from Today returns to Today at its prior position.
 - [ ] Empty states reference only controls that are actually visible and available.
 - [ ] Deposit loading has contextual progress immediately and the server response is
       measured after the query fix.
