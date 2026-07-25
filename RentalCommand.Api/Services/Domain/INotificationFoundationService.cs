@@ -24,6 +24,10 @@ public interface INotificationFoundationService
         UpsertTenantNoticePolicyRequest request, string operationKey, CancellationToken ct);
     Task<IReadOnlyList<WorkspaceNoticeTemplateResponse>> ListTemplatesAsync(int portfolioId, CancellationToken ct);
     IReadOnlyList<NoticeMergeFieldHelpResponse> ListMergeFields(string systemKey);
+    Task<NoticePreviewResponse> PreviewNoticeAsync(
+        int portfolioId, NoticePreviewRequest request, CancellationToken ct);
+    Task<NoticeTestSendResponse> SendNoticeTestAsync(
+        int portfolioId, NoticeTestSendRequest request, string operationKey, CancellationToken ct);
     Task SeedSuppliedTemplatesAsync(WorkspaceReadScope scope, string operationKey, CancellationToken ct);
     Task<TenantNoticePolicyResponse> CreateTemplateVersionAsync(WorkspaceReadScope scope, string systemKey,
         CreateWorkspaceNoticeTemplateVersionRequest request, string operationKey, CancellationToken ct);

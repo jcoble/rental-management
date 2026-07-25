@@ -274,6 +274,72 @@ void main() {
     expect(fields.single.example, 'Taylor Tenant');
   });
 
+  test('Tenant notice preview sends unsaved subject and body', () async {
+    final adapter = _RecordingAdapter(
+      (_) => {
+        'systemKey': 'rent-reminder',
+        'subject': 'Hello Taylor',
+        'body': 'Rent is due August 1.',
+        'exampleValues': {'tenant_name': 'Taylor Tenant'},
+      },
+    );
+    final repository = NotificationFoundationRepository(_dio(adapter));
+
+    final preview = await repository.previewTenantNotice(
+      systemKey: 'rent-reminder',
+      subject: 'Hello {{tenant_name}}',
+      body: 'Rent is due {{rent_due_date}}.',
+    );
+
+    expect(
+      adapter.requests.single.path,
+      '/tenant-notices/templates/rent-reminder/preview',
+    );
+    expect(adapter.requests.single.data, {
+      'systemKey': 'rent-reminder',
+      'subject': 'Hello {{tenant_name}}',
+      'body': 'Rent is due {{rent_due_date}}.',
+    });
+    expect(preview.subject, 'Hello Taylor');
+    expect(preview.exampleValues['tenant_name'], 'Taylor Tenant');
+  });
+
+  test(
+    'Tenant notice test send uses an explicit isolated destination',
+    () async {
+      final adapter = _RecordingAdapter(
+        (_) => {
+          'state': 'Suppressed',
+          'message': 'No provider is configured.',
+          'destination': 'owner+test@example.test',
+          'provider': null,
+          'providerMessageId': null,
+        },
+      );
+      final repository = NotificationFoundationRepository(_dio(adapter));
+
+      final result = await repository.sendTenantNoticeTest(
+        systemKey: 'rent-reminder',
+        subject: 'Hello {{tenant_name}}',
+        body: 'Rent is due {{rent_due_date}}.',
+        destination: 'owner+test@example.test',
+      );
+
+      expect(
+        adapter.requests.single.path,
+        '/tenant-notices/templates/rent-reminder/test-send',
+      );
+      expect(adapter.requests.single.method, 'POST');
+      expect(
+        adapter.requests.single.data,
+        containsPair('destination', 'owner+test@example.test'),
+      );
+      expect(adapter.requests.single.headers, contains('Idempotency-Key'));
+      expect(result.state, 'Suppressed');
+      expect(noticeTestSendStates, {'Accepted', 'Suppressed', 'ProviderError'});
+    },
+  );
+
   test(
     'Tenant policy update never sends a legacy global tenant switch',
     () async {

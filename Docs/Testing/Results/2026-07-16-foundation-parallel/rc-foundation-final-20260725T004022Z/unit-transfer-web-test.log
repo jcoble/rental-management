@@ -1,0 +1,17 @@
+▶ unit lease tab create action
+  ✔ offers only the canonical Prepare move-in and agreement-import entry points (0.731386ms)
+  ✔ does not retain the removed client-side occupancy gate or modal lifecycle (0.153959ms)
+  ✔ loads canonical unit-scoped tenant relationships and agreement summaries (0.293526ms)
+  ✔ uses precise LeaseManagement identifiers without an ambiguous lease id (0.121761ms)
+  ✔ does not let access-disposition initialization retrigger its own effect (0.14177ms)
+  ✔ shows a retryable error instead of leaving tenant relationships in a loader (0.212806ms)
+  ✔ searches and pages eligible transfer destinations on the server (0.236702ms)
+✔ unit lease tab create action (2.793549ms)
+ℹ tests 7
+ℹ suites 1
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 83.283624

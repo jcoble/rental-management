@@ -18,7 +18,9 @@
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import StarRating from '$lib/components/shared/StarRating.svelte';
+	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { History, Pencil, Save, Trash2, X, MessageSquare, Star, Check, Wrench, Coins, Phone, Mail } from '@lucide/svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
@@ -56,10 +58,17 @@
 		enabled: !isNaN(workOrderId) && workOrderId > 0,
 	}));
 
-	const propertiesQuery = createQuery(() => ({
-		queryKey: ['properties', portfolioId],
-		queryFn: () => properties.list(portfolioId, { take: 200 }),
-	}));
+	async function loadPropertyOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await properties.listPage(portfolioId, { ...params, sort: 'name' });
+		return {
+			...result,
+			items: result.items.map((property) => ({
+				id: property.id,
+				label: property.name,
+				description: `${property.addressLine1}, ${property.city}, ${property.state}`
+			}))
+		};
+	}
 
 	const wo = $derived(workOrderQuery.data);
 	const canManageWork = $derived(hasCapability('work.manage'));
@@ -133,9 +142,6 @@
 	});
 
 	const priorityOptions = $derived(WO_PRIORITIES.map((value) => ({ value, label: value })));
-	const propertyOptions = $derived(
-		(propertiesQuery.data ?? []).map((p) => ({ value: String(p.id), label: p.name }))
-	);
 
 	// --- Inline edit ---
 	let editing = $state(false);
@@ -156,6 +162,7 @@
 	});
 	let formErrors = $state<Record<string, string>>({});
 	let showDeleteConfirm = $state(false);
+	let selectedPropertyLabel = $state<string | null>(null);
 
 	// Snapshot of the timing dates (yyyy-MM-dd) exactly as seeded when editing began, so save() re-sends
 	// ONLY a date the user actually changed. These fields bind a full timestamp as date-only; re-submitting
@@ -186,11 +193,13 @@
 			scheduledFor: form.scheduledFor,
 			completedAt: form.completedAt,
 		};
+		selectedPropertyLabel = wo.propertyName ?? null;
 		formErrors = {};
 		editing = true;
 	}
 	function cancelEditing() {
 		editing = false;
+		selectedPropertyLabel = null;
 		formErrors = {};
 	}
 	function save() {
@@ -220,6 +229,7 @@
 		onSuccess: () => {
 			showSuccess('Work order updated.');
 			editing = false;
+			selectedPropertyLabel = null;
 			invalidate();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -273,31 +283,40 @@
 	// Vendors are only loaded once the dispatch dialog is opened, to keep the page light.
 	let showDispatch = $state(false);
 	let selectedVendorId = $state<number | null>(null);
+	let selectedVendorLabel = $state<string | null>(null);
+	let selectedDispatchVendor = $state<Vendor | null>(null);
+	let vendorOptionCache = $state<Record<string, Vendor>>({});
 	let dispatchNote = $state('');
 	let dispatched = $state(false);
 
-	const vendorsQuery = createQuery(() => ({
-		queryKey: ['vendors', portfolioId],
-		queryFn: () => vendors.list(portfolioId, { take: 200 }),
-		// Loaded for the dispatch picker AND whenever this work order already has a vendor, so the
-		// manager-only call/text/email contact links can resolve the assigned vendor's details.
-		enabled: portfolioId > 0 && (showDispatch || (canManageWork && wo?.vendorId != null)),
+	async function loadVendorOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await vendors.listPage(portfolioId, { ...params, sort: 'name' });
+		vendorOptionCache = {
+			...vendorOptionCache,
+			...Object.fromEntries(result.items.map((vendor) => [String(vendor.id), vendor]))
+		};
+		return {
+			...result,
+			items: result.items.map((vendor) => ({
+				id: vendor.id,
+				label: vendor.name,
+				description: `${vendor.serviceType}${vendor.phone ? ` · ${vendor.phone}` : ' · no phone on file'}`
+			}))
+		};
+	}
+
+	const assignedVendorQuery = createQuery(() => ({
+		queryKey: ['vendor', wo?.vendorId],
+		queryFn: () => vendors.get(wo!.vendorId!),
+		enabled: canManageWork && (wo?.vendorId ?? 0) > 0
 	}));
-	const vendorList = $derived(vendorsQuery.data ?? []);
-	const selectedDispatchVendor = $derived(
-		selectedVendorId == null ? null : (vendorList.find((v) => v.id === selectedVendorId) ?? null)
-	);
 	const canConfirmDispatch = $derived(canDispatchToVendor(selectedDispatchVendor));
 	const dispatchBlockReason = $derived(dispatchVendorBlockReason(selectedDispatchVendor));
 
-	// The vendor assigned to this work order (when any), resolved from the loaded list so we can offer
-	// call / text / email contact actions matching the mobile trio. tel:/sms: hrefs strip everything but
-	// digits and a leading +, and the whole value is URL-encoded.
-	const assignedVendor = $derived(
-		canManageWork && wo?.vendorId != null
-			? (vendorList.find((v) => v.id === wo.vendorId) ?? null)
-			: null
-	);
+	// The vendor assigned to this work order (when any), resolved by its exact id so the page does not
+	// preload a capped vendor list. tel:/sms: hrefs strip everything but digits and a leading +, and the
+	// whole value is URL-encoded.
+	const assignedVendor = $derived(canManageWork ? assignedVendorQuery.data ?? null : null);
 	function telHref(scheme: 'tel' | 'sms', phone: string | null | undefined): string | null {
 		if (!phone) return null;
 		const cleaned = phone.replace(/[^\d+]/g, '');
@@ -306,11 +325,16 @@
 
 	function openDispatch() {
 		selectedVendorId = null;
+		selectedVendorLabel = null;
+		selectedDispatchVendor = null;
 		dispatchNote = '';
 		showDispatch = true;
 	}
 	function closeDispatch() {
 		showDispatch = false;
+		selectedVendorId = null;
+		selectedVendorLabel = null;
+		selectedDispatchVendor = null;
 	}
 	function ratingLabel(v: Vendor): string {
 		if (v.averageRating == null || v.ratingCount === 0) return 'No ratings yet';
@@ -414,9 +438,13 @@
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="work-order-detail-page">
 	{#if workOrderQuery.isLoading}
-		<p class="py-8 text-center text-sm text-muted-foreground" data-testid="work-order-detail-loading">Loading…</p>
+		<LoadingState label="Loading work order details" variant="page" testid="work-order-detail-loading" />
 	{:else if workOrderQuery.isError}
-		<p class="py-8 text-center text-sm text-destructive" data-testid="work-order-detail-error">Failed to load work order.</p>
+		<div class="rounded-lg border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="work-order-detail-error">
+			<p class="font-medium text-destructive">Could not load this work order.</p>
+			<p class="mt-1 text-sm text-muted-foreground">Try again. No work-order changes have been made.</p>
+			<Button class="mt-4" variant="outline" onclick={() => workOrderQuery.refetch()}>Try again</Button>
+		</div>
 	{:else if !wo}
 		<p class="py-8 text-center text-sm text-muted-foreground" data-testid="work-order-detail-not-found">Work order not found.</p>
 	{:else}
@@ -605,7 +633,23 @@
 			<InlineField label="Title" bind:value={form.title} display={wo.title} {editing} error={formErrors.title} testid="work-order-detail-title-field" class="sm:col-span-2 lg:col-span-3" />
 			<InlineField label="Description" bind:value={form.description} display={wo.description} {editing} type="textarea" error={formErrors.description} testid="work-order-detail-description" class="sm:col-span-2 lg:col-span-3" />
 			<InlineField label="Safe technician access" bind:value={form.technicianAccessInstructions} display={wo.technicianAccessInstructions} {editing} type="textarea" testid="work-order-detail-technician-access" class="sm:col-span-2 lg:col-span-3" />
-			<InlineField label="Property" bind:value={form.propertyId} display={wo.propertyName} {editing} type="select" options={propertyOptions} error={formErrors.propertyId} testid="work-order-detail-property-field" />
+			{#if editing}
+				<RemoteRecordSelect
+					queryKey={['work-order-detail-property', portfolioId]}
+					label="Property"
+					bind:value={form.propertyId}
+					selectedLabel={selectedPropertyLabel}
+					placeholder="Select property"
+					searchPlaceholder="Search properties…"
+					emptyLabel="No matching properties"
+					required
+					loadPage={loadPropertyOptions}
+					onValueChange={(_value, option) => (selectedPropertyLabel = option?.label ?? null)}
+					testid="work-order-detail-property-field"
+				/>
+			{:else}
+				<InlineField label="Property" bind:value={form.propertyId} display={wo.propertyName} editing={false} error={formErrors.propertyId} testid="work-order-detail-property-field" />
+			{/if}
 			<InlineField label="Priority" bind:value={form.priority} display={wo.priority} {editing} type="select" options={priorityOptions} testid="work-order-detail-priority" />
 			<InlineField label="Category" bind:value={form.category} display={wo.category} {editing} error={formErrors.category} testid="work-order-detail-category" />
 		</DetailCard>
@@ -710,47 +754,38 @@
 			</Dialog.Description>
 		</Dialog.Header>
 
-		{#if vendorsQuery.isLoading}
-			<p class="py-6 text-center text-sm text-muted-foreground" data-testid="work-order-dispatch-loading">Loading vendors…</p>
-		{:else if vendorList.length === 0}
-			<div class="space-y-3 py-6 text-center" data-testid="work-order-dispatch-empty">
-				<p class="text-sm text-muted-foreground">No vendors yet. Add a vendor before texting this job.</p>
-				<Button variant="outline" size="sm" href="/vendors?create=1" data-testid="work-order-dispatch-add-vendor">
-					Add vendor
-				</Button>
-			</div>
-		{:else}
-			<div class="max-h-64 space-y-2 overflow-y-auto pr-1" data-testid="work-order-dispatch-vendor-list">
-				{#each vendorList as v (v.id)}
-					<button
-						type="button"
-						class="flex w-full items-center justify-between gap-3 rounded-md border p-3 text-left transition-colors hover:bg-accent
-							{selectedVendorId === v.id ? 'border-primary ring-1 ring-primary' : 'border-border'}"
-						data-testid="work-order-dispatch-vendor-{v.id}"
-						aria-pressed={selectedVendorId === v.id}
-						onclick={() => (selectedVendorId = v.id)}
-					>
-						<div class="min-w-0">
-							<div class="flex items-center gap-2">
-								<span class="truncate font-medium">{v.name}</span>
-								{#if v.preferred}<StatusBadge status="Preferred" map={{ Preferred: { class: 'm3-tone-chip border m3-tone--success' } }} />{/if}
-							</div>
-							<p class="truncate text-xs text-muted-foreground">{v.serviceType}{v.phone ? ` · ${v.phone}` : ' · no phone on file'}</p>
-						</div>
-						<div class="flex shrink-0 items-center gap-2">
-							{#if v.averageRating != null && v.ratingCount > 0}
-								<StarRating value={v.averageRating} size="sm" testid="work-order-dispatch-vendor-{v.id}-stars" />
-							{/if}
-							<span class="whitespace-nowrap text-xs text-muted-foreground">{ratingLabel(v)}</span>
-						</div>
-					</button>
-				{/each}
-			</div>
+		<div class="space-y-3" data-testid="work-order-dispatch-vendor-list">
+			<RemoteRecordSelect
+				queryKey={['work-order-dispatch-vendor', portfolioId]}
+				label="Vendor"
+				value={selectedVendorId == null ? '' : String(selectedVendorId)}
+				selectedLabel={selectedVendorLabel}
+				placeholder="Choose a vendor"
+				searchPlaceholder="Search vendors…"
+				emptyLabel="No matching vendors"
+				loadPage={loadVendorOptions}
+				onValueChange={(value, option) => {
+					selectedVendorId = value ? Number(value) : null;
+					selectedVendorLabel = option?.label ?? null;
+					selectedDispatchVendor = value ? vendorOptionCache[value] ?? null : null;
+				}}
+				testid="work-order-dispatch-vendor-select"
+			/>
+			<Button variant="outline" size="sm" href="/vendors?create=1" data-testid="work-order-dispatch-add-vendor">
+				Add vendor
+			</Button>
 
 			{#if dispatchBlockReason}
 				<p class="text-xs text-muted-foreground" data-testid="work-order-dispatch-block-reason">
 					{dispatchBlockReason}
 				</p>
+			{/if}
+
+			{#if selectedDispatchVendor}
+				<div class="flex items-center justify-between gap-3 rounded-md border border-border p-3 text-sm" data-testid="work-order-dispatch-vendor-summary">
+					<span>{selectedDispatchVendor.name}</span>
+					<span class="text-xs text-muted-foreground">{ratingLabel(selectedDispatchVendor)}</span>
+				</div>
 			{/if}
 
 			<div class="space-y-1.5">
@@ -765,7 +800,7 @@
 					data-testid="work-order-dispatch-note"
 				></textarea>
 			</div>
-		{/if}
+		</div>
 
 		<Dialog.Footer>
 			<Button variant="outline" onclick={closeDispatch} disabled={dispatchMutation.isPending} data-testid="work-order-dispatch-cancel">

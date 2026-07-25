@@ -37,7 +37,7 @@ public class Portfolio
     public DateTime? DeletedAt { get; set; }
 
     public List<Property> Properties { get; set; } = [];
-    public List<Owner> Owners { get; set; } = [];
+    public List<PropertyOwnership> PropertyOwnerships { get; set; } = [];
     public List<OwnerEntity> OwnerEntities { get; set; } = [];
     public List<Tenant> Tenants { get; set; } = [];
     public List<Vendor> Vendors { get; set; } = [];

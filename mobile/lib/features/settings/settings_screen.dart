@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/auth/auth_controller.dart';
 import '../../core/auth/mobile_access_policy.dart';
+import 'ai_provider_settings_screen.dart';
 import 'change_password_screen.dart';
 import 'my_alerts_screen.dart';
 import 'team_routing_screen.dart';
@@ -28,6 +29,7 @@ class SettingsScreen extends ConsumerWidget {
     final canManageMessagingProvider = capabilities.contains(
       'integrations.manage',
     );
+    final canManageAiProvider = capabilities.contains('integrations.manage');
 
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
@@ -78,6 +80,17 @@ class SettingsScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 12),
             const _ProviderBoundaryCard(),
+          ],
+          if (canManageAiProvider) ...[
+            const SizedBox(height: 10),
+            _SettingsCard(
+              icon: Icons.auto_awesome_outlined,
+              title: 'AI provider',
+              subtitle:
+                  'Connect and manage the workspace AI provider used by '
+                  'Scan / Add.',
+              onTap: () => _open(context, const AiProviderSettingsScreen()),
+            ),
           ],
           const SizedBox(height: 24),
           const _SectionHeader(

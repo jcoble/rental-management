@@ -100,6 +100,11 @@ public class InspectionService : IInspectionService
             q = q.Where(i => i.PropertyId == propertyId.Value);
         }
 
+        if (query is InspectionListQuery { UnitId: int unitId })
+        {
+            q = q.Where(i => i.UnitId == unitId);
+        }
+
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
             var term = query.Search.Trim();

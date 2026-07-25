@@ -2,8 +2,11 @@ using System.Text.RegularExpressions;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Migrations.Operations;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Migrations;
 
 namespace RentalCommand.Data.Tests;
 
@@ -116,19 +119,19 @@ public sealed class FoundationBaselinePostgreSqlTests
     [Fact]
     public void DurableDeletePolicy_RequiresDatabaseValidatedSandboxAuthority()
     {
+        var normalizedSql = Regex.Replace(CreateSql, @"\s+", " ");
+
         CreateSql.Should().Contain(
             "CREATE POLICY tenant_delete ON \"TenantLedgerEntries\" FOR DELETE USING " +
             "(rc_sandbox_graduation_allows(\"PortfolioId\"));");
-        CreateSql.Should().Contain(
-            "CREATE POLICY tenant_select ON \"TenantLedgerEntries\" FOR SELECT USING " +
-            "(rc_api_resource_scope_allows(\"PortfolioId\", NULL, NULL, NULL, NULL, \"TenantAccountId\", NULL, TRUE, TRUE, FALSE));");
-        CreateSql.Should().Contain(
-            "CREATE POLICY tenant_insert ON \"TenantLedgerEntries\" FOR INSERT WITH CHECK " +
-            "(rc_api_resource_scope_allows(\"PortfolioId\", NULL, NULL, NULL, NULL, \"TenantAccountId\", NULL, FALSE, TRUE, FALSE));");
-        CreateSql.Should().Contain(
-            "CREATE POLICY tenant_update ON \"TenantLedgerEntries\" FOR UPDATE USING " +
-            "(rc_api_resource_scope_allows(\"PortfolioId\", NULL, NULL, NULL, NULL, \"TenantAccountId\", NULL, FALSE, TRUE, FALSE)) WITH CHECK " +
-            "(rc_api_resource_scope_allows(\"PortfolioId\", NULL, NULL, NULL, NULL, \"TenantAccountId\", NULL, FALSE, TRUE, FALSE));");
+        CreateSql.Should().Contain("CREATE POLICY tenant_select ON \"TenantLedgerEntries\" FOR SELECT USING (CASE");
+        CreateSql.Should().Contain("CREATE POLICY tenant_insert ON \"TenantLedgerEntries\" FOR INSERT WITH CHECK (CASE");
+        CreateSql.Should().Contain("CREATE POLICY tenant_update ON \"TenantLedgerEntries\" FOR UPDATE USING (CASE");
+        normalizedSql.Should().Contain(
+            "rc_api_resource_scope_allows(\"PortfolioId\", NULL, NULL, NULL, NULL, \"TenantAccountId\", NULL, TRUE, TRUE, FALSE)");
+        normalizedSql.Should().Contain(
+            "rc_api_resource_scope_allows(\"PortfolioId\", NULL, NULL, NULL, NULL, \"TenantAccountId\", NULL, FALSE, TRUE, FALSE)");
+        CreateSql.Should().Contain("rc_api_all_properties_scope_allows(NULLIF(current_setting('app.current_portfolio_id', true), '')::integer)");
         CreateSql.Should().NotContain("app.rls_bypass_reason");
         CreateSql.Should().NotContain("app.is_admin");
     }
@@ -261,8 +264,14 @@ public sealed class FoundationBaselinePostgreSqlTests
         var portfolioDeleteTables = FoundationBaselinePostgreSql.SandboxGraduationDeleteTables
             .Except(FoundationBaselinePostgreSql.SandboxGraduationGlobalDeleteTables)
             .ToHashSet(StringComparer.Ordinal);
+        portfolioDeleteTables.Remove("ExpenseAllocations").Should().BeTrue(
+            "the post-baseline L02 migration owns the allocation table's grants and RLS");
+        portfolioDeleteTables.Remove("LlmUsageEvidence").Should().BeTrue(
+            "the post-baseline L07 migration owns the usage-evidence table's grants and RLS");
         var preservedTables = FoundationBaselinePostgreSql.SandboxGraduationPreservedTables
             .ToHashSet(StringComparer.Ordinal);
+        preservedTables.Remove("WorkspaceLlmCredentials").Should().BeTrue(
+            "the post-baseline L07 migration owns the reusable credential table's grants and RLS");
 
         portfolioDeleteTables.Intersect(preservedTables).Should().BeEmpty();
         portfolioDeleteTables.Union(preservedTables).Should().BeEquivalentTo(mappedPortfolioTables);
@@ -288,6 +297,12 @@ public sealed class FoundationBaselinePostgreSqlTests
             .Where(table => table is not null)
             .Select(table => table!)
             .ToHashSet(StringComparer.Ordinal);
+        mappedBaseTables.Remove("ExpenseAllocations").Should().BeTrue(
+            "the L02 allocation table is deliberately installed and secured after InitialCreate");
+        mappedBaseTables.Remove("WorkspaceLlmCredentials").Should().BeTrue(
+            "the L07 credential table is deliberately installed and secured after InitialCreate");
+        mappedBaseTables.Remove("LlmUsageEvidence").Should().BeTrue(
+            "the L07 usage-evidence table is deliberately installed and secured after InitialCreate");
 
         var direct = FoundationBaselinePostgreSql.DirectPortfolioTables
             .ToHashSet(StringComparer.Ordinal);
@@ -314,6 +329,99 @@ public sealed class FoundationBaselinePostgreSqlTests
             .ToHashSet(StringComparer.Ordinal)
             .Should().BeEquivalentTo(mappedBaseTables,
                 "every mapped table must be deliberately classified before it can enter the clean baseline");
+    }
+
+    [Fact]
+    public void ExpenseAllocations_AreSecuredByTheirPostBaselineContract()
+    {
+        var createSql = string.Join(
+            Environment.NewLine, ExpenseAllocationPostgreSqlContract.CreateStatements);
+
+        FoundationBaselinePostgreSql.SandboxGraduationDeleteTables
+            .Should().Contain("ExpenseAllocations");
+        createSql.Should().Contain(
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE \"ExpenseAllocations\" TO rentalcommand_api;");
+        createSql.Should().Contain(
+            "GRANT USAGE, SELECT ON SEQUENCE \"ExpenseAllocations_Id_seq\" TO rentalcommand_api;");
+        createSql.Should().Contain(
+            "ALTER TABLE \"ExpenseAllocations\" ENABLE ROW LEVEL SECURITY;");
+        createSql.Should().Contain(
+            "ALTER TABLE \"ExpenseAllocations\" FORCE ROW LEVEL SECURITY;");
+        createSql.Should().Contain(
+            "CREATE CONSTRAINT TRIGGER trg_expense_allocation_balance_from_allocation");
+        createSql.Should().Contain("DEFERRABLE INITIALLY DEFERRED");
+        createSql.Should().Contain("pg_advisory_xact_lock(74002, target_expense_id)");
+        createSql.Should().Contain("COALESCE(SUM(allocation.\"Amount\"), 0)");
+    }
+
+    [Fact]
+    public void WorkspaceLlmTables_AreSecuredAndClassifiedByTheirPostBaselineMigration()
+    {
+        var migration = new AddWorkspaceLlmCredentials();
+        var builder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        var up = typeof(AddWorkspaceLlmCredentials).GetMethod(
+            "Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        up.Invoke(migration, [builder]);
+        var migrationSql = Regex.Replace(
+            string.Join(
+                Environment.NewLine,
+                builder.Operations.OfType<SqlOperation>().Select(operation => operation.Sql)),
+            @"\s+",
+            " ");
+
+        FoundationBaselinePostgreSql.SandboxGraduationPreservedTables
+            .Should().Contain("WorkspaceLlmCredentials");
+        FoundationBaselinePostgreSql.SandboxGraduationDeleteTables
+            .Should().NotContain("WorkspaceLlmCredentials");
+        FoundationBaselinePostgreSql.SandboxGraduationDeleteTables
+            .Should().Contain("LlmUsageEvidence");
+        FoundationBaselinePostgreSql.SandboxGraduationPreservedTables
+            .Should().NotContain("LlmUsageEvidence");
+
+        foreach (var table in new[] { "WorkspaceLlmCredentials", "LlmUsageEvidence" })
+        {
+            migrationSql.Should().Contain(
+                $"ALTER TABLE \"{table}\" ENABLE ROW LEVEL SECURITY;");
+            migrationSql.Should().Contain(
+                $"ALTER TABLE \"{table}\" FORCE ROW LEVEL SECURITY;");
+            migrationSql.Should().Contain(
+                $"CREATE POLICY tenant_select ON \"{table}\" FOR SELECT USING (rc_api_scope_allows(\"PortfolioId\"));");
+            migrationSql.Should().Contain(
+                $"CREATE POLICY tenant_insert ON \"{table}\" FOR INSERT WITH CHECK (rc_api_scope_allows(\"PortfolioId\"));");
+        }
+
+        migrationSql.Should().Contain(
+            "CREATE POLICY tenant_update ON \"WorkspaceLlmCredentials\" FOR UPDATE " +
+            "USING (rc_api_scope_allows(\"PortfolioId\")) " +
+            "WITH CHECK (rc_api_scope_allows(\"PortfolioId\"));");
+        migrationSql.Should().Contain(
+            "CREATE POLICY tenant_delete ON \"WorkspaceLlmCredentials\" " +
+            "FOR DELETE USING (rc_api_scope_allows(\"PortfolioId\"));");
+        migrationSql.Should().Contain(
+            "CREATE POLICY tenant_delete ON \"LlmUsageEvidence\" " +
+            "FOR DELETE USING (rc_sandbox_graduation_allows(\"PortfolioId\"));");
+        migrationSql.Should().NotContain(
+            "CREATE POLICY tenant_delete ON \"LlmUsageEvidence\" " +
+            "FOR DELETE USING (rc_api_scope_allows(\"PortfolioId\"));");
+
+        migrationSql.Should().Contain(
+            "GRANT SELECT, INSERT, UPDATE, DELETE " +
+            "ON TABLE \"WorkspaceLlmCredentials\" TO rentalcommand_api;");
+        migrationSql.Should().Contain(
+            "GRANT SELECT ON TABLE \"WorkspaceLlmCredentials\" TO rentalcommand_engine;");
+        migrationSql.Should().Contain(
+            "GRANT SELECT, INSERT, DELETE ON TABLE \"LlmUsageEvidence\" TO rentalcommand_api;");
+        migrationSql.Should().Contain(
+            "GRANT SELECT, INSERT ON TABLE \"LlmUsageEvidence\" TO rentalcommand_engine;");
+        migrationSql.Should().NotContain(
+            "GRANT SELECT, INSERT, DELETE ON TABLE \"LlmUsageEvidence\" TO rentalcommand_engine;");
+        migrationSql.Should().NotContain(
+            "GRANT DELETE ON TABLE \"LlmUsageEvidence\" TO rentalcommand_engine;");
+        migrationSql.Should().Contain(
+            "GRANT USAGE, SELECT ON SEQUENCE \"WorkspaceLlmCredentials_Id_seq\" TO rentalcommand_api;");
+        migrationSql.Should().Contain(
+            "GRANT USAGE, SELECT ON SEQUENCE \"LlmUsageEvidence_Id_seq\" " +
+            "TO rentalcommand_api, rentalcommand_engine;");
     }
 
     [Fact]
@@ -384,7 +492,7 @@ public sealed class FoundationBaselinePostgreSqlTests
         [
             "AspNetUsers", "AtomicCommandReceipts", "AuthSessions", "CapabilityDefinitions", "LeaseManagementParties",
             "LeaseManagements", "LegalDocumentArtifacts", "LoginContextSelectionChallenges", "MembershipRoleAssignmentProperties", "MembershipRoleAssignments",
-            "OwnerEntities", "OwnerUserAccesses", "Portfolios", "Properties", "RoleProfileCapabilities",
+            "OwnerEntities", "OwnerUserAccesses", "Portfolios", "Properties", "PropertyOwnerships", "RoleProfileCapabilities",
             "RoleProfiles", "SignatureRequests", "SignatureSigners", "SimulationClocks", "StoredFiles", "SystemNoticeTemplateVersions", "TenantAccounts",
             "TenantUserAccesses", "Units", "WorkOrders", "WorkOrderResponsibilities",
             "WorkspaceAccessContexts", "WorkspaceInvitations", "WorkspaceMemberships", "WorkspaceNoticeTemplateVersions",
@@ -404,11 +512,13 @@ public sealed class FoundationBaselinePostgreSqlTests
         FoundationBaselinePostgreSql.RlsAuthorityOwnedFunctions.Should().BeEquivalentTo(
         [
             "rc_api_scope_allows(integer)",
+            "rc_api_effective_capability_scopes(integer, uuid, integer, integer, bigint, text[], text)",
+            "rc_api_all_properties_scope_allows(integer)",
             "rc_public_application_scope_allows(integer)",
             "rc_public_signing_scope_allows(integer)",
             "rc_public_signing_request_allows(integer, integer)",
             "rc_public_signing_artifact_allows(integer, integer)",
-            "rc_public_signing_file_allows(integer, integer, text, integer)",
+            "rc_public_signing_file_allows(integer, integer, text, bigint)",
             "rc_api_resource_scope_allows(integer, integer, integer, integer, integer, integer, integer, boolean, boolean, boolean)",
             "rc_account_bootstrap_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text)",
             "rc_pre_auth_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb)",
@@ -512,6 +622,261 @@ public sealed class FoundationBaselinePostgreSqlTests
     }
 
     [Fact]
+    public void ResourceScopePolicies_UseOneTimeRequestGatesWithoutChangingPublicScopes()
+    {
+        var normalizedResourceSql = Regex.Replace(FoundationBaselinePostgreSql.ResourcePoliciesSql, @"\s+", " ");
+        normalizedResourceSql.Should().Contain("WHEN session_user = 'rentalcommand_engine' THEN TRUE");
+        normalizedResourceSql.Should().Contain(
+            "OR \"PortfolioId\" IS DISTINCT FROM NULLIF(current_setting('app.current_portfolio_id', true), '')::integer");
+        normalizedResourceSql.Should().Contain(
+            "WHEN NOT (SELECT rc_api_scope_allows(NULLIF(current_setting('app.current_portfolio_id', true), '')::integer)) THEN FALSE WHEN (SELECT rc_api_all_properties_scope_allows(NULLIF(current_setting('app.current_portfolio_id', true), '')::integer)) THEN TRUE");
+        normalizedResourceSql.IndexOf("WHEN NOT (SELECT rc_api_scope_allows", StringComparison.Ordinal).Should().BeLessThan(
+            normalizedResourceSql.IndexOf("WHEN (SELECT rc_api_all_properties_scope_allows", StringComparison.Ordinal),
+            "the all-properties helper is secondary-only after canonical live session/context/revision validation");
+        normalizedResourceSql.Should().Contain("ELSE rc_api_resource_scope_allows(");
+
+        var normalizedAuthoritySql = Regex.Replace(FoundationBaselinePostgreSql.RlsAuthorityFunctionSql, @"\s+", " ");
+        var resourceFunction = Regex.Match(
+            normalizedAuthoritySql,
+            @"CREATE OR REPLACE FUNCTION rc_api_resource_scope_allows\(.*?ALTER FUNCTION rc_api_resource_scope_allows",
+            RegexOptions.Singleline).Value;
+        resourceFunction.Should().NotContain("rc_api_scope_allows");
+
+        FoundationBaselinePostgreSql.PublicSigningPoliciesSql.Should().NotContain("rc_api_resource_scope_allows");
+        CreateSql.Should().Contain("CREATE POLICY public_application_select ON \"Units\" FOR SELECT");
+        CreateSql.Should().Contain("CREATE POLICY public_signing_select ON \"SignatureRequests\" FOR SELECT");
+
+        foreach (var signature in new[]
+                 {
+                     "rc_public_application_scope_allows(integer)",
+                     "rc_public_signing_scope_allows(integer)",
+                     "rc_public_signing_request_allows(integer, integer)",
+                     "rc_public_signing_artifact_allows(integer, integer)",
+                     "rc_public_signing_file_allows(integer, integer, text, bigint)",
+                 })
+        {
+            normalizedAuthoritySql.Should().Contain(
+                $"ALTER FUNCTION {signature} OWNER TO rentalcommand_rls_authority;");
+            normalizedAuthoritySql.Should().Contain(
+                $"REVOKE ALL ON FUNCTION {signature} FROM PUBLIC;");
+            normalizedAuthoritySql.Should().Contain(
+                $"GRANT EXECUTE ON FUNCTION {signature} TO rentalcommand_api, rentalcommand_engine;");
+        }
+    }
+
+    [Fact]
+    public void RlsAuthorityVersions_PreserveHistoricalL15AndInstallCurrentBootstrapAuthority()
+    {
+        FoundationBaselinePostgreSql.RlsAuthorityFunctionSql.Should()
+            .BeSameAs(FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260725);
+        FoundationBaselinePostgreSql.ResourcePoliciesSql.Should()
+            .BeSameAs(FoundationBaselinePostgreSql.ResourcePoliciesSqlV20260719);
+
+        const string secondaryFunctionMarker = "-- Secondary scope shortcut only.";
+        var historicalAuthority = FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260719;
+        var currentAuthority = FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260724;
+        var historicalMarkerIndex = historicalAuthority.IndexOf(
+            secondaryFunctionMarker,
+            StringComparison.Ordinal);
+        var currentMarkerIndex = currentAuthority.IndexOf(secondaryFunctionMarker, StringComparison.Ordinal);
+        historicalMarkerIndex.Should().BeGreaterThan(0);
+        currentMarkerIndex.Should().BeGreaterThan(0);
+        var historicalScopeAuthority = historicalAuthority[..historicalMarkerIndex];
+        var currentScopeAuthority = currentAuthority[..currentMarkerIndex];
+
+        historicalScopeAuthority.Should().NotContain("receipt.\"CommandType\" = 'auth.account.bootstrap'");
+        currentScopeAuthority.Should().Contain("WHEN session_user = 'rentalcommand_engine' THEN TRUE");
+        currentScopeAuthority.Should().Contain(
+            "WHEN session_user IS DISTINCT FROM 'rentalcommand_api'\n" +
+            "      OR target_portfolio_id IS NULL\n" +
+            "      OR target_portfolio_id <= 0\n" +
+            "    THEN FALSE");
+        currentScopeAuthority.Should().Contain("receipt.\"CommandType\" = 'auth.account.bootstrap'");
+        currentScopeAuthority.Should().Contain("receipt.xmin = pg_current_xact_id()::xid");
+        currentScopeAuthority.Should().Contain("user_row.xmin = pg_current_xact_id()::xid");
+        currentScopeAuthority.Should().Contain("portfolio.xmin = pg_current_xact_id()::xid");
+        currentScopeAuthority.Should().Contain("access_context.xmin = pg_current_xact_id()::xid");
+        currentScopeAuthority.Should().Contain("membership.xmin = pg_current_xact_id()::xid");
+        currentScopeAuthority.Should().Contain("assignment.xmin = pg_current_xact_id()::xid");
+        currentScopeAuthority.Should().Contain("assignment.\"RoleProfileId\" = 1");
+        currentScopeAuthority.Should().Contain("assignment.\"ScopeKind\" = 'AllProperties'");
+        currentScopeAuthority.Should().Contain(
+            "ALTER FUNCTION rc_api_scope_allows(integer) OWNER TO rentalcommand_rls_authority;");
+        currentScopeAuthority.Should().Contain(
+            "REVOKE ALL ON FUNCTION rc_api_scope_allows(integer) FROM PUBLIC;");
+        currentScopeAuthority.Should().Contain(
+            "GRANT EXECUTE ON FUNCTION rc_api_scope_allows(integer)\n  TO rentalcommand_api, rentalcommand_engine;");
+        const string canonicalSessionBranch =
+            "ELSE EXISTS (\n      SELECT 1\n      FROM public.\"AuthSessions\" session";
+        var historicalSessionIndex = historicalScopeAuthority.IndexOf(canonicalSessionBranch, StringComparison.Ordinal);
+        var currentSessionIndex = currentScopeAuthority.IndexOf(canonicalSessionBranch, StringComparison.Ordinal);
+        historicalSessionIndex.Should().BeGreaterThan(0);
+        currentSessionIndex.Should().BeGreaterThan(0);
+        currentScopeAuthority[currentSessionIndex..]
+            .Should().Be(
+                historicalScopeAuthority[historicalSessionIndex..],
+                "the ordinary session/access/membership authority and owner/revoke/grant tail must remain exact");
+        currentAuthority[currentMarkerIndex..]
+            .Should().Be(
+                historicalAuthority[historicalMarkerIndex..],
+                "V20260724 may extend only rc_api_scope_allows; the remaining reviewed L15 authority stays byte-identical");
+
+        var l15Migration = new OptimizeRlsRequestScope();
+        var l15Builder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        var up = typeof(OptimizeRlsRequestScope).GetMethod(
+            "Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        up.Invoke(l15Migration, [l15Builder]);
+        l15Builder.Operations.OfType<SqlOperation>().Select(operation => operation.Sql).Should().Equal(
+            FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260719,
+            FoundationBaselinePostgreSql.ResourcePoliciesSqlV20260719);
+        l15Builder.Operations.Should().HaveCount(2);
+
+        var currentMigration = new AddSuppliedLegalNoticeTemplateV2();
+        var currentBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(AddSuppliedLegalNoticeTemplateV2).GetMethod(
+                "Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(currentMigration, [currentBuilder]);
+        var currentSql = currentBuilder.Operations.OfType<SqlOperation>()
+            .Select(operation => operation.Sql)
+            .ToArray();
+        currentSql.Should().HaveCount(2);
+        currentSql[0].Should().BeSameAs(FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260724);
+        currentSql[1].Should().Contain("CREATE OR REPLACE FUNCTION rc_delete_fresh_workspace_notice_templates");
+        currentSql[1].Should().NotContain("CREATE OR REPLACE FUNCTION rc_api_scope_allows");
+        currentBuilder.Operations.OfType<InsertDataOperation>().Should().ContainSingle(
+            "the legal-template seed remains a separate, deterministic migration operation");
+        currentBuilder.Operations.Should().HaveCount(3);
+
+        var optimizedMigration = new AddEffectiveCapabilityScopeAuthority();
+        var optimizedBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(AddEffectiveCapabilityScopeAuthority).GetMethod(
+                "Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(optimizedMigration, [optimizedBuilder]);
+        optimizedBuilder.Operations.OfType<SqlOperation>().Should().ContainSingle()
+            .Which.Sql.Should().BeSameAs(
+                FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260725);
+        optimizedBuilder.Operations.Should().ContainSingle(
+            "the immutable optimization migration replaces only current scope authority and adds " +
+            "the relational capability-scope authority");
+
+        var down = typeof(OptimizeRlsRequestScope).GetMethod(
+            "Down", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        var act = () => down.Invoke(l15Migration, [new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL")]);
+        act.Should().Throw<System.Reflection.TargetInvocationException>()
+            .WithInnerException<NotSupportedException>()
+            .WithMessage("*intentionally irreversible*production latency defect*database backup*");
+    }
+
+    [Fact]
+    public void EffectiveCapabilityScopeAuthority_IsApiOnlyCurrentAndFailClosed()
+    {
+        var delta = FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260725;
+        var normalizedDelta = Regex.Replace(delta, @"\s+", " ");
+
+        normalizedDelta.Should().Contain(
+            "WHEN NULLIF(current_setting('app.auth_session_id', true), '') IS NOT NULL THEN EXISTS");
+        normalizedDelta.IndexOf(
+                "WHEN NULLIF(current_setting('app.auth_session_id', true), '') IS NOT NULL",
+                StringComparison.Ordinal)
+            .Should().BeLessThan(
+                normalizedDelta.IndexOf(
+                    "receipt.\"CommandType\" = 'auth.account.bootstrap'",
+                    StringComparison.Ordinal),
+                "a supplied invalid or stale session must never fall through to registration bootstrap");
+        normalizedDelta.Should().Contain(
+            "CREATE OR REPLACE FUNCTION rc_api_effective_capability_scopes(");
+        normalizedDelta.Should().Contain("WITH request_scope AS MATERIALIZED");
+        normalizedDelta.Should().Contain("public.rc_api_scope_allows(target_portfolio_id)");
+        normalizedDelta.Should().Contain(
+            "capability.\"Key\" = ANY(capability_keys)");
+        normalizedDelta.Should().Contain(
+            "capability.\"AuthorizationTargetKind\"::text = authorization_target_kind");
+        normalizedDelta.Should().Contain(
+            "assignment.\"EffectiveFromUtc\" <= CURRENT_TIMESTAMP");
+        normalizedDelta.Should().Contain(
+            "membership.\"EffectiveFromUtc\" <= CURRENT_TIMESTAMP");
+        normalizedDelta.Should().Contain("SELECT DISTINCT assignment.\"Id\" AS \"AssignmentId\"");
+        normalizedDelta.Should().Contain(
+            "REVOKE ALL ON FUNCTION rc_api_effective_capability_scopes(integer, uuid, integer, integer, bigint, text[], text) FROM PUBLIC;");
+        normalizedDelta.Should().Contain(
+            "REVOKE ALL ON FUNCTION rc_api_effective_capability_scopes(integer, uuid, integer, integer, bigint, text[], text) FROM rentalcommand_engine;");
+        normalizedDelta.Should().Contain(
+            "GRANT EXECUTE ON FUNCTION rc_api_effective_capability_scopes(integer, uuid, integer, integer, bigint, text[], text) TO rentalcommand_api;");
+        normalizedDelta.Should().NotContain(
+            "GRANT EXECUTE ON FUNCTION rc_api_effective_capability_scopes(integer, uuid, integer, integer, bigint, text[], text) TO rentalcommand_engine;");
+
+        var normalizedBaseline = Regex.Replace(
+            FoundationBaselinePostgreSql.RlsAuthorityFunctionSqlV20260725,
+            @"\s+",
+            " ");
+        normalizedBaseline.Should().Contain(
+            Regex.Replace(
+                FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260725[
+                    FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260725.IndexOf(
+                        "CREATE OR REPLACE FUNCTION rc_api_effective_capability_scopes",
+                        StringComparison.Ordinal)..],
+                @"\s+",
+                " "),
+            "the fresh baseline and forward migration must install the same function and ACL");
+    }
+
+    [Fact]
+    public void EngineAtomicAuditPolicyHelpers_AreExecutableWithoutGrantingPreAuthAdmission()
+    {
+        var normalizedAuthoritySql = Regex.Replace(
+            FoundationBaselinePostgreSql.RlsAuthorityFunctionSql, @"\s+", " ");
+        foreach (var signature in new[]
+                 {
+                     "rc_pre_auth_email_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb)",
+                     "rc_pre_auth_account_security_audit_allows(integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb)",
+                 })
+        {
+            normalizedAuthoritySql.Should().Contain(
+                $"GRANT EXECUTE ON FUNCTION {signature} TO rentalcommand_api, rentalcommand_engine;");
+        }
+
+        foreach (var functionName in new[]
+                 {
+                     "rc_pre_auth_email_audit_allows",
+                     "rc_pre_auth_account_security_audit_allows",
+                 })
+        {
+            Regex.Match(
+                    normalizedAuthoritySql,
+                    $@"CREATE OR REPLACE FUNCTION {functionName}\(.*?ALTER FUNCTION {functionName}",
+                    RegexOptions.Singleline)
+                .Value.Should().Contain("SELECT session_user = 'rentalcommand_api'",
+                    "Engine may evaluate this AtomicAuditLogs policy branch but must not receive pre-auth admission");
+        }
+
+        var migration = new GrantEngineAtomicAuditPolicyHelpers();
+        var upBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(GrantEngineAtomicAuditPolicyHelpers).GetMethod(
+                "Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(migration, [upBuilder]);
+        var upSql = Regex.Replace(
+            upBuilder.Operations.OfType<SqlOperation>().Should().ContainSingle().Which.Sql, @"\s+", " ");
+        upSql.Should().Contain(
+            "GRANT EXECUTE ON FUNCTION rc_pre_auth_email_audit_allows( integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb) TO rentalcommand_engine;");
+        upSql.Should().Contain(
+            "GRANT EXECUTE ON FUNCTION rc_pre_auth_account_security_audit_allows( integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb) TO rentalcommand_engine;");
+        upSql.Should().NotContain("GRANT SELECT");
+        upSql.Should().NotContain("ALTER FUNCTION");
+        upSql.Should().NotContain("BYPASSRLS");
+
+        var downBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(GrantEngineAtomicAuditPolicyHelpers).GetMethod(
+                "Down", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(migration, [downBuilder]);
+        var downSql = Regex.Replace(
+            downBuilder.Operations.OfType<SqlOperation>().Should().ContainSingle().Which.Sql, @"\s+", " ");
+        downSql.Should().Contain(
+            "REVOKE EXECUTE ON FUNCTION rc_pre_auth_email_audit_allows( integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb) FROM rentalcommand_engine;");
+        downSql.Should().Contain(
+            "REVOKE EXECUTE ON FUNCTION rc_pre_auth_account_security_audit_allows( integer, uuid, text, text, bigint, integer, text, integer, integer, text, text, jsonb) FROM rentalcommand_engine;");
+    }
+
+    [Fact]
     public void PublicApplicationScope_IsOpaqueTokenBoundAndCannotMutateWorkspaceRows()
     {
         CreateSql.Should().Contain(
@@ -522,7 +887,8 @@ public sealed class FoundationBaselinePostgreSqlTests
         CreateSql.Should().MatchRegex(
             @"ALTER FUNCTION rc_public_application_scope_allows\(integer\)\s+OWNER TO rentalcommand_rls_authority;");
         CreateSql.Should().MatchRegex(
-            @"GRANT EXECUTE ON FUNCTION rc_public_application_scope_allows\(integer\)\s+TO rentalcommand_api;");
+            @"GRANT EXECUTE ON FUNCTION rc_public_application_scope_allows\(integer\)\s+TO rentalcommand_api, rentalcommand_engine;");
+        CreateSql.Should().Contain("WHEN session_user IS DISTINCT FROM 'rentalcommand_api'");
 
         foreach (var table in new[]
                  {

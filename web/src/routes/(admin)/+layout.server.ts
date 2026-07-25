@@ -1,11 +1,12 @@
 /**
  * Admin layout guard. Requires authentication AND the Admin role.
- * Unauthenticated -> /login; authenticated-but-not-admin -> 403.
+ * Unauthenticated visitors go to login. Authenticated users without access return to the first
+ * route their selected experience can open.
  */
 
-import { error, redirect } from '@sveltejs/kit';
+import { redirect } from '@sveltejs/kit';
 import type { LayoutServerLoad } from './$types';
-import { canAccessRoute } from '$lib/auth/experience-policy';
+import { canAccessRoute, safeLandingForAccess } from '$lib/auth/experience-policy';
 
 export const load: LayoutServerLoad = async ({ locals, url }) => {
 	if (!locals.user) {
@@ -18,7 +19,7 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 		locals.access?.navigation.find((item) => item.experience === activeExperience)?.capabilityKeys ?? []
 	);
 	if (!activeExperience || !canAccessRoute(url.pathname, activeExperience, capabilities)) {
-		throw error(403, 'Workspace administration access required');
+		throw redirect(303, locals.access ? (safeLandingForAccess(locals.access) ?? '/logout') : '/logout');
 	}
 
 	return {

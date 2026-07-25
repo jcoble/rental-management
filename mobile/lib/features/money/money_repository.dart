@@ -8,6 +8,8 @@ import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
 import '../../core/api/idempotent_mutation.dart';
 import '../properties/capital_assets_repository.dart';
+import '../properties/property_loans_repository.dart';
+import '../payments/payments_repository.dart';
 import 'expense_models.dart';
 import 'transaction_models.dart';
 
@@ -15,6 +17,7 @@ class ExpenseListQuery {
   const ExpenseListQuery({
     this.skip = 0,
     this.take = 20,
+    this.operationalScope,
     this.propertyId,
     this.unitId,
     this.workOrderId,
@@ -31,6 +34,7 @@ class ExpenseListQuery {
 
   final int skip;
   final int take;
+  final String? operationalScope;
   final int? propertyId;
   final int? unitId;
   final int? workOrderId;
@@ -49,6 +53,7 @@ class ExpenseListQuery {
     return other is ExpenseListQuery &&
         other.skip == skip &&
         other.take == take &&
+        other.operationalScope == operationalScope &&
         other.propertyId == propertyId &&
         other.unitId == unitId &&
         other.workOrderId == workOrderId &&
@@ -66,7 +71,8 @@ class ExpenseListQuery {
   @override
   int get hashCode => Object.hash(
     skip,
-    take,
+      take,
+      operationalScope,
     propertyId,
     unitId,
     workOrderId,
@@ -116,6 +122,94 @@ class ExpenseListPage {
   }
 }
 
+class TenantChargePosition {
+  const TenantChargePosition({
+    required this.tenantLedgerEntryId,
+    required this.description,
+    required this.currency,
+    required this.originalAmount,
+    required this.netAllocations,
+    required this.openAmount,
+    required this.isPastDue,
+  });
+
+  final int tenantLedgerEntryId;
+  final String description;
+  final String currency;
+  final double originalAmount;
+  final double netAllocations;
+  final double openAmount;
+  final bool isPastDue;
+
+  factory TenantChargePosition.fromJson(Map<String, dynamic> json) =>
+      TenantChargePosition(
+        tenantLedgerEntryId: (json['tenantLedgerEntryId'] as num).toInt(),
+        description: json['description'] as String? ?? '',
+        currency: json['currency'] as String? ?? 'USD',
+        originalAmount: (json['originalAmount'] as num?)?.toDouble() ?? 0,
+        netAllocations: (json['netAllocations'] as num?)?.toDouble() ?? 0,
+        openAmount: (json['openAmount'] as num?)?.toDouble() ?? 0,
+        isPastDue: json['isPastDue'] as bool? ?? false,
+      );
+}
+
+class TenantDepositPosition {
+  const TenantDepositPosition({
+    required this.securityDepositAccountId,
+    required this.accountNumber,
+    required this.currency,
+    required this.heldBalance,
+    required this.status,
+  });
+
+  final int securityDepositAccountId;
+  final String accountNumber;
+  final String currency;
+  final double heldBalance;
+  final String status;
+
+  factory TenantDepositPosition.fromJson(Map<String, dynamic> json) =>
+      TenantDepositPosition(
+        securityDepositAccountId: (json['securityDepositAccountId'] as num)
+            .toInt(),
+        accountNumber: json['accountNumber'] as String? ?? '',
+        currency: json['currency'] as String? ?? 'USD',
+        heldBalance: (json['heldBalance'] as num?)?.toDouble() ?? 0,
+        status: json['status'] as String? ?? '',
+      );
+}
+
+class UnitMoneyPage<T> {
+  const UnitMoneyPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<T> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+
+  bool get hasPrevious => skip > 0;
+  bool get hasNext => skip + items.length < totalCount;
+}
+
+typedef UnitMoneyPageKey = ({
+  int tenantAccountId,
+  int propertyId,
+  int unitId,
+  int skip,
+  int take,
+});
+
+typedef PropertyMoneyPageKey = ({
+  int propertyId,
+  int skip,
+  int take,
+});
+
 /// Repository for the Money tab: the unified accounting ledger plus full
 /// expense CRUD and receipt streaming.
 ///
@@ -132,6 +226,103 @@ class MoneyRepository {
   const MoneyRepository(this._dio);
 
   final Dio _dio;
+
+  Future<UnitMoneyPage<StaffTenantLedgerEntry>> accountActivityPage(
+    UnitMoneyPageKey key,
+  ) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/tenant-accounts/entries/page',
+        queryParameters: {
+          'tenantAccountId': key.tenantAccountId,
+          'skip': key.skip,
+          'take': key.take,
+          'sort': '-postedAtUtc',
+        },
+      );
+      return _page(response.data, StaffTenantLedgerEntry.fromJson);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<UnitMoneyPage<TenantChargePosition>> chargePositionsPage(
+    UnitMoneyPageKey key,
+  ) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/tenant-accounts/${key.tenantAccountId}/charges/page',
+        queryParameters: {
+          'skip': key.skip,
+          'take': key.take,
+          'sort': '-effectiveOn',
+        },
+      );
+      return _page(response.data, TenantChargePosition.fromJson);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<UnitMoneyPage<TenantDepositPosition>> depositsPage(
+    UnitMoneyPageKey key,
+  ) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/tenant-accounts/deposits/page',
+        queryParameters: {
+          'tenantAccountId': key.tenantAccountId,
+          'skip': key.skip,
+          'take': key.take,
+          'sort': '-createdAtUtc',
+        },
+      );
+      return _page(response.data, TenantDepositPosition.fromJson);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<UnitMoneyPage<PropertyLoan>> financingPage(
+    PropertyMoneyPageKey key,
+  ) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/loans/page',
+        queryParameters: {
+          'propertyId': key.propertyId,
+          'skip': key.skip,
+          'take': key.take,
+          'sort': '-startDate',
+        },
+      );
+      return _page(response.data, PropertyLoan.fromJson);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  UnitMoneyPage<T> _page<T>(
+    Map<String, dynamic>? json,
+    T Function(Map<String, dynamic>) decode,
+  ) {
+    if (json == null) {
+      throw const ApiException(
+        statusCode: 0,
+        message: 'Empty response from server.',
+      );
+    }
+    final items = (json['items'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(decode)
+        .toList(growable: false);
+    return UnitMoneyPage<T>(
+      items: items,
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? 0,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? items.length,
+    );
+  }
 
   /// Fetches one page of the unified ledger. Server-side aggregation +
   /// pagination — never load-then-loop client-side.
@@ -223,6 +414,7 @@ class MoneyRepository {
     final params = <String, dynamic>{
       'skip': query.skip,
       'take': query.take,
+      'operationalScope': query.operationalScope,
       'propertyId': query.propertyId,
       'unitId': query.unitId,
       'workOrderId': query.workOrderId,
@@ -391,6 +583,29 @@ final expensesListProvider = FutureProvider.autoDispose<List<Expense>>((ref) {
 final expensesPageProvider = FutureProvider.autoDispose
     .family<ExpenseListPage, ExpenseListQuery>((ref, query) {
       return ref.watch(moneyRepositoryProvider).listExpensesPage(query);
+    });
+
+final unitMoneyActivityPageProvider = FutureProvider.autoDispose
+    .family<UnitMoneyPage<StaffTenantLedgerEntry>, UnitMoneyPageKey>((
+      ref,
+      key,
+    ) {
+      return ref.watch(moneyRepositoryProvider).accountActivityPage(key);
+    });
+
+final unitMoneyChargesPageProvider = FutureProvider.autoDispose
+    .family<UnitMoneyPage<TenantChargePosition>, UnitMoneyPageKey>((ref, key) {
+      return ref.watch(moneyRepositoryProvider).chargePositionsPage(key);
+    });
+
+final unitMoneyDepositsPageProvider = FutureProvider.autoDispose
+    .family<UnitMoneyPage<TenantDepositPosition>, UnitMoneyPageKey>((ref, key) {
+      return ref.watch(moneyRepositoryProvider).depositsPage(key);
+    });
+
+final unitMoneyFinancingPageProvider = FutureProvider.autoDispose
+    .family<UnitMoneyPage<PropertyLoan>, PropertyMoneyPageKey>((ref, key) {
+      return ref.watch(moneyRepositoryProvider).financingPage(key);
     });
 
 /// Unit-scoped operating costs, filtered and capped by the API.

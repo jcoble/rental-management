@@ -55,7 +55,6 @@
 	import M3NavGroup from '$lib/components/m3/NavGroup.svelte';
 	import M3NavItem from '$lib/components/m3/NavItem.svelte';
 	import MaterialSymbol from '$lib/components/m3/MaterialSymbol.svelte';
-	import CommandCenterNav from '$lib/components/CommandCenterNav.svelte';
 	import { clearAuthState, getAuthState } from '$lib/stores/auth.svelte';
 	import type { WorkspaceExperience } from '$lib/types/user';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
@@ -215,7 +214,7 @@
 		'/ai': 'auto_awesome',
 		'/docs': 'menu_book',
 		'/settings/notifications/my-alerts': 'notifications',
-		'/settings/notifications/team-routing': 'account_tree',
+		'/settings/notifications/team-routing': 'group',
 		'/settings/notifications/tenant-notices': 'campaign',
 		'/settings': 'settings',
 		'/admin/users': 'shield',
@@ -227,9 +226,8 @@
 		'/leasing/calendar': 'event',
 		'/leasing/inbox': 'forum',
 		'/my-work': 'build',
-		'/my-schedule': 'schedule',
-		'/assignment-inbox': 'forum',
-		'/profile': 'person'
+		'/my-schedule': 'event',
+		'/assignment-inbox': 'forum'
 	};
 	// Material Symbols glyph per staff nav group id (collapsible section headers).
 	const navGlyphByGroup: Record<string, string> = {
@@ -329,7 +327,9 @@
 		{ href: '/assignment-inbox', label: 'Inbox', icon: MessageSquare },
 		{ href: '/settings/notifications/my-alerts', label: 'My alerts', icon: BellRing }
 	];
-	const commandCenterTitleItem: NavItem = { href: '/units/', label: 'Command Center', icon: Home };
+	// Unit list and detail routes belong to Rentals. Keeping the detail prefix in title resolution
+	// preserves safe direct links without promoting a second peer-level Unit picker.
+	const commandCenterTitleItem: NavItem = { href: '/units/', label: 'Rentals', icon: Home };
 
 	function itemVisible(item: NavItem): boolean {
 		return canAccessRoute(item.href, activeExperience, activeCapabilities);
@@ -344,10 +344,6 @@
 
 	// Pinned single links (Dashboard, Scan / Edit) above the groups.
 	let visiblePinned = $derived.by(() => pinnedNavItems.filter(itemVisible));
-
-	// Command Center (the per-unit drill-down) is surfaced as its own pinned entry below Scan / Edit;
-	// staff-only, gated to the same roles as the Units nav item.
-	let canSeeCommandCenter = $derived(canAccessRoute('/units/1', activeExperience, activeCapabilities));
 
 	// Bottom-rail standalone links (Assistant, Help).
 	let visibleBottomRail = $derived.by(() => bottomRailItems.filter(itemVisible));
@@ -374,7 +370,7 @@
 							? [...visibleTechnicianNavItems, { href: '/profile', label: 'Profile', icon: UserRound }]
 						: [
 						...visiblePinned,
-						...(canSeeCommandCenter ? [commandCenterTitleItem] : []),
+						commandCenterTitleItem,
 						...visibleGroups.flatMap((g) => g.items),
 						...visibleBottomRail,
 						...(visibleSettingsGroup?.items ?? [])
@@ -386,16 +382,12 @@
 		if (href === '/') return currentPath === '/';
 		if (href === '/owner') return currentPath === '/owner';
 		if (href === '/leasing') return currentPath === '/leasing';
-		if (href === '/units') return currentPath === '/units';
+		if (href === '/units') return currentPath === '/units' || currentPath.startsWith('/units/');
 		return currentPath.startsWith(href);
 	}
 
 	function groupHasActive(group: NavGroup): boolean {
 		return group.items.some((i) => isActive(i.href));
-	}
-
-	function commandCenterHasActive(): boolean {
-		return page.url.pathname.startsWith('/units/');
 	}
 
 	// --- Collapsible group open/closed state (remembered) -----------------------
@@ -436,12 +428,7 @@
 		const next = { ...current };
 		let changed = false;
 		const groupsForState = visibleSettingsGroup ? [...visibleGroups, visibleSettingsGroup] : visibleGroups;
-		const groupIdsForState = [
-			...groupsForState.map((g) => g.id),
-			...(canSeeCommandCenter ? ['command-center'] : [])
-		];
-		// Command Center is a selectable unit picker: keep its active highlight on unit pages, but do
-		// not auto-reopen it after a unit selection explicitly collapses the picker.
+		const groupIdsForState = groupsForState.map((g) => g.id);
 		const activeGroupId = groupsForState.find((g) => groupHasActive(g))?.id;
 		if (activeGroupId) {
 			for (const id of groupIdsForState) {
@@ -774,14 +761,6 @@
 				{#each visiblePinned as item}
 					{@render navLinkCollapsed(item)}
 				{/each}
-				{#if canSeeCommandCenter}
-					<CommandCenterNav
-						collapsed
-						open={openGroups['command-center'] ?? false}
-						onOpenChange={(next) => setGroupOpen('command-center', next)}
-						onNavigate={handleNavClick}
-					/>
-				{/if}
 				{#each visibleGroups as group}
 					{@render navGroupCollapsed(group)}
 				{/each}
@@ -797,13 +776,6 @@
 				{#each visiblePinned as item}
 					{@render navLink(item)}
 				{/each}
-				{#if canSeeCommandCenter}
-					<CommandCenterNav
-						open={openGroups['command-center'] ?? false}
-						onOpenChange={(next) => setGroupOpen('command-center', next)}
-						onNavigate={handleNavClick}
-					/>
-				{/if}
 				<div class="my-2"></div>
 				{#each visibleGroups as group}
 					{@render navGroup(group)}
@@ -1089,7 +1061,7 @@
 		<main class="customer-shell-main flex min-h-0 flex-1 justify-center overflow-hidden">
 			<div class="h-full w-full max-w-[1600px]">
 				{#key page.url.pathname}
-					<div class="m3-route-transition" data-testid="route-transition-frame">
+					<div class="m3-route-transition h-full overflow-y-auto" data-testid="route-transition-frame">
 						{@render children()}
 					</div>
 				{/key}

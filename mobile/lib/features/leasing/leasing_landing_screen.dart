@@ -61,7 +61,7 @@ class _LeasingLandingScreenState extends ConsumerState<LeasingLandingScreen> {
         heroTag: 'leasing-scan',
         onPressed: () => openAuthorizedMobileScan(context, ref),
         icon: const Icon(Symbols.document_scanner_rounded),
-        label: const Text('Scan'),
+        label: const Text('Scan / Add'),
       ),
     );
   }

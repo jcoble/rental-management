@@ -246,19 +246,33 @@ internal sealed class AtomicCoreCsvImportPersistence
             ORDER BY classified."RowNumber"
         ), inserted_properties AS (
             INSERT INTO "Properties" (
-                "Id", "PortfolioId", "OwnerEntityId", "Name", "PropertyType", "RentalStructure", "Status",
+                "Id", "PortfolioId", "Name", "PropertyType", "RentalStructure", "Status",
                 "AddressLine1", "AddressLine2", "City", "State", "PostalCode",
                 "AccumulatedDepreciation", "CreatedAt", "UpdatedAt")
             SELECT prepared."CreatedId", @portfolioId,
-                   (SELECT owner."Id" FROM "OwnerEntities" owner
-                    WHERE owner."PortfolioId" = @portfolioId
-                      AND owner."IsPrimary" AND owner."DeletedAt" IS NULL
-                    ORDER BY owner."Id" LIMIT 1),
                    trim(prepared."Name"), prepared."PropertyType", prepared."RentalStructure", 0,
                    trim(prepared."AddressLine1"), nullif(trim(prepared."AddressLine2"), ''),
                    trim(prepared."City"), trim(prepared."State"), trim(prepared."PostalCode"),
                    0, @createdAt, @createdAt
             FROM prepared
+            RETURNING "Id"
+        ), inserted_ownerships AS (
+            INSERT INTO "PropertyOwnerships" (
+                "PortfolioId", "PropertyId", "OwnerEntityId", "OwnershipSharePercent",
+                "EffectiveFromUtc", "StatementRecipientName", "StatementRecipientEmail", "PayeeName")
+            SELECT @portfolioId, prepared."CreatedId", owner."Id", 100.0000,
+                   @createdAt, owner."Name", owner."Email", owner."Name"
+            FROM prepared
+            JOIN inserted_properties ON inserted_properties."Id" = prepared."CreatedId"
+            JOIN LATERAL (
+                SELECT owner_entity."Id", owner_entity."Name", owner_entity."Email"
+                FROM "OwnerEntities" owner_entity
+                WHERE owner_entity."PortfolioId" = @portfolioId
+                  AND owner_entity."IsPrimary"
+                  AND owner_entity."DeletedAt" IS NULL
+                ORDER BY owner_entity."Id"
+                LIMIT 1
+            ) owner ON TRUE
             RETURNING "Id"
         ), inserted_units AS (
             INSERT INTO "Units" (

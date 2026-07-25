@@ -12,5 +12,7 @@ public sealed class SandboxGraduationInventoryContractTests
         SandboxService.SandboxGraduationDeleteOrder.Should().OnlyHaveUniqueItems();
         SandboxService.SandboxGraduationDeleteOrder.Should().BeEquivalentTo(
             FoundationBaselinePostgreSql.SandboxGraduationDeleteTables);
+        SandboxService.SandboxGraduationDeleteOrder.Should().Contain("LlmUsageEvidence");
+        SandboxService.SandboxGraduationDeleteOrder.Should().NotContain("WorkspaceLlmCredentials");
     }
 }

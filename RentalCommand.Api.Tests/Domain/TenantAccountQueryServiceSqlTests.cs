@@ -113,6 +113,39 @@ public sealed class TenantAccountQueryServiceSqlTests
     }
 
     [Fact]
+    public void EntryAndDepositPages_TranslateToSql()
+    {
+        using var db = NewContext();
+        var service = NewService(db);
+        var entrySql = service.BuildEntryPageQuery(Scope, 41,
+            new TenantLedgerEntryListQuery
+            {
+                Skip = 20,
+                Take = 20,
+                Sort = "-postedAtUtc",
+            }).ToQueryString();
+        var depositSql = service.BuildDepositPageQuery(Scope,
+            new TenantAccountDepositListQuery
+            {
+                TenantAccountId = 41,
+                Skip = 20,
+                Take = 20,
+                Sort = "-createdAtUtc",
+            }).ToQueryString();
+
+        AssertAuthorized(entrySql);
+        AssertDepositAuthorized(depositSql);
+        foreach (var sql in new[] { entrySql, depositSql })
+        {
+            sql.Should().Contain("ORDER BY");
+            sql.Should().Contain("LIMIT");
+            sql.Should().Contain("OFFSET");
+        }
+        entrySql.Should().Contain("TenantLedgerEntries");
+        depositSql.Should().Contain("vw_security_deposit_balances");
+    }
+
+    [Fact]
     public void DepositPage_AppliesContextFiltersCanonicalBalanceViewAndPagingInOneAuthorizedStatement()
     {
         using var db = NewContext();
@@ -165,6 +198,31 @@ public sealed class TenantAccountQueryServiceSqlTests
         orderBy.Should().NotContain("DESC",
             "unsupported sort prefixes must not invert the canonical stable default");
         AssertFinalOrderingKey(pageQuery, nameof(TenantAccountDepositListItemResponse.SecurityDepositAccountId));
+    }
+
+    [Fact]
+    public void DepositCount_AvoidsAggregateViewsUntilAFilterNeedsThem()
+    {
+        using var db = NewContext();
+        var service = NewService(db);
+
+        var commonCountSql = service.BuildDepositCountQuery(
+            Scope,
+            new TenantAccountDepositListQuery { PropertyId = 53 }).ToQueryString();
+        var filteredCountSql = service.BuildDepositCountQuery(
+            Scope,
+            new TenantAccountDepositListQuery { Search = "Maple" }).ToQueryString();
+
+        AssertDepositAuthorized(commonCountSql);
+        commonCountSql.Should().Contain("SecurityDepositAccounts");
+        commonCountSql.Should().Contain("PropertyId");
+        commonCountSql.Should().NotContain("vw_security_deposit_balances");
+        commonCountSql.Should().NotContain("vw_lease_management_lifecycle");
+
+        AssertDepositAuthorized(filteredCountSql);
+        filteredCountSql.Should().Contain("vw_security_deposit_balances");
+        filteredCountSql.Should().Contain("vw_lease_management_lifecycle");
+        filteredCountSql.Should().Contain("ILIKE");
     }
 
     [Fact]

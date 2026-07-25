@@ -187,8 +187,10 @@ public sealed class EnqueueMorningBriefingsHandler
                         deviceToken = token,
                         title = subject,
                         body,
-                        actionUrl = "/today",
-                        type = "MorningBriefing",
+                        // The briefing digest contract does not carry the recipient's current
+                        // access context/revision. Omit navigation rather than minting an
+                        // unbound route; the client opens its safe authorized home.
+                        navigationIntent = (object?)null,
                     }, now);
                     queued++;
                 }

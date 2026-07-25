@@ -14,6 +14,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Navigation;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
@@ -751,7 +752,10 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
                 row.PortfolioId == portfolioId && row.Type == "TenantNotice");
             notification.RelatedEntityType.Should().Be(nameof(Conversation));
             notification.RelatedEntityId.Should().Be(conversation.Id);
-            notification.ActionUrl.Should().Be($"/portal/messages?conversation={conversation.Id}");
+            notification.NavigationExperience.Should().Be(NavigationExperience.Tenant);
+            notification.NavigationDestination.Should().Be(NavigationDestination.Message);
+            notification.NavigationResourceKind.Should().Be(nameof(Conversation));
+            notification.NavigationResourceId.Should().Be(conversation.Id);
             (await mutate.NoticeDeliveryEvidence.CountAsync(row => row.PortfolioId == portfolioId)).Should().Be(3);
             (await mutate.NoticeDeliveryEvidence.CountAsync(row =>
                 row.PortfolioId == portfolioId

@@ -52,6 +52,31 @@ public sealed class TenantNoticePoliciesController : AuthenticatedPortfolioContr
     public ActionResult<IReadOnlyList<NoticeMergeFieldHelpResponse>> ListMergeFields(string systemKey) =>
         Ok(_service.ListMergeFields(systemKey));
 
+    [HttpPost("templates/{systemKey}/preview")]
+    public async Task<ActionResult<NoticePreviewResponse>> PreviewNotice(
+        string systemKey,
+        NoticePreviewRequest request,
+        CancellationToken ct)
+    {
+        if (!string.Equals(systemKey, request.SystemKey, StringComparison.Ordinal))
+            return BadRequest();
+        return await _service.PreviewNoticeAsync(GetPortfolioId(), request, ct);
+    }
+
+    [HttpPost("templates/{systemKey}/test-send")]
+    public async Task<ActionResult<NoticeTestSendResponse>> SendTest(
+        string systemKey,
+        NoticeTestSendRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
+    {
+        if (!string.Equals(systemKey, request.SystemKey, StringComparison.Ordinal))
+            return BadRequest();
+        if (!NotificationRouteKey.TryParse(idempotencyKey, out var operationKey))
+            return NotificationRouteKey.Invalid();
+        return await _service.SendNoticeTestAsync(GetPortfolioId(), request, operationKey, ct);
+    }
+
     [HttpPost("templates/{systemKey}/versions")]
     public async Task<ActionResult<TenantNoticePolicyResponse>> CreateTemplateVersion(
         string systemKey,

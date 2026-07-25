@@ -149,6 +149,45 @@ public sealed class NotificationFoundationModelTests
     }
 
     [Fact]
+    public void SuppliedLegalTemplateV2_UsesNewStableIdsAndJurisdictionNeutralContent()
+    {
+        SuppliedNoticeTemplateBaseline.V2Legal.Should().HaveCount(2);
+        SuppliedNoticeTemplateBaseline.V2Legal.Select(template => template.Id)
+            .Should().Equal(6, 7);
+        SuppliedNoticeTemplateBaseline.V2Legal.Select(template => template.SystemKey)
+            .Should().Equal("lease-non-renewal", "late-rent-late-fee");
+        SuppliedNoticeTemplateBaseline.V1.Select(template => template.Id)
+            .Concat(SuppliedNoticeTemplateBaseline.V2Legal.Select(template => template.Id))
+            .Should().OnlyHaveUniqueItems();
+        SuppliedNoticeTemplateBaseline.LegalVersion.Should().Be(2);
+        SuppliedNoticeTemplateBaseline.LegalV2Provenance
+            .Should().Contain("jurisdiction-neutral")
+            .And.Contain("local timing and content review required");
+        SuppliedNoticeTemplateBaseline.LegalV2PublishedAtUtc.Kind.Should().Be(DateTimeKind.Utc);
+
+        var nonRenewal = SuppliedNoticeTemplateBaseline.V2Legal[0];
+        nonRenewal.Body.Should().Contain("{{tenant_name}}")
+            .And.Contain("{{property_address}}")
+            .And.Contain("{{lease_end_date}}")
+            .And.Contain("return possession")
+            .And.Contain("Security-deposit and final-account handling")
+            .And.Contain("state and local timing, delivery, and content requirement")
+            .And.Contain("not a determination that the notice is legally sufficient");
+
+        var lateRent = SuppliedNoticeTemplateBaseline.V2Legal[1];
+        lateRent.Body.Should().Contain("{{tenant_name}}")
+            .And.Contain("{{property_address}}")
+            .And.Contain("{{overdue_amount}}")
+            .And.Contain("{{today}}")
+            .And.Contain("{{rent_due_date}}")
+            .And.Contain("{{late_fee_amount}}")
+            .And.Contain("only if that fee is authorized by the rental agreement")
+            .And.Contain("believe the amount is incorrect")
+            .And.Contain("state and local timing, delivery, and content requirement")
+            .And.Contain("not a determination that the notice is legally sufficient");
+    }
+
+    [Fact]
     public void SuppliedTemplateWorkspaceCopyAndDraftPolicies_AreOneConflictSafeCommand()
     {
         var createdAtUtc = new DateTime(2026, 7, 13, 1, 2, 3, DateTimeKind.Utc);

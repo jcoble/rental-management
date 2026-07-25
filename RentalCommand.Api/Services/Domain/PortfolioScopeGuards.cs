@@ -51,9 +51,6 @@ internal static class PortfolioScopeGuards
         => db.WorkOrders.AnyAsync(w => w.Id == workOrderId && w.PortfolioId == portfolioId, ct);
 
     /// <summary>The referenced owner (legacy contact) must live in the caller's portfolio.</summary>
-    public static Task<bool> EnsureOwnerInPortfolioAsync(this RentalCommandDbContext db, int portfolioId, int ownerId, CancellationToken ct)
-        => db.Owners.AnyAsync(o => o.Id == ownerId && o.PortfolioId == portfolioId, ct);
-
     /// <summary>The referenced owner entity (legal owner) must live in the caller's portfolio.</summary>
     public static Task<bool> EnsureOwnerEntityInPortfolioAsync(this RentalCommandDbContext db, int portfolioId, int ownerEntityId, CancellationToken ct)
         => db.OwnerEntities.AnyAsync(e => e.Id == ownerEntityId && e.PortfolioId == portfolioId, ct);

@@ -346,6 +346,44 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task Rls_EngineCanInsertOrdinaryAtomicAuditWithoutReceivingPreAuthAdmission()
+    {
+        SkipIfNoDocker();
+
+        await using var engine = await OpenDirectRoleAsync(EngineRole, EnginePassword);
+        var attemptId = Guid.NewGuid();
+        var insertedId = await ExecScalarIntAsync(engine, $"""
+            INSERT INTO "AtomicAuditLogs"
+              ("AttemptId", "CommandType", "CommandIdempotencyKey", "MutationOrdinal",
+               "PortfolioId", "ActorLabel", "EntityType", "EntityId", "Operation",
+               "ChangeReason", "Timestamp")
+            VALUES
+              ('{attemptId}', 'engine.atomic-audit.rls-regression', '{attemptId:N}', 1,
+               {_portfolioA}, 'engine:rls-regression', 'EngineRegression', 1, 1,
+               'Engine ordinary audit admission regression', CURRENT_TIMESTAMP)
+            RETURNING "Id"
+            """);
+
+        insertedId.Should().BePositive();
+        (await ExecScalarIntAsync(engine, $"""
+            SELECT count(*)
+            FROM "AtomicAuditLogs"
+            WHERE "Id" = {insertedId}
+              AND "CommandType" = 'engine.atomic-audit.rls-regression'
+            """)).Should().Be(1);
+
+        (await ExecScalarIntAsync(engine, """
+            SELECT (
+              NOT rc_pre_auth_email_audit_allows(
+                NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
+              AND NOT rc_pre_auth_account_security_audit_allows(
+                NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
+            )::integer
+            """)).Should().Be(1,
+                "the Engine EXECUTE grants permit policy evaluation but both API-only pre-auth branches stay false");
+    }
+
+    [SkippableFact]
     public async Task Rls_SameWorkspaceResourceScopes_BlockUnrelatedRowsAndWrites()
     {
         SkipIfNoDocker();
@@ -416,6 +454,40 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
                 $"UPDATE \"WorkOrders\" SET \"Status\" = 2 WHERE \"Id\" = {_resourceScopes.DecoyWorkOrderId}"))
                 .Should().Be(0, "assigned-work authority cannot update a same-workspace decoy");
         }
+    }
+
+    [SkippableFact]
+    public async Task Rls_TenantRelationship_CanInsertAndReturnOwnWorkOrder()
+    {
+        SkipIfNoDocker();
+
+        await using var tenant = await OpenAsApiRoleAsync(_resourceScopes.Tenant);
+        (await ExecScalarIntAsync(tenant,
+            $"SELECT rc_api_scope_allows({_scopeA.PortfolioId})::int"))
+            .Should().Be(1);
+        (await ExecScalarIntAsync(tenant, $"""
+            SELECT rc_api_resource_scope_allows(
+              {_scopeA.PortfolioId}, {_scopeA.PropertyId}, {_scopeA.UnitId}, NULL,
+              {_scopeA.LeaseManagementId}, NULL, {_scopeA.TenantId}, FALSE, TRUE, FALSE)::int
+            """)).Should().Be(1);
+        var insertedId = await ExecScalarIntAsync(tenant, $"""
+            INSERT INTO "WorkOrders"
+              ("PortfolioId", "PropertyId", "UnitId", "TenantId", "LeaseManagementId",
+               "Title", "Description", "Category", "Priority", "Status", "RequestedAt",
+               "CreatedBy", "UpdatedAt", "ActualCost", "EstimatedCost")
+            VALUES
+              ({_scopeA.PortfolioId}, {_scopeA.PropertyId}, {_scopeA.UnitId}, {_scopeA.TenantId},
+               {_scopeA.LeaseManagementId}, 'Leaking kitchen faucet',
+               'Water drips under sink after use', 'Resident Request', 1, 1,
+               CURRENT_TIMESTAMP, 'Tenant', CURRENT_TIMESTAMP, 0, 0)
+            RETURNING "Id"
+            """);
+
+        insertedId.Should().BePositive();
+        (await ReadIdsAsync(tenant, "WorkOrders")).Should().Contain(insertedId);
+
+        await using var unrelatedTenant = await OpenAsApiRoleAsync(_scopeB);
+        (await ReadIdsAsync(unrelatedTenant, "WorkOrders")).Should().NotContain(insertedId);
     }
 
     // ----- helpers -----
@@ -543,7 +615,16 @@ public sealed class RlsTenantIsolationTests : IAsyncLifetime
         };
         ctx.OwnerEntities.Add(ownerEntity);
         var primaryProperty = await ctx.Properties.SingleAsync(property => property.Id == primary.PropertyId);
-        primaryProperty.OwnerEntity = ownerEntity;
+        ctx.PropertyOwnerships.Add(new PropertyOwnership
+        {
+            PortfolioId = primary.PortfolioId,
+            Property = primaryProperty,
+            OwnerEntity = ownerEntity,
+            OwnershipSharePercent = 100m,
+            EffectiveFromUtc = now.AddDays(-1),
+            StatementRecipientName = ownerEntity.Name,
+            PayeeName = ownerEntity.Name,
+        });
 
         var decoyProperty = new Property
         {

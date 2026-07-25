@@ -409,12 +409,16 @@ internal static class StoredDocumentAuthorization
                             selected.PropertyId == deposit.TenantAccount!.LeaseManagement!.PropertyId)), ct),
             StoredDocumentTarget.OwnerEntity => persistence.Query<OwnerEntity>().AnyAsync(owner =>
                 owner.Id == entityId && owner.PortfolioId == portfolioId &&
-                persistence.Query<Property>().Any(property =>
-                    property.PortfolioId == owner.PortfolioId && property.OwnerEntityId == owner.Id &&
-                    assignments.Any(assignment =>
+                persistence.Query<PropertyOwnership>().Any(ownership =>
+                    ownership.PortfolioId == owner.PortfolioId
+                    && ownership.OwnerEntityId == owner.Id
+                    && ownership.EffectiveFromUtc <= utcNow
+                    && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > utcNow)
+                    && assignments.Any(assignment =>
                         assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
                         assignment.SelectedProperties.Any(selected =>
-                            selected.PortfolioId == portfolioId && selected.PropertyId == property.Id))), ct),
+                            selected.PortfolioId == portfolioId
+                            && selected.PropertyId == ownership.PropertyId))), ct),
             _ => Task.FromResult(false),
         };
     }

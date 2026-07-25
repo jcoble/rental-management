@@ -6,6 +6,7 @@
 	import { portfolios } from '$lib/api/endpoints/portfolios';
 	import { owners } from '$lib/api/endpoints/owners';
 	import { properties } from '$lib/api/endpoints/properties';
+	import { units } from '$lib/api/endpoints/units';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { leaseManagements } from '$lib/api/endpoints/lease-managements';
 	import { scan } from '$lib/api/scan';
@@ -39,6 +40,7 @@
 	import LeaseFirstImport from '$lib/components/scan/LeaseFirstImport.svelte';
 	import LeaseScanSignatureChoice, { type LeaseScanReviewDisposition } from '$lib/components/scan/LeaseScanSignatureChoice.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import {
 		WIZARD_STEPS,
 		CORE_WIZARD_STEPS,
@@ -91,6 +93,7 @@
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
+	const SELECTOR_PAGE_SIZE = 20;
 
 	// ---------------------------------------------------------------------------
 	// Step model. The ordered flow is the core entity steps (portfolio → lease)
@@ -158,16 +161,16 @@
 		queryFn: () => portfolios.get(portfolioId),
 	}));
 	const ownersQuery = createQuery(() => ({
-		queryKey: ['owners', portfolioId],
-		queryFn: () => owners.list(portfolioId, { take: 200 }),
+		queryKey: ['owners', portfolioId, 'onboarding-first-page'],
+		queryFn: () => owners.listPage(portfolioId, { skip: 0, take: SELECTOR_PAGE_SIZE, sort: 'name' }),
 	}));
 	const propertiesQuery = createQuery(() => ({
-		queryKey: ['properties', portfolioId],
-		queryFn: () => properties.list(portfolioId, { take: 200 }),
+		queryKey: ['properties', portfolioId, 'onboarding-first-page'],
+		queryFn: () => properties.listPage(portfolioId, { skip: 0, take: SELECTOR_PAGE_SIZE, sort: 'name' }),
 	}));
 	const tenantsQuery = createQuery(() => ({
-		queryKey: ['tenants', portfolioId],
-		queryFn: () => tenants.list(portfolioId, { take: 200 }),
+		queryKey: ['tenants', portfolioId, 'onboarding-first-page'],
+		queryFn: () => tenants.listPage(portfolioId, { skip: 0, take: SELECTOR_PAGE_SIZE, sort: 'lastName' }),
 	}));
 	const leasesQuery = createQuery(() => ({
 		queryKey: ['lease-managements', 'onboarding'],
@@ -179,6 +182,38 @@
 		queryFn: () => notifications.myAlerts.get(),
 	}));
 
+	async function loadOwnerOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await owners.listPage(portfolioId, { ...params, sort: 'name' });
+		return {
+			...result,
+			items: result.items.map((owner) => ({ id: owner.id, label: ownerOptionLabel(owner) })),
+		};
+	}
+
+	async function loadPropertyOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await properties.listPage(portfolioId, { ...params, sort: 'name' });
+		return {
+			...result,
+			items: result.items.map((property) => ({
+				id: property.id,
+				label: property.name,
+				description: `${property.addressLine1}, ${property.city}, ${property.state}`,
+			})),
+		};
+	}
+
+	async function loadTenantOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await tenants.listPage(portfolioId, { ...params, sort: 'lastName' });
+		return {
+			...result,
+			items: result.items.map((tenant) => ({
+				id: tenant.id,
+				label: tenant.fullName || `${tenant.firstName} ${tenant.lastName}`,
+				description: tenant.email || tenant.phone || null,
+			})),
+		};
+	}
+
 	// Sandbox/example-data state still matters for copy and progress framing, but it must not block
 	// re-entering Guided Setup. Users need to test the setup/import flow before going live.
 	const sandboxQuery = createQuery(() => ({
@@ -188,9 +223,9 @@
 		staleTime: 60_000,
 	}));
 
-	const hasExistingOwners = $derived((ownersQuery.data?.length ?? 0) > 0);
-	const hasExistingProperties = $derived((propertiesQuery.data?.length ?? 0) > 0);
-	const hasExistingTenants = $derived((tenantsQuery.data?.length ?? 0) > 0);
+	const hasExistingOwners = $derived((ownersQuery.data?.totalCount ?? 0) > 0);
+	const hasExistingProperties = $derived((propertiesQuery.data?.totalCount ?? 0) > 0);
+	const hasExistingTenants = $derived((tenantsQuery.data?.totalCount ?? 0) > 0);
 	const hasExistingLeases = $derived((leasesQuery.data?.totalCount ?? 0) > 0);
 	// A step counts as "done" if the wizard handled it OR data already exists.
 	const stepDone = $derived<Record<WizardStepKey, boolean>>({
@@ -348,14 +383,16 @@
 	let ownerForm = $state({ name: '', ownerEntityType: 'Person' as OwnerEntityType, email: '', taxId: '' });
 	let ownerErrors = $state<Record<string, string>>({});
 	let selectedOwnerId = $state(NEW_ONBOARDING_OWNER_VALUE);
+	let selectedRemoteOwner = $state<Owner | null>(null);
 	let ownerDeleteTarget = $state<Owner | null>(null);
 	let ownerSelectionPrefilled = false;
 	const ownerRecordOptions = $derived(onboardingOwnerRecordOptions({
 		createdOwner,
-		existingOwners: ownersQuery.data ?? []
+		existingOwners: ownersQuery.data?.items ?? []
 	}));
 
 	function ownerById(id: string): Owner | null {
+		if (selectedRemoteOwner && String(selectedRemoteOwner.id) === id) return selectedRemoteOwner;
 		return (ownerRecordOptions.find((owner) => String(owner.id) === id) as Owner | undefined) ?? null;
 	}
 
@@ -380,6 +417,19 @@
 		if (owner) {
 			ownerForm = onboardingOwnerFormFromOwner(owner);
 		}
+	}
+
+	async function selectRemoteOwnerRecord(value: string, option: { label: string } | null) {
+		if (!value) {
+			selectedRemoteOwner = null;
+			selectOwnerRecord(NEW_ONBOARDING_OWNER_VALUE);
+			return;
+		}
+		selectedOwnerId = value;
+		const owner = await owners.get(Number(value));
+		selectedRemoteOwner = owner;
+		ownerForm = onboardingOwnerFormFromOwner(owner);
+		if (option?.label && !owner.name) ownerForm.name = option.label;
 	}
 
 	const ownerSelectionLabel = $derived.by(() => {
@@ -506,15 +556,17 @@
 	});
 	let propertyErrors = $state<Record<string, string>>({});
 	let selectedPropertyId = $state(NEW_ONBOARDING_PROPERTY_VALUE);
+	let selectedRemoteProperty = $state<Property | null>(null);
 	let propertyDeleteTarget = $state<Property | null>(null);
 	let unitDeleteTarget = $state<Unit | null>(null);
 	let propertySelectionPrefilled = false;
 	const propertyRecordOptions = $derived(onboardingPropertyRecordOptions({
 		createdProperty,
-		existingProperties: propertiesQuery.data ?? []
+		existingProperties: propertiesQuery.data?.items ?? []
 	}));
 
 	function propertyById(id: string): Property | null {
+		if (selectedRemoteProperty && String(selectedRemoteProperty.id) === id) return selectedRemoteProperty;
 		return (propertyRecordOptions.find((property) => String(property.id) === id) as Property | undefined) ?? null;
 	}
 
@@ -563,6 +615,21 @@
 			unitRowErrors = [{}];
 			propertySub = 'address';
 		}
+	}
+
+	async function selectRemotePropertyRecord(value: string) {
+		if (!value) {
+			selectedRemoteProperty = null;
+			selectPropertyRecord(NEW_ONBOARDING_PROPERTY_VALUE);
+			return;
+		}
+		selectedPropertyId = value;
+		const property = await properties.get(Number(value));
+		selectedRemoteProperty = property;
+		propertyForm = onboardingPropertyFormFromProperty(property);
+		unitRows = [emptyUnit()];
+		unitRowErrors = [{}];
+		propertySub = 'address';
 	}
 
 	const propertySelectionLabel = $derived.by(() => {
@@ -775,6 +842,7 @@
 			return;
 		}
 		propertyErrors = {};
+		const { ownerEntityId: _ownerSelectionField, ...validatedProperty } = propResult.data;
 
 		const errors: Record<string, string>[] = unitRows.map(() => ({}));
 		const validUnits: Record<string, unknown>[] = [];
@@ -801,9 +869,10 @@
 			propertyId: propertyIdFromSelection(),
 			property: {
 				portfolioId,
-				...propResult.data,
+				...validatedProperty,
 				rentalStructure,
-				clearOwnerEntity: propertyPayload.clearOwnerEntity
+				ownerships: propertyPayload.ownerships,
+				clearOwnership: propertyPayload.clearOwnership
 			},
 			units: validUnits
 		});
@@ -883,6 +952,9 @@
 	let leaseEndDateAutoDefault = $state(leaseForm.endDate);
 	let leaseReviewDisposition = $state<LeaseScanReviewDisposition | ''>('');
 	let leaseDocumentTemplateId = $state('');
+	let selectedLeasePropertyLabel = $state('');
+	let selectedLeaseUnitLabel = $state('');
+	let selectedLeaseTenantLabel = $state('');
 	// Pre-fill security deposit with monthly rent (common default) once — stays
 	// editable; if the user clears it we do not re-fill.
 	let securityDepositDefaulted = $state(false);
@@ -900,14 +972,25 @@
 		!leaseReviewDisposition
 	);
 
-	const leaseProperties = $derived(propertiesQuery.data ?? []);
-	const leaseTenants = $derived(tenantsQuery.data ?? []);
+	async function loadLeaseUnitOptions(params: { search?: string; skip: number; take: number }) {
+		if (!leaseForm.propertyId) return { items: [], totalCount: 0, skip: params.skip, take: params.take };
+		const result = await units.listWithHealthPage({
+			...params,
+			propertyId: Number(leaseForm.propertyId),
+			sort: 'unitNumber',
+		});
+		return {
+			...result,
+			items: result.items.map((unit) => ({
+				id: unit.id,
+				label: `Unit ${unit.unitNumber}`,
+				description: unit.status,
+			})),
+		};
+	}
 
-	const leaseUnitsQuery = createQuery(() => ({
-		queryKey: ['onboarding-units', leaseForm.propertyId],
-		enabled: !!leaseForm.propertyId,
-		queryFn: () => properties.listUnits(Number(leaseForm.propertyId)),
-	}));
+	const leaseProperties = $derived(propertiesQuery.data?.items ?? []);
+	const leaseTenants = $derived(tenantsQuery.data?.items ?? []);
 
 	$effect(() => {
 		if (leasePrefilled) return;
@@ -916,18 +999,23 @@
 		const tenant = createdTenants[0] ?? leaseTenants[0];
 		if (propId == null && tenant == null) return;
 		leasePrefilled = true;
-		if (propId != null) leaseForm.propertyId = String(propId);
-		if (tenant != null) leaseForm.tenantId = String(tenant.id);
+		if (propId != null) {
+			leaseForm.propertyId = String(propId);
+			selectedLeasePropertyLabel =
+				createdProperty?.id === propId ? createdProperty.name : (leaseProperties.find((property) => property.id === propId)?.name ?? '');
+		}
+		if (tenant != null) {
+			leaseForm.tenantId = String(tenant.id);
+			selectedLeaseTenantLabel = tenant.fullName || `${tenant.firstName} ${tenant.lastName}`;
+		}
 	});
 
 	$effect(() => {
-		const list = leaseUnitsQuery.data ?? [];
-		if (!leaseForm.unitId && list.length > 0) {
-			const preferred = createdUnits.find((u) => list.some((l) => l.id === u.id)) ?? list[0];
+		const preferred = createdUnits.find((unit) => unit.propertyId === Number(leaseForm.propertyId));
+		if (!leaseForm.unitId && preferred) {
 			leaseForm.unitId = String(preferred.id);
-			if (!leaseForm.monthlyRent && preferred.marketRent != null) {
-				leaseForm.monthlyRent = String(preferred.marketRent);
-			}
+			selectedLeaseUnitLabel = `Unit ${preferred.unitNumber}`;
+			if (!leaseForm.monthlyRent && preferred.marketRent != null) leaseForm.monthlyRent = String(preferred.marketRent);
 		}
 	});
 	function handleLeaseStartDateChange(iso: string) {
@@ -1174,19 +1262,6 @@
 			saveMyAlertsMutation.isPending
 	);
 
-	// Labels for select triggers.
-	const leasePropertyLabel = $derived(
-		leaseProperties.find((p) => String(p.id) === leaseForm.propertyId)?.name ?? 'Select property'
-	);
-	const leaseUnitLabel = $derived.by(() => {
-		const u = (leaseUnitsQuery.data ?? []).find((x) => String(x.id) === leaseForm.unitId);
-		return u ? `Unit ${u.unitNumber}` : 'Select unit';
-	});
-	const leaseTenantLabel = $derived.by(() => {
-		const t = leaseTenants.find((x) => String(x.id) === leaseForm.tenantId);
-		return t ? t.fullName || `${t.firstName} ${t.lastName}` : 'Select tenant';
-	});
-
 	const coreCount = $derived(CORE_WIZARD_STEPS.length);
 	const leaseBlocked = $derived(leaseProperties.length === 0 || leaseTenants.length === 0);
 
@@ -1384,7 +1459,7 @@
 						<WizardStepScaffold step={currentStep}>
 							{#if hasExistingOwners && !createdOwner}
 								<div class="mb-4 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-sm text-foreground" data-testid="onboarding-owner-existing">
-									You already have {ownersQuery.data?.length} owner{(ownersQuery.data?.length ?? 0) === 1 ? '' : 's'} on file. Choose one to review, add another, or skip ahead.
+									You already have {ownersQuery.data?.totalCount} owner{(ownersQuery.data?.totalCount ?? 0) === 1 ? '' : 's'} on file. Choose one to review, add another, or skip ahead.
 								</div>
 							{:else if ownerPrefilled}
 								<div class="mb-4 rounded-md border border-primary/40 bg-primary/10 px-3 py-2 text-sm text-foreground" data-testid="onboarding-owner-prefilled">
@@ -1396,19 +1471,18 @@
 									<label for="ob-owner-selector" class="mb-1 block text-xs font-medium text-muted-foreground">Owner record</label>
 									<div class="flex items-center gap-2">
 										<div class="min-w-0 flex-1">
-											<Select.Root type="single" bind:value={selectedOwnerId} onValueChange={selectOwnerRecord}>
-												<Select.Trigger id="ob-owner-selector" class="w-full" data-testid="onboarding-owner-record-select">
-													{ownerSelectionLabel}
-												</Select.Trigger>
-												<Select.Content>
-													{#each ownerRecordOptions as owner (owner.id)}
-														<Select.Item value={String(owner.id)} label={ownerOptionLabel(owner)}>{ownerOptionLabel(owner)}</Select.Item>
-													{/each}
-													<Select.Item value={NEW_ONBOARDING_OWNER_VALUE} label="Add a new owner">
-														<span class="inline-flex items-center gap-2"><Plus class="h-3.5 w-3.5" /> Add a new owner</span>
-													</Select.Item>
-												</Select.Content>
-											</Select.Root>
+											<RemoteRecordSelect
+												queryKey={['onboarding-owner-records', portfolioId]}
+												label="Owner record"
+												value={selectedOwnerId === NEW_ONBOARDING_OWNER_VALUE ? '' : selectedOwnerId}
+												selectedLabel={ownerSelectionLabel}
+												placeholder="Add a new owner"
+												clearLabel="Add a new owner"
+												searchPlaceholder="Search owners…"
+												testid="onboarding-owner-record-select"
+												loadPage={loadOwnerOptions}
+												onValueChange={selectRemoteOwnerRecord}
+											/>
 										</div>
 										{#if selectedOwnerRecord}
 											<Button
@@ -1465,7 +1539,7 @@
 						<WizardStepScaffold step={currentStep}>
 							{#if hasExistingProperties && !createdProperty}
 								<div class="mb-4 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-sm text-foreground" data-testid="onboarding-property-existing">
-									You already have {propertiesQuery.data?.length} propert{(propertiesQuery.data?.length ?? 0) === 1 ? 'y' : 'ies'}. Choose one to review, add another, or skip ahead.
+									You already have {propertiesQuery.data?.totalCount} propert{(propertiesQuery.data?.totalCount ?? 0) === 1 ? 'y' : 'ies'}. Choose one to review, add another, or skip ahead.
 								</div>
 							{/if}
 							{#if propertyRecordOptions.length > 0}
@@ -1473,19 +1547,18 @@
 									<label for="ob-property-selector" class="mb-1 block text-xs font-medium text-muted-foreground">Property record</label>
 									<div class="flex items-center gap-2">
 										<div class="min-w-0 flex-1">
-											<Select.Root type="single" bind:value={selectedPropertyId} onValueChange={selectPropertyRecord}>
-												<Select.Trigger id="ob-property-selector" class="w-full" data-testid="onboarding-property-record-select">
-													{propertySelectionLabel}
-												</Select.Trigger>
-												<Select.Content>
-													{#each propertyRecordOptions as property (property.id)}
-														<Select.Item value={String(property.id)} label={propertyOptionLabel(property)}>{propertyOptionLabel(property)}</Select.Item>
-													{/each}
-													<Select.Item value={NEW_ONBOARDING_PROPERTY_VALUE} label="Add a new property">
-														<span class="inline-flex items-center gap-2"><Plus class="h-3.5 w-3.5" /> Add a new property</span>
-													</Select.Item>
-												</Select.Content>
-											</Select.Root>
+											<RemoteRecordSelect
+												queryKey={['onboarding-property-records', portfolioId]}
+												label="Property record"
+												value={selectedPropertyId === NEW_ONBOARDING_PROPERTY_VALUE ? '' : selectedPropertyId}
+												selectedLabel={propertySelectionLabel}
+												placeholder="Add a new property"
+												clearLabel="Add a new property"
+												searchPlaceholder="Search properties…"
+												testid="onboarding-property-record-select"
+												loadPage={loadPropertyOptions}
+												onValueChange={(value) => void selectRemotePropertyRecord(value)}
+											/>
 										</div>
 										{#if selectedPropertyRecord}
 											<Button
@@ -1509,20 +1582,17 @@
 							{#if propertySub === 'address'}
 								<div class="grid gap-4" data-testid="onboarding-property-sub-address">
 									<div>
-										<span class="mb-1 block text-xs font-medium text-muted-foreground">Owner</span>
-										<Select.Root type="single" bind:value={propertyForm.ownerEntityId}>
-											<Select.Trigger class="w-full" data-testid="onboarding-property-owner">
-												{propertyForm.ownerEntityId
-													? (ownerRecordOptions.find((owner) => String(owner.id) === propertyForm.ownerEntityId)?.name ?? 'Choose owner')
-													: 'No owner assigned'}
-											</Select.Trigger>
-											<Select.Content>
-												<Select.Item value="" label="No owner assigned">No owner assigned</Select.Item>
-												{#each ownerRecordOptions as owner (owner.id)}
-													<Select.Item value={String(owner.id)} label={ownerOptionLabel(owner)}>{ownerOptionLabel(owner)}</Select.Item>
-												{/each}
-											</Select.Content>
-										</Select.Root>
+										<RemoteRecordSelect
+											queryKey={['onboarding-property-owners', portfolioId]}
+											label="Owner"
+											bind:value={propertyForm.ownerEntityId}
+											selectedLabel={ownerRecordOptions.find((owner) => String(owner.id) === propertyForm.ownerEntityId)?.name}
+											placeholder="No owner assigned"
+											clearLabel="No owner assigned"
+											searchPlaceholder="Search owners…"
+											testid="onboarding-property-owner"
+											loadPage={loadOwnerOptions}
+										/>
 										<p class="mt-1 text-xs text-muted-foreground">
 											You can leave this unassigned during onboarding. Assign an owner before reports
 											or owner statements need to be correct.
@@ -1727,7 +1797,7 @@
 						<WizardStepScaffold step={currentStep}>
 							{#if hasExistingTenants && createdTenants.length === 0}
 								<div class="mb-4 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-sm text-foreground" data-testid="onboarding-tenants-existing">
-									You already have {tenantsQuery.data?.length} tenant{(tenantsQuery.data?.length ?? 0) === 1 ? '' : 's'}. Add more or skip ahead.
+									You already have {tenantsQuery.data?.totalCount} tenant{(tenantsQuery.data?.totalCount ?? 0) === 1 ? '' : 's'}. Add more or skip ahead.
 								</div>
 							{/if}
 							<div class="space-y-3" data-testid="onboarding-tenants-list">
@@ -1802,38 +1872,52 @@
 							{:else}
 								<div class="grid gap-4 sm:grid-cols-2">
 									<div>
-										<span class="mb-1 block text-xs font-medium text-muted-foreground">Tenant</span>
-										<Select.Root type="single" bind:value={leaseForm.tenantId}>
-											<Select.Trigger class="w-full" data-testid="onboarding-lease-tenant" data-coach="onboarding-lease">{leaseTenantLabel}</Select.Trigger>
-											<Select.Content>
-												{#each leaseTenants as t}
-													<Select.Item value={String(t.id)} label={t.fullName || `${t.firstName} ${t.lastName}`}>{t.fullName || `${t.firstName} ${t.lastName}`}</Select.Item>
-												{/each}
-											</Select.Content>
-										</Select.Root>
+										<RemoteRecordSelect
+											queryKey={['onboarding-lease-tenants', portfolioId]}
+											label="Tenant"
+											bind:value={leaseForm.tenantId}
+											selectedLabel={selectedLeaseTenantLabel}
+											placeholder="Select tenant"
+											searchPlaceholder="Search tenants…"
+											required
+											testid="onboarding-lease-tenant"
+											loadPage={loadTenantOptions}
+											onValueChange={(_value, option) => (selectedLeaseTenantLabel = option?.label ?? '')}
+										/>
 										{#if leaseErrors.tenantId}<p class="mt-1 text-xs text-destructive">{leaseErrors.tenantId}</p>{/if}
 									</div>
 									<div>
-										<span class="mb-1 block text-xs font-medium text-muted-foreground">Property</span>
-										<Select.Root type="single" bind:value={leaseForm.propertyId} onValueChange={() => { leaseForm.unitId = ''; }}>
-											<Select.Trigger class="w-full" data-testid="onboarding-lease-property">{leasePropertyLabel}</Select.Trigger>
-											<Select.Content>
-												{#each leaseProperties as p}
-													<Select.Item value={String(p.id)} label={p.name}>{p.name}</Select.Item>
-												{/each}
-											</Select.Content>
-										</Select.Root>
+										<RemoteRecordSelect
+											queryKey={['onboarding-lease-properties', portfolioId]}
+											label="Property"
+											bind:value={leaseForm.propertyId}
+											selectedLabel={selectedLeasePropertyLabel}
+											placeholder="Select property"
+											searchPlaceholder="Search properties…"
+											required
+											testid="onboarding-lease-property"
+											loadPage={loadPropertyOptions}
+											onValueChange={(_value, option) => {
+												leaseForm.unitId = '';
+												selectedLeaseUnitLabel = '';
+												selectedLeasePropertyLabel = option?.label ?? '';
+											}}
+										/>
 									</div>
 									<div>
-										<span class="mb-1 block text-xs font-medium text-muted-foreground">Unit</span>
-										<Select.Root type="single" bind:value={leaseForm.unitId} disabled={!leaseForm.propertyId}>
-											<Select.Trigger class="w-full" data-testid="onboarding-lease-unit" disabled={!leaseForm.propertyId}>{leaseUnitLabel}</Select.Trigger>
-											<Select.Content>
-												{#each leaseUnitsQuery.data ?? [] as u}
-													<Select.Item value={String(u.id)} label="Unit {u.unitNumber}">Unit {u.unitNumber} ({u.status})</Select.Item>
-												{/each}
-											</Select.Content>
-										</Select.Root>
+										<RemoteRecordSelect
+											queryKey={['onboarding-lease-units', portfolioId, leaseForm.propertyId]}
+											label="Unit"
+											bind:value={leaseForm.unitId}
+											selectedLabel={selectedLeaseUnitLabel}
+											placeholder={leaseForm.propertyId ? 'Select unit' : 'Pick a property first'}
+											searchPlaceholder="Search units…"
+											disabled={!leaseForm.propertyId}
+											required
+											testid="onboarding-lease-unit"
+											loadPage={loadLeaseUnitOptions}
+											onValueChange={(_value, option) => (selectedLeaseUnitLabel = option?.label ?? '')}
+										/>
 										{#if leaseErrors.unitId}<p class="mt-1 text-xs text-destructive">{leaseErrors.unitId}</p>{/if}
 									</div>
 									<div>

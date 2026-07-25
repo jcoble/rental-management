@@ -268,15 +268,23 @@ public sealed class OwnerPortalService : IOwnerPortalService
 
     private IQueryable<Property> AuthorizedProperties(
         OwnerPortalReadScope scope,
-        IQueryable<EffectiveOwnerAccessProjection> ownerAccess) =>
-        _db.Properties
+        IQueryable<EffectiveOwnerAccessProjection> ownerAccess)
+    {
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
+        return _db.Properties
             .AsNoTracking()
             .Where(property =>
                 property.PortfolioId == scope.PortfolioId &&
                 property.DeletedAt == null &&
                 ownerAccess.Any(access =>
                     access.PropertyId == property.Id &&
-                    access.OwnerEntityId == property.OwnerEntityId));
+                    _db.PropertyOwnerships.Any(ownership =>
+                        ownership.PortfolioId == scope.PortfolioId
+                        && ownership.PropertyId == property.Id
+                        && ownership.OwnerEntityId == access.OwnerEntityId
+                        && ownership.EffectiveFromUtc <= now
+                        && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now))));
+    }
 
     private IQueryable<Notification> OwnerItems(
         OwnerPortalReadScope scope,

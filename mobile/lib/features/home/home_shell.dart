@@ -1,12 +1,9 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:uuid/uuid.dart';
 
 import 'package:go_router/go_router.dart';
 
@@ -49,13 +46,14 @@ import '../onboarding/getting_started_tasks.dart';
 import '../payments/payment_detail_screen.dart';
 import '../payments/payments_screen.dart';
 import '../portal/tenant_account_history_screen.dart';
+import '../portal/tenant_maintenance_screen.dart';
 import '../portal/tenant_portal_repository.dart';
-import '../portal/tenant_work_order_detail_screen.dart';
 import '../scan/scan_review_screen.dart';
 import '../tenants/tenant_detail_screen.dart';
 import '../tenants/tenants_list_screen.dart';
 import '../tenants/tenant_lease_screen.dart';
 import '../units/unit_command_center_screen.dart';
+import '../../core/navigation/mobile_restoration_state.dart';
 import 'mobile_destination.dart';
 import 'home_access_providers.dart';
 import 'mobile_domain_hub.dart';
@@ -84,7 +82,7 @@ Future<void> _openGoLiveSheetAndRefreshHome(
 /// Bottom-navigation app shell.
 ///
 /// Landlord tabs: Today · Rentals · Money · Work · Inbox.
-/// Tenant tabs: Home · Messages · Maintenance · More
+/// Tenant tabs: Home · Account & lease · Maintenance · Messages · Profile.
 class HomeShell extends ConsumerStatefulWidget {
   const HomeShell({super.key});
 
@@ -93,12 +91,26 @@ class HomeShell extends ConsumerStatefulWidget {
 }
 
 class _HomeShellState extends ConsumerState<HomeShell>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, RestorationMixin {
   final _domainNavigators = <MobileShellTabId, MobileDomainNavigator>{};
   late final List<MobileQuickActionController> _quickActionControllers =
       List.generate(_tabs.length, (_) => MobileQuickActionController());
   late final MobileShellNavigator _shellNavigator;
   int _selectedIndex = 0;
+  final _restorationState = RestorableMobileRestorationState();
+  bool _restoredUnitStack = false;
+  String? _durableRestorationAuthorityKey;
+  Future<void>? _durableRestorationLoad;
+  int _durableRestorationGeneration = 0;
+  bool _suppressDurableRestorationSave = false;
+
+  @override
+  String? get restorationId => 'home-shell';
+
+  @override
+  void restoreState(RestorationBucket? oldBucket, bool initialRestore) {
+    registerForRestoration(_restorationState, 'unit-navigation');
+  }
 
   static const _tabs = [
     _TabItem(label: 'Today', icon: Symbols.home_rounded),
@@ -118,9 +130,10 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
   static const _tenantTabs = [
     _TabItem(label: 'Home', icon: Symbols.home_rounded),
-    _TabItem(label: 'Messages', icon: Symbols.forum_rounded),
+    _TabItem(label: 'Account & lease', icon: Symbols.description_rounded),
     _TabItem(label: 'Maintenance', icon: Symbols.build_rounded),
-    _TabItem(label: 'More', icon: Symbols.more_horiz_rounded),
+    _TabItem(label: 'Messages', icon: Symbols.forum_rounded),
+    _TabItem(label: 'Profile', icon: Symbols.account_circle_rounded),
   ];
 
   void _openAssistant() => openMobileAssistant(context);
@@ -129,6 +142,190 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
   void _registerDomain(MobileShellTabId tab, MobileDomainNavigator controller) {
     _domainNavigators[tab] = controller;
+    if (tab == MobileShellTabId.rentals) _prepareRestorationForAuthority();
+  }
+
+  String _authorityKey(AuthStateAuthenticated auth) {
+    final context = auth.access.selectedContext;
+    return '${auth.user.id}:${context.accessContextId}:${context.accessRevision}';
+  }
+
+  bool _matchesCurrentAuthority(
+    MobileRestorationState state,
+    AuthStateAuthenticated auth,
+  ) {
+    final context = auth.access.selectedContext;
+    return state.matchesAuthority(
+      userId: auth.user.id,
+      contextId: context.accessContextId,
+      revision: context.accessRevision,
+    );
+  }
+
+  MobileRestorationState _blankStateFor(AuthStateAuthenticated auth) {
+    final context = auth.access.selectedContext;
+    return const MobileRestorationState().bindAuthority(
+      userId: auth.user.id,
+      contextId: context.accessContextId,
+      revision: context.accessRevision,
+    );
+  }
+
+  void _saveDurableRestorationState() {
+    if (_suppressDurableRestorationSave) return;
+    final auth = ref.read(authControllerProvider);
+    if (auth is! AuthStateAuthenticated) return;
+    final restored = _restorationState.value;
+    if (!_matchesCurrentAuthority(restored, auth)) return;
+    unawaited(ref.read(mobileRestorationStateStoreProvider).save(restored));
+  }
+
+  void _setRestorationStateWithoutPersist(MobileRestorationState state) {
+    _suppressDurableRestorationSave = true;
+    _restorationState.value = state;
+    _suppressDurableRestorationSave = false;
+  }
+
+  void _clearRestorationForSignedOutSession() {
+    _durableRestorationGeneration++;
+    _durableRestorationAuthorityKey = null;
+    _durableRestorationLoad = null;
+    _restoredUnitStack = false;
+    _setRestorationStateWithoutPersist(
+      _restorationState.value.clearRichState(),
+    );
+    unawaited(ref.read(mobileRestorationStateStoreProvider).clear());
+  }
+
+  void _clearRestorationForAuthority(AuthStateAuthenticated auth) {
+    _durableRestorationGeneration++;
+    _durableRestorationAuthorityKey = _authorityKey(auth);
+    _durableRestorationLoad = null;
+    _restoredUnitStack = false;
+    _setRestorationStateWithoutPersist(_blankStateFor(auth));
+    unawaited(ref.read(mobileRestorationStateStoreProvider).clear());
+  }
+
+  void _prepareRestorationForAuthority() {
+    final auth = ref.read(authControllerProvider);
+    if (auth is! AuthStateAuthenticated) {
+      _clearRestorationForSignedOutSession();
+      return;
+    }
+    final restored = _restorationState.value;
+    if (!restored.hasAuthority) {
+      _loadDurableRestorationForAuthority(auth);
+      return;
+    }
+    if (!_matchesCurrentAuthority(restored, auth)) {
+      _clearRestorationForAuthority(auth);
+      return;
+    }
+    _saveDurableRestorationState();
+    _restoreUnitStackIfAuthorized();
+  }
+
+  void _loadDurableRestorationForAuthority(AuthStateAuthenticated auth) {
+    final key = _authorityKey(auth);
+    if (_durableRestorationAuthorityKey == key &&
+        _durableRestorationLoad != null) {
+      return;
+    }
+    _durableRestorationAuthorityKey = key;
+    final generation = _durableRestorationGeneration;
+    _durableRestorationLoad = _loadDurableRestorationForAuthorityKey(
+      key,
+      generation,
+    );
+  }
+
+  AuthStateAuthenticated? _currentRestorationAuthority(
+    String key,
+    int generation,
+  ) {
+    if (!mounted ||
+        _durableRestorationAuthorityKey != key ||
+        _durableRestorationGeneration != generation) {
+      return null;
+    }
+    final auth = ref.read(authControllerProvider);
+    if (auth is! AuthStateAuthenticated || _authorityKey(auth) != key) {
+      return null;
+    }
+    return auth;
+  }
+
+  bool _isCurrentRestorationAuthority(String key, int generation) {
+    if (!mounted || _durableRestorationGeneration != generation) {
+      return false;
+    }
+    final auth = ref.read(authControllerProvider);
+    return auth is AuthStateAuthenticated && _authorityKey(auth) == key;
+  }
+
+  Future<void> _loadDurableRestorationForAuthorityKey(
+    String key,
+    int generation,
+  ) async {
+    final store = ref.read(mobileRestorationStateStoreProvider);
+    final loadResult = await store.load();
+    final auth = _currentRestorationAuthority(key, generation);
+    if (auth == null) return;
+
+    if (loadResult case MobileRestorationStateLoadSuccess(:final state)) {
+      if (_matchesCurrentAuthority(state, auth)) {
+        _setRestorationStateWithoutPersist(state);
+        _restoreUnitStackIfAuthorized();
+        return;
+      }
+    }
+
+    if (loadResult is! MobileRestorationStateLoadMissing) {
+      await store.clear();
+    }
+    final currentAuth = _currentRestorationAuthority(key, generation);
+    if (currentAuth == null) return;
+    _setRestorationStateWithoutPersist(_blankStateFor(currentAuth));
+  }
+
+  void _restoreUnitStackIfAuthorized() {
+    if (_restoredUnitStack) return;
+    final auth = ref.read(authControllerProvider);
+    final restored = _restorationState.value;
+    final context = auth is AuthStateAuthenticated
+        ? auth.access.selectedContext
+        : null;
+    if (auth is! AuthStateAuthenticated ||
+        context == null ||
+        !_matchesCurrentAuthority(restored, auth) ||
+        restored.unitId == null ||
+        _domainNavigators[MobileShellTabId.rentals] == null) {
+      return;
+    }
+    final tab = UnitCommandCenterTab.values.firstWhere(
+      (value) => value.name == restored.destination,
+      orElse: () => UnitCommandCenterTab.summary,
+    );
+    final view = UnitCommandCenterView.values
+        .where((value) => value.name == restored.anchor)
+        .firstOrNull;
+    final restorationAuthorityKey = _authorityKey(auth);
+    final restorationGeneration = _durableRestorationGeneration;
+    bool isCurrentRestorationNavigation() => _isCurrentRestorationAuthority(
+      restorationAuthorityKey,
+      restorationGeneration,
+    );
+    _restoredUnitStack = true;
+    _openShellTab(
+      MobileShellTabId.rentals,
+      destination: MobileDestinationId.units,
+      detailBuilder: (_) => UnitCommandCenterLoaderScreen(
+        unitId: restored.unitId!,
+        initialTab: tab,
+        initialView: view,
+      ),
+      canNavigate: isCurrentRestorationNavigation,
+    );
   }
 
   void _unregisterDomain(
@@ -200,6 +397,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
     MobileShellTabId tab, {
     MobileDestinationId? destination,
     MobileDetailBuilder? detailBuilder,
+    MobileNavigationGuard? canNavigate,
   }) {
     final authState = ref.read(authControllerProvider);
     final tenantMode =
@@ -223,17 +421,21 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      _prepareRestorationForAuthority();
+      if (canNavigate?.call() == false) return;
 
       final domainNavigator = _domainNavigators[tab];
       if (destination != null && domainNavigator != null) {
         domainNavigator.openDestination(
           destination,
           detailBuilder: detailBuilder,
+          canNavigate: canNavigate,
         );
         return;
       }
 
       if (detailBuilder != null) {
+        if (canNavigate?.call() == false) return;
         Navigator.of(
           context,
         ).push<void>(MaterialPageRoute<void>(builder: detailBuilder));
@@ -393,6 +595,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
     );
     MobileShellNavigationRegistry.attach(_shellNavigator);
     WidgetsBinding.instance.addObserver(this);
+    _restorationState.addListener(_saveDurableRestorationState);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       // I7: if the first-login gate couldn't be determined at login (the
@@ -415,6 +618,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
       // before authentication completed.
       final pendingLink = ref.read(pendingPushLinkProvider);
       if (pendingLink != null) _handlePushLink(pendingLink);
+      _prepareRestorationForAuthority();
     });
   }
 
@@ -425,6 +629,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
     for (final controller in _quickActionControllers) {
       controller.dispose();
     }
+    _restorationState.removeListener(_saveDurableRestorationState);
+    _restorationState.dispose();
     super.dispose();
   }
 
@@ -610,13 +816,33 @@ class _HomeShellState extends ConsumerState<HomeShell>
     });
 
     ref.listen<AuthState>(authControllerProvider, (previous, next) {
-      if (!accessAuthorityChanged(previous, next)) return;
+      if (next is! AuthStateAuthenticated) {
+        if (previous is AuthStateAuthenticated) {
+          _selectedIndex = 0;
+          _clearRestorationForSignedOutSession();
+        }
+        return;
+      }
+
+      if (previous is! AuthStateAuthenticated) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _prepareRestorationForAuthority();
+        });
+        return;
+      }
+
+      if (!accessAuthorityChanged(previous, next)) {
+        return;
+      }
       _selectedIndex = 0;
+      _clearRestorationForAuthority(next);
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         for (final navigator in _domainNavigators.values) {
           navigator.popToCurrentRoot();
         }
+        _prepareRestorationForAuthority();
       });
     });
 
@@ -654,28 +880,44 @@ class _HomeShellState extends ConsumerState<HomeShell>
           actions: const [MobileNotificationBell(), MobileAccountMenu()],
           destinations: [
             MobileRoleDestination(
-              label: 'Home',
-              icon: Symbols.home_rounded,
+              label: tenantShellDestinations[0].label,
+              bottomNavigationLabel:
+                  tenantShellDestinations[0].bottomNavigationLabel,
+              icon: tenantShellDestinations[0].icon,
               ownsScaffold: true,
               builder: (_) => _TenantHomeTab(user: user),
             ),
             MobileRoleDestination(
-              label: 'Messages',
-              icon: Symbols.forum_rounded,
+              label: tenantShellDestinations[1].label,
+              bottomNavigationLabel:
+                  tenantShellDestinations[1].bottomNavigationLabel,
+              icon: tenantShellDestinations[1].icon,
+              ownsScaffold: true,
+              builder: (_) => const _TenantAccountLeaseTab(),
+            ),
+            MobileRoleDestination(
+              label: tenantShellDestinations[2].label,
+              bottomNavigationLabel:
+                  tenantShellDestinations[2].bottomNavigationLabel,
+              icon: tenantShellDestinations[2].icon,
+              ownsScaffold: true,
+              builder: (_) => const TenantMaintenanceScreen(),
+            ),
+            MobileRoleDestination(
+              label: tenantShellDestinations[3].label,
+              bottomNavigationLabel:
+                  tenantShellDestinations[3].bottomNavigationLabel,
+              icon: tenantShellDestinations[3].icon,
               ownsScaffold: true,
               builder: (_) => const MessagesListScreen(),
             ),
             MobileRoleDestination(
-              label: 'Maintenance',
-              icon: Symbols.build_rounded,
+              label: tenantShellDestinations[4].label,
+              bottomNavigationLabel:
+                  tenantShellDestinations[4].bottomNavigationLabel,
+              icon: tenantShellDestinations[4].icon,
               ownsScaffold: true,
-              builder: (_) => const _TenantMaintenanceTab(),
-            ),
-            MobileRoleDestination(
-              label: 'More',
-              icon: Symbols.more_horiz_rounded,
-              ownsScaffold: true,
-              builder: (_) => const _TenantMoreTab(),
+              builder: (_) => const _TenantProfileTab(),
             ),
           ],
         ),
@@ -710,63 +952,68 @@ class _HomeShellState extends ConsumerState<HomeShell>
         ? null
         : _quickActionControllers[_tabIds.indexOf(landlordTabs[selectedIndex])];
 
-    return MobileShellNavigation(
-      controller: _shellNavigator,
-      child: Scaffold(
-        body: Column(
-          children: [
-            // App-wide "Sandbox mode" indicator: a slim bar above the tabs, shown only while the
-            // account is a seeded demo sandbox. Inert (zero-height) once the account is Live.
-            const _SandboxIndicator(),
-            Expanded(
-              child: IndexedStack(
-                index: selectedIndex,
-                children: tenantMode
-                    ? [
-                        _TenantHomeTab(user: user),
-                        const MessagesListScreen(),
-                        const _TenantMaintenanceTab(),
-                        const _TenantMoreTab(),
-                      ]
-                    : landlordTabs
-                          .map(
-                            (tab) => _buildLandlordTab(tab, user, landlordTabs),
-                          )
-                          .toList(growable: false),
+    return MobileRestorationScope(
+      controller: _restorationState,
+      child: MobileShellNavigation(
+        controller: _shellNavigator,
+        child: Scaffold(
+          body: Column(
+            children: [
+              // App-wide "Sandbox mode" indicator: a slim bar above the tabs, shown only while the
+              // account is a seeded demo sandbox. Inert (zero-height) once the account is Live.
+              const _SandboxIndicator(),
+              Expanded(
+                child: IndexedStack(
+                  index: selectedIndex,
+                  children: tenantMode
+                      ? [
+                          _TenantHomeTab(user: user),
+                          const _TenantAccountLeaseTab(),
+                          const TenantMaintenanceScreen(),
+                          const MessagesListScreen(),
+                          const _TenantProfileTab(),
+                        ]
+                      : landlordTabs
+                            .map(
+                              (tab) =>
+                                  _buildLandlordTab(tab, user, landlordTabs),
+                            )
+                            .toList(growable: false),
+                ),
               ),
-            ),
-          ],
-        ),
-        floatingActionButton: quickActionController == null
-            ? null
-            : AnimatedBuilder(
-                animation: quickActionController,
-                builder: (context, _) {
-                  if (quickActionController.hidden) {
-                    return const SizedBox.shrink();
-                  }
+            ],
+          ),
+          floatingActionButton: quickActionController == null
+              ? null
+              : AnimatedBuilder(
+                  animation: quickActionController,
+                  builder: (context, _) {
+                    if (quickActionController.hidden) {
+                      return const SizedBox.shrink();
+                    }
 
-                  return MobileQuickActionFab(
-                    heroTag: 'home-quick-action-fab-$selectedIndex',
-                    primaryActions: quickActionController.primaryActions,
-                    useNearestScope: false,
-                    onChat: _openAssistant,
-                    onRecord: _openRecord,
-                    onScan: quickActionController.scanAction ?? _openCapture,
-                  );
-                },
-              ),
-        floatingActionButtonLocation: quickActionController == null
-            ? null
-            : FloatingActionButtonLocation.endFloat,
-        bottomNavigationBar: _MorphNavBar(
-          tabs: tabs,
-          selectedIndex: selectedIndex,
-          centerGap: false,
-          onSelected: (index) => _handleBottomNavigationSelected(
-            index,
-            tenantMode: tenantMode,
-            landlordTabs: landlordTabs,
+                    return MobileQuickActionFab(
+                      heroTag: 'home-quick-action-fab-$selectedIndex',
+                      primaryActions: quickActionController.primaryActions,
+                      useNearestScope: false,
+                      onChat: _openAssistant,
+                      onRecord: _openRecord,
+                      onScan: quickActionController.scanAction ?? _openCapture,
+                    );
+                  },
+                ),
+          floatingActionButtonLocation: quickActionController == null
+              ? null
+              : FloatingActionButtonLocation.endFloat,
+          bottomNavigationBar: _MorphNavBar(
+            tabs: tabs,
+            selectedIndex: selectedIndex,
+            centerGap: false,
+            onSelected: (index) => _handleBottomNavigationSelected(
+              index,
+              tenantMode: tenantMode,
+              landlordTabs: landlordTabs,
+            ),
           ),
         ),
       ),
@@ -1000,6 +1247,23 @@ class _CompactNavItem extends StatelessWidget {
 // _HomeTab — the actual dashboard
 // ---------------------------------------------------------------------------
 
+Future<void>? _tenantSessionRecoveryInFlight;
+
+Future<void> _restoreTenantSessionSilently(WidgetRef ref) async {
+  final controller = ref.read(authControllerProvider.notifier);
+  final recovery = _tenantSessionRecoveryInFlight ??= controller
+      .restoreSession();
+  try {
+    await recovery;
+  } catch (_) {
+    // Best effort only. Callers keep a neutral retry state visible.
+  } finally {
+    if (identical(_tenantSessionRecoveryInFlight, recovery)) {
+      _tenantSessionRecoveryInFlight = null;
+    }
+  }
+}
+
 class _TenantHomeTab extends ConsumerStatefulWidget {
   const _TenantHomeTab({required this.user});
 
@@ -1069,12 +1333,17 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
       if (url.isEmpty) return;
       await _open(url);
     } on ApiException catch (e) {
+      if (e.statusCode == 401) {
+        unawaited(_restoreTenantSessionSilently(ref));
+      }
       messenger
         ..hideCurrentSnackBar()
         ..showSnackBar(
           SnackBar(
             content: Text(
-              e.statusCode == 503
+              e.statusCode == 401
+                  ? "We couldn't complete that right now. Please try again."
+                  : e.statusCode == 503
                   ? "Online payments aren't set up yet."
                   : e.message,
             ),
@@ -1102,12 +1371,17 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
         ref.invalidate(tenantAutopayStatusProvider(tenantAccountId));
       }
     } on ApiException catch (e) {
+      if (e.statusCode == 401) {
+        unawaited(_restoreTenantSessionSilently(ref));
+      }
       messenger
         ..hideCurrentSnackBar()
         ..showSnackBar(
           SnackBar(
             content: Text(
-              e.statusCode == 503
+              e.statusCode == 401
+                  ? "We couldn't complete that right now. Please try again."
+                  : e.statusCode == 503
                   ? "Online payments aren't set up yet."
                   : e.message,
             ),
@@ -1132,9 +1406,20 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
         ..hideCurrentSnackBar()
         ..showSnackBar(const SnackBar(content: Text('Autopay turned off.')));
     } on ApiException catch (e) {
+      if (e.statusCode == 401) {
+        unawaited(_restoreTenantSessionSilently(ref));
+      }
       messenger
         ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(e.message)));
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              e.statusCode == 401
+                  ? "We couldn't complete that right now. Please try again."
+                  : e.message,
+            ),
+          ),
+        );
     } finally {
       if (mounted) setState(() => _busyAutopayAccountId = null);
     }
@@ -1180,12 +1465,11 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
           error: (err, _) => ListView(
             padding: const EdgeInsets.all(20),
             children: [
-              Text(
-                'Could not load your dashboard.',
-                style: theme.textTheme.titleMedium,
+              _TenantLoadError(
+                error: err,
+                title: "We couldn't load your home.",
+                onRetry: () => ref.invalidate(tenantPortalSnapshotProvider),
               ),
-              const SizedBox(height: 8),
-              Text('$err'),
             ],
           ),
           data: (data) {
@@ -1257,7 +1541,7 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
                       : _money(account.pastDueAmount, account.currency),
                   subtitle: account == null
                       ? 'Choose an account'
-                      : '${account.pastDueCount} overdue item(s)',
+                      : tenantOverdueItemsLabel(account.pastDueCount),
                 ),
                 if (data.accounts.items.isNotEmpty)
                   _TenantCard(
@@ -1294,7 +1578,17 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
                       padding: EdgeInsets.all(16),
                       child: Center(child: CircularProgressIndicator()),
                     ),
-                    error: (err, _) => Text("Couldn't load charges: $err"),
+                    error: (err, _) => _TenantLoadError(
+                      error: err,
+                      title: "We couldn't load charges.",
+                      onRetry: () => ref.invalidate(
+                        tenantPortalChargesPageProvider((
+                          tenantAccountId: accountId!,
+                          skip: _chargeSkip,
+                          take: _chargePageSize,
+                        )),
+                      ),
+                    ),
                     data: (charges) => Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -1618,320 +1912,14 @@ String _shortDate(DateTime date) {
   return '${months[date.month - 1]} ${date.day}';
 }
 
-class _TenantMaintenanceTab extends ConsumerStatefulWidget {
-  const _TenantMaintenanceTab();
-
-  @override
-  ConsumerState<_TenantMaintenanceTab> createState() =>
-      _TenantMaintenanceTabState();
-}
-
-class _TenantMaintenanceTabState extends ConsumerState<_TenantMaintenanceTab> {
-  static const _workOrderPageSize = 20;
-  final _title = TextEditingController();
-  final _description = TextEditingController();
-  final _workOrderSearch = TextEditingController();
-  String _priority = 'Normal';
-  String _workOrderSearchTerm = '';
-  String _workOrderStatus = 'Open';
-  int _workOrderSkip = 0;
-  Uint8List? _photoBytes;
-  String? _photoName;
-  String? _photoContentType;
-  String? _photoUploadOperationId;
-  bool _saving = false;
-
-  @override
-  void dispose() {
-    _title.dispose();
-    _description.dispose();
-    _workOrderSearch.dispose();
-    super.dispose();
-  }
-
-  Future<void> _pickPhoto(ImageSource source) async {
-    final picked = await ImagePicker().pickImage(
-      source: source,
-      imageQuality: 80,
-      maxWidth: 1600,
-      maxHeight: 1600,
-    );
-    if (picked == null) return;
-    final bytes = Uint8List.fromList(await picked.readAsBytes());
-    if (!mounted) return;
-    setState(() {
-      _photoBytes = bytes;
-      _photoName = picked.name;
-      _photoContentType = _mimeFromExtension(picked.name);
-      _photoUploadOperationId = const Uuid().v4();
-    });
-  }
-
-  String _mimeFromExtension(String filename) {
-    final lower = filename.toLowerCase();
-    if (lower.endsWith('.png')) return 'image/png';
-    if (lower.endsWith('.webp')) return 'image/webp';
-    if (lower.endsWith('.heic')) return 'image/heic';
-    return 'image/jpeg';
-  }
-
-  Future<void> _submit() async {
-    if (_title.text.trim().isEmpty || _description.text.trim().isEmpty) return;
-    setState(() => _saving = true);
-    try {
-      final repo = ref.read(tenantPortalRepositoryProvider);
-      final created = await repo.createWorkOrder(
-        title: _title.text.trim(),
-        description: _description.text.trim(),
-        priority: _priority,
-      );
-      final photoBytes = _photoBytes;
-      final photoName = _photoName;
-      final photoContentType = _photoContentType;
-      if (photoBytes != null && photoName != null && photoContentType != null) {
-        await repo.uploadWorkOrderPhoto(
-          workOrderId: created.id,
-          bytes: photoBytes,
-          fileName: photoName,
-          contentType: photoContentType,
-          clientOperationId: _photoUploadOperationId ??= const Uuid().v4(),
-        );
-      }
-      ref.invalidate(tenantPortalSnapshotProvider);
-      ref.invalidate(tenantPortalWorkOrdersPageProvider);
-      _title.clear();
-      _description.clear();
-      _photoBytes = null;
-      _photoName = null;
-      _photoContentType = null;
-      _photoUploadOperationId = null;
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Maintenance request submitted.')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
+class _TenantAccountLeaseTab extends StatelessWidget {
+  const _TenantAccountLeaseTab();
 
   @override
   Widget build(BuildContext context) {
-    final workOrders = ref.watch(
-      tenantPortalWorkOrdersPageProvider((
-        skip: _workOrderSkip,
-        take: _workOrderPageSize,
-        search: _workOrderSearchTerm,
-        status: _workOrderStatus == 'Open' ? null : _workOrderStatus,
-      )),
-    );
-
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Maintenance'),
-        actions: const [MobileNotificationBell(), MobileAccountMenu()],
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          TextField(
-            controller: _workOrderSearch,
-            textInputAction: TextInputAction.search,
-            decoration: InputDecoration(
-              labelText: 'Search requests',
-              prefixIcon: const Icon(Icons.search),
-              suffixIcon: IconButton(
-                tooltip: 'Search',
-                icon: const Icon(Icons.arrow_forward),
-                onPressed: () => setState(() {
-                  _workOrderSearchTerm = _workOrderSearch.text.trim();
-                  _workOrderSkip = 0;
-                }),
-              ),
-            ),
-            onSubmitted: (value) => setState(() {
-              _workOrderSearchTerm = value.trim();
-              _workOrderSkip = 0;
-            }),
-          ),
-          const SizedBox(height: 8),
-          DropdownButtonFormField<String>(
-            initialValue: _workOrderStatus,
-            decoration: const InputDecoration(labelText: 'Status'),
-            items:
-                const [
-                      'Open',
-                      'New',
-                      'Scheduled',
-                      'InProgress',
-                      'WaitingParts',
-                      'OnHold',
-                      'Completed',
-                      'Cancelled',
-                      'Archived',
-                    ]
-                    .map(
-                      (value) =>
-                          DropdownMenuItem(value: value, child: Text(value)),
-                    )
-                    .toList(),
-            onChanged: (value) => setState(() {
-              _workOrderStatus = value ?? 'Open';
-              _workOrderSkip = 0;
-            }),
-          ),
-          const SizedBox(height: 12),
-          workOrders.when(
-            loading: () => const Center(child: CircularProgressIndicator()),
-            error: (error, _) => Card(
-              child: ListTile(
-                leading: const Icon(Icons.error_outline),
-                title: const Text('Requests could not be loaded'),
-                subtitle: Text(error.toString()),
-                trailing: IconButton(
-                  tooltip: 'Retry',
-                  icon: const Icon(Icons.refresh),
-                  onPressed: () =>
-                      ref.invalidate(tenantPortalWorkOrdersPageProvider),
-                ),
-              ),
-            ),
-            data: (page) {
-              if (page.items.isEmpty) {
-                return const Text(
-                  'No maintenance requests match these filters.',
-                );
-              }
-              return Column(
-                children: [
-                  for (final workOrder in page.items)
-                    Card(
-                      child: ListTile(
-                        titleAlignment: ListTileTitleAlignment.center,
-                        title: Text(workOrder.title),
-                        subtitle: Text(
-                          '${workOrder.status} · ${workOrder.priority}',
-                        ),
-                        trailing: const Icon(Icons.chevron_right),
-                        onTap: () => Navigator.of(context).push<void>(
-                          MaterialPageRoute<void>(
-                            builder: (_) => TenantWorkOrderDetailScreen(
-                              workOrderId: workOrder.id,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  if (page.totalCount > page.take)
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        OutlinedButton(
-                          onPressed: page.skip <= 0
-                              ? null
-                              : () => setState(() {
-                                  _workOrderSkip = (_workOrderSkip - page.take)
-                                      .clamp(0, page.totalCount)
-                                      .toInt();
-                                }),
-                          child: const Text('Previous'),
-                        ),
-                        Text(
-                          '${page.skip + 1}–${(page.skip + page.items.length).clamp(0, page.totalCount)} of ${page.totalCount}',
-                        ),
-                        OutlinedButton(
-                          onPressed: page.skip + page.take >= page.totalCount
-                              ? null
-                              : () => setState(() {
-                                  _workOrderSkip += page.take;
-                                }),
-                          child: const Text('Next'),
-                        ),
-                      ],
-                    ),
-                ],
-              );
-            },
-          ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: _title,
-            decoration: const InputDecoration(labelText: 'Issue title'),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _description,
-            minLines: 3,
-            maxLines: 5,
-            decoration: const InputDecoration(labelText: 'Description'),
-          ),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<String>(
-            initialValue: _priority,
-            decoration: const InputDecoration(labelText: 'Priority'),
-            items: const [
-              'Low',
-              'Normal',
-              'High',
-              'Emergency',
-            ].map((p) => DropdownMenuItem(value: p, child: Text(p))).toList(),
-            onChanged: (value) => setState(() => _priority = value ?? 'Normal'),
-          ),
-          const SizedBox(height: 12),
-          if (_photoBytes != null) ...[
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Image.memory(
-                _photoBytes!,
-                height: 140,
-                width: double.infinity,
-                fit: BoxFit.cover,
-              ),
-            ),
-            const SizedBox(height: 8),
-          ],
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _saving
-                      ? null
-                      : () => _pickPhoto(ImageSource.camera),
-                  icon: const Icon(Icons.camera_alt_outlined),
-                  label: Text(_photoBytes == null ? 'Take photo' : 'Retake'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _saving
-                      ? null
-                      : () => _pickPhoto(ImageSource.gallery),
-                  icon: const Icon(Icons.photo_library_outlined),
-                  label: const Text('Choose'),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          FilledButton(
-            onPressed: _saving ? null : _submit,
-            child: Text(_saving ? 'Submitting...' : 'Submit Request'),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _TenantMoreTab extends ConsumerWidget {
-  const _TenantMoreTab();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('More'),
+        title: const Text('Account & lease'),
         actions: const [MobileNotificationBell(), MobileAccountMenu()],
       ),
       body: ListView(
@@ -1960,6 +1948,24 @@ class _TenantMoreTab extends ConsumerWidget {
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TenantProfileTab extends ConsumerWidget {
+  const _TenantProfileTab();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Profile'),
+        actions: const [MobileNotificationBell(), MobileAccountMenu()],
+      ),
+      body: ListView(
+        children: [
           ListTile(
             titleAlignment: ListTileTitleAlignment.center,
             leading: const Icon(Icons.event_outlined),
@@ -1974,6 +1980,14 @@ class _TenantMoreTab extends ConsumerWidget {
           ),
           ListTile(
             titleAlignment: ListTileTitleAlignment.center,
+            leading: const Icon(Icons.manage_accounts_outlined),
+            title: const Text('Account settings'),
+            subtitle: const Text('Sign-in, security and personal alerts.'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/settings'),
+          ),
+          ListTile(
+            titleAlignment: ListTileTitleAlignment.center,
             leading: const Icon(Icons.logout_outlined),
             title: const Text('Sign out'),
             onTap: () async {
@@ -1981,6 +1995,118 @@ class _TenantMoreTab extends ConsumerWidget {
             },
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _TenantLoadError extends ConsumerStatefulWidget {
+  const _TenantLoadError({
+    required this.error,
+    required this.title,
+    required this.onRetry,
+  });
+
+  final Object error;
+  final String title;
+  final VoidCallback onRetry;
+
+  @override
+  ConsumerState<_TenantLoadError> createState() => _TenantLoadErrorState();
+}
+
+class _TenantLoadErrorState extends ConsumerState<_TenantLoadError> {
+  bool _recoveryAttempted = false;
+  bool _recovering = false;
+
+  bool get _sessionExpired {
+    final error = widget.error;
+    return error is ApiException && error.statusCode == 401;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleSilentSessionRecovery();
+  }
+
+  @override
+  void didUpdateWidget(covariant _TenantLoadError oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (identical(oldWidget.error, widget.error)) return;
+    _recoveryAttempted = false;
+    _scheduleSilentSessionRecovery();
+  }
+
+  void _scheduleSilentSessionRecovery() {
+    if (!_sessionExpired || _recoveryAttempted) return;
+    _recoveryAttempted = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_recoverSession());
+    });
+  }
+
+  Future<void> _recoverSession() async {
+    if (_recovering) return;
+    setState(() => _recovering = true);
+
+    try {
+      await _restoreTenantSessionSilently(ref);
+      if (!mounted) return;
+      if (ref.read(authControllerProvider) is AuthStateAuthenticated) {
+        widget.onRetry();
+      }
+    } finally {
+      if (mounted) setState(() => _recovering = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final message = _sessionExpired
+        ? _recovering
+              ? "We're reconnecting your account."
+              : "We couldn't reconnect your account. Please try again."
+        : 'Please check your connection and try again.';
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.cloud_off_outlined, color: colorScheme.onSurfaceVariant),
+            const SizedBox(height: 12),
+            Text(widget.title, style: theme.textTheme.titleMedium),
+            const SizedBox(height: 4),
+            Text(
+              message,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _recovering
+                  ? null
+                  : _sessionExpired
+                  ? _recoverSession
+                  : widget.onRetry,
+              icon: _recovering
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh),
+              label: _recovering
+                  ? const Text('Reconnecting…')
+                  : const Text('Try again'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2043,6 +2169,9 @@ class _TenantCard extends StatelessWidget {
     );
   }
 }
+
+String tenantOverdueItemsLabel(int count) =>
+    '$count overdue ${count == 1 ? 'item' : 'items'}';
 
 String _money(num value, [String currency = 'USD']) {
   final amount = value

@@ -1,3 +1,5 @@
+import type { WorkspaceExperience } from '$lib/types/user';
+
 export type NotificationSeverity =
   | "Info"
   | "Success"
@@ -5,13 +7,58 @@ export type NotificationSeverity =
   | "Error"
   | "Critical";
 
+export type NotificationDestination =
+  | "Home"
+  | "Notifications"
+  | "Rentals"
+  | "Owners"
+  | "Money"
+  | "Work"
+  | "Inbox"
+  | "UnitSummary"
+  | "UnitTenantLease"
+  | "UnitMoney"
+  | "UnitMaintenance"
+  | "UnitRecords"
+  | "TenantLedgerEntry"
+  | "Expense"
+  | "ScanDraft"
+  | "Message"
+  | "WorkOrder"
+  | "TechnicianWork"
+  | "LeasingRental"
+  | "LeasingApplication"
+  | "LeasingAppointment"
+  | "LeasingConversation"
+  | "LeasingMoveIn";
+
+export type NotificationAction = "Open" | "Review" | "Resolve";
+
+export interface NotificationResource {
+  kind: string;
+  id: number;
+}
+
+export interface NotificationNavigationIntent {
+  experience: WorkspaceExperience;
+  destination: NotificationDestination;
+  accessContextId: number;
+  accessRevision: number;
+  resource: NotificationResource | null;
+  parentResource: NotificationResource | null;
+  childResource: NotificationResource | null;
+  action: NotificationAction;
+  expiresAtUtc: string;
+  fallbackDestination: NotificationDestination;
+}
+
 export interface NotificationItem {
   id: number;
   type: string;
   title: string;
   message: string;
   severity: NotificationSeverity;
-  actionUrl?: string | null;
+  navigationIntent?: NotificationNavigationIntent | null;
   relatedEntityType?: string | null;
   relatedEntityId?: number | null;
   isRead: boolean;

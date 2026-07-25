@@ -598,7 +598,6 @@ public sealed class AtomicNotificationMutationHandler
             Title = request.Title.Trim(),
             Message = request.Message.Trim(),
             Severity = NormalizeSeverity(request.Severity),
-            ActionUrl = string.IsNullOrWhiteSpace(request.ActionUrl) ? null : request.ActionUrl.Trim(),
             CreatedAt = now,
         };
         attempt.Persistence.Add(notification);
@@ -941,7 +940,6 @@ public sealed class AtomicNotificationMutationHandler
                 Title = notification.Title,
                 Message = notification.Message,
                 Severity = notification.Severity,
-                ActionUrl = notification.ActionUrl,
                 RelatedEntityType = notification.RelatedEntityType,
                 RelatedEntityId = notification.RelatedEntityId,
                 IsRead = false,

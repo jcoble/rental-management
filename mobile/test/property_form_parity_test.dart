@@ -156,7 +156,12 @@ void main() {
         containsPair('rentalStructure', 'SingleRental'),
       );
       expect(repo.createdPayload, containsPair('status', 'UnderMaintenance'));
-      expect(repo.createdPayload, containsPair('ownerEntityId', 42));
+      final ownerships = repo.createdPayload!['ownerships'] as List<dynamic>;
+      expect(ownerships, hasLength(1));
+      final ownership = ownerships.single as Map<String, dynamic>;
+      expect(ownership, containsPair('ownerEntityId', 42));
+      expect(ownership, containsPair('ownershipSharePercent', 100));
+      expect(repo.createdPayload, containsPair('clearOwnership', false));
       expect(repo.createdPayload, containsPair('addressLine2', 'Suite 12'));
       expect(repo.createdPayload, containsPair('yearBuilt', 1998));
       expect(repo.createdPayload, containsPair('managementFeePercent', 8.5));
@@ -473,7 +478,17 @@ Property _property({
   return Property(
     id: 1,
     portfolioId: 1,
-    ownerEntityId: 42,
+    ownerships: [
+      PropertyOwnership(
+        id: 17,
+        ownerEntityId: 42,
+        ownerName: 'North Coast Holdings',
+        ownershipSharePercent: 100,
+        effectiveFromUtc: DateTime(2026),
+        statementRecipientName: 'North Coast Holdings',
+        payeeName: 'North Coast Holdings',
+      ),
+    ],
     name: 'Vineyard Flats',
     type: type,
     rentalStructure: rentalStructure,
@@ -486,7 +501,6 @@ Property _property({
     yearBuilt: 1998,
     managementFeePercent: 8.5,
     notes: 'North building has separate utility meters.',
-    ownerName: 'North Coast Holdings',
     unitCount: 0,
     createdAt: DateTime(2026),
     updatedAt: DateTime(2026),

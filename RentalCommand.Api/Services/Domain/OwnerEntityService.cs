@@ -138,6 +138,7 @@ public class OwnerEntityService : IOwnerEntityService
         IQueryable<OwnerEntity> query,
         IQueryable<Property> authorizedProperties)
     {
+        var now = _timeProvider.UtcNow();
         return query.Select(o => new OwnerEntityResponse
         {
             Id = o.Id,
@@ -150,10 +151,14 @@ public class OwnerEntityService : IOwnerEntityService
             City = o.City,
             State = o.State,
             PostalCode = o.PostalCode,
-            Address = o.Address,
             Phone = o.Phone,
             Email = o.Email,
-            AssignedPropertyCount = authorizedProperties.Count(p => p.OwnerEntityId == o.Id),
+            AssignedPropertyCount = _db.PropertyOwnerships.Count(ownership =>
+                ownership.PortfolioId == o.PortfolioId
+                && ownership.OwnerEntityId == o.Id
+                && ownership.EffectiveFromUtc <= now
+                && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now)
+                && authorizedProperties.Any(property => property.Id == ownership.PropertyId)),
             IsPrimary = o.IsPrimary,
             CreatedAt = o.CreatedAt,
             UpdatedAt = o.UpdatedAt,
@@ -186,6 +191,7 @@ public class OwnerEntityService : IOwnerEntityService
 
     private IQueryable<OwnerEntity> AuthorizedOwnersForRead(WorkspaceReadScope scope)
     {
+        var now = _timeProvider.UtcNow();
         var authorizedProperties = AuthorizedProperties(scope, CapabilityKeys.MoneyOwnerReportsRead);
         var allProperties = _db.AuthorizedWorkspaceAssignments(
             scope,
@@ -197,11 +203,17 @@ public class OwnerEntityService : IOwnerEntityService
             .AsNoTracking()
             .Where(owner =>
                 owner.PortfolioId == scope.PortfolioId &&
-                (allProperties.Any() || authorizedProperties.Any(property => property.OwnerEntityId == owner.Id)));
+                (allProperties.Any() || _db.PropertyOwnerships.Any(ownership =>
+                    ownership.PortfolioId == scope.PortfolioId
+                    && ownership.OwnerEntityId == owner.Id
+                    && ownership.EffectiveFromUtc <= now
+                    && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now)
+                    && authorizedProperties.Any(property => property.Id == ownership.PropertyId))));
     }
 
     private IQueryable<OwnerEntity> AuthorizedOwnersForMutation(WorkspaceReadScope scope, string capabilityKey)
     {
+        var now = _timeProvider.UtcNow();
         var authorizedProperties = AuthorizedProperties(scope, capabilityKey);
         var allProperties = _db.AuthorizedWorkspaceAssignments(
             scope,
@@ -212,11 +224,16 @@ public class OwnerEntityService : IOwnerEntityService
         return _db.OwnerEntities.Where(owner =>
             owner.PortfolioId == scope.PortfolioId &&
             (allProperties.Any() ||
-             (_db.Properties.Any(property =>
-                  property.PortfolioId == scope.PortfolioId && property.OwnerEntityId == owner.Id) &&
-              !_db.Properties.Any(property =>
-                  property.PortfolioId == scope.PortfolioId &&
-                  property.OwnerEntityId == owner.Id &&
-                  !authorizedProperties.Any(authorized => authorized.Id == property.Id)))));
+             (_db.PropertyOwnerships.Any(ownership =>
+                  ownership.PortfolioId == scope.PortfolioId
+                  && ownership.OwnerEntityId == owner.Id
+                  && ownership.EffectiveFromUtc <= now
+                  && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now)) &&
+              !_db.PropertyOwnerships.Any(ownership =>
+                  ownership.PortfolioId == scope.PortfolioId
+                  && ownership.OwnerEntityId == owner.Id
+                  && ownership.EffectiveFromUtc <= now
+                  && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now)
+                  && !authorizedProperties.Any(authorized => authorized.Id == ownership.PropertyId)))));
     }
 }

@@ -82,7 +82,7 @@ public class ScanController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<ActionResult<ScanCreatedResponse>> Upload(
         IFormFile file,
-        [FromForm] string targetEntityType,
+        [FromForm] string? targetEntityType,
         [FromForm] string clientOperationId,
         CancellationToken ct)
     {
@@ -93,20 +93,21 @@ public class ScanController : ManagementControllerBase
 
         // When a targetEntityType is explicitly provided it must be a recognised value.
         // Empty/null is allowed — the LLM worker will classify it during processing.
-        if (!string.IsNullOrEmpty(targetEntityType) && !ValidTargets.Contains(targetEntityType))
+        var target = targetEntityType?.Trim() ?? string.Empty;
+        if (!string.IsNullOrEmpty(target) && !ValidTargets.Contains(target))
         {
-            return BadRequest(new { error = $"targetEntityType '{targetEntityType}' is not valid. Allowed values: Expense, Payment, WorkOrder, LeaseAgreement, Application, Loan (or omit to auto-classify)." });
+            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, LeaseAgreement, Application, Loan (or omit to auto-classify)." });
         }
-        if (!string.IsNullOrEmpty(targetEntityType))
-            targetEntityType = ValidTargets.First(target =>
-                string.Equals(target, targetEntityType, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrEmpty(target))
+            target = ValidTargets.First(validTarget =>
+                string.Equals(validTarget, target, StringComparison.OrdinalIgnoreCase));
 
         using var ms = new MemoryStream();
         await file.CopyToAsync(ms, ct);
         var bytes = ms.ToArray();
 
         var captureContext = await BuildCaptureContextAsync(ct);
-        if (!await CanCaptureAsync(targetEntityType, captureContext, ct))
+        if (!await CanCaptureAsync(target, captureContext, ct))
             return Forbid();
 
         try
@@ -114,7 +115,7 @@ public class ScanController : ManagementControllerBase
             var result = await _uploads.UploadAsync(
                 GetWorkspaceReadScope(),
                 clientOperationId,
-                targetEntityType,
+                target,
                 createBatch: false,
                 batchName: null,
                 captureContext,
@@ -425,27 +426,38 @@ public class ScanController : ManagementControllerBase
 
     private IQueryable<ScanBatchSummaryQueryRow> QueryBatchSummaryRows(WorkspaceReadScope scope)
     {
-        var authorizedDrafts = AuthorizedDrafts(scope);
+        var authorizedRollups = AuthorizedDrafts(scope)
+            .Where(draft => draft.BatchId != null)
+            .GroupBy(draft => draft.BatchId!.Value)
+            .Select(group => new
+            {
+                BatchId = group.Key,
+                Total = group.Count(),
+                Pending = group.Count(draft =>
+                    draft.Status == "Pending" || draft.Status == "Processing" || draft.Status == "Confirming"),
+                Reviewing = group.Count(draft => draft.Status == "Reviewing"),
+                Confirmed = group.Count(draft => draft.Status == "Confirmed"),
+                Rejected = group.Count(draft => draft.Status == "Rejected"),
+                Failed = group.Count(draft => draft.Status == "Failed"),
+            });
+
         return
-        _db.ScanBatches
-            .AsNoTracking()
-            .Where(batch => batch.PortfolioId == scope.PortfolioId
-                && authorizedDrafts.Any(draft => draft.BatchId == batch.Id))
-            .Select(batch => new ScanBatchSummaryQueryRow
+            from batch in _db.ScanBatches.AsNoTracking()
+            join rollup in authorizedRollups on batch.Id equals rollup.BatchId
+            where batch.PortfolioId == scope.PortfolioId
+            select new ScanBatchSummaryQueryRow
             {
                 Id = batch.Id,
                 Name = batch.Name,
                 TargetEntityType = batch.TargetEntityType,
                 CreatedAtUtc = batch.CreatedAtUtc,
-                Total = authorizedDrafts.Count(d => d.BatchId == batch.Id),
-                Pending = authorizedDrafts.Count(d =>
-                    d.BatchId == batch.Id &&
-                    (d.Status == "Pending" || d.Status == "Processing" || d.Status == "Confirming")),
-                Reviewing = authorizedDrafts.Count(d => d.BatchId == batch.Id && d.Status == "Reviewing"),
-                Confirmed = authorizedDrafts.Count(d => d.BatchId == batch.Id && d.Status == "Confirmed"),
-                Rejected = authorizedDrafts.Count(d => d.BatchId == batch.Id && d.Status == "Rejected"),
-                Failed = authorizedDrafts.Count(d => d.BatchId == batch.Id && d.Status == "Failed"),
-            });
+                Total = rollup.Total,
+                Pending = rollup.Pending,
+                Reviewing = rollup.Reviewing,
+                Confirmed = rollup.Confirmed,
+                Rejected = rollup.Rejected,
+                Failed = rollup.Failed,
+            };
     }
 
     private IQueryable<ScanDraft> AuthorizedDrafts(WorkspaceReadScope scope) =>

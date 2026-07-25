@@ -114,12 +114,28 @@ public class PortalService : IPortalService
                     RentDueDay = agreement.RentDueDay,
                     Currency = agreement.Currency,
                     FullyExecutedAtUtc = agreement.FullyExecutedAtUtc,
-                    ExecutedStoredFileId = agreement.ExecutedArtifact == null
+                    ExecutedDocumentAvailable = agreement.FullyExecutedAtUtc != null
+                        && agreement.VoidedAtUtc == null
+                        && agreement.ExecutedArtifact != null
+                        && agreement.ExecutedArtifact.ArtifactKind == LegalDocumentArtifactKind.ExecutedAgreement
+                        && agreement.ExecutedArtifact.StoredFile != null
+                        && agreement.ExecutedArtifact.StoredFile.DeletedAt == null,
+                    ExecutedDocumentFileName = agreement.FullyExecutedAtUtc == null
+                        || agreement.VoidedAtUtc != null
+                        || agreement.ExecutedArtifact == null
                         || agreement.ExecutedArtifact.ArtifactKind != LegalDocumentArtifactKind.ExecutedAgreement
                         || agreement.ExecutedArtifact.StoredFile == null
                         || agreement.ExecutedArtifact.StoredFile.DeletedAt != null
                             ? null
-                            : agreement.ExecutedArtifact.StoredFileId,
+                            : agreement.ExecutedArtifact.FileName,
+                    ExecutedDocumentContentType = agreement.FullyExecutedAtUtc == null
+                        || agreement.VoidedAtUtc != null
+                        || agreement.ExecutedArtifact == null
+                        || agreement.ExecutedArtifact.ArtifactKind != LegalDocumentArtifactKind.ExecutedAgreement
+                        || agreement.ExecutedArtifact.StoredFile == null
+                        || agreement.ExecutedArtifact.StoredFile.DeletedAt != null
+                            ? null
+                            : agreement.ExecutedArtifact.ContentType,
                 },
         };
 
@@ -357,13 +373,31 @@ public class PortalService : IPortalService
                         RentDueDay = agreement.RentDueDay,
                         Currency = agreement.Currency,
                         FullyExecutedAtUtc = agreement.FullyExecutedAtUtc,
-                        ExecutedStoredFileId = agreement.ExecutedArtifact == null
+                        ExecutedDocumentAvailable = agreement.FullyExecutedAtUtc != null
+                            && agreement.VoidedAtUtc == null
+                            && agreement.ExecutedArtifact != null
+                            && agreement.ExecutedArtifact.ArtifactKind
+                                == LegalDocumentArtifactKind.ExecutedAgreement
+                            && agreement.ExecutedArtifact.StoredFile != null
+                            && agreement.ExecutedArtifact.StoredFile.DeletedAt == null,
+                        ExecutedDocumentFileName = agreement.FullyExecutedAtUtc == null
+                            || agreement.VoidedAtUtc != null
+                            || agreement.ExecutedArtifact == null
                             || agreement.ExecutedArtifact.ArtifactKind
                                 != LegalDocumentArtifactKind.ExecutedAgreement
                             || agreement.ExecutedArtifact.StoredFile == null
                             || agreement.ExecutedArtifact.StoredFile.DeletedAt != null
                                 ? null
-                                : agreement.ExecutedArtifact.StoredFileId,
+                                : agreement.ExecutedArtifact.FileName,
+                        ExecutedDocumentContentType = agreement.FullyExecutedAtUtc == null
+                            || agreement.VoidedAtUtc != null
+                            || agreement.ExecutedArtifact == null
+                            || agreement.ExecutedArtifact.ArtifactKind
+                                != LegalDocumentArtifactKind.ExecutedAgreement
+                            || agreement.ExecutedArtifact.StoredFile == null
+                            || agreement.ExecutedArtifact.StoredFile.DeletedAt != null
+                                ? null
+                                : agreement.ExecutedArtifact.ContentType,
                     },
                 Deposit = depositAccount == null || depositBalance.IsPresent != true
                     ? null
@@ -490,6 +524,8 @@ public class PortalService : IPortalService
                 }
                 equals new { entry.PortfolioId, entry.TenantAccountId, entry.Id }
             where account.Id == tenantAccountId
+                && balance.OpenAmount > 0m
+                && balance.DueOn <= balance.BusinessDate
             select new PortalTenantChargeResponse
             {
                 TenantAccountId = account.Id,
@@ -881,13 +917,13 @@ public class PortalService : IPortalService
                 || (w.UnitNumber != null && EF.Functions.ILike(w.UnitNumber, search)));
         }
 
-        if (query.From is { } from)
+        var (fromUtc, toUtcExclusive) = ListDateRange.UtcDay(query.From, query.To);
+        if (fromUtc is { } from)
         {
             rows = rows.Where(w => w.RequestedAt >= from);
         }
-        if (query.To is { } to)
+        if (toUtcExclusive is { } exclusiveEnd)
         {
-            var exclusiveEnd = to.Date.AddDays(1);
             rows = rows.Where(w => w.RequestedAt < exclusiveEnd);
         }
 

@@ -68,6 +68,17 @@ final _tenantAccountOptionProvider = FutureProvider.autoDispose
       }
     });
 
+typedef _ScanTargetQuery = ({String search, int skip});
+
+/// Holds one authorized, server-filtered and server-paged set of Unit targets.
+final _scanTargetOptionsProvider = FutureProvider.autoDispose
+    .family<ScanUnitTargetOptionPage, _ScanTargetQuery>((ref, query) async {
+      ref.keepAlive();
+      return ref
+          .read(scanRepositoryProvider)
+          .listTargetOptions(search: query.search, skip: query.skip);
+    });
+
 /// Properties for the in-portfolio property picker (Lease drafts only).
 final _propertiesProvider = FutureProvider.autoDispose<List<Property>>((
   ref,
@@ -75,13 +86,6 @@ final _propertiesProvider = FutureProvider.autoDispose<List<Property>>((
   ref.keepAlive();
   return ref.read(propertiesRepositoryProvider).listProperties();
 });
-
-/// Units for the selected property, scoping the unit picker (Lease drafts only).
-final _unitsForPropertyProvider = FutureProvider.autoDispose
-    .family<List<Unit>, int>((ref, propertyId) async {
-      ref.keepAlive();
-      return ref.read(propertiesRepositoryProvider).listUnits(propertyId);
-    });
 
 /// Tenants for the optional tenant picker (Lease drafts only).
 final _tenantsProvider = FutureProvider.autoDispose<List<Tenant>>((ref) async {
@@ -2254,8 +2258,10 @@ const _pickerDecoration = InputDecoration(
   contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
 );
 
-/// Link-to-existing property → unit pickers (both required in this mode).
-class _LinkPropertyFields extends ConsumerWidget {
+/// Remotely searched and paged Unit target picker. Selecting a Unit supplies
+/// both canonical identifiers, so the client never preloads Properties and
+/// then follows up with a per-Property Unit request.
+class _LinkPropertyFields extends ConsumerStatefulWidget {
   const _LinkPropertyFields({
     required this.selectedPropertyId,
     required this.onPropertySelected,
@@ -2269,70 +2275,124 @@ class _LinkPropertyFields extends ConsumerWidget {
   final ValueChanged<int?> onUnitSelected;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_LinkPropertyFields> createState() =>
+      _LinkPropertyFieldsState();
+}
+
+class _LinkPropertyFieldsState extends ConsumerState<_LinkPropertyFields> {
+  final _searchController = TextEditingController();
+  int _skip = 0;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _search() {
+    setState(() => _skip = 0);
+  }
+
+  void _select(ScanUnitTargetOption target) {
+    widget.onPropertySelected(target.propertyId);
+    widget.onUnitSelected(target.unitId);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final propertiesAsync = ref.watch(_propertiesProvider);
+    final targetsAsync = ref.watch(
+      _scanTargetOptionsProvider((
+        search: _searchController.text.trim(),
+        skip: _skip,
+      )),
+    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // ── Property (required) ──────────────────────────────────────────
-        _PickerLabel(text: 'Property', required: true),
-        propertiesAsync.when(
+        _PickerLabel(text: 'Property and Unit', required: true),
+        SearchBar(
+          controller: _searchController,
+          hintText: 'Search property or Unit',
+          leading: const Icon(Icons.search),
+          onSubmitted: (_) => _search(),
+        ),
+        const SizedBox(height: 8),
+        targetsAsync.when(
           loading: () => const LinearProgressIndicator(),
           error: (e, _) => Text(
-            'Could not load properties.',
+            'Could not load Unit targets.',
             style: TextStyle(color: colorScheme.error),
           ),
-          data: (properties) {
-            if (properties.isEmpty) {
+          data: (page) {
+            if (page.items.isEmpty) {
               return Text(
-                'You have no properties yet — switch to "Create new" to add one '
-                'from this lease.',
+                'No matching Units. Search again or switch to "Create new".',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: colorScheme.error,
                 ),
               );
             }
-            final ids = properties.map((p) => p.id).toSet();
-            final value = ids.contains(selectedPropertyId)
-                ? selectedPropertyId
-                : null;
-            return DropdownButtonFormField<int>(
-              initialValue: value,
-              hint: const Text('Select a property'),
-              isExpanded: true,
-              decoration: _pickerDecoration,
-              items: properties
-                  .map(
-                    (p) => DropdownMenuItem(
-                      value: p.id,
-                      child: Text(p.name, overflow: TextOverflow.ellipsis),
-                    ),
-                  )
-                  .toList(),
-              onChanged: onPropertySelected,
+            return Column(
+              children: [
+                RadioGroup<int>(
+                  groupValue: widget.selectedUnitId,
+                  onChanged: (unitId) {
+                    if (unitId == null) return;
+                    _select(
+                      page.items.firstWhere(
+                        (target) => target.unitId == unitId,
+                      ),
+                    );
+                  },
+                  child: Column(
+                    children: [
+                      for (final target in page.items)
+                        RadioListTile<int>(
+                          value: target.unitId,
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(
+                            target.propertyName,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(
+                            'Unit ${target.unitNumber}',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                if (page.totalCount > page.take)
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      OutlinedButton(
+                        onPressed: page.hasPrevious
+                            ? () => setState(
+                                () => _skip = page.skip > page.take
+                                    ? page.skip - page.take
+                                    : 0,
+                              )
+                            : null,
+                        child: const Text('Previous'),
+                      ),
+                      const SizedBox(width: 8),
+                      OutlinedButton(
+                        onPressed: page.hasNext
+                            ? () =>
+                                  setState(() => _skip = page.skip + page.take)
+                            : null,
+                        child: const Text('Next'),
+                      ),
+                    ],
+                  ),
+              ],
             );
           },
         ),
-        const SizedBox(height: 14),
-
-        // ── Unit (required, scoped to property) ──────────────────────────
-        _PickerLabel(text: 'Unit', required: true),
-        if (selectedPropertyId == null)
-          Text(
-            'Choose a property first.',
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: colorScheme.onSurfaceVariant,
-            ),
-          )
-        else
-          _UnitPicker(
-            propertyId: selectedPropertyId!,
-            selectedUnitId: selectedUnitId,
-            onUnitSelected: onUnitSelected,
-          ),
       ],
     );
   }
@@ -2565,64 +2625,6 @@ class _PlainFieldInputState extends State<_PlainFieldInput> {
           vertical: 10,
         ),
       ),
-    );
-  }
-}
-
-/// Unit dropdown scoped to a single property; rebuilds when [propertyId] changes.
-class _UnitPicker extends ConsumerWidget {
-  const _UnitPicker({
-    required this.propertyId,
-    required this.selectedUnitId,
-    required this.onUnitSelected,
-  });
-
-  final int propertyId;
-  final int? selectedUnitId;
-  final ValueChanged<int?> onUnitSelected;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final unitsAsync = ref.watch(_unitsForPropertyProvider(propertyId));
-
-    return unitsAsync.when(
-      loading: () => const LinearProgressIndicator(),
-      error: (e, _) => Text(
-        'Could not load units.',
-        style: TextStyle(color: colorScheme.error),
-      ),
-      data: (units) {
-        if (units.isEmpty) {
-          return Text(
-            'This property has no units yet.',
-            style: TextStyle(color: colorScheme.error, fontSize: 13),
-          );
-        }
-        final ids = units.map((u) => u.id).toSet();
-        final value = ids.contains(selectedUnitId) ? selectedUnitId : null;
-        return DropdownButtonFormField<int>(
-          initialValue: value,
-          hint: const Text('Select a unit'),
-          isExpanded: true,
-          decoration: const InputDecoration(
-            border: OutlineInputBorder(),
-            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          ),
-          items: units
-              .map(
-                (u) => DropdownMenuItem(
-                  value: u.id,
-                  child: Text(
-                    'Unit ${u.unitNumber}',
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              )
-              .toList(),
-          onChanged: onUnitSelected,
-        );
-      },
     );
   }
 }

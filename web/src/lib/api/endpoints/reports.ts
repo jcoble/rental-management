@@ -26,7 +26,10 @@ export type ReportParamKey =
 	| 'propertyIds'
 	| 'year'
 	| 'ownerId'
-	| 'days';
+	| 'days'
+	| 'skip'
+	| 'take'
+	| 'sort';
 
 export interface ReportCatalogEntry {
 	/** Stable report key, e.g. "rent-roll" — also the URL segment in /reports/[report]. */
@@ -65,6 +68,11 @@ export interface ReportRequestParams {
 	year?: number;
 	/** Forward-looking window in days (lease-expirations). */
 	days?: number;
+	/** Server-side row window for paged reports. */
+	skip?: number;
+	take?: number;
+	/** Server-side sort, with a leading "-" for descending. */
+	sort?: string;
 }
 
 // ── Report response DTOs (match ReportsDtos.cs exactly) ─────────────────────────────────────────────
@@ -170,6 +178,10 @@ export interface CashFlowResponse {
 	from: string;
 	to: string;
 	months: CashFlowMonth[];
+	totalCount: number;
+	skip: number;
+	take: number;
+	sort: string;
 	totalIncome: number;
 	totalExpense: number;
 	totalNet: number;
@@ -278,6 +290,10 @@ export interface SecurityDepositRegisterRow {
 export interface SecurityDepositRegisterResponse {
 	generatedAt: string;
 	rows: SecurityDepositRegisterRow[];
+	totalCount: number;
+	skip: number;
+	take: number;
+	sort: string;
 	totalHeld: number;
 	totalDeductions: number;
 	totalReturned: number;
@@ -299,6 +315,7 @@ export interface Vendor1099Response {
 	year: number;
 	rows: Vendor1099Row[];
 	totalPaid: number;
+	needsW9Count: number;
 	threshold: number;
 }
 
@@ -387,6 +404,9 @@ export function buildReportQuery(params: ReportRequestParams, accepts: ReportPar
 	}
 	if (set.has('year') && params.year != null) qs.set('year', String(params.year));
 	if (set.has('days') && params.days != null) qs.set('days', String(params.days));
+	if (set.has('skip') && params.skip != null) qs.set('skip', String(params.skip));
+	if (set.has('take') && params.take != null) qs.set('take', String(params.take));
+	if (set.has('sort') && params.sort) qs.set('sort', params.sort);
 
 	const s = qs.toString();
 	return s ? `?${s}` : '';
@@ -429,7 +449,7 @@ export const reports = {
 	leaseExpirations: (params: ReportRequestParams = {}) =>
 		fetchApi<LeaseExpirationsResponse>(`/reports/lease-expirations${buildReportQuery(params, ['days', 'propertyIds'])}`),
 	securityDeposits: (params: ReportRequestParams = {}) =>
-		fetchApi<SecurityDepositRegisterResponse>(`/reports/security-deposits${buildReportQuery(params, ['propertyIds'])}`),
+		fetchApi<SecurityDepositRegisterResponse>(`/reports/security-deposits${buildReportQuery(params, ['propertyIds', 'skip', 'take', 'sort'])}`),
 	vendor1099: (params: ReportRequestParams = {}) =>
 		fetchApi<Vendor1099Response>(`/reports/vendor-1099${buildReportQuery(params, ['year'])}`),
 	ownerDistributions: (params: ReportRequestParams = {}) =>

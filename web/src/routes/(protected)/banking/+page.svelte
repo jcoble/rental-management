@@ -24,6 +24,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import Pagination from '$lib/components/shared/Pagination.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { Ban, Check, Landmark, Link2, RefreshCw, RotateCcw, Upload, X } from '@lucide/svelte';
 
 	type PlaidWindow = Window &
@@ -466,9 +467,12 @@
 			</Card.Header>
 			<Card.Content class="p-0">
 				{#if reviewQueueQuery.isLoading}
-					<p class="py-12 text-center text-sm text-muted-foreground">Loading suggested matches...</p>
+					<LoadingState label="Loading suggested matches" variant="spinner" testid="bank-review-loading" />
 				{:else if reviewQueueQuery.isError}
-					<p class="py-12 text-center text-sm text-destructive">Could not load suggested matches.</p>
+					<div class="flex flex-wrap items-center justify-center gap-3 py-12" role="alert" data-testid="bank-review-error">
+						<p class="text-sm text-destructive">Could not load suggested matches.</p>
+						<Button size="sm" variant="outline" onclick={() => reviewQueueQuery.refetch()}>Retry matches</Button>
+					</div>
 				{:else if reviewItems.length === 0}
 					<p class="py-12 text-center text-sm text-muted-foreground" data-testid="bank-review-empty">
 						Nothing to review.
@@ -583,9 +587,12 @@
 			</Card.Header>
 			<Card.Content class="p-0">
 				{#if transactionsQuery.isLoading}
-					<p class="py-12 text-center text-sm text-muted-foreground">Loading bank transactions...</p>
+					<LoadingState label="Loading bank transactions" variant="spinner" testid="bank-transactions-loading" />
 				{:else if transactionsQuery.isError}
-					<p class="py-12 text-center text-sm text-destructive">Could not load bank transactions.</p>
+					<div class="flex flex-wrap items-center justify-center gap-3 py-12" role="alert" data-testid="bank-transactions-error">
+						<p class="text-sm text-destructive">Could not load bank transactions.</p>
+						<Button size="sm" variant="outline" onclick={() => transactionsQuery.refetch()}>Retry transactions</Button>
+					</div>
 				{:else if transactions.length === 0}
 					<p class="py-12 text-center text-sm text-muted-foreground">
 						{statusFilter === 'Removed' ? 'No ignored bank lines.' : 'No bank transactions yet.'}

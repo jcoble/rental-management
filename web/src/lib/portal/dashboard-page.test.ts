@@ -34,4 +34,26 @@ describe('portal dashboard page', () => {
 		assert.match(source, /data-testid="tenant-dashboard-maintenance-description-error"/);
 		assert.doesNotMatch(source, /if \(!workOrderForm\.title\.trim\(\) \|\| !workOrderForm\.description\.trim\(\)\) return;/);
 	});
+
+	it('keeps the appointments section stable and recoverable while loading', () => {
+		const source = readFileSync(
+			new URL('../../routes/(portal)/portal/+page.svelte', import.meta.url),
+			'utf8'
+		);
+
+		assert.match(source, /LoadingState/);
+		assert.match(source, /tenant-dashboard-appointments-loading/);
+		assert.match(source, /appointmentsQuery\.refetch\(\)/);
+	});
+
+	it('distinguishes lease loading and failure from an empty tenant relationship', () => {
+		const source = readFileSync(
+			new URL('../../routes/(portal)/portal/+page.svelte', import.meta.url),
+			'utf8'
+		);
+
+		assert.match(source, /<LoadingState label="Loading lease"/);
+		assert.match(source, /leasesQuery\.isError/);
+		assert.match(source, /leasesQuery\.refetch\(\)/);
+	});
 });

@@ -16,6 +16,14 @@ internal sealed class AtomicNoticeDraftPersistence : IAtomicNoticeDraftPersisten
         _scope = scope;
     }
 
+    public async Task<IReadOnlyList<AtomicGeneratedTenantNoticeDraft>> GenerateClaimedBatchAsync(
+        Guid claimToken,
+        CancellationToken ct = default)
+    {
+        using var lease = _scope.BeginInternalRawDml("NoticeDrafts", AtomicRawDmlOperation.Insert);
+        return await _store.GenerateClaimedBatchAsync(claimToken, ct);
+    }
+
     public async Task<IReadOnlyList<AtomicGeneratedTenantNoticeDraft>> GenerateManualAsync(
         WorkspaceReadScope scope,
         int? recipientTenantId,

@@ -83,8 +83,7 @@ export interface Owner {
 export interface Property {
 	id: number;
 	portfolioId: number;
-	ownerId?: number;
-	ownerEntityId?: number | null;
+	ownerships: PropertyOwnership[];
 	name: string;
 	// Wire field is `type` (PropertyResponse maps PropertyType → "type"); the grid column,
 	// type filter, and create/edit forms all read/write this single name.
@@ -106,11 +105,22 @@ export interface Property {
 	manualAnnualDepreciation?: number | null;
 	/** Cumulative depreciation taken to date (read-only; system-maintained). */
 	accumulatedDepreciation?: number;
-	ownerName?: string;
 	unitCount?: number;
 	occupiedUnits?: number;
 	createdAt: string;
 	updatedAt: string;
+}
+
+export interface PropertyOwnership {
+	id: number;
+	ownerEntityId: number;
+	ownerName: string;
+	ownershipSharePercent: number;
+	effectiveFromUtc: string;
+	effectiveToUtc?: string | null;
+	statementRecipientName: string;
+	statementRecipientEmail?: string | null;
+	payeeName: string;
 }
 
 export interface Unit {
@@ -277,6 +287,40 @@ export interface UnitDashboardHeader {
 	currentTenantName?: string;
 }
 
+export interface UnitOccupancyPossessionCondition {
+	status: string;
+	isOccupied: boolean;
+	hasScheduledMoveIn: boolean;
+	leaseManagementId?: number | null;
+}
+
+export interface UnitMarketingAvailabilityCondition {
+	status: string;
+	isAvailable: boolean;
+}
+
+export interface UnitTenantAccountCondition {
+	status: string;
+	tenantAccountId?: number | null;
+	receivableBalance: number;
+	pastDueAmount: number;
+}
+
+export interface UnitLegalNoticeCondition {
+	status: string;
+	agreementId?: number | null;
+	agreementStatus?: string | null;
+	openNoticeCount: number;
+}
+
+export interface UnitMaintenanceTurnoverCondition {
+	status: string;
+	openWorkOrderCount: number;
+	isInTurnover: boolean;
+	isOutOfService: boolean;
+	isOnManagementHold: boolean;
+}
+
 export interface UnitLeaseSummary {
 	id: number;
 	leaseManagementId: number;
@@ -364,6 +408,13 @@ export interface UnitDashboard {
 	lifecycleStage: UnitLifecycleStage;
 	nextBestAction: UnitNextBestAction;
 	header: UnitDashboardHeader;
+	occupancyPossession: UnitOccupancyPossessionCondition;
+	marketingAvailability: UnitMarketingAvailabilityCondition;
+	tenantAccountCondition: UnitTenantAccountCondition;
+	legalNoticeCondition: UnitLegalNoticeCondition;
+	maintenanceTurnover: UnitMaintenanceTurnoverCondition;
+	leaseManagementId?: number | null;
+	tenantAccountId?: number | null;
 	currentLease?: UnitLeaseSummary;
 	currentTenant?: UnitTenantSummary;
 	currentTenants?: UnitTenantSummary[];
@@ -525,6 +576,7 @@ export interface ExpenseLineItem {
 export interface Expense {
 	id: number;
 	portfolioId: number;
+	operationalScope?: 'Portfolio' | 'Property' | 'Unit' | 'WorkOrder';
 	propertyId?: number;
 	unitId?: number;
 	vendorId?: number;
@@ -534,6 +586,7 @@ export interface Expense {
 	description: string;
 	status: ExpenseStatus;
 	amount: number;
+	allocationTotal?: number;
 	subtotal?: number;
 	taxAmount?: number;
 	incurredAt: string;

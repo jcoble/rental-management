@@ -53,6 +53,16 @@ public class UnitController : ManagementControllerBase
         return Ok(items);
     }
 
+    [HttpGet("page")]
+    [ProducesResponseType(typeof(UnitListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<UnitListResponse>> ListPage(
+        [FromQuery] UnitListQuery query, [FromQuery] int? propertyId, CancellationToken ct)
+    {
+        if (!TryReadManagementScope(out var scope)) return Forbid();
+        var page = await _service.ListPageAsync(scope, propertyId, query, ct);
+        return Ok(page);
+    }
+
     /// <summary>
     /// Units with cheap health badges for the <c>/units</c> page (spec section 10): status, open-WO count,
     /// days-until-lease-end, a unit-document count, and a simplified stage label. One projection query —

@@ -1,6 +1,10 @@
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:rental_command/core/models/models.dart';
 import 'package:rental_command/features/portal/tenant_portal_repository.dart';
 
 void main() {
@@ -79,4 +83,110 @@ void main() {
     expect(home, isNot(contains('.sort(')));
     expect(history, isNot(contains('.sort(')));
   });
+
+  test('portal lease agreement parses document availability metadata', () {
+    final agreement = PortalLeaseAgreement.fromJson({
+      'leaseAgreementId': 81,
+      'agreementNumber': 'AGR-81',
+      'agreementStatus': 'Executed',
+      'termStartOn': '2026-01-01',
+      'termEndOn': '2026-12-31',
+      'baseRentAmount': 1400,
+      'securityDepositObligation': 1400,
+      'lateFeeAmount': 50,
+      'rentDueDay': 1,
+      'executedDocumentAvailable': true,
+      'executedDocumentFileName': 'signed-lease.pdf',
+      'executedDocumentContentType': 'application/pdf',
+    });
+
+    expect(agreement.executedDocumentAvailable, isTrue);
+    expect(agreement.executedDocumentFileName, 'signed-lease.pdf');
+    expect(agreement.executedDocumentContentType, 'application/pdf');
+  });
+
+  test(
+    'portal lease document download uses exact tenant endpoint and metadata',
+    () async {
+      final adapter = _PortalLeaseDocumentAdapter();
+      final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+        ..httpClientAdapter = adapter;
+      final repository = TenantPortalRepository(dio);
+
+      final document = await repository.executedAgreementDocument(
+        leaseManagementId: 44,
+        leaseAgreementId: 81,
+        fileName: 'signed-lease.pdf',
+        contentType: 'application/pdf',
+      );
+
+      expect(adapter.method, 'GET');
+      expect(adapter.path, '/portal/leases/44/agreements/81/executed-document');
+      expect(document.bytes, Uint8List.fromList([1, 2, 3]));
+      expect(document.fileName, 'signed-lease.pdf');
+      expect(document.contentType, 'application/pdf');
+    },
+  );
+
+  test(
+    'tenant lease screen opens exact document bytes and shows safe states',
+    () {
+      final screen = File(
+        'lib/features/tenants/tenant_lease_screen.dart',
+      ).readAsStringSync();
+
+      expect(screen, contains('tenantLeaseDocumentOpenerProvider'));
+      expect(screen, contains('executedAgreementDocument('));
+      expect(screen, contains('bytes: document.bytes'));
+      expect(screen, contains('fileName: document.fileName'));
+      expect(screen, contains('mimeType: document.contentType'));
+      expect(
+        screen,
+        contains('Signed lease PDF is not available yet. Contact management.'),
+      );
+      expect(
+        screen,
+        contains(
+          'Could not open the signed lease PDF. Please try again or contact management.',
+        ),
+      );
+      expect(screen, isNot(contains('/lease-managements/')));
+    },
+  );
+}
+
+class _PortalLeaseDocumentAdapter implements HttpClientAdapter {
+  String? method;
+  String? path;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    method = options.method;
+    path = options.path;
+
+    if (options.path.endsWith('/executed-document')) {
+      return ResponseBody.fromBytes(
+        [1, 2, 3],
+        200,
+        headers: {
+          Headers.contentTypeHeader: ['application/pdf'],
+        },
+      );
+    }
+
+    return ResponseBody.fromString(
+      jsonEncode(<String, dynamic>{}),
+      404,
+      headers: {
+        Headers.contentTypeHeader: [Headers.jsonContentType],
+      },
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
 }

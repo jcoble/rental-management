@@ -19,7 +19,7 @@ const propertyForm = {
 	ownerEntityId: '1'
 };
 
-test('onboarding property payload supplies hidden status and persisted owner id', () => {
+test('onboarding property payload supplies hidden status and canonical ownership', () => {
 	assert.deepEqual(
 		buildOnboardingPropertyPayload({
 			propertyForm,
@@ -28,10 +28,17 @@ test('onboarding property payload supplies hidden status and persisted owner id'
 			existingOwners: [{ id: 1 }]
 		}),
 		{
-			...propertyForm,
+			name: propertyForm.name,
+			type: propertyForm.type,
+			rentalStructure: propertyForm.rentalStructure,
+			addressLine1: propertyForm.addressLine1,
+			addressLine2: propertyForm.addressLine2,
+			city: propertyForm.city,
+			state: propertyForm.state,
+			postalCode: propertyForm.postalCode,
 			status: 'Active',
-			ownerEntityId: 1,
-			clearOwnerEntity: false
+			ownerships: [{ ownerEntityId: 1, ownershipSharePercent: 100 }],
+			clearOwnership: false
 		}
 	);
 });
@@ -43,7 +50,7 @@ test('current-session owner can prefill the property owner field', () => {
 			selectedOwnerId: '',
 			createdOwner: { id: 7 },
 			existingOwners: [{ id: 1 }]
-		}).ownerEntityId,
+		}).ownerships[0]?.ownerEntityId,
 		7
 	);
 });
@@ -55,7 +62,7 @@ test('selected property owner field is used for the property payload', () => {
 			selectedOwnerId: '3',
 			createdOwner: { id: 7 },
 			existingOwners: [{ id: 1 }, { id: 3 }]
-		}).ownerEntityId,
+		}).ownerships[0]?.ownerEntityId,
 		3
 	);
 });
@@ -69,10 +76,17 @@ test('property owner field can explicitly clear the owner assignment', () => {
 			existingOwners: [{ id: 1 }, { id: 3 }]
 		}),
 		{
-			...propertyForm,
+			name: propertyForm.name,
+			type: propertyForm.type,
+			rentalStructure: propertyForm.rentalStructure,
+			addressLine1: propertyForm.addressLine1,
+			addressLine2: propertyForm.addressLine2,
+			city: propertyForm.city,
+			state: propertyForm.state,
+			postalCode: propertyForm.postalCode,
 			status: 'Active',
-			ownerEntityId: null,
-			clearOwnerEntity: true
+			ownerships: [],
+			clearOwnership: true
 		}
 	);
 });
@@ -84,7 +98,7 @@ test('property owner field wins over the owner-step default', () => {
 			selectedOwnerId: '3',
 			createdOwner: { id: 7 },
 			existingOwners: [{ id: 1 }, { id: 3 }, { id: 11 }]
-		}).ownerEntityId,
+		}).ownerships[0]?.ownerEntityId,
 		11
 	);
 });
@@ -101,7 +115,7 @@ test('selected property fills the editable onboarding property fields', () => {
 			city: 'Columbus',
 			state: 'OH',
 			postalCode: '43201',
-			ownerEntityId: 4
+			ownerships: [{ ownerEntityId: 4 }]
 		}),
 		{
 			name: 'Clintonville Townhome',

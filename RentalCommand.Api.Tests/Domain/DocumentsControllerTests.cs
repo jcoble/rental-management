@@ -363,11 +363,79 @@ public sealed class DocumentsControllerTests : IDisposable
             Mock.Of<IFileStorage>(),
             isManagement: false,
             new Claim("tenantId", tenantId.ToString()));
+        var workOrder = _ctx.Db.WorkOrders.Single(candidate => candidate.Id == workOrderId);
+        workOrder.LeaseManagementId = _ctx.Db.EffectiveTenantAccess
+            .Single(access => access.TenantId == tenantId)
+            .LeaseManagementId;
+        _ctx.Db.SaveChanges();
 
         var result = await controller.List("WorkOrder", workOrderId, CancellationToken.None);
 
         result.Result.Should().BeOfType<OkObjectResult>()
             .Which.Value.Should().BeSameAs(expected);
+    }
+
+    [Fact]
+    public async Task GetFile_WithSameTenantButDifferentRelationship_DeniesBeforeStorageAndAllowsExactRelationship()
+    {
+        var workOrderId = SeedDocumentTarget("WorkOrder");
+        var workOrder = _ctx.Db.WorkOrders.Single(candidate => candidate.Id == workOrderId);
+        var tenantId = workOrder.TenantId!.Value;
+        var documents = new Mock<IDocumentService>();
+        documents.Setup(d => d.FindAsync(PortfolioId, 46, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new StoredFile
+            {
+                Id = 46,
+                PortfolioId = PortfolioId,
+                EntityType = "WorkOrder",
+                EntityId = workOrderId,
+                FileName = "repair.jpg",
+                FilePath = "stored/repair.jpg",
+                ContentType = "image/jpeg",
+                FileSize = TestPng.Length,
+                UploadedAt = DateTime.UtcNow,
+            });
+        var storage = new Mock<IFileStorage>();
+        storage.Setup(s => s.DownloadAsync(
+                "stored/repair.jpg", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new MemoryStream(TestPng));
+        var controller = CreateController(
+            documents.Object,
+            storage.Object,
+            isManagement: false,
+            new Claim("tenantId", tenantId.ToString()));
+        var accessRelationshipId = _ctx.Db.EffectiveTenantAccess
+            .Single(access => access.TenantId == tenantId)
+            .LeaseManagementId;
+        var differentRelationship = AddAndSave(new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            PropertyId = workOrder.PropertyId,
+            UnitId = workOrder.UnitId!.Value,
+            RelationshipNumber = $"DOC-DIFFERENT-{Guid.NewGuid():N}",
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = 7,
+            UpdatedAtUtc = DateTime.UtcNow,
+            RowVersion = Guid.NewGuid(),
+        });
+        workOrder.LeaseManagementId = differentRelationship.Id;
+        _ctx.Db.SaveChanges();
+
+        var denied = await controller.GetFile(46, thumb: false, CancellationToken.None);
+
+        denied.Should().BeOfType<NotFoundObjectResult>();
+        storage.Verify(s => s.DownloadAsync(
+            "stored/repair.jpg", It.IsAny<CancellationToken>()), Times.Never);
+
+        workOrder.LeaseManagementId = accessRelationshipId;
+        _ctx.Db.SaveChanges();
+
+        var allowed = await controller.GetFile(46, thumb: false, CancellationToken.None);
+
+        allowed.Should().BeOfType<FileStreamResult>();
+        storage.Verify(s => s.DownloadAsync(
+            "stored/repair.jpg", It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -683,7 +751,6 @@ public sealed class DocumentsControllerTests : IDisposable
         var property = new Property
         {
             PortfolioId = PortfolioId,
-            OwnerEntity = owner,
             Name = $"Property {entityType}",
             AddressLine1 = "100 Test",
             City = "Columbus",
@@ -691,6 +758,18 @@ public sealed class DocumentsControllerTests : IDisposable
             PostalCode = "43215",
             CreatedAt = now,
             UpdatedAt = now,
+            Ownerships =
+            [
+                new PropertyOwnership
+                {
+                    PortfolioId = PortfolioId,
+                    OwnerEntity = owner,
+                    OwnershipSharePercent = 100m,
+                    EffectiveFromUtc = now,
+                    StatementRecipientName = owner.Name,
+                    PayeeName = owner.Name,
+                },
+            ],
         };
         var unit = new Unit
         {

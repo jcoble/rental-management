@@ -8,6 +8,7 @@
 	import { getAuthState } from '$lib/stores/auth.svelte';
 	import { capabilityKeysForExperience } from '$lib/types/user';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
@@ -140,9 +141,14 @@
 	<a href="/my-work" class="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft class="h-4 w-4" />My work</a>
 
 	{#if assignment.isPending}
-		<div class="rounded-2xl border border-border bg-card p-10 text-center text-muted-foreground">Loading assignment…</div>
+		<LoadingState label="Loading assignment" variant="page" testid="technician-assignment-loading" />
 	{:else if assignment.isError || !assignment.data}
-		<div class="rounded-2xl border border-destructive/40 bg-destructive/5 p-6 text-destructive">This assignment is unavailable or is no longer assigned to you.</div>
+		<div class="rounded-2xl border border-destructive/40 bg-destructive/5 p-6">
+			<p class="text-sm font-medium text-destructive">This assignment is unavailable or is no longer assigned to you.</p>
+			{#if assignment.isError}
+				<Button type="button" variant="outline" size="sm" class="mt-3" onclick={() => assignment.refetch()}>Try again</Button>
+			{/if}
+		</div>
 	{:else}
 		{@const work = assignment.data}
 		<header class="rounded-3xl border border-border bg-card p-5 sm:p-6">

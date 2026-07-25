@@ -94,7 +94,13 @@ public class OwnerStatementEmailService : IOwnerStatementEmailService
                 o.PortfolioId == portfolioId &&
                 o.Id == ownerId &&
                 o.DeletedAt == null &&
-                authorizedProperties.Any(property => property.OwnerEntityId == o.Id))
+                _db.PropertyOwnerships.Any(ownership =>
+                    ownership.PortfolioId == portfolioId
+                    && ownership.OwnerEntityId == o.Id
+                    && ownership.EffectiveFromUtc <= _timeProvider.UtcNow()
+                    && (ownership.EffectiveToUtc == null
+                        || ownership.EffectiveToUtc > _timeProvider.UtcNow())
+                    && authorizedProperties.Any(property => property.Id == ownership.PropertyId)))
             .Select(o => new OwnerEmailRecipient(o.Id, o.Name, o.Email))
             .FirstOrDefaultAsync(ct);
 
@@ -237,8 +243,13 @@ public sealed class QueueOwnerStatementEmailHandler
         var ownerIsAuthorized = await persistence.Query<OwnerEntity>().AsNoTracking().AnyAsync(owner =>
             owner.Id == command.OwnerEntityId && owner.PortfolioId == command.PortfolioId
             && owner.DeletedAt == null
-            && AuthorizedOwnerReportProperties(command, persistence, now)
-                .Any(property => property.OwnerEntityId == owner.Id), ct);
+            && persistence.Query<PropertyOwnership>().Any(ownership =>
+                ownership.PortfolioId == command.PortfolioId
+                && ownership.OwnerEntityId == owner.Id
+                && ownership.EffectiveFromUtc <= now
+                && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now)
+                && AuthorizedOwnerReportProperties(command, persistence, now)
+                    .Any(property => property.Id == ownership.PropertyId)), ct);
         if (!ownerIsAuthorized)
             throw new UnauthorizedAccessException(
                 "The owner is no longer available within your current reporting scope.");

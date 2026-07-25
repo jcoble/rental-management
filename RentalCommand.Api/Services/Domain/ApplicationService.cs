@@ -276,19 +276,47 @@ public sealed class ApplicationService : IApplicationService
         var items = await q
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
-            .Select(a => new ApplicationHomeProjection
+            .Select(a => new ApplicationResponse
             {
-                Application = a,
+                Id = a.Id,
+                PortfolioId = a.PortfolioId,
+                PropertyId = a.PropertyId,
+                UnitId = a.UnitId,
                 PropertyName = a.Property != null ? a.Property.Name : null,
                 UnitNumber = a.Unit != null ? a.Unit.UnitNumber : null,
+                FirstName = a.FirstName,
+                LastName = a.LastName,
+                Email = a.Email,
+                Phone = a.Phone,
+                DateOfBirth = a.DateOfBirth,
+                CurrentAddressLine1 = a.CurrentAddressLine1,
+                CurrentAddressLine2 = a.CurrentAddressLine2,
+                CurrentCity = a.CurrentCity,
+                CurrentState = a.CurrentState,
+                CurrentPostalCode = a.CurrentPostalCode,
+                CurrentAddress = a.CurrentAddress,
+                Employer = a.Employer,
+                MonthlyIncome = a.MonthlyIncome,
+                DesiredMoveInDate = a.DesiredMoveInDate,
+                Notes = a.Notes,
+                IdExtractedFields = a.IdExtractedFields,
+                ConsentGiven = a.ConsentGiven,
+                ConsentAtUtc = a.ConsentAtUtc,
+                Status = a.Status == ApplicationStatus.Submitted ? "Submitted"
+                    : a.Status == ApplicationStatus.UnderReview ? "UnderReview"
+                    : a.Status == ApplicationStatus.Approved ? "Approved"
+                    : a.Status == ApplicationStatus.Declined ? "Declined"
+                    : "Withdrawn",
+                DecisionReason = a.DecisionReason,
+                SubmittedAtUtc = a.SubmittedAtUtc,
+                ReviewedAtUtc = a.ReviewedAtUtc,
+                ApprovedTenantId = a.ApprovedTenantId,
             })
             .ToListAsync(ct);
 
         return new ApplicationListResponse
         {
-            Items = items
-                .Select(i => ApplicationResponse.FromEntity(i.Application, i.PropertyName, i.UnitNumber))
-                .ToList(),
+            Items = items,
             TotalCount = totalCount,
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,

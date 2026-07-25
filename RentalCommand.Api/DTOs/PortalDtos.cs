@@ -44,7 +44,9 @@ public class PortalLeaseAgreementResponse
     public short RentDueDay { get; set; }
     public string Currency { get; set; } = string.Empty;
     public DateTime? FullyExecutedAtUtc { get; set; }
-    public int? ExecutedStoredFileId { get; set; }
+    public bool ExecutedDocumentAvailable { get; set; }
+    public string? ExecutedDocumentFileName { get; set; }
+    public string? ExecutedDocumentContentType { get; set; }
 }
 
 public sealed class PortalTenantAccountListQuery : ListQuery

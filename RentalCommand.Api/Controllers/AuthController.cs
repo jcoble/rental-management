@@ -488,10 +488,42 @@ public class AuthController : ControllerBase
     [AllowAnonymous]
     public async Task<ActionResult<LoginResponse>> GoogleSignIn([FromBody] GoogleAuthRequest request)
     {
-        await Task.CompletedTask;
-        return StatusCode(
-            StatusCodes.Status503ServiceUnavailable,
-            new { error = "Google sign-in is unavailable until it issues canonical workspace sessions." });
+        if (!_googleOptions.Enabled)
+        {
+            return StatusCode(
+                StatusCodes.Status501NotImplemented,
+                new { error = "Google sign-in is not configured." });
+        }
+
+        GoogleAuthResult result;
+        if (!string.IsNullOrWhiteSpace(request.IdToken))
+        {
+            result = await _googleAuthService.AuthenticateWithIdTokenAsync(
+                request.IdToken,
+                HttpContext.RequestAborted);
+        }
+        else if (!string.IsNullOrWhiteSpace(request.Code) &&
+                 !string.IsNullOrWhiteSpace(request.RedirectUri))
+        {
+            result = await _googleAuthService.AuthenticateAsync(
+                request.Code,
+                request.RedirectUri,
+                HttpContext.RequestAborted);
+        }
+        else
+        {
+            return BadRequest(new { error = "Provide an idToken (native) or code + redirectUri (web)." });
+        }
+
+        if (!result.Success || result.Response is null || result.Tokens is null)
+        {
+            _logger.LogInformation("Google sign-in attempt failed: {Error}", result.Error);
+            return Unauthorized(new { error = "Google sign-in failed." });
+        }
+
+        SetRefreshTokenCookie(result.Tokens.RefreshToken, result.Tokens.RefreshTokenExpiration);
+        PopulateBodyRefreshTokenForMobile(result.Response, result.Tokens);
+        return Ok(result.Response);
     }
 
     private void SetRefreshTokenCookie(string token, DateTime expiration)

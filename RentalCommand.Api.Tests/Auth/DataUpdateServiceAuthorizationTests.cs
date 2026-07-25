@@ -1,5 +1,6 @@
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Moq;
 using RentalCommand.Api.Data;
@@ -25,6 +26,7 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
     {
         _context = new SqliteTestContext(
             [new Domain.RecordingCommandInterceptor(_commands)]);
+        EnsureRelationshipProjectionView();
         var hub = new Mock<IHubContext<DataUpdateHub>>();
         hub.SetupGet(value => value.Clients).Returns(_clients.Object);
         _clients.Setup(value => value.Groups(It.IsAny<IReadOnlyList<string>>()))
@@ -53,7 +55,7 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
         var decoy = AddTeamSession("decoy", decoyProperty, now);
         var stale = AddTeamSession("stale", targetProperty, now, currentRevision: 2);
         var revoked = AddTeamSession("revoked", targetProperty, now, revoked: true);
-        var relationshipOnly = AddRelationshipSession("tenant", now);
+        var relationshipOnly = AddEffectiveTenantSession("tenant", now);
         _context.Db.SaveChanges();
         _commands.Clear();
 
@@ -83,6 +85,58 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
                 && ((EntityUpdatePayload)arguments[0]!).EntityType == "Property"
                 && ((EntityUpdatePayload)arguments[0]!).EntityId == targetProperty.Id),
             It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task PortfolioNotificationInvalidation_TargetsTeamAndEffectiveTenantSessionsInOneQuery()
+    {
+        var now = DateTime.UtcNow;
+        var teamProperty = AddProperty("Notification Team");
+        _context.Db.SaveChanges();
+
+        var team = AddTeamSession("notification-team", teamProperty, now);
+        var tenant = AddEffectiveTenantSession("notification-tenant", now);
+        var mutedTenant = AddEffectiveTenantSession("notification-muted-tenant", now);
+        var unbacked = AddBareContextSession("notification-unbacked", now);
+        var notification = new Notification
+        {
+            PortfolioId = 1,
+            Type = "System",
+            Title = "Water interruption",
+            Message = "Water will be off from noon until two.",
+            CreatedAt = now,
+        };
+        _context.Db.Notifications.Add(notification);
+        _context.Db.SaveChanges();
+        _context.Db.UserAlertPreferences.Add(new UserAlertPreference
+        {
+            PortfolioId = 1,
+            UserId = mutedTenant.User.Id,
+            EnableInApp = false,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        });
+        _context.Db.SaveChanges();
+        _commands.Clear();
+
+        await _service.BroadcastEntityUpdateAsync(
+            1,
+            "Notification",
+            notification.Id,
+            new { notification.Id, Secret = "must-not-reach-signalr" });
+
+        _deliveredGroups.Should().Contain(DataUpdateHub.SessionRevisionGroup(team.SessionId, 1));
+        _deliveredGroups.Should().Contain(
+            DataUpdateHub.SessionRevisionGroup(tenant.SessionId, 1),
+            "portfolio announcements readable by an effective tenant must update the tenant UI live");
+        _deliveredGroups.Should().NotContain(
+            DataUpdateHub.SessionRevisionGroup(unbacked.SessionId, 1),
+            "an active context label without current workspace or relationship authority is not readable");
+        _deliveredGroups.Should().NotContain(
+            DataUpdateHub.SessionRevisionGroup(mutedTenant.SessionId, 1),
+            "realtime fanout must honor the same in-app preference as the REST notification read");
+        _commands.Should().HaveCount(1,
+            "notification authorization, effective access, and session selection must be one SQL query");
     }
 
     private Property AddProperty(string name)
@@ -163,10 +217,86 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
             RevokedAtUtc = revoked ? now : null,
         };
         _context.Db.AddRange(assignment, session);
-        return new SessionCoordinates(session.Id);
+        return new SessionCoordinates(session.Id, user);
     }
 
-    private SessionCoordinates AddRelationshipSession(string key, DateTime now)
+    private SessionCoordinates AddEffectiveTenantSession(string key, DateTime now)
+    {
+        var user = AddUser(key, now);
+        var context = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = 1,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            User = user,
+            ActiveAccessContext = context,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        var property = AddProperty($"{key} relationship");
+        var unit = new Unit
+        {
+            PortfolioId = 1,
+            Property = property,
+            UnitNumber = "1",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = 1,
+            FirstName = key,
+            LastName = "Tenant",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var relationship = new LeaseManagement
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = 1,
+            Property = property,
+            Unit = unit,
+            RelationshipNumber = $"LM-{key}",
+            CreatedAtUtc = now,
+            CreatedByUser = user,
+            UpdatedAtUtc = now,
+            RowVersion = Guid.NewGuid(),
+        };
+        var party = new LeaseManagementParty
+        {
+            PortfolioId = 1,
+            LeaseManagement = relationship,
+            Tenant = tenant,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(now.AddDays(-1)),
+            ChangeReason = "Realtime authorization test",
+            CreatedAtUtc = now,
+            CreatedByUser = user,
+        };
+        var access = new TenantUserAccess
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = 1,
+            AccessContext = context,
+            ApplicationUser = user,
+            LeaseManagementParty = party,
+            GrantedAtUtc = now,
+            GrantedByUser = user,
+            Reason = "Realtime authorization test",
+        };
+        _context.Db.AddRange(session, access);
+        return new SessionCoordinates(session.Id, user);
+    }
+
+    private SessionCoordinates AddBareContextSession(string key, DateTime now)
     {
         var user = AddUser(key, now);
         var context = new WorkspaceAccessContext
@@ -188,7 +318,36 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
             ExpiresAtUtc = now.AddHours(1),
         };
         _context.Db.Add(session);
-        return new SessionCoordinates(session.Id);
+        return new SessionCoordinates(session.Id, user);
+    }
+
+    private void EnsureRelationshipProjectionView()
+    {
+        _context.Db.Database.ExecuteSqlRaw("""
+            CREATE VIEW "vw_effective_tenant_access" AS
+            SELECT context."Id" AS "AccessContextId", context."UserId", context."PortfolioId",
+                   context."AccessRevision", access."Id" AS "TenantUserAccessId",
+                   party."Id" AS "LeaseManagementPartyId", party."TenantId",
+                   party."LeaseManagementId", NULL AS "TenantAccountId",
+                   relationship."PropertyId", relationship."UnitId"
+            FROM "WorkspaceAccessContexts" context
+            JOIN "TenantUserAccesses" access
+              ON access."AccessContextId" = context."Id"
+             AND access."ApplicationUserId" = context."UserId"
+             AND access."PortfolioId" = context."PortfolioId"
+            JOIN "LeaseManagementParties" party
+              ON party."Id" = access."LeaseManagementPartyId"
+             AND party."PortfolioId" = access."PortfolioId"
+            JOIN "LeaseManagements" relationship
+              ON relationship."Id" = party."LeaseManagementId"
+             AND relationship."PortfolioId" = party."PortfolioId"
+            WHERE context."Status" = 'Active'
+              AND context."SuspendedAtUtc" IS NULL
+              AND context."RevokedAtUtc" IS NULL
+              AND access."RevokedAtUtc" IS NULL
+              AND party."EffectiveFrom" <= date('now')
+              AND (party."EffectiveThrough" IS NULL OR party."EffectiveThrough" >= date('now'));
+            """);
     }
 
     private ApplicationUser AddUser(string key, DateTime now)
@@ -209,5 +368,5 @@ public sealed class DataUpdateServiceAuthorizationTests : IDisposable
 
     public void Dispose() => _context.Dispose();
 
-    private sealed record SessionCoordinates(Guid SessionId);
+    private sealed record SessionCoordinates(Guid SessionId, ApplicationUser User);
 }

@@ -14,6 +14,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
@@ -40,6 +41,11 @@
 		getPropertiesEmptyStateCopy
 	} from '$lib/properties/property-list-state';
 	import { propertyUpdateFields } from '$lib/properties/property-update-payload';
+	import {
+		propertyWorkspaceRoute,
+		resolvePropertyWorkspaceEntry,
+		type PropertyWithWorkspaceEntry
+	} from '$lib/components/property/property-workspace';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -63,8 +69,15 @@
 	$effect(() => {
 		if (page.url.searchParams.get('coach') === 'open-property-for-units') forwardUnitCoach = true;
 	});
-	function openProperty(p: Property) {
-		goto(`/properties/${p.id}${forwardUnitCoach ? '?coach=add-unit' : ''}`);
+	function openProperty(p: PropertyWithWorkspaceEntry) {
+		const entry = resolvePropertyWorkspaceEntry(p);
+		const route = propertyWorkspaceRoute(entry);
+		if (!route) {
+			showError('This one-rental property is missing its canonical rental. Finish Guided Setup before opening it.');
+			return;
+		}
+		const separator = route.includes('?') ? '&' : '?';
+		goto(`${route}${forwardUnitCoach ? `${separator}coach=add-unit` : ''}`);
 	}
 
 	// Filter/search/sort/page state persisted in the URL so it survives navigating away and back (and
@@ -121,13 +134,19 @@
 		}),
 	}));
 
-	const ownersQuery = createQuery(() => ({
-		queryKey: ['owners', portfolioId],
-		queryFn: () => owners.list(portfolioId, { take: 200 }),
-		enabled: canManageRentals,
-	}));
+	async function loadOwnerOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await owners.listPage(portfolioId, { ...params, sort: 'name' });
+		return {
+			...result,
+			items: result.items.map((owner) => ({
+				id: owner.id,
+				label: owner.name,
+				description: owner.ownerEntityType
+			}))
+		};
+	}
 
-	const list = $derived(propertiesQuery.data?.items ?? []);
+	const list = $derived<PropertyWithWorkspaceEntry[]>(propertiesQuery.data?.items ?? []);
 	const totalCount = $derived(propertiesQuery.data?.totalCount ?? 0);
 	const hasActiveFilters = $derived(Boolean(search.trim() || typeFilter || statusFilter));
 	const emptyStateCopy = $derived(getPropertiesEmptyStateCopy({ hasActiveFilters }));
@@ -138,6 +157,8 @@
 	let formErrors = $state<Record<string, string>>({});
 	let propertyStep = $state(0);
 	let completedPropertySteps = $state<number[]>([]);
+	let selectedOwnerLabel = $state<string | null>(null);
+	let initialOwnerEntityId = $state('');
 	let deleteTarget = $state<Property | null>(null);
 	const deleteState = $derived(deleteTarget ? getPropertyDeleteState(deleteTarget) : null);
 
@@ -216,8 +237,10 @@
 			city: p.city,
 			state: p.state,
 			postalCode: p.postalCode,
-			ownerEntityId: p.ownerEntityId != null ? String(p.ownerEntityId) : '',
+			ownerEntityId: p.ownerships.length === 1 ? String(p.ownerships[0].ownerEntityId) : '',
 		};
+		initialOwnerEntityId = form.ownerEntityId;
+		selectedOwnerLabel = p.ownerships.length === 1 ? p.ownerships[0].ownerName : null;
 		formErrors = {};
 		propertyStep = 0;
 		completedPropertySteps = [];
@@ -227,6 +250,8 @@
 	function closeForm() {
 		showForm = false;
 		editingId = null;
+		selectedOwnerLabel = null;
+		initialOwnerEntityId = '';
 		formErrors = {};
 		propertyStep = 0;
 		completedPropertySteps = [];
@@ -283,18 +308,27 @@
 		}
 		formErrors = {};
 		const mutableProperty = propertyUpdateFields(result.data);
+		const ownerEntityId = result.data.ownerEntityId;
+		const ownershipChange = String(ownerEntityId ?? '') === initialOwnerEntityId
+			? {}
+			: ownerEntityId == null
+				? { ownerships: [], clearOwnership: true }
+				: {
+						ownerships: [{ ownerEntityId, ownershipSharePercent: 100 }],
+						clearOwnership: false
+					};
 		savePropertyMutation.mutate({
 			id: editingId,
 			data: {
 				portfolioId,
 				...mutableProperty,
-				clearOwnerEntity: result.data.ownerEntityId == null,
+				...ownershipChange,
 			},
 		});
 	}
 
 	// DataGrid column definitions
-	const columns: ColumnDef<Property>[] = [
+	const columns: ColumnDef<PropertyWithWorkspaceEntry>[] = [
 		{
 			key: 'name',
 			title: 'Name',
@@ -349,15 +383,15 @@
 	];
 </script>
 
-{#snippet nameCellSnippet(p: Property)}
+{#snippet nameCellSnippet(p: PropertyWithWorkspaceEntry)}
 	<span data-testid="property-name">{p.name}</span>
 {/snippet}
 
-{#snippet statusCellSnippet(p: Property)}
+{#snippet statusCellSnippet(p: PropertyWithWorkspaceEntry)}
 	<StatusBadge status={p.status} />
 {/snippet}
 
-{#snippet actionsCellSnippet(p: Property)}
+{#snippet actionsCellSnippet(p: PropertyWithWorkspaceEntry)}
 	{#if canManageRentals}
 	<div class="flex items-center justify-end gap-1" onclick={(e) => e.stopPropagation()} role="none">
 		<button
@@ -401,6 +435,13 @@
 	<!-- data-coach anchor: the getting-started "add a unit" step lands here and spotlights the list so
 	     the user opens a property, then adds units on its detail page. -->
 	<div data-coach="open-property-for-units">
+	{#if propertiesQuery.isError}
+		<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="properties-list-error">
+			<p class="font-medium text-destructive">Could not load properties.</p>
+			<p class="mt-1 text-sm text-muted-foreground">Try again. An unavailable list is not the same as an empty portfolio.</p>
+			<Button class="mt-4" variant="outline" onclick={() => propertiesQuery.refetch()}>Try again</Button>
+		</div>
+	{:else}
 	<DataGrid
 		data={list}
 		{columns}
@@ -457,6 +498,7 @@
 			{/if}
 		{/snippet}
 	</DataGrid>
+	{/if}
 	</div>
 </div>
 
@@ -492,20 +534,20 @@
 						<span class="mb-1 block text-xs font-medium text-muted-foreground">Apt / Suite / Unit #</span>
 						<Input data-testid="property-address2-input" bind:value={form.addressLine2} placeholder="Apt / Suite / Unit # (optional)" />
 					</div>
-					<div>
-						<span class="mb-1 block text-xs font-medium text-muted-foreground">Owner</span>
-						<Select.Root type="single" bind:value={form.ownerEntityId}>
-							<Select.Trigger class="w-full" data-testid="property-owner-input">
-								{form.ownerEntityId ? ((ownersQuery.data || []).find(o => String(o.id) === form.ownerEntityId)?.name ?? 'No owner assigned') : 'No owner assigned'}
-							</Select.Trigger>
-							<Select.Content>
-								<Select.Item value="" label="No owner assigned">No owner assigned</Select.Item>
-								{#each ownersQuery.data || [] as owner}
-									<Select.Item value={String(owner.id)} label={owner.name}>{owner.name}</Select.Item>
-								{/each}
-							</Select.Content>
-						</Select.Root>
-					</div>
+					<RemoteRecordSelect
+						queryKey={['property-owner', portfolioId]}
+						label="Owner"
+						bind:value={form.ownerEntityId}
+						selectedLabel={selectedOwnerLabel}
+						placeholder="No owner assigned"
+						clearLabel="No owner assigned"
+						searchPlaceholder="Search owners…"
+						emptyLabel="No matching owners"
+						disabled={!canManageRentals}
+						loadPage={loadOwnerOptions}
+						onValueChange={(_value, option) => (selectedOwnerLabel = option?.label ?? null)}
+						testid="property-owner-input"
+					/>
 				{/if}
 			</div>
 		</FormStepper>

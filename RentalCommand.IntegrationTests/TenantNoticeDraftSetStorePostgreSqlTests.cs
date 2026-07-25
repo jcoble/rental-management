@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Automation;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -58,8 +59,13 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
 
         var services = new ServiceCollection();
         services.AddSingleton(TimeProvider.System);
+        services.AddSingleton<CommandRecorder>();
         services.AddScoped<ICurrentActor, SystemCurrentActor>();
         services.AddAtomicPersistenceKernel();
+        services.AddAtomicCommandHandler<
+            ApplyClaimedTenantNoticeDraftBatchCommand,
+            ApplyClaimedTenantNoticeDraftBatchResult,
+            ApplyClaimedTenantNoticeDraftBatchHandler>();
         services.AddAtomicCommandHandler<
             AtomicNotificationMutationCommand,
             AtomicNotificationMutationResult,
@@ -69,7 +75,9 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
             AtomicNoticeDraftMutationResult,
             AtomicNoticeDraftMutationHandler>();
         services.AddDbContext<RentalCommandDbContext>((provider, options) =>
-            options.UseNpgsql(_connectionString).UseAtomicPersistenceKernel(provider));
+            options.UseNpgsql(_connectionString)
+                .UseAtomicPersistenceKernel(provider)
+                .AddInterceptors(provider.GetRequiredService<CommandRecorder>()));
         _services = services.BuildServiceProvider();
     }
 
@@ -164,29 +172,36 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
             validTenantId = first.TenantId;
         }
 
-        var recorder = new CommandRecorder();
-        var firstCall = Task.Run(async () =>
-        {
-            await using var db = NewContext(recorder);
-            return await new TenantNoticeDraftSetStore(db).GenerateClaimedBatchAsync(token);
-        });
-        var secondCall = Task.Run(async () =>
-        {
-            await using var db = NewContext();
-            return await new TenantNoticeDraftSetStore(db).GenerateClaimedBatchAsync(token);
-        });
-        var concurrent = await Task.WhenAll(firstCall, secondCall);
+        var recorder = _services!.GetRequiredService<CommandRecorder>();
+        recorder.Clear();
+        var command = new ApplyClaimedTenantNoticeDraftBatchCommand(token);
+        var identity = TenantNoticeDraftAutomation.Identity(command);
+        var concurrent = await Task.WhenAll(
+            Atomic.ExecuteAsync(identity, command, TenantNoticeDraftAutomation.Codec),
+            Atomic.ExecuteAsync(identity, command, TenantNoticeDraftAutomation.Codec));
 
-        concurrent.Should().OnlyContain(rows => rows.Count == 1);
-        concurrent.SelectMany(rows => rows).Should().OnlyContain(row =>
+        concurrent.Select(outcome => outcome.Disposition).Should()
+            .BeEquivalentTo([AtomicCommandDisposition.Executed, AtomicCommandDisposition.Replayed]);
+        concurrent[0].Value.Should().BeEquivalentTo(concurrent[1].Value);
+        concurrent.Should().OnlyContain(outcome => outcome.Value.Drafts.Length == 1);
+        concurrent.SelectMany(outcome => outcome.Value.Drafts).Should().OnlyContain(row =>
             row.WorkItemId == validWorkId && row.TenantLedgerEntryId == validLedgerId);
-        concurrent.SelectMany(rows => rows).Count(row => row.WasCreated).Should().Be(1);
-        concurrent.SelectMany(rows => rows).Select(row => row.DraftId).Distinct().Should().ContainSingle(
-            because: "both concurrent callers must resolve the same canonical draft id");
-        concurrent.SelectMany(rows => rows).Should().NotContain(row => row.WorkItemId == mismatchedWorkId);
+        concurrent.Should().OnlyContain(outcome => outcome.Value.CreatedCount == 1);
+        concurrent.SelectMany(outcome => outcome.Value.Drafts).Should().OnlyContain(row => row.WasCreated);
+        concurrent.SelectMany(outcome => outcome.Value.Drafts)
+            .Should().OnlyContain(row => row.PortfolioId == portfolioId);
+        concurrent.SelectMany(outcome => outcome.Value.Drafts).Select(row => row.DraftId)
+            .Distinct().Should().ContainSingle(
+                because: "receipt replay must return the first exact canonical draft result");
+        concurrent.SelectMany(outcome => outcome.Value.Drafts)
+            .Should().NotContain(row => row.WorkItemId == mismatchedWorkId);
 
-        recorder.ReaderCommands.Should().ContainSingle();
-        var sql = recorder.ReaderCommands.Single();
+        var noticeCommands = recorder.ReaderCommands
+            .Where(sql => sql.Contains("INSERT INTO \"NoticeDrafts\"", StringComparison.Ordinal))
+            .ToArray();
+        noticeCommands.Should().ContainSingle(
+            because: "receipt replay must not execute the raw notice insertion command twice");
+        var sql = noticeCommands.Single();
         sql.Should().Contain("INSERT INTO \"NoticeDrafts\"");
         sql.Should().Contain("vw_lease_management_lifecycle");
         sql.Should().Contain("vw_tenant_charge_balances");
@@ -202,7 +217,7 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
             var rows = await store.GenerateClaimedBatchAsync(token);
             rows.Should().ContainSingle();
             rows[0].WasCreated.Should().BeFalse();
-            rows[0].DraftId.Should().Be(concurrent[0][0].DraftId);
+            rows[0].DraftId.Should().Be(concurrent[0].Value.Drafts[0].DraftId);
 
             var manual = await store.GenerateManualAsync(
                 manualScope, null, validLeaseManagementId, null, validLedgerId,
@@ -305,6 +320,16 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
 
         await using var verify = NewContext();
         (await verify.NoticeDrafts.CountAsync(row => row.PortfolioId == portfolioId)).Should().Be(3);
+        (await verify.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == identity.CommandType &&
+            receipt.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+        (await verify.AtomicAuditLogs.CountAsync(audit =>
+            audit.CommandType == identity.CommandType &&
+            audit.PortfolioId == portfolioId &&
+            audit.EntityType == nameof(NoticeDraft))).Should().Be(1);
+        (await verify.OutboxMessages.CountAsync(message =>
+            message.PortfolioId == portfolioId &&
+            message.IdempotencyKey.StartsWith("tenant-notice-draft-worker:"))).Should().Be(1);
         var persisted = await verify.NoticeDrafts.SingleAsync(row =>
             row.PortfolioId == portfolioId &&
             row.LeaseManagementId == validLeaseManagementId &&
@@ -681,6 +706,13 @@ public sealed class TenantNoticeDraftSetStorePostgreSqlTests : IAsyncLifetime
     private sealed class CommandRecorder : DbCommandInterceptor
     {
         public ConcurrentQueue<string> ReaderCommands { get; } = new();
+
+        public void Clear()
+        {
+            while (ReaderCommands.TryDequeue(out _))
+            {
+            }
+        }
 
         public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
             DbCommand command,

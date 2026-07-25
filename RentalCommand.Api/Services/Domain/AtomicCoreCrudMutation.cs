@@ -150,18 +150,18 @@ public sealed class AtomicCoreCrudMutationHandler
         if (command.Operation != AtomicCoreCrudMutationOperation.Update)
             throw new ArgumentException("Unsupported Property mutation operation.");
         var update = Read<UpdatePropertyRequest>(command);
-        if (update.OwnerId is > 0 && !await persistence.Query<Owner>().AnyAsync(owner =>
-                owner.Id == update.OwnerId && owner.PortfolioId == command.PortfolioId, ct))
-            return Missing();
-        if (update.OwnerEntityId is > 0 && !await persistence.Query<OwnerEntity>().AnyAsync(owner =>
-                owner.Id == update.OwnerEntityId && owner.PortfolioId == command.PortfolioId && owner.DeletedAt == null, ct))
-            return Missing();
+        var ownershipRequests = RequestedOwnerships(
+            update.Ownerships, update.ClearOwnership);
+        if (ownershipRequests is not null)
+        {
+            var ownerships = await BuildOwnershipsAsync(
+                command.PortfolioId, property.Id, ownershipRequests, now, persistence, ct);
+            await ReplaceCurrentOwnershipsAsync(
+                command.PortfolioId, property.Id, ownerships, now, persistence, ct);
+        }
         if (update.Status == PropertyStatus.Inactive && property.Status != PropertyStatus.Inactive)
             await EnsurePropertyHasNoCurrentOccupancyAsync(command.PortfolioId, property.Id, persistence, ct);
 
-        if (update.OwnerId.HasValue) property.OwnerId = update.OwnerId;
-        if (update.ClearOwnerEntity) property.OwnerEntityId = null;
-        else if (update.OwnerEntityId.HasValue) property.OwnerEntityId = update.OwnerEntityId;
         if (update.Name is not null) property.Name = update.Name;
         if (update.PropertyType.HasValue) property.PropertyType = update.PropertyType.Value;
         if (update.Status.HasValue) property.Status = update.Status.Value;
@@ -209,13 +209,18 @@ public sealed class AtomicCoreCrudMutationHandler
         }
 
         var request = setup.Property;
-        if (request.OwnerId is > 0 && !await persistence.Query<Owner>().AnyAsync(owner =>
-                owner.Id == request.OwnerId && owner.PortfolioId == command.PortfolioId, ct))
-            return Missing();
-        if (request.OwnerEntityId is > 0 && !await persistence.Query<OwnerEntity>().AnyAsync(owner =>
-                owner.Id == request.OwnerEntityId && owner.PortfolioId == command.PortfolioId
-                && owner.DeletedAt == null, ct))
-            return Missing();
+        var requestedOwnerships = RequestedOwnerships(
+            request.Ownerships, request.ClearOwnership) ?? [];
+        if (requestedOwnerships.Count == 0 && !request.ClearOwnership)
+        {
+            var primaryOwnerId = await persistence.Query<OwnerEntity>().AsNoTracking()
+                .Where(owner => owner.PortfolioId == command.PortfolioId && owner.IsPrimary
+                    && owner.DeletedAt == null)
+                .Select(owner => (int?)owner.Id)
+                .FirstOrDefaultAsync(ct);
+            if (primaryOwnerId.HasValue)
+                requestedOwnerships = [new PropertyOwnershipRequest { OwnerEntityId = primaryOwnerId.Value }];
+        }
 
         var requestedUnitNumbers = setup.Units
             .Select(unit => unit.UnitNumber.Trim().ToLowerInvariant())
@@ -250,25 +255,18 @@ public sealed class AtomicCoreCrudMutationHandler
             }
 
             ApplyPropertySetup(property, request, now);
+            var ownerships = await BuildOwnershipsAsync(
+                command.PortfolioId, property.Id, requestedOwnerships, now, persistence, ct);
+            await ReplaceCurrentOwnershipsAsync(
+                command.PortfolioId, property.Id, ownerships, now, persistence, ct);
             attempt.BindSemanticAudit(property, Audit(command, nameof(Property),
                 AuditLogOperation.Updated, $"Property {property.Name} updated during Guided Setup", property.Id));
         }
         else
         {
-            var ownerEntityId = request.ClearOwnerEntity ? null : request.OwnerEntityId;
-            if (ownerEntityId is null && !request.ClearOwnerEntity)
-            {
-                ownerEntityId = await persistence.Query<OwnerEntity>().AsNoTracking()
-                    .Where(owner => owner.PortfolioId == command.PortfolioId && owner.IsPrimary
-                        && owner.DeletedAt == null)
-                    .Select(owner => (int?)owner.Id)
-                    .FirstOrDefaultAsync(ct);
-            }
-
             property = new Property
             {
                 PortfolioId = command.PortfolioId,
-                OwnerEntityId = ownerEntityId,
                 CreatedAt = now,
             };
             ApplyPropertySetup(property, request, now);
@@ -284,6 +282,15 @@ public sealed class AtomicCoreCrudMutationHandler
             throw Conflict("A MultiRental Property must contain at least one Unit.");
 
         await attempt.FlushBusinessAsync(ct);
+
+        if (!updated && requestedOwnerships.Count > 0)
+        {
+            var ownerships = await BuildOwnershipsAsync(
+                command.PortfolioId, property.Id, requestedOwnerships, now, persistence, ct);
+            foreach (var ownership in ownerships)
+                persistence.Add(ownership);
+            await attempt.FlushBusinessAsync(ct);
+        }
 
         var units = setup.Units.Select(unit => new Unit
         {
@@ -352,9 +359,6 @@ public sealed class AtomicCoreCrudMutationHandler
 
     private static void ApplyPropertySetup(Property property, CreatePropertyRequest request, DateTime now)
     {
-        property.OwnerId = request.OwnerId;
-        if (request.ClearOwnerEntity) property.OwnerEntityId = null;
-        else if (request.OwnerEntityId.HasValue) property.OwnerEntityId = request.OwnerEntityId;
         property.Name = request.Name.Trim();
         property.PropertyType = request.PropertyType;
         property.RentalStructure = request.RentalStructure;
@@ -372,6 +376,94 @@ public sealed class AtomicCoreCrudMutationHandler
         property.InServiceDate = Utc(request.InServiceDate);
         property.ManualAnnualDepreciation = request.ManualAnnualDepreciation;
         property.UpdatedAt = now;
+    }
+
+    private static IReadOnlyList<PropertyOwnershipRequest>? RequestedOwnerships(
+        IReadOnlyList<PropertyOwnershipRequest>? ownerships,
+        bool clearOwnership)
+    {
+        if (clearOwnership && ownerships is { Count: > 0 })
+            throw new ArgumentException("Clearing ownership cannot be combined with owner assignments.");
+        if (ownerships is not null) return ownerships;
+        return clearOwnership ? [] : null;
+    }
+
+    private static async Task<List<PropertyOwnership>> BuildOwnershipsAsync(
+        int portfolioId,
+        int propertyId,
+        IReadOnlyList<PropertyOwnershipRequest> requests,
+        DateTime now,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        if (requests.Count == 0) return [];
+        var ownerIds = requests.Select(request => request.OwnerEntityId).ToArray();
+        if (ownerIds.Any(id => id <= 0) || ownerIds.Distinct().Count() != ownerIds.Length)
+            throw new ArgumentException("Each ownership row must reference one distinct OwnerEntity.");
+        if (requests.Sum(request => request.OwnershipSharePercent) != 100m)
+            throw new ArgumentException("Current Property ownership shares must total exactly 100 percent.");
+
+        var ownersQuery = persistence.Query<OwnerEntity>().AsNoTracking()
+            .Where(owner => owner.PortfolioId == portfolioId
+                && ownerIds.Contains(owner.Id)
+                && owner.DeletedAt == null);
+        var ownerCount = await ownersQuery.CountAsync(ct);
+        if (ownerCount != ownerIds.Length)
+            throw new AtomicReceiptInvariantException(
+                "One or more OwnerEntities are missing or outside this workspace.");
+        var owners = await ownersQuery
+            .Select(owner => new { owner.Id, owner.Name, owner.Email })
+            .ToListAsync(ct);
+
+        var ownerById = owners.ToDictionary(owner => owner.Id);
+        var result = new List<PropertyOwnership>(requests.Count);
+        foreach (var request in requests)
+        {
+            if (request.OwnershipSharePercent <= 0m || request.OwnershipSharePercent > 100m)
+                throw new ArgumentException("Ownership share must be greater than zero and no more than 100 percent.");
+            var effectiveFrom = Utc(request.EffectiveFromUtc) ?? now;
+            var effectiveTo = Utc(request.EffectiveToUtc);
+            if (effectiveTo.HasValue && effectiveTo <= effectiveFrom)
+                throw new ArgumentException("Ownership end must be later than its effective start.");
+            var owner = ownerById[request.OwnerEntityId];
+            var statementRecipientName = request.StatementRecipientName?.Trim();
+            var payeeName = request.PayeeName?.Trim();
+            result.Add(new PropertyOwnership
+            {
+                PortfolioId = portfolioId,
+                PropertyId = propertyId,
+                OwnerEntityId = owner.Id,
+                OwnershipSharePercent = request.OwnershipSharePercent,
+                EffectiveFromUtc = effectiveFrom,
+                EffectiveToUtc = effectiveTo,
+                StatementRecipientName = string.IsNullOrWhiteSpace(statementRecipientName)
+                    ? owner.Name
+                    : statementRecipientName,
+                StatementRecipientEmail = request.StatementRecipientEmail?.Trim() ?? owner.Email,
+                PayeeName = string.IsNullOrWhiteSpace(payeeName) ? owner.Name : payeeName,
+            });
+        }
+        return result;
+    }
+
+    private static async Task ReplaceCurrentOwnershipsAsync(
+        int portfolioId,
+        int propertyId,
+        IReadOnlyList<PropertyOwnership> replacements,
+        DateTime now,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        var current = await persistence.Query<PropertyOwnership>()
+            .Where(ownership => ownership.PortfolioId == portfolioId
+                && ownership.PropertyId == propertyId
+                && ownership.EffectiveFromUtc <= now
+                && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now))
+            .ToListAsync(ct);
+        foreach (var ownership in current)
+            ownership.EffectiveToUtc = now;
+        foreach (var ownership in replacements)
+            persistence.Add(ownership);
     }
 
     private static UnitResponse ToUnitResponse(Unit unit) => new()
@@ -405,8 +497,6 @@ public sealed class AtomicCoreCrudMutationHandler
                 Name = request.Name, TaxId = request.TaxId, AddressLine1 = request.AddressLine1,
                 AddressLine2 = request.AddressLine2, City = request.City, State = request.State,
                 PostalCode = request.PostalCode,
-                Address = AddressComposer.Compose(request.AddressLine1, request.AddressLine2,
-                    request.City, request.State, request.PostalCode) ?? request.Address,
                 Phone = request.Phone, Email = request.Email, CreatedAt = now, UpdatedAt = now,
             };
             persistence.Add(entity);
@@ -423,9 +513,17 @@ public sealed class AtomicCoreCrudMutationHandler
         if (!await AuthorizeOwnerEntityAsync(command, persistence, now, ct)) throw Denied();
         if (command.Operation == AtomicCoreCrudMutationOperation.Delete)
         {
-            var propertyCount = await persistence.Query<Property>().AsNoTracking().CountAsync(property =>
-                property.PortfolioId == command.PortfolioId && property.OwnerEntityId == owner.Id
-                && property.DeletedAt == null, ct);
+            var propertyCount = await persistence.Query<PropertyOwnership>().AsNoTracking()
+                .Where(ownership =>
+                    ownership.PortfolioId == command.PortfolioId
+                    && ownership.OwnerEntityId == owner.Id
+                    && ownership.EffectiveFromUtc <= now
+                    && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now)
+                    && ownership.Property != null
+                    && ownership.Property.DeletedAt == null)
+                .Select(ownership => ownership.PropertyId)
+                .Distinct()
+                .CountAsync(ct);
             if (propertyCount > 0)
                 throw Conflict($"This owner is assigned to {propertyCount} {(propertyCount == 1 ? "property" : "properties")}. Reassign or clear those properties before deleting this owner.");
             var distributions = await persistence.Query<OwnerDistribution>().AsNoTracking().CountAsync(row =>
@@ -451,8 +549,6 @@ public sealed class AtomicCoreCrudMutationHandler
         if (update.City is not null) owner.City = update.City;
         if (update.State is not null) owner.State = update.State;
         if (update.PostalCode is not null) owner.PostalCode = update.PostalCode;
-        owner.Address = AddressComposer.Compose(owner.AddressLine1, owner.AddressLine2,
-            owner.City, owner.State, owner.PostalCode) ?? (update.Address ?? owner.Address);
         if (update.Phone is not null) owner.Phone = update.Phone;
         if (update.Email is not null) owner.Email = update.Email;
         owner.UpdatedAt = now;
@@ -650,11 +746,21 @@ public sealed class AtomicCoreCrudMutationHandler
             CapabilityKeys.RentalsManage, CapabilityKeys.RentalsManage);
         return await persistence.Query<OwnerEntity>().AsNoTracking().AnyAsync(owner =>
             owner.Id == command.EntityId && owner.PortfolioId == command.PortfolioId
-            && persistence.Query<Property>().Any(property => property.PortfolioId == command.PortfolioId
-                && property.OwnerEntityId == owner.Id && property.DeletedAt == null)
-            && !persistence.Query<Property>().Any(property => property.PortfolioId == command.PortfolioId
-                && property.OwnerEntityId == owner.Id && property.DeletedAt == null
-                && !authorized.Any(allowed => allowed.Id == property.Id)), ct);
+            && persistence.Query<PropertyOwnership>().Any(ownership =>
+                ownership.PortfolioId == command.PortfolioId
+                && ownership.OwnerEntityId == owner.Id
+                && ownership.EffectiveFromUtc <= now
+                && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now)
+                && ownership.Property != null
+                && ownership.Property.DeletedAt == null)
+            && !persistence.Query<PropertyOwnership>().Any(ownership =>
+                ownership.PortfolioId == command.PortfolioId
+                && ownership.OwnerEntityId == owner.Id
+                && ownership.EffectiveFromUtc <= now
+                && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now)
+                && ownership.Property != null
+                && ownership.Property.DeletedAt == null
+                && !authorized.Any(allowed => allowed.Id == ownership.PropertyId)), ct);
     }
 
     private static async Task<bool> AuthorizeTenantAsync(
@@ -832,20 +938,34 @@ public sealed class AtomicCoreCrudMutationHandler
         IAtomicPersistenceSession persistence,
         CancellationToken ct)
     {
+        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
         var facts = await persistence.Query<Property>().AsNoTracking()
             .Where(property => property.PortfolioId == entity.PortfolioId && property.Id == entity.Id)
             .Select(property => new
             {
-                OwnerName = property.OwnerEntity != null
-                    ? property.OwnerEntity.Name
-                    : property.Owner != null ? property.Owner.Name : null,
+                Ownerships = property.Ownerships
+                    .Where(ownership => ownership.EffectiveFromUtc <= now
+                        && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now))
+                    .OrderBy(ownership => ownership.OwnerEntityId)
+                    .Select(ownership => new PropertyOwnershipResponse
+                    {
+                        Id = ownership.Id,
+                        OwnerEntityId = ownership.OwnerEntityId,
+                        OwnerName = ownership.OwnerEntity!.Name,
+                        OwnershipSharePercent = ownership.OwnershipSharePercent,
+                        EffectiveFromUtc = ownership.EffectiveFromUtc,
+                        EffectiveToUtc = ownership.EffectiveToUtc,
+                        StatementRecipientName = ownership.StatementRecipientName,
+                        StatementRecipientEmail = ownership.StatementRecipientEmail,
+                        PayeeName = ownership.PayeeName,
+                    }).ToList(),
                 UnitCount = property.Units.Count,
                 OccupiedUnits = persistence.Query<UnitOccupancyProjection>().Count(occupancy =>
                     occupancy.PortfolioId == entity.PortfolioId
                     && occupancy.PropertyId == property.Id && occupancy.IsOccupied),
             }).SingleAsync(ct);
         var response = PropertyResponse.FromEntity(entity, facts.UnitCount, facts.OccupiedUnits);
-        response.OwnerName = facts.OwnerName;
+        response.Ownerships = facts.Ownerships;
         return JsonSerializer.Serialize(response);
     }
 
@@ -854,9 +974,18 @@ public sealed class AtomicCoreCrudMutationHandler
         IAtomicPersistenceSession persistence,
         CancellationToken ct)
     {
-        var assigned = await persistence.Query<Property>().AsNoTracking().CountAsync(property =>
-            property.PortfolioId == entity.PortfolioId && property.OwnerEntityId == entity.Id
-            && property.DeletedAt == null, ct);
+        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var assigned = await persistence.Query<PropertyOwnership>().AsNoTracking()
+            .Where(ownership =>
+                ownership.PortfolioId == entity.PortfolioId
+                && ownership.OwnerEntityId == entity.Id
+                && ownership.EffectiveFromUtc <= now
+                && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now)
+                && ownership.Property != null
+                && ownership.Property.DeletedAt == null)
+            .Select(ownership => ownership.PropertyId)
+            .Distinct()
+            .CountAsync(ct);
         return JsonSerializer.Serialize(OwnerEntityResponse.FromEntity(entity, assigned));
     }
 

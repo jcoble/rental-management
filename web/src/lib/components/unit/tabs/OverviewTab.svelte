@@ -33,6 +33,16 @@
 			<span aria-hidden="true">›</span>
 		</a>
 	{/if}
+	<section class="rounded-xl border bg-card p-4" data-testid="unit-condition-families">
+		<h2 class="mb-3 font-semibold">Unit conditions</h2>
+		<dl class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-5">
+			<div data-testid="condition-occupancy-possession"><dt class="text-muted-foreground">Occupancy / possession</dt><dd class="font-medium">{dashboard.occupancyPossession.status}</dd></div>
+			<div data-testid="condition-marketing-availability"><dt class="text-muted-foreground">Marketing availability</dt><dd class="font-medium">{dashboard.marketingAvailability.status}</dd></div>
+			<div data-testid="condition-tenant-account"><dt class="text-muted-foreground">TenantAccount</dt><dd class="font-medium">{dashboard.tenantAccountCondition.status}</dd></div>
+			<div data-testid="condition-legal-notice"><dt class="text-muted-foreground">Legal / notice</dt><dd class="font-medium">{dashboard.legalNoticeCondition.status}</dd></div>
+			<div data-testid="condition-maintenance-turnover"><dt class="text-muted-foreground">Maintenance / turnover</dt><dd class="font-medium">{dashboard.maintenanceTurnover.status}</dd></div>
+		</dl>
+	</section>
 	<div class="grid gap-4 lg:grid-cols-2">
 	<!-- Snapshot -->
 	<DetailCard title="Snapshot" icon={Home} accent="primary" testid="overview-snapshot">
@@ -47,7 +57,7 @@
 
 	<!-- Tenant + lease -->
 	<DetailCard title="Tenant & lease" icon={User} accent="success" testid="overview-tenant-lease">
-		{#if lease}
+		{#if dashboard.leaseManagementId}
 			<div class="space-y-2 text-sm">
 				{#if currentTenants.length}
 					<div class="flex items-center justify-between gap-3">
@@ -64,15 +74,19 @@
 						<button type="button" class="shrink-0 text-xs text-primary hover:underline" onclick={() => onOpenTab('tenant-lease')}>View lease</button>
 					</div>
 				{/if}
-				<dl class="grid grid-cols-2 gap-2 border-t pt-2">
-					<div><dt class="text-muted-foreground">Lease</dt><dd class="font-medium">{lease.leaseNumber}</dd></div>
-					<div><dt class="text-muted-foreground">Rent</dt><dd class="font-medium">{money(lease.monthlyRent)}</dd></div>
-					<div><dt class="text-muted-foreground">Start</dt><dd>{formatDateOnly(lease.startDate)}</dd></div>
-					<div><dt class="text-muted-foreground">End</dt><dd>{formatDateOnly(lease.endDate)}</dd></div>
-				</dl>
+				{#if lease}
+					<dl class="grid grid-cols-2 gap-2 border-t pt-2">
+						<div><dt class="text-muted-foreground">Agreement</dt><dd class="font-medium">{lease.leaseNumber}</dd></div>
+						<div><dt class="text-muted-foreground">Rent</dt><dd class="font-medium">{money(lease.monthlyRent)}</dd></div>
+						<div><dt class="text-muted-foreground">Start</dt><dd>{formatDateOnly(lease.startDate)}</dd></div>
+						<div><dt class="text-muted-foreground">End</dt><dd>{formatDateOnly(lease.endDate)}</dd></div>
+					</dl>
+				{:else}
+					<p class="border-t pt-2 text-muted-foreground">Possession is active for this tenant relationship. No governing Agreement is on file.</p>
+				{/if}
 			</div>
 		{:else}
-			<p class="text-sm text-muted-foreground">No current lease for this unit.</p>
+			<p class="text-sm text-muted-foreground">No current tenant relationship for this unit.</p>
 		{/if}
 	</DetailCard>
 

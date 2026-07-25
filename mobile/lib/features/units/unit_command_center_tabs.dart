@@ -12,7 +12,11 @@ enum UnitCommandCenterView {
   applications,
   agreements,
   residents,
+  tenantAccount,
+  operatingCosts,
   workOrders,
+  inspections,
+  recurring,
   turnover,
   documents,
   history,
@@ -99,8 +103,13 @@ UnitCommandCenterDestination unitCommandCenterDestinationFromName(
         },
       );
     case 'money':
-      return const UnitCommandCenterDestination(
-        tab: UnitCommandCenterTab.money,
+      return canonical(
+        UnitCommandCenterTab.money,
+        UnitCommandCenterView.tenantAccount,
+        {
+          'tenant-account': UnitCommandCenterView.tenantAccount,
+          'operating-costs': UnitCommandCenterView.operatingCosts,
+        },
       );
     case 'maintenance':
       return canonical(
@@ -108,6 +117,8 @@ UnitCommandCenterDestination unitCommandCenterDestinationFromName(
         UnitCommandCenterView.workOrders,
         {
           'work-orders': UnitCommandCenterView.workOrders,
+          'inspections': UnitCommandCenterView.inspections,
+          'recurring': UnitCommandCenterView.recurring,
           'turnover': UnitCommandCenterView.turnover,
         },
       );

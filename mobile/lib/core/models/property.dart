@@ -14,11 +14,52 @@ enum RentalStructure {
   }
 }
 
+class PropertyOwnership {
+  final int id;
+  final int ownerEntityId;
+  final String ownerName;
+  final double ownershipSharePercent;
+  final DateTime effectiveFromUtc;
+  final DateTime? effectiveToUtc;
+  final String statementRecipientName;
+  final String? statementRecipientEmail;
+  final String payeeName;
+
+  const PropertyOwnership({
+    required this.id,
+    required this.ownerEntityId,
+    required this.ownerName,
+    required this.ownershipSharePercent,
+    required this.effectiveFromUtc,
+    this.effectiveToUtc,
+    required this.statementRecipientName,
+    this.statementRecipientEmail,
+    required this.payeeName,
+  });
+
+  factory PropertyOwnership.fromJson(Map<String, dynamic> json) {
+    return PropertyOwnership(
+      id: (json['id'] as num).toInt(),
+      ownerEntityId: (json['ownerEntityId'] as num).toInt(),
+      ownerName: json['ownerName'] as String? ?? '',
+      ownershipSharePercent: (json['ownershipSharePercent'] as num).toDouble(),
+      effectiveFromUtc:
+          DateTime.tryParse(json['effectiveFromUtc'] as String? ?? '') ??
+          DateTime(0),
+      effectiveToUtc: DateTime.tryParse(
+        json['effectiveToUtc'] as String? ?? '',
+      ),
+      statementRecipientName: json['statementRecipientName'] as String? ?? '',
+      statementRecipientEmail: json['statementRecipientEmail'] as String?,
+      payeeName: json['payeeName'] as String? ?? '',
+    );
+  }
+}
+
 class Property {
   final int id;
   final int portfolioId;
-  final int? ownerId;
-  final int? ownerEntityId;
+  final List<PropertyOwnership> ownerships;
   final String name;
   final String type;
   final RentalStructure rentalStructure;
@@ -36,7 +77,6 @@ class Property {
   final String? inServiceDate;
   final double? manualAnnualDepreciation;
   final double? accumulatedDepreciation;
-  final String? ownerName;
   final int? unitCount;
   final int? occupiedUnits;
   final DateTime createdAt;
@@ -45,8 +85,7 @@ class Property {
   const Property({
     required this.id,
     required this.portfolioId,
-    this.ownerId,
-    this.ownerEntityId,
+    this.ownerships = const [],
     required this.name,
     required this.type,
     required this.rentalStructure,
@@ -64,7 +103,6 @@ class Property {
     this.inServiceDate,
     this.manualAnnualDepreciation,
     this.accumulatedDepreciation,
-    this.ownerName,
     this.unitCount,
     this.occupiedUnits,
     required this.createdAt,
@@ -75,8 +113,14 @@ class Property {
     return Property(
       id: (json['id'] as num).toInt(),
       portfolioId: (json['portfolioId'] as num).toInt(),
-      ownerId: (json['ownerId'] as num?)?.toInt(),
-      ownerEntityId: (json['ownerEntityId'] as num?)?.toInt(),
+      ownerships: (json['ownerships'] as List<dynamic>? ?? const [])
+          .whereType<Map>()
+          .map(
+            (ownership) => PropertyOwnership.fromJson(
+              Map<String, dynamic>.from(ownership),
+            ),
+          )
+          .toList(growable: false),
       name: json['name'] as String? ?? '',
       type: json['type'] as String? ?? '',
       rentalStructure: RentalStructure.fromJson(json['rentalStructure']),
@@ -96,7 +140,6 @@ class Property {
           ?.toDouble(),
       accumulatedDepreciation: (json['accumulatedDepreciation'] as num?)
           ?.toDouble(),
-      ownerName: json['ownerName'] as String?,
       unitCount: (json['unitCount'] as num?)?.toInt(),
       occupiedUnits: (json['occupiedUnits'] as num?)?.toInt(),
       createdAt:
@@ -109,8 +152,6 @@ class Property {
   Map<String, dynamic> toJson() {
     return {
       'portfolioId': portfolioId,
-      if (ownerId != null) 'ownerId': ownerId,
-      if (ownerEntityId != null) 'ownerEntityId': ownerEntityId,
       'name': name,
       'type': type,
       'rentalStructure': rentalStructure.wireValue,

@@ -35,4 +35,30 @@ describe('unit lease tab create action', () => {
 		assert.doesNotMatch(source, /relationship\.leaseId/);
 		assert.doesNotMatch(source, /selectedLeaseId/);
 	});
+
+	it('does not let access-disposition initialization retrigger its own effect', () => {
+		assert.match(source, /import \{[^}]*untrack[^}]*\} from 'svelte'/s);
+		assert.match(source, /const current = untrack\(\(\) => accessDispositions\)/);
+		assert.match(source, /let changed = false/);
+		assert.match(source, /if \(changed\) accessDispositions = next/);
+		assert.doesNotMatch(source, /const next = \{ \.\.\.accessDispositions \}/);
+	});
+
+	it('shows a retryable error instead of leaving tenant relationships in a loader', () => {
+		assert.match(
+			source,
+			/\{#if relationshipsQuery\.isLoading\}[\s\S]*\{:else if relationshipsQuery\.isError\}[\s\S]*Tenant relationships could not be loaded\.[\s\S]*relationshipsQuery\.refetch\(\)/
+		);
+		assert.match(source, /retry:\s*false/);
+	});
+
+	it('searches and pages eligible transfer destinations on the server', () => {
+		assert.match(source, /<RemoteRecordSelect[\s\S]*testid="transfer-destination-unit"/);
+		assert.match(source, /units\.listPage\(\{/);
+		assert.match(source, /\.\.\.params/);
+		assert.match(source, /availableForLease:\s*true/);
+		assert.match(source, /excludeUnitId:\s*dashboard\.unit\.id/);
+		assert.doesNotMatch(source, /destinationUnitsQuery/);
+		assert.doesNotMatch(source, /take:\s*100,\s*\n\s*availableForLease:\s*true/);
+	});
 });

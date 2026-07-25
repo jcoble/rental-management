@@ -166,11 +166,27 @@ public class ApplicationServiceTests : IDisposable
 
         result.TotalCount.Should().Be(2, "only the two applications tied to unit A are in scope");
         result.Items.Select(a => a.LastName).Should().BeEquivalentTo(["Alpha", "Bravo"]);
+        result.Items.Should().OnlyContain(a =>
+            a.PropertyName == "Maple Grove" && (a.UnitNumber == "A"));
 
-        // The unit scope must run as a SQL WHERE on UnitId (DB-side), never an in-memory filter.
-        _commands.Should().Contain(sql =>
-            sql.Contains("\"UnitId\"", StringComparison.OrdinalIgnoreCase) &&
+        _commands.Should().HaveCount(2, "the application page is one count plus one page statement");
+        var countSql = _commands.Single(sql =>
             sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase));
+        var pageSql = _commands.Single(sql =>
+            !sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase));
+        countSql.Should().Contain("\"UnitId\"");
+        pageSql.Should().Contain("\"UnitId\"");
+        pageSql.Should().Contain("ORDER BY");
+        pageSql.Should().Contain("LIMIT");
+        pageSql.Should().Contain("LEFT JOIN");
+        pageSql.Should().Contain("\"PropertyName\"");
+        pageSql.Should().Contain("\"UnitNumber\"");
+        pageSql.Should().Contain("\"FirstName\"");
+        pageSql.Should().Contain("\"ApprovedTenantId\"");
+        pageSql.Should().NotContain("SELECT *");
+        _commands.Should().OnlyContain(sql =>
+            sql.Contains("\"UnitId\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("RentalApplications", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

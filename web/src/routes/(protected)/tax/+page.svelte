@@ -13,6 +13,7 @@
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { FileText, Receipt, MessageSquare, AlertTriangle } from '@lucide/svelte';
 	import { ApiError } from '$lib/api/client';
 
@@ -44,7 +45,7 @@
 	}));
 
 	const vendors1099 = $derived(vendor1099Query.data?.rows ?? []);
-	const vendorsNeedingW9 = $derived(vendors1099.filter((v) => v.needsW9).length);
+	const vendorsNeedingW9 = $derived(vendor1099Query.data?.needsW9Count ?? 0);
 
 	let w9OperationIds = $state<Record<number, string>>({});
 	const requestW9Mutation = createMutation(() => ({
@@ -181,13 +182,12 @@
 		</Card.Header>
 		<Card.Content class="p-4">
 			{#if vendor1099Query.isLoading}
-				<p class="py-6 text-center text-sm text-muted-foreground" data-testid="vendors-1099-loading">
-					Loading vendors…
-				</p>
+				<LoadingState label="Loading 1099 vendors" variant="spinner" testid="vendors-1099-loading" />
 			{:else if vendor1099Query.isError}
-				<p class="py-6 text-center text-sm text-destructive" data-testid="vendors-1099-error">
-					Could not load the 1099 checklist.
-				</p>
+				<div class="flex flex-wrap items-center justify-center gap-3 py-6" role="alert" data-testid="vendors-1099-error">
+					<p class="text-sm text-destructive">Could not load the 1099 checklist.</p>
+					<Button size="sm" variant="outline" onclick={() => vendor1099Query.refetch()}>Retry checklist</Button>
+				</div>
 			{:else if vendors1099.length === 0}
 				<p class="py-6 text-center text-sm text-muted-foreground" data-testid="vendors-1099-empty">
 					No 1099-eligible vendors yet.
@@ -282,13 +282,12 @@
 	</Card.Root>
 
 	{#if scheduleEQuery.isLoading}
-		<p class="py-12 text-center text-sm text-muted-foreground" data-testid="tax-loading">
-			Loading tax summary…
-		</p>
+		<LoadingState label="Loading tax summary" variant="page" testid="tax-loading" />
 	{:else if scheduleEQuery.isError}
-		<p class="py-12 text-center text-sm text-destructive" data-testid="tax-error">
-			Could not load tax data. Please try again.
-		</p>
+		<div class="flex flex-wrap items-center justify-center gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="tax-error">
+			<p class="text-sm text-destructive">Could not load tax data.</p>
+			<Button size="sm" variant="outline" onclick={() => scheduleEQuery.refetch()}>Retry tax summary</Button>
+		</div>
 	{:else if !report || (report.properties.length === 0 && !report.unallocatedActivity.requiresAllocation)}
 		<p class="py-12 text-center text-sm text-muted-foreground" data-testid="tax-empty">
 			No rental income or expense data for {selectedYear}.

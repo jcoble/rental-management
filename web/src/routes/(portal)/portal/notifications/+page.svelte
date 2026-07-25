@@ -3,10 +3,12 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import { notifications } from '$lib/api/endpoints/notifications';
 	import type { NotificationItem } from '$lib/api/types/notification';
+	import { getAuthState } from '$lib/stores/auth.svelte';
 	import { notificationStore } from '$lib/stores/notifications.svelte';
-	import { portalActionUrl } from '$lib/utils/portalLinks';
+	import { notificationIntentUrl } from '$lib/utils/portalLinks';
 	import { BellRing } from '@lucide/svelte';
 
+	const authState = getAuthState();
 	const notificationsQuery = createQuery(() => ({
 		queryKey: ['portal-notifications-page'],
 		queryFn: () => notifications.list({ take: 50 })
@@ -17,7 +19,10 @@
 			await notificationStore.markAsRead(item.id);
 			await notificationStore.refresh();
 		}
-		await goto(portalActionUrl(item.actionUrl), { invalidateAll: true });
+		await goto(
+			notificationIntentUrl(item.navigationIntent, authState.accessEnvelope?.selectedContext),
+			{ invalidateAll: true }
+		);
 	}
 </script>
 

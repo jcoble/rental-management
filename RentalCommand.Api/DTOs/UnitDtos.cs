@@ -33,6 +33,14 @@ public class UnitResponse
 
 }
 
+public class UnitListResponse
+{
+    public IReadOnlyList<UnitResponse> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
+}
+
 /// <summary>
 /// A units-list row with cheap health badges for the <c>/units</c> page (spec section 10). Fields
 /// come from the paged canonical health query plus one page-scoped DB aggregate for documents; the list
@@ -96,6 +104,7 @@ public class UnitHealthListQuery : ListQuery
 public class UnitListQuery : ListQuery
 {
     public bool? AvailableForLease { get; set; }
+    public int? ExcludeUnitId { get; set; }
 }
 
 public class CreateUnitRequest

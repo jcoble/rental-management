@@ -5,6 +5,7 @@ using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Navigation;
 using RentalCommand.Core.Owners;
 
 namespace RentalCommand.Data.Owners;
@@ -153,24 +154,32 @@ internal static class OwnerPortalCommandSupport
             });
         }
 
-        var recipientIds = await StaffRecipientsForOwner(
+        var recipients = await StaffRecipientsForOwner(
                 attempt.Persistence, portfolioId, source.OwnerEntityId, now)
-            .OrderBy(userId => userId)
+            .OrderBy(recipient => recipient.UserId)
             .ToListAsync(ct);
         var body = string.IsNullOrWhiteSpace(responseBody)
             ? responseTitle
             : $"{responseTitle}: {responseBody.Trim()}";
         if (body.Length > 1000) body = body[..997] + "...";
 
-        var notifications = recipientIds.Select(userId => new Notification
+        var notifications = recipients.Select(recipient => new Notification
         {
             PortfolioId = portfolioId,
-            UserId = userId,
+            UserId = recipient.UserId,
             Type = responseType,
             Title = responseTitle,
             Message = body,
             Severity = responseType == "OwnerApprovalDecision" ? "Info" : "Success",
-            ActionUrl = $"/owners/{source.OwnerEntityId}",
+            NavigationExperience = NavigationExperience.Management,
+            NavigationDestination = NavigationDestination.Owners,
+            NavigationAccessContextId = recipient.AccessContextId,
+            NavigationAccessRevision = recipient.AccessRevision,
+            NavigationResourceKind = nameof(OwnerEntity),
+            NavigationResourceId = source.OwnerEntityId,
+            NavigationAction = NavigationAction.Open,
+            NavigationExpiresAtUtc = now.AddDays(7),
+            NavigationFallbackDestination = NavigationDestination.Home,
             RelatedEntityType = "OwnerEntity",
             RelatedEntityId = source.OwnerEntityId,
             CreatedAt = now,
@@ -308,17 +317,20 @@ internal static class OwnerPortalCommandSupport
             "The owner portal item is not available in the active relationship.");
     }
 
-    private static IQueryable<int> StaffRecipientsForOwner(
+    private static IQueryable<StaffRecipient> StaffRecipientsForOwner(
         IAtomicPersistenceSession persistence,
         int portfolioId,
         int ownerEntityId,
         DateTime now)
     {
-        var ownerPropertyIds = persistence.Query<Property>()
-            .Where(property => property.PortfolioId == portfolioId
-                && property.OwnerEntityId == ownerEntityId
-                && property.DeletedAt == null)
-            .Select(property => property.Id);
+        var ownerPropertyIds = persistence.Query<PropertyOwnership>()
+            .Where(ownership => ownership.PortfolioId == portfolioId
+                && ownership.OwnerEntityId == ownerEntityId
+                && ownership.EffectiveFromUtc <= now
+                && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now)
+                && ownership.Property != null
+                && ownership.Property.DeletedAt == null)
+            .Select(ownership => ownership.PropertyId);
 
         return (
             from context in persistence.Query<WorkspaceAccessContext>()
@@ -352,7 +364,7 @@ internal static class OwnerPortalCommandSupport
                     && assignment.SelectedProperties.Any(selected =>
                         selected.PortfolioId == portfolioId
                         && ownerPropertyIds.Contains(selected.PropertyId)))
-            select context.UserId)
+            select new StaffRecipient(context.UserId, context.Id, context.AccessRevision))
             .Distinct()
             .TagWith("Owner portal response recipients: owner property scope and owner-report authority");
     }
@@ -375,4 +387,5 @@ internal static class OwnerPortalCommandSupport
     }
 
     private sealed record OwnerSource(int OwnerEntityId);
+    private sealed record StaffRecipient(int UserId, int AccessContextId, long AccessRevision);
 }

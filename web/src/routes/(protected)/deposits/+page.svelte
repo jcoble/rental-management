@@ -182,7 +182,7 @@
 	<DataGrid
 		data={accounts}
 		{columns}
-		loading={depositsQuery.isLoading || depositsQuery.isFetching}
+		loading={depositsQuery.isLoading}
 		emptyMessage={search.trim() ? 'No security deposit accounts match your search.' : 'No security deposit accounts yet.'}
 		emptyDescription={search.trim() ? 'Try a tenant, property, unit, or account number.' : 'An account is created when an approved application is prepared for move-in.'}
 		getRowKey={(account) => account.securityDepositAccountId}

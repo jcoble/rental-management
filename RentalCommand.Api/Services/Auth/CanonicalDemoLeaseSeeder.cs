@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -12,7 +13,23 @@ internal sealed record CanonicalDemoLeaseSeedResult(
     IReadOnlyList<LeaseManagement> ActiveManagements,
     int ExpiredManagementCount,
     int LedgerEntryCount,
-    int SecurityDepositAccountCount);
+    int SecurityDepositAccountCount,
+    CanonicalDemoLegalDocumentIntent? LegalDocumentIntent);
+
+internal sealed record CanonicalDemoLegalDocumentIntent(
+    int PortfolioId,
+    int ActorUserId,
+    int LeaseManagementId,
+    int AgreementId,
+    int DraftRevision,
+    int DocumentSourceVersionId,
+    int TermsSchemaVersion,
+    string TermsPayload,
+    LeaseAgreementRenderData RenderData,
+    string TenantName,
+    string TenantEmail,
+    DateTime IssuedAtUtc,
+    DateTime ExecutedAtUtc);
 
 /// <summary>Builds demo lease facts directly in the canonical lifecycle and money model.</summary>
 internal static class CanonicalDemoLeaseSeeder
@@ -77,7 +94,7 @@ internal static class CanonicalDemoLeaseSeeder
                 PossessionAgreementExceptionReason =
                     "Demo relationship has synthetic terms and no fabricated legal-document bytes.",
                 PossessionAgreementExceptionAuthorizedByUserId = actorUserId,
-                PlannedMoveOutAtUtc = isCurrent ? end : null,
+                PlannedMoveOutAtUtc = null,
                 PossessionReturnedAtUtc = isCurrent ? null : end,
                 // Historical money must be inserted while the account is open. Closed demo
                 // relationships are finalized after their complete ledger is persisted below.
@@ -338,7 +355,152 @@ internal static class CanonicalDemoLeaseSeeder
             activeManagements,
             graphs.Count - activeManagements.Count,
             ledgerEntryCount,
-            graphs.Count);
+            graphs.Count,
+            await BuildLegalDocumentIntentAsync(db, portfolioId, actorUserId, now, ct));
+    }
+
+    public static async Task<CanonicalDemoLeaseSeedResult> ReconcileAsync(
+        RentalCommandDbContext db,
+        IAtomicExecutionState atomicExecution,
+        int portfolioId,
+        int actorUserId,
+        DateTime now,
+        CancellationToken ct)
+    {
+        if (!atomicExecution.IsInfrastructureActive)
+        {
+            throw new AtomicArchitectureException(
+                "Canonical demo lease reconciliation must run inside the admitted infrastructure transaction.");
+        }
+
+        var rowVersion = Guid.NewGuid();
+        var openRelationshipIds = db.TenantAccounts
+            .Where(account => account.PortfolioId == portfolioId && account.ClosedAtUtc == null)
+            .Select(account => account.LeaseManagementId);
+        await db.LeaseManagements
+            .Where(relationship => relationship.PortfolioId == portfolioId
+                && relationship.RelationshipNumber.StartsWith("DEMO-LM-")
+                && relationship.PossessionGivenAtUtc != null
+                && relationship.PossessionReturnedAtUtc == null
+                && openRelationshipIds.Contains(relationship.Id)
+                && relationship.EndingDisposition == LeaseManagementEndingDisposition.Undecided)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(relationship => relationship.PlannedMoveOutAtUtc, (DateTime?)null)
+                .SetProperty(relationship => relationship.EndingDispositionDecidedAtUtc, (DateTime?)null)
+                .SetProperty(relationship => relationship.EndingDispositionDecidedByUserId, (int?)null)
+                .SetProperty(relationship => relationship.UpdatedAtUtc, now)
+                .SetProperty(relationship => relationship.RowVersion, rowVersion)
+                .SetProperty(
+                    relationship => relationship.PossessionAgreementExceptionReason,
+                    relationship => relationship.RelationshipNumber == "DEMO-LM-ACTIVE-017"
+                        ? "Demo imported possession is intentionally retained without a governing Agreement."
+                        : relationship.PossessionAgreementExceptionReason)
+                .SetProperty(
+                    relationship => relationship.PossessionAgreementExceptionAuthorizedByUserId,
+                    relationship => relationship.RelationshipNumber == "DEMO-LM-ACTIVE-017"
+                        ? actorUserId
+                        : relationship.PossessionAgreementExceptionAuthorizedByUserId),
+                ct);
+        return new CanonicalDemoLeaseSeedResult(
+            [],
+            0,
+            0,
+            0,
+            await BuildLegalDocumentIntentAsync(db, portfolioId, actorUserId, now, ct));
+    }
+
+    private static async Task<CanonicalDemoLegalDocumentIntent?> BuildLegalDocumentIntentAsync(
+        RentalCommandDbContext db,
+        int portfolioId,
+        int actorUserId,
+        DateTime now,
+        CancellationToken ct)
+    {
+        var row = await (
+            from candidateAgreement in db.LeaseAgreements.AsNoTracking()
+            where candidateAgreement.PortfolioId == portfolioId
+                && candidateAgreement.AgreementNumber == "DEMO-AGR-ACTIVE-001-V1"
+            join relationship in db.LeaseManagements.AsNoTracking()
+                on new { candidateAgreement.PortfolioId, Id = candidateAgreement.LeaseManagementId }
+                equals new { relationship.PortfolioId, relationship.Id }
+            join property in db.Properties.AsNoTracking()
+                on new { relationship.PortfolioId, Id = relationship.PropertyId }
+                equals new { property.PortfolioId, property.Id }
+            join unit in db.Units.AsNoTracking()
+                on new { relationship.PortfolioId, Id = relationship.UnitId }
+                equals new { unit.PortfolioId, unit.Id }
+            join signer in db.LeaseAgreementSigners.AsNoTracking()
+                    .Where(candidate => candidate.SignerRole == LeaseLegalSignerRole.PrimaryTenant)
+                on new { candidateAgreement.PortfolioId, AgreementId = candidateAgreement.Id }
+                equals new { signer.PortfolioId, AgreementId = signer.LeaseAgreementId }
+            join portfolio in db.Portfolios.AsNoTracking()
+                on candidateAgreement.PortfolioId equals portfolio.Id
+            select new
+            {
+                Agreement = candidateAgreement,
+                relationship.PropertyId,
+                property.Name,
+                property.AddressLine1,
+                property.AddressLine2,
+                property.City,
+                property.State,
+                property.PostalCode,
+                property.YearBuilt,
+                unit.UnitNumber,
+                signer.NameSnapshot,
+                signer.EmailSnapshot,
+                portfolio.ManagementCompanyName,
+                PortfolioName = portfolio.Name,
+            }).SingleOrDefaultAsync(ct);
+
+        if (row is null)
+        {
+            return null;
+        }
+
+        var agreement = row.Agreement;
+        var propertyAddress = string.Join(", ", new[]
+        {
+            row.AddressLine1,
+            row.AddressLine2,
+            $"{row.City}, {row.State} {row.PostalCode}".Trim(),
+        }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        var issuedAt = agreement.CreatedAtUtc.AddMinutes(1);
+        var executedAt = issuedAt.AddMinutes(5);
+        return new CanonicalDemoLegalDocumentIntent(
+            portfolioId,
+            actorUserId,
+            agreement.LeaseManagementId,
+            agreement.Id,
+            agreement.DraftRevision,
+            agreement.DocumentSourceVersionId,
+            agreement.TermsSchemaVersion,
+            agreement.TermsPayload,
+            new LeaseAgreementRenderData
+            {
+                PropertyId = row.PropertyId,
+                AgreementNumber = agreement.AgreementNumber,
+                TermStartOn = agreement.TermStartOn,
+                TermEndOn = agreement.TermEndOn,
+                BaseRentAmount = agreement.BaseRentAmount,
+                SecurityDepositObligation = agreement.SecurityDepositObligation,
+                LateFeeAmount = agreement.LateFeeAmount,
+                RentDueDay = agreement.RentDueDay,
+                LandlordName = string.IsNullOrWhiteSpace(row.ManagementCompanyName)
+                    ? row.PortfolioName
+                    : row.ManagementCompanyName,
+                TenantName = row.NameSnapshot,
+                TenantEmail = row.EmailSnapshot,
+                PropertyName = row.Name,
+                PropertyAddress = propertyAddress,
+                UnitNumber = row.UnitNumber,
+                State = row.State,
+                YearBuilt = row.YearBuilt,
+            },
+            row.NameSnapshot,
+            row.EmailSnapshot,
+            issuedAt,
+            executedAt);
     }
 
     private static TenantLedgerEntry Entry(

@@ -6,7 +6,9 @@
 	import { properties } from '$lib/api/endpoints/properties';
 	import { owners } from '$lib/api/endpoints/owners';
 	import { leaseManagements } from '$lib/api/endpoints/lease-managements';
-	import type { LeaseManagementSummary, Property, Unit } from '$lib/types';
+	import { workOrders } from '$lib/api/endpoints/workOrders';
+	import { expenses } from '$lib/api/endpoints/expenses';
+	import type { Expense, LeaseManagementSummary, Property, Unit, UnitHealth, WorkOrder } from '$lib/types';
 	import { recordHref } from '$lib/navigation/record-href';
 	import { getPropertyDeleteState } from '$lib/properties/property-delete-state';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
@@ -21,7 +23,9 @@
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
+	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import HeroCard, { type HeroTone } from '$lib/components/shared/HeroCard.svelte';
@@ -45,6 +49,11 @@
 	import type { WorkspaceExperience } from '$lib/types/user';
 	import { getAuthState } from '$lib/stores/auth.svelte';
 	import { CAPABILITY } from '$lib/auth/experience-policy';
+	import {
+		propertyWorkspaceSections,
+		readPropertyWorkspaceSection,
+		type PropertyWorkspaceSection
+	} from '$lib/components/property/property-workspace';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -62,6 +71,18 @@
 	const canManageMoneyExpenses = $derived(
 		activeExperience === 'Management' && activeCapabilities.has(CAPABILITY.moneyExpensesManage)
 	);
+	const PAGE_SIZE = 20;
+	const activeArea = $derived<PropertyWorkspaceSection>(
+		readPropertyWorkspaceSection(page.url.searchParams.get('area'))
+	);
+	let rentalsPage = $state(1);
+	let workPage = $state(1);
+	let financePage = $state(1);
+	let leasePage = $state(1);
+
+	function openArea(area: PropertyWorkspaceSection) {
+		void goto(`/properties/${id}?area=${area}`, { keepFocus: true, noScroll: true });
+	}
 
 	// ── Queries ────────────────────────────────────────────────────────────────
 	const propertyQuery = createQuery(() => ({
@@ -71,27 +92,75 @@
 	}));
 
 	const unitsQuery = createQuery(() => ({
-		queryKey: ['units', id],
-		queryFn: () => properties.listUnits(id),
-		enabled: !isNaN(id) && id > 0,
+		queryKey: ['property-workspace', id, 'rentals', rentalsPage, PAGE_SIZE],
+		queryFn: () => properties.listWorkspaceUnitsPage(id, {
+			skip: (rentalsPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+			sort: 'unitNumber'
+		}),
+		enabled: !isNaN(id) && id > 0 && activeArea === 'rentals',
 	}));
 
 	const leasesQuery = createQuery(() => ({
-		queryKey: ['lease-managements', { propertyId: id }],
-		queryFn: () => leaseManagements.listPage({ propertyId: id, take: 100, sort: '-updatedAtUtc' }),
-		enabled: !isNaN(id) && id > 0 && portfolioId > 0,
+		queryKey: ['property-workspace', id, 'leases', leasePage, PAGE_SIZE],
+		queryFn: () => leaseManagements.listPage({
+			propertyId: id,
+			skip: (leasePage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+			sort: '-updatedAtUtc'
+		}),
+		enabled: !isNaN(id) && id > 0 && portfolioId > 0 && activeArea === 'rentals',
 	}));
 
-	const ownersQuery = createQuery(() => ({
-		queryKey: ['owners', portfolioId],
-		queryFn: () => owners.list(portfolioId, { take: 200 }),
-		enabled: portfolioId > 0 && canManageRentals,
+	const workOrdersQuery = createQuery(() => ({
+		queryKey: ['property-workspace', id, 'work', workPage, PAGE_SIZE],
+		queryFn: () => workOrders.listPage(portfolioId, {
+			propertyId: id,
+			skip: (workPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+			sort: '-updatedAt'
+		}),
+		enabled: !isNaN(id) && id > 0 && portfolioId > 0 && activeArea === 'property-work',
 	}));
+
+	const expensesQuery = createQuery(() => ({
+		queryKey: ['property-workspace', id, 'finances', financePage, PAGE_SIZE],
+		queryFn: () => expenses.listPage(portfolioId, {
+			propertyId: id,
+			skip: (financePage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+			sort: '-incurredAt'
+		}),
+		enabled: !isNaN(id) && id > 0 && portfolioId > 0 && activeArea === 'property-finances',
+	}));
+
+	async function loadOwnerOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await owners.listPage(portfolioId, { ...params, sort: 'name' });
+		return {
+			...result,
+			items: result.items.map((owner) => ({
+				id: owner.id,
+				label: owner.name,
+				description: owner.ownerEntityType
+			}))
+		};
+	}
 
 	const property = $derived(propertyQuery.data);
 	const propertyDeleteState = $derived(property ? getPropertyDeleteState(property) : null);
-	const unitsList = $derived(unitsQuery.data ?? []);
+	const unitsList = $derived(unitsQuery.data?.items ?? []);
 	const leasesList = $derived(leasesQuery.data?.items ?? []);
+
+	$effect(() => {
+		const loaded = propertyQuery.data;
+		if (
+			loaded?.rentalStructure === 'SingleRental' &&
+			loaded.workspaceEntry.destination === 'Unit' &&
+			loaded.workspaceEntry.unitId
+		) {
+			void goto(`/units/${loaded.workspaceEntry.unitId}`, { replaceState: true });
+		}
+	});
 
 	// Hero occupancy + context tone: full occupancy reads green, vacancy is neutral.
 	const occupiedUnits = $derived(property?.occupiedUnits ?? 0);
@@ -109,6 +178,8 @@
 	let propertyForm = $state({ ...emptyProperty });
 	let propertyFormErrors = $state<Record<string, string>>({});
 	let showDeletePropertyConfirm = $state(false);
+	let selectedOwnerLabel = $state<string | null>(null);
+	let initialOwnerEntityId = $state('');
 
 	function fmtMoney(value: number): string {
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value || 0);
@@ -117,11 +188,16 @@
 		const d = new Date(value);
 		return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 	}
-
-	const ownerOptions = $derived([
-		{ value: '', label: 'No owner assigned' },
-		...(ownersQuery.data ?? []).map((o) => ({ value: String(o.id), label: o.name })),
-	]);
+	function ownershipLabel(ownerships: Property['ownerships']): string {
+		if (ownerships.length === 0) return 'No owner assigned';
+		return ownerships
+			.map((ownership) =>
+				ownerships.length === 1 && ownership.ownershipSharePercent === 100
+					? ownership.ownerName
+					: `${ownership.ownerName} (${ownership.ownershipSharePercent}%)`
+			)
+			.join(', ');
+	}
 
 	// TSK-599 — field-level container transform. Wrap a view⇄edit state change in a View
 	// Transition and tag <html> so each InlineField's read-only box morphs into its input
@@ -149,6 +225,7 @@
 	function startEditingProperty() {
 		if (!canManageRentals) return;
 		if (!property) return;
+		if (activeArea !== 'ownership-management') openArea('ownership-management');
 		propertyForm = {
 			name: property.name,
 			type: property.type ?? 'MultiFamily',
@@ -159,12 +236,14 @@
 			city: property.city,
 			state: property.state,
 			postalCode: property.postalCode,
-			ownerEntityId: property.ownerEntityId != null ? String(property.ownerEntityId) : '',
+			ownerEntityId: property.ownerships.length === 1 ? String(property.ownerships[0].ownerEntityId) : '',
 			purchasePrice: property.purchasePrice != null ? String(property.purchasePrice) : '',
 			landValue: property.landValue != null ? String(property.landValue) : '',
 			inServiceDate: property.inServiceDate ? property.inServiceDate.slice(0, 10) : '',
 			manualAnnualDepreciation: property.manualAnnualDepreciation != null ? String(property.manualAnnualDepreciation) : '',
 		};
+		initialOwnerEntityId = propertyForm.ownerEntityId;
+		selectedOwnerLabel = property.ownerships.length === 1 ? property.ownerships[0].ownerName : null;
 		propertyFormErrors = {};
 		morphEdit(() => {
 			editingProperty = true;
@@ -188,13 +267,22 @@
 		}
 		propertyFormErrors = {};
 		const mutableProperty = propertyUpdateFields(result.data);
+		const ownerEntityId = result.data.ownerEntityId;
+		const ownershipChange = String(ownerEntityId ?? '') === initialOwnerEntityId
+			? {}
+			: ownerEntityId == null
+				? { ownerships: [], clearOwnership: true }
+				: {
+						ownerships: [{ ownerEntityId, ownershipSharePercent: 100 }],
+						clearOwnership: false
+					};
 		savePropertyMutation.mutate({
 			id,
 			data: {
 				portfolioId,
 				...mutableProperty,
 				...basis.data,
-				clearOwnerEntity: result.data.ownerEntityId == null,
+				...ownershipChange,
 			},
 		});
 	}
@@ -313,26 +401,12 @@
 	}));
 
 	// ── Unit columns ───────────────────────────────────────────────────────────
-	const unitColumns: ColumnDef<Unit>[] = [
+	const unitColumns: ColumnDef<UnitHealth>[] = [
 		{
 			key: 'unitNumber',
 			title: 'Unit #',
 			sortable: true,
 			mobileRole: 'title',
-		},
-		{
-			key: 'bedrooms',
-			title: 'Beds',
-			format: 'number',
-			sortable: true,
-			mobileRole: 'meta',
-		},
-		{
-			key: 'bathrooms',
-			title: 'Baths',
-			format: 'number',
-			sortable: true,
-			mobileRole: 'meta',
 		},
 		{
 			key: 'marketRent',
@@ -348,13 +422,27 @@
 			cell: unitStatusCell,
 		},
 		{
-			key: 'actions',
-			title: '',
-			mobileRole: 'hidden',
-			align: 'right',
-			width: '6rem',
-			cell: unitActionsCell,
+			key: 'openWorkOrderCount',
+			title: 'Open work',
+			format: 'number',
+			mobileRole: 'meta',
 		},
+	];
+
+	const workOrderColumns: ColumnDef<WorkOrder>[] = [
+		{ key: 'title', title: 'Work order', sortable: true, mobileRole: 'title' },
+		{ key: 'unitNumber', title: 'Unit', mobileRole: 'subtitle', accessor: (row) => row.unitNumber ?? 'Property-wide' },
+		{ key: 'priority', title: 'Priority', sortable: true, mobileRole: 'meta' },
+		{ key: 'status', title: 'Status', sortable: true, mobileRole: 'badge' },
+		{ key: 'updatedAt', title: 'Updated', sortable: true, format: 'date', mobileRole: 'meta' }
+	];
+
+	const expenseColumns: ColumnDef<Expense>[] = [
+		{ key: 'description', title: 'Expense', sortable: true, mobileRole: 'title' },
+		{ key: 'category', title: 'Category', sortable: true, mobileRole: 'subtitle' },
+		{ key: 'amount', title: 'Amount', sortable: true, format: 'currency', mobileRole: 'metric' },
+		{ key: 'status', title: 'Status', sortable: true, mobileRole: 'badge' },
+		{ key: 'incurredAt', title: 'Incurred', sortable: true, format: 'date', mobileRole: 'meta' }
 	];
 
 	// ── Lease columns ──────────────────────────────────────────────────────────
@@ -403,41 +491,8 @@
 	];
 </script>
 
-{#snippet unitStatusCell(u: Unit)}
+{#snippet unitStatusCell(u: UnitHealth)}
 	<StatusBadge status={u.status} />
-{/snippet}
-
-{#snippet unitActionsCell(u: Unit)}
-	<div class="flex items-center justify-end gap-1" onclick={(e) => e.stopPropagation()} role="none">
-		<a
-			href="/units/{u.id}"
-			data-testid="unit-open"
-			class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-			aria-label="Open unit"
-		>
-			<ArrowRight class="h-3.5 w-3.5" />
-		</a>
-		{#if canManageRentals}
-			<button
-				type="button"
-				data-testid="unit-edit"
-				class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-				aria-label="Edit unit"
-				onclick={(e) => { e.stopPropagation(); openEditUnit(u); }}
-			>
-				<Pencil class="h-3.5 w-3.5" />
-			</button>
-			<button
-				type="button"
-				data-testid="unit-delete"
-				class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-				aria-label="Delete unit"
-				onclick={(e) => { e.stopPropagation(); deleteUnitTarget = u; }}
-			>
-				<Trash2 class="h-3.5 w-3.5" />
-			</button>
-		{/if}
-	</div>
 {/snippet}
 
 {#snippet leaseStatusCell(relationship: LeaseManagementSummary)}
@@ -580,23 +635,50 @@
 			{/if}
 		</div>
 
-		<!-- Hero: the property + its occupancy at a glance, washed by occupancy/status. -->
-		<HeroCard tone={heroTone} testid="property-hero" contentClass="flex flex-wrap items-end justify-between gap-6" class="mb-6">
-			<div class="min-w-0">
-				<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Occupancy</p>
-				<p class="mt-1 font-mono text-4xl font-bold tabular-nums tracking-tight" data-testid="property-hero-occupancy">
-					{occupiedUnits}<span class="text-2xl text-muted-foreground">/{totalUnits}</span>
-				</p>
-				<div class="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
-					<StatusBadge status={property.status} />
-					<span aria-hidden="true">·</span>
-					<span>{totalUnits === 1 ? '1 unit' : `${totalUnits} units`}{#if totalUnits > 0} · {Math.round((occupiedUnits / totalUnits) * 100)}% occupied{/if}</span>
-				</div>
+		<nav class="mb-6 overflow-x-auto border-b border-border" aria-label="Property workspace" data-testid="property-workspace-sections">
+			<div class="flex min-w-max gap-1">
+				{#each propertyWorkspaceSections as section}
+					<button
+						type="button"
+						class="border-b-2 px-4 py-3 text-sm font-medium transition-colors {activeArea === section.id ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}"
+						aria-current={activeArea === section.id ? 'page' : undefined}
+						data-testid={`property-area-${section.id}`}
+						onclick={() => openArea(section.id)}
+					>
+						{section.label}
+					</button>
+				{/each}
 			</div>
-		</HeroCard>
+		</nav>
 
-		<!-- Grouped detail cards -->
-		<div class="mb-6 grid gap-6 lg:grid-cols-2">
+		{#if activeArea === 'summary'}
+			<HeroCard tone={heroTone} testid="property-hero" contentClass="flex flex-wrap items-end justify-between gap-6" class="mb-6">
+				<div class="min-w-0">
+					<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Occupancy</p>
+					<p class="mt-1 font-mono text-4xl font-bold tabular-nums tracking-tight" data-testid="property-hero-occupancy">
+						{occupiedUnits}<span class="text-2xl text-muted-foreground">/{totalUnits}</span>
+					</p>
+					<div class="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+						<StatusBadge status={property.status} />
+						<span aria-hidden="true">·</span>
+						<span>{totalUnits === 1 ? '1 unit' : `${totalUnits} units`}{#if totalUnits > 0} · {Math.round((occupiedUnits / totalUnits) * 100)}% occupied{/if}</span>
+					</div>
+				</div>
+			</HeroCard>
+			<DetailCard
+				title="Property summary"
+				icon={Info}
+				accent="muted"
+				testid="property-detail-meta-card"
+				contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-4"
+			>
+				<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Rental setup</dt><dd class="mt-1 text-sm font-semibold">{formatRentalStructure(property.rentalStructure)}</dd></div>
+				<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Owner</dt><dd class="mt-1 text-sm font-semibold">{ownershipLabel(property.ownerships)}</dd></div>
+				<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Year built</dt><dd class="mt-1 text-sm font-semibold">{property.yearBuilt ?? '—'}</dd></div>
+				<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Management fee</dt><dd class="mt-1 text-sm font-semibold">{property.managementFeePercent != null ? `${property.managementFeePercent}%` : '—'}</dd></div>
+			</DetailCard>
+		{:else if activeArea === 'ownership-management'}
+		<div class="mb-6 grid gap-6 lg:grid-cols-2" data-testid="property-area-ownership-management-content">
 			<!-- TSK-599: field-level container transform. Each InlineField carries a morphName,
 			     so toggling Edit (via morphEdit → startViewTransition) morphs each read-only box
 			     into its input in place; the card itself stays put. -->
@@ -605,7 +687,26 @@
 				<InlineField label="Type" bind:value={propertyForm.type} display={formatPropertyType(property.type)} editing={editingProperty} type="select" options={propertyTypeOptions} error={propertyFormErrors.type} testid="property-detail-type" morphName="vt-prop-type" />
 				<InlineField label="Rental setup" bind:value={propertyForm.rentalStructure} display={formatRentalStructure(property.rentalStructure)} editing={false} type="select" options={rentalStructureOptions} error={propertyFormErrors.rentalStructure} testid="property-detail-rental-structure" morphName="vt-prop-rental-structure" />
 				<InlineField label="Status" bind:value={propertyForm.status} display={formatPropertyStatus(property.status)} editing={editingProperty} type="select" options={propertyStatusOptions} error={propertyFormErrors.status} testid="property-detail-status" morphName="vt-prop-status" />
-				<InlineField label="Owner" bind:value={propertyForm.ownerEntityId} display={property.ownerName ?? 'No owner assigned'} editing={editingProperty} type="select" options={ownerOptions} error={propertyFormErrors.ownerEntityId} testid="property-detail-owner" class="sm:col-span-2" morphName="vt-prop-owner" />
+				{#if editingProperty}
+					<div class="sm:col-span-2">
+						<RemoteRecordSelect
+							queryKey={['property-detail-owner', portfolioId]}
+							label="Owner"
+							bind:value={propertyForm.ownerEntityId}
+							selectedLabel={selectedOwnerLabel}
+							placeholder="No owner assigned"
+							clearLabel="No owner assigned"
+							searchPlaceholder="Search owners…"
+							emptyLabel="No matching owners"
+							loadPage={loadOwnerOptions}
+							onValueChange={(_value, option) => (selectedOwnerLabel = option?.label ?? null)}
+							testid="property-detail-owner"
+						/>
+						{#if propertyFormErrors.ownerEntityId}<p class="mt-1 text-xs text-destructive">{propertyFormErrors.ownerEntityId}</p>{/if}
+					</div>
+				{:else}
+					<InlineField label="Owner" bind:value={propertyForm.ownerEntityId} display={ownershipLabel(property.ownerships)} editing={false} testid="property-detail-owner" class="sm:col-span-2" morphName="vt-prop-owner" />
+				{/if}
 			</DetailCard>
 
 			<DetailCard title="Address" icon={MapPin} accent="muted" testid="property-detail-address-card" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
@@ -618,71 +719,8 @@
 				<InlineField label="ZIP" bind:value={propertyForm.postalCode} display={property.postalCode} editing={editingProperty} error={propertyFormErrors.postalCode} testid="property-detail-zip" morphName="vt-prop-zip" />
 			</DetailCard>
 
-			<DetailCard
-				title="Details"
-				icon={Info}
-				accent="muted"
-				testid="property-detail-meta-card"
-				class="lg:col-span-2"
-				contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-3"
-				help="Summary counts rolled up from the property's units. 'Occupied' counts units whose status is Occupied."
-				helpDetail="Unit count and occupancy are read-only — unit count updates as you add or remove units, and occupancy updates automatically as leases move tenants in and out."
-				helpLearnMoreUrl="/docs/property-details"
-				helpTestid="detailcard-help-details"
-			>
-				{#if !editingProperty && property.yearBuilt}
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Year Built</dt>
-						<dd class="mt-1 text-sm text-foreground">{property.yearBuilt}</dd>
-					</div>
-				{/if}
-				{#if !editingProperty && property.managementFeePercent != null}
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Management Fee</dt>
-						<dd class="mt-1 text-sm text-foreground">{property.managementFeePercent}%</dd>
-					</div>
-				{/if}
-				<div>
-					<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Units</dt>
-					<dd class="mt-1 text-sm font-semibold tabular-nums text-foreground">
-						{property.unitCount ?? 0} total · {property.occupiedUnits ?? 0} occupied
-					</dd>
-				</div>
-				{#if !editingProperty && property.notes}
-					<div class="sm:col-span-2 lg:col-span-3">
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Notes</dt>
-						<dd class="mt-1 text-sm text-foreground">{property.notes}</dd>
-					</div>
-				{/if}
-			</DetailCard>
-
-			<!-- Cost basis (depreciation): same field-level morph as the others (TSK-599). -->
-			<DetailCard
-				title="Cost basis (depreciation)"
-				icon={Info}
-				accent="muted"
-				testid="property-detail-basis-card"
-				class="lg:col-span-2"
-				contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-4"
-				help="These fields capture what you paid and when the property was put into service — the inputs your accountant needs for annual depreciation."
-				helpDetail="Purchase price minus land value gives the depreciable basis (land is NOT depreciable). In-service date starts the depreciation clock. Leave Manual annual depreciation blank to use the automatic straight-line calculation; fill it in to override with a custom amount."
-				helpLearnMoreUrl="/docs/cost-basis-depreciation"
-				helpTestid="detailcard-help-cost-basis"
-			>
-				<InlineField label="Purchase price" bind:value={propertyForm.purchasePrice} display={property.purchasePrice != null ? fmtMoney(property.purchasePrice) : '—'} editing={editingProperty} type="number" error={propertyFormErrors.purchasePrice} testid="property-basis-purchase-price" morphName="vt-prop-purchase" />
-				<InlineField label="Land value" bind:value={propertyForm.landValue} display={property.landValue != null ? fmtMoney(property.landValue) : '—'} editing={editingProperty} type="number" error={propertyFormErrors.landValue} testid="property-basis-land-value" morphName="vt-prop-land" />
-				<InlineField label="In-service date" bind:value={propertyForm.inServiceDate} display={property.inServiceDate ? fmtDateOnly(property.inServiceDate) : '—'} editing={editingProperty} type="date" error={propertyFormErrors.inServiceDate} testid="property-basis-in-service" morphName="vt-prop-inservice" />
-				<InlineField label="Manual annual depreciation" bind:value={propertyForm.manualAnnualDepreciation} display={property.manualAnnualDepreciation != null ? fmtMoney(property.manualAnnualDepreciation) : 'Auto (straight-line)'} editing={editingProperty} type="number" error={propertyFormErrors.manualAnnualDepreciation} testid="property-basis-manual-depr" morphName="vt-prop-manualdepr" />
-				{#if !editingProperty && (property.accumulatedDepreciation ?? 0) > 0}
-					<div class="sm:col-span-2 lg:col-span-4">
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Accumulated depreciation to date</dt>
-						<dd class="mt-1 text-sm tabular-nums text-foreground">{fmtMoney(property.accumulatedDepreciation ?? 0)}</dd>
-					</div>
-				{/if}
-			</DetailCard>
 		</div>
-
-		<!-- Units section -->
+		{:else if activeArea === 'rentals'}
 		<div class="mb-6" data-testid="property-detail-units">
 			<h2 class="mb-3 text-lg font-semibold">Units</h2>
 			<DataGrid
@@ -692,7 +730,11 @@
 				emptyMessage="No units on this property yet."
 				getRowKey={(u) => u.id}
 				onRowClick={(u) => goto(`/units/${u.id}`)}
-				pageSize={20}
+				pageSize={PAGE_SIZE}
+				page={rentalsPage}
+				totalCount={unitsQuery.data?.totalCount ?? 0}
+				serverSide
+				onPageChange={(next) => (rentalsPage = next)}
 				data-testid="property-units-grid"
 			>
 				{#snippet toolbar()}
@@ -706,22 +748,8 @@
 				{/snippet}
 			</DataGrid>
 		</div>
-
-		<!-- Mortgage / Loans section (+ inline amortization schedule) -->
-		<PropertyLoansSection propertyId={id} canManage={canManageMoneyExpenses} />
-
-		<!-- Capital assets section -->
-		<PropertyCapitalAssetsSection propertyId={id} canManage={canManageMoneyExpenses} />
-
-		<!-- Property sale / disposition section -->
-		<PropertyDispositionsSection propertyId={id} canManage={canManageRentals} />
-
-		<!-- Recurring expenses section -->
-		<PropertyRecurringExpensesSection propertyId={id} canManage={canManageMoneyExpenses} />
-
-		<!-- Leases section -->
 		<div data-testid="property-detail-leases">
-			<h2 class="mb-3 text-lg font-semibold">Leases</h2>
+			<h2 class="mb-3 text-lg font-semibold">Rental relationships</h2>
 			<DataGrid
 				data={leasesList}
 				columns={leaseColumns}
@@ -729,17 +757,74 @@
 				emptyMessage="No leases for this property."
 				onRowClick={(relationship) => goto(`/leases/${relationship.leaseManagementId}`)}
 				getRowKey={(relationship) => relationship.leaseManagementId}
-				pageSize={10}
+				pageSize={PAGE_SIZE}
+				page={leasePage}
+				totalCount={leasesQuery.data?.totalCount ?? 0}
+				serverSide
+				onPageChange={(next) => (leasePage = next)}
 				data-testid="property-leases-grid"
 			/>
 		</div>
-
-		<!-- Per-record audit history -->
-		<div class="mt-6 rounded-lg border border-border bg-card p-4" data-testid="property-history-section">
-			<h2 class="mb-1 text-base font-semibold">History</h2>
-			<p class="mb-3 text-sm text-muted-foreground">Every recorded change to this property — who, what, and when.</p>
-			<RecordHistory entityType="Property" entityId={id} />
+		{:else if activeArea === 'property-work'}
+			<DataGrid
+				data={workOrdersQuery.data?.items ?? []}
+				columns={workOrderColumns}
+				loading={workOrdersQuery.isLoading || workOrdersQuery.isFetching}
+				emptyMessage="No property-wide or Unit work orders."
+				onRowClick={(row) => goto(recordHref('workOrder', row))}
+				getRowKey={(row) => row.id}
+				pageSize={PAGE_SIZE}
+				page={workPage}
+				totalCount={workOrdersQuery.data?.totalCount ?? 0}
+				serverSide
+				onPageChange={(next) => (workPage = next)}
+				data-testid="property-work-grid"
+			/>
+		{:else if activeArea === 'property-finances'}
+			<div class="space-y-6" data-testid="property-finances-content">
+				<DataGrid
+					data={expensesQuery.data?.items ?? []}
+					columns={expenseColumns}
+					loading={expensesQuery.isLoading || expensesQuery.isFetching}
+					emptyMessage="No property expenses."
+					onRowClick={(row) => goto(recordHref('expense', row))}
+					getRowKey={(row) => row.id}
+					pageSize={PAGE_SIZE}
+					page={financePage}
+					totalCount={expensesQuery.data?.totalCount ?? 0}
+					serverSide
+					onPageChange={(next) => (financePage = next)}
+					data-testid="property-expenses-grid"
+				/>
+				<PropertyLoansSection propertyId={id} canManage={canManageMoneyExpenses} />
+				<PropertyCapitalAssetsSection propertyId={id} canManage={canManageMoneyExpenses} />
+				<PropertyDispositionsSection propertyId={id} canManage={canManageRentals} />
+				<PropertyRecurringExpensesSection propertyId={id} canManage={canManageMoneyExpenses} />
+				<DetailCard
+					title="Cost basis (depreciation)"
+					icon={Info}
+					accent="muted"
+					testid="property-detail-basis-card"
+					contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-4"
+				>
+					<InlineField label="Purchase price" bind:value={propertyForm.purchasePrice} display={property.purchasePrice != null ? fmtMoney(property.purchasePrice) : '—'} editing={false} type="number" testid="property-basis-purchase-price" />
+					<InlineField label="Land value" bind:value={propertyForm.landValue} display={property.landValue != null ? fmtMoney(property.landValue) : '—'} editing={false} type="number" testid="property-basis-land-value" />
+					<InlineField label="In-service date" bind:value={propertyForm.inServiceDate} display={property.inServiceDate ? fmtDateOnly(property.inServiceDate) : '—'} editing={false} type="date" testid="property-basis-in-service" />
+					<InlineField label="Accumulated depreciation" bind:value={propertyForm.manualAnnualDepreciation} display={fmtMoney(property.accumulatedDepreciation ?? 0)} editing={false} type="number" testid="property-basis-accumulated" />
+				</DetailCard>
+			</div>
+		{:else if activeArea === 'documents-history'}
+		<div class="space-y-6" data-testid="property-documents-history-surface">
+			<section data-testid="property-documents-section">
+				<DocumentsPanel title="Property documents" entityType="Property" entityId={id} />
+			</section>
+			<section class="rounded-lg border border-border bg-card p-4" data-testid="property-history-section">
+				<h2 class="mb-1 text-base font-semibold">History</h2>
+				<p class="mb-3 text-sm text-muted-foreground">Every permitted change to this property.</p>
+				<RecordHistory entityType="Property" entityId={id} />
+			</section>
 		</div>
+		{/if}
 	{/if}
 </div>
 

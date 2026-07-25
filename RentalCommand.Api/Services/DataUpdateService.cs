@@ -6,6 +6,7 @@ using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Api.Services;
 
@@ -182,12 +183,22 @@ public sealed class DataUpdateService : IDataUpdateService
         int notificationId)
     {
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        var effectiveContexts = _db.WorkspaceAccessContexts.AsNoTracking().WhereEffective();
-        var effectiveMemberships = _db.WorkspaceMemberships.AsNoTracking().WhereEffective(utcNow);
+        var effectiveContexts = _db.WorkspaceAccessContexts.AsNoTracking()
+            .WhereEffectiveAccess(
+                _db.WorkspaceMemberships.AsNoTracking(),
+                _db.MembershipRoleAssignments.AsNoTracking(),
+                _db.OwnerUserAccesses.AsNoTracking(),
+                _db.EffectiveTenantAccess.AsNoTracking(),
+                userId: 0,
+                utcNow: utcNow);
+        var staffUserIds = ScopedNotificationRecipientQuery
+            .ForWorkspaceMembership(_db, portfolioId, utcNow);
 
-        // A user-addressed notification may reach that user's current relationship-only context.
-        // A workspace broadcast requires an effective Team membership. Neither path carries the
-        // notification body; the recipient refetches its authorized notification list.
+        // Mirror NotificationService.AuthorizedNotifications: a portfolio-wide notification is
+        // readable in every currently-authorized Team/owner/tenant context, while a user-addressed
+        // row reaches only that user. Personal in-app preferences and the staff-only TenantMessage
+        // exception stay in the same translated recipient query. The wire still carries only an
+        // invalidation hint; each client refetches through the authorized REST read.
         return (
             from session in _db.AuthSessions.AsNoTracking()
             join context in effectiveContexts
@@ -200,17 +211,23 @@ public sealed class DataUpdateService : IDataUpdateService
                 && _db.Notifications.AsNoTracking().Any(notification =>
                     notification.Id == notificationId
                     && notification.PortfolioId == portfolioId
-                    && (notification.UserId == context.UserId
-                        || (notification.UserId == null
-                            && effectiveMemberships.Any(membership =>
-                                membership.AccessContextId == context.Id
-                                && membership.PortfolioId == portfolioId))))
+                    && (notification.UserId == null || notification.UserId == context.UserId)
+                    && (!_db.UserAlertPreferences.AsNoTracking().Any(preference =>
+                            preference.PortfolioId == portfolioId
+                            && preference.UserId == context.UserId)
+                        || _db.UserAlertPreferences.AsNoTracking().Any(preference =>
+                            preference.PortfolioId == portfolioId
+                            && preference.UserId == context.UserId
+                            && preference.EnableInApp))
+                    && (notification.Type != "TenantMessage"
+                        || staffUserIds.Any(candidateUserId =>
+                            candidateUserId == context.UserId)))
             select new RealtimeSessionRecipient
             {
                 SessionId = session.Id,
                 AccessRevision = context.AccessRevision,
             })
-            .TagWith("Realtime notification recipients: current addressed user or Team membership");
+            .TagWith("Realtime notification recipients: current REST-readable notification audience");
     }
 
     private IQueryable<RealtimeSessionRecipient> BuildConversationRecipientQuery(

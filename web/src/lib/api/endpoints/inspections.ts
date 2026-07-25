@@ -13,9 +13,25 @@ import { CLIENT_API_BASE_URL } from '$lib/config';
 import { getAuthState, isTokenExpired } from '$lib/stores/auth.svelte';
 import { browser } from '$app/environment';
 import { idempotentMutation } from '../idempotency';
+import { buildListQuery, type ListParams } from '../list-params';
+
+export interface UnitInspectionListParams extends ListParams {
+	unitId: number;
+}
+
+export interface InspectionListResponse {
+	items: Inspection[];
+	totalCount: number;
+	skip: number;
+	take: number;
+}
 
 export const inspections = {
 	list: (portfolioId: number) => api.get<Inspection[]>(`/inspections?portfolioId=${portfolioId}`),
+	listUnitPage: ({ unitId, ...list }: UnitInspectionListParams) =>
+		api.get<InspectionListResponse>(
+			`/inspections/page${buildListQuery(list, { unitId })}`
+		),
 	get: (id: number) => api.get<InspectionDetail>(`/inspections/${id}`),
 	// Create now returns the full detail (items materialized as Pending when a templateId is given).
 	create: (data: Record<string, unknown>) =>

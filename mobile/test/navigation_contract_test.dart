@@ -3,6 +3,292 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('Unit Maintenance keeps four vertical subjects without nested tabs', () {
+    final source = File(
+      'lib/features/units/unit_command_center_screen.dart',
+    ).readAsStringSync();
+    for (final label in [
+      "'Work orders'",
+      "'Inspections'",
+      "'Recurring maintenance'",
+      "'Turnover/make-ready'",
+    ]) {
+      expect(source, contains(label));
+    }
+    expect(
+      RegExp(r'area: UnitCommandCenterTab\.maintenance[\s\S]*?children: \[')
+          .hasMatch(source),
+      isTrue,
+    );
+  });
+  test('startup keeps the Android restoration scope while auth restores', () {
+    final source = File('lib/main.dart').readAsStringSync();
+    final startupBranch = source.substring(
+      source.indexOf('if (authState is AuthStateUnknown) {'),
+      source.indexOf('return const RentalCommandApp();'),
+    );
+
+    expect(startupBranch, contains("restorationScopeId: 'rental-command'"));
+  });
+
+  test('home shell loads durable Unit restoration before opening stack', () {
+    final source = File('lib/features/home/home_shell.dart').readAsStringSync();
+    final loadStart = source.indexOf(
+      'Future<void> _loadDurableRestorationForAuthorityKey',
+    );
+    final loadBlock = source.substring(
+      loadStart,
+      source.indexOf('void _restoreUnitStackIfAuthorized()', loadStart),
+    );
+
+    expect(loadBlock, contains('final loadResult = await store.load();'));
+    expect(
+      loadBlock,
+      contains('MobileRestorationStateLoadSuccess(:final state)'),
+    );
+    expect(loadBlock, contains('_matchesCurrentAuthority(state, auth)'));
+    expect(
+      loadBlock.indexOf('final loadResult = await store.load();'),
+      lessThan(loadBlock.indexOf('_restoreUnitStackIfAuthorized();')),
+    );
+    expect(source, contains('mobileRestorationStateStoreProvider'));
+    expect(source, contains('_clearRestorationForSignedOutSession()'));
+    expect(
+      source,
+      contains('_clearRestorationForAuthority(AuthStateAuthenticated auth)'),
+    );
+    expect(source, contains('unitId: restored.unitId!'));
+  });
+
+  test(
+    'cold session rehydration loads durable Unit state without clearing it',
+    () {
+      final source = File('lib/features/home/home_shell.dart').readAsStringSync();
+      final listenerStart = source.indexOf(
+        'ref.listen<AuthState>(authControllerProvider',
+      );
+      final listenerBlock = source.substring(
+        listenerStart,
+        source.indexOf('final authState = ref.watch', listenerStart),
+      );
+      final coldRestoreBranch = listenerBlock.substring(
+        listenerBlock.indexOf('if (previous is! AuthStateAuthenticated)'),
+        listenerBlock.indexOf(
+          'if (!accessAuthorityChanged(previous, next))',
+        ),
+      );
+      final authorityChangeBranch = listenerBlock.substring(
+        listenerBlock.indexOf(
+          'if (!accessAuthorityChanged(previous, next))',
+        ),
+      );
+
+      expect(coldRestoreBranch, contains('_prepareRestorationForAuthority();'));
+      expect(
+        coldRestoreBranch,
+        isNot(contains('_clearRestorationForAuthority(next)')),
+      );
+      expect(
+        authorityChangeBranch,
+        contains('_clearRestorationForAuthority(next)'),
+      );
+    },
+  );
+
+  test('home shell ignores obsolete delayed durable restoration loads', () {
+    final source = File('lib/features/home/home_shell.dart').readAsStringSync();
+    final signedOutClear = source.substring(
+      source.indexOf('void _clearRestorationForSignedOutSession()'),
+      source.indexOf('void _clearRestorationForAuthority'),
+    );
+    final authorityClear = source.substring(
+      source.indexOf('void _clearRestorationForAuthority'),
+      source.indexOf('void _prepareRestorationForAuthority'),
+    );
+    final loadStart = source.substring(
+      source.indexOf('void _loadDurableRestorationForAuthority'),
+      source.indexOf('Future<void> _loadDurableRestorationForAuthorityKey'),
+    );
+    final currentAuthority = source.substring(
+      source.indexOf('AuthStateAuthenticated? _currentRestorationAuthority'),
+      source.indexOf('Future<void> _loadDurableRestorationForAuthorityKey'),
+    );
+    final loadBlock = source.substring(
+      source.indexOf('Future<void> _loadDurableRestorationForAuthorityKey'),
+      source.indexOf('void _restoreUnitStackIfAuthorized()'),
+    );
+
+    expect(source, contains('int _durableRestorationGeneration = 0'));
+    expect(signedOutClear, contains('_durableRestorationGeneration++'));
+    expect(authorityClear, contains('_durableRestorationGeneration++'));
+    expect(
+      loadStart,
+      contains('final generation = _durableRestorationGeneration'),
+    );
+    expect(loadStart, contains('key,'));
+    expect(loadStart, contains('generation,'));
+    expect(
+      currentAuthority,
+      contains('_durableRestorationGeneration != generation'),
+    );
+    expect(currentAuthority, contains("_authorityKey(auth) != key"));
+    expect(loadBlock, contains('final loadResult = await store.load();'));
+    expect(
+      loadBlock.indexOf(
+        'final auth = _currentRestorationAuthority(key, generation);',
+      ),
+      greaterThan(loadBlock.indexOf('final loadResult = await store.load();')),
+    );
+    expect(
+      loadBlock.indexOf(
+        'if (loadResult is! MobileRestorationStateLoadMissing)',
+      ),
+      lessThan(loadBlock.indexOf('await store.clear();')),
+    );
+    expect(loadBlock, contains('await store.clear();'));
+    expect(
+      loadBlock.indexOf(
+        'final currentAuth = _currentRestorationAuthority(key, generation);',
+      ),
+      greaterThan(loadBlock.indexOf('await store.clear();')),
+    );
+    expect(
+      loadBlock.indexOf('_setRestorationStateWithoutPersist(state);'),
+      greaterThan(
+        loadBlock.indexOf(
+          'final auth = _currentRestorationAuthority(key, generation);',
+        ),
+      ),
+    );
+    expect(
+      loadBlock.indexOf('_restoreUnitStackIfAuthorized();'),
+      greaterThan(
+        loadBlock.indexOf(
+          'final auth = _currentRestorationAuthority(key, generation);',
+        ),
+      ),
+    );
+  });
+
+  test(
+    'obsolete A restoration cannot run delayed domain navigation after B generation',
+    () {
+      final homeShellSource = File(
+        'lib/features/home/home_shell.dart',
+      ).readAsStringSync();
+      final domainNavigationSource = File(
+        'lib/features/home/mobile_domain_navigation.dart',
+      ).readAsStringSync();
+      final domainHubSource = File(
+        'lib/features/home/mobile_domain_hub.dart',
+      ).readAsStringSync();
+      final restoreBlock = homeShellSource.substring(
+        homeShellSource.indexOf('void _restoreUnitStackIfAuthorized()'),
+        homeShellSource.indexOf('void _unregisterDomain'),
+      );
+      final shellOpenBlock = homeShellSource.substring(
+        homeShellSource.indexOf('void _openShellTab'),
+        homeShellSource.indexOf('bool _openShellRoute'),
+      );
+      final hubOpenBlock = domainHubSource.substring(
+        domainHubSource.indexOf('void _openDestination'),
+        domainHubSource.indexOf('void _replaceContentRoot'),
+      );
+      final deferredHubOpenBlock = hubOpenBlock.substring(
+        hubOpenBlock.indexOf('WidgetsBinding.instance.addPostFrameCallback'),
+      );
+
+      expect(
+        homeShellSource,
+        contains(
+          'bool _isCurrentRestorationAuthority(String key, int generation)',
+        ),
+      );
+      expect(
+        restoreBlock.indexOf(
+          'final restorationAuthorityKey = _authorityKey(auth);',
+        ),
+        lessThan(
+          restoreBlock.indexOf(
+            'final restorationGeneration = _durableRestorationGeneration;',
+          ),
+        ),
+      );
+      expect(
+        restoreBlock.indexOf('bool isCurrentRestorationNavigation() =>'),
+        lessThan(
+          restoreBlock.indexOf('canNavigate: isCurrentRestorationNavigation'),
+        ),
+      );
+      expect(restoreBlock, contains('_isCurrentRestorationAuthority('));
+      expect(
+        restoreBlock,
+        contains('canNavigate: isCurrentRestorationNavigation'),
+      );
+      expect(
+        domainNavigationSource,
+        contains('typedef MobileNavigationGuard = bool Function();'),
+      );
+      expect(shellOpenBlock, contains('MobileNavigationGuard? canNavigate'));
+      expect(
+        shellOpenBlock.indexOf('if (canNavigate?.call() == false) return;'),
+        lessThan(shellOpenBlock.indexOf('domainNavigator.openDestination(')),
+      );
+      expect(shellOpenBlock, contains('canNavigate: canNavigate'));
+      expect(hubOpenBlock, contains('MobileNavigationGuard? canNavigate'));
+      expect(
+        deferredHubOpenBlock.indexOf(
+          'if (canNavigate?.call() == false) return;',
+        ),
+        lessThan(deferredHubOpenBlock.indexOf('setState(() {')),
+      );
+      expect(
+        deferredHubOpenBlock.indexOf('setState(() {'),
+        lessThan(
+          deferredHubOpenBlock.indexOf(
+            '_replaceContentRoot(widget.destinations[index]);',
+          ),
+        ),
+      );
+      expect(
+        deferredHubOpenBlock.indexOf('_selectedIndex = index;'),
+        lessThan(
+          deferredHubOpenBlock.indexOf(
+            '_replaceContentRoot(widget.destinations[index]);',
+          ),
+        ),
+      );
+      expect(
+        deferredHubOpenBlock.indexOf('_scheduleQuickActionFallbackCheck();'),
+        lessThan(
+          deferredHubOpenBlock.indexOf(
+            '_replaceContentRoot(widget.destinations[index]);',
+          ),
+        ),
+      );
+      expect(
+        deferredHubOpenBlock.lastIndexOf(
+          'if (canNavigate?.call() == false) return;',
+        ),
+        greaterThan(
+          deferredHubOpenBlock.indexOf(
+            '_replaceContentRoot(widget.destinations[index]);',
+          ),
+        ),
+      );
+      expect(
+        deferredHubOpenBlock.lastIndexOf(
+          'if (canNavigate?.call() == false) return;',
+        ),
+        lessThan(
+          deferredHubOpenBlock.indexOf(
+            '_contentNavigatorKey.currentState?.push',
+          ),
+        ),
+      );
+    },
+  );
+
   test('auth secondary screens are pushed so mobile back navigation works', () {
     final loginSource = File(
       'lib/features/auth/login_screen.dart',

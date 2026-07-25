@@ -5,8 +5,8 @@
 		type RecurringMaintenanceTask,
 	} from '$lib/api/endpoints/recurring-maintenance';
 	import { properties } from '$lib/api/endpoints/properties';
+	import { units } from '$lib/api/endpoints/units';
 	import { vendors } from '$lib/api/endpoints/vendors';
-	import type { Unit } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { recurringMaintenanceSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
@@ -16,6 +16,7 @@
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
+	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
@@ -81,21 +82,8 @@
 		enabled: portfolioId > 0,
 	}));
 
-	const propertiesQuery = createQuery(() => ({
-		queryKey: ['properties', portfolioId],
-		queryFn: () => properties.list(portfolioId, { take: 200 }),
-		enabled: portfolioId > 0,
-	}));
-
-	const vendorsQuery = createQuery(() => ({
-		queryKey: ['vendors', portfolioId],
-		queryFn: () => vendors.list(portfolioId, { take: 200 }),
-		enabled: portfolioId > 0,
-	}));
-
 	const propertyName = (id: number) =>
 		tasksQuery.data?.items.find((t) => t.propertyId === id)?.propertyName ??
-		(propertiesQuery.data ?? []).find((p) => p.id === id)?.name ??
 		`Property #${id}`;
 
 	function formatNextDue(value: string): string {
@@ -139,6 +127,9 @@
 	let showForm = $state(false);
 	let editingId = $state<number | null>(null);
 	let form = $state({ ...emptyForm });
+	let selectedPropertyLabel = $state('');
+	let selectedUnitLabel = $state('');
+	let selectedVendorLabel = $state('');
 	let errors = $state<Record<string, string>>({});
 	let deleteTarget = $state<RecurringMaintenanceTask | null>(null);
 
@@ -160,13 +151,46 @@
 		if (form.category.trim()) clearRecurringError('category');
 	});
 
-	// Units for the selected property (optional picker, scoped to property).
-	const unitsQuery = createQuery(() => ({
-		queryKey: ['units', Number(form.propertyId)],
-		queryFn: () => properties.listUnits(Number(form.propertyId)),
-		enabled: !!form.propertyId,
-	}));
-	const units = $derived<Unit[]>(unitsQuery.data ?? []);
+	async function loadPropertyOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await properties.listPage(portfolioId, {
+			...params,
+			search: params.search ?? '',
+			sort: 'name'
+		});
+		return {
+			...result,
+			items: result.items.map((property) => ({ id: property.id, label: property.name })),
+		};
+	}
+
+	async function loadUnitOptions(params: { search?: string; skip: number; take: number }) {
+		if (!form.propertyId) return { items: [], totalCount: 0, skip: params.skip, take: params.take };
+		const result = await units.listWithHealthPage({
+			...params,
+			search: params.search ?? '',
+			propertyId: Number(form.propertyId),
+			sort: 'unitNumber',
+		});
+		return {
+			...result,
+			items: result.items.map((unit) => ({
+				id: unit.id,
+				label: `Unit ${unit.unitNumber}`,
+			})),
+		};
+	}
+
+	async function loadVendorOptions(params: { search?: string; skip: number; take: number }) {
+		const result = await vendors.listPage(portfolioId, {
+			...params,
+			search: params.search ?? '',
+			sort: 'name'
+		});
+		return {
+			...result,
+			items: result.items.map((vendor) => ({ id: vendor.id, label: vendor.name })),
+		};
+	}
 
 	function invalidate() {
 		queryClient.invalidateQueries({ queryKey: ['recurring-maintenance', portfolioId] });
@@ -208,6 +232,9 @@
 	function openCreate() {
 		editingId = null;
 		form = { ...emptyForm };
+		selectedPropertyLabel = '';
+		selectedUnitLabel = '';
+		selectedVendorLabel = '';
 		errors = {};
 		showForm = true;
 	}
@@ -228,6 +255,9 @@
 			priority: task.priority,
 			isActive: task.isActive,
 		};
+		selectedPropertyLabel = task.propertyName ?? `Property #${task.propertyId}`;
+		selectedUnitLabel = task.unitNumber ? `Unit ${task.unitNumber}` : '';
+		selectedVendorLabel = task.vendorName ?? '';
 		errors = {};
 		showForm = true;
 	}
@@ -235,12 +265,18 @@
 	function closeForm() {
 		showForm = false;
 		editingId = null;
+		selectedPropertyLabel = '';
+		selectedUnitLabel = '';
+		selectedVendorLabel = '';
 		errors = {};
 	}
 
 	// Reset the unit selection when the property changes (units are property-scoped).
 	function onPropertyChange(value: string) {
-		if (value !== form.propertyId) form.unitId = '';
+		if (value !== form.propertyId) {
+			form.unitId = '';
+			selectedUnitLabel = '';
+		}
 		form.propertyId = value;
 	}
 
@@ -452,58 +488,57 @@
 
 			<!-- Property (required) -->
 			<div>
-				<span class="mb-1 block text-sm font-medium">Property</span>
-				<Select.Root type="single" value={form.propertyId} onValueChange={onPropertyChange}>
-					<Select.Trigger class="w-full" data-testid="recurring-task-property-input" disabled={editingId != null}>
-						{form.propertyId
-							? ((propertiesQuery.data ?? []).find((p) => String(p.id) === form.propertyId)?.name ?? 'Select property')
-							: 'Select property'}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" label="Select property">Select property</Select.Item>
-						{#each propertiesQuery.data ?? [] as property}
-							<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
+				<RemoteRecordSelect
+					queryKey={['recurring-task-properties', portfolioId]}
+					label="Property"
+					bind:value={form.propertyId}
+					selectedLabel={selectedPropertyLabel}
+					placeholder="Select property"
+					searchPlaceholder="Search properties…"
+					disabled={editingId != null}
+					required
+					testid="recurring-task-property-input"
+					loadPage={loadPropertyOptions}
+					onValueChange={(value, option) => {
+						onPropertyChange(value);
+						selectedPropertyLabel = option?.label ?? '';
+					}}
+				/>
 				{#if editingId != null}<p class="mt-1 text-xs text-muted-foreground">The property can't be changed after creation.</p>{/if}
 				{#if errors.propertyId}<p class="mt-1 text-xs text-destructive" data-testid="recurring-task-property-error">{errors.propertyId}</p>{/if}
 			</div>
 
 			<!-- Unit (optional, scoped to property) -->
 			<div>
-				<span class="mb-1 block text-sm font-medium">Unit <span class="text-muted-foreground">(optional)</span></span>
-				<Select.Root type="single" bind:value={form.unitId}>
-					<Select.Trigger class="w-full" data-testid="recurring-task-unit-input" disabled={!form.propertyId}>
-						{form.unitId
-							? ('Unit ' + (units.find((u) => String(u.id) === form.unitId)?.unitNumber ?? form.unitId))
-							: (form.propertyId ? 'Whole property' : 'Pick a property first')}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" label="Whole property">Whole property</Select.Item>
-						{#each units as unit}
-							<Select.Item value={String(unit.id)} label={'Unit ' + unit.unitNumber}>Unit {unit.unitNumber}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
+				<RemoteRecordSelect
+					queryKey={['recurring-task-units', portfolioId, form.propertyId]}
+					label="Unit (optional)"
+					bind:value={form.unitId}
+					selectedLabel={selectedUnitLabel}
+					placeholder={form.propertyId ? 'Whole property' : 'Pick a property first'}
+					searchPlaceholder="Search units…"
+					clearLabel="Whole property"
+					disabled={!form.propertyId}
+					testid="recurring-task-unit-input"
+					loadPage={loadUnitOptions}
+					onValueChange={(_value, option) => (selectedUnitLabel = option?.label ?? '')}
+				/>
 			</div>
 
 			<!-- Vendor (optional) -->
 			<div>
-				<span class="mb-1 block text-sm font-medium">Vendor <span class="text-muted-foreground">(optional)</span></span>
-				<Select.Root type="single" bind:value={form.vendorId}>
-					<Select.Trigger class="w-full" data-testid="recurring-task-vendor-input">
-						{form.vendorId
-							? ((vendorsQuery.data ?? []).find((v) => String(v.id) === form.vendorId)?.name ?? 'Select vendor')
-							: 'No vendor'}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" label="No vendor">No vendor</Select.Item>
-						{#each vendorsQuery.data ?? [] as vendor}
-							<Select.Item value={String(vendor.id)} label={vendor.name}>{vendor.name}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
+				<RemoteRecordSelect
+					queryKey={['recurring-task-vendors', portfolioId]}
+					label="Vendor (optional)"
+					bind:value={form.vendorId}
+					selectedLabel={selectedVendorLabel}
+					placeholder="No vendor"
+					searchPlaceholder="Search vendors…"
+					clearLabel="No vendor"
+					testid="recurring-task-vendor-input"
+					loadPage={loadVendorOptions}
+					onValueChange={(_value, option) => (selectedVendorLabel = option?.label ?? '')}
+				/>
 			</div>
 
 			<!-- Schedule + next due -->

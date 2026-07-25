@@ -11,10 +11,12 @@ using RentalCommand.Api.Scanning;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Sms;
 using RentalCommand.Api.Simulation;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Authorization;
 using RentalCommand.Data.Notifications;
 using RentalCommand.Engine.HealthChecks;
 using RentalCommand.Engine.Services;
@@ -109,6 +111,10 @@ builder.Services.AddAtomicCommandHandler<
     RentalCommand.Api.Services.Domain.AtomicNoticeDeliveryResult,
     RentalCommand.Api.Services.Domain.AtomicNoticeDeliveryHandler>();
 builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Automation.ApplyClaimedTenantNoticeDraftBatchCommand,
+    RentalCommand.Core.Automation.ApplyClaimedTenantNoticeDraftBatchResult,
+    RentalCommand.Data.Notifications.ApplyClaimedTenantNoticeDraftBatchHandler>();
+builder.Services.AddAtomicCommandHandler<
     RentalCommand.Engine.Services.EnqueueMorningBriefingsCommand,
     RentalCommand.Engine.Services.EnqueueMorningBriefingsResult,
     RentalCommand.Engine.Services.EnqueueMorningBriefingsHandler>();
@@ -151,6 +157,26 @@ builder.Services.Configure<UploadSettings>(builder.Configuration.GetSection(Uplo
 builder.Services.Configure<NotificationsConfig>(builder.Configuration.GetSection(NotificationsConfig.SectionName));
 var llmProvider = builder.Configuration.GetValue<string>("Assistant:Provider") ?? "openai";
 builder.Services.AddSingleton<IImageTextExtractor, TesseractImageTextExtractor>();
+builder.Services.AddHttpClient<OpenAiLlmProvider>(c =>
+{
+    c.BaseAddress = new Uri("https://api.openai.com/");
+    c.Timeout = TimeSpan.FromSeconds(90);
+});
+builder.Services.AddHttpClient<AnthropicLlmProvider>(c =>
+{
+    c.BaseAddress = new Uri("https://api.anthropic.com/");
+    c.Timeout = TimeSpan.FromSeconds(90);
+});
+builder.Services.AddScoped<IWorkspaceLlmExtractionProvider>(sp =>
+    sp.GetRequiredService<OpenAiLlmProvider>());
+builder.Services.AddScoped<IWorkspaceLlmExtractionProvider>(sp =>
+    sp.GetRequiredService<AnthropicLlmProvider>());
+builder.Services.AddScoped<IWorkspaceAuthorizationEvaluator, WorkspaceAuthorizationEvaluator>();
+builder.Services.AddScoped<IWorkspaceLlmCredentialService, WorkspaceLlmCredentialService>();
+builder.Services.AddScoped<IWorkspaceLlmCredentialResolver>(sp =>
+    sp.GetRequiredService<IWorkspaceLlmCredentialService>());
+builder.Services.AddScoped<ILlmUsageEvidenceRecorder>(sp =>
+    sp.GetRequiredService<IWorkspaceLlmCredentialService>());
 if (string.Equals(llmProvider, "anthropic", StringComparison.OrdinalIgnoreCase))
 {
     builder.Services.AddHttpClient<ILlmProvider, AnthropicLlmProvider>(c =>

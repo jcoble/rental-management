@@ -8,11 +8,11 @@
  * decision by deep-linking or refreshing. Once a choice is recorded the gate is inert.
  */
 
-import { error, redirect } from '@sveltejs/kit';
+import { redirect } from '@sveltejs/kit';
 import type { LayoutServerLoad } from './$types';
 import { serverGet } from '$lib/api/server-fetch';
 import type { SandboxState } from '$lib/types';
-import { canAccessRoute, CAPABILITY } from '$lib/auth/experience-policy';
+import { canAccessRoute, CAPABILITY, safeLandingForAccess } from '$lib/auth/experience-policy';
 
 // Routes that are part of the first-login flow itself — never gate these (would loop).
 const ONBOARDING_GATE_PATHS = ['/choose-setup', '/setting-up'];
@@ -39,7 +39,7 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 		locals.access.navigation.find((entry) => entry.experience === activeExperience)?.capabilityKeys ?? []
 	);
 	if (!canAccessRoute(url.pathname, activeExperience, effectiveCapabilities)) {
-		throw error(403, 'This page is not available for your current workspace access.');
+		throw redirect(303, safeLandingForAccess(locals.access) ?? '/logout');
 	}
 
 	// First-login Sandbox-vs-Live gate (staff only; portal users already redirected above). Skip the

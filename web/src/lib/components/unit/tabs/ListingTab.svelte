@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { untrack } from 'svelte';
 	import { units } from '$lib/api/endpoints/units';
 	import type { ListingPhoto, ListingPublication, ListingPublicationStatus, ListingWorkspace, SaveListingWorkspaceRequest } from '$lib/types';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
@@ -23,6 +25,7 @@
 
 	const workspaceQuery = createQuery(() => ({
 		queryKey: ['listing-workspace', unitId],
+		retry: false,
 		queryFn: () => units.listingWorkspace(unitId),
 	}));
 	const workspace = $derived(workspaceQuery.data ?? null);
@@ -32,7 +35,7 @@
 
 	$effect(() => {
 		const value = workspaceQuery.data;
-		if (value && value.contentVersion !== loadedVersion) {
+		if (value && value.contentVersion !== untrack(() => loadedVersion)) {
 			loadedVersion = value.contentVersion;
 			form = formFrom(value, value.publications.find((item) => item.providerKey === 'Zillow' && item.mode === 'Guided'));
 		}
@@ -163,7 +166,12 @@
 	</div>
 
 	{#if workspaceQuery.isLoading}
-		<p class="rounded-lg border bg-card p-6 text-center text-sm text-muted-foreground">Loading listing workspace…</p>
+		<LoadingState label="Loading listing workspace" testid="unit-listing-loading" />
+	{:else if workspaceQuery.isError}
+		<div class="rounded-lg border bg-card p-6 text-center" data-testid="unit-listing-error">
+			<p class="text-sm text-destructive">Listing workspace could not be loaded.</p>
+			<Button class="mt-3" variant="outline" size="sm" onclick={() => workspaceQuery.refetch()}>Retry</Button>
+		</div>
 	{:else if !workspace}
 		<DetailCard title="Prepare this rental listing" icon={FileDown} accent="primary">
 			<p class="text-sm text-muted-foreground">Rental Command will prepare reusable copy, terms, and an ordered photo package for this unit.</p>

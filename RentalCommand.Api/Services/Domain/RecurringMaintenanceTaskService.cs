@@ -85,6 +85,11 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
             q = q.Where(t => t.PropertyId == propertyId.Value);
         }
 
+        if (query is RecurringMaintenanceTaskListQuery { UnitId: int unitId })
+        {
+            q = q.Where(t => t.UnitId == unitId);
+        }
+
         if (activeOnly == true)
         {
             q = q.Where(t => t.IsActive);

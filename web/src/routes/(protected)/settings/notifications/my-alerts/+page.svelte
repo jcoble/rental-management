@@ -7,7 +7,9 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Card from '$lib/components/ui/card';
-	import { ArrowLeft, ExternalLink } from '@lucide/svelte';
+	import NotificationHelpAction from '$lib/components/notifications/NotificationHelpAction.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
+	import { ArrowLeft } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const authState = getAuthState();
@@ -67,14 +69,16 @@
 				<h1 class="text-2xl font-semibold tracking-tight">My alerts</h1>
 				<p class="mt-1 text-sm text-muted-foreground">These choices apply only to your signed-in account, not your team or tenants.</p>
 			</div>
-			<a href="/docs/settings-and-notifications" class="inline-flex min-h-11 items-center gap-2 text-sm font-medium text-primary hover:underline">
-				How this works <ExternalLink class="size-4" />
-			</a>
+				<NotificationHelpAction
+					title="How My alerts works"
+					description="These destinations belong only to the signed-in account."
+					guidance="Choose where you personally receive Rental Command alerts. Team responsibilities and tenant notice delivery use their own settings and are never changed here."
+				/>
 		</div>
 	</div>
 
 	{#if alertsQuery.isLoading}
-		<Card.Root><Card.Content class="p-6 text-sm text-muted-foreground">Loading your alert destinations…</Card.Content></Card.Root>
+		<LoadingState label="Loading your alert destinations" testid="my-alerts-loading" />
 	{:else if alertsQuery.isError || !alertsQuery.data}
 		<Card.Root><Card.Content class="space-y-4 p-6"><p class="text-sm text-destructive">We couldn't load your alert preferences.</p><Button variant="outline" onclick={() => alertsQuery.refetch()}>Retry</Button></Card.Content></Card.Root>
 	{:else}

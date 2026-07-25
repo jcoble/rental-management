@@ -33,6 +33,32 @@ internal sealed class AtomicAccountSecurityPersistence : IAtomicAccountSecurityP
         return new AtomicInitialWorkspaceBootstrap(row.PortfolioId, row.AccessContextId);
     }
 
+    public async Task<int> DeleteFreshWorkspaceSuppliedNoticeTemplateVersionsAsync(
+        int userId,
+        int portfolioId,
+        IReadOnlyList<int> templateVersionIds,
+        CancellationToken ct = default)
+    {
+        if (userId <= 0 || portfolioId <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(portfolioId));
+        }
+
+        if (templateVersionIds.Count != 2 || templateVersionIds.Distinct().Count() != 2)
+        {
+            throw new ArgumentException(
+                "Exactly two distinct fresh-workspace template versions are required.",
+                nameof(templateVersionIds));
+        }
+
+        var templateIds = templateVersionIds.ToArray();
+        return await _db.Database.SqlQuery<int>($"""
+                SELECT rc_delete_fresh_workspace_notice_templates(
+                    {userId}, {portfolioId}, {templateIds}) AS "Value"
+                """)
+            .SingleAsync(ct);
+    }
+
     public async Task<AtomicWorkspaceInvitationActivation?> ActivateWorkspaceInvitationAsync(
         long invitationId,
         int invitedUserId,

@@ -343,6 +343,7 @@ class _MobileQuickActionFabState extends ConsumerState<MobileQuickActionFab> {
     final capabilities = auth is AuthStateAuthenticated
         ? auth.capabilities
         : const <String>{};
+    final disableAnimations = MediaQuery.disableAnimationsOf(context);
     final hasGlobalScan = canUseGlobalScan(capabilities);
     final actions = <MobileQuickAction>[
       if (hasGlobalScan)
@@ -367,36 +368,50 @@ class _MobileQuickActionFabState extends ConsumerState<MobileQuickActionFab> {
     ];
     if (actions.isEmpty) return const SizedBox.shrink();
 
+    final actionMenu = _open
+        ? Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                for (var i = 0; i < actions.length; i++)
+                  Padding(
+                    padding: EdgeInsets.only(top: i == 0 ? 0 : 8),
+                    child: _QuickActionButton(
+                      action: actions[i],
+                      delay: i * 32,
+                      disableAnimations: disableAnimations,
+                      onPressed: () => _run(actions[i].onPressed),
+                    ),
+                  ),
+              ],
+            ),
+          )
+        : const SizedBox.shrink();
+    final fabIcon = Icon(
+      _open
+          ? Icons.close_rounded
+          : hasGlobalScan
+          ? Icons.document_scanner_outlined
+          : Icons.add_rounded,
+      key: ValueKey((_open, hasGlobalScan)),
+    );
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        AnimatedSize(
-          duration: const Duration(milliseconds: 220),
-          curve: Curves.easeOutCubic,
-          alignment: Alignment.bottomRight,
-          child: _open
-              ? Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      for (var i = 0; i < actions.length; i++)
-                        Padding(
-                          padding: EdgeInsets.only(top: i == 0 ? 0 : 8),
-                          child: _QuickActionButton(
-                            action: actions[i],
-                            delay: i * 32,
-                            onPressed: () => _run(actions[i].onPressed),
-                          ),
-                        ),
-                    ],
-                  ),
-                )
-              : const SizedBox.shrink(),
-        ),
-        FloatingActionButton(
+        if (disableAnimations)
+          actionMenu
+        else
+          AnimatedSize(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.bottomRight,
+            child: actionMenu,
+          ),
+        FloatingActionButton.extended(
           heroTag: widget.heroTag,
           onPressed: _toggle,
           tooltip: _open
@@ -405,25 +420,30 @@ class _MobileQuickActionFabState extends ConsumerState<MobileQuickActionFab> {
               ? 'Scan / Add'
               : 'Open quick actions',
           elevation: 3,
-          child: AnimatedSwitcher(
-            duration: const Duration(milliseconds: 160),
-            transitionBuilder: (child, animation) {
-              return ScaleTransition(
-                scale: animation,
-                child: RotationTransition(
-                  turns: Tween<double>(begin: -0.08, end: 0).animate(animation),
-                  child: child,
+          icon: disableAnimations
+              ? fabIcon
+              : AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 160),
+                  transitionBuilder: (child, animation) {
+                    return ScaleTransition(
+                      scale: animation,
+                      child: RotationTransition(
+                        turns: Tween<double>(
+                          begin: -0.08,
+                          end: 0,
+                        ).animate(animation),
+                        child: child,
+                      ),
+                    );
+                  },
+                  child: fabIcon,
                 ),
-              );
-            },
-            child: Icon(
-              _open
-                  ? Icons.close_rounded
-                  : hasGlobalScan
-                  ? Icons.document_scanner_outlined
-                  : Icons.add_rounded,
-              key: ValueKey((_open, hasGlobalScan)),
-            ),
+          label: Text(
+            _open
+                ? 'Close'
+                : hasGlobalScan
+                ? 'Scan / Add'
+                : 'Open',
           ),
         ),
       ],
@@ -435,16 +455,63 @@ class _QuickActionButton extends StatelessWidget {
   const _QuickActionButton({
     required this.action,
     required this.delay,
+    required this.disableAnimations,
     required this.onPressed,
   });
 
   final MobileQuickAction action;
   final int delay;
+  final bool disableAnimations;
   final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+
+    final button = Semantics(
+      button: true,
+      label: action.label,
+      child: Material(
+        color: colorScheme.secondaryContainer,
+        elevation: 2,
+        shadowColor: colorScheme.shadow.withValues(alpha: 0.18),
+        shape: const StadiumBorder(),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          customBorder: const StadiumBorder(),
+          onTap: onPressed,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 260),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    action.icon,
+                    size: 20,
+                    color: colorScheme.onSecondaryContainer,
+                  ),
+                  const SizedBox(width: 12),
+                  Flexible(
+                    child: Text(
+                      action.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: colorScheme.onSecondaryContainer,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    if (disableAnimations) return button;
 
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
@@ -459,52 +526,7 @@ class _QuickActionButton extends StatelessWidget {
           ),
         );
       },
-      child: Semantics(
-        button: true,
-        label: action.label,
-        child: Material(
-          color: colorScheme.secondaryContainer,
-          elevation: 2,
-          shadowColor: colorScheme.shadow.withValues(alpha: 0.18),
-          shape: const StadiumBorder(),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            customBorder: const StadiumBorder(),
-            onTap: onPressed,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 260),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      action.icon,
-                      size: 20,
-                      color: colorScheme.onSecondaryContainer,
-                    ),
-                    const SizedBox(width: 12),
-                    Flexible(
-                      child: Text(
-                        action.label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                          color: colorScheme.onSecondaryContainer,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
+      child: button,
     );
   }
 }

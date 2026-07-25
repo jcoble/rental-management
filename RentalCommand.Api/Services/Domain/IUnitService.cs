@@ -12,6 +12,8 @@ public interface IUnitService
 {
     Task<IReadOnlyList<UnitResponse>> ListAsync(
         WorkspaceReadScope scope, int? propertyId, ListQuery query, CancellationToken ct = default);
+    Task<UnitListResponse> ListPageAsync(
+        WorkspaceReadScope scope, int? propertyId, UnitListQuery query, CancellationToken ct = default);
 
     /// <summary>
     /// Lists portfolio units with cheap health badges for the <c>/units</c> page (spec section 10):

@@ -48,6 +48,7 @@
 	const canBroadcast = $derived(hasCapability('rentals.manage', 'leasing.onboarding.manage'));
 	const canManageTeamRouting = $derived(hasCapability('notifications.manage'));
 	const canManageTenantNotices = $derived(hasCapability('notifications.manage'));
+	const canManageAiProvider = $derived(hasCapability('integrations.manage'));
 
 	// Tabbed hub: each section is one tab. The active tab is mirrored to the URL hash so a deep-link
 	// (e.g. /settings#messaging) lands on the right tab and a refresh keeps your place. WalkMeThrough
@@ -794,6 +795,22 @@
 						</div>
 					</Card.Content>
 				</Card.Root>
+
+				{#if canManageAiProvider}
+					<Card.Root class="gap-0 py-0" data-testid="settings-ai-provider-link">
+						<Card.Content class="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
+							<div>
+								<p class="text-sm font-semibold">AI provider</p>
+								<p class="text-xs text-muted-foreground">
+									Connect and manage the workspace AI provider used by Scan / Add.
+								</p>
+							</div>
+							<Button href="/settings/integrations/ai" data-testid="settings-ai-provider-open">
+								Manage AI provider <ArrowRight class="ml-1.5 h-4 w-4" />
+							</Button>
+						</Card.Content>
+					</Card.Root>
+				{/if}
 
 				<!-- Connect your accounting: brings rent payments + expenses in from QuickBooks (and
 				     future providers) — its own focused route. -->

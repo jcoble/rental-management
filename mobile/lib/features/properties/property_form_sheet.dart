@@ -91,6 +91,7 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
   RentalStructure _rentalStructure = RentalStructure.singleRental;
   String _selectedStatus = 'Active';
   int? _selectedOwnerEntityId;
+  int? _initialOwnerEntityId;
   List<PropertyOwnerOption> _owners = const [];
   bool _ownersLoading = false;
   bool _ownerActionLoading = false;
@@ -123,7 +124,10 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
       _selectedType = _knownType(property.type);
       _rentalStructure = property.rentalStructure;
       _selectedStatus = _knownStatus(property.status);
-      _selectedOwnerEntityId = property.ownerEntityId;
+      _selectedOwnerEntityId = property.ownerships.length == 1
+          ? property.ownerships.first.ownerEntityId
+          : null;
+      _initialOwnerEntityId = _selectedOwnerEntityId;
     }
     Future.microtask(_loadOwners);
   }
@@ -201,7 +205,9 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
         0,
         PropertyOwnerOption(
           id: selected,
-          name: widget.property?.ownerName ?? 'Current owner',
+          name: widget.property?.ownerships.length == 1
+              ? widget.property!.ownerships.first.ownerName
+              : 'Current owner',
         ),
       );
     }
@@ -376,8 +382,16 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
       'postalCode': _zipCtrl.text.trim(),
     };
 
-    if (_selectedOwnerEntityId != null) {
-      data['ownerEntityId'] = _selectedOwnerEntityId;
+    if (!_isEditing || _selectedOwnerEntityId != _initialOwnerEntityId) {
+      data['ownerships'] = _selectedOwnerEntityId == null
+          ? <Map<String, dynamic>>[]
+          : [
+              {
+                'ownerEntityId': _selectedOwnerEntityId,
+                'ownershipSharePercent': 100,
+              },
+            ];
+      data['clearOwnership'] = _selectedOwnerEntityId == null;
     }
     _putOptionalText(data, 'addressLine2', _address2Ctrl);
     _putOptionalText(data, 'notes', _notesCtrl);

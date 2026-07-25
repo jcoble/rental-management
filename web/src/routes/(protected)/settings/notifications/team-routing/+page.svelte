@@ -11,7 +11,9 @@
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Input } from '$lib/components/ui/input';
 	import * as Card from '$lib/components/ui/card';
-	import { ArrowLeft, ExternalLink, Search, X } from '@lucide/svelte';
+	import NotificationHelpAction from '$lib/components/notifications/NotificationHelpAction.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
+	import { ArrowLeft, Search, X } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const authState = getAuthState();
@@ -174,14 +176,18 @@
 		<a href={returnHref} class="mb-3 inline-flex min-h-11 items-center gap-2 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft class="size-4" /> Back</a>
 		<div class="flex flex-wrap items-start justify-between gap-4">
 			<div><h1 class="text-2xl font-semibold tracking-tight">Team routing</h1><p class="mt-1 text-sm text-muted-foreground">Choose which named team members are responsible for each topic and show why they receive it.</p></div>
-			<a href="/docs/settings-and-notifications" class="inline-flex min-h-11 items-center gap-2 text-sm font-medium text-primary hover:underline">How this works <ExternalLink class="size-4" /></a>
+				<NotificationHelpAction
+					title="How Team routing works"
+					description="Routing assigns internal responsibility without changing anyone's personal channels."
+					guidance="Name the team members responsible for each topic and explain why. Their saved My alerts choices determine which of their own destinations are used."
+				/>
 		</div>
 	</div>
 
 	{#if !canManage}
 		<Card.Root><Card.Content class="p-6"><h2 class="font-semibold">Administrator access required</h2><p class="mt-2 text-sm text-muted-foreground">You can manage your own alerts, but only a workspace administrator can change team responsibilities.</p></Card.Content></Card.Root>
 	{:else if rulesQuery.isLoading}
-		<Card.Root><Card.Content class="p-6 text-sm text-muted-foreground">Loading saved routing rules…</Card.Content></Card.Root>
+		<LoadingState label="Loading saved routing rules" testid="team-routing-loading" />
 	{:else if rulesQuery.isError}
 		<Card.Root><Card.Content class="space-y-4 p-6"><p class="text-sm text-destructive">We couldn't load team routing.</p><Button variant="outline" onclick={() => rulesQuery.refetch()}>Retry</Button></Card.Content></Card.Root>
 	{:else}
@@ -189,7 +195,7 @@
 			<Card.Content class="space-y-5 p-5">
 				<div><h2 class="font-semibold">Morning Briefing schedule</h2><p class="mt-1 text-sm text-muted-foreground">Automatically sends the routed team member a daily list of what needs attention. Delivery channels come from that person's My alerts.</p></div>
 				{#if briefingQuery.isLoading}
-					<p class="text-sm text-muted-foreground">Loading schedule…</p>
+					<LoadingState label="Loading Morning Briefing schedule" variant="spinner" testid="morning-briefing-loading" />
 				{:else if briefingQuery.isError || !briefingQuery.data}
 					<div class="flex items-center gap-3"><p class="text-sm text-destructive">We couldn't load the Morning Briefing schedule.</p><Button variant="outline" onclick={() => briefingQuery.refetch()}>Retry</Button></div>
 				{:else}
@@ -228,7 +234,12 @@
 					<div><h2 class="text-lg font-semibold">Configure {topicMeta(editingTopic).label}</h2><p class="text-sm text-muted-foreground">Scope: {editingScope}. Named users receive this topic because of the explanation saved beside their assignment.</p></div>
 
 					{#if recipientsQuery.isLoading}
-						<p class="text-sm text-muted-foreground">Loading named recipients…</p>
+						<LoadingState label="Loading named recipients" variant="spinner" testid="team-routing-recipients-loading" />
+					{:else if recipientsQuery.isError}
+						<div class="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-4" role="alert">
+							<p class="text-sm text-destructive">We couldn't load the named recipients.</p>
+							<Button variant="outline" size="sm" onclick={() => recipientsQuery.refetch()}>Retry recipients</Button>
+						</div>
 					{:else}
 						<div class="space-y-3">
 							{#each Object.values(selectedRecipients) as recipient (recipient.userId)}
@@ -246,16 +257,27 @@
 						<div class="relative mt-2"><Search class="pointer-events-none absolute left-3 top-3 size-4 text-muted-foreground" /><Input id="team-routing-search" class="pl-9" bind:value={memberSearch} placeholder="Type at least 2 characters" /></div>
 						{#if memberSearch.trim().length >= 2}
 							<div class="mt-2 space-y-1">
-								{#each memberSearchQuery.data?.items ?? [] as member (member.userId)}
-									<button type="button" class="flex min-h-11 w-full items-center justify-between rounded-md px-3 py-2 text-left hover:bg-muted disabled:opacity-50" disabled={member.accessStatus !== 'Active' || member.membershipStatus !== 'Active' || !!selectedRecipients[member.userId]} onclick={() => addRecipient(member)}><span><span class="block text-sm font-medium">{member.displayName}</span><span class="block text-xs text-muted-foreground">{member.email} · {member.roleSummary || member.membershipStatus}</span></span><span class="text-xs text-muted-foreground">Add</span></button>
-								{/each}
+								{#if memberSearchQuery.isLoading}
+									<LoadingState label="Searching team members" variant="spinner" testid="team-routing-member-search-loading" />
+								{:else if memberSearchQuery.isError}
+									<div class="flex flex-wrap items-center gap-2" role="alert">
+										<p class="text-sm text-destructive">We couldn't search the team.</p>
+										<Button variant="outline" size="sm" onclick={() => memberSearchQuery.refetch()}>Retry search</Button>
+									</div>
+								{:else}
+									{#each memberSearchQuery.data?.items ?? [] as member (member.userId)}
+										<button type="button" class="flex min-h-11 w-full items-center justify-between rounded-md px-3 py-2 text-left hover:bg-muted disabled:opacity-50" disabled={member.accessStatus !== 'Active' || member.membershipStatus !== 'Active' || !!selectedRecipients[member.userId]} onclick={() => addRecipient(member)}><span><span class="block text-sm font-medium">{member.displayName}</span><span class="block text-xs text-muted-foreground">{member.email} · {member.roleSummary || member.membershipStatus}</span></span><span class="text-xs text-muted-foreground">Add</span></button>
+									{/each}
+								{/if}
 							</div>
 						{/if}
 					</div>
 
 					<label class="flex min-h-16 items-start gap-3 rounded-lg border border-border p-4"><Checkbox checked={useFallback} onCheckedChange={(value) => (useFallback = value === true)} /><span><span class="block font-medium">Fall back to Workspace Administrators</span><span class="block text-sm text-muted-foreground">Used only when this saved rule has no named recipient. The fallback is always shown in the preview.</span></span></label>
 
-					{#if editingRuleId && previewQuery.isError}
+					{#if editingRuleId && previewQuery.isLoading}
+						<LoadingState label="Loading recipient preview" variant="spinner" testid="team-routing-preview-loading" />
+					{:else if editingRuleId && previewQuery.isError}
 						<div class="flex flex-wrap items-center gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-4">
 							<p class="text-sm text-destructive">We couldn't load the current recipient preview. No routing changes have been made.</p>
 							<Button variant="outline" size="sm" onclick={() => previewQuery.refetch()}>Retry preview</Button>

@@ -21,6 +21,7 @@
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import TenantNoticeDialog from '$lib/components/notices/TenantNoticeDialog.svelte';
@@ -28,10 +29,15 @@
 	import { Mail, Phone, AlertCircle, Pencil, Save, Trash2, User, X, Contact, FileClock, BellRing } from '@lucide/svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
+	import { debounced } from '$lib/utils/debounce.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const id = $derived(Number(page.params.id));
+	const RELATED_PAGE_SIZE = 20;
+	let leaseSearch = $state('');
+	let leasePage = $state(1);
+	const debouncedLeaseSearch = debounced(() => leaseSearch, 300);
 
 	const tenantQuery = createQuery(() => ({
 		queryKey: ['tenant', id],
@@ -40,10 +46,21 @@
 	}));
 
 	const leasesQuery = createQuery(() => ({
-		queryKey: ['lease-managements', { tenantId: id }],
-		queryFn: () => leaseManagements.listPage({ tenantId: id, take: 100, sort: '-updatedAtUtc' }),
+		queryKey: ['lease-managements', { tenantId: id, search: debouncedLeaseSearch.value, page: leasePage }],
+		queryFn: () => leaseManagements.listPage({
+			tenantId: id,
+			search: debouncedLeaseSearch.value || undefined,
+			skip: (leasePage - 1) * RELATED_PAGE_SIZE,
+			take: RELATED_PAGE_SIZE,
+			sort: '-updatedAtUtc'
+		}),
 		enabled: !isNaN(id) && id > 0 && portfolioId > 0,
 	}));
+
+	$effect(() => {
+		debouncedLeaseSearch.value;
+		leasePage = 1;
+	});
 
 	const tenant = $derived(tenantQuery.data);
 	const tenantLeases = $derived(leasesQuery.data?.items ?? []);
@@ -327,6 +344,12 @@
 		<!-- Leases section -->
 		<div data-testid="tenant-detail-leases">
 			<h2 class="mb-3 text-lg font-semibold">Leases</h2>
+			{#if leasesQuery.isError}
+				<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="tenant-leases-error">
+					<p class="text-sm font-medium text-destructive">Could not load this tenant’s leases.</p>
+					<Button class="mt-3" variant="outline" size="sm" onclick={() => leasesQuery.refetch()}>Try again</Button>
+				</div>
+			{:else}
 			<DataGrid
 				data={tenantLeases}
 				columns={leaseColumns}
@@ -334,9 +357,18 @@
 				emptyMessage="No leases found for this tenant."
 				onRowClick={(relationship) => goto(`/leases/${relationship.leaseManagementId}`)}
 				getRowKey={(relationship) => relationship.leaseManagementId}
-				pageSize={10}
+				pageSize={RELATED_PAGE_SIZE}
+				page={leasePage}
+				totalCount={leasesQuery.data?.totalCount ?? 0}
+				serverSide
+				onPageChange={(next) => (leasePage = next)}
 				data-testid="tenant-leases-grid"
-			/>
+			>
+				{#snippet toolbar()}
+					<SearchInput bind:value={leaseSearch} placeholder="Search this tenant’s leases…" testid="tenant-lease-search" />
+				{/snippet}
+			</DataGrid>
+			{/if}
 		</div>
 
 		<!-- Documents section -->

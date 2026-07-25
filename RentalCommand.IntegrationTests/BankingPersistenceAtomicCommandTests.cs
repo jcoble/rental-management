@@ -308,7 +308,11 @@ public sealed class BankingPersistenceAtomicCommandTests : IAsyncLifetime
             [nameof(BankTransaction)] = 40,
             [nameof(Notification)] = 1,
         });
-        (await db.Notifications.CountAsync(row => row.Type == "BankImportCompleted")).Should().Be(1);
+        var bankNotification = await db.Notifications.SingleAsync(row =>
+            row.Type == "BankImportCompleted");
+        bankNotification.NavigationDestination.Should().BeNull(
+            "workspace-wide bank imports have no single access-bound recipient context");
+        bankNotification.NavigationAccessContextId.Should().BeNull();
 
         var mergeCommands = Recorder.Commands
             .Where(sql => sql.Contains("jsonb_array_elements(@transactions::jsonb)", StringComparison.Ordinal))

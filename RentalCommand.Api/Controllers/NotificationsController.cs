@@ -4,6 +4,8 @@ using RentalCommand.Api.Auth;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Enums;
+using RentalCommand.Core.Navigation;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -27,8 +29,31 @@ public class NotificationsController : AuthenticatedPortfolioControllerBase
         [FromQuery] int take = 20,
         CancellationToken ct = default)
     {
-        var items = await _notifications.ListAsync(GetPortfolioId(), GetUserId(), unreadOnly, skip, take, ct);
+        var active = GetActiveAccessContext();
+        var scope = new WorkspaceReadScope(
+            active.PortfolioId, active.UserId, active.SessionId,
+            active.AccessContextId, active.AccessRevision);
+        var experience = (NavigationExperience)(
+            active.LastAuthorizedExperience ?? active.DefaultExperience ?? WorkspaceExperience.Management);
+        var items = await _notifications.ListAsync(scope, experience, unreadOnly, skip, take, ct);
         return Ok(items);
+    }
+
+    [HttpGet("{id:int}")]
+    [ProducesResponseType(typeof(NotificationResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<NotificationResponse>> Get(int id, CancellationToken ct)
+    {
+        var active = GetActiveAccessContext();
+        var scope = new WorkspaceReadScope(
+            active.PortfolioId, active.UserId, active.SessionId,
+            active.AccessContextId, active.AccessRevision);
+        var experience = (NavigationExperience)(
+            active.LastAuthorizedExperience ?? active.DefaultExperience ?? WorkspaceExperience.Management);
+        var item = await _notifications.GetAsync(scope, experience, id, ct);
+        return item is null
+            ? NotFound(new { error = "Notification not found" })
+            : Ok(item);
     }
 
     [HttpGet("unread-count")]

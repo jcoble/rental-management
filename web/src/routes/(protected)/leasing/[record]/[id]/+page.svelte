@@ -4,6 +4,7 @@
 	import { ArrowLeft, CalendarDays, Home, Inbox, Send, UserRound } from '@lucide/svelte';
 	import { leasingWorkspace } from '$lib/api/endpoints/leasing-workspace';
 	import ListingTab from '$lib/components/unit/tabs/ListingTab.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 
@@ -72,11 +73,14 @@
 		{/if}
 
 		{#if detailQuery.isLoading}
-			<p class="rounded-xl border p-8 text-center text-sm text-muted-foreground">Loading leasing record…</p>
+			<LoadingState label="Loading leasing record" variant="page" testid="leasing-record-loading" />
 		{:else if detailQuery.isError || !detail || !meta}
 			<div class="rounded-xl border border-destructive/40 p-8 text-center">
 				<h1 class="font-semibold">This leasing record is unavailable</h1>
 				<p class="mt-2 text-sm text-muted-foreground">It may be outside your assigned properties or no longer active.</p>
+				{#if detailQuery.isError}
+					<Button type="button" variant="outline" size="sm" class="mt-3" onclick={() => detailQuery.refetch()}>Try again</Button>
+				{/if}
 			</div>
 		{:else}
 			<header class="flex items-start gap-4">

@@ -1,6 +1,7 @@
 using System.Security.Claims;
-using RentalCommand.Api.Data;
+using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Authorization;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Auth;
 
@@ -23,7 +24,8 @@ public sealed class CanonicalAccessContextMiddleware
     public async Task InvokeAsync(
         HttpContext httpContext,
         IActiveAccessContextResolver resolver,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        RentalCommandDbContext db)
     {
         var principal = httpContext.User;
         if (principal.Identity?.IsAuthenticated == true)
@@ -62,6 +64,32 @@ public sealed class CanonicalAccessContextMiddleware
             }
         }
 
-        await _next(httpContext);
+        if (principal.Identity?.IsAuthenticated != true ||
+            IsLongLivedHubRequest(httpContext.Request.Path))
+        {
+            await _next(httpContext);
+            return;
+        }
+
+        var connectionOpened = false;
+        try
+        {
+            // Keep the scoped EF connection open after canonical resolution so the RLS
+            // interceptor configures it once and every downstream query in this request
+            // reuses the same validated PostgreSQL session coordinates.
+            await db.Database.OpenConnectionAsync(httpContext.RequestAborted);
+            connectionOpened = true;
+            await _next(httpContext);
+        }
+        finally
+        {
+            if (connectionOpened)
+            {
+                await db.Database.CloseConnectionAsync();
+            }
+        }
     }
+
+    private static bool IsLongLivedHubRequest(PathString path) =>
+        path.StartsWithSegments("/api/v1/hubs");
 }

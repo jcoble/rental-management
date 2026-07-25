@@ -96,13 +96,14 @@ public class PropertyService : IPropertyService
         WorkspaceReadScope scope, PropertyListQuery query, CancellationToken ct = default)
     {
         var portfolioId = scope.PortfolioId;
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
         var q = _db.Properties
             .AsNoTracking()
             .WhereAuthorized(
                 _db,
                 scope,
                 CapabilityKeys.RentalsRead,
-                _timeProvider.GetUtcNow().UtcDateTime);
+                now);
 
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
@@ -113,8 +114,11 @@ public class PropertyService : IPropertyService
                 EF.Functions.ILike(p.City, $"%{term}%") ||
                 EF.Functions.ILike(p.State, $"%{term}%") ||
                 EF.Functions.ILike(p.PostalCode, $"%{term}%") ||
-                (p.OwnerEntity != null && EF.Functions.ILike(p.OwnerEntity.Name, $"%{term}%")) ||
-                (p.Owner != null && EF.Functions.ILike(p.Owner.Name, $"%{term}%")));
+                p.Ownerships.Any(ownership =>
+                    ownership.EffectiveFromUtc <= now
+                    && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now)
+                    && ownership.OwnerEntity != null
+                    && EF.Functions.ILike(ownership.OwnerEntity.Name, $"%{term}%")));
         }
 
         if (query.Type.HasValue)
@@ -165,10 +169,28 @@ public class PropertyService : IPropertyService
             .ThenBy(p => p.Id)
             .Select(p => new ProjectedProperty(
                 p,
-                p.OwnerEntity != null ? p.OwnerEntity.Name : (p.Owner != null ? p.Owner.Name : null),
+                p.Ownerships
+                    .Where(ownership => ownership.EffectiveFromUtc <= now
+                        && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now))
+                    .OrderBy(ownership => ownership.OwnerEntityId)
+                    .Select(ownership => new PropertyOwnershipResponse
+                    {
+                        Id = ownership.Id,
+                        OwnerEntityId = ownership.OwnerEntityId,
+                        OwnerName = ownership.OwnerEntity!.Name,
+                        OwnershipSharePercent = ownership.OwnershipSharePercent,
+                        EffectiveFromUtc = ownership.EffectiveFromUtc,
+                        EffectiveToUtc = ownership.EffectiveToUtc,
+                        StatementRecipientName = ownership.StatementRecipientName,
+                        StatementRecipientEmail = ownership.StatementRecipientEmail,
+                        PayeeName = ownership.PayeeName,
+                    }).ToList(),
                 p.Units.Count,
                 _db.UnitOccupancyProjections.Count(occupancy =>
-                    occupancy.PortfolioId == portfolioId && occupancy.PropertyId == p.Id && occupancy.IsOccupied)))
+                    occupancy.PortfolioId == portfolioId && occupancy.PropertyId == p.Id && occupancy.IsOccupied),
+                p.RentalStructure == RentalStructure.SingleRental
+                    ? p.Units.OrderBy(unit => unit.Id).Select(unit => (int?)unit.Id).FirstOrDefault()
+                    : null))
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
@@ -196,16 +218,35 @@ public class PropertyService : IPropertyService
     public async Task<PropertyResponse?> GetAsync(WorkspaceReadScope scope, int id, CancellationToken ct = default)
     {
         var portfolioId = scope.PortfolioId;
+        var now = _timeProvider.UtcNow();
         var row = await _db.Properties
             .AsNoTracking()
-            .WhereAuthorized(_db, scope, CapabilityKeys.RentalsRead, _timeProvider.UtcNow())
+            .WhereAuthorized(_db, scope, CapabilityKeys.RentalsRead, now)
             .Where(p => p.Id == id)
             .Select(p => new ProjectedProperty(
                 p,
-                p.OwnerEntity != null ? p.OwnerEntity.Name : (p.Owner != null ? p.Owner.Name : null),
+                p.Ownerships
+                    .Where(ownership => ownership.EffectiveFromUtc <= now
+                        && (ownership.EffectiveToUtc == null || ownership.EffectiveToUtc > now))
+                    .OrderBy(ownership => ownership.OwnerEntityId)
+                    .Select(ownership => new PropertyOwnershipResponse
+                    {
+                        Id = ownership.Id,
+                        OwnerEntityId = ownership.OwnerEntityId,
+                        OwnerName = ownership.OwnerEntity!.Name,
+                        OwnershipSharePercent = ownership.OwnershipSharePercent,
+                        EffectiveFromUtc = ownership.EffectiveFromUtc,
+                        EffectiveToUtc = ownership.EffectiveToUtc,
+                        StatementRecipientName = ownership.StatementRecipientName,
+                        StatementRecipientEmail = ownership.StatementRecipientEmail,
+                        PayeeName = ownership.PayeeName,
+                    }).ToList(),
                 p.Units.Count,
                 _db.UnitOccupancyProjections.Count(occupancy =>
-                    occupancy.PortfolioId == portfolioId && occupancy.PropertyId == p.Id && occupancy.IsOccupied)))
+                    occupancy.PortfolioId == portfolioId && occupancy.PropertyId == p.Id && occupancy.IsOccupied),
+                p.RentalStructure == RentalStructure.SingleRental
+                    ? p.Units.OrderBy(unit => unit.Id).Select(unit => (int?)unit.Id).FirstOrDefault()
+                    : null))
             .FirstOrDefaultAsync(ct);
 
         return row == null ? null : ToResponse(row);
@@ -216,12 +257,21 @@ public class PropertyService : IPropertyService
     /// re-listing every scalar in the projection) keeps the read in one SELECT while letting
     /// <see cref="PropertyResponse.FromEntity"/> own the scalar mapping.
     /// </summary>
-    private sealed record ProjectedProperty(Property Property, string? OwnerName, int UnitCount, int OccupiedUnits);
+    private sealed record ProjectedProperty(
+        Property Property,
+        IReadOnlyList<PropertyOwnershipResponse> Ownerships,
+        int UnitCount,
+        int OccupiedUnits,
+        int? SingleRentalUnitId);
 
     private static PropertyResponse ToResponse(ProjectedProperty row)
     {
         var response = PropertyResponse.FromEntity(row.Property, row.UnitCount, row.OccupiedUnits);
-        response.OwnerName = row.OwnerName;
+        response.Ownerships = row.Ownerships;
+        response.WorkspaceEntry = PropertyWorkspaceEntryResponse.FromPersistedStructure(
+            row.Property.RentalStructure,
+            row.Property.Id,
+            row.SingleRentalUnitId);
         return response;
     }
 

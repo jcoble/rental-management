@@ -17,6 +17,7 @@
 		workOrderReceiptScanContext
 	} from '$lib/components/unit/maintenance-actions';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
@@ -315,7 +316,12 @@
 
 	<!-- Work orders as compact cards; the full edit/assign/close lives on the WO detail page. -->
 	{#if workOrdersQuery.isLoading}
-		<p class="rounded-xl border bg-card p-6 text-center text-sm text-muted-foreground">Loading work orders…</p>
+		<LoadingState label="Loading work orders" testid="unit-work-orders-loading" />
+	{:else if workOrdersQuery.isError}
+		<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="unit-work-orders-error">
+			<p class="text-sm font-medium text-destructive">Work orders could not be loaded.</p>
+			<Button class="mt-3" variant="outline" size="sm" onclick={() => workOrdersQuery.refetch()}>Try again</Button>
+		</div>
 	{:else if workOrderList.length === 0}
 		<DetailCard title="No work orders" icon={Wrench} accent="muted" testid="maintenance-empty">
 			<p class="text-sm text-muted-foreground">Create a ticket when something needs fixing, or scan a vendor invoice.</p>
@@ -370,7 +376,14 @@
 				data-testid="maintenance-scan-receipt"
 			>Scan receipt</button>
 		{/snippet}
-		{#if workOrderReceipts.length === 0}
+		{#if expensesQuery.isLoading}
+			<LoadingState label="Loading work-order receipts" testid="maintenance-receipts-loading" />
+		{:else if expensesQuery.isError}
+			<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="maintenance-receipts-error">
+				<p class="text-sm font-medium text-destructive">Work-order receipts could not be loaded.</p>
+				<Button class="mt-3" variant="outline" size="sm" onclick={() => expensesQuery.refetch()}>Try again</Button>
+			</div>
+		{:else if workOrderReceipts.length === 0}
 			<p class="text-sm text-muted-foreground">No work-order receipts yet. Snap a receipt to link it to a job.</p>
 		{:else}
 			<ul class="divide-y text-sm">

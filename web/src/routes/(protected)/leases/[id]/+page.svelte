@@ -26,6 +26,7 @@
 	import PossessionActions from '$lib/components/leases/PossessionActions.svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import Pagination from '$lib/components/shared/Pagination.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
@@ -224,15 +225,23 @@
 		: 'Lease - Rental Command'}</title>
 </svelte:head>
 
+<div class="m3-page-frame">
 {#if relationshipQuery.isLoading}
-	<p class="text-muted-foreground">Loading tenant and lease relationship…</p>
+	<LoadingState
+		label="Loading tenant and lease relationship"
+		variant="page"
+		testid="lease-relationship-loading"
+	/>
 {:else if relationshipQuery.error || !relationshipQuery.data}
 	<div class="rounded-xl border border-destructive/30 bg-destructive/5 p-6">
 		<h1 class="text-xl font-semibold">Tenant and lease relationship unavailable</h1>
 		<p class="mt-2 text-sm text-muted-foreground">
 			It may no longer exist or you may not have access.
 		</p>
-		<Button href="/leases" variant="outline" class="mt-4">Back to leases</Button>
+		<div class="mt-4 flex flex-wrap gap-2">
+			<Button variant="outline" onclick={() => relationshipQuery.refetch()}>Try again</Button>
+			<Button href="/leases" variant="ghost">Back to leases</Button>
+		</div>
 	</div>
 {:else}
 	{@const detail = relationshipQuery.data}
@@ -330,7 +339,14 @@
 				</div>
 			</CardHeader>
 			<CardContent class="space-y-5">
-				{#if detail.parties.length === 0}
+				{#if householdContextQuery.isLoading}
+					<LoadingState label="Loading household" testid="lease-household-loading" />
+				{:else if householdContextQuery.isError}
+					<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="lease-household-error">
+						<p class="text-sm font-medium text-destructive">Household details could not be loaded.</p>
+						<Button class="mt-3" variant="outline" size="sm" onclick={() => householdContextQuery.refetch()}>Try again</Button>
+					</div>
+				{:else if detail.parties.length === 0}
 					<p class="text-sm text-muted-foreground">No effective parties.</p>
 				{:else}
 					<div>
@@ -368,9 +384,12 @@
 			</CardHeader>
 			<CardContent class="space-y-4">
 				{#if agreementsQuery.isLoading}
-					<p class="text-sm text-muted-foreground">Loading agreement versions…</p>
+					<LoadingState label="Loading agreement versions" testid="lease-agreements-loading" />
 				{:else if agreementsQuery.isError}
-					<p class="text-sm text-destructive">Agreement history could not be loaded.</p>
+					<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="lease-agreements-error">
+						<p class="text-sm font-medium text-destructive">Agreement history could not be loaded.</p>
+						<Button class="mt-3" variant="outline" size="sm" onclick={() => agreementsQuery.refetch()}>Try again</Button>
+					</div>
 				{:else if (agreementsQuery.data?.items.length ?? 0) === 0}
 					<p class="text-sm text-muted-foreground">No agreement versions yet.</p>
 				{:else}
@@ -455,9 +474,12 @@
 			</CardHeader>
 			<CardContent class="space-y-4">
 				{#if addendaQuery.isLoading}
-					<p class="text-sm text-muted-foreground">Loading addendum versions…</p>
+					<LoadingState label="Loading addendum versions" testid="lease-addenda-loading" />
 				{:else if addendaQuery.isError}
-					<p class="text-sm text-destructive">Addendum history could not be loaded.</p>
+					<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="lease-addenda-error">
+						<p class="text-sm font-medium text-destructive">Addendum history could not be loaded.</p>
+						<Button class="mt-3" variant="outline" size="sm" onclick={() => addendaQuery.refetch()}>Try again</Button>
+					</div>
 				{:else if (addendaQuery.data?.items.length ?? 0) === 0}
 					<p class="text-sm text-muted-foreground">No addendum versions yet.</p>
 				{:else}
@@ -531,3 +553,4 @@
 		<HouseholdManagementDialog mode={householdAction.mode} {summary} party={householdAction.party} parties={householdContextQuery.data?.parties ?? []} agreements={agreementsQuery.data?.items ?? []} accessId={householdAction.access?.tenantUserAccessId} onclose={() => (householdAction = null)} onchanged={refreshLease} />
 	{/if}
 {/if}
+</div>

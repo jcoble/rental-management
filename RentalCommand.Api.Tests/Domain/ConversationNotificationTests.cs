@@ -12,6 +12,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Navigation;
 using RentalCommand.Core.Conversations;
 using RentalCommand.Data.Atomic;
 using RentalCommand.Data.Auditing;
@@ -105,7 +106,11 @@ public class ConversationNotificationTests : IAsyncLifetime
         notification.Type.Should().Be("TenantMessage");
         notification.UserId.Should().Be(10);
         notification.Title.Should().Be("New message from Emily Chen");
-        notification.ActionUrl.Should().Be($"/messages/{result!.Id}");
+        notification.NavigationDestination.Should().Be(NavigationDestination.Message);
+        notification.NavigationResourceKind.Should().Be(nameof(Conversation));
+        notification.NavigationResourceId.Should().Be(result!.Id);
+        notification.NavigationAccessContextId.Should().BePositive();
+        notification.NavigationAccessRevision.Should().BePositive();
         _ctx.Db.Notifications.Should().NotContain(item => item.UserId == 30);
     }
 
@@ -151,7 +156,10 @@ public class ConversationNotificationTests : IAsyncLifetime
         result.Should().NotBeNull();
         var notification = _ctx.Db.Notifications.Should().ContainSingle(n => n.Type == "TenantNotice").Subject;
         notification.UserId.Should().Be(20);
-        notification.ActionUrl.Should().Be($"/portal/messages?conversation={result!.Id}");
+        notification.NavigationExperience.Should().Be(NavigationExperience.Tenant);
+        notification.NavigationDestination.Should().Be(NavigationDestination.Message);
+        notification.NavigationResourceKind.Should().Be(nameof(Conversation));
+        notification.NavigationResourceId.Should().Be(result!.Id);
         _ctx.Db.OutboxMessages.Should().NotContain(m => m.MessageType == "push");
     }
 

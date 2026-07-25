@@ -1,4 +1,4 @@
-import { api } from '../client';
+import { api, downloadFile } from '../client';
 import { idempotentMutation } from '../idempotency';
 import type {
 	Appointment,
@@ -186,7 +186,9 @@ export interface PortalLeaseAgreement {
 	rentDueDay: number;
 	currency: string;
 	fullyExecutedAtUtc?: string | null;
-	executedStoredFileId?: number | null;
+	executedDocumentAvailable: boolean;
+	executedDocumentFileName?: string | null;
+	executedDocumentContentType?: string | null;
 }
 
 export interface PortalLeaseRelationship {
@@ -214,9 +216,33 @@ function queryString(params: object): string {
 	return text ? `?${text}` : '';
 }
 
+function saveBlob(blob: Blob, fileName: string): void {
+	const objectUrl = URL.createObjectURL(blob);
+	const anchor = document.createElement('a');
+	anchor.href = objectUrl;
+	anchor.download = fileName;
+	document.body.appendChild(anchor);
+	anchor.click();
+	document.body.removeChild(anchor);
+	URL.revokeObjectURL(objectUrl);
+}
+
+export async function downloadPortalExecutedAgreement(
+	leaseManagementId: number,
+	leaseAgreementId: number,
+	fileName: string,
+	contentType: string
+): Promise<void> {
+	const blob = await downloadFile(
+		`/portal/leases/${leaseManagementId}/agreements/${leaseAgreementId}/executed-document`
+	);
+	saveBlob(blob.type ? blob : new Blob([blob], { type: contentType }), fileName);
+}
+
 export const portal = {
 	overview: () => api.get('/portal/overview'),
 	leases: () => api.get<PortalLeaseRelationship[]>('/portal/leases'),
+	downloadExecutedAgreement: downloadPortalExecutedAgreement,
 	/**
 	 * Ask a plain-English question grounded in the tenant's OWN lease. Omit `leaseId` to use the
 	 * tenant's most relevant lease. Scoped server-side to the signed-in tenant; 404 if they have no

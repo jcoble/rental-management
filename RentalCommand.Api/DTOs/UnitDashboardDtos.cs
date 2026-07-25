@@ -24,6 +24,27 @@ public class UnitDashboardResponse
     /// <summary>The compact health summary rendered as chips in the page header.</summary>
     public UnitDashboardHeader Header { get; set; } = new();
 
+    /// <summary>Canonical occupancy and possession truth, independent of Agreement state.</summary>
+    public UnitOccupancyPossessionCondition OccupancyPossession { get; set; } = new();
+
+    /// <summary>Canonical marketing availability, independent of tenancy and Agreement state.</summary>
+    public UnitMarketingAvailabilityCondition MarketingAvailability { get; set; } = new();
+
+    /// <summary>Canonical TenantAccount condition, independent of Agreement state.</summary>
+    public UnitTenantAccountCondition TenantAccountCondition { get; set; } = new();
+
+    /// <summary>Canonical legal and notice condition, without inferring other condition families.</summary>
+    public UnitLegalNoticeCondition LegalNoticeCondition { get; set; } = new();
+
+    /// <summary>Canonical maintenance and turnover condition.</summary>
+    public UnitMaintenanceTurnoverCondition MaintenanceTurnover { get; set; } = new();
+
+    /// <summary>The canonical current/planned LeaseManagement identity, independent of Agreement state.</summary>
+    public int? LeaseManagementId { get; set; }
+
+    /// <summary>The canonical open TenantAccount identity, independent of Agreement state.</summary>
+    public int? TenantAccountId { get; set; }
+
     /// <summary>The governing or upcoming immutable agreement for the Unit's current relationship.</summary>
     public UnitLeaseSummary? CurrentLease { get; set; }
 
@@ -41,6 +62,45 @@ public class UnitDashboardResponse
 
     /// <summary>The most recent unit history events (~15), for the persistent timeline rail.</summary>
     public IReadOnlyList<AuditEntryResponse> RecentTimeline { get; set; } = [];
+}
+
+public class UnitOccupancyPossessionCondition
+{
+    public string Status { get; set; } = "Vacant";
+    public bool IsOccupied { get; set; }
+    public bool HasScheduledMoveIn { get; set; }
+    public int? LeaseManagementId { get; set; }
+}
+
+public class UnitMarketingAvailabilityCondition
+{
+    public string Status { get; set; } = "Available";
+    public bool IsAvailable { get; set; }
+}
+
+public class UnitTenantAccountCondition
+{
+    public string Status { get; set; } = "NoAccount";
+    public int? TenantAccountId { get; set; }
+    public decimal ReceivableBalance { get; set; }
+    public decimal PastDueAmount { get; set; }
+}
+
+public class UnitLegalNoticeCondition
+{
+    public string Status { get; set; } = "NoGoverningAgreement";
+    public int? AgreementId { get; set; }
+    public string? AgreementStatus { get; set; }
+    public int OpenNoticeCount { get; set; }
+}
+
+public class UnitMaintenanceTurnoverCondition
+{
+    public string Status { get; set; } = "Clear";
+    public int OpenWorkOrderCount { get; set; }
+    public bool IsInTurnover { get; set; }
+    public bool IsOutOfService { get; set; }
+    public bool IsOnManagementHold { get; set; }
 }
 
 /// <summary>A stage's recommended next action plus the web route it deep-links to.</summary>

@@ -765,7 +765,6 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         var property = new Property
         {
             PortfolioId = portfolio.Id,
-            OwnerEntity = owner,
             Name = "Relationship Property",
             AddressLine1 = "1 Context Way",
             City = "Columbus",
@@ -773,6 +772,18 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             PostalCode = "43215",
             CreatedAt = now,
             UpdatedAt = now,
+            Ownerships =
+            [
+                new PropertyOwnership
+                {
+                    PortfolioId = portfolio.Id,
+                    OwnerEntity = owner,
+                    OwnershipSharePercent = 100m,
+                    EffectiveFromUtc = now.AddDays(-1),
+                    StatementRecipientName = owner.Name,
+                    PayeeName = owner.Name,
+                },
+            ],
         };
         var unit = new Unit
         {
@@ -835,6 +846,32 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             },
             tenantAccess);
         await db.SaveChangesAsync();
+
+        var managementContext = await db.WorkspaceAccessContexts
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == _firstContextId);
+        var tenantSession = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = tenantUser.Id,
+            ActiveAccessContextId = tenantContext.Id,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        var managementSession = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            UserId = _userId,
+            ActiveAccessContextId = managementContext.Id,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+        db.AuthSessions.AddRange(tenantSession, managementSession);
+        await db.SaveChangesAsync();
         db.ChangeTracker.Clear();
 
         var ownerOptions = await new EffectiveAccessContextSelectionQuery(db)
@@ -855,6 +892,82 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         (await db.EffectiveTenantAccess.SingleAsync(item => item.AccessContextId == tenantContext.Id))
             .LeaseManagementId.Should().Be(relationship.Id);
 
+        await using var runtimeScope = (_runtimeServices
+            ?? throw new InvalidOperationException("Runtime auth-start services are unavailable."))
+            .CreateAsyncScope();
+        var runtimeDb = runtimeScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        await runtimeDb.Database.OpenConnectionAsync();
+        var resolver = new ActiveAccessContextResolver(runtimeDb);
+
+        await SetBootstrapScopeAsync(
+            runtimeDb,
+            tenantSession.Id,
+            tenantUser.Id,
+            tenantContext.Id,
+            tenantContext.AccessRevision);
+        _queryCapture!.Reset();
+        var resolvedTenant = await resolver.ResolveAsync(
+            tenantSession.Id,
+            tenantUser.Id,
+            tenantContext.Id,
+            tenantContext.AccessRevision,
+            now);
+
+        resolvedTenant.SessionId.Should().Be(tenantSession.Id);
+        resolvedTenant.UserId.Should().Be(tenantUser.Id);
+        resolvedTenant.AccessContextId.Should().Be(tenantContext.Id);
+        resolvedTenant.PortfolioId.Should().Be(portfolio.Id);
+        resolvedTenant.AccessRevision.Should().Be(tenantContext.AccessRevision);
+        resolvedTenant.LastAuthorizedExperience.Should().Be(WorkspaceExperience.Tenant);
+        resolvedTenant.WorkspaceMembershipId.Should().BeNull();
+        resolvedTenant.DefaultExperience.Should().BeNull();
+        _queryCapture.ReaderCommands.Should().ContainSingle()
+            .Which.Should().Contain("rc_access_context_is_effective");
+
+        await SetBootstrapScopeAsync(
+            runtimeDb,
+            managementSession.Id,
+            _userId,
+            managementContext.Id,
+            managementContext.AccessRevision);
+        _queryCapture.Reset();
+        var resolvedManagement = await resolver.ResolveAsync(
+            managementSession.Id,
+            _userId,
+            managementContext.Id,
+            managementContext.AccessRevision,
+            now);
+
+        resolvedManagement.SessionId.Should().Be(managementSession.Id);
+        resolvedManagement.UserId.Should().Be(_userId);
+        resolvedManagement.AccessContextId.Should().Be(managementContext.Id);
+        resolvedManagement.PortfolioId.Should().Be(managementContext.PortfolioId);
+        resolvedManagement.AccessRevision.Should().Be(managementContext.AccessRevision);
+        resolvedManagement.WorkspaceMembershipId.Should().Be(_firstMembershipId);
+        resolvedManagement.DefaultExperience.Should().Be(WorkspaceExperience.Management);
+        _queryCapture.ReaderCommands.Should().ContainSingle()
+            .Which.Should().Contain("rc_access_context_is_effective");
+
+        await SetBootstrapScopeAsync(
+            runtimeDb,
+            tenantSession.Id,
+            tenantUser.Id,
+            tenantContext.Id,
+            tenantContext.AccessRevision);
+        _queryCapture.Reset();
+        Func<Task> resolveStale = async () => await resolver.ResolveAsync(
+            tenantSession.Id,
+            tenantUser.Id,
+            tenantContext.Id,
+            tenantContext.AccessRevision + 1,
+            now);
+
+        var stale = await resolveStale.Should().ThrowAsync<StaleAccessRevisionException>();
+        stale.Which.PresentedRevision.Should().Be(tenantContext.AccessRevision + 1);
+        stale.Which.CurrentRevision.Should().Be(tenantContext.AccessRevision);
+        _queryCapture.ReaderCommands.Should().ContainSingle()
+            .Which.Should().Contain("rc_access_context_is_effective");
+
         tenantAccess = await db.TenantUserAccesses.SingleAsync(item => item.Id == tenantAccess.Id);
         tenantContext = await db.WorkspaceAccessContexts.SingleAsync(item => item.Id == tenantContext.Id);
         tenantAccess.RevokedAtUtc = now.AddMinutes(1);
@@ -870,6 +983,24 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         (await ReadEnvelopeViewAsync(db, tenantUser.Id, tenantContext.Id)).Should().BeNull();
         (await db.EffectiveTenantAccess.AnyAsync(item => item.AccessContextId == tenantContext.Id))
             .Should().BeFalse();
+
+        await SetBootstrapScopeAsync(
+            runtimeDb,
+            tenantSession.Id,
+            tenantUser.Id,
+            tenantContext.Id,
+            tenantContext.AccessRevision);
+        _queryCapture.Reset();
+        Func<Task> resolveRevoked = async () => await resolver.ResolveAsync(
+            tenantSession.Id,
+            tenantUser.Id,
+            tenantContext.Id,
+            tenantContext.AccessRevision,
+            now.AddMinutes(1));
+
+        await resolveRevoked.Should().ThrowAsync<AccessContextUnavailableException>();
+        _queryCapture.ReaderCommands.Should().ContainSingle()
+            .Which.Should().Contain("rc_access_context_is_effective");
     }
 
     private async Task<IssueLoginContextSelectionChallengeCommand> IssueChallengeAsync(
@@ -1048,6 +1179,22 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         };
         options.Converters.Add(new JsonStringEnumConverter());
         return JsonSerializer.Deserialize<AccessEnvelope>(row.EnvelopeJson, options);
+    }
+
+    private static async Task SetBootstrapScopeAsync(
+        RentalCommandDbContext db,
+        Guid sessionId,
+        int userId,
+        int accessContextId,
+        long accessRevision)
+    {
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            SELECT set_config('app.current_portfolio_id', '0', false),
+                   set_config('app.auth_session_id', {sessionId.ToString("D")}, false),
+                   set_config('app.current_user_id', {userId.ToString()}, false),
+                   set_config('app.current_access_context_id', {accessContextId.ToString()}, false),
+                   set_config('app.access_revision', {accessRevision.ToString()}, false);
+            """);
     }
 
     private RentalCommandDbContext NewPlainContext() => new(

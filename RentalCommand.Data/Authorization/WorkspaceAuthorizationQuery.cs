@@ -59,40 +59,19 @@ public static class WorkspaceAuthorizationQuery
         CapabilityAuthorizationTargetKind targetKind,
         DateTime utcNow)
     {
-        var keys = RequireCapabilityKeys(capabilityKeys);
+        _ = utcNow;
+        var scopes = db.EffectiveCapabilityScopes(
+            scope,
+            RequireCapabilityKeys(capabilityKeys),
+            targetKind);
 
         return db.MembershipRoleAssignments.AsNoTracking()
             .Where(assignment =>
                 assignment.PortfolioId == scope.PortfolioId &&
-                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties &&
-                assignment.Status == MembershipRoleAssignmentStatus.Active &&
-                assignment.SuspendedAtUtc == null &&
-                assignment.RevokedAtUtc == null &&
-                assignment.EffectiveFromUtc <= utcNow &&
-                (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > utcNow) &&
-                assignment.WorkspaceMembership!.AccessContextId == scope.AccessContextId &&
-                assignment.WorkspaceMembership.PortfolioId == scope.PortfolioId &&
-                assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active &&
-                assignment.WorkspaceMembership.SuspendedAtUtc == null &&
-                assignment.WorkspaceMembership.RevokedAtUtc == null &&
-                assignment.WorkspaceMembership.EffectiveFromUtc <= utcNow &&
-                (assignment.WorkspaceMembership.EffectiveToUtc == null ||
-                 assignment.WorkspaceMembership.EffectiveToUtc > utcNow) &&
-                assignment.WorkspaceMembership.AccessContext!.UserId == scope.UserId &&
-                assignment.WorkspaceMembership.AccessContext.AccessRevision == scope.AccessRevision &&
-                assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active &&
-                assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null &&
-                assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null &&
-                db.AuthSessions.AsNoTracking().Any(session =>
-                    session.Id == scope.SessionId &&
-                    session.UserId == scope.UserId &&
-                    session.ActiveAccessContextId == scope.AccessContextId &&
-                    session.Status == AuthSessionStatus.Active &&
-                    session.RevokedAtUtc == null &&
-                    session.ExpiresAtUtc > utcNow) &&
-                assignment.RoleProfile!.Capabilities.Any(profileCapability =>
-                    keys.Contains(profileCapability.CapabilityDefinition!.Key) &&
-                    profileCapability.CapabilityDefinition.AuthorizationTargetKind == targetKind));
+                scopes.Any(effectiveScope =>
+                    effectiveScope.AssignmentId == assignment.Id &&
+                    effectiveScope.WorkspaceMembershipId == assignment.WorkspaceMembershipId &&
+                    effectiveScope.ScopeKind == EffectiveCapabilityScopeQuery.AllPropertiesScope));
     }
 
     /// <summary>
@@ -108,48 +87,7 @@ public static class WorkspaceAuthorizationQuery
         DateTime utcNow)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(capabilityKey);
-
-        return properties.Where(property =>
-            property.PortfolioId == scope.PortfolioId &&
-            db.AuthSessions.AsNoTracking().Any(session =>
-                session.Id == scope.SessionId &&
-                session.UserId == scope.UserId &&
-                session.ActiveAccessContextId == scope.AccessContextId &&
-                session.Status == AuthSessionStatus.Active &&
-                session.RevokedAtUtc == null &&
-                session.ExpiresAtUtc > utcNow &&
-                session.ActiveAccessContext != null &&
-                session.ActiveAccessContext.Id == scope.AccessContextId &&
-                session.ActiveAccessContext.UserId == scope.UserId &&
-                session.ActiveAccessContext.PortfolioId == scope.PortfolioId &&
-                session.ActiveAccessContext.AccessRevision == scope.AccessRevision &&
-                session.ActiveAccessContext.Status == WorkspaceAccessContextStatus.Active &&
-                session.ActiveAccessContext.SuspendedAtUtc == null &&
-                session.ActiveAccessContext.RevokedAtUtc == null &&
-                session.ActiveAccessContext.Membership != null &&
-                session.ActiveAccessContext.Membership.PortfolioId == property.PortfolioId &&
-                session.ActiveAccessContext.Membership.Status == WorkspaceMembershipStatus.Active &&
-                session.ActiveAccessContext.Membership.SuspendedAtUtc == null &&
-                session.ActiveAccessContext.Membership.RevokedAtUtc == null &&
-                session.ActiveAccessContext.Membership.EffectiveFromUtc <= utcNow &&
-                (session.ActiveAccessContext.Membership.EffectiveToUtc == null ||
-                 session.ActiveAccessContext.Membership.EffectiveToUtc > utcNow) &&
-                session.ActiveAccessContext.Membership.RoleAssignments.Any(assignment =>
-                    assignment.PortfolioId == property.PortfolioId &&
-                    assignment.Status == MembershipRoleAssignmentStatus.Active &&
-                    assignment.SuspendedAtUtc == null &&
-                    assignment.RevokedAtUtc == null &&
-                    assignment.EffectiveFromUtc <= utcNow &&
-                    (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > utcNow) &&
-                    assignment.RoleProfile!.Capabilities.Any(profileCapability =>
-                        profileCapability.CapabilityDefinition!.Key == capabilityKey &&
-                        profileCapability.CapabilityDefinition.AuthorizationTargetKind ==
-                            CapabilityAuthorizationTargetKind.Property) &&
-                    (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
-                     (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
-                      assignment.SelectedProperties.Any(selected =>
-                          selected.PortfolioId == property.PortfolioId &&
-                          selected.PropertyId == property.Id))))));
+        return properties.WhereAuthorized(db, scope, [capabilityKey], utcNow);
     }
 
     /// <summary>
@@ -164,49 +102,18 @@ public static class WorkspaceAuthorizationQuery
         IReadOnlyCollection<string> capabilityKeys,
         DateTime utcNow)
     {
-        var keys = RequireCapabilityKeys(capabilityKeys);
+        _ = utcNow;
+        var scopes = db.EffectiveCapabilityScopes(
+            scope,
+            RequireCapabilityKeys(capabilityKeys),
+            CapabilityAuthorizationTargetKind.Property);
 
         return properties.Where(property =>
             property.PortfolioId == scope.PortfolioId &&
-            db.AuthSessions.AsNoTracking().Any(session =>
-                session.Id == scope.SessionId &&
-                session.UserId == scope.UserId &&
-                session.ActiveAccessContextId == scope.AccessContextId &&
-                session.Status == AuthSessionStatus.Active &&
-                session.RevokedAtUtc == null &&
-                session.ExpiresAtUtc > utcNow &&
-                session.ActiveAccessContext != null &&
-                session.ActiveAccessContext.Id == scope.AccessContextId &&
-                session.ActiveAccessContext.UserId == scope.UserId &&
-                session.ActiveAccessContext.PortfolioId == scope.PortfolioId &&
-                session.ActiveAccessContext.AccessRevision == scope.AccessRevision &&
-                session.ActiveAccessContext.Status == WorkspaceAccessContextStatus.Active &&
-                session.ActiveAccessContext.SuspendedAtUtc == null &&
-                session.ActiveAccessContext.RevokedAtUtc == null &&
-                session.ActiveAccessContext.Membership != null &&
-                session.ActiveAccessContext.Membership.PortfolioId == property.PortfolioId &&
-                session.ActiveAccessContext.Membership.Status == WorkspaceMembershipStatus.Active &&
-                session.ActiveAccessContext.Membership.SuspendedAtUtc == null &&
-                session.ActiveAccessContext.Membership.RevokedAtUtc == null &&
-                session.ActiveAccessContext.Membership.EffectiveFromUtc <= utcNow &&
-                (session.ActiveAccessContext.Membership.EffectiveToUtc == null ||
-                 session.ActiveAccessContext.Membership.EffectiveToUtc > utcNow) &&
-                session.ActiveAccessContext.Membership.RoleAssignments.Any(assignment =>
-                    assignment.PortfolioId == property.PortfolioId &&
-                    assignment.Status == MembershipRoleAssignmentStatus.Active &&
-                    assignment.SuspendedAtUtc == null &&
-                    assignment.RevokedAtUtc == null &&
-                    assignment.EffectiveFromUtc <= utcNow &&
-                    (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > utcNow) &&
-                    assignment.RoleProfile!.Capabilities.Any(profileCapability =>
-                        keys.Contains(profileCapability.CapabilityDefinition!.Key) &&
-                        profileCapability.CapabilityDefinition.AuthorizationTargetKind ==
-                            CapabilityAuthorizationTargetKind.Property) &&
-                    (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
-                     (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
-                      assignment.SelectedProperties.Any(selected =>
-                          selected.PortfolioId == property.PortfolioId &&
-                          selected.PropertyId == property.Id))))));
+            scopes.Any(effectiveScope =>
+                effectiveScope.ScopeKind == EffectiveCapabilityScopeQuery.AllPropertiesScope ||
+                effectiveScope.ScopeKind == EffectiveCapabilityScopeQuery.SelectedPropertiesScope &&
+                effectiveScope.PropertyId == property.Id));
     }
 
     public static IQueryable<RentalApplication> WhereAuthorized(
@@ -226,7 +133,8 @@ public static class WorkspaceAuthorizationQuery
 
         return applications.Where(application =>
             application.PortfolioId == scope.PortfolioId &&
-            (allPropertiesAssignments.Any() ||
+            (allPropertiesAssignments.Any(assignment =>
+                 assignment.PortfolioId == application.PortfolioId) ||
              (application.PropertyId != null &&
               authorizedProperties.Any(property =>
                   property.Id == application.PropertyId &&
@@ -241,55 +149,30 @@ public static class WorkspaceAuthorizationQuery
         DateTime utcNow)
     {
         var keys = RequireCapabilityKeys(capabilityKeys);
-        var authorizedProperties = db.Properties.AsNoTracking()
-            .WhereAuthorized(db, scope, keys, utcNow);
-        var assignedWorkAssignments = db.MembershipRoleAssignments.AsNoTracking()
-            .Where(assignment =>
-                assignment.PortfolioId == scope.PortfolioId &&
-                assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AssignedWorkOrders &&
-                assignment.Status == MembershipRoleAssignmentStatus.Active &&
-                assignment.SuspendedAtUtc == null &&
-                assignment.RevokedAtUtc == null &&
-                assignment.EffectiveFromUtc <= utcNow &&
-                (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > utcNow) &&
-                assignment.WorkspaceMembership!.AccessContextId == scope.AccessContextId &&
-                assignment.WorkspaceMembership.PortfolioId == scope.PortfolioId &&
-                assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active &&
-                assignment.WorkspaceMembership.SuspendedAtUtc == null &&
-                assignment.WorkspaceMembership.RevokedAtUtc == null &&
-                assignment.WorkspaceMembership.EffectiveFromUtc <= utcNow &&
-                (assignment.WorkspaceMembership.EffectiveToUtc == null ||
-                 assignment.WorkspaceMembership.EffectiveToUtc > utcNow) &&
-                assignment.WorkspaceMembership.AccessContext!.UserId == scope.UserId &&
-                assignment.WorkspaceMembership.AccessContext.AccessRevision == scope.AccessRevision &&
-                assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active &&
-                assignment.WorkspaceMembership.AccessContext.SuspendedAtUtc == null &&
-                assignment.WorkspaceMembership.AccessContext.RevokedAtUtc == null &&
-                db.AuthSessions.AsNoTracking().Any(session =>
-                    session.Id == scope.SessionId &&
-                    session.UserId == scope.UserId &&
-                    session.ActiveAccessContextId == scope.AccessContextId &&
-                    session.Status == AuthSessionStatus.Active &&
-                    session.RevokedAtUtc == null &&
-                    session.ExpiresAtUtc > utcNow) &&
-                assignment.RoleProfile!.Capabilities.Any(profileCapability =>
-                    keys.Contains(profileCapability.CapabilityDefinition!.Key) &&
-                    profileCapability.CapabilityDefinition.AuthorizationTargetKind ==
-                        CapabilityAuthorizationTargetKind.WorkOrder));
+        var propertyScopes = db.EffectiveCapabilityScopes(
+            scope,
+            keys,
+            CapabilityAuthorizationTargetKind.Property);
+        var assignedWorkScopes = db.EffectiveCapabilityScopes(
+            scope,
+            keys,
+            CapabilityAuthorizationTargetKind.WorkOrder);
 
         return workOrders.Where(workOrder =>
             workOrder.PortfolioId == scope.PortfolioId &&
-            (authorizedProperties.Any(property =>
-                 property.Id == workOrder.PropertyId &&
-                 property.PortfolioId == workOrder.PortfolioId) ||
-             assignedWorkAssignments.Any(assignment =>
-                 assignment.PortfolioId == workOrder.PortfolioId &&
+            (propertyScopes.Any(effectiveScope =>
+                 effectiveScope.ScopeKind == EffectiveCapabilityScopeQuery.AllPropertiesScope ||
+                 effectiveScope.ScopeKind == EffectiveCapabilityScopeQuery.SelectedPropertiesScope &&
+                 effectiveScope.PropertyId == workOrder.PropertyId) ||
+             assignedWorkScopes.Any(effectiveScope =>
+                 effectiveScope.ScopeKind == EffectiveCapabilityScopeQuery.AssignedWorkOrdersScope &&
                  workOrder.Responsibilities.Any(responsibility =>
                      responsibility.PortfolioId == workOrder.PortfolioId &&
-                     responsibility.WorkspaceMembershipId == assignment.WorkspaceMembershipId &&
-                     responsibility.MembershipRoleAssignmentId == assignment.Id &&
+                     responsibility.WorkspaceMembershipId == effectiveScope.WorkspaceMembershipId &&
+                     responsibility.MembershipRoleAssignmentId == effectiveScope.AssignmentId &&
                      responsibility.EffectiveFromUtc <= utcNow &&
-                     (responsibility.EffectiveToUtc == null || responsibility.EffectiveToUtc > utcNow)))));
+                     (responsibility.EffectiveToUtc == null ||
+                      responsibility.EffectiveToUtc > utcNow)))));
     }
 
     public static IQueryable<Conversation> WhereAuthorized(
@@ -312,7 +195,9 @@ public static class WorkspaceAuthorizationQuery
         // assignment; selected-property access never falls back through portfolio or tenant alone.
         return conversations.Where(conversation =>
             conversation.PortfolioId == scope.PortfolioId &&
-            ((conversation.PropertyId == null && allPropertiesAssignments.Any()) ||
+            ((conversation.PropertyId == null &&
+              allPropertiesAssignments.Any(assignment =>
+                  assignment.PortfolioId == conversation.PortfolioId)) ||
              (conversation.PropertyId != null &&
               authorizedProperties.Any(property =>
                   property.Id == conversation.PropertyId &&
@@ -327,6 +212,11 @@ public static class WorkspaceAuthorizationQuery
         DateTime utcNow)
     {
         var keys = RequireCapabilityKeys(capabilityKeys);
+        var allPropertiesAssignments = db.AuthorizedAllPropertyAssignments(
+            scope,
+            keys,
+            CapabilityAuthorizationTargetKind.Property,
+            utcNow);
         var authorizedProperties = db.Properties.AsNoTracking()
             .WhereAuthorized(db, scope, keys, utcNow);
 
@@ -335,11 +225,8 @@ public static class WorkspaceAuthorizationQuery
         // require an AllProperties assignment carrying one of the endpoint capabilities.
         return tenants.Where(tenant =>
             tenant.PortfolioId == scope.PortfolioId &&
-            (db.AuthorizedAllPropertyAssignments(
-                    scope,
-                    keys,
-                    CapabilityAuthorizationTargetKind.Property,
-                    utcNow).Any()
+            (allPropertiesAssignments.Any(assignment =>
+                 assignment.PortfolioId == tenant.PortfolioId)
              || tenant.LeaseManagementParties.Any(party =>
                  party.PortfolioId == tenant.PortfolioId &&
                  party.LeaseManagement != null &&
@@ -377,33 +264,17 @@ public static class WorkspaceAuthorizationQuery
         DateTime utcNow)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(capabilityKey);
-
-        var effectiveContexts = db.WorkspaceAccessContexts.AsNoTracking().WhereEffective();
-        var effectiveMemberships = db.WorkspaceMemberships.AsNoTracking().WhereEffective(utcNow);
-        var effectiveAssignments = db.MembershipRoleAssignments.AsNoTracking().WhereEffective(utcNow);
+        _ = utcNow;
+        var scopes = db.EffectiveCapabilityScopes(
+            accessContext,
+            [capabilityKey],
+            CapabilityAuthorizationTargetKind.Property);
 
         return properties.Where(property =>
             property.PortfolioId == accessContext.PortfolioId &&
-            effectiveAssignments.Any(assignment =>
-                assignment.WorkspaceMembershipId == accessContext.WorkspaceMembershipId &&
-                assignment.PortfolioId == property.PortfolioId &&
-                effectiveMemberships.Any(membership =>
-                    membership.Id == assignment.WorkspaceMembershipId &&
-                    membership.AccessContextId == accessContext.AccessContextId &&
-                    membership.PortfolioId == property.PortfolioId) &&
-                effectiveContexts.Any(context =>
-                    context.Id == accessContext.AccessContextId &&
-                    context.UserId == accessContext.UserId &&
-                    context.PortfolioId == property.PortfolioId &&
-                    context.AccessRevision == accessContext.AccessRevision) &&
-                assignment.RoleProfile!.Capabilities.Any(profileCapability =>
-                    profileCapability.CapabilityDefinition!.Key == capabilityKey &&
-                    profileCapability.CapabilityDefinition.AuthorizationTargetKind ==
-                        CapabilityAuthorizationTargetKind.Property) &&
-                (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties ||
-                 (assignment.ScopeKind == MembershipRoleAssignmentScopeKind.SelectedProperties &&
-                  assignment.SelectedProperties.Any(scope =>
-                      scope.PropertyId == property.Id &&
-                      scope.PortfolioId == property.PortfolioId)))));
+            scopes.Any(effectiveScope =>
+                effectiveScope.ScopeKind == EffectiveCapabilityScopeQuery.AllPropertiesScope ||
+                effectiveScope.ScopeKind == EffectiveCapabilityScopeQuery.SelectedPropertiesScope &&
+                effectiveScope.PropertyId == property.Id));
     }
 }

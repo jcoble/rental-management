@@ -2,7 +2,9 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import { Building2, CheckCircle2, FileText, MessageSquare, WalletCards } from '@lucide/svelte';
 	import { ownerPortal } from '$lib/api/endpoints/owner-portal';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import * as Card from '$lib/components/ui/card';
+	import { Button } from '$lib/components/ui/button';
 
 	const overviewQuery = createQuery(() => ({
 		queryKey: ['owner-portal', 'overview'],
@@ -34,9 +36,12 @@
 	</header>
 
 	{#if overviewQuery.isLoading}
-		<p class="py-12 text-center text-sm text-muted-foreground" data-testid="owner-overview-loading">Loading your overview…</p>
+		<LoadingState label="Loading your ownership overview" variant="page" testid="owner-overview-loading" />
 	{:else if overviewQuery.isError || !overview}
-		<p class="py-12 text-center text-sm text-destructive" data-testid="owner-overview-error">We could not load your owner information. Please try again.</p>
+		<div class="rounded-xl border border-destructive/40 px-6 py-10 text-center" data-testid="owner-overview-error">
+			<p class="text-sm font-medium text-destructive">We could not load your owner information.</p>
+			<Button type="button" variant="outline" size="sm" class="mt-3" onclick={() => overviewQuery.refetch()}>Try again</Button>
+		</div>
 	{:else}
 		<div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-5" data-testid="owner-overview-metrics">
 			<Card.Root class="gap-0 py-0" data-testid="owner-overview-properties"><Card.Content class="p-4"><p class="text-xs text-muted-foreground">Properties</p><p class="mt-1 text-2xl font-semibold">{overview.propertyCount}</p></Card.Content></Card.Root>

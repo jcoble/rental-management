@@ -68,6 +68,13 @@ public class InspectionListResponse
     public int Take { get; set; }
 }
 
+/// <summary>Server-paged Inspection query with an optional Unit-local scope.</summary>
+public sealed class InspectionListQuery : ListQuery
+{
+    [Range(1, int.MaxValue)]
+    public int? UnitId { get; set; }
+}
+
 /// <summary>One checklist item on an inspection.</summary>
 public class InspectionItemResponse
 {

@@ -11,6 +11,11 @@ const detailPageSource = readFileSync(
 	new URL('../../../routes/(protected)/deposits/[id]/+page.svelte', import.meta.url),
 	'utf8'
 );
+const reportEndpointSource = readFileSync(new URL('./reports.ts', import.meta.url), 'utf8');
+const reportPageSource = readFileSync(
+	new URL('../../../routes/(protected)/reports/[report]/+page.svelte', import.meta.url),
+	'utf8'
+);
 
 describe('security deposit tenant-account read contract', () => {
 	it('uses only canonical account-scoped list, detail, and statement reads', () => {
@@ -40,5 +45,15 @@ describe('security deposit tenant-account read contract', () => {
 		assert.match(listPageSource, /key: 'heldBalance'/);
 		assert.doesNotMatch(listPageSource, /key: 'account'/);
 		assert.doesNotMatch(listPageSource, /key: 'amount'/);
+	});
+
+	it('pages the report register through the reports endpoint contract', () => {
+		assert.match(reportEndpointSource, /SecurityDepositRegisterResponse[\s\S]*totalCount: number/);
+		assert.match(reportEndpointSource, /buildReportQuery\(params, \['propertyIds', 'skip', 'take', 'sort'\]\)/);
+		assert.match(reportPageSource, /setReportPage\(deposits\.skip - deposits\.take\)/);
+		assert.match(reportPageSource, /setReportPage\(deposits\.skip \+ deposits\.take\)/);
+		const clientSideDepositPaging = /\bdeposits\s*\??\.\s*rows\s*\??\.\s*slice\s*\(/;
+		assert.match('deposits\n  .rows\n  .slice(0, 20)', clientSideDepositPaging);
+		assert.doesNotMatch(reportPageSource, clientSideDepositPaging);
 	});
 });

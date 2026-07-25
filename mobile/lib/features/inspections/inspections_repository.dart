@@ -15,6 +15,7 @@ class InspectionListQuery {
     this.skip = 0,
     this.take = 20,
     this.propertyId,
+    this.unitId,
     this.search,
     this.sort = '-scheduledFor',
   });
@@ -22,6 +23,7 @@ class InspectionListQuery {
   final int skip;
   final int take;
   final int? propertyId;
+  final int? unitId;
   final String? search;
   final String sort;
 
@@ -31,12 +33,13 @@ class InspectionListQuery {
         other.skip == skip &&
         other.take == take &&
         other.propertyId == propertyId &&
+        other.unitId == unitId &&
         other.search == search &&
         other.sort == sort;
   }
 
   @override
-  int get hashCode => Object.hash(skip, take, propertyId, search, sort);
+  int get hashCode => Object.hash(skip, take, propertyId, unitId, search, sort);
 }
 
 class InspectionListPage {
@@ -100,6 +103,7 @@ class InspectionsRepository {
   ]) async {
     final parameters = <String, dynamic>{
       'propertyId': query.propertyId,
+      'unitId': query.unitId,
       'skip': query.skip,
       'take': query.take,
       'search': query.search,

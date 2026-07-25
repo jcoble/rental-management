@@ -12,8 +12,7 @@ import 'app_typography.dart';
 /// not shadows. Generous radii (cards/dialogs `extra-large` 28px, inputs/rows
 /// `large` 16px). Funnel Display for display/headline, Funnel Sans for the rest.
 abstract final class AppTheme {
-  static ThemeData get light =>
-      _build(M3Colors.lightScheme, AppTokens.light);
+  static ThemeData get light => _build(M3Colors.lightScheme, AppTokens.light);
   static ThemeData get dark => _build(M3Colors.darkScheme, AppTokens.dark);
 
   static ThemeData _build(ColorScheme scheme, AppTokens tokens) {
@@ -115,7 +114,9 @@ abstract final class AppTheme {
         labelTextStyle: WidgetStateProperty.resolveWith((states) {
           final selected = states.contains(WidgetState.selected);
           return textTheme.labelLarge?.copyWith(
-            color: selected ? scheme.onPrimaryContainer : scheme.onSurfaceVariant,
+            color: selected
+                ? scheme.onPrimaryContainer
+                : scheme.onSurfaceVariant,
             fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
           );
         }),
@@ -125,7 +126,9 @@ abstract final class AppTheme {
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: controlFill,
-        hintStyle: textTheme.bodyLarge?.copyWith(color: scheme.onSurfaceVariant),
+        hintStyle: textTheme.bodyLarge?.copyWith(
+          color: scheme.onSurfaceVariant,
+        ),
         labelStyle: textTheme.bodyLarge?.copyWith(
           color: scheme.onSurfaceVariant,
           fontWeight: FontWeight.w500,
@@ -152,7 +155,7 @@ abstract final class AppTheme {
       // ── Buttons — pill (full) radius, label-large font, flat (§8 Button)
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          minimumSize: const Size.fromHeight(48),
+          minimumSize: const Size(64, 48),
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
           foregroundColor: scheme.onPrimary,
           backgroundColor: scheme.primary,
@@ -167,7 +170,7 @@ abstract final class AppTheme {
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
-          minimumSize: const Size.fromHeight(48),
+          minimumSize: const Size(64, 48),
           elevation: 0,
           foregroundColor: scheme.primary,
           backgroundColor: scheme.surfaceContainerHigh,
@@ -178,7 +181,7 @@ abstract final class AppTheme {
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
-          minimumSize: const Size.fromHeight(48),
+          minimumSize: const Size(64, 48),
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
           foregroundColor: scheme.onSurface,
           side: BorderSide(color: controlBorder),
