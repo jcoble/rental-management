@@ -14,6 +14,7 @@ import '../../core/theme/app_tokens.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
 import '../../core/models/models.dart';
+import '../../core/presentation/plain_english_labels.dart';
 import '../../core/push/push_service.dart';
 import '../../core/push/mobile_navigation_intent.dart';
 import '../../core/realtime/realtime_providers.dart';
@@ -2573,6 +2574,9 @@ class _FieldQueueCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
+    final propertyName = workOrder.propertyName?.trim() ?? '';
+    final status = plainEnglishLabel(workOrder.status);
+    final priority = plainEnglishLabel(workOrder.priority);
 
     return Card(
       child: ListTile(
@@ -2600,11 +2604,10 @@ class _FieldQueueCard extends StatelessWidget {
         ),
         subtitle: Text(
           [
-            if (workOrder.propertyName != null) workOrder.propertyName!,
-            workOrder.status,
-            workOrder.priority,
-          ].join(' / '),
-          maxLines: 1,
+            if (propertyName.isNotEmpty) propertyName,
+            '$status · $priority priority',
+          ].join('\n'),
+          maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
         trailing: const Icon(Icons.chevron_right),
