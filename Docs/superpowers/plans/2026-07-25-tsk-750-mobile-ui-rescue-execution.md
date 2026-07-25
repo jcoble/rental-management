@@ -32,9 +32,9 @@ External effects happen after commit or through the outbox.
 
 ### Evidence
 
-The closed global `Scan / Add` extended FAB overlaps primary actions and content
+The closed global `Scan / Add` extended FAB overlapped primary actions and content
 on Appointment Schedule/Contact, Inspection detail, Notice detail, payment
-correction, and Record receipt. UI hierarchy evidence proves overlapping bounds,
+correction, and Record receipt. UI hierarchy evidence proved overlapping bounds,
 not merely visual proximity:
 
 - `11-appointment-edit-schedule.png`
@@ -44,9 +44,24 @@ not merely visual proximity:
 - `45-correct-payment-sheet.png`
 - `48-record-receipt-sheet.png`
 
+The first implementation changed the closed launcher to a compact Material 3 FAB,
+but Azure emulator re-proof at commit
+`f556c901e0d519ba27bea9b9aee7c7924a18735f` showed that its 147×147 hit target
+still intersects five bottom actions. Notice detail now passes. The measured
+failures are recorded in
+`Docs/Reviews/2026-07-25-tsk-750-mobile-fab-proof.md`.
+
+`TSK-751` is the active verified-defect fixer task within parent rescue
+`TSK-750`. It closes only after FAB-07 passes on a freshly installed exact-SHA
+Azure emulator build.
+
 ### Allowed source files
 
 - `mobile/lib/features/home/mobile_quick_action_fab.dart`
+- `mobile/lib/features/appointments/appointments_screen.dart`
+- `mobile/lib/features/inspections/inspection_run_screen.dart`
+- `mobile/lib/features/payments/payment_detail_screen.dart`
+- `mobile/lib/features/payments/payments_screen.dart`
 
 ### Allowed test files
 
@@ -64,6 +79,15 @@ editing another file.
   the expanded action menu.
 - Preserve capability filtering, scoped-action registration, disabled-animation
   behavior, tooltip discoverability, and one-tap menu opening.
+- Add one reusable scope-aware hider that registers a hidden owner while its
+  child is mounted and always releases that owner when the child leaves the
+  tree or changes scope.
+- Apply that hider only to the evidenced Appointment Edit Schedule/Contact flow
+  (not Appointment Create), active Inspection run,
+  payment correction, and Record receipt surfaces whose persistent bottom
+  actions conflict with the global FAB.
+- Keep the FAB visible on ordinary pages and on Notice detail, which passed
+  emulator re-proof.
 - Do not change action authorization, navigation, capture behavior, or feature
   labels inside the expanded menu.
 
@@ -79,8 +103,11 @@ editing another file.
   `AnimatedSize`, `AnimatedSwitcher`, or `TweenAnimationBuilder`.
 - **FAB-05:** Scoped and host-registered quick actions still render only one
   launcher.
-- **FAB-06:** Emulator re-proof shows no FAB overlap on Appointment Save Changes,
-  Inspection Complete, Notice SMS, Append correction, or Record receipt.
+- **FAB-06:** The reusable hider hides the scoped launcher while mounted, restores
+  it on disposal, and does not disturb another active hidden owner.
+- **FAB-07:** Emulator re-proof shows the FAB absent on Appointment Next/Save
+  Changes, Inspection Complete, Append correction, and Record receipt; Notice
+  detail and an ordinary page retain the compact FAB without action overlap.
 
 ### Targeted commands
 
@@ -88,9 +115,17 @@ Run serially:
 
 ```bash
 dart format mobile/lib/features/home/mobile_quick_action_fab.dart \
+  mobile/lib/features/appointments/appointments_screen.dart \
+  mobile/lib/features/inspections/inspection_run_screen.dart \
+  mobile/lib/features/payments/payment_detail_screen.dart \
+  mobile/lib/features/payments/payments_screen.dart \
   mobile/test/mobile_quick_action_fab_test.dart
 flutter test mobile/test/mobile_quick_action_fab_test.dart
 flutter analyze mobile/lib/features/home/mobile_quick_action_fab.dart \
+  mobile/lib/features/appointments/appointments_screen.dart \
+  mobile/lib/features/inspections/inspection_run_screen.dart \
+  mobile/lib/features/payments/payment_detail_screen.dart \
+  mobile/lib/features/payments/payments_screen.dart \
   mobile/test/mobile_quick_action_fab_test.dart
 git diff --check
 ```
@@ -104,7 +139,7 @@ The Flutter test/analyze commands run from `mobile/` with paths adjusted to
 After implementation, a read-only reviewer checks only:
 
 1. the active file diff;
-2. FAB-01 through FAB-05 test evidence;
+2. FAB-01 through FAB-06 test evidence;
 3. absence of authorization/navigation changes;
 4. whether any new file or behavior exceeds this contract.
 
@@ -114,7 +149,7 @@ Any out-of-bound discovery is recorded for a pending step; it is not absorbed.
 
 The sole emulator tester re-captures these exact changed states under:
 
-`Docs/Reviews/artifacts/tsk-750/post-fab/`
+`Docs/Reviews/artifacts/tsk-750/post-fab-hidden/`
 
 - `appointment-schedule.png`
 - `appointment-contact.png`
@@ -122,13 +157,16 @@ The sole emulator tester re-captures these exact changed states under:
 - `notice-detail.png`
 - `payment-correction.png`
 - `record-receipt.png`
+- `ordinary-page.png`
 - matching UI hierarchy XML for each screen
 
 The proof report is:
 
-`Docs/Reviews/2026-07-25-tsk-750-mobile-fab-proof.md`
+`Docs/Reviews/2026-07-25-tsk-750-mobile-fab-hidden-proof.md`
 
-Step 1 completes only when FAB-06 is evidenced on the Azure emulator.
+Step 1 completes only when FAB-07 is evidenced on the Azure emulator.
+After that proof, close and verify `TSK-751`; keep parent rescue `TSK-750` open
+for the remaining roadmap boundaries.
 
 ## Pending roadmap boundaries
 
