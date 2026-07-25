@@ -204,6 +204,8 @@ public sealed class TenantAccountQueryServiceSqlTests
         limitIndex.Should().BeLessThan(
             sql.IndexOf("vw_security_deposit_balances", StringComparison.Ordinal),
             "the authorized deposit IDs must be paged before aggregate balances are joined");
+        sql.Split("JOIN LATERAL", StringSplitOptions.None).Should().HaveCount(3,
+            "both expensive display views must be correlated to one already-paged deposit seed");
     }
 
     [Fact]
