@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,6 +9,7 @@ import 'package:rental_command/features/home/mobile_domain_navigation.dart';
 import 'package:rental_command/features/maintenance/work_order_unit_aware_loader.dart';
 import 'package:rental_command/features/maintenance/work_orders_repository.dart';
 import 'package:rental_command/features/units/unit_command_center_screen.dart';
+import 'package:rental_command/features/units/units_repository.dart';
 
 void main() {
   tearDown(() {
@@ -15,6 +18,48 @@ void main() {
       MobileShellNavigationRegistry.detach(current);
     }
   });
+
+  testWidgets(
+    'Today unit work order keeps contextual loading while its Unit loads',
+    (tester) async {
+      final dashboardCompleter = Completer<UnitDashboard>();
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            workOrdersRepositoryProvider.overrideWithValue(
+              _FakeWorkOrdersRepository(
+                detail: WorkOrderDetail(
+                  workOrder: _workOrder(id: 17, unitId: 42),
+                  timeline: const [],
+                ),
+              ),
+            ),
+            unitDashboardProvider.overrideWith(
+              (ref, unitId) => dashboardCompleter.future,
+            ),
+          ],
+          child: const MaterialApp(
+            home: WorkOrderUnitAwareLoaderScreen(workOrderId: 17),
+          ),
+        ),
+      );
+
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Work order'), findsOneWidget);
+      expect(find.text('Unit'), findsNothing);
+      expect(
+        find.byKey(const Key('work-order-unit-aware-loading')),
+        findsOneWidget,
+      );
+      expect(find.text('Loading work order'), findsOneWidget);
+      expect(find.text('Details, schedule, and activity'), findsOneWidget);
+      expect(find.text('Work order details'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    },
+  );
 
   testWidgets(
     'unit-scoped work-order deep links redirect to Rentals > Units > Work',

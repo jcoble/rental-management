@@ -268,7 +268,7 @@ class _RelationshipTile extends StatelessWidget {
         item.primaryTenantName?.trim().isNotEmpty == true
             ? item.primaryTenantName!
             : item.relationshipNumber,
-        maxLines: 1,
+        maxLines: 2,
         overflow: TextOverflow.ellipsis,
       ),
       supporting: [

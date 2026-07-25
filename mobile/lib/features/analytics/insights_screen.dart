@@ -161,9 +161,9 @@ class _KpiGrid extends StatelessWidget {
             const SizedBox(width: 10),
             Expanded(
               child: _KpiCard(
-                label: 'Monthly Rent',
+                label: 'Signed lease rent',
                 value: _fmtCurrency(overview.monthlyRecurringRent),
-                subtitle: 'recurring',
+                subtitle: 'currently governing',
                 color: cs.tertiaryContainer,
                 textColor: cs.onTertiaryContainer,
               ),

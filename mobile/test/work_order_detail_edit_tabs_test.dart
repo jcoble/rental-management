@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -15,6 +16,38 @@ import 'package:rental_command/features/vendors/vendors_models.dart' as vendors;
 import 'package:rental_command/features/vendors/vendors_repository.dart';
 
 void main() {
+  testWidgets(
+    'pending work order keeps its app bar and shows contextual detail structure',
+    (tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            authControllerProvider.overrideWith(
+              () => _StaticAuthController(_managementAuthority(const {})),
+            ),
+            workOrdersRepositoryProvider.overrideWithValue(
+              _PendingWorkOrdersRepository(),
+            ),
+          ],
+          child: const MaterialApp(
+            home: WorkOrderDetailScreen(workOrderId: 17),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.text('Work Order'), findsOneWidget);
+      expect(
+        find.byKey(const Key('work-order-detail-loading')),
+        findsOneWidget,
+      );
+      expect(find.text('Loading work order'), findsOneWidget);
+      expect(find.text('Details, schedule, and activity'), findsOneWidget);
+      expect(find.text('Work order details'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    },
+  );
+
   testWidgets(
     'work order edit form is tabbed and saves schedule and cost fields',
     (tester) async {
@@ -250,6 +283,15 @@ class _FakeWorkOrdersRepository extends WorkOrdersRepository {
 
   @override
   Future<List<Property>> listProperties() async => [_property()];
+}
+
+class _PendingWorkOrdersRepository extends WorkOrdersRepository {
+  _PendingWorkOrdersRepository() : super(Dio());
+
+  final _pending = Completer<WorkOrderDetail>();
+
+  @override
+  Future<WorkOrderDetail> getWorkOrderDetail(int id) => _pending.future;
 }
 
 class _FakePropertiesRepository extends PropertiesRepository {
