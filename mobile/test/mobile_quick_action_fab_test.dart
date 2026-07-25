@@ -26,7 +26,7 @@ void main() {
       );
       expect(find.text('Assistant'), findsNothing);
       expect(find.text('Record'), findsNothing);
-      expect(find.text('Scan / Add'), findsOneWidget);
+      expect(find.text('Scan / Add'), findsNothing);
 
       await tester.tap(find.byTooltip('Scan / Add'));
       await tester.pumpAndSettle();
@@ -44,6 +44,53 @@ void main() {
       expect(find.text('Record'), findsNothing);
     },
   );
+
+  testWidgets('closed launcher is compact and keeps scan discoverable', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _authenticatedApp(
+        home: Scaffold(
+          floatingActionButton: MobileQuickActionFab(
+            onChat: () {},
+            onRecord: () {},
+            onScan: () {},
+          ),
+        ),
+      ),
+    );
+
+    final closedFab = tester.widget<FloatingActionButton>(
+      find.byType(FloatingActionButton),
+    );
+    final closedSize = tester.getSize(find.byType(FloatingActionButton));
+
+    expect(closedFab.isExtended, isFalse);
+    expect(closedSize.width, lessThanOrEqualTo(closedSize.height + 8));
+    expect(find.byTooltip('Scan / Add'), findsOneWidget);
+    expect(find.text('Scan / Add'), findsNothing);
+
+    await tester.tap(find.byTooltip('Scan / Add'));
+    await tester.pumpAndSettle();
+
+    final openFab = tester.widget<FloatingActionButton>(
+      find.byType(FloatingActionButton),
+    );
+    expect(openFab.isExtended, isTrue);
+    expect(find.byTooltip('Close quick actions'), findsOneWidget);
+    expect(find.text('Scan / Add'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Close quick actions'));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<FloatingActionButton>(find.byType(FloatingActionButton))
+          .isExtended,
+      isFalse,
+    );
+    expect(find.text('Scan / Add'), findsNothing);
+  });
 
   testWidgets('disabled animations preserve the exact Scan / Add action', (
     tester,

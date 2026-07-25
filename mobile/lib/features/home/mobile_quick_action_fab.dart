@@ -397,6 +397,37 @@ class _MobileQuickActionFabState extends ConsumerState<MobileQuickActionFab> {
           : Icons.add_rounded,
       key: ValueKey((_open, hasGlobalScan)),
     );
+    final animatedFabIcon = disableAnimations
+        ? fabIcon
+        : AnimatedSwitcher(
+            duration: const Duration(milliseconds: 160),
+            transitionBuilder: (child, animation) {
+              return ScaleTransition(
+                scale: animation,
+                child: RotationTransition(
+                  turns: Tween<double>(begin: -0.08, end: 0).animate(animation),
+                  child: child,
+                ),
+              );
+            },
+            child: fabIcon,
+          );
+    final launcher = _open
+        ? FloatingActionButton.extended(
+            heroTag: widget.heroTag,
+            onPressed: _toggle,
+            tooltip: 'Close quick actions',
+            elevation: 3,
+            icon: animatedFabIcon,
+            label: const Text('Close'),
+          )
+        : FloatingActionButton(
+            heroTag: widget.heroTag,
+            onPressed: _toggle,
+            tooltip: hasGlobalScan ? 'Scan / Add' : 'Open quick actions',
+            elevation: 3,
+            child: animatedFabIcon,
+          );
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -411,41 +442,7 @@ class _MobileQuickActionFabState extends ConsumerState<MobileQuickActionFab> {
             alignment: Alignment.bottomRight,
             child: actionMenu,
           ),
-        FloatingActionButton.extended(
-          heroTag: widget.heroTag,
-          onPressed: _toggle,
-          tooltip: _open
-              ? 'Close quick actions'
-              : hasGlobalScan
-              ? 'Scan / Add'
-              : 'Open quick actions',
-          elevation: 3,
-          icon: disableAnimations
-              ? fabIcon
-              : AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 160),
-                  transitionBuilder: (child, animation) {
-                    return ScaleTransition(
-                      scale: animation,
-                      child: RotationTransition(
-                        turns: Tween<double>(
-                          begin: -0.08,
-                          end: 0,
-                        ).animate(animation),
-                        child: child,
-                      ),
-                    );
-                  },
-                  child: fabIcon,
-                ),
-          label: Text(
-            _open
-                ? 'Close'
-                : hasGlobalScan
-                ? 'Scan / Add'
-                : 'Open',
-          ),
-        ),
+        launcher,
       ],
     );
   }
