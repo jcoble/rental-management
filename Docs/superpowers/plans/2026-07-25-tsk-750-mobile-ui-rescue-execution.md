@@ -168,7 +168,7 @@ Step 1 completes only when FAB-07 is evidenced on the Azure emulator.
 After that proof, close and verify `TSK-751`; keep parent rescue `TSK-750` open
 for the remaining roadmap boundaries.
 
-## Active contract: Step 2A — make every hub section discoverable
+## Completed contract: Step 2A — make every hub section discoverable
 
 ### Evidence
 
@@ -264,15 +264,114 @@ The proof report is:
 Step 2A completes only when HUB-06 is evidenced on an exact-SHA Azure emulator
 build.
 
+## Active contract: Step 2B — make Unit Command Center sections discoverable
+
+### Evidence
+
+The Unit Command Center has six peer sections in an `isScrollable` `TabBar`.
+Audit captures `00-current-screen.png` and `42-unit-main-money.png` show the
+selected end of that strip while earlier labels are clipped off-screen. A user
+cannot see Summary, Leasing, Tenant & lease, Money, Maintenance, and Documents
+& history together or know that the strip scrolls.
+
+### Allowed source files
+
+- `mobile/lib/core/widgets/mobile_section_selector.dart` (new shared component)
+- `mobile/lib/features/home/mobile_domain_hub.dart`
+- `mobile/lib/features/units/unit_command_center_screen.dart`
+
+### Allowed test files
+
+- `mobile/test/mobile_domain_hub_test.dart`
+- `mobile/test/unit_navigation_test.dart`
+
+No unit content surface, repository, authorization, router, Today, work-order,
+or backend file is in this active boundary.
+
+### Required change
+
+- Extract the already-proven anchored hub selector presentation into one generic
+  Material 3 section-selector component without changing Step 2A behavior.
+- Replace the Unit Command Center's scrollable top `TabBar` with that selector,
+  listing Summary, Leasing, Tenant & lease, Money, Maintenance, and Documents &
+  history together with icons and a selected-state check.
+- Drive the existing `DefaultTabController` through `animateTo`; retain the
+  existing single `TabBarView`, tab order, `_handleTopTabChanged`, active nested
+  view memory, deep-link initial tab, restoration, and content widgets.
+- The selector tooltip/semantic label must say that it changes the unit section.
+- Do not change the nested section controls within Leasing, Tenant & lease,
+  Money, Maintenance, or Documents & history.
+
+### Acceptance criteria
+
+- **UNITNAV-01:** Unit Command Center renders one full-width section selector,
+  no top-level `TabBar`, and the existing one top-level `TabBarView`.
+- **UNITNAV-02:** Opening the selector exposes all six ordered unit sections,
+  with the current section marked.
+- **UNITNAV-03:** Selecting Money and Documents & history updates the selector,
+  `DefaultTabController`, root content, and existing restoration state through
+  the current tab-change listener.
+- **UNITNAV-04:** A deep-linked initial Documents & history or Maintenance state
+  opens with the matching selector value and retains its requested nested view.
+- **UNITNAV-05:** The shared six-destination Rentals selector and the
+  three-destination Inbox segments continue to pass their existing tests.
+- **UNITNAV-06:** Azure emulator proof shows Unit Summary closed, the open
+  six-section menu, Money closed with its content, and Documents & history closed
+  with Documents/History content; no label is clipped and the FAB intersects no
+  selector or menu action.
+
+### Targeted commands
+
+Run serially from `mobile/`:
+
+```bash
+dart format lib/core/widgets/mobile_section_selector.dart \
+  lib/features/home/mobile_domain_hub.dart \
+  lib/features/units/unit_command_center_screen.dart \
+  test/mobile_domain_hub_test.dart test/unit_navigation_test.dart
+flutter test test/mobile_domain_hub_test.dart test/unit_navigation_test.dart
+flutter analyze lib/core/widgets/mobile_section_selector.dart \
+  lib/features/home/mobile_domain_hub.dart \
+  lib/features/units/unit_command_center_screen.dart \
+  test/mobile_domain_hub_test.dart test/unit_navigation_test.dart
+git diff --check
+```
+
+### Relevance gate
+
+After implementation, a read-only reviewer checks only:
+
+1. the five allowed-file diffs;
+2. UNITNAV-01 through UNITNAV-05 test evidence;
+3. preservation of tab order, `DefaultTabController`, `TabBarView`, nested view
+   memory, deep-link initial state, and Step 2A behavior;
+4. absence of content, data, authorization, router, or other roadmap changes.
+
+### Emulator proof gate
+
+The sole emulator tester captures PNG and matching hierarchy XML under:
+
+`Docs/Reviews/artifacts/tsk-750/post-unit-selector/`
+
+- `unit-summary-closed`
+- `unit-selector-open`
+- `unit-money-closed`
+- `unit-documents-history-closed`
+
+The proof report is:
+
+`Docs/Reviews/2026-07-25-tsk-750-mobile-unit-selector-proof.md`
+
+Step 2B completes only when UNITNAV-06 is evidenced on an exact-SHA Azure
+emulator build.
+
 ## Pending roadmap boundaries
 
 These are evidence-backed but inactive. Each receives its own exact-file contract
 and relevance gate only after the active step closes.
 
-### Step 2B — visible, unit-centered navigation
+### Step 2C — preserve Today navigation origin
 
-- Replace clipped/mystery horizontal navigation in the Unit Command Center with
-  an explicit section affordance.
 - Preserve unit/property context, destination restoration, and deep links.
 - Restore Today as the Back destination for work orders opened from Today.
 - Evidence: 00, 05–07, 42, 52, 53, 57.

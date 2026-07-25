@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
@@ -14,6 +15,7 @@ import '../../core/auth/mobile_access_policy.dart';
 import '../../core/models/work_order.dart';
 import '../../core/models/property.dart';
 import '../../core/navigation/mobile_restoration_state.dart';
+import '../../core/widgets/mobile_section_selector.dart';
 import '../activity/activity_history_screen.dart';
 import '../applications/application_detail_screen.dart';
 import '../applications/applications_models.dart';
@@ -241,18 +243,6 @@ class _UnitCommandCenterScreenState extends State<UnitCommandCenterScreen> {
         ? 'Property'
         : widget.dashboard.propertyName.trim();
     final usesDomainHeader = MobileDomainHeaderScope.maybeOf(context) != null;
-    const unitTabs = TabBar(
-      isScrollable: true,
-      tabAlignment: TabAlignment.start,
-      tabs: [
-        Tab(text: 'Summary'),
-        Tab(text: 'Leasing'),
-        Tab(text: 'Tenant & lease'),
-        Tab(text: 'Money'),
-        Tab(text: 'Maintenance'),
-        Tab(text: 'Documents & history'),
-      ],
-    );
     final tabView = TabBarView(
       children: [
         _UnitOverviewTab(dashboard: widget.dashboard),
@@ -335,7 +325,56 @@ class _UnitCommandCenterScreenState extends State<UnitCommandCenterScreen> {
       initialIndex: widget.initialTab.index,
       child: Builder(
         builder: (tabContext) {
-          _bindTopController(DefaultTabController.of(tabContext));
+          final topController = DefaultTabController.of(tabContext);
+          _bindTopController(topController);
+          final unitSelector = AnimatedBuilder(
+            animation: topController.animation!,
+            builder: (context, _) => MobileSectionSelector<int>(
+              items: const [
+                MobileSectionItem(
+                  value: 0,
+                  id: 'summary',
+                  label: 'Summary',
+                  icon: Icons.dashboard_outlined,
+                ),
+                MobileSectionItem(
+                  value: 1,
+                  id: 'leasing',
+                  label: 'Leasing',
+                  icon: Icons.campaign_outlined,
+                ),
+                MobileSectionItem(
+                  value: 2,
+                  id: 'tenant-lease',
+                  label: 'Tenant & lease',
+                  icon: Icons.group_outlined,
+                ),
+                MobileSectionItem(
+                  value: 3,
+                  id: 'money',
+                  label: 'Money',
+                  icon: Icons.payments_outlined,
+                ),
+                MobileSectionItem(
+                  value: 4,
+                  id: 'maintenance',
+                  label: 'Maintenance',
+                  icon: Icons.build_outlined,
+                ),
+                MobileSectionItem(
+                  value: 5,
+                  id: 'documents-history',
+                  label: 'Documents & history',
+                  icon: Icons.folder_copy_outlined,
+                ),
+              ],
+              selectedValue: topController.index,
+              onSelected: topController.animateTo,
+              tooltip: 'Choose unit section',
+              selectorKey: const Key('unit-section-selector'),
+              itemKeyPrefix: 'unit-section',
+            ),
+          );
           return _UnitViewScope(
             activeView: _activeView,
             child: Scaffold(
@@ -360,22 +399,26 @@ class _UnitCommandCenterScreenState extends State<UnitCommandCenterScreen> {
                           ),
                         ],
                       ),
-                      bottom: unitTabs,
                     ),
               body: usesDomainHeader
                   ? Column(
                       children: [
                         Material(
                           color: Theme.of(context).colorScheme.surface,
-                          child: const Align(
-                            alignment: Alignment.centerLeft,
-                            child: unitTabs,
-                          ),
+                          child: unitSelector,
                         ),
                         Expanded(child: tabView),
                       ],
                     )
-                  : tabView,
+                  : Column(
+                      children: [
+                        Material(
+                          color: Theme.of(context).colorScheme.surface,
+                          child: unitSelector,
+                        ),
+                        Expanded(child: tabView),
+                      ],
+                    ),
               floatingActionButton: _UnitWorkOrderQuickActionFab(
                 dashboard: widget.dashboard,
                 selectedWorkOrder: widget.initialWorkOrder,
@@ -435,6 +478,7 @@ class _UnitAreaSurfaceState extends State<_UnitAreaSurface> {
   ScrollController? _scrollController;
   late final List<GlobalKey> _sectionKeys;
   TabController? _outerController;
+  bool _activeViewSyncScheduled = false;
 
   @override
   void initState() {
@@ -472,6 +516,18 @@ class _UnitAreaSurfaceState extends State<_UnitAreaSurface> {
   }
 
   void _syncActiveView() {
+    final phase = SchedulerBinding.instance.schedulerPhase;
+    if (phase != SchedulerPhase.idle &&
+        phase != SchedulerPhase.postFrameCallbacks) {
+      if (_activeViewSyncScheduled) return;
+      _activeViewSyncScheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _activeViewSyncScheduled = false;
+        if (mounted) _syncActiveView();
+      });
+      return;
+    }
+
     if (_outerController?.index != widget.area.index) return;
     final requested = widget.activeView.value;
     final next = requested != null && widget.views.contains(requested)
