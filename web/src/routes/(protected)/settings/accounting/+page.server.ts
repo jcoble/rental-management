@@ -13,6 +13,7 @@
  */
 
 import { fail } from '@sveltejs/kit';
+import { randomUUID } from 'node:crypto';
 import type { Actions, PageServerLoad } from './$types';
 import { serverGet, serverPost } from '$lib/api/server-fetch';
 
@@ -58,6 +59,8 @@ export interface AccountingMapping {
 	confidence: number | null;
 	confirmed: boolean;
 	confirmedAt: string | null;
+	revision: number;
+	confirmationOperationId: string;
 }
 
 /** One imported transaction parked in the review queue (unmatched / needs-review). */
@@ -72,6 +75,10 @@ export interface AccountingReviewItem {
 /** A provider plus its lazily-loaded mappings + review queue (only fetched once connected). */
 export interface ProviderView {
 	status: AccountingConnectionStatus;
+	connectOperationId: string;
+	disconnectOperationId: string;
+	pullEnableOperationId: string;
+	pullDisableOperationId: string;
 	unconfirmedMappings: AccountingMapping[];
 	confirmedMappings: AccountingMapping[];
 	unconfirmedMappingsHasMore: boolean;
@@ -101,9 +108,16 @@ export const load: PageServerLoad = async ({ locals }) => {
 	const providers = await Promise.all(
 		statusResult.data.map(async (status): Promise<ProviderView> => {
 			const isConnected = status.status === 'Connected' || status.status === 'NeedsReconnect';
+			const operationIds = {
+				connectOperationId: randomUUID(),
+				disconnectOperationId: randomUUID(),
+				pullEnableOperationId: randomUUID(),
+				pullDisableOperationId: randomUUID()
+			};
 			if (!isConnected) {
 				return {
 					status,
+					...operationIds,
 					unconfirmedMappings: [],
 					confirmedMappings: [],
 					unconfirmedMappingsHasMore: false,
@@ -129,11 +143,16 @@ export const load: PageServerLoad = async ({ locals }) => {
 				)
 			]);
 
-			const unconfirmed = unconfirmedResult.data ?? [];
-			const confirmed = confirmedResult.data ?? [];
+			const withOperation = (mapping: Omit<AccountingMapping, 'confirmationOperationId'>): AccountingMapping => ({
+				...mapping,
+				confirmationOperationId: randomUUID()
+			});
+			const unconfirmed = (unconfirmedResult.data ?? []).map(withOperation);
+			const confirmed = (confirmedResult.data ?? []).map(withOperation);
 			const reviewQueue = reviewResult.data ?? [];
 			return {
 				status,
+				...operationIds,
 				unconfirmedMappings: unconfirmed.slice(0, MAPPING_SECTION_SIZE),
 				confirmedMappings: confirmed.slice(0, MAPPING_SECTION_SIZE),
 				unconfirmedMappingsHasMore: unconfirmed.length > MAPPING_SECTION_SIZE,
@@ -155,14 +174,21 @@ export const actions: Actions = {
 		if (!locals.accessToken) {
 			return fail(401, { error: 'Your session has expired. Please sign in again.' });
 		}
-		const provider = (await request.formData()).get('provider')?.toString();
+		const form = await request.formData();
+		const provider = form.get('provider')?.toString();
+		const operationKey = form.get('operationKey')?.toString().trim();
 		if (!provider) {
 			return fail(400, { error: 'Missing provider.' });
+		}
+		if (!operationKey || operationKey.length > 128) {
+			return fail(400, { error: 'Missing or invalid operation key.' });
 		}
 
 		const result = await serverPost<{ authorizeUrl: string }>(
 			`${BASE}/${provider}/connect`,
-			locals.accessToken
+			locals.accessToken,
+			undefined,
+			{ headers: { 'Idempotency-Key': operationKey } }
 		);
 		if (result.error || !result.data?.authorizeUrl) {
 			return fail(result.status || 400, { error: result.error ?? 'Could not start the connection.' });
@@ -174,12 +200,19 @@ export const actions: Actions = {
 		if (!locals.accessToken) {
 			return fail(401, { error: 'Your session has expired. Please sign in again.' });
 		}
-		const provider = (await request.formData()).get('provider')?.toString();
+		const form = await request.formData();
+		const provider = form.get('provider')?.toString();
+		const operationKey = form.get('operationKey')?.toString().trim();
 		if (!provider) {
 			return fail(400, { error: 'Missing provider.' });
 		}
+		if (!operationKey || operationKey.length > 128) {
+			return fail(400, { error: 'Missing or invalid operation key.' });
+		}
 
-		const result = await serverPost(`${BASE}/${provider}/disconnect`, locals.accessToken);
+		const result = await serverPost(`${BASE}/${provider}/disconnect`, locals.accessToken, undefined, {
+			headers: { 'Idempotency-Key': operationKey }
+		});
 		if (result.error) {
 			return fail(result.status || 400, { error: result.error });
 		}
@@ -192,16 +225,22 @@ export const actions: Actions = {
 		}
 		const form = await request.formData();
 		const provider = form.get('provider')?.toString();
+		const operationKey = form.get('operationKey')?.toString().trim();
 		if (!provider) {
 			return fail(400, { error: 'Missing provider.' });
+		}
+		if (!operationKey || operationKey.length > 128) {
+			return fail(400, { error: 'Missing or invalid operation key.' });
 		}
 		const pullEnabled = form.get('pullEnabled') === 'true';
 		const pushEnabled = form.get('pushEnabled') === 'true';
 
-		const result = await serverPost(`${BASE}/${provider}/direction`, locals.accessToken, {
-			pullEnabled,
-			pushEnabled
-		});
+		const result = await serverPost(
+			`${BASE}/${provider}/direction`,
+			locals.accessToken,
+			{ pullEnabled, pushEnabled },
+			{ headers: { 'Idempotency-Key': operationKey } }
+		);
 		if (result.error) {
 			return fail(result.status || 400, { error: result.error });
 		}
@@ -250,11 +289,18 @@ export const actions: Actions = {
 		const localEntityIdRaw = form.get('localEntityId')?.toString();
 		const localEnumValue = form.get('localEnumValue')?.toString() || null;
 		const externalDisplayName = form.get('externalDisplayName')?.toString() || null;
+		const clientOperationId = form.get('clientOperationId')?.toString();
+		const expectedRevisionRaw = form.get('expectedRevision')?.toString();
+		if (!clientOperationId || expectedRevisionRaw == null) {
+			return fail(400, { error: 'Missing mapping operation identity or revision.' });
+		}
 
-		const result = await serverPost<{ promoted: number }>(
+		const result = await serverPost<{ promoted: number; hasMore: boolean; continuationId: string | null }>(
 			`${BASE}/${provider}/mappings/confirm`,
 			locals.accessToken,
 			{
+				clientOperationId,
+				expectedRevision: Number(expectedRevisionRaw),
 				externalType,
 				externalId,
 				externalDisplayName,
@@ -266,6 +312,10 @@ export const actions: Actions = {
 		if (result.error) {
 			return fail(result.status || 400, { error: result.error });
 		}
-		return { mappingConfirmed: true, promoted: result.data?.promoted ?? 0 };
+		return {
+			mappingConfirmed: true,
+			promoted: result.data?.promoted ?? 0,
+			promotionContinues: result.data?.hasMore ?? false
+		};
 	}
 };

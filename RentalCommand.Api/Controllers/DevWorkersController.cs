@@ -1,6 +1,9 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using RentalCommand.Api.Auth;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Atomic;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Simulation;
 using RentalCommand.Core.Entities;
@@ -21,7 +24,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/dev/workers")]
 [SimulationOnly]
-[Authorize(Roles = "Admin")]
+[Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.SecurityManage)]
 [Produces("application/json")]
 public sealed class DevWorkersController : ControllerBase
 {
@@ -30,11 +33,16 @@ public sealed class DevWorkersController : ControllerBase
 
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
+    private readonly IAtomicInfrastructureUnitOfWork _infrastructure;
 
-    public DevWorkersController(RentalCommandDbContext db, TimeProvider timeProvider)
+    public DevWorkersController(
+        RentalCommandDbContext db,
+        TimeProvider timeProvider,
+        IAtomicInfrastructureUnitOfWork infrastructure)
     {
         _db = db;
         _timeProvider = timeProvider;
+        _infrastructure = infrastructure;
     }
 
     /// <summary>Enqueue one automation job and wait (long-poll) for it to finish.</summary>
@@ -70,8 +78,14 @@ public sealed class DevWorkersController : ControllerBase
             Status = SimWorkerCommandStatus.Pending,
             CreatedRealUtc = TimeProvider.System.GetUtcNow().UtcDateTime,
         };
-        _db.SimWorkerCommands.Add(command);
-        await _db.SaveChangesAsync(ct);
+        await _infrastructure.ExecuteAsync(
+            AtomicInfrastructureOperation.SimulationWorkerCommand,
+            _ =>
+            {
+                _db.SimWorkerCommands.Add(command);
+                return Task.CompletedTask;
+            },
+            ct);
 
         // Long-poll the row for a terminal state — the Engine worker runs it cross-process. Poll timing is
         // on the REAL clock so the timeout still fires under a frozen sim clock.

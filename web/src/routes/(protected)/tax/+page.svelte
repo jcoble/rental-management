@@ -13,7 +13,9 @@
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { FileText, Receipt, MessageSquare, AlertTriangle } from '@lucide/svelte';
+	import { ApiError } from '$lib/api/client';
 
 	const CURRENT_YEAR = new Date().getFullYear();
 	const YEAR_OPTIONS = Array.from({ length: 5 }, (_, i) => CURRENT_YEAR - i);
@@ -43,13 +45,22 @@
 	}));
 
 	const vendors1099 = $derived(vendor1099Query.data?.rows ?? []);
-	const vendorsNeedingW9 = $derived(vendors1099.filter((v) => v.needsW9).length);
+	const vendorsNeedingW9 = $derived(vendor1099Query.data?.needsW9Count ?? 0);
 
+	let w9OperationIds = $state<Record<number, string>>({});
 	const requestW9Mutation = createMutation(() => ({
-		mutationFn: (vendorId: number) => vendors.requestW9(vendorId),
-		onSuccess: (res) => showSuccess(`W-9 request texted to ${res.sentTo}.`),
+		mutationFn: ({ vendorId }: { vendorId: number }) =>
+			vendors.requestW9(vendorId, (w9OperationIds[vendorId] ??= crypto.randomUUID())),
+		onSuccess: (res, { vendorId }) => {
+			delete w9OperationIds[vendorId];
+			showSuccess(`W-9 request texted to ${res.sentTo}.`);
+		},
 		// 400 { error } when the vendor has no phone on file — surface it plainly.
-		onError: (err) => showError(apiErrorMessage(err))
+		onError: (err, { vendorId }) => {
+			if (err instanceof ApiError && err.status >= 400 && err.status < 500
+				&& err.status !== 408 && err.status !== 429) delete w9OperationIds[vendorId];
+			showError(apiErrorMessage(err));
+		}
 	}));
 
 	function money(value: number) {
@@ -171,13 +182,12 @@
 		</Card.Header>
 		<Card.Content class="p-4">
 			{#if vendor1099Query.isLoading}
-				<p class="py-6 text-center text-sm text-muted-foreground" data-testid="vendors-1099-loading">
-					Loading vendors…
-				</p>
+				<LoadingState label="Loading 1099 vendors" variant="spinner" testid="vendors-1099-loading" />
 			{:else if vendor1099Query.isError}
-				<p class="py-6 text-center text-sm text-destructive" data-testid="vendors-1099-error">
-					Could not load the 1099 checklist.
-				</p>
+				<div class="flex flex-wrap items-center justify-center gap-3 py-6" role="alert" data-testid="vendors-1099-error">
+					<p class="text-sm text-destructive">Could not load the 1099 checklist.</p>
+					<Button size="sm" variant="outline" onclick={() => vendor1099Query.refetch()}>Retry checklist</Button>
+				</div>
 			{:else if vendors1099.length === 0}
 				<p class="py-6 text-center text-sm text-muted-foreground" data-testid="vendors-1099-empty">
 					No 1099-eligible vendors yet.
@@ -250,7 +260,8 @@
 											<Button
 												variant="outline"
 												size="sm"
-												onclick={() => requestW9Mutation.mutate(v.vendorId)}
+												onclick={() =>
+												requestW9Mutation.mutate({ vendorId: v.vendorId })}
 												disabled={requestW9Mutation.isPending}
 												data-testid="vendor-1099-request-w9-{v.vendorId}"
 											>
@@ -271,18 +282,24 @@
 	</Card.Root>
 
 	{#if scheduleEQuery.isLoading}
-		<p class="py-12 text-center text-sm text-muted-foreground" data-testid="tax-loading">
-			Loading tax summary…
-		</p>
+		<LoadingState label="Loading tax summary" variant="page" testid="tax-loading" />
 	{:else if scheduleEQuery.isError}
-		<p class="py-12 text-center text-sm text-destructive" data-testid="tax-error">
-			Could not load tax data. Please try again.
-		</p>
-	{:else if !report || report.properties.length === 0}
+		<div class="flex flex-wrap items-center justify-center gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="tax-error">
+			<p class="text-sm text-destructive">Could not load tax data.</p>
+			<Button size="sm" variant="outline" onclick={() => scheduleEQuery.refetch()}>Retry tax summary</Button>
+		</div>
+	{:else if !report || (report.properties.length === 0 && !report.unallocatedActivity.requiresAllocation)}
 		<p class="py-12 text-center text-sm text-muted-foreground" data-testid="tax-empty">
 			No rental income or expense data for {selectedYear}.
 		</p>
 	{:else}
+		{#if report.unallocatedActivity.requiresAllocation}
+			<div class="mb-6 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100" data-testid="tax-unallocated-warning">
+				<p class="font-semibold">Tax activity needs a property before filing</p>
+				<p class="mt-1">{report.unallocatedActivity.incomeEntryCount} income entries ({money(report.unallocatedActivity.rentalIncome)}) and {report.unallocatedActivity.expenseCount} expenses ({money(report.unallocatedActivity.totalExpenses)}) are not assigned to a property, so they are excluded from the Schedule E property lines below.</p>
+				<p class="mt-2 font-medium">Reconciled activity: {money(report.reconciledTotalRentalIncome)} income − {money(report.reconciledTotalExpenses)} expenses = {money(report.reconciledNetIncome)} net.</p>
+			</div>
+		{/if}
 		<!-- Grand-total summary cards -->
 		<div class="mb-6 grid gap-4 sm:grid-cols-3" data-testid="tax-summary-cards">
 			<Card.Root class="gap-0 py-0" data-testid="tax-total-income">

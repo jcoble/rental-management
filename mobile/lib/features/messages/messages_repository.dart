@@ -1,8 +1,11 @@
+import 'dart:math';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import '../../core/auth/auth_controller.dart';
 import 'message_models.dart';
 
@@ -23,17 +26,67 @@ class MessagesRepository {
   final Dio _dio;
   final bool tenantMode;
 
+  static String createOperationKey() {
+    final random = Random.secure();
+    return List.generate(
+      16,
+      (_) => random.nextInt(256),
+    ).map((value) => value.toRadixString(16).padLeft(2, '0')).join();
+  }
+
   /// GET /conversations → ConversationSummary[] (messages list empty).
   Future<List<Conversation>> listConversations() async {
+    return (await listConversationPage()).items;
+  }
+
+  Future<ConversationListPage> listConversationPage([
+    ConversationListQuery query = const ConversationListQuery(),
+  ]) async {
+    final parameters = <String, dynamic>{
+      'skip': query.skip,
+      'take': query.take,
+      'search': query.search,
+      'sort': query.sort,
+      if (query.unreadOnly) 'unreadOnly': true,
+    }..removeWhere((_, value) => value == null || value == '');
+
     try {
-      final response = await _dio.get<List<dynamic>>(
-        tenantMode ? '/portal/conversations' : '/conversations',
+      final response = await _dio.get<Map<String, dynamic>>(
+        tenantMode ? '/portal/conversations/page' : '/conversations/page',
+        queryParameters: parameters,
       );
-      final data = response.data ?? [];
-      return data
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ConversationListPage.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// The management dashboard's bounded recent-thread projection. Paging and
+  /// ordering are applied by the API/EF query; the client never loads the full
+  /// conversation list and truncates it in memory.
+  Future<List<Conversation>> listRecentConversations({int take = 5}) async {
+    if (tenantMode) {
+      return (await listConversationPage(
+        ConversationListQuery(take: take),
+      )).items;
+    }
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/conversations/page',
+        queryParameters: {'skip': 0, 'take': take, 'sort': '-lastMessageAt'},
+      );
+      final items = response.data?['items'];
+      return (items is List ? items : const [])
           .whereType<Map<String, dynamic>>()
           .map(Conversation.fromJson)
-          .toList();
+          .toList(growable: false);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -42,8 +95,17 @@ class MessagesRepository {
   /// GET /conversations/{id} → full thread with messages (asc).
   Future<Conversation> getConversation(int id) async {
     try {
+      final prefix = tenantMode ? '/portal' : '';
+      await IdempotentMutation.run(
+        '${tenantMode ? 'portal:' : ''}conversations:read:$id',
+        (operationKey) => _dio.post<void>(
+          '$prefix/conversations/$id/read',
+          data: const <String, dynamic>{},
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        ),
+      );
       final response = await _dio.get<Map<String, dynamic>>(
-        tenantMode ? '/portal/conversations/$id' : '/conversations/$id',
+        '$prefix/conversations/$id',
       );
       final data = response.data;
       if (data == null) {
@@ -64,13 +126,19 @@ class MessagesRepository {
     required String subject,
     required String body,
     required List<String> channels,
+    String? operationKey,
   }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
         tenantMode ? '/portal/conversations' : '/conversations',
         data: tenantMode
-            ? {'subject': subject, 'body': body}
+            ? {
+                'operationKey': operationKey ?? createOperationKey(),
+                'subject': subject,
+                'body': body,
+              }
             : {
+                'operationKey': operationKey ?? createOperationKey(),
                 'tenantId': tenantId,
                 'subject': subject,
                 'body': body,
@@ -95,6 +163,7 @@ class MessagesRepository {
     int id, {
     required String body,
     required List<String> channels,
+    String? operationKey,
   }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
@@ -102,8 +171,15 @@ class MessagesRepository {
             ? '/portal/conversations/$id/messages'
             : '/conversations/$id/messages',
         data: tenantMode
-            ? {'body': body}
-            : {'body': body, 'channels': channels},
+            ? {
+                'operationKey': operationKey ?? createOperationKey(),
+                'body': body,
+              }
+            : {
+                'operationKey': operationKey ?? createOperationKey(),
+                'body': body,
+                'channels': channels,
+              },
       );
       final data = response.data;
       if (data == null) {
@@ -123,7 +199,7 @@ class MessagesRepository {
 
 final messagesRepositoryProvider = Provider<MessagesRepository>((ref) {
   final auth = ref.watch(authControllerProvider);
-  final tenantMode = auth is AuthStateAuthenticated && auth.user.isTenant;
+  final tenantMode = auth is AuthStateAuthenticated && auth.isTenantExperience;
   return MessagesRepository(ref.watch(dioProvider), tenantMode: tenantMode);
 });
 
@@ -153,6 +229,11 @@ final conversationsProvider =
       ConversationsNotifier.new,
     );
 
+final conversationsPageProvider = FutureProvider.autoDispose
+    .family<ConversationListPage, ConversationListQuery>((ref, query) {
+      return ref.watch(messagesRepositoryProvider).listConversationPage(query);
+    });
+
 // ── Single conversation (thread) ──────────────────────────────────────────────
 
 class ConversationNotifier extends Notifier<AsyncValue<Conversation>> {
@@ -175,6 +256,7 @@ class ConversationNotifier extends Notifier<AsyncValue<Conversation>> {
       state = AsyncValue.data(convo);
       // Opening the thread marks it read server-side; refresh the list so the
       // unread badge clears in the inbox.
+      ref.invalidate(conversationsPageProvider);
       ref.read(conversationsProvider.notifier).refresh();
     } on ApiException catch (e) {
       state = AsyncValue.error(e, StackTrace.current);
@@ -189,13 +271,19 @@ class ConversationNotifier extends Notifier<AsyncValue<Conversation>> {
   ///
   /// Rethrows [ApiException] so the compose bar can surface the error without
   /// dropping the thread out of its loaded state.
-  Future<void> sendMessage(String body, List<String> channels) async {
+  Future<void> sendMessage(
+    String body,
+    List<String> channels, {
+    String? operationKey,
+  }) async {
     final updated = await _repo.sendMessage(
       _id,
       body: body,
       channels: channels,
+      operationKey: operationKey,
     );
     state = AsyncValue.data(updated);
+    ref.invalidate(conversationsPageProvider);
     ref.read(conversationsProvider.notifier).refresh();
   }
 }

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import 'owners_models.dart';
 
 class OwnersRepository {
@@ -59,9 +60,13 @@ class OwnersRepository {
 
   Future<OwnerEntity> createOwner(Map<String, dynamic> data) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/owner-entities',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'owners:create:$data',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/owner-entities',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -78,9 +83,13 @@ class OwnersRepository {
 
   Future<OwnerEntity> updateOwner(int id, Map<String, dynamic> data) async {
     try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/owner-entities/$id',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'owners:update:$id:$data',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/owner-entities/$id',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -95,14 +104,14 @@ class OwnersRepository {
     }
   }
 
-  Future<void> deleteOwner(
-    int id, {
-    bool clearPropertyAssignments = false,
-  }) async {
+  Future<void> deleteOwner(int id) async {
     try {
-      await _dio.delete<dynamic>(
-        '/owner-entities/$id',
-        queryParameters: {'clearPropertyAssignments': clearPropertyAssignments},
+      await IdempotentMutation.run(
+        'owners:delete:$id',
+        (key) => _dio.delete<dynamic>(
+          '/owner-entities/$id',
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);

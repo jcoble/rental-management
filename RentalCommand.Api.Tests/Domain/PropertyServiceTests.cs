@@ -5,7 +5,9 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Tests;
 using RentalCommand.Core;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -13,21 +15,92 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public class PropertyServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class PropertyServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
     private readonly List<string> _commands = [];
-    private readonly SqliteTestContext _ctx;
-    private readonly PropertyService _sut;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private PropertyService _sut = null!;
+    private WorkspaceReadScope _scope;
 
-    public PropertyServiceTests()
+    public PropertyServiceTests(MigratedPostgreSqlFixture fixture)
     {
-        _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
+        _scope = SeedAdministratorScope();
         _sut = new PropertyService(_ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
     }
 
-    public void Dispose() => _ctx.Dispose();
+    private WorkspaceReadScope SeedAdministratorScope()
+    {
+        var now = DateTime.UtcNow;
+        var user = new ApplicationUser
+        {
+            UserName = "property-service@example.test",
+            NormalizedUserName = "PROPERTY-SERVICE@EXAMPLE.TEST",
+            Email = "property-service@example.test",
+            NormalizedEmail = "PROPERTY-SERVICE@EXAMPLE.TEST",
+            DisplayName = "Property Service Test Administrator",
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = now,
+        };
+        var accessContext = new WorkspaceAccessContext
+        {
+            User = user,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceAccessContextStatus.Active,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var membership = new WorkspaceMembership
+        {
+            AccessContext = accessContext,
+            PortfolioId = PortfolioId,
+            Status = WorkspaceMembershipStatus.Active,
+            DefaultExperience = WorkspaceExperience.Management,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var assignment = new MembershipRoleAssignment
+        {
+            WorkspaceMembership = membership,
+            PortfolioId = PortfolioId,
+            RoleProfileId = AccessCatalog.Roles.Single(role =>
+                role.Key == RoleProfileKeys.WorkspaceAdministrator).Id,
+            Status = MembershipRoleAssignmentStatus.Active,
+            ScopeKind = MembershipRoleAssignmentScopeKind.AllProperties,
+            EffectiveFromUtc = now.AddMinutes(-1),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+        };
+        var session = new AuthSession
+        {
+            Id = Guid.NewGuid(),
+            User = user,
+            ActiveAccessContext = accessContext,
+            Status = AuthSessionStatus.Active,
+            CreatedAtUtc = now,
+            LastSeenAtUtc = now,
+            ExpiresAtUtc = now.AddHours(1),
+        };
+
+        _ctx.Db.AddRange(assignment, session);
+        _ctx.Db.SaveChanges();
+
+        return new WorkspaceReadScope(
+            PortfolioId, user.Id, session.Id, accessContext.Id, accessContext.AccessRevision);
+    }
+
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
     public async Task ListPageAsync_ReturnsSqlCountAndRequestedWindow()
@@ -35,7 +108,7 @@ public class PropertyServiceTests : IDisposable
         SeedProperties("Alpha", "Bravo", "Charlie", "Delta", "Echo");
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new PropertyListQuery
+        var result = await _sut.ListPageAsync(_scope, new PropertyListQuery
         {
             Sort = "name",
             Skip = 2,
@@ -58,373 +131,195 @@ public class PropertyServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task ListPageAsync_AvailableForLeaseReturnsOnlyPropertiesWithEligibleUnitsInSql()
+    public async Task ListAndDetail_UsePersistedRentalStructureForWorkspaceEntry()
     {
-        var available = SeedPropertyWithUnit(out var availableUnit);
-        available.Name = "Available Property";
-        availableUnit.Status = UnitStatus.Vacant;
-
-        var occupied = SeedPropertyWithUnit(out var occupiedUnit);
-        occupied.Name = "Occupied Property";
-        occupiedUnit.Status = UnitStatus.Occupied;
-
-        var activeLease = SeedPropertyWithUnit(out var activeLeaseUnit);
-        activeLease.Name = "Active Lease Property";
-        activeLeaseUnit.Status = UnitStatus.Vacant;
-        SeedOccupyingLease(activeLease, activeLeaseUnit, LeaseStatus.Active);
+        var now = DateTime.UtcNow;
+        var single = NewProperty("One address", RentalStructure.SingleRental, now);
+        var duplex = NewProperty("One entered unit", RentalStructure.MultiRental, now);
+        var singleUnit = NewUnit(single, "Rental", now);
+        _ctx.Db.AddRange(single, duplex, singleUnit, NewUnit(duplex, "A", now));
         _ctx.Db.SaveChanges();
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new PropertyListQuery
+        var page = await _sut.ListPageAsync(_scope, new PropertyListQuery
         {
-            AvailableForLease = true,
             Sort = "name",
-            Skip = 0,
             Take = 20,
         });
 
-        result.Items.Select(p => p.Name).Should().Equal("Available Property");
-        _commands.Should().HaveCount(2);
-        _commands.Should().OnlyContain(sql =>
-            sql.Contains("Units", StringComparison.OrdinalIgnoreCase));
-        _commands.Should().Contain(sql =>
-            sql.Contains("Leases", StringComparison.OrdinalIgnoreCase));
-    }
+        var singleRow = page.Items.Single(row => row.Id == single.Id);
+        singleRow.WorkspaceEntry.Destination.Should().Be(PropertyWorkspaceDestination.Unit);
+        singleRow.WorkspaceEntry.UnitId.Should().Be(singleUnit.Id);
+        singleRow.WorkspaceEntry.Areas.Should().BeEmpty();
 
-    [Theory]
-    [InlineData(PropertyType.SingleFamily)]
-    [InlineData(PropertyType.Condo)]
-    [InlineData(PropertyType.Townhome)]
-    public async Task CreateAsync_CreatesCanonicalUnitForPropertyUnitTypes(PropertyType propertyType)
-    {
-        var created = await _sut.CreateAsync(PortfolioId, NewProperty("293 Mallard Point Dr", propertyType));
+        var duplexRow = page.Items.Single(row => row.Id == duplex.Id);
+        duplexRow.UnitCount.Should().Be(1);
+        duplexRow.WorkspaceEntry.Destination.Should().Be(PropertyWorkspaceDestination.Property);
+        duplexRow.WorkspaceEntry.UnitId.Should().BeNull();
+        duplexRow.WorkspaceEntry.Areas.Should().Equal(
+            PropertyWorkspaceArea.Summary,
+            PropertyWorkspaceArea.Rentals,
+            PropertyWorkspaceArea.OwnershipManagement,
+            PropertyWorkspaceArea.PropertyWork,
+            PropertyWorkspaceArea.PropertyFinances,
+            PropertyWorkspaceArea.DocumentsHistory);
 
-        created.Should().NotBeNull();
-        created!.UnitCount.Should().Be(1);
+        var listCommands = _commands.ToArray();
+        listCommands.Should().HaveCount(2);
+        listCommands[1].Should().Contain("RentalStructure");
+        listCommands[1].Should().Contain("Units");
 
-        var unit = _ctx.Db.Units.Single(u => u.PropertyId == created.Id);
-        unit.UnitNumber.Should().Be("293 Mallard Point Dr");
-        unit.Status.Should().Be(UnitStatus.Vacant);
-        unit.MarketRent.Should().Be(0m);
-    }
-
-    [Theory]
-    [InlineData(PropertyType.MultiFamily)]
-    [InlineData(PropertyType.MixedUse)]
-    [InlineData(PropertyType.Commercial)]
-    public async Task CreateAsync_DoesNotCreateCanonicalUnitForUnitizedPropertyTypes(PropertyType propertyType)
-    {
-        var created = await _sut.CreateAsync(PortfolioId, NewProperty("Westview Four-Plex", propertyType));
-
-        created.Should().NotBeNull();
-        created!.UnitCount.Should().Be(0);
-        _ctx.Db.Units.Where(u => u.PropertyId == created.Id).Should().BeEmpty();
+        _commands.Clear();
+        var detail = await _sut.GetAsync(_scope, single.Id);
+        detail.Should().NotBeNull();
+        detail!.WorkspaceEntry.UnitId.Should().Be(singleUnit.Id);
+        _commands.Should().ContainSingle();
     }
 
     [Fact]
-    public async Task UpdateAsync_CreatesCanonicalUnitWhenPropertyUnitTypeHasNoUnits()
-    {
-        var property = SeedProperty("Standalone Home", PropertyType.MultiFamily);
-
-        var updated = await _sut.UpdateAsync(
-            PortfolioId,
-            property.Id,
-            new UpdatePropertyRequest { PropertyType = PropertyType.SingleFamily });
-
-        updated.Should().NotBeNull();
-        updated!.UnitCount.Should().Be(1);
-        _ctx.Db.Units.Single(u => u.PropertyId == property.Id).UnitNumber.Should().Be("Standalone Home");
-    }
-
-    [Fact]
-    public async Task UpdateAsync_RenamesExistingCanonicalUnitWhenPropertyNameChanges()
-    {
-        var created = await _sut.CreateAsync(PortfolioId, NewProperty("Old Home Name", PropertyType.SingleFamily));
-
-        var updated = await _sut.UpdateAsync(
-            PortfolioId,
-            created!.Id,
-            new UpdatePropertyRequest { Name = "New Home Name" });
-
-        updated.Should().NotBeNull();
-        updated!.UnitCount.Should().Be(1);
-        _ctx.Db.Units.Single(u => u.PropertyId == created.Id).UnitNumber.Should().Be("New Home Name");
-    }
-
-    [Fact]
-    public async Task UpdateAsync_DoesNotRenameManuallyNamedSingleUnit()
-    {
-        var property = SeedProperty("Standalone Home", PropertyType.SingleFamily);
-        _ctx.Db.Units.Add(new Unit
-        {
-            PropertyId = property.Id,
-            UnitNumber = "Detached Garage Apartment",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        await _ctx.Db.SaveChangesAsync();
-
-        var updated = await _sut.UpdateAsync(
-            PortfolioId,
-            property.Id,
-            new UpdatePropertyRequest { Name = "Renamed Home" });
-
-        updated.Should().NotBeNull();
-        _ctx.Db.Units.Single(u => u.PropertyId == property.Id)
-            .UnitNumber.Should().Be("Detached Garage Apartment");
-    }
-
-    [Fact]
-    public async Task UpdateAsync_ClearOwnerEntity_AllowsAssignedOwnerToBeDeleted()
+    public async Task ListAndDetail_ProjectOnlyCurrentEffectiveOwnershipRelationshipFacts()
     {
         var now = DateTime.UtcNow;
-        var owner = new OwnerEntity
+        var property = NewProperty("Shared ownership", RentalStructure.MultiRental, now);
+        var currentOwner = new OwnerEntity
         {
             PortfolioId = PortfolioId,
-            OwnerEntityType = OwnerEntityType.Person,
-            Name = "Owner To Clear",
+            Name = "Current Owner LLC",
+            Email = "current-owner@example.test",
             CreatedAt = now,
             UpdatedAt = now,
         };
-        _ctx.Db.OwnerEntities.Add(owner);
-        _ctx.Db.SaveChanges();
-
-        var property = SeedProperty("Owner Linked Property", PropertyType.MultiFamily);
-        property.OwnerEntityId = owner.Id;
-        _ctx.Db.SaveChanges();
-
-        var updated = await _sut.UpdateAsync(
-            PortfolioId,
-            property.Id,
-            new UpdatePropertyRequest { ClearOwnerEntity = true });
-
-        updated.Should().NotBeNull();
-        updated!.OwnerEntityId.Should().BeNull();
-        _ctx.Db.Properties.Single(p => p.Id == property.Id).OwnerEntityId.Should().BeNull();
-
-        var ownerService = new OwnerEntityService(_ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
-        (await ownerService.DeleteAsync(PortfolioId, owner.Id)).Should().BeTrue();
-    }
-
-    [Fact]
-    public async Task DeleteAsync_ThrowsWhenPropertyStillHasLiveUnits()
-    {
-        var property = SeedPropertyWithUnit(out _);
-
-        var act = async () => await _sut.DeleteAsync(PortfolioId, property.Id);
-
-        var ex = await act.Should().ThrowAsync<DomainValidationException>();
-        ex.Which.Message.Should().Contain("Remove the unit");
-        (await _sut.GetAsync(PortfolioId, property.Id))
-            .Should().NotBeNull("a property with live units must not be deleted");
-    }
-
-    [Fact]
-    public async Task DeleteAsync_ThrowsWhenPropertyHasOccupyingLeaseButNoLiveUnit()
-    {
-        var property = SeedPropertyWithUnit(out var unit);
-        SeedOccupyingLease(property, unit, LeaseStatus.NoticeGiven);
-        // Soft-delete the unit so the unit guard passes and only the lease safety-net guard can fire —
-        // the exact orphan scenario (occupying lease whose unit is already gone).
-        unit.DeletedAt = DateTime.UtcNow;
-        _ctx.Db.SaveChanges();
-
-        var act = async () => await _sut.DeleteAsync(PortfolioId, property.Id);
-
-        var ex = await act.Should().ThrowAsync<DomainValidationException>();
-        ex.Which.Message.Should().Contain("active lease");
-        (await _sut.GetAsync(PortfolioId, property.Id))
-            .Should().NotBeNull("a property with an occupying lease must not be deleted");
-    }
-
-    [Fact]
-    public async Task DeleteAsync_SoftDeletesEmptyCanonicalUnitForPropertyUnitTypes()
-    {
-        var created = await _sut.CreateAsync(PortfolioId, NewProperty("Empty House", PropertyType.SingleFamily));
-        created.Should().NotBeNull();
-        var unit = _ctx.Db.Units.Single(u => u.PropertyId == created!.Id);
-
-        var deleted = await _sut.DeleteAsync(PortfolioId, created!.Id);
-
-        deleted.Should().BeTrue();
-        (await _sut.GetAsync(PortfolioId, created.Id)).Should().BeNull();
-        _ctx.Db.Units.IgnoreQueryFilters().Single(u => u.Id == unit.Id).DeletedAt.Should().NotBeNull();
-    }
-
-    [Fact]
-    public async Task DeleteAsync_ThrowsWhenPropertyHasWorkOrderHistory()
-    {
-        var property = SeedPropertyWithUnit(out var unit);
-        _ctx.Db.WorkOrders.Add(new WorkOrder
+        var formerOwner = new OwnerEntity
         {
             PortfolioId = PortfolioId,
-            PropertyId = property.Id,
-            UnitId = unit.Id,
-            Title = "Patch drywall",
-            Description = "Repair hallway drywall",
-            RequestedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
+            Name = "Former Owner LLC",
+            Email = "former-owner@example.test",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        property.Ownerships.Add(new PropertyOwnership
+        {
+            PortfolioId = PortfolioId,
+            OwnerEntity = currentOwner,
+            OwnershipSharePercent = 62.5000m,
+            EffectiveFromUtc = now.AddDays(-10),
+            StatementRecipientName = "Current Statements",
+            StatementRecipientEmail = "statements@example.test",
+            PayeeName = "Current Payee LLC",
         });
-        unit.DeletedAt = DateTime.UtcNow;
-        _ctx.Db.SaveChanges();
-
-        var act = async () => await _sut.DeleteAsync(PortfolioId, property.Id);
-
-        var ex = await act.Should().ThrowAsync<DomainValidationException>();
-        ex.Which.Message.Should().Contain("work order");
-        ex.Which.Message.Should().Contain("history");
-    }
-
-    [Fact]
-    public async Task DeleteAsync_ThrowsWhenPropertyHasExpenseHistory()
-    {
-        var property = SeedPropertyWithUnit(out var unit);
-        _ctx.Db.Expenses.Add(new Expense
+        property.Ownerships.Add(new PropertyOwnership
         {
             PortfolioId = PortfolioId,
-            PropertyId = property.Id,
-            UnitId = unit.Id,
-            Description = "Paint",
-            Amount = 125m,
-            IncurredAt = DateTime.UtcNow,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
+            OwnerEntity = formerOwner,
+            OwnershipSharePercent = 100m,
+            EffectiveFromUtc = now.AddYears(-1),
+            EffectiveToUtc = now.AddDays(-30),
+            StatementRecipientName = "Former Statements",
+            StatementRecipientEmail = "former-statements@example.test",
+            PayeeName = "Former Payee LLC",
         });
-        unit.DeletedAt = DateTime.UtcNow;
-        _ctx.Db.SaveChanges();
-
-        var act = async () => await _sut.DeleteAsync(PortfolioId, property.Id);
-
-        var ex = await act.Should().ThrowAsync<DomainValidationException>();
-        ex.Which.Message.Should().Contain("expense");
-        ex.Which.Message.Should().Contain("history");
-    }
-
-    [Fact]
-    public async Task DeleteAsync_ThrowsWhenPropertyHasApplicationHistory()
-    {
-        var property = SeedPropertyWithUnit(out var unit);
-        _ctx.Db.RentalApplications.Add(new RentalApplication
-        {
-            PortfolioId = PortfolioId,
-            PropertyId = property.Id,
-            UnitId = unit.Id,
-            FirstName = "Applied",
-            LastName = "Tenant",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        unit.DeletedAt = DateTime.UtcNow;
-        _ctx.Db.SaveChanges();
-
-        var act = async () => await _sut.DeleteAsync(PortfolioId, property.Id);
-
-        var ex = await act.Should().ThrowAsync<DomainValidationException>();
-        ex.Which.Message.Should().Contain("application");
-        ex.Which.Message.Should().Contain("history");
-    }
-
-    [Fact]
-    public async Task DeleteAsync_SoftDeletesWhenNoUnitsOrOccupyingLeases()
-    {
-        SeedProperties("Standalone");
-        var property = _ctx.Db.Properties.Single(p => p.Name == "Standalone");
-
-        var deleted = await _sut.DeleteAsync(PortfolioId, property.Id);
-
-        deleted.Should().BeTrue();
-        (await _sut.GetAsync(PortfolioId, property.Id))
-            .Should().BeNull("a property with no children is soft-deleted");
-    }
-
-    private Property SeedPropertyWithUnit(out Unit unit)
-    {
-        var now = DateTime.UtcNow;
-        var property = new Property
-        {
-            PortfolioId = PortfolioId,
-            Name = "Occupied Property",
-            AddressLine1 = "1 Main Street",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43215",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        unit = new Unit
-        {
-            Property = property,
-            UnitNumber = "101",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _ctx.Db.Units.Add(unit);
-        _ctx.Db.SaveChanges();
-        return property;
-    }
-
-    private Property SeedProperty(string name, PropertyType type)
-    {
-        var now = DateTime.UtcNow;
-        var property = new Property
-        {
-            PortfolioId = PortfolioId,
-            Name = name,
-            PropertyType = type,
-            AddressLine1 = $"{name} Street",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43215",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
         _ctx.Db.Properties.Add(property);
         _ctx.Db.SaveChanges();
-        return property;
+
+        _commands.Clear();
+        var page = await _sut.ListPageAsync(_scope, new PropertyListQuery
+        {
+            Search = "Current Owner",
+            Sort = "name",
+            Take = 20,
+        });
+
+        var row = page.Items.Should().ContainSingle().Subject;
+        var ownership = row.Ownerships.Should().ContainSingle().Subject;
+        ownership.OwnerEntityId.Should().Be(currentOwner.Id);
+        ownership.OwnerName.Should().Be("Current Owner LLC");
+        ownership.OwnershipSharePercent.Should().Be(62.5000m);
+        ownership.StatementRecipientName.Should().Be("Current Statements");
+        ownership.StatementRecipientEmail.Should().Be("statements@example.test");
+        ownership.PayeeName.Should().Be("Current Payee LLC");
+        _commands.Should().HaveCount(2, "the translated count and bounded page are the only reads");
+        var countSql = _commands.Single(sql =>
+            sql.TrimStart().StartsWith("SELECT count(*)", StringComparison.OrdinalIgnoreCase) &&
+            !sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            !sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
+            !sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
+        var pageSql = _commands.Single(sql =>
+            !sql.TrimStart().StartsWith("SELECT count(*)", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
+        new[] { countSql, pageSql }.Should().OnlyContain(sql =>
+            sql.Contains("AuthSessions", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("PropertyOwnerships", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("EffectiveFromUtc", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("EffectiveToUtc", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase));
+
+        _commands.Clear();
+        var formerOwnerPage = await _sut.ListPageAsync(_scope, new PropertyListQuery
+        {
+            Search = "Former Owner",
+            Sort = "name",
+            Take = 20,
+        });
+
+        formerOwnerPage.Items.Should().BeEmpty(
+            "expired ownership relationships must not contribute owner-name search matches");
+        formerOwnerPage.TotalCount.Should().Be(0);
+        _commands.Should().HaveCount(2, "the negative owner search remains a count and bounded page read");
+        var formerCountSql = _commands.Single(sql =>
+            sql.TrimStart().StartsWith("SELECT count(*)", StringComparison.OrdinalIgnoreCase) &&
+            !sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            !sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
+            !sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
+        var formerPageSql = _commands.Single(sql =>
+            !sql.TrimStart().StartsWith("SELECT count(*)", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
+        new[] { formerCountSql, formerPageSql }.Should().OnlyContain(sql =>
+            sql.Contains("AuthSessions", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("PropertyOwnerships", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("EffectiveFromUtc", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("EffectiveToUtc", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase));
+
+        _commands.Clear();
+        var detail = await _sut.GetAsync(_scope, property.Id);
+
+        detail.Should().NotBeNull();
+        detail!.Ownerships.Should().ContainSingle(item =>
+            item.OwnerEntityId == currentOwner.Id
+            && item.OwnershipSharePercent == 62.5000m
+            && item.StatementRecipientName == "Current Statements"
+            && item.StatementRecipientEmail == "statements@example.test"
+            && item.PayeeName == "Current Payee LLC");
+        detail.Ownerships.Should().NotContain(item => item.OwnerEntityId == formerOwner.Id);
+        _commands.Should().ContainSingle();
+        _commands[0].Should().Contain("PropertyOwnerships");
     }
 
-    private static CreatePropertyRequest NewProperty(string name, PropertyType type) => new()
+    private static Property NewProperty(string name, RentalStructure structure, DateTime now) => new()
     {
+        PortfolioId = PortfolioId,
         Name = name,
-        PropertyType = type,
-        Status = PropertyStatus.Active,
-        AddressLine1 = "293 Mallard Point Dr",
+        RentalStructure = structure,
+        AddressLine1 = $"{name} Street",
         City = "Columbus",
         State = "OH",
         PostalCode = "43215",
+        CreatedAt = now,
+        UpdatedAt = now,
     };
 
-    private void SeedOccupyingLease(Property property, Unit unit, LeaseStatus status)
+    private static Unit NewUnit(Property property, string unitNumber, DateTime now) => new()
     {
-        var now = DateTime.UtcNow;
-        var tenant = new Tenant
-        {
-            PortfolioId = PortfolioId,
-            FirstName = "Occupant",
-            LastName = "Tenant",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _ctx.Db.Tenants.Add(tenant);
-        _ctx.Db.SaveChanges();
-
-        _ctx.Db.Leases.Add(new Lease
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            TenantId = tenant.Id,
-            LeaseNumber = "L-1",
-            Status = status,
-            StartDate = now.Date,
-            EndDate = now.Date.AddYears(1),
-            MonthlyRent = 1200m,
-            SecurityDeposit = 1200m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
-        _ctx.Db.SaveChanges();
-    }
+        PortfolioId = PortfolioId,
+        Property = property,
+        UnitNumber = unitNumber,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
 
     private void SeedProperties(params string[] names)
     {

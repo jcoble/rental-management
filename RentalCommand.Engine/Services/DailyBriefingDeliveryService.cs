@@ -1,178 +1,239 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
-using RentalCommand.Core.Time;
-using RentalCommand.Data;
 
 namespace RentalCommand.Engine.Services;
 
+/// <summary>
+/// Enqueues the landlord/team morning briefing through one receipt-backed command. PostgreSQL
+/// resolves due workspaces, current routed recipients, preferences, destinations, and each
+/// recipient's current authorized action list in one set-based query.
+/// </summary>
 public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
 {
-    private const string Purpose = "daily-briefing";
-    private readonly RentalCommandDbContext _db;
-    private readonly IDailyBriefingService _briefing;
-    private readonly INotificationSettingsService _settings;
+    private static readonly AtomicJsonResultCodec<EnqueueMorningBriefingsResult> ResultCodec =
+        new("notifications.morning-briefing.enqueue.v1");
+
+    private readonly IAtomicUnitOfWork _atomic;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<DailyBriefingDeliveryService> _logger;
 
     public DailyBriefingDeliveryService(
-        RentalCommandDbContext db,
-        IDailyBriefingService briefing,
-        INotificationSettingsService settings,
+        IAtomicUnitOfWork atomic,
         TimeProvider timeProvider,
         ILogger<DailyBriefingDeliveryService> logger)
     {
-        _db = db;
-        _briefing = briefing;
-        _settings = settings;
+        _atomic = atomic;
         _timeProvider = timeProvider;
         _logger = logger;
     }
 
     public async Task<int> EnqueueDueAsync(DateTime? utcNow = null, CancellationToken ct = default)
     {
-        var now = utcNow ?? _timeProvider.UtcNow();
-        var portfolios = await _db.Portfolios
-            .Where(p => p.DeletedAt == null)
-            .OrderBy(p => p.Id)
-            .ToListAsync(ct);
+        var requestedUtc = DateTime.SpecifyKind(
+            utcNow ?? _timeProvider.GetUtcNow().UtcDateTime,
+            DateTimeKind.Utc);
+        var evaluationUtc = new DateTime(
+            requestedUtc.Year,
+            requestedUtc.Month,
+            requestedUtc.Day,
+            requestedUtc.Hour,
+            0,
+            0,
+            DateTimeKind.Utc);
+        var outcome = await _atomic.ExecuteAsync(
+            new AtomicCommandIdentity(
+                "notifications.morning-briefing.enqueue",
+                $"utc-hour:{evaluationUtc:yyyyMMddHH}"),
+            new EnqueueMorningBriefingsCommand(evaluationUtc),
+            ResultCodec,
+            ct);
 
-        var queued = 0;
-        foreach (var portfolio in portfolios)
+        if (outcome.Value.QueuedCount > 0)
         {
-            // Settings (gate, recipients, send-hour, channel matrix) are per-portfolio now.
-            var config = await _settings.GetRuntimeAsync(portfolio.Id, ct);
-            if (!config.EnableDailyBriefingMessages)
-                continue;
-
-            var channels = config.ResolveChannels(NotificationType.DailyBriefing);
-            var smsRecipients = channels.EnableSms ? CleanRecipients(config.DailyBriefing.SmsRecipients) : [];
-            var emailRecipients = channels.EnableEmail ? CleanRecipients(config.DailyBriefing.EmailRecipients) : [];
-            if (smsRecipients.Count == 0 && emailRecipients.Count == 0)
-                continue;
-
-            var localNow = ToPortfolioLocalTime(now, portfolio.TimeZone);
-            if (localNow.Hour < config.DailyBriefing.SendHourLocal)
-                continue;
-
-            var dateKey = localNow.Date.ToString("yyyy-MM-dd");
-            var dedupKey = $"{Purpose}:{portfolio.Id}:{dateKey}";
-            if (await AlreadyQueuedAsync(dedupKey, ct))
-                continue;
-
-            var briefing = await _briefing.ComposeAsync(portfolio.Id, ct);
-            if (!config.DailyBriefing.IncludeEmptyBriefing &&
-                briefing.Bullets.Count == 0 &&
-                string.IsNullOrWhiteSpace(briefing.Summary))
-            {
-                continue;
-            }
-
-            var body = ComposeBody(portfolio.Name, dateKey, briefing);
-            foreach (var to in smsRecipients)
-            {
-                _db.OutboxMessages.Add(new OutboxMessage
-                {
-                    PortfolioId = portfolio.Id,
-                    MessageType = "sms",
-                    DedupKey = dedupKey,
-                    Payload = JsonSerializer.Serialize(new
-                    {
-                        purpose = Purpose,
-                        date = dateKey,
-                        to,
-                        message = body,
-                    }),
-                    CreatedAt = now,
-                });
-                queued++;
-            }
-
-            foreach (var to in emailRecipients)
-            {
-                _db.OutboxMessages.Add(new OutboxMessage
-                {
-                    PortfolioId = portfolio.Id,
-                    MessageType = "email",
-                    DedupKey = dedupKey,
-                    Payload = JsonSerializer.Serialize(new
-                    {
-                        purpose = Purpose,
-                        date = dateKey,
-                        to,
-                        subject = $"Rental Command briefing for {dateKey}",
-                        body,
-                    }),
-                    CreatedAt = now,
-                });
-                queued++;
-            }
+            _logger.LogInformation(
+                "Queued {Count} morning briefing delivery or deliveries ({Disposition}).",
+                outcome.Value.QueuedCount,
+                outcome.Disposition);
         }
 
-        if (queued > 0)
-        {
-            await _db.SaveChangesAsync(ct);
-            _logger.LogInformation("Queued {Count} daily briefing notification(s).", queued);
-        }
-
-        return queued;
+        return outcome.Value.QueuedCount;
     }
 
-    // Single indexed lookup on DedupKey — no payload scan, no in-memory JSON parse, bounded regardless
-    // of how many historical outbox rows the portfolio has accumulated.
-    private async Task<bool> AlreadyQueuedAsync(string dedupKey, CancellationToken ct) =>
-        await _db.OutboxMessages.AnyAsync(m => m.DedupKey == dedupKey, ct);
+    internal static string DestinationHash(string destination) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(destination.Trim())))
+            .ToLowerInvariant()[..24];
 
-    private static DateTime ToPortfolioLocalTime(DateTime utcNow, string? timeZoneId)
+    internal static string ComposeBody(
+        string portfolioName,
+        string localDate,
+        IReadOnlyList<BriefingDigestItem> items)
     {
-        try
+        var body = new StringBuilder()
+            .Append("Rental Command - ")
+            .Append(portfolioName)
+            .Append(" briefing for ")
+            .Append(localDate)
+            .Append(':');
+
+        if (items.Count == 0)
         {
-            var tz = TimeZoneInfo.FindSystemTimeZoneById(
-                string.IsNullOrWhiteSpace(timeZoneId) ? "America/New_York" : timeZoneId);
-            return TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utcNow, DateTimeKind.Utc), tz);
+            return body.Append(" Nothing currently needs your attention.").ToString();
         }
-        catch
+
+        foreach (var item in items)
         {
-            return utcNow;
+            var (title, detail) = FormatItem(item, DateOnly.Parse(localDate));
+            body.AppendLine().Append("- ").Append(title);
+            if (!string.IsNullOrWhiteSpace(detail))
+            {
+                body.Append(": ").Append(detail);
+            }
         }
+
+        return body.ToString();
     }
 
-    private static string ComposeBody(string portfolioName, string dateKey, BriefingResponse briefing)
+    private static (string Title, string Detail) FormatItem(BriefingDigestItem item, DateOnly today)
     {
-        var sb = new StringBuilder();
-        sb.Append("Rental Command");
-        if (!string.IsNullOrWhiteSpace(portfolioName))
-            sb.Append(" - ").Append(portfolioName);
-        sb.Append(" briefing for ").Append(dateKey).Append(':');
-
-        if (!string.IsNullOrWhiteSpace(briefing.Summary))
+        var date = item.EventDateOnly ?? (item.EventDateTime is DateTime timestamp
+            ? DateOnly.FromDateTime(timestamp)
+            : today);
+        var rental = string.IsNullOrWhiteSpace(item.TenantName)
+            ? $"{item.PropertyName}, Unit {item.UnitNumber}"
+            : $"{item.TenantName} - {item.PropertyName}, Unit {item.UnitNumber}";
+        return item.Category switch
         {
-            sb.Append(' ').Append(briefing.Summary.Trim());
-        }
-
-        foreach (var bullet in briefing.Bullets.Take(5))
-        {
-            sb.AppendLine();
-            sb.Append("- ").Append(bullet.Title);
-            if (!string.IsNullOrWhiteSpace(bullet.Detail))
-                sb.Append(": ").Append(bullet.Detail);
-        }
-
-        if (briefing.Bullets.Count > 5)
-            sb.AppendLine().Append("- Plus ").Append(briefing.Bullets.Count - 5).Append(" more item(s).");
-
-        return sb.ToString();
+            "Maintenance" => ($"Emergency: {item.TitleText}", item.DetailText ?? string.Empty),
+            "RentLate" => ($"Rent overdue - {rental}",
+                $"${item.Amount:N0} was due {today.DayNumber - date.DayNumber} day(s) ago"),
+            "RentDue" => ($"Rent due today - {rental}", $"${item.Amount:N0} due"),
+            "Appointment" => ($"Appointment today: {item.TitleText}",
+                item.EventDateTime is DateTime at
+                    ? $"{(AppointmentType)item.TypeValue} at {at:h:mm tt}"
+                    : ((AppointmentType)item.TypeValue).ToString()),
+            "Inspection" => ($"Inspection - {(InspectionType)item.TypeValue}", $"Scheduled for {date:MMM d}"),
+            "LeaseExpiring" => ($"Lease expiring - {rental}",
+                $"Ends {date:MMM d} ({date.DayNumber - today.DayNumber} day(s) left)"),
+            _ => (item.TitleText ?? item.Category, item.DetailText ?? string.Empty),
+        };
     }
 
-    private static List<string> CleanRecipients(IEnumerable<string>? values) =>
-        (values ?? [])
-        .Where(v => !string.IsNullOrWhiteSpace(v))
-        .Select(v => v.Trim())
-        .Distinct(StringComparer.OrdinalIgnoreCase)
-        .ToList();
+    internal static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
 }
+
+public sealed record EnqueueMorningBriefingsCommand(DateTime EvaluationUtc) : IAtomicCommandData;
+
+public sealed record EnqueueMorningBriefingsResult(int QueuedCount) : IAtomicResultData;
+
+public sealed class EnqueueMorningBriefingsHandler
+    : IAtomicCommandHandler<EnqueueMorningBriefingsCommand, EnqueueMorningBriefingsResult>
+{
+    private const string Purpose = "morning-briefing";
+
+    public async Task<EnqueueMorningBriefingsResult> HandleAsync(
+        EnqueueMorningBriefingsCommand command,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        if (command.EvaluationUtc.Kind != DateTimeKind.Utc)
+        {
+            throw new ArgumentException("Morning briefing evaluation time must be UTC.");
+        }
+
+        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var digests = await attempt.Notifications.ReadDueMorningBriefingsAsync(command.EvaluationUtc, ct);
+        var queued = 0;
+
+        foreach (var digest in digests)
+        {
+            var items = JsonSerializer.Deserialize<List<BriefingDigestItem>>(
+                digest.ItemsJson,
+                DailyBriefingDeliveryService.JsonOptions) ?? [];
+            var body = DailyBriefingDeliveryService.ComposeBody(
+                digest.PortfolioName,
+                digest.LocalDate,
+                items);
+            var subject = $"Rental Command morning briefing for {digest.LocalDate}";
+
+            if (digest.EnableEmail && !string.IsNullOrWhiteSpace(digest.Email))
+            {
+                StageOutbox(attempt, digest, "email", digest.Email,
+                    new { to = digest.Email, subject, body }, now);
+                queued++;
+            }
+
+            if (digest.EnableSms && !string.IsNullOrWhiteSpace(digest.PhoneNumber))
+            {
+                StageOutbox(attempt, digest, "sms", digest.PhoneNumber,
+                    new { to = digest.PhoneNumber, message = body }, now);
+                queued++;
+            }
+
+            if (digest.EnablePush)
+            {
+                var tokens = JsonSerializer.Deserialize<List<string>>(digest.DeviceTokensJson) ?? [];
+                foreach (var token in tokens)
+                {
+                    StageOutbox(attempt, digest, "push", token, new
+                    {
+                        deviceToken = token,
+                        title = subject,
+                        body,
+                        // The briefing digest contract does not carry the recipient's current
+                        // access context/revision. Omit navigation rather than minting an
+                        // unbound route; the client opens its safe authorized home.
+                        navigationIntent = (object?)null,
+                    }, now);
+                    queued++;
+                }
+            }
+        }
+
+        return new EnqueueMorningBriefingsResult(queued);
+    }
+
+    private static void StageOutbox(
+        IAtomicWriteAttempt attempt,
+        AtomicMorningBriefingDigest digest,
+        string channel,
+        string destination,
+        object payload,
+        DateTime now)
+    {
+        attempt.StageOutbox(new OutboxMessage
+        {
+            PortfolioId = digest.PortfolioId,
+            MessageType = channel,
+            Payload = JsonSerializer.Serialize(payload),
+            IdempotencyKey = $"{Purpose}:{digest.PortfolioId}:{digest.UserId}:{digest.LocalDate}:{channel}:" +
+                             DailyBriefingDeliveryService.DestinationHash(destination),
+            CreatedAtUtc = now,
+            NextAttemptAtUtc = now,
+        });
+    }
+}
+
+public sealed record BriefingDigestItem(
+    string Category,
+    int SeverityOrder,
+    string EntityType,
+    int EntityId,
+    int? UnitId,
+    string? TitleText,
+    string? DetailText,
+    string? LeaseNumber,
+    string? UnitNumber,
+    string? TenantName,
+    string? PropertyName,
+    decimal Amount,
+    DateTime? EventDateTime,
+    DateOnly? EventDateOnly,
+    int TypeValue);

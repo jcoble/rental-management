@@ -13,6 +13,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 		user: locals.user,
 		accessToken: locals.accessToken,
 		accessTokenExpiration: locals.accessTokenExpiration ?? null,
+		access: locals.access,
 		// Resolved server-side from the PLATFORM_ADMIN_EMAILS allowlist; the client only
 		// ever sees this boolean, never the list (F6 / TSK-212).
 		isPlatformAdmin: isPlatformAdmin(locals.user)

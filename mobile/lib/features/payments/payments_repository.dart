@@ -1,11 +1,9 @@
-import 'dart:typed_data';
-
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
-import '../../core/models/models.dart';
+import '../../core/api/idempotent_mutation.dart';
 
 // ── Inline model: accounting summary ─────────────────────────────────────────
 
@@ -51,70 +49,186 @@ class AccountingSummary {
   }
 }
 
-class PaymentListQuery {
-  const PaymentListQuery({
+class TenantLedgerEntryListQuery {
+  const TenantLedgerEntryListQuery({
     this.skip = 0,
     this.take = 20,
-    this.leaseId,
-    this.applicationId,
+    this.tenantAccountId,
     this.search,
-    this.sort = '-createdAt',
-    this.dueFrom,
-    this.dueTo,
-    this.paidFrom,
-    this.paidTo,
+    this.sort = '-postedAtUtc',
+    this.from,
+    this.to,
   });
 
   final int skip;
   final int take;
-  final int? leaseId;
-  final int? applicationId;
+  final int? tenantAccountId;
   final String? search;
   final String sort;
-  final String? dueFrom;
-  final String? dueTo;
-  final String? paidFrom;
-  final String? paidTo;
+  final String? from;
+  final String? to;
 
   @override
   bool operator ==(Object other) {
-    return other is PaymentListQuery &&
+    return other is TenantLedgerEntryListQuery &&
         other.skip == skip &&
         other.take == take &&
-        other.leaseId == leaseId &&
-        other.applicationId == applicationId &&
+        other.tenantAccountId == tenantAccountId &&
         other.search == search &&
         other.sort == sort &&
-        other.dueFrom == dueFrom &&
-        other.dueTo == dueTo &&
-        other.paidFrom == paidFrom &&
-        other.paidTo == paidTo;
+        other.from == from &&
+        other.to == to;
   }
 
   @override
-  int get hashCode => Object.hash(
-    skip,
-    take,
-    leaseId,
-    applicationId,
-    search,
-    sort,
-    dueFrom,
-    dueTo,
-    paidFrom,
-    paidTo,
-  );
+  int get hashCode =>
+      Object.hash(skip, take, tenantAccountId, search, sort, from, to);
 }
 
-class PaymentListPage {
-  const PaymentListPage({
+class StaffTenantLedgerEntry {
+  const StaffTenantLedgerEntry({
+    required this.tenantAccountId,
+    required this.leaseManagementId,
+    required this.tenantLedgerEntryId,
+    required this.propertyId,
+    required this.propertyName,
+    required this.unitId,
+    required this.unitNumber,
+    required this.accountNumber,
+    required this.relationshipNumber,
+    required this.entryType,
+    required this.direction,
+    required this.amount,
+    required this.currency,
+    required this.effectiveOn,
+    required this.postedAtUtc,
+    required this.description,
+    this.primaryTenantName,
+    this.providerPaymentAttemptId,
+    this.sourceStoredFileId,
+  });
+
+  final int tenantAccountId;
+  final int leaseManagementId;
+  final int tenantLedgerEntryId;
+  final int propertyId;
+  final String propertyName;
+  final int unitId;
+  final String unitNumber;
+  final String accountNumber;
+  final String relationshipNumber;
+  final String? primaryTenantName;
+  final String entryType;
+  final String direction;
+  final double amount;
+  final String currency;
+  final DateTime effectiveOn;
+  final DateTime postedAtUtc;
+  final String description;
+  final int? providerPaymentAttemptId;
+  final int? sourceStoredFileId;
+
+  factory StaffTenantLedgerEntry.fromJson(Map<String, dynamic> json) {
+    return StaffTenantLedgerEntry(
+      tenantAccountId: (json['tenantAccountId'] as num).toInt(),
+      leaseManagementId: (json['leaseManagementId'] as num).toInt(),
+      tenantLedgerEntryId: (json['tenantLedgerEntryId'] as num).toInt(),
+      propertyId: (json['propertyId'] as num).toInt(),
+      propertyName: json['propertyName'] as String,
+      unitId: (json['unitId'] as num).toInt(),
+      unitNumber: json['unitNumber'] as String,
+      accountNumber: json['accountNumber'] as String,
+      relationshipNumber: json['relationshipNumber'] as String,
+      primaryTenantName: json['primaryTenantName'] as String?,
+      entryType: json['entryType'] as String,
+      direction: json['direction'] as String,
+      amount: (json['amount'] as num).toDouble(),
+      currency: json['currency'] as String,
+      effectiveOn: DateTime.parse(json['effectiveOn'] as String),
+      postedAtUtc: DateTime.parse(json['postedAtUtc'] as String),
+      description: json['description'] as String,
+      providerPaymentAttemptId: (json['providerPaymentAttemptId'] as num?)
+          ?.toInt(),
+      sourceStoredFileId: (json['sourceStoredFileId'] as num?)?.toInt(),
+    );
+  }
+}
+
+class StaffTenantLedgerEntryDetail extends StaffTenantLedgerEntry {
+  const StaffTenantLedgerEntryDetail({
+    required super.tenantAccountId,
+    required super.leaseManagementId,
+    required super.tenantLedgerEntryId,
+    required super.propertyId,
+    required super.propertyName,
+    required super.unitId,
+    required super.unitNumber,
+    required super.accountNumber,
+    required super.relationshipNumber,
+    required super.entryType,
+    required super.direction,
+    required super.amount,
+    required super.currency,
+    required super.effectiveOn,
+    required super.postedAtUtc,
+    required super.description,
+    super.primaryTenantName,
+    super.providerPaymentAttemptId,
+    super.sourceStoredFileId,
+    this.paymentMethodSummary,
+    this.providerReference,
+    this.payerName,
+    this.checkNumber,
+    this.bankName,
+  });
+
+  final String? paymentMethodSummary;
+  final String? providerReference;
+  final String? payerName;
+  final String? checkNumber;
+  final String? bankName;
+
+  factory StaffTenantLedgerEntryDetail.fromJson(Map<String, dynamic> json) {
+    final attempt = json['providerAttempt'] as Map<String, dynamic>?;
+    return StaffTenantLedgerEntryDetail(
+      tenantAccountId: (json['tenantAccountId'] as num).toInt(),
+      leaseManagementId: (json['leaseManagementId'] as num).toInt(),
+      tenantLedgerEntryId: (json['tenantLedgerEntryId'] as num).toInt(),
+      propertyId: (json['propertyId'] as num).toInt(),
+      propertyName: json['propertyName'] as String,
+      unitId: (json['unitId'] as num).toInt(),
+      unitNumber: json['unitNumber'] as String,
+      accountNumber: json['accountNumber'] as String,
+      relationshipNumber: json['relationshipNumber'] as String,
+      primaryTenantName: json['tenantName'] as String?,
+      entryType: json['entryType'] as String,
+      direction: json['direction'] as String,
+      amount: (json['amount'] as num).toDouble(),
+      currency: json['currency'] as String,
+      effectiveOn: DateTime.parse(json['effectiveOn'] as String),
+      postedAtUtc: DateTime.parse(json['postedAtUtc'] as String),
+      description: json['description'] as String,
+      providerPaymentAttemptId: (json['providerPaymentAttemptId'] as num?)
+          ?.toInt(),
+      sourceStoredFileId: (json['sourceStoredFileId'] as num?)?.toInt(),
+      paymentMethodSummary: attempt?['paymentMethodSummary'] as String?,
+      providerReference: attempt?['providerReference'] as String?,
+      payerName: attempt?['payerName'] as String?,
+      checkNumber: attempt?['checkNumber'] as String?,
+      bankName: attempt?['bankName'] as String?,
+    );
+  }
+}
+
+class TenantLedgerEntryListPage {
+  const TenantLedgerEntryListPage({
     required this.items,
     required this.totalCount,
     required this.skip,
     required this.take,
   });
 
-  final List<Payment> items;
+  final List<StaffTenantLedgerEntry> items;
   final int totalCount;
   final int skip;
   final int take;
@@ -122,16 +236,16 @@ class PaymentListPage {
   bool get hasPrevious => skip > 0;
   bool get hasNext => skip + items.length < totalCount;
 
-  factory PaymentListPage.fromJson(Map<String, dynamic> json) {
+  factory TenantLedgerEntryListPage.fromJson(Map<String, dynamic> json) {
     final rawItems = json['items'];
     final items = rawItems is List
         ? rawItems
               .whereType<Map<String, dynamic>>()
-              .map(Payment.fromJson)
+              .map(StaffTenantLedgerEntry.fromJson)
               .toList()
-        : <Payment>[];
+        : <StaffTenantLedgerEntry>[];
 
-    return PaymentListPage(
+    return TenantLedgerEntryListPage(
       items: items,
       totalCount: (json['totalCount'] as num?)?.toInt() ?? items.length,
       skip: (json['skip'] as num?)?.toInt() ?? 0,
@@ -140,25 +254,114 @@ class PaymentListPage {
   }
 }
 
-class MarkLeasePastDuePaidResult {
-  const MarkLeasePastDuePaidResult({
-    required this.leaseId,
-    required this.markedPaidCount,
-    required this.paymentIds,
+class RecordTenantReceiptInput {
+  const RecordTenantReceiptInput({
+    required this.amount,
+    required this.effectiveOn,
+    required this.description,
+    required this.paymentMethodSummary,
+    this.externalReference,
+    this.payerName,
+    this.checkNumber,
+    this.bankName,
+    this.sourceStoredFileId,
+    this.allocateOldestCharges = true,
   });
 
-  final int leaseId;
-  final int markedPaidCount;
-  final List<int> paymentIds;
+  final double amount;
+  final DateTime effectiveOn;
+  final String description;
+  final String paymentMethodSummary;
+  final String? externalReference;
+  final String? payerName;
+  final String? checkNumber;
+  final String? bankName;
+  final int? sourceStoredFileId;
+  final bool allocateOldestCharges;
+}
 
-  factory MarkLeasePastDuePaidResult.fromJson(Map<String, dynamic> json) {
-    return MarkLeasePastDuePaidResult(
-      leaseId: (json['leaseId'] as num?)?.toInt() ?? 0,
-      markedPaidCount: (json['markedPaidCount'] as num?)?.toInt() ?? 0,
-      paymentIds: (json['paymentIds'] as List<dynamic>? ?? const [])
-          .whereType<num>()
-          .map((id) => id.toInt())
-          .toList(),
+class RecordTenantReceiptResult {
+  const RecordTenantReceiptResult({
+    required this.tenantAccountId,
+    required this.ledgerEntryId,
+    required this.paymentAttemptId,
+    required this.amount,
+    required this.allocatedAmount,
+    required this.allocationCount,
+    required this.replayed,
+  });
+
+  final int tenantAccountId;
+  final int ledgerEntryId;
+  final int paymentAttemptId;
+  final double amount;
+  final double allocatedAmount;
+  final int allocationCount;
+  final bool replayed;
+
+  factory RecordTenantReceiptResult.fromJson(Map<String, dynamic> json) {
+    final value = json['value'] as Map<String, dynamic>? ?? const {};
+    return RecordTenantReceiptResult(
+      tenantAccountId: (value['tenantAccountId'] as num).toInt(),
+      ledgerEntryId: (value['ledgerEntryId'] as num).toInt(),
+      paymentAttemptId: (value['paymentAttemptId'] as num).toInt(),
+      amount: (value['amount'] as num).toDouble(),
+      allocatedAmount: (value['allocatedAmount'] as num).toDouble(),
+      allocationCount: (value['allocationCount'] as num).toInt(),
+      replayed: json['replayed'] as bool? ?? false,
+    );
+  }
+}
+
+class CorrectTenantPaymentInput {
+  const CorrectTenantPaymentInput({
+    required this.paymentEntryId,
+    required this.effectiveOn,
+    required this.reason,
+    required this.paymentMethodSummary,
+    required this.externalReference,
+    this.sourceStoredFileId,
+  });
+
+  final int paymentEntryId;
+  final DateTime effectiveOn;
+  final String reason;
+  final String paymentMethodSummary;
+  final String externalReference;
+  final int? sourceStoredFileId;
+}
+
+class CorrectTenantPaymentResult {
+  const CorrectTenantPaymentResult({
+    required this.applied,
+    required this.outcome,
+    required this.paymentEntryId,
+    required this.refundEntryId,
+    required this.compensatedAllocationAmount,
+    required this.compensatedAllocationCount,
+    required this.replayed,
+  });
+
+  final bool applied;
+  final String outcome;
+  final int paymentEntryId;
+  final int? refundEntryId;
+  final double compensatedAllocationAmount;
+  final int compensatedAllocationCount;
+  final bool replayed;
+
+  factory CorrectTenantPaymentResult.fromJson(Map<String, dynamic> json) {
+    final value = json['value'] as Map<String, dynamic>? ?? const {};
+    return CorrectTenantPaymentResult(
+      applied: value['applied'] as bool? ?? false,
+      outcome: value['outcome'] as String? ?? '',
+      paymentEntryId: (value['paymentEntryId'] as num).toInt(),
+      refundEntryId: (value['refundEntryId'] as num?)?.toInt(),
+      compensatedAllocationAmount:
+          (value['compensatedAllocationAmount'] as num?)?.toDouble() ?? 0,
+      compensatedAllocationCount:
+          (value['compensatedAllocationCount'] as num?)?.toInt() ?? 0,
+      replayed: json['replayed'] as bool? ?? false,
     );
   }
 }
@@ -210,86 +413,35 @@ class ExpenseCategoryTotal {
 
 // ── Repository ────────────────────────────────────────────────────────────────
 
-/// Handles all payment and accounting API calls.
+/// Handles canonical tenant-account reads plus payment/accounting commands.
 ///
 /// Endpoints:
-///   GET    /payments                    — list (JWT-scoped)
-///   GET    /payments/{id}               — single
-///   POST   /payments                    — create { leaseId, amount, dueDate, type, status }
-///   PATCH  /payments/{id}               — update (same fields, partial)
-///   POST   /payments/{id}/mark-paid     — mark as paid { paidDate?, method? }
+///   GET    /tenant-accounts/entries/page — immutable cross-account entries
+///   GET    /tenant-accounts/{accountId}/entries/{entryId} — one entry
+///   POST   /tenant-accounts/{id}/receipts — record a receipt
 ///   GET    /accounting/summary          — AccountingSummary rollup
-///   GET    /leases                      — full lease list for the dropdown
 class PaymentsRepository {
   PaymentsRepository(this._dio);
 
   final Dio _dio;
 
-  /// Lists payments, newest first by default.
-  ///
-  /// The API defaults to ascending `CreatedAt` when no `sort` is supplied
-  /// (`PaymentService.ListAsync`), which surfaces the oldest payments on top.
-  /// We pass `-createdAt` so the Money ledger and the standalone Payments
-  /// screen both show the most recent activity first.
-  Future<List<Payment>> listPayments({
-    int? leaseId,
-    int? applicationId,
-    String sort = '-createdAt',
-    String? dueFrom,
-    String? dueTo,
-    String? paidFrom,
-    String? paidTo,
-  }) async {
-    try {
-      final params = <String, dynamic>{};
-      if (leaseId != null) params['leaseId'] = leaseId;
-      if (applicationId != null) params['applicationId'] = applicationId;
-      if (sort.isNotEmpty) params['sort'] = sort;
-      if (dueFrom != null && dueFrom.isNotEmpty) {
-        params['dueFrom'] = dueFrom;
-      }
-      if (dueTo != null && dueTo.isNotEmpty) {
-        params['dueTo'] = dueTo;
-      }
-      if (paidFrom != null && paidFrom.isNotEmpty) {
-        params['paidFrom'] = paidFrom;
-      }
-      if (paidTo != null && paidTo.isNotEmpty) {
-        params['paidTo'] = paidTo;
-      }
-      final response = await _dio.get<List<dynamic>>(
-        '/payments',
-        queryParameters: params.isEmpty ? null : params,
-      );
-      final data = response.data ?? [];
-      return data
-          .whereType<Map<String, dynamic>>()
-          .map(Payment.fromJson)
-          .toList();
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
-  }
-
-  Future<PaymentListPage> listPaymentsPage([
-    PaymentListQuery query = const PaymentListQuery(),
+  Future<TenantLedgerEntryListPage> listTenantLedgerEntriesPage([
+    TenantLedgerEntryListQuery query = const TenantLedgerEntryListQuery(),
   ]) async {
     final params = <String, dynamic>{
       'skip': query.skip,
       'take': query.take,
-      'leaseId': query.leaseId,
-      'applicationId': query.applicationId,
+      'tenantAccountId': query.tenantAccountId,
+      'entryType': 'PaymentReceipt',
       'search': query.search,
       'sort': query.sort,
-      'dueFrom': query.dueFrom,
-      'dueTo': query.dueTo,
-      'paidFrom': query.paidFrom,
-      'paidTo': query.paidTo,
+      'from': query.from,
+      'to': query.to,
     }..removeWhere((_, value) => value == null || value == '');
 
     try {
       final response = await _dio.get<Map<String, dynamic>>(
-        '/payments/page',
+        '/tenant-accounts/entries/page',
         queryParameters: params,
       );
       final data = response.data;
@@ -299,15 +451,20 @@ class PaymentsRepository {
           message: 'Empty response from server.',
         );
       }
-      return PaymentListPage.fromJson(data);
+      return TenantLedgerEntryListPage.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
   }
 
-  Future<Payment> getPayment(int id) async {
+  Future<StaffTenantLedgerEntryDetail> getTenantLedgerEntry(
+    int tenantAccountId,
+    int tenantLedgerEntryId,
+  ) async {
     try {
-      final response = await _dio.get<Map<String, dynamic>>('/payments/$id');
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/tenant-accounts/$tenantAccountId/entries/$tenantLedgerEntryId',
+      );
       final data = response.data;
       if (data == null) {
         throw const ApiException(
@@ -315,32 +472,38 @@ class PaymentsRepository {
           message: 'Empty response from server.',
         );
       }
-      return Payment.fromJson(data);
+      return StaffTenantLedgerEntryDetail.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
   }
 
-  /// Streams the latest uploaded payment scan/receipt bytes. The shared Dio
-  /// auth interceptor attaches the Bearer token.
-  Future<Uint8List> scanBytes(int id) async {
-    try {
-      final response = await _dio.get<List<int>>(
-        '/payments/$id/scan',
-        options: Options(responseType: ResponseType.bytes),
-      );
-      return Uint8List.fromList(response.data ?? const []);
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
-  }
-
-  /// Create body: { leaseId, amount, dueDate (yyyy-MM-dd), type, status }
-  Future<Payment> createPayment(Map<String, dynamic> data) async {
+  Future<RecordTenantReceiptResult> recordReceipt(
+    int tenantAccountId,
+    RecordTenantReceiptInput input, {
+    required String operationKey,
+  }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
-        '/payments',
-        data: data,
+        '/tenant-accounts/$tenantAccountId/receipts',
+        data: <String, dynamic>{
+          'amount': input.amount,
+          'effectiveOn': _dateOnly(input.effectiveOn),
+          'description': input.description.trim(),
+          'paymentMethodSummary': input.paymentMethodSummary.trim(),
+          if (input.externalReference?.trim().isNotEmpty == true)
+            'externalReference': input.externalReference!.trim(),
+          if (input.payerName?.trim().isNotEmpty == true)
+            'payerName': input.payerName!.trim(),
+          if (input.checkNumber?.trim().isNotEmpty == true)
+            'checkNumber': input.checkNumber!.trim(),
+          if (input.bankName?.trim().isNotEmpty == true)
+            'bankName': input.bankName!.trim(),
+          if (input.sourceStoredFileId != null)
+            'sourceStoredFileId': input.sourceStoredFileId,
+          'allocateOldestCharges': input.allocateOldestCharges,
+        },
+        options: Options(headers: {'Idempotency-Key': operationKey}),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -349,60 +512,36 @@ class PaymentsRepository {
           message: 'Empty response from server.',
         );
       }
-      return Payment.fromJson(responseData);
+      return RecordTenantReceiptResult.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
   }
 
-  /// Update body: same optional fields as create (partial PATCH)
-  Future<Payment> updatePayment(int id, Map<String, dynamic> data) async {
+  Future<CorrectTenantPaymentResult> correctPayment(
+    int tenantAccountId,
+    CorrectTenantPaymentInput input,
+  ) async {
+    final scope =
+        'tenant-payment-refund:$tenantAccountId:${input.paymentEntryId}:'
+        '${input.effectiveOn.toIso8601String().split('T').first}:'
+        '${input.reason.trim()}:${input.externalReference.trim()}';
     try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/payments/$id',
-        data: data,
-      );
-      final responseData = response.data;
-      if (responseData == null) {
-        throw const ApiException(
-          statusCode: 0,
-          message: 'Empty response from server.',
-        );
-      }
-      return Payment.fromJson(responseData);
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
-  }
-
-  Future<void> deletePayment(int id) async {
-    try {
-      await _dio.delete<void>('/payments/$id');
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
-  }
-
-  /// POST /payments/{id}/mark-paid
-  /// body: { paidDate?, method?, externalReference?, notes? }
-  Future<Payment> markPaid(
-    int id, {
-    String? paidDate,
-    String? method,
-    String? externalReference,
-    String? notes,
-  }) async {
-    try {
-      final body = <String, dynamic>{};
-      if (paidDate != null) body['paidDate'] = paidDate;
-      if (method != null) body['method'] = method;
-      if (externalReference != null) {
-        body['externalReference'] = externalReference;
-      }
-      if (notes != null) body['notes'] = notes;
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/payments/$id/mark-paid',
-        data: body,
+      final response = await IdempotentMutation.run(
+        scope,
+        (operationKey) => _dio.post<Map<String, dynamic>>(
+          '/tenant-accounts/$tenantAccountId/refunds',
+          data: <String, dynamic>{
+            'paymentEntryId': input.paymentEntryId,
+            'effectiveOn': _dateOnly(input.effectiveOn),
+            'reason': input.reason.trim(),
+            'paymentMethodSummary': input.paymentMethodSummary.trim(),
+            'externalReference': input.externalReference.trim(),
+            if (input.sourceStoredFileId != null)
+              'sourceStoredFileId': input.sourceStoredFileId,
+          },
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        ),
       );
       final data = response.data;
       if (data == null) {
@@ -411,51 +550,18 @@ class PaymentsRepository {
           message: 'Empty response from server.',
         );
       }
-      return Payment.fromJson(data);
+      return CorrectTenantPaymentResult.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
   }
 
-  /// POST /payments/leases/{leaseId}/past-due/mark-paid
-  /// body: { paidDate?, method?, externalReference?, notes? }
-  ///
-  /// The server owns the past-due predicate and updates the matching rows. The
-  /// mobile client must not fetch a lease payment list and filter it locally.
-  Future<MarkLeasePastDuePaidResult> markLeasePastDuePaid(
-    int leaseId, {
-    String? paidDate,
-    String? method,
-    String? externalReference,
-    String? notes,
-  }) async {
-    try {
-      final body = <String, dynamic>{};
-      if (paidDate != null) body['paidDate'] = paidDate;
-      if (method != null) body['method'] = method;
-      if (externalReference != null) {
-        body['externalReference'] = externalReference;
-      }
-      if (notes != null) body['notes'] = notes;
+  String _dateOnly(DateTime value) =>
+      '${value.year.toString().padLeft(4, '0')}-'
+      '${value.month.toString().padLeft(2, '0')}-'
+      '${value.day.toString().padLeft(2, '0')}';
 
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/payments/leases/$leaseId/past-due/mark-paid',
-        data: body,
-      );
-      final data = response.data;
-      if (data == null) {
-        throw const ApiException(
-          statusCode: 0,
-          message: 'Empty response from server.',
-        );
-      }
-      return MarkLeasePastDuePaidResult.fromJson(data);
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
-  }
-
-  /// GET /accounting/summary — JWT-scoped, no portfolioId param needed.
+  /// GET /accounting/summary — canonical-access-scoped, no portfolioId param needed.
   Future<AccountingSummary> accountingSummary() async {
     try {
       final response = await _dio.get<Map<String, dynamic>>(
@@ -469,20 +575,6 @@ class PaymentsRepository {
         );
       }
       return AccountingSummary.fromJson(data);
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
-  }
-
-  /// GET /leases — for lease dropdown in the create form.
-  Future<List<Lease>> listLeases() async {
-    try {
-      final response = await _dio.get<List<dynamic>>('/leases');
-      final data = response.data ?? [];
-      return data
-          .whereType<Map<String, dynamic>>()
-          .map(Lease.fromJson)
-          .toList();
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -522,104 +614,14 @@ final accountingSummaryProvider =
       AccountingSummaryNotifier.new,
     );
 
-// ── Payments list ─────────────────────────────────────────────────────────────
+// ── Canonical tenant-ledger receipt page ──────────────────────────────────────
 
-class PaymentsNotifier extends Notifier<AsyncValue<List<Payment>>> {
-  @override
-  AsyncValue<List<Payment>> build() => const AsyncValue.loading();
-
-  PaymentsRepository get _repo => ref.read(paymentsRepositoryProvider);
-
-  Future<void> load() async {
-    state = const AsyncValue.loading();
-    try {
-      final list = await _repo.listPayments();
-      state = AsyncValue.data(list);
-    } on ApiException catch (e) {
-      state = AsyncValue.error(e, StackTrace.current);
-    }
-  }
-
-  Future<void> refresh() => load();
-
-  /// Marks a payment as paid and updates the in-memory list.
-  Future<void> markPaid(int id) async {
-    try {
-      final today = DateTime.now().toIso8601String().split('T').first;
-      final updated = await _repo.markPaid(id, paidDate: today);
-      state.whenData((list) {
-        state = AsyncValue.data([
-          for (final p in list)
-            if (p.id == id) updated else p,
-        ]);
-      });
-    } on ApiException catch (e) {
-      state = AsyncValue.error(e, StackTrace.current);
-    }
-  }
-}
-
-final paymentsProvider =
-    NotifierProvider<PaymentsNotifier, AsyncValue<List<Payment>>>(
-      PaymentsNotifier.new,
-    );
-
-final paymentsPageProvider = FutureProvider.autoDispose
-    .family<PaymentListPage, PaymentListQuery>((ref, query) {
-      return ref.watch(paymentsRepositoryProvider).listPaymentsPage(query);
-    });
-
-// ── Payments for a specific lease ─────────────────────────────────────────────
-
-/// Payments belonging to one lease, newest first. Backs the Payments section on
-/// the lease detail screen (`GET /payments?leaseId=…`). autoDispose so it
-/// refetches whenever the lease screen is reopened, and invalidate-able after an
-/// inline mark-paid.
-final leasePaymentsProvider = FutureProvider.autoDispose
-    .family<List<Payment>, int>((ref, leaseId) {
+final tenantLedgerEntriesPageProvider = FutureProvider.autoDispose
+    .family<TenantLedgerEntryListPage, TenantLedgerEntryListQuery>((
+      ref,
+      query,
+    ) {
       return ref
           .watch(paymentsRepositoryProvider)
-          .listPayments(leaseId: leaseId);
+          .listTenantLedgerEntriesPage(query);
     });
-
-// ── Payments for a specific rental application ───────────────────────────────
-
-/// Lease-less application/screening fees for one application. The filter is
-/// server-side (`GET /payments?applicationId=…`) so detail screens never load
-/// the whole ledger and filter locally.
-final applicationPaymentsProvider = FutureProvider.autoDispose
-    .family<List<Payment>, int>((ref, applicationId) {
-      return ref
-          .watch(paymentsRepositoryProvider)
-          .listPayments(applicationId: applicationId);
-    });
-
-/// Receipt/scan bytes for a payment, keyed by id.
-final paymentReceiptProvider = FutureProvider.autoDispose
-    .family<Uint8List, int>((ref, id) {
-      return ref.watch(paymentsRepositoryProvider).scanBytes(id);
-    });
-
-// ── Leases (for the create-payment dropdown) ──────────────────────────────────
-
-class LeasesNotifier extends Notifier<AsyncValue<List<Lease>>> {
-  @override
-  AsyncValue<List<Lease>> build() => const AsyncValue.loading();
-
-  PaymentsRepository get _repo => ref.read(paymentsRepositoryProvider);
-
-  Future<void> load() async {
-    state = const AsyncValue.loading();
-    try {
-      final list = await _repo.listLeases();
-      state = AsyncValue.data(list);
-    } on ApiException catch (e) {
-      state = AsyncValue.error(e, StackTrace.current);
-    }
-  }
-}
-
-final leasesForPaymentProvider =
-    NotifierProvider<LeasesNotifier, AsyncValue<List<Lease>>>(
-      LeasesNotifier.new,
-    );

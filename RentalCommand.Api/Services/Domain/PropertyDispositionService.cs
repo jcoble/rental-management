@@ -1,33 +1,36 @@
 using Microsoft.EntityFrameworkCore;
+using System.Security.Cryptography;
+using System.Text;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
-using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Leasing;
 using RentalCommand.Core.Services;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
 public class PropertyDispositionService : IPropertyDispositionService
 {
-    private const string EntityType = "PropertyDisposition";
-    private const string PropertyEntityType = "Property";
-    private const string LeaseEntityType = "Lease";
-    private const string UnitEntityType = "Unit";
-    private const string CapitalAssetEntityType = "CapitalAsset";
+    private static readonly string[] ReadCapabilities = [CapabilityKeys.MoneyOwnerReportsRead];
 
     private readonly RentalCommandDbContext _db;
-    private readonly IDataUpdateService _dataUpdate;
+    private static readonly AtomicJsonResultCodec<CreatePropertyDispositionResult> CreateCodec =
+        new("property-disposition.create.v1");
+    private readonly IAtomicUnitOfWork? _atomic;
     private readonly TimeProvider _timeProvider;
 
     public PropertyDispositionService(
         RentalCommandDbContext db,
-        IDataUpdateService dataUpdate,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IAtomicUnitOfWork? atomic = null)
     {
         _db = db;
-        _dataUpdate = dataUpdate;
+        _atomic = atomic;
         _timeProvider = timeProvider;
     }
 
@@ -40,8 +43,25 @@ public class PropertyDispositionService : IPropertyDispositionService
 
     public async Task<PropertyDispositionListResponse> ListPageAsync(
         int portfolioId, PropertyDispositionListQuery query, CancellationToken ct = default)
+        => await ListPageFromQueryAsync(
+            _db.PropertyDispositions.AsNoTracking().Where(item => item.PortfolioId == portfolioId),
+            query,
+            ct);
+
+    public async Task<IReadOnlyList<PropertyDispositionResponse>> ListAuthorizedAsync(
+        WorkspaceReadScope scope, PropertyDispositionListQuery query, CancellationToken ct = default)
+        => (await ListPageAuthorizedAsync(scope, query, ct)).Items;
+
+    public Task<PropertyDispositionListResponse> ListPageAuthorizedAsync(
+        WorkspaceReadScope scope, PropertyDispositionListQuery query, CancellationToken ct = default)
+        => ListPageFromQueryAsync(AuthorizedDispositions(scope, ReadCapabilities), query, ct);
+
+    private async Task<PropertyDispositionListResponse> ListPageFromQueryAsync(
+        IQueryable<PropertyDisposition> dispositions,
+        PropertyDispositionListQuery query,
+        CancellationToken ct)
     {
-        var filtered = BuildListQuery(portfolioId, query);
+        var filtered = BuildListQuery(dispositions, query);
         var totalCount = await filtered.CountAsync(ct);
         var rows = await ProjectRows(ApplySort(filtered, query))
             .Skip(query.NormalizedSkip)
@@ -68,126 +88,81 @@ public class PropertyDispositionService : IPropertyDispositionService
         return row is null ? null : ToResponse(row);
     }
 
+    public async Task<PropertyDispositionResponse?> GetAuthorizedAsync(
+        WorkspaceReadScope scope, int id, CancellationToken ct = default)
+    {
+        var row = await ProjectRows(
+                AuthorizedDispositions(scope, ReadCapabilities).Where(item => item.Id == id))
+            .FirstOrDefaultAsync(ct);
+        return row == null ? null : ToResponse(row);
+    }
+
     public async Task<PropertyDispositionResponse?> CreateAsync(
-        int portfolioId, CreatePropertyDispositionRequest request, CancellationToken ct = default)
+        ActiveAccessContext accessContext, CreatePropertyDispositionRequest request,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        var property = await _db.Properties
-            .FirstOrDefaultAsync(p => p.Id == request.PropertyId && p.PortfolioId == portfolioId, ct);
-        if (property is null)
-            return null;
-
-        var alreadyDisposed = await _db.PropertyDispositions
-            .AnyAsync(d => d.PortfolioId == portfolioId && d.PropertyId == request.PropertyId, ct);
-        if (alreadyDisposed)
-            return null;
-
-        var now = _timeProvider.UtcNow();
+        var atomic = _atomic
+            ?? throw new InvalidOperationException("Atomic property disposition is not configured.");
+        var portfolioId = accessContext.PortfolioId;
         var closedOn = request.ClosedOnDate.ToUtc().Date;
-        var entity = new PropertyDisposition
-        {
-            PortfolioId = portfolioId,
-            PropertyId = request.PropertyId,
-            ClosedOnDate = closedOn,
-            SalePrice = request.SalePrice,
-            SellingCosts = request.SellingCosts,
-            BuyerName = Normalize(request.BuyerName),
-            Memo = Normalize(request.Memo),
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        await using var tx = await _db.Database.BeginTransactionAsync(ct);
-
-        _db.PropertyDispositions.Add(entity);
-        property.Status = PropertyStatus.Inactive;
-        property.UpdatedAt = now;
-
-        var leases = await _db.Leases
-            .Where(l => l.PortfolioId == portfolioId &&
-                        l.PropertyId == property.Id &&
-                        (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven))
-            .ToListAsync(ct);
-        foreach (var lease in leases)
-        {
-            lease.Status = LeaseStatus.Terminated;
-            if (lease.EndDate > closedOn)
-                lease.EndDate = closedOn;
-            lease.MoveOutDate = closedOn;
-            lease.UpdatedAt = now;
-        }
-
-        var units = await _db.Units
-            .Where(u => u.PropertyId == property.Id)
-            .ToListAsync(ct);
-        foreach (var unit in units)
-        {
-            unit.Status = UnitStatus.Offline;
-            unit.UpdatedAt = now;
-        }
-
-        var capitalAssets = await _db.CapitalAssets
-            .Where(a => a.PortfolioId == portfolioId &&
-                        a.PropertyId == property.Id &&
-                        a.DisposedOnDate == null)
-            .ToListAsync(ct);
-        foreach (var asset in capitalAssets)
-        {
-            asset.DisposedOnDate = closedOn;
-            asset.UpdatedAt = now;
-        }
-
-        await _db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
-
-        var response = await GetAsync(portfolioId, entity.Id, ct) ?? PropertyDispositionResponse.FromEntity(entity);
-        await BroadcastRelatedUpdatesAsync(portfolioId, property, leases, units, capitalAssets, ct);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
-    }
-
-    public async Task<PropertyDispositionResponse?> UpdateAsync(
-        int portfolioId, int id, UpdatePropertyDispositionRequest request, CancellationToken ct = default)
-    {
-        var entity = await _db.PropertyDispositions
-            .FirstOrDefaultAsync(d => d.Id == id && d.PortfolioId == portfolioId, ct);
-        if (entity is null)
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationKey);
+        var digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(operationKey.Trim())))
+            .ToLowerInvariant();
+        var deliveryKey = $"property-disposition:{portfolioId}:{request.PropertyId}:{digest}";
+        var outcome = await atomic.ExecuteAsync(
+            new AtomicCommandIdentity("property-disposition.create", deliveryKey),
+            new CreatePropertyDispositionCommand(portfolioId, request.PropertyId, closedOn,
+                request.SalePrice, request.SellingCosts, Normalize(request.BuyerName),
+                Normalize(request.Memo), accessContext.UserId, accessContext.SessionId,
+                accessContext.AccessContextId, accessContext.AccessRevision, deliveryKey),
+            CreateCodec, ct);
+        if (outcome.Value.Outcome == CreatePropertyDispositionOutcome.PropertyNotFoundOrAlreadyDisposed
+            || outcome.Value.DispositionId is not { } dispositionId)
             return null;
 
-        if (request.ClosedOnDate.HasValue) entity.ClosedOnDate = request.ClosedOnDate.Value.ToUtc().Date;
-        if (request.SalePrice.HasValue) entity.SalePrice = request.SalePrice.Value;
-        if (request.SellingCosts.HasValue) entity.SellingCosts = request.SellingCosts.Value;
-        if (request.BuyerName != null) entity.BuyerName = Normalize(request.BuyerName);
-        if (request.Memo != null) entity.Memo = Normalize(request.Memo);
-        entity.UpdatedAt = _timeProvider.UtcNow();
-
-        await _db.SaveChangesAsync(ct);
-
-        var response = await GetAsync(portfolioId, entity.Id, ct) ?? PropertyDispositionResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
+        return await GetAsync(portfolioId, dispositionId, ct)
+            ?? throw new InvalidOperationException("Committed property disposition could not be read back.");
     }
 
-    public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
+    public async Task<PropertyDispositionResponse?> UpdateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        UpdatePropertyDispositionRequest request,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        var entity = await _db.PropertyDispositions
-            .FirstOrDefaultAsync(d => d.Id == id && d.PortfolioId == portfolioId, ct);
-        if (entity is null)
-            return false;
-
-        var now = _timeProvider.UtcNow();
-        entity.DeletedAt = now;
-        entity.UpdatedAt = now;
-        await _db.SaveChangesAsync(ct);
-
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
-        return true;
+        var atomic = _atomic
+            ?? throw new InvalidOperationException("Atomic property disposition is not configured.");
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.RentalsManage,
+            AtomicMoneyDomain.PropertyDisposition, AtomicMoneyOperation.Update, id, operationKey, request);
+        var outcome = await atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        return outcome.Value.Found
+            ? await GetAsync(scope.PortfolioId, outcome.Value.EntityId, ct)
+            : null;
     }
 
-    private IQueryable<PropertyDisposition> BuildListQuery(int portfolioId, PropertyDispositionListQuery query)
+    public async Task<bool> DeleteAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        var q = _db.PropertyDispositions
-            .AsNoTracking()
-            .Where(d => d.PortfolioId == portfolioId);
+        var atomic = _atomic
+            ?? throw new InvalidOperationException("Atomic property disposition is not configured.");
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.RentalsManage,
+            AtomicMoneyDomain.PropertyDisposition, AtomicMoneyOperation.Delete, id, operationKey, new object());
+        var outcome = await atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        return outcome.Value.Found;
+    }
+
+    private static IQueryable<PropertyDisposition> BuildListQuery(
+        IQueryable<PropertyDisposition> dispositions,
+        PropertyDispositionListQuery query)
+    {
+        var q = dispositions;
 
         if (query.PropertyId.HasValue)
             q = q.Where(d => d.PropertyId == query.PropertyId.Value);
@@ -296,37 +271,23 @@ public class PropertyDispositionService : IPropertyDispositionService
         };
     }
 
-    private async Task BroadcastRelatedUpdatesAsync(
-        int portfolioId,
-        Property property,
-        IReadOnlyCollection<Lease> leases,
-        IReadOnlyCollection<Unit> units,
-        IReadOnlyCollection<CapitalAsset> capitalAssets,
-        CancellationToken ct)
-    {
-        var unitCount = await _db.Units.CountAsync(u => u.PropertyId == property.Id, ct);
-        var occupiedUnits = await _db.Units.CountAsync(u => u.PropertyId == property.Id && u.Status == UnitStatus.Occupied, ct);
-        await _dataUpdate.BroadcastEntityUpdateAsync(
-            portfolioId,
-            PropertyEntityType,
-            property.Id,
-            PropertyResponse.FromEntity(property, unitCount, occupiedUnits),
-            ct);
-
-        foreach (var lease in leases)
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, LeaseEntityType, lease.Id, LeaseResponse.FromEntity(lease), ct);
-
-        foreach (var unit in units)
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, UnitEntityType, unit.Id, UnitResponse.FromEntity(unit), ct);
-
-        foreach (var asset in capitalAssets)
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, CapitalAssetEntityType, asset.Id, CapitalAssetResponse.FromEntity(asset, property.UpdatedAt.Year), ct);
-    }
-
     private static string? Normalize(string? value)
     {
         var trimmed = value?.Trim();
         return string.IsNullOrEmpty(trimmed) ? null : trimmed;
+    }
+
+    private IQueryable<PropertyDisposition> AuthorizedDispositions(
+        WorkspaceReadScope scope,
+        IReadOnlyCollection<string> capabilities)
+    {
+        var authorizedProperties = _db.Properties.AsNoTracking()
+            .WhereAuthorized(_db, scope, capabilities, _timeProvider.UtcNow());
+        return _db.PropertyDispositions.AsNoTracking().Where(disposition =>
+            disposition.PortfolioId == scope.PortfolioId &&
+            authorizedProperties.Any(property =>
+                property.Id == disposition.PropertyId &&
+                property.PortfolioId == disposition.PortfolioId));
     }
 
     private sealed class DispositionRow

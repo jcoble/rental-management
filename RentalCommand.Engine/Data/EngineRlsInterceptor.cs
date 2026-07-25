@@ -1,24 +1,23 @@
 using System.Data.Common;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using RentalCommand.Data.Security;
 
 namespace RentalCommand.Engine.Data;
 
 /// <summary>
-/// Row-Level Security (RLS) interceptor for the background Engine. The Engine has no HTTP context and
-/// legitimately operates across every portfolio (late-fee sweeps, autopay charges, the outbox drain,
-/// notifications). It therefore always sets <c>app.is_admin = true</c>, which makes the
-/// <c>tenant_isolation</c> policies' admin branch match and gives the worker unfiltered access — the
-/// same model EdiPlatform's Engine uses.
-///
-/// <para>This sets the session variables on the worker's pooled connections via the same GUC names
-/// the API interceptor and the policies use, so behaviour is identical whether the Engine connects
-/// as the dedicated <c>rentalcommand_api</c> role or as the table-owner/superuser. (As a superuser
-/// the policies are bypassed regardless; setting <c>is_admin</c> keeps the contract explicit and
-/// correct if the Engine is ever pointed at a non-superuser role.)</para>
+/// Verifies that every Engine connection is the restricted direct-login Engine role. RLS recognizes
+/// the Engine by immutable <c>session_user</c>; no mutable admin GUC or runtime role assumption can
+/// grant cross-workspace authority.
 /// </summary>
 public sealed class EngineRlsInterceptor : DbConnectionInterceptor
 {
-    private const string Sql = "SET app.current_portfolio_id = '0'; SET app.is_admin = 'true';";
+    internal const string RuntimeRole = DatabaseRuntimeIdentity.EngineRole;
+    internal const string SessionInitializationSql =
+        "SELECT set_config('app.current_portfolio_id', '', false), " +
+        "set_config('app.auth_session_id', '', false), " +
+        "set_config('app.current_user_id', '', false), " +
+        "set_config('app.current_access_context_id', '', false), " +
+        "set_config('app.access_revision', '', false);";
 
     public override void ConnectionOpened(DbConnection connection, ConnectionEndEventData eventData)
         => SetAdminSession(connection);
@@ -29,15 +28,17 @@ public sealed class EngineRlsInterceptor : DbConnectionInterceptor
 
     private static void SetAdminSession(DbConnection connection)
     {
+        DatabaseRuntimeIdentity.ValidateOpenedConnection(connection, RuntimeRole);
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = Sql;
+        cmd.CommandText = SessionInitializationSql;
         cmd.ExecuteNonQuery();
     }
 
     private static async Task SetAdminSessionAsync(DbConnection connection, CancellationToken cancellationToken)
     {
+        await DatabaseRuntimeIdentity.ValidateOpenedConnectionAsync(connection, RuntimeRole, cancellationToken);
         await using var cmd = connection.CreateCommand();
-        cmd.CommandText = Sql;
+        cmd.CommandText = SessionInitializationSql;
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 }

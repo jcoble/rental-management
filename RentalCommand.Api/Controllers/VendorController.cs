@@ -5,7 +5,7 @@ using RentalCommand.Api.Services.Domain;
 namespace RentalCommand.Api.Controllers;
 
 /// <summary>
-/// CRUD for vendors within the caller's portfolio. Scope comes from the JWT <c>portfolioId</c> claim;
+/// CRUD for vendors within the caller's portfolio. Scope comes from the server-validated workspace context;
 /// list supports <c>?skip&amp;take&amp;search&amp;sort</c>. Removal is a soft-delete.
 /// </summary>
 [ApiController]
@@ -26,7 +26,8 @@ public class VendorController : ManagementControllerBase
     [ProducesResponseType(typeof(IReadOnlyList<VendorResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<VendorResponse>>> List([FromQuery] ListQuery query, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), query, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var items = await _service.ListAsync(scope, query, ct);
         return Ok(items);
     }
 
@@ -34,7 +35,8 @@ public class VendorController : ManagementControllerBase
     [ProducesResponseType(typeof(VendorListResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<VendorListResponse>> ListPage([FromQuery] ListQuery query, CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), query, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var page = await _service.ListPageAsync(scope, query, ct);
         return Ok(page);
     }
 
@@ -43,33 +45,54 @@ public class VendorController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<VendorResponse>> Get(int id, CancellationToken ct)
     {
-        var item = await _service.GetAsync(GetPortfolioId(), id, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var item = await _service.GetAsync(scope, id, ct);
         return item == null ? NotFound(new { error = "Vendor not found" }) : Ok(item);
     }
 
     [HttpPost]
     [ProducesResponseType(typeof(VendorResponse), StatusCodes.Status201Created)]
-    public async Task<ActionResult<VendorResponse>> Create([FromBody] CreateVendorRequest request, CancellationToken ct)
+    public async Task<ActionResult<VendorResponse>> Create(
+        [FromBody] CreateVendorRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+        var created = await _service.CreateAsync(scope, request, operationKey, ct);
+        if (created == null) return NotFound(new { error = "Vendor not found" });
         return CreatedAtAction(nameof(Get), new { id = created.Id }, created);
     }
 
     [HttpPatch("{id:int}")]
     [ProducesResponseType(typeof(VendorResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<VendorResponse>> Update(int id, [FromBody] UpdateVendorRequest request, CancellationToken ct)
+    public async Task<ActionResult<VendorResponse>> Update(
+        int id,
+        [FromBody] UpdateVendorRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+        var updated = await _service.UpdateAsync(scope, id, request, operationKey, ct);
         return updated == null ? NotFound(new { error = "Vendor not found" }) : Ok(updated);
     }
 
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        int id,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key header is required and cannot exceed 128 characters." });
+        var deleted = await _service.DeleteAsync(scope, id, operationKey, ct);
         return deleted ? NoContent() : NotFound(new { error = "Vendor not found" });
     }
 
@@ -77,9 +100,16 @@ public class VendorController : ManagementControllerBase
     [HttpPost("{id:int}/ratings")]
     [ProducesResponseType(typeof(VendorRatingResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<VendorRatingResponse>> Rate(int id, [FromBody] CreateVendorRatingRequest request, CancellationToken ct)
+    public async Task<ActionResult<VendorRatingResponse>> Rate(
+        int id,
+        [FromBody] CreateVendorRatingRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var created = await _dispatch.RateAsync(GetPortfolioId(), id, request, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        if (string.IsNullOrWhiteSpace(idempotencyKey) || idempotencyKey.Length > 128)
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var created = await _dispatch.RateAsync(scope, id, request, idempotencyKey, ct);
         return created == null
             ? NotFound(new { error = "Vendor not found" })
             : CreatedAtAction(nameof(Scorecard), new { id }, created);
@@ -93,9 +123,14 @@ public class VendorController : ManagementControllerBase
     [ProducesResponseType(typeof(object), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> RequestW9(int id, CancellationToken ct)
+    public async Task<IActionResult> RequestW9(
+        int id,
+        [FromBody] RequestVendorW9Request request,
+        CancellationToken ct)
     {
-        var result = await _service.RequestW9Async(GetPortfolioId(), id, GetUserId(), ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var result = await _service.RequestW9Async(
+            scope, id, request.ClientOperationId, GetUserId(), ct);
         return result.Outcome switch
         {
             RequestW9Outcome.Queued => Ok(new { queued = true, sentTo = result.Phone }),
@@ -113,7 +148,8 @@ public class VendorController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<VendorScorecardResponse>> Scorecard(int id, CancellationToken ct)
     {
-        var card = await _dispatch.GetScorecardAsync(GetPortfolioId(), id, ct);
+        if (!TryReadWorkspaceScope(out var scope)) return Forbid();
+        var card = await _dispatch.GetScorecardAsync(scope, id, ct);
         return card == null ? NotFound(new { error = "Vendor not found" }) : Ok(card);
     }
 }

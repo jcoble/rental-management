@@ -217,11 +217,11 @@ class _NoticeCardState extends ConsumerState<_NoticeCard> {
 
   String _label(String type) {
     switch (type) {
-      case 'RenewalOffer':
+      case 'lease-renewal-offer':
         return 'Renewal';
-      case 'LateRentNotice':
+      case 'late-rent-late-fee':
         return 'Late rent';
-      case 'MoveOutReminder':
+      case 'lease-non-renewal':
         return 'Move-out';
       default:
         return type;

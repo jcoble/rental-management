@@ -33,6 +33,7 @@ enum MobileDestinationId {
 }
 
 typedef MobileDetailBuilder = WidgetBuilder;
+typedef MobileNavigationGuard = bool Function();
 
 class MobileDomainHeaderSnapshot {
   const MobileDomainHeaderSnapshot({required this.title, this.subtitle});
@@ -241,6 +242,7 @@ class MobileDomainNavigator {
     required void Function(
       MobileDestinationId destination, {
       MobileDetailBuilder? detailBuilder,
+      MobileNavigationGuard? canNavigate,
     })
     openDestination,
     required this.popToCurrentRoot,
@@ -249,6 +251,7 @@ class MobileDomainNavigator {
   final void Function(
     MobileDestinationId destination, {
     MobileDetailBuilder? detailBuilder,
+    MobileNavigationGuard? canNavigate,
   })
   _openDestination;
   final VoidCallback popToCurrentRoot;
@@ -256,8 +259,13 @@ class MobileDomainNavigator {
   void openDestination(
     MobileDestinationId destination, {
     MobileDetailBuilder? detailBuilder,
+    MobileNavigationGuard? canNavigate,
   }) {
-    _openDestination(destination, detailBuilder: detailBuilder);
+    _openDestination(
+      destination,
+      detailBuilder: detailBuilder,
+      canNavigate: canNavigate,
+    );
   }
 }
 

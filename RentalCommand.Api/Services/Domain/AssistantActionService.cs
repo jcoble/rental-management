@@ -2,10 +2,12 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Models.Accounting;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -23,7 +25,7 @@ public sealed partial class AssistantActionService : IAssistantActionService
     }
 
     public async Task<AssistantActionDraftResponse> DraftAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         AssistantActionDraftRequest request,
         CancellationToken ct = default)
     {
@@ -38,7 +40,7 @@ public sealed partial class AssistantActionService : IAssistantActionService
             return Unsupported("I can answer that as a question, but I can only draft expense actions right now.");
         }
 
-        var draft = await BuildExpenseDraftAsync(portfolioId, command, ct);
+        var draft = await BuildExpenseDraftAsync(scope, command, ct);
         var missing = RequiredMissingFields(draft.Expense).ToList();
         var status = missing.Count > 0
             ? AssistantActionStatus.MissingRequiredFields
@@ -58,8 +60,9 @@ public sealed partial class AssistantActionService : IAssistantActionService
     }
 
     public async Task<AssistantActionExecuteResponse> ExecuteAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         AssistantActionExecuteRequest request,
+        string idempotencyKey,
         CancellationToken ct = default)
     {
         if (!request.WriteModeEnabled)
@@ -104,8 +107,20 @@ public sealed partial class AssistantActionService : IAssistantActionService
             };
         }
 
+        var propertyIsAuthorized = await AuthorizedProperties(scope)
+            .AnyAsync(property => property.Id == expense.PropertyId, ct);
+        if (!propertyIsAuthorized)
+        {
+            return new AssistantActionExecuteResponse
+            {
+                Status = AssistantActionStatus.InvalidDraft,
+                Message = "That expense draft no longer targets a property you can manage. Draft it again.",
+                Kind = AssistantActionKind.CreateExpense,
+            };
+        }
+
         var created = await _expenses.CreateAsync(
-            portfolioId,
+            scope,
             new CreateExpenseRequest
             {
                 PropertyId = expense.PropertyId,
@@ -117,6 +132,7 @@ public sealed partial class AssistantActionService : IAssistantActionService
                 PaidAt = expense.PaidAt,
                 Notes = BuildNotes(expense.Notes),
             },
+            idempotencyKey,
             ct);
 
         if (created is null)
@@ -153,7 +169,7 @@ public sealed partial class AssistantActionService : IAssistantActionService
     }
 
     private async Task<AssistantActionDraft> BuildExpenseDraftAsync(
-        int portfolioId,
+        WorkspaceReadScope scope,
         string command,
         CancellationToken ct)
     {
@@ -164,7 +180,7 @@ public sealed partial class AssistantActionService : IAssistantActionService
         var propertyHint = ExtractPropertyHint(command);
         var property = propertyHint is null
             ? null
-            : await ResolvePropertyAsync(portfolioId, propertyHint, ct);
+            : await ResolvePropertyAsync(scope, propertyHint, ct);
         var description = ExtractDescription(command, amount, propertyHint);
 
         var expense = new AssistantExpenseDraft
@@ -191,29 +207,54 @@ public sealed partial class AssistantActionService : IAssistantActionService
         };
     }
 
-    private async Task<PropertyMatch?> ResolvePropertyAsync(int portfolioId, string hint, CancellationToken ct)
+    private async Task<PropertyMatch?> ResolvePropertyAsync(
+        WorkspaceReadScope scope,
+        string hint,
+        CancellationToken ct)
     {
         var normalized = StripUnitSuffix(hint).Trim().ToLowerInvariant();
         if (normalized.Length == 0) return null;
 
-        var exact = await _db.Properties
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId && p.DeletedAt == null)
+        var properties = AuthorizedProperties(scope);
+        var exactQuery = properties
             .Where(p => p.Name.ToLower() == normalized || p.AddressLine1.ToLower() == normalized)
-            .OrderBy(p => p.Name)
-            .Select(p => new PropertyMatch(p.Id, p.Name))
-            .FirstOrDefaultAsync(ct);
+            .OrderBy(p => p.Id);
+        var exact = await ResolveUniqueAsync(exactQuery, ct);
 
         if (exact is not null) return exact;
 
-        return await _db.Properties
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId && p.DeletedAt == null)
+        var partialQuery = properties
             .Where(p => p.Name.ToLower().Contains(normalized) || p.AddressLine1.ToLower().Contains(normalized))
-            .OrderBy(p => p.Name)
-            .Select(p => new PropertyMatch(p.Id, p.Name))
-            .FirstOrDefaultAsync(ct);
+            .OrderBy(p => p.Id);
+        return await ResolveUniqueAsync(partialQuery, ct);
     }
+
+    private async Task<PropertyMatch?> ResolveUniqueAsync(
+        IQueryable<RentalCommand.Core.Entities.Property> query,
+        CancellationToken ct)
+    {
+        var match = await query
+            .Select(property => new
+            {
+                property.Id,
+                property.Name,
+                HasOtherMatch = query.Any(other => other.Id != property.Id),
+            })
+            .FirstOrDefaultAsync(ct);
+        return match is not null && !match.HasOtherMatch
+            ? new PropertyMatch(match.Id, match.Name)
+            : null;
+    }
+
+    private IQueryable<RentalCommand.Core.Entities.Property> AuthorizedProperties(WorkspaceReadScope scope) =>
+        _db.Properties
+            .AsNoTracking()
+            .Where(property => property.DeletedAt == null)
+            .WhereAuthorized(
+                _db,
+                scope,
+                CapabilityKeys.MoneyExpensesManage,
+                _timeProvider.GetUtcNow().UtcDateTime);
 
     private static IEnumerable<string> RequiredMissingFields(AssistantExpenseDraft? expense)
     {
@@ -224,6 +265,7 @@ public sealed partial class AssistantActionService : IAssistantActionService
         }
 
         if (expense.Amount is null or <= 0m) yield return "amount";
+        if (expense.PropertyId is null) yield return "property";
         if (string.IsNullOrWhiteSpace(expense.Description)) yield return "description";
     }
 

@@ -89,7 +89,9 @@ class Expense {
   const Expense({
     required this.id,
     required this.portfolioId,
+    this.operationalScope = '',
     this.propertyId,
+    this.unitId,
     this.vendorId,
     this.workOrderId,
     this.capitalizedAssetId,
@@ -97,6 +99,7 @@ class Expense {
     required this.description,
     required this.status,
     required this.amount,
+    this.allocationTotal = 0,
     required this.incurredAt,
     this.dueDate,
     this.paidAt,
@@ -118,7 +121,9 @@ class Expense {
 
   final int id;
   final int portfolioId;
+  final String operationalScope;
   final int? propertyId;
+  final int? unitId;
   final int? vendorId;
   final int? workOrderId;
   final int? capitalizedAssetId;
@@ -126,6 +131,7 @@ class Expense {
   final String description;
   final ExpenseStatus status;
   final double amount;
+  final double allocationTotal;
   final DateTime incurredAt;
   final DateTime? dueDate;
   final DateTime? paidAt;
@@ -148,7 +154,9 @@ class Expense {
     return Expense(
       id: (json['id'] as num).toInt(),
       portfolioId: (json['portfolioId'] as num?)?.toInt() ?? 0,
+      operationalScope: json['operationalScope'] as String? ?? '',
       propertyId: (json['propertyId'] as num?)?.toInt(),
+      unitId: (json['unitId'] as num?)?.toInt(),
       vendorId: (json['vendorId'] as num?)?.toInt(),
       workOrderId: (json['workOrderId'] as num?)?.toInt(),
       capitalizedAssetId: (json['capitalizedAssetId'] as num?)?.toInt(),
@@ -156,6 +164,7 @@ class Expense {
       description: json['description'] as String? ?? '',
       status: ExpenseStatus.fromWire(json['status'] as String?),
       amount: (json['amount'] as num?)?.toDouble() ?? 0,
+      allocationTotal: (json['allocationTotal'] as num?)?.toDouble() ?? 0,
       incurredAt:
           DateTime.tryParse(json['incurredAt'] as String? ?? '') ?? DateTime(0),
       dueDate: DateTime.tryParse(json['dueDate'] as String? ?? ''),

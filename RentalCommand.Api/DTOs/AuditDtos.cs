@@ -23,13 +23,13 @@ public sealed class AuditFieldChange
 }
 
 /// <summary>
-/// MVP wire shape for one <see cref="AuditLog"/> row in the unified audit viewer. The trail is
+/// MVP wire shape for one <see cref="AtomicAuditLog"/> row in the unified audit viewer. The trail is
 /// append-only, so this is a read-only projection. The raw old/new JSON and IP address are
 /// intentionally NOT exposed here — they belong to the deferred admin deep-view.
 /// </summary>
 public class AuditEntryResponse
 {
-    public int Id { get; set; }
+    public long Id { get; set; }
     public int PortfolioId { get; set; }
     public AuditLogOperation Operation { get; set; }
 
@@ -61,10 +61,10 @@ public class AuditEntryResponse
     public IReadOnlyList<AuditFieldChange> Changes { get; set; } = Array.Empty<AuditFieldChange>();
 
     public static AuditEntryResponse FromEntity(
-        AuditLog e,
+        AtomicAuditLog e,
         AuditDescriber describer,
         AuditDiffBuilder? diff = null,
-        IReadOnlyDictionary<int, string>? userNames = null,
+        string? resolvedActorName = null,
         int? unitId = null) => new()
         {
             Id = e.Id,
@@ -73,7 +73,7 @@ public class AuditEntryResponse
             OperationName = e.Operation.ToString(),
             EntityType = e.EntityType,
             EntityId = e.EntityId,
-            Actor = ResolveActor(e, userNames),
+            Actor = ResolveActor(e, resolvedActorName),
             Description = describer.Describe(e),
             DetailHref = BuildDetailHref(e.EntityType, e.EntityId, unitId),
             Timestamp = e.Timestamp,
@@ -81,13 +81,14 @@ public class AuditEntryResponse
         };
 
     /// <summary>
-    /// Resolves a human-readable actor label. Precedence: the row's own <see cref="AuditLog.ActorLabel"/>
+    /// Resolves a human-readable actor label. Precedence: the row's own <see cref="AtomicAuditLog.ActorLabel"/>
     /// (set for system/AI actors and HTTP requests that carried a name claim) → the user's display
-    /// name/email resolved from <paramref name="userNames"/> when only a <see cref="AuditLog.UserId"/>
+    /// name/email resolved by the database projection in <paramref name="resolvedActorName"/> when
+    /// only a <see cref="AtomicAuditLog.UserId"/>
     /// is present → "system" for actor-less rows. The bare "User #{id}" is a last resort only when a
     /// user id has no resolvable account (e.g. a since-deleted user), never the normal case.
     /// </summary>
-    internal static string ResolveActor(AuditLog e, IReadOnlyDictionary<int, string>? userNames = null)
+    internal static string ResolveActor(AtomicAuditLog e, string? resolvedActorName = null)
     {
         if (!string.IsNullOrWhiteSpace(e.ActorLabel))
         {
@@ -96,11 +97,9 @@ public class AuditEntryResponse
 
         if (e.UserId.HasValue)
         {
-            if (userNames is not null
-                && userNames.TryGetValue(e.UserId.Value, out var name)
-                && !string.IsNullOrWhiteSpace(name))
+            if (!string.IsNullOrWhiteSpace(resolvedActorName))
             {
-                return name;
+                return resolvedActorName;
             }
 
             return $"User #{e.UserId.Value}";
@@ -112,12 +111,14 @@ public class AuditEntryResponse
     /// <summary>Maps an entity type + id to its web detail route (null when there is no page).</summary>
     internal static string? BuildDetailHref(string entityType, int entityId, int? unitId = null) => entityType switch
     {
-        "Payment" when unitId is > 0 => $"/units/{unitId}?tab=ledger&ledger=rent&payment={entityId}",
-        "Payment" => $"/accounting/payments/{entityId}",
-        "Expense" when unitId is > 0 => $"/units/{unitId}?tab=ledger&ledger=expenses&expense={entityId}",
+        "TenantAccount" when unitId is > 0 => $"/units/{unitId}?tab=money&tenantAccount={entityId}",
+        "TenantAccount" => $"/tenant-accounts/{entityId}",
+        "Expense" when unitId is > 0 => $"/units/{unitId}?tab=money&ledger=expenses&expense={entityId}",
         "Expense" => $"/accounting/expenses/{entityId}",
-        "Lease" when unitId is > 0 => $"/units/{unitId}?tab=lease&lease={entityId}",
-        "Lease" => $"/leases/{entityId}",
+        "LeaseManagement" when unitId is > 0 => $"/units/{unitId}?tab=tenant-lease&view=agreements&leaseManagement={entityId}",
+        "LeaseManagement" => $"/lease-managements/{entityId}",
+        "LeaseAgreement" when unitId is > 0 => $"/units/{unitId}?tab=tenant-lease&view=agreements&agreement={entityId}",
+        "LeaseAgreement" => $"/lease-agreements/{entityId}",
         "Tenant" => $"/tenants/{entityId}",
         "Property" => $"/properties/{entityId}",
         "WorkOrder" when unitId is > 0 => $"/units/{unitId}?tab=maintenance&wo={entityId}",
@@ -126,21 +127,21 @@ public class AuditEntryResponse
         "OwnerEntity" => "/owners",
         "Appointment" => $"/appointments/{entityId}",
         "Inspection" => $"/maintenance/inspections/{entityId}",
-        "RentalApplication" when unitId is > 0 => $"/units/{unitId}?tab=applications&app={entityId}",
+        "RentalApplication" when unitId is > 0 => $"/units/{unitId}?tab=leasing&view=applications&app={entityId}",
         "RentalApplication" => $"/applications/{entityId}",
         _ => null,
     };
 }
 
 /// <summary>
-/// Admin-only forensic projection of one <see cref="AuditLog"/> row. Extends the landlord-facing
+/// Admin-only forensic projection of one <see cref="AtomicAuditLog"/> row. Extends the landlord-facing
 /// <see cref="AuditEntryResponse"/> with the fields it intentionally withholds — the actor's raw IP
 /// address and the unredacted old→new JSON — for compliance / forensic review. Surfaced only via the
 /// Admin-gated <c>GET /api/v1/admin/audit</c>; the data already lives on the row (no migration).
 /// </summary>
 public sealed class AdminAuditEntryResponse
 {
-    public int Id { get; set; }
+    public long Id { get; set; }
     public int PortfolioId { get; set; }
     public AuditLogOperation Operation { get; set; }
     public string OperationName { get; set; } = string.Empty;
@@ -167,9 +168,10 @@ public sealed class AdminAuditEntryResponse
     public string TestId => $"admin-audit-{Id}";
 
     public static AdminAuditEntryResponse FromEntity(
-        AuditLog e,
+        AtomicAuditLog e,
         AuditDescriber describer,
-        IReadOnlyDictionary<int, string>? userNames = null) => new()
+        string? resolvedActorName = null,
+        int? unitId = null) => new()
         {
             Id = e.Id,
             PortfolioId = e.PortfolioId,
@@ -177,11 +179,11 @@ public sealed class AdminAuditEntryResponse
             OperationName = e.Operation.ToString(),
             EntityType = e.EntityType,
             EntityId = e.EntityId,
-            Actor = AuditEntryResponse.ResolveActor(e, userNames),
+            Actor = AuditEntryResponse.ResolveActor(e, resolvedActorName),
             UserId = e.UserId,
             ActorLabel = e.ActorLabel,
             Description = describer.Describe(e),
-            DetailHref = AuditEntryResponse.BuildDetailHref(e.EntityType, e.EntityId),
+            DetailHref = AuditEntryResponse.BuildDetailHref(e.EntityType, e.EntityId, unitId),
             Timestamp = e.Timestamp,
             IpAddress = e.IpAddress,
             OldValues = e.OldValues,

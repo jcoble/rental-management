@@ -1,706 +1,255 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
-	import { page } from '$app/state';
+	import { untrack } from 'svelte';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { leases } from '$lib/api/endpoints/leases';
-	import { tenants } from '$lib/api/endpoints/tenants';
-	import type { Lease, UnitDashboard } from '$lib/types';
-	import DetailCard from '$lib/components/shared/DetailCard.svelte';
-	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
-	import LeaseDetail from '$lib/components/records/LeaseDetail.svelte';
-	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
-	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
-	import LeaseTermFields from '$lib/components/forms/LeaseTermFields.svelte';
-	import TenantMultiSelect from '$lib/components/forms/TenantMultiSelect.svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { leaseRentTrackingErrors, leaseSchema, parseForm } from '$lib/schemas';
-	import { defaultLeaseNumber } from '$lib/leases/lease-number';
-	import { LEASE_STATUSES } from '$lib/leases/lease-list-state';
-	import { clearFieldError } from '$lib/forms/form-errors';
-	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
-	import { formatDateOnly } from '$lib/utils/date';
 	import {
-		buildSimpleTenantPayload,
-		createSimpleTenantForm,
-		createUnitLeaseForm,
-		hasOccupyingLease,
-		validateSimpleTenantForm,
-		type SimpleTenantForm,
-		type UnitLeaseCreateForm,
-	} from '$lib/components/unit/unit-lease-create';
-	import { FileText, ScanLine, ArrowLeft, Plus, UserPlus, Users } from '@lucide/svelte';
+		leaseManagements,
+		type CancelPlannedAccessDisposition,
+		type LeaseManagementCurrentPartiesContext,
+	} from '$lib/api/endpoints/lease-managements';
+	import { documentTemplates } from '$lib/api/endpoints/document-templates';
+	import { units } from '$lib/api/endpoints/units';
+	import { hasCapability } from '$lib/stores/auth.svelte';
+	import type { LeaseManagementSummary, UnitDashboard } from '$lib/types';
+	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
+	import DetailCard from '$lib/components/shared/DetailCard.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
+	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
+	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import * as Dialog from '$lib/components/ui/dialog';
+	import { Button } from '$lib/components/ui/button';
+	import { ArrowRight, FileText, ScanLine, Users } from '@lucide/svelte';
 
-	let {
-		dashboard,
-		onScan,
-	}: {
-		dashboard: UnitDashboard;
-		onScan: () => void;
-	} = $props();
-
+	let { dashboard, onScan }: { dashboard: UnitDashboard; onScan: () => void } = $props();
 	const queryClient = useQueryClient();
-	const portfolioId = $derived(getCurrentPortfolioId());
-	let showCreateLease = $state(false);
-	let tenantMode = $state<'existing' | 'new'>('existing');
-	let form = $state<UnitLeaseCreateForm>(createBlankLeaseForm());
-	let tenantForm = $state<SimpleTenantForm>(createSimpleTenantForm());
-	let formErrors = $state<Record<string, string>>({});
-	let tenantErrors = $state<Record<string, string>>({});
-	let createLeaseStep = $state(0);
-	let completedCreateLeaseSteps = $state<number[]>([]);
+	const canManageLifecycle = $derived(hasCapability('leasing.onboarding.manage'));
+	let selected = $state<LeaseManagementSummary | null>(null);
+	let cancelOpen = $state(false);
+	let transferOpen = $state(false);
+	let closeOpen = $state(false);
+	let cancellationReasonCode = $state('');
+	let draftCancellationReason = $state('');
+	let cancellationNote = $state('');
+	let accessDispositions = $state<Record<number, CancelPlannedAccessDisposition>>({});
+	let destinationUnitValue = $state('');
+	let destinationTemplateId = $state(0);
+	let effectiveOn = $state(new Date().toISOString().slice(0, 10));
+	let giveDestinationPossessionNow = $state(false);
+	let plannedDestinationPossessionAtUtc = $state('');
+	let possessionAgreementExceptionReason = $state('');
+	let carryTenantBalance = $state(true);
+	let carrySecurityDeposit = $state(true);
+	let transferReason = $state('');
+	let closeReasonCode = $state('');
+	let closeNote = $state('');
 
-	const tenantsQuery = createQuery(() => ({
-		queryKey: ['tenants', portfolioId, 'unit-lease-create', 'available-for-lease'],
-		queryFn: () =>
-			tenants.listPage(portfolioId, { take: 200, sort: 'name', availableForLease: true }),
+	const relationshipsQuery = createQuery(() => ({
+		queryKey: ['lease-managements', 'unit', dashboard.unit.id],
+		queryFn: () => leaseManagements.listPage({ unitId: dashboard.unit.id, take: 50, sort: '-updatedAtUtc' }),
+		retry: false,
+	}));
+	const cancelContextQuery = createQuery<LeaseManagementCurrentPartiesContext>(() => ({
+		queryKey: ['lease-management', selected?.leaseManagementId, 'cancel-context'],
+		queryFn: () => leaseManagements.getCurrentPartiesContext(selected!.leaseManagementId),
+		enabled: cancelOpen && Boolean(selected),
+	}));
+	const destinationTemplatesQuery = createQuery(() => ({
+		queryKey: ['document-templates', 'lease-transfer'],
+		queryFn: () => documentTemplates.listPage({ kind: 'Lease', status: 'Active', sort: 'name', take: 100 }),
+		enabled: transferOpen,
 	}));
 
-	const unitLeasesQuery = createQuery(() => ({
-		queryKey: ['unit-leases', portfolioId, dashboard.unit.id],
-		queryFn: () => leases.listPage(portfolioId, {
+	$effect(() => {
+		const accesses = cancelContextQuery.data?.activeTenantUserAccesses ?? [];
+		const current = untrack(() => accessDispositions);
+		const next = { ...current };
+		let changed = false;
+		for (const access of accesses) {
+			if (next[access.tenantUserAccessId]) continue;
+			next[access.tenantUserAccessId] = 'RevokeNow';
+			changed = true;
+		}
+		if (changed) accessDispositions = next;
+	});
+
+	async function refresh() {
+		await queryClient.invalidateQueries({ queryKey: ['lease-managements'] });
+		await queryClient.invalidateQueries({ queryKey: ['unit-dashboard', dashboard.unit.id] });
+	}
+
+	async function loadDestinationUnits(params: { search?: string; skip: number; take: number }) {
+		const page = await units.listPage({
+			...params,
+			sort: 'unitNumber',
+			availableForLease: true,
+			excludeUnitId: dashboard.unit.id,
+		});
+		return {
+			items: page.items.map((unit) => ({
+				id: unit.id,
+				label: `Unit ${unit.unitNumber}`,
+				description: unit.floorPlan,
+			})),
+			totalCount: page.totalCount,
+			skip: page.skip,
+			take: page.take,
+		};
+	}
+
+	const cancelMutation = createMutation(() => ({
+		mutationFn: () => leaseManagements.cancelPlannedRelationship(selected!.leaseManagementId, {
 			unitId: dashboard.unit.id,
-			take: 50,
-			sort: '-startDate',
-		}),
+			cancellationReasonCode: cancellationReasonCode.trim(),
+			draftCancellationReason: draftCancellationReason.trim(),
+			cancellationNote: cancellationNote.trim() || null,
+			accesses: (cancelContextQuery.data?.activeTenantUserAccesses ?? []).map((access) => ({
+				tenantUserAccessId: access.tenantUserAccessId,
+				disposition: accessDispositions[access.tenantUserAccessId],
+			})),
+		}, crypto.randomUUID()),
+		onSuccess: async () => { cancelOpen = false; await refresh(); showSuccess('Planned relationship canceled.'); },
+		onError: (error) => showError(apiErrorMessage(error, 'Could not cancel the planned relationship.')),
 	}));
 
-	const unitLabel = $derived(`${dashboard.propertyName} · Unit ${dashboard.unit.unitNumber}`);
-	const unitLeases = $derived(unitLeasesQuery.data?.items ?? []);
-	const availableTenants = $derived(tenantsQuery.data?.items ?? []);
-	const isCheckingLeaseAvailability = $derived(unitLeasesQuery.isLoading);
-	const hasCurrentOccupyingLease = $derived(
-		dashboard.unit.status !== 'Vacant' ||
-			hasOccupyingLease(dashboard.currentLease) ||
-			unitLeases.some((lease) => hasOccupyingLease(lease)),
-	);
-
-	const createLeaseSteps: FormStepperStep[] = [
-		{ id: 'tenants', label: 'Tenants', description: 'Existing or new' },
-		{ id: 'identity', label: 'Lease #', description: 'Reference' },
-		{ id: 'dates', label: 'Dates', description: 'Start and end' },
-		{ id: 'rent', label: 'Rent', description: 'Rent and deposit' },
-		{ id: 'fees', label: 'Fees', description: 'Late fee and due day' },
-		{ id: 'status', label: 'Status', description: 'State and notes' },
-		{ id: 'tracking', label: 'Tracking', description: 'Backfill options' },
-	];
-	const createLeaseStepFields = [
-		['tenantId', 'tenant.firstName', 'tenant.lastName', 'tenant.email', 'tenant.phone'],
-		['leaseNumber'],
-		['startDate', 'endDate'],
-		['monthlyRent', 'securityDeposit'],
-		['lateFeeAmount', 'rentDueDay'],
-		['status', 'notes'],
-		['rentTrackingStartMode', 'rentTrackingStartDate', 'openingBalanceAmount', 'openingBalanceAsOfDate', 'openingBalanceNote'],
-	] as const;
-
-	// Which lease to show: an explicit ?lease=<id> (e.g. a prior lease) wins, otherwise the
-	// unit's current lease. Inner lease tabs live in LeaseDetail's local state, so they never
-	// collide with the unit Command Center's own ?tab=lease.
-	const currentLeaseId = $derived(dashboard.currentLease?.id ?? null);
-	const requestedLeaseId = $derived(Number(page.url.searchParams.get('lease')) || null);
-	const selectedLeaseId = $derived(requestedLeaseId ?? currentLeaseId);
-	// Show a "back to current lease" affordance only when viewing a non-current lease via ?lease=.
-	const viewingPriorLease = $derived(
-		requestedLeaseId !== null && requestedLeaseId !== currentLeaseId
-	);
-
-	// Clearing the selection drops ?lease= and falls back to the current lease (or empty state).
-	function clearSelection() {
-		goto('/units/' + dashboard.unit.id + '?tab=lease', {
-			replaceState: true,
-			keepFocus: true,
-			noScroll: true,
-		});
-	}
-
-	function selectLease(leaseId: number) {
-		goto(`/units/${dashboard.unit.id}?tab=lease&lease=${leaseId}`, {
-			replaceState: true,
-			keepFocus: true,
-			noScroll: true,
-		});
-	}
-
-	function leaseLabel(lease: Lease): string {
-		return lease.leaseNumber?.trim() || `Lease #${lease.id}`;
-	}
-
-	function leaseTenantLabel(lease: Lease): string {
-		if (lease.tenantName?.trim()) return lease.tenantName;
-		const tenantNames = lease.tenants?.map((tenant) => tenant.name).filter(Boolean) ?? [];
-		return tenantNames.length > 0 ? tenantNames.join(', ') : 'No tenant name';
-	}
-
-	function leaseTermLabel(lease: Lease): string {
-		return `${formatDateOnly(lease.startDate)} - ${formatDateOnly(lease.endDate)}`;
-	}
-
-	function clearLeaseError(field: string) {
-		const next = clearFieldError(formErrors, field);
-		if (next !== formErrors) formErrors = next;
-	}
-
-	function clearTenantError(field: string) {
-		if (!tenantErrors[field]) return;
-		const { [field]: _removed, ...next } = tenantErrors;
-		tenantErrors = next;
-	}
-
-	function createBlankLeaseForm(): UnitLeaseCreateForm {
-		return {
-			leaseNumber: defaultLeaseNumber(),
-			propertyId: '',
-			unitId: '',
-			tenantId: '',
-			tenantIds: [],
-			startDate: '',
-			endDate: '',
-			monthlyRent: '',
-			securityDeposit: '',
-			lateFeeAmount: '75',
-			rentDueDay: '1',
-			rentTrackingStartMode: 'ForwardOnly',
-			rentTrackingStartDate: '',
-			openingBalanceAmount: '',
-			openingBalanceAsOfDate: '',
-			openingBalanceNote: '',
-			status: 'Active',
-			notes: '',
-		};
-	}
-
-	function createCurrentUnitLeaseForm() {
-		return {
-			...createUnitLeaseForm({
-				unit: {
-					id: dashboard.unit.id,
-					propertyId: dashboard.unit.propertyId,
-					unitNumber: dashboard.unit.unitNumber,
-					marketRent: dashboard.unit.marketRent,
-				},
-				propertyName: dashboard.propertyName,
-			}),
-			propertyId: String(dashboard.unit.propertyId),
-			unitId: String(dashboard.unit.id),
-		};
-	}
-
-	$effect(() => {
-		form.propertyId = String(dashboard.unit.propertyId);
-		form.unitId = String(dashboard.unit.id);
-	});
-	$effect(() => {
-		if (form.tenantIds.length > 0 || form.tenantId) clearLeaseError('tenantId');
-	});
-	$effect(() => {
-		if (form.leaseNumber.trim()) clearLeaseError('leaseNumber');
-	});
-	$effect(() => {
-		if (form.startDate) clearLeaseError('startDate');
-	});
-	$effect(() => {
-		if (form.endDate) clearLeaseError('endDate');
-	});
-	$effect(() => {
-		if (form.monthlyRent) clearLeaseError('monthlyRent');
-	});
-	$effect(() => {
-		if (form.securityDeposit) clearLeaseError('securityDeposit');
-	});
-	$effect(() => {
-		if (form.lateFeeAmount) clearLeaseError('lateFeeAmount');
-	});
-	$effect(() => {
-		if (form.rentDueDay) clearLeaseError('rentDueDay');
-	});
-	$effect(() => {
-		if (form.rentTrackingStartDate) clearLeaseError('rentTrackingStartDate');
-	});
-	$effect(() => {
-		if (form.openingBalanceAmount) clearLeaseError('openingBalanceAmount');
-	});
-	$effect(() => {
-		if (form.openingBalanceAsOfDate) clearLeaseError('openingBalanceAsOfDate');
-	});
-	$effect(() => {
-		if (form.openingBalanceNote) clearLeaseError('openingBalanceNote');
-	});
-	$effect(() => {
-		if (form.rentTrackingStartMode !== 'CustomCutoffDate' && form.rentTrackingStartDate) {
-			form.rentTrackingStartDate = '';
-		}
-	});
-	$effect(() => {
-		if (form.rentTrackingStartMode !== 'OpeningBalanceOnly') {
-			if (form.openingBalanceAmount) form.openingBalanceAmount = '';
-			if (form.openingBalanceAsOfDate) form.openingBalanceAsOfDate = '';
-			if (form.openingBalanceNote) form.openingBalanceNote = '';
-		}
-	});
-	$effect(() => {
-		if (tenantForm.firstName.trim()) clearTenantError('firstName');
-	});
-	$effect(() => {
-		if (tenantForm.lastName.trim()) clearTenantError('lastName');
-	});
-	$effect(() => {
-		if (tenantForm.email.trim()) clearTenantError('email');
-	});
-	$effect(() => {
-		if (tenantForm.phone.trim()) clearTenantError('phone');
-	});
-
-	function resetCreateLeaseForm() {
-		form = createCurrentUnitLeaseForm();
-		tenantForm = createSimpleTenantForm();
-		tenantMode = 'existing';
-		formErrors = {};
-		tenantErrors = {};
-		createLeaseStep = 0;
-		completedCreateLeaseSteps = [];
-	}
-
-	function openCreateLease() {
-		if (isCheckingLeaseAvailability) {
-			showError('Still checking this unit for an existing lease. Try again in a moment.');
-			return;
-		}
-		if (hasCurrentOccupyingLease) {
-			showError('End the current active lease before adding another lease to this unit.');
-			return;
-		}
-		resetCreateLeaseForm();
-		showCreateLease = true;
-	}
-
-	function closeCreateLease() {
-		showCreateLease = false;
-		formErrors = {};
-		tenantErrors = {};
-		createLeaseStep = 0;
-		completedCreateLeaseSteps = [];
-	}
-
-	const createLeaseMutation = createMutation(() => ({
-		mutationFn: async ({
-			leaseData,
-			simpleTenant,
-		}: {
-			leaseData: Record<string, unknown>;
-			simpleTenant: SimpleTenantForm | null;
-		}) => {
-			let tenantIds = Array.isArray(leaseData.tenantIds)
-				? (leaseData.tenantIds as number[])
-				: [Number(leaseData.tenantId)].filter((id) => id > 0);
-			if (simpleTenant) {
-				const { tenantId: _tenantId, tenantIds: _tenantIds, ...leaseWithoutTenantIds } = leaseData;
-				return leases.create({
-					...leaseWithoutTenantIds,
-					newTenant: buildSimpleTenantPayload(portfolioId, simpleTenant),
-				});
-			}
-			return leases.create({ ...leaseData, tenantId: tenantIds[0], tenantIds });
-		},
-		onSuccess: (lease, vars) => {
-			showSuccess('Lease created.');
-			closeCreateLease();
-			queryClient.invalidateQueries({ queryKey: ['unit-dashboard', dashboard.unit.id] });
-			queryClient.invalidateQueries({ queryKey: ['unit-leases', portfolioId, dashboard.unit.id] });
-			queryClient.invalidateQueries({ queryKey: ['leases', portfolioId] });
-			queryClient.invalidateQueries({ queryKey: ['units'] });
-			queryClient.invalidateQueries({ queryKey: ['properties'] });
-			if (vars.simpleTenant) queryClient.invalidateQueries({ queryKey: ['tenants', portfolioId] });
-			goto(`/units/${dashboard.unit.id}?tab=lease&lease=${lease.id}`, {
-				replaceState: true,
-				keepFocus: true,
-				noScroll: true,
-			});
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
+	const transferMutation = createMutation(() => ({
+		mutationFn: () => leaseManagements.transferToUnit(selected!.leaseManagementId, {
+			sourceUnitId: dashboard.unit.id,
+			destinationUnitId: Number(destinationUnitValue),
+			effectiveOn,
+			plannedDestinationPossessionAtUtc: plannedDestinationPossessionAtUtc ? new Date(plannedDestinationPossessionAtUtc).toISOString() : null,
+			giveDestinationPossessionNow,
+			possessionAgreementExceptionReason: giveDestinationPossessionNow ? possessionAgreementExceptionReason.trim() : null,
+			destinationDocumentTemplateId: destinationTemplateId,
+			carryTenantBalance,
+			carrySecurityDeposit,
+			transferReason: transferReason.trim(),
+		}, crypto.randomUUID()),
+		onSuccess: async () => { transferOpen = false; await refresh(); showSuccess('Relationship transferred.'); },
+		onError: (error) => showError(apiErrorMessage(error, 'Could not transfer the relationship.')),
 	}));
 
-	function selectedCreateLeaseTenantIds() {
-		return form.tenantIds
-			.map((id) => Number(id))
-			.filter((id) => Number.isInteger(id) && id > 0);
-	}
+	const closeMutation = createMutation(() => ({
+		mutationFn: () => leaseManagements.closeAccount(selected!.leaseManagementId, {
+			tenantAccountId: selected!.tenantAccountId!,
+			closeReasonCode: closeReasonCode.trim(),
+			closeNote: closeNote.trim() || null,
+		}, crypto.randomUUID()),
+		onSuccess: async () => { closeOpen = false; await refresh(); showSuccess('Tenant account closed.'); },
+		onError: (error) => showError(apiErrorMessage(error, 'The account cannot close until possession, money, drafts, signatures, payments, and autopay are resolved.')),
+	}));
 
-	function createLeaseValidationState() {
-		const tenantValidationErrors =
-			tenantMode === 'new' ? validateSimpleTenantForm(tenantForm) : {};
-		const selectedTenantIds = selectedCreateLeaseTenantIds();
-		const leaseInput = {
-			...form,
-			propertyId: String(dashboard.unit.propertyId),
-			unitId: String(dashboard.unit.id),
-			tenantId: tenantMode === 'new' ? '1' : String(selectedTenantIds[0] ?? ''),
-		};
-		const result = parseForm(leaseSchema, leaseInput);
-		const rentTrackingErrors = leaseRentTrackingErrors(leaseInput);
-		const tenantSelectionErrors: Record<string, string> =
-			tenantMode === 'existing' && selectedTenantIds.length === 0
-				? { tenantId: 'Select at least one tenant' }
-				: {};
-		const nextFormErrors = { ...(result.errors ?? {}), ...rentTrackingErrors, ...tenantSelectionErrors };
-		if (tenantMode === 'new') delete nextFormErrors.tenantId;
-		return {
-			data: result.data,
-			formErrors: nextFormErrors,
-			tenantErrors: tenantValidationErrors,
-			selectedTenantIds,
-		};
-	}
-
-	function createLeaseStepErrorFields(
-		step: number,
-		errors: Record<string, string>,
-		simpleTenantErrors: Record<string, string>
-	) {
-		const visibleFields = new Set<string>(createLeaseStepFields[step] ?? []);
-		const formEntries = Object.entries(errors).filter(([field]) => visibleFields.has(field));
-		const tenantEntries = Object.entries(simpleTenantErrors).map(([field, message]) => [`tenant.${field}`, message] as const)
-			.filter(([field]) => visibleFields.has(field));
-		return [...formEntries, ...tenantEntries];
-	}
-
-	function firstCreateLeaseErrorStep(
-		errors: Record<string, string>,
-		simpleTenantErrors: Record<string, string>
-	) {
-		return createLeaseStepFields.findIndex((fields) => fields.some((field) => {
-			if (errors[field]) return true;
-			if (field.startsWith('tenant.')) return Boolean(simpleTenantErrors[field.replace('tenant.', '')]);
-			return false;
-		}));
-	}
-
-	function markCreateLeaseStepInvalid(step: number) {
-		completedCreateLeaseSteps = completedCreateLeaseSteps.filter((completedStep) => completedStep < step);
-	}
-
-	function validateCreateLeaseStep(step: number) {
-		const validation = createLeaseValidationState();
-		const currentEntries = createLeaseStepErrorFields(step, validation.formErrors, validation.tenantErrors);
-		const currentErrors = Object.fromEntries(currentEntries.filter(([field]) => !field.startsWith('tenant.')));
-		const currentTenantErrors = Object.fromEntries(
-			currentEntries
-				.filter(([field]) => field.startsWith('tenant.'))
-				.map(([field, message]) => [field.replace('tenant.', ''), message])
-		);
-		const currentFields = new Set<string>(createLeaseStepFields[step] ?? []);
-		const nextFormErrors = Object.fromEntries(
-			Object.entries(formErrors).filter(([field]) => !currentFields.has(field))
-		);
-		const nextTenantErrors = Object.fromEntries(
-			Object.entries(tenantErrors).filter(([field]) => !currentFields.has(`tenant.${field}`))
-		);
-		formErrors = { ...nextFormErrors, ...currentErrors };
-		tenantErrors = { ...nextTenantErrors, ...currentTenantErrors };
-		const isValid = currentEntries.length === 0;
-		if (!isValid) markCreateLeaseStepInvalid(step);
-		return isValid;
-	}
-
-	function nextCreateLeaseStep() {
-		if (!validateCreateLeaseStep(createLeaseStep)) return;
-		if (completedCreateLeaseSteps.includes(createLeaseStep)) {
-			createLeaseStep = Math.min(createLeaseStep + 1, createLeaseSteps.length - 1);
-			return;
-		}
-		completedCreateLeaseSteps = [...completedCreateLeaseSteps, createLeaseStep];
-		window.setTimeout(() => {
-			createLeaseStep = Math.min(createLeaseStep + 1, createLeaseSteps.length - 1);
-		}, 260);
-	}
-
-	function submitCreateLease() {
-		const validation = createLeaseValidationState();
-		if (
-			Object.keys(validation.formErrors).length > 0 ||
-			Object.keys(validation.tenantErrors).length > 0
-		) {
-			formErrors = validation.formErrors;
-			tenantErrors = validation.tenantErrors;
-			const firstErrorStep = firstCreateLeaseErrorStep(validation.formErrors, validation.tenantErrors);
-			if (firstErrorStep >= 0) {
-				createLeaseStep = firstErrorStep;
-				markCreateLeaseStepInvalid(firstErrorStep);
-			}
-			return;
-		}
-		if (!validation.data) return;
-		formErrors = {};
-		tenantErrors = {};
-		createLeaseMutation.mutate({
-			leaseData: { portfolioId, ...validation.data, tenantIds: validation.selectedTenantIds },
-			simpleTenant: tenantMode === 'new' ? { ...tenantForm } : null,
-		});
+	function choose(relationship: LeaseManagementSummary, action: 'cancel' | 'transfer' | 'close') {
+		selected = relationship;
+		if (action === 'cancel') cancelOpen = true;
+		if (action === 'transfer') transferOpen = true;
+		if (action === 'close') closeOpen = true;
 	}
 </script>
 
 <div class="space-y-4" data-testid="unit-lease-tab">
-	{#if selectedLeaseId}
-		{#if viewingPriorLease}
-			<Button
-				variant="outline"
-				size="sm"
-				class="gap-1"
-				onclick={clearSelection}
-				data-testid="lease-back-to-current"
-			>
-				<ArrowLeft class="h-4 w-4" /> Back to current lease
-			</Button>
-		{/if}
-		<LeaseDetail
-			leaseId={selectedLeaseId}
-			expectedUnitId={dashboard.unit.id}
-			onUnitMismatch={clearSelection}
-			onDeleted={() => {
-				queryClient.invalidateQueries({ queryKey: ['unit-dashboard', dashboard.unit.id] });
-				queryClient.invalidateQueries({ queryKey: ['unit-leases', portfolioId, dashboard.unit.id] });
-				clearSelection();
-			}}
-		/>
-	{:else}
-		<DetailCard title="No current lease" icon={FileText} accent="muted" testid="lease-empty">
-			<p class="text-sm text-muted-foreground">
-				This unit has no current lease. Add a lease for this unit, or scan an existing signed lease to extract its terms.
-			</p>
-		</DetailCard>
-	{/if}
-
-	<div class="flex flex-wrap gap-2">
-		<Button
-			class="gap-2"
-			onclick={openCreateLease}
-			disabled={isCheckingLeaseAvailability || hasCurrentOccupyingLease}
-			title={hasCurrentOccupyingLease ? 'End the current active lease before adding another.' : undefined}
-			data-testid="unit-lease-add-button"
-		>
-			<Plus class="h-4 w-4" /> Add Lease
-		</Button>
-		<Button variant="outline" class="gap-2" onclick={() => onScan()} data-testid="lease-scan">
-			<ScanLine class="h-4 w-4" /> Scan / upload lease
-		</Button>
+	<div class="flex flex-wrap items-center justify-between gap-3">
+		<div><h2 class="text-lg font-semibold">Tenant & lease</h2><p class="text-sm text-muted-foreground">Household, possession, agreement versions, and account relationship for this rental.</p></div>
+		<div class="flex gap-2"><Button variant="outline" class="gap-2" onclick={onScan}><ScanLine class="h-4 w-4" /> Import agreement</Button><Button href="/applications" class="gap-2"><Users class="h-4 w-4" /> Prepare move-in</Button></div>
 	</div>
-	{#if hasCurrentOccupyingLease}
-		<p class="text-sm text-muted-foreground" data-testid="unit-lease-add-blocked-reason">
-			This unit already has an active lease. End or terminate it before adding the next lease.
-		</p>
-	{/if}
 
-	<div class="rounded-lg border border-border bg-card p-4" data-testid="unit-lease-history">
-		<div class="flex flex-wrap items-start justify-between gap-2">
-			<div>
-				<h3 class="text-base font-semibold">Lease history</h3>
-				<p class="text-sm text-muted-foreground">Past and current leases attached to this unit.</p>
-			</div>
-			{#if unitLeasesQuery.isFetching}
-				<span class="text-xs text-muted-foreground">Loading...</span>
-			{:else if unitLeases.length > 0}
-				<span class="text-xs text-muted-foreground">{unitLeases.length} {unitLeases.length === 1 ? 'lease' : 'leases'}</span>
-			{/if}
+	{#if relationshipsQuery.isLoading}
+		<LoadingState label="Loading tenant relationships" testid="unit-tenant-relationships-loading" />
+	{:else if relationshipsQuery.isError}
+		<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="unit-tenant-relationships-error">
+			<p class="text-sm font-medium text-destructive">Tenant relationships could not be loaded.</p>
+			<p class="mt-1 text-sm text-muted-foreground">The service may be temporarily unavailable. Try again.</p>
+			<Button class="mt-3" variant="outline" size="sm" onclick={() => relationshipsQuery.refetch()}>Try again</Button>
 		</div>
-
-		{#if unitLeasesQuery.isError}
-			<p class="mt-3 text-sm text-destructive">Lease history could not be loaded.</p>
-		{:else if unitLeases.length === 0 && !unitLeasesQuery.isLoading}
-			<p class="mt-3 text-sm text-muted-foreground">No lease history yet.</p>
-		{:else}
-			<div class="mt-3 divide-y divide-border" role="list">
-				{#each unitLeases as lease (lease.id)}
-					<button
-						type="button"
-						class={`grid w-full gap-2 py-3 text-left transition hover:bg-muted/40 sm:grid-cols-[minmax(0,1fr)_auto] ${lease.id === selectedLeaseId ? 'bg-muted' : ''}`}
-						aria-current={lease.id === selectedLeaseId ? 'true' : undefined}
-						onclick={() => selectLease(lease.id)}
-						data-testid={`unit-lease-history-item-${lease.id}`}
-					>
-						<span class="min-w-0">
-							<span class="block truncate font-medium">{leaseLabel(lease)}</span>
-							<span class="block truncate text-sm text-muted-foreground">
-								{leaseTenantLabel(lease)} · {leaseTermLabel(lease)}
-							</span>
-						</span>
-						<span class="flex shrink-0 items-center gap-2">
-							<StatusBadge status={lease.status} />
-							<span class="text-sm font-medium tabular-nums">
-								{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(lease.monthlyRent)}
-							</span>
-						</span>
-					</button>
-				{/each}
-			</div>
-		{/if}
-	</div>
+	{:else if (relationshipsQuery.data?.items.length ?? 0) === 0}
+		<DetailCard title="No tenant relationship yet" icon={FileText}><p class="text-sm text-muted-foreground">Prepare a move-in from an approved application, or scan an existing signed agreement.</p></DetailCard>
+	{:else}
+		<div class="grid gap-3">
+			{#each relationshipsQuery.data?.items ?? [] as relationship}
+				<div class="rounded-xl border bg-card p-4">
+					<a href={`/leases/${relationship.leaseManagementId}`} class="flex items-center justify-between gap-4 transition-colors hover:bg-muted/40">
+						<div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><p class="font-medium">{relationship.primaryTenantName ?? 'No primary tenant'}</p><StatusBadge status={relationship.lifecycle} /></div><p class="mt-1 text-sm text-muted-foreground">{relationship.agreementNumber ?? 'No governing agreement'}{relationship.agreementStatus ? ` · ${relationship.agreementStatus}` : ''}{relationship.termEndOn ? ` · ends ${relationship.termEndOn}` : ''}</p></div><ArrowRight class="h-4 w-4 shrink-0 text-muted-foreground" />
+					</a>
+					{#if canManageLifecycle}
+						<div class="mt-3 flex flex-wrap gap-2" data-testid="unit-lifecycle-actions-{relationship.leaseManagementId}">
+							{#if relationship.lifecycle === 'Planned' && !relationship.possessionGivenAtUtc}
+								<Button size="sm" variant="destructive" onclick={() => choose(relationship, 'cancel')}>Cancel planned relationship</Button>
+							{/if}
+							{#if relationship.possessionGivenAtUtc && !relationship.possessionReturnedAtUtc}
+								<Button size="sm" variant="outline" onclick={() => choose(relationship, 'transfer')}>Transfer to Unit</Button>
+							{/if}
+							{#if relationship.tenantAccountId && !relationship.accountClosedAtUtc}
+								<Button size="sm" variant="outline" onclick={() => choose(relationship, 'close')}>Close account</Button>
+							{/if}
+						</div>
+					{/if}
+				</div>
+			{/each}
+		</div>
+	{/if}
 </div>
 
-<Dialog.Root open={showCreateLease} onOpenChange={(v) => { if (!v) closeCreateLease(); }}>
-	<Dialog.Content
-		class="max-h-[85vh] max-w-2xl overflow-y-auto"
-		onInteractOutside={(event) => event.preventDefault()}
-		onEscapeKeydown={(event) => event.preventDefault()}
-		data-testid="unit-lease-create-dialog"
-	>
-		<Dialog.Header>
-			<Dialog.Title>Add lease</Dialog.Title>
-			<Dialog.Description>
-				This lease will be added to {unitLabel}. Choose an existing tenant or add the basic tenant record here.
-			</Dialog.Description>
-		</Dialog.Header>
-
-		<div class="space-y-4" data-testid="unit-lease-create-form">
-			<div class="grid gap-3 rounded-lg border bg-muted/30 p-3 text-sm sm:grid-cols-2">
-				<div>
-					<p class="text-xs font-medium text-muted-foreground">Property</p>
-					<p class="font-medium">{dashboard.propertyName}</p>
-				</div>
-				<div>
-					<p class="text-xs font-medium text-muted-foreground">Unit</p>
-					<p class="font-medium">Unit {dashboard.unit.unitNumber}</p>
-				</div>
+<Dialog.Root open={cancelOpen} onOpenChange={(open) => (cancelOpen = open)}>
+	<Dialog.Content class="max-h-[90vh] max-w-xl overflow-y-auto" data-testid="cancel-planned-dialog">
+		<Dialog.Header><Dialog.Title>Cancel planned relationship</Dialog.Title><Dialog.Description>Record the cancellation and disposition every active tenant access. No occupancy will be opened.</Dialog.Description></Dialog.Header>
+		<label class="block space-y-1 text-sm"><span>Cancellation code</span><input bind:value={cancellationReasonCode} class="h-10 w-full rounded-md border px-3" /></label>
+		<label class="block space-y-1 text-sm"><span>Draft reason</span><textarea bind:value={draftCancellationReason} class="min-h-20 w-full rounded-md border p-3"></textarea></label>
+		<label class="block space-y-1 text-sm"><span>Optional note</span><textarea bind:value={cancellationNote} class="min-h-20 w-full rounded-md border p-3"></textarea></label>
+		{#if cancelContextQuery.isLoading}
+			<LoadingState label="Loading tenant access" variant="spinner" testid="cancel-relationship-context-loading" />
+		{:else if cancelContextQuery.isError}
+			<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert">
+				<p class="text-sm font-medium text-destructive">Tenant access could not be loaded.</p>
+				<Button class="mt-3" variant="outline" size="sm" onclick={() => cancelContextQuery.refetch()}>Try again</Button>
 			</div>
+		{:else}
+			{#each cancelContextQuery.data?.activeTenantUserAccesses ?? [] as access}
+				<label class="block space-y-1 text-sm"><span>{access.tenantName} · {access.userEmail}</span><select bind:value={accessDispositions[access.tenantUserAccessId]} class="h-10 w-full rounded-md border px-3"><option value="RevokeNow">Revoke now</option><option value="Retain">Retain historical access</option></select></label>
+			{/each}
+		{/if}
+		<Dialog.Footer><Button variant="outline" onclick={() => (cancelOpen = false)}>Keep relationship</Button><Button variant="destructive" disabled={!cancellationReasonCode.trim() || !draftCancellationReason.trim() || cancelContextQuery.isLoading || cancelContextQuery.isError || cancelMutation.isPending} onclick={() => cancelMutation.mutate()}>Cancel relationship</Button></Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
 
-			<FormStepper
-				steps={createLeaseSteps}
-				bind:currentStep={createLeaseStep}
-				completedSteps={completedCreateLeaseSteps}
-				testid="unit-lease-create-stepper"
-			>
-				{#if createLeaseStep === 0}
-					<div class="space-y-3">
-						<div class="flex flex-wrap gap-2" aria-label="Tenant mode">
-							<Button
-								type="button"
-								size="sm"
-								variant={tenantMode === 'existing' ? 'default' : 'outline'}
-								class="gap-2"
-								onclick={() => {
-									tenantMode = 'existing';
-									tenantErrors = {};
-								}}
-								data-testid="unit-lease-existing-tenant-mode"
-							>
-								<Users class="h-4 w-4" /> Existing tenant
-							</Button>
-							<Button
-								type="button"
-								size="sm"
-								variant={tenantMode === 'new' ? 'default' : 'outline'}
-								class="gap-2"
-								onclick={() => {
-									tenantMode = 'new';
-									form.tenantId = '';
-									form.tenantIds = [];
-									clearLeaseError('tenantId');
-								}}
-								data-testid="unit-lease-new-tenant-mode"
-							>
-								<UserPlus class="h-4 w-4" /> New tenant
-							</Button>
-						</div>
+<Dialog.Root open={transferOpen} onOpenChange={(open) => (transferOpen = open)}>
+	<Dialog.Content class="max-h-[90vh] max-w-xl overflow-y-auto" data-testid="transfer-unit-dialog">
+		<Dialog.Header><Dialog.Title>Transfer occupied relationship</Dialog.Title><Dialog.Description>The source closure and destination relationship commit as one command.</Dialog.Description></Dialog.Header>
+		<RemoteRecordSelect
+			queryKey={['units', 'lease-transfer', dashboard.unit.id]}
+			label="Destination Unit"
+			bind:value={destinationUnitValue}
+			placeholder="Select a Unit"
+			searchPlaceholder="Search available Units…"
+			emptyLabel="No available Units"
+			loadPage={loadDestinationUnits}
+			disabled={transferMutation.isPending}
+			required
+			testid="transfer-destination-unit"
+		/>
+		{#if destinationTemplatesQuery.isLoading}
+			<LoadingState label="Loading active lease templates" variant="spinner" testid="transfer-options-loading" />
+		{:else if destinationTemplatesQuery.isError}
+			<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert">
+				<p class="text-sm font-medium text-destructive">Active lease templates could not be loaded.</p>
+				<Button class="mt-3" variant="outline" size="sm" onclick={() => destinationTemplatesQuery.refetch()}>Try again</Button>
+			</div>
+		{:else}
+			<label class="block space-y-1 text-sm"><span>Active lease template</span><select bind:value={destinationTemplateId} class="h-10 w-full rounded-md border px-3"><option value={0}>Select a template</option>{#each destinationTemplatesQuery.data?.items ?? [] as template}<option value={template.id}>{template.name}</option>{/each}</select></label>
+		{/if}
+		<label class="block space-y-1 text-sm"><span>Effective date</span><input type="date" bind:value={effectiveOn} class="h-10 w-full rounded-md border px-3" /></label>
+		<label class="block space-y-1 text-sm"><span>Planned destination possession</span><input type="datetime-local" bind:value={plannedDestinationPossessionAtUtc} class="h-10 w-full rounded-md border px-3" /></label>
+		<label class="flex items-center gap-2 text-sm"><input type="checkbox" bind:checked={giveDestinationPossessionNow} /> Give destination possession now</label>
+		{#if giveDestinationPossessionNow}<label class="block space-y-1 text-sm"><span>Possession agreement exception reason</span><textarea bind:value={possessionAgreementExceptionReason} class="min-h-20 w-full rounded-md border p-3"></textarea></label>{/if}
+		<label class="flex items-center gap-2 text-sm"><input type="checkbox" bind:checked={carryTenantBalance} /> Carry tenant balance</label>
+		<label class="flex items-center gap-2 text-sm"><input type="checkbox" bind:checked={carrySecurityDeposit} /> Carry security deposit</label>
+		<label class="block space-y-1 text-sm"><span>Transfer reason</span><textarea bind:value={transferReason} class="min-h-20 w-full rounded-md border p-3"></textarea></label>
+		<Dialog.Footer><Button variant="outline" onclick={() => (transferOpen = false)}>Cancel</Button><Button disabled={Number(destinationUnitValue) <= 0 || destinationTemplateId <= 0 || !effectiveOn || !transferReason.trim() || (giveDestinationPossessionNow && !possessionAgreementExceptionReason.trim()) || destinationTemplatesQuery.isLoading || destinationTemplatesQuery.isError || transferMutation.isPending} onclick={() => transferMutation.mutate()}>Transfer relationship</Button></Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
 
-						{#if tenantMode === 'existing'}
-							<TenantMultiSelect
-								label="Tenants"
-								tenants={availableTenants}
-								bind:selectedIds={form.tenantIds}
-								error={formErrors.tenantId}
-								disabled={tenantsQuery.isLoading}
-								testid="unit-lease-tenants-input"
-							/>
-						{:else}
-							<div class="grid gap-3 sm:grid-cols-2" data-testid="unit-lease-new-tenant-fields">
-								<div>
-									<span class="mb-1 block text-xs font-medium text-muted-foreground">First name</span>
-									<Input data-testid="unit-lease-new-tenant-first-name" bind:value={tenantForm.firstName} placeholder="First name" />
-									{#if tenantErrors.firstName}
-										<p class="mt-1 text-xs text-destructive" data-testid="unit-lease-new-tenant-first-name-error">{tenantErrors.firstName}</p>
-									{/if}
-								</div>
-								<div>
-									<span class="mb-1 block text-xs font-medium text-muted-foreground">Last name</span>
-									<Input data-testid="unit-lease-new-tenant-last-name" bind:value={tenantForm.lastName} placeholder="Last name" />
-									{#if tenantErrors.lastName}
-										<p class="mt-1 text-xs text-destructive" data-testid="unit-lease-new-tenant-last-name-error">{tenantErrors.lastName}</p>
-									{/if}
-								</div>
-								<div>
-									<span class="mb-1 block text-xs font-medium text-muted-foreground">Email</span>
-									<Input
-										data-testid="unit-lease-new-tenant-email"
-										type="email"
-										autocomplete="email"
-										bind:value={tenantForm.email}
-										placeholder="Email"
-									/>
-									{#if tenantErrors.email}
-										<p class="mt-1 text-xs text-destructive" data-testid="unit-lease-new-tenant-email-error">{tenantErrors.email}</p>
-									{/if}
-								</div>
-								<div>
-									<span class="mb-1 block text-xs font-medium text-muted-foreground">Phone</span>
-									<Input
-										data-testid="unit-lease-new-tenant-phone"
-										type="tel"
-										autocomplete="tel"
-										inputmode="tel"
-										mask="phone"
-										bind:value={tenantForm.phone}
-										placeholder="Phone"
-									/>
-									{#if tenantErrors.phone}
-										<p class="mt-1 text-xs text-destructive" data-testid="unit-lease-new-tenant-phone-error">{tenantErrors.phone}</p>
-									{/if}
-								</div>
-							</div>
-						{/if}
-					</div>
-				{:else if createLeaseStep === 1}
-					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="identity" testidPrefix="unit-lease-create" />
-				{:else if createLeaseStep === 2}
-					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="dates" testidPrefix="unit-lease-create" />
-				{:else if createLeaseStep === 3}
-					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="rent" testidPrefix="unit-lease-create" />
-				{:else if createLeaseStep === 4}
-					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="fees" testidPrefix="unit-lease-create" />
-				{:else if createLeaseStep === 5}
-					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="status" testidPrefix="unit-lease-create" />
-				{:else}
-					<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} section="tracking" testidPrefix="unit-lease-create" />
-				{/if}
-			</FormStepper>
-		</div>
-
-		<Dialog.Footer class="mt-4">
-			<Button variant="outline" onclick={closeCreateLease} data-testid="unit-lease-create-cancel">Cancel</Button>
-			{#if createLeaseStep > 0}
-				<Button
-					variant="outline"
-					onclick={() => (createLeaseStep = Math.max(createLeaseStep - 1, 0))}
-					data-testid="unit-lease-create-back"
-				>
-					Back
-				</Button>
-			{/if}
-			{#if createLeaseStep < createLeaseSteps.length - 1}
-				<StepperNextButton
-					testid="unit-lease-create-next"
-					onclick={nextCreateLeaseStep}
-					complete={completedCreateLeaseSteps.includes(createLeaseStep)}
-				/>
-			{:else}
-				<Button
-					onclick={submitCreateLease}
-					disabled={createLeaseMutation.isPending}
-					data-testid="unit-lease-create-save"
-				>
-					{createLeaseMutation.isPending ? 'Saving…' : 'Save lease'}
-				</Button>
-			{/if}
-		</Dialog.Footer>
+<Dialog.Root open={closeOpen} onOpenChange={(open) => (closeOpen = open)}>
+	<Dialog.Content class="max-w-lg" data-testid="close-account-dialog">
+		<Dialog.Header><Dialog.Title>Close tenant account</Dialog.Title><Dialog.Description>Possession must be returned; receivable, unapplied credit, and deposit must be zero; drafts, signatures, payments, and autopay must be resolved.</Dialog.Description></Dialog.Header>
+		<label class="block space-y-1 text-sm"><span>Close reason code</span><input bind:value={closeReasonCode} class="h-10 w-full rounded-md border px-3" /></label>
+		<label class="block space-y-1 text-sm"><span>Optional note</span><textarea bind:value={closeNote} class="min-h-20 w-full rounded-md border p-3"></textarea></label>
+		<Dialog.Footer><Button variant="outline" onclick={() => (closeOpen = false)}>Cancel</Button><Button disabled={!closeReasonCode.trim() || closeMutation.isPending} onclick={() => closeMutation.mutate()}>Close account</Button></Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>

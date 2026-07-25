@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { createMutation, createQuery } from '@tanstack/svelte-query';
 	import { portal } from '$lib/api/endpoints/portal';
-	import { FileText, MessageCircleQuestionMark } from '@lucide/svelte';
+	import { FileDown, FileText, MessageCircleQuestionMark } from '@lucide/svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { formatLeaseAnswerText } from '$lib/portal/lease-answer-display';
 	import { formatDateOnly } from '$lib/utils/date';
 
@@ -22,9 +23,11 @@
 	let leaseQuestion = $state('');
 	let leaseAnswer = $state('');
 	let leaseAnswerSources = $state<string[]>([]);
+	let downloadingAgreementId = $state<number | null>(null);
+	let leaseDocumentMessage = $state('');
 
 	const askLeaseMutation = createMutation(() => ({
-		mutationFn: (question: string) => portal.askLease(question, primaryLease?.id),
+		mutationFn: (question: string) => portal.askLease(question, primaryLease?.leaseManagementId),
 		onSuccess: (res) => {
 			leaseAnswer = res.answer;
 			leaseAnswerSources = res.sources ?? [];
@@ -52,6 +55,33 @@
 	function askSuggestion(q: string) {
 		askLease(q);
 	}
+
+	async function downloadSignedLease(relationship: NonNullable<typeof primaryLease>) {
+		const agreement = relationship.agreement;
+		if (
+			!agreement?.executedDocumentAvailable ||
+			!agreement.executedDocumentFileName ||
+			!agreement.executedDocumentContentType
+		) {
+			leaseDocumentMessage = 'Signed lease PDF is not available yet. Contact management.';
+			return;
+		}
+
+		downloadingAgreementId = agreement.leaseAgreementId;
+		leaseDocumentMessage = '';
+		try {
+			await portal.downloadExecutedAgreement(
+				relationship.leaseManagementId,
+				agreement.leaseAgreementId,
+				agreement.executedDocumentFileName,
+				agreement.executedDocumentContentType
+			);
+		} catch {
+			leaseDocumentMessage = 'Could not download the signed lease PDF. Please try again or contact management.';
+		} finally {
+			downloadingAgreementId = null;
+		}
+	}
 </script>
 
 <svelte:head><title>Lease - Rental Command</title></svelte:head>
@@ -59,15 +89,45 @@
 <div class="h-full overflow-y-auto p-6">
 	<div class="mb-5 flex items-center gap-2"><FileText class="h-5 w-5 text-primary" /><h1 class="text-2xl font-semibold">Lease</h1></div>
 	<div class="space-y-3">
-		{#each leasesQuery.data ?? [] as lease}
-			<div class="rounded-lg border border-border bg-card p-4">
-				<p class="font-medium">{lease.leaseNumber}</p>
-				<p class="mt-1 text-sm text-muted-foreground">{lease.propertyName ?? 'Linked property'} {lease.unitNumber ? `Unit ${lease.unitNumber}` : ''}</p>
-				<p class="mt-3 text-sm">Rent {money(lease.monthlyRent)} · Ends {formatDateOnly(lease.endDate)}</p>
+		{#if leasesQuery.isLoading}
+			<LoadingState label="Loading lease information" variant="page" testid="portal-lease-loading" />
+		{:else if leasesQuery.isError}
+			<div class="rounded-lg border border-destructive/40 p-6 text-center" data-testid="portal-lease-error">
+				<p class="text-sm font-medium text-destructive">Couldn't load your lease information.</p>
+				<Button type="button" variant="outline" size="sm" class="mt-3" onclick={() => leasesQuery.refetch()}>Try again</Button>
 			</div>
 		{:else}
-			<p class="text-sm text-muted-foreground">No lease is linked to this account.</p>
-		{/each}
+			{#each leasesQuery.data ?? [] as relationship}
+				<div class="rounded-lg border border-border bg-card p-4">
+					<p class="font-medium">{relationship.agreement?.agreementNumber ?? relationship.relationshipNumber}</p>
+					<p class="mt-1 text-sm text-muted-foreground">{relationship.propertyName} {relationship.unitNumber ? `Unit ${relationship.unitNumber}` : ''}</p>
+					<p class="mt-3 text-sm">{relationship.agreement ? `Rent ${money(relationship.agreement.baseRentAmount)} · ${relationship.agreement.termEndOn ? `Ends ${formatDateOnly(relationship.agreement.termEndOn)}` : 'Month-to-month'}` : 'No governing agreement'}</p>
+					{#if relationship.agreement?.executedDocumentAvailable}
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							class="mt-4 gap-2"
+							onclick={() => downloadSignedLease(relationship)}
+							disabled={downloadingAgreementId === relationship.agreement?.leaseAgreementId}
+							data-testid="portal-lease-download-signed-pdf"
+						>
+							<FileDown class="h-4 w-4" />
+							{downloadingAgreementId === relationship.agreement.leaseAgreementId ? 'Downloading…' : 'Download signed lease PDF'}
+						</Button>
+					{:else if relationship.agreement}
+						<p class="mt-4 text-sm text-muted-foreground" data-testid="portal-lease-signed-pdf-missing">
+							Signed lease PDF is not available yet. Contact management.
+						</p>
+					{/if}
+				</div>
+			{:else}
+				<p class="text-sm text-muted-foreground">No lease is linked to this account.</p>
+			{/each}
+		{/if}
+		{#if leaseDocumentMessage}
+			<p class="text-sm text-destructive" data-testid="portal-lease-document-message">{leaseDocumentMessage}</p>
+		{/if}
 	</div>
 
 	{#if primaryLease}

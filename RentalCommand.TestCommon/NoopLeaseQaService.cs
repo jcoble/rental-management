@@ -9,6 +9,13 @@ namespace RentalCommand.TestCommon;
 /// </summary>
 public sealed class NoopLeaseQaService : ILeaseQaService
 {
+    public Task<LeaseQuestionResponse?> AskManagementAsync(
+        LeaseManagementReadContext access,
+        int leaseManagementId,
+        string question,
+        CancellationToken ct = default)
+        => Task.FromResult<LeaseQuestionResponse?>(null);
+
     public Task<LeaseQuestionResponse?> AskAsync(
         int portfolioId, int leaseId, string question, CancellationToken ct = default)
         => Task.FromResult<LeaseQuestionResponse?>(null);

@@ -1,13 +1,15 @@
-using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -20,27 +22,23 @@ public sealed class ApplicationService : IApplicationService
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly IAuditTrailService _audit;
-    private readonly ITenantPortalProvisioningService _portalProvisioning;
-    private readonly ILogger<ApplicationService> _logger;
     private readonly TimeProvider _timeProvider;
+    private readonly IAtomicUnitOfWork _atomic;
 
     public ApplicationService(
         RentalCommandDbContext db,
         IFileStorage files,
         IDataUpdateService dataUpdate,
         IAuditTrailService audit,
-        ITenantPortalProvisioningService portalProvisioning,
-        ILogger<ApplicationService> logger,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IAtomicUnitOfWork atomic)
     {
         _db = db;
         _files = files;
         _dataUpdate = dataUpdate;
-        _audit = audit;
-        _portalProvisioning = portalProvisioning;
-        _logger = logger;
+        _ = audit;
         _timeProvider = timeProvider;
+        _atomic = atomic;
     }
 
     // -------------------------------------------------------------------------
@@ -53,31 +51,73 @@ public sealed class ApplicationService : IApplicationService
         if (portfolio is null)
             return null;
 
-        // Offer active properties (and their non-offline units) so the applicant can pick what they're
-        // applying for. Soft-deleted rows are excluded by the entities' global query filters.
-        var properties = await _db.Properties
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolio.Id && p.Status != PropertyStatus.Inactive)
-            .OrderBy(p => p.Name)
-            .Select(p => new PublicPropertyOption
-            {
-                Id = p.Id,
-                Name = p.Name,
-                AddressLine1 = p.AddressLine1,
-                City = p.City,
-                State = p.State,
-                Units = p.Units
-                    .Where(u => u.Status != UnitStatus.Offline)
-                    .OrderBy(u => u.UnitNumber)
-                    .Select(u => new PublicUnitOption
-                    {
-                        Id = u.Id,
-                        UnitNumber = u.UnitNumber,
-                        Status = u.Status,
-                    })
-                    .ToList(),
-            })
+        // PostgreSQL performs the property/unit join, operational filtering, ordering, and grouping
+        // in one statement. In particular, the LEFT JOIN keeps active properties that currently
+        // have no eligible units. Unit has no mutable availability field; the canonical occupancy
+        // view is the only source for its presentation status.
+        var rows = await _db.Database.SqlQuery<PublicPropertyOptionDatabaseRow>($"""
+            WITH eligible_units AS (
+                SELECT
+                    unit."Id",
+                    unit."PortfolioId",
+                    unit."PropertyId",
+                    unit."UnitNumber",
+                    CASE
+                        WHEN occupancy."IsOccupied" THEN {(int)DerivedUnitStatus.Occupied}
+                        WHEN occupancy."HasScheduledMoveIn" THEN {(int)DerivedUnitStatus.Reserved}
+                        ELSE {(int)DerivedUnitStatus.Vacant}
+                    END AS "Status"
+                FROM "Units" AS unit
+                INNER JOIN "vw_unit_occupancy" AS occupancy
+                    ON occupancy."PortfolioId" = unit."PortfolioId"
+                    AND occupancy."UnitId" = unit."Id"
+                WHERE unit."PortfolioId" = {portfolio.Id}
+                    AND unit."DeletedAt" IS NULL
+                    AND NOT occupancy."IsInTurnover"
+                    AND NOT occupancy."IsOutOfService"
+                    AND NOT occupancy."IsOnManagementHold"
+            )
+            SELECT
+                property."Id",
+                property."Name",
+                property."AddressLine1",
+                property."City",
+                property."State",
+                COALESCE(
+                    jsonb_agg(
+                        jsonb_build_object(
+                            'Id', eligible."Id",
+                            'UnitNumber', eligible."UnitNumber",
+                            'Status', eligible."Status")
+                        ORDER BY eligible."UnitNumber", eligible."Id")
+                        FILTER (WHERE eligible."Id" IS NOT NULL),
+                    '[]'::jsonb)::text AS "UnitsJson"
+            FROM "Properties" AS property
+            LEFT JOIN eligible_units AS eligible
+                ON eligible."PortfolioId" = property."PortfolioId"
+                AND eligible."PropertyId" = property."Id"
+            WHERE property."PortfolioId" = {portfolio.Id}
+                AND property."DeletedAt" IS NULL
+                AND property."Status" <> {(int)PropertyStatus.Inactive}
+            GROUP BY
+                property."Id",
+                property."Name",
+                property."AddressLine1",
+                property."City",
+                property."State"
+            ORDER BY property."Name", property."Id"
+            """)
             .ToListAsync(ct);
+
+        var properties = rows.Select(row => new PublicPropertyOption
+        {
+            Id = row.Id,
+            Name = row.Name,
+            AddressLine1 = row.AddressLine1,
+            City = row.City,
+            State = row.State,
+            Units = JsonSerializer.Deserialize<PublicUnitOption[]>(row.UnitsJson) ?? [],
+        }).ToList();
 
         return new PublicApplicationFormInfo
         {
@@ -86,91 +126,36 @@ public sealed class ApplicationService : IApplicationService
         };
     }
 
-    public async Task<SubmitApplicationResult?> SubmitAsync(
-        string token, SubmitApplicationRequest request, string? ipAddress, CancellationToken ct = default)
+    private sealed class PublicPropertyOptionDatabaseRow
     {
-        var portfolio = await ResolvePortfolioByTokenAsync(token, ct);
-        if (portfolio is null)
-            return null;
+        public int Id { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string AddressLine1 { get; set; } = string.Empty;
+        public string City { get; set; } = string.Empty;
+        public string State { get; set; } = string.Empty;
+        public string UnitsJson { get; set; } = "[]";
+    }
 
-        var portfolioId = portfolio.Id;
-
-        // IDOR guard: a client-supplied PropertyId/UnitId is honored only when it actually lives in
-        // the token's portfolio; otherwise it is dropped (the applicant simply applied without a
-        // specific property) rather than letting them reference another portfolio's record.
-        int? propertyId = null;
-        if (request.PropertyId is > 0 &&
-            await _db.Properties.AnyAsync(p => p.Id == request.PropertyId && p.PortfolioId == portfolioId, ct))
-        {
-            propertyId = request.PropertyId;
-        }
-
-        int? unitId = null;
-        if (request.UnitId is > 0 &&
-            await _db.Units.AnyAsync(u => u.Id == request.UnitId
-                && u.Property != null && u.Property.PortfolioId == portfolioId
-                && (propertyId == null || u.PropertyId == propertyId), ct))
-        {
-            unitId = request.UnitId;
-        }
-
-        var existingOpenApplicationId = await FindOpenApplicationIdByEmailAsync(portfolioId, request.Email, ct);
-        if (existingOpenApplicationId is not null)
-        {
-            throw new DomainValidationException(
-                $"An application for {NormalizeEmailForComparison(request.Email)} already exists as application #{existingOpenApplicationId}. Review the existing application before creating another.",
-                statusCode: 409);
-        }
-
-        var now = _timeProvider.UtcNow();
-        var entity = new RentalApplication
-        {
-            PortfolioId = portfolioId,
-            PropertyId = propertyId,
-            UnitId = unitId,
-            FirstName = request.FirstName.Trim(),
-            LastName = request.LastName.Trim(),
-            Email = request.Email,
-            Phone = request.Phone,
-            DateOfBirth = request.DateOfBirth.ToUtc(),
-            CurrentAddressLine1 = request.CurrentAddressLine1,
-            CurrentAddressLine2 = request.CurrentAddressLine2,
-            CurrentCity = request.CurrentCity,
-            CurrentState = request.CurrentState,
-            CurrentPostalCode = request.CurrentPostalCode,
-            // Keep the legacy single-line CurrentAddress in sync (composed from the structured
-            // fields; falls back to any single-line value the caller still sends).
-            CurrentAddress = AddressComposer.Compose(
-                                 request.CurrentAddressLine1, request.CurrentAddressLine2,
-                                 request.CurrentCity, request.CurrentState, request.CurrentPostalCode)
-                             ?? request.CurrentAddress,
-            Employer = request.Employer,
-            MonthlyIncome = request.MonthlyIncome,
-            DesiredMoveInDate = request.DesiredMoveInDate.ToUtc(),
-            Notes = request.Notes,
-            IdExtractedFields = request.IdExtractedFields,
-            ConsentGiven = request.ConsentGiven,
-            // Consent is required at the controller; record exactly when/where it was captured for FCRA.
-            ConsentAtUtc = request.ConsentGiven ? now : null,
-            ConsentIpAddress = request.ConsentGiven ? ipAddress : null,
-            Status = ApplicationStatus.Submitted,
-            SubmittedAtUtc = now,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        _db.RentalApplications.Add(entity);
-        await _db.SaveChangesAsync(ct);
-
-        // Surface the new application to the landlord's live views.
-        var response = ApplicationResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-
-        return new SubmitApplicationResult
-        {
-            ApplicationId = entity.Id,
-            Status = entity.Status.ToString(),
-        };
+    public async Task<SubmitApplicationResult?> SubmitAsync(
+        string token,
+        SubmitApplicationRequest request,
+        string? ipAddress,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = new AtomicPublicApplicationSubmissionCommand(
+            token, JsonSerializer.Serialize(request), ipAddress, operationKey);
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicPublicApplicationSubmission.Identity(command), command,
+            AtomicPublicApplicationSubmission.Codec, ct);
+        return outcome.Value.Found
+            ? new SubmitApplicationResult
+            {
+                ApplicationId = outcome.Value.ApplicationId,
+                Status = outcome.Value.Status,
+                Message = outcome.Value.Message,
+            }
+            : null;
     }
 
     // -------------------------------------------------------------------------
@@ -178,80 +163,19 @@ public sealed class ApplicationService : IApplicationService
     // -------------------------------------------------------------------------
 
     public async Task<ApplicationResponse> CreateFromScanAsync(
-        int portfolioId, CreateApplicationRequest request, int userId, CancellationToken ct = default)
+        WorkspaceReadScope scope,
+        CreateApplicationRequest request,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        // IDOR guard: honor a PropertyId/UnitId only when it actually lives in THIS portfolio; otherwise
-        // drop it (the landlord simply filed the applicant without a specific property) rather than letting
-        // a hallucinated/foreign id from the scan reference another portfolio's record. Same shape as the
-        // public SubmitAsync guard.
-        int? propertyId = null;
-        if (request.PropertyId is > 0 &&
-            await _db.Properties.AnyAsync(p => p.Id == request.PropertyId && p.PortfolioId == portfolioId, ct))
-        {
-            propertyId = request.PropertyId;
-        }
-
-        int? unitId = null;
-        if (request.UnitId is > 0 &&
-            await _db.Units.AnyAsync(u => u.Id == request.UnitId
-                && u.Property != null && u.Property.PortfolioId == portfolioId
-                && (propertyId == null || u.PropertyId == propertyId), ct))
-        {
-            unitId = request.UnitId;
-        }
-
-        var existingOpenApplicationId = await FindOpenApplicationIdByEmailAsync(portfolioId, request.Email, ct);
-        if (existingOpenApplicationId is not null)
-        {
-            throw new DomainValidationException(
-                $"An application for {NormalizeEmailForComparison(request.Email)} already exists as application #{existingOpenApplicationId}. Review the existing application before creating another.",
-                statusCode: 409);
-        }
-
-        var now = _timeProvider.UtcNow();
-        var entity = new RentalApplication
-        {
-            PortfolioId = portfolioId,
-            PropertyId = propertyId,
-            UnitId = unitId,
-            FirstName = request.FirstName.Trim(),
-            LastName = request.LastName.Trim(),
-            Email = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim(),
-            Phone = request.Phone,
-            DateOfBirth = request.DateOfBirth.ToUtc(),
-            // The scanned application carries a single-line current address; keep it on the legacy
-            // CurrentAddress column (the structured line1/city/... fields stay null, same as a public
-            // submit that only sends a single-line address).
-            CurrentAddress = string.IsNullOrWhiteSpace(request.CurrentAddress) ? null : request.CurrentAddress.Trim(),
-            Employer = request.Employer,
-            MonthlyIncome = request.MonthlyIncome,
-            DesiredMoveInDate = request.DesiredMoveInDate.ToUtc(),
-            Notes = request.Notes,
-            IdExtractedFields = request.IdExtractedFields,
-            // A landlord-keyed paper application carries no in-app FCRA consent event.
-            ConsentGiven = false,
-            Status = ApplicationStatus.Submitted,
-            SubmittedAtUtc = now,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        _db.RentalApplications.Add(entity);
-        await _db.SaveChangesAsync(ct);
-
-        // Audit the PII-touching create (an applicant record was created from a scanned application).
-        await _audit.LogAsync(
-            portfolioId,
-            EntityType,
-            entity.Id,
-            AuditLogOperation.Created,
-            userId: userId,
-            changeReason: "Created from scanned rental application",
-            ct: ct);
-
-        var response = ApplicationResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
+        var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Application,
+            AtomicRentalMutationOperation.Create, 0, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        return outcome.Value.ResponseJson is { Length: > 0 } json
+            ? JsonSerializer.Deserialize<ApplicationResponse>(json)
+              ?? throw new InvalidOperationException("The application receipt snapshot is invalid.")
+            : throw new InvalidOperationException("The application receipt has no response snapshot.");
     }
 
     public async Task<IReadOnlyList<ApplicationResponse>> ListAsync(
@@ -261,12 +185,52 @@ public sealed class ApplicationService : IApplicationService
         return page.Items;
     }
 
-    public async Task<ApplicationListResponse> ListPageAsync(
+    public async Task<IReadOnlyList<ApplicationResponse>> ListAuthorizedAsync(
+        WorkspaceReadScope scope,
+        string? status,
+        ListQuery query,
+        int? unitId = null,
+        CancellationToken ct = default)
+    {
+        var page = await ListPageAuthorizedAsync(scope, status, query, unitId, ct);
+        return page.Items;
+    }
+
+    public Task<ApplicationListResponse> ListPageAuthorizedAsync(
+        WorkspaceReadScope scope,
+        string? status,
+        ListQuery query,
+        int? unitId = null,
+        CancellationToken ct = default)
+    {
+        var applications = _db.RentalApplications
+            .AsNoTracking()
+            .WhereAuthorized(
+                _db,
+                scope,
+                [CapabilityKeys.LeasingApplicationsManage],
+                _timeProvider.UtcNow());
+        return ListPageFromQueryAsync(applications, scope.PortfolioId, status, query, unitId, ct);
+    }
+
+    public Task<ApplicationListResponse> ListPageAsync(
         int portfolioId, string? status, ListQuery query, int? unitId = null, CancellationToken ct = default)
     {
         var q = _db.RentalApplications
             .AsNoTracking()
             .Where(a => a.PortfolioId == portfolioId);
+
+        return ListPageFromQueryAsync(q, portfolioId, status, query, unitId, ct);
+    }
+
+    private async Task<ApplicationListResponse> ListPageFromQueryAsync(
+        IQueryable<RentalApplication> q,
+        int portfolioId,
+        string? status,
+        ListQuery query,
+        int? unitId,
+        CancellationToken ct)
+    {
 
         // Unit Command Center filter: scope to one unit's applications. Applied DB-side (translates to
         // a WHERE clause), never by materializing the portfolio's apps and filtering in memory.
@@ -312,19 +276,47 @@ public sealed class ApplicationService : IApplicationService
         var items = await q
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
-            .Select(a => new ApplicationHomeProjection
+            .Select(a => new ApplicationResponse
             {
-                Application = a,
+                Id = a.Id,
+                PortfolioId = a.PortfolioId,
+                PropertyId = a.PropertyId,
+                UnitId = a.UnitId,
                 PropertyName = a.Property != null ? a.Property.Name : null,
                 UnitNumber = a.Unit != null ? a.Unit.UnitNumber : null,
+                FirstName = a.FirstName,
+                LastName = a.LastName,
+                Email = a.Email,
+                Phone = a.Phone,
+                DateOfBirth = a.DateOfBirth,
+                CurrentAddressLine1 = a.CurrentAddressLine1,
+                CurrentAddressLine2 = a.CurrentAddressLine2,
+                CurrentCity = a.CurrentCity,
+                CurrentState = a.CurrentState,
+                CurrentPostalCode = a.CurrentPostalCode,
+                CurrentAddress = a.CurrentAddress,
+                Employer = a.Employer,
+                MonthlyIncome = a.MonthlyIncome,
+                DesiredMoveInDate = a.DesiredMoveInDate,
+                Notes = a.Notes,
+                IdExtractedFields = a.IdExtractedFields,
+                ConsentGiven = a.ConsentGiven,
+                ConsentAtUtc = a.ConsentAtUtc,
+                Status = a.Status == ApplicationStatus.Submitted ? "Submitted"
+                    : a.Status == ApplicationStatus.UnderReview ? "UnderReview"
+                    : a.Status == ApplicationStatus.Approved ? "Approved"
+                    : a.Status == ApplicationStatus.Declined ? "Declined"
+                    : "Withdrawn",
+                DecisionReason = a.DecisionReason,
+                SubmittedAtUtc = a.SubmittedAtUtc,
+                ReviewedAtUtc = a.ReviewedAtUtc,
+                ApprovedTenantId = a.ApprovedTenantId,
             })
             .ToListAsync(ct);
 
         return new ApplicationListResponse
         {
-            Items = items
-                .Select(i => ApplicationResponse.FromEntity(i.Application, i.PropertyName, i.UnitNumber))
-                .ToList(),
+            Items = items,
             TotalCount = totalCount,
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,
@@ -333,9 +325,35 @@ public sealed class ApplicationService : IApplicationService
 
     public async Task<ApplicationResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {
-        var item = await _db.RentalApplications
+        var applications = _db.RentalApplications
             .AsNoTracking()
-            .Where(a => a.Id == id && a.PortfolioId == portfolioId)
+            .Where(a => a.Id == id && a.PortfolioId == portfolioId);
+        return await GetFromQueryAsync(applications, portfolioId, id, ct);
+    }
+
+    public Task<ApplicationResponse?> GetAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        CancellationToken ct = default)
+    {
+        var applications = _db.RentalApplications
+            .AsNoTracking()
+            .Where(a => a.Id == id)
+            .WhereAuthorized(
+                _db,
+                scope,
+                [CapabilityKeys.LeasingApplicationsManage],
+                _timeProvider.UtcNow());
+        return GetFromQueryAsync(applications, scope.PortfolioId, id, ct);
+    }
+
+    private async Task<ApplicationResponse?> GetFromQueryAsync(
+        IQueryable<RentalApplication> applications,
+        int portfolioId,
+        int id,
+        CancellationToken ct)
+    {
+        var item = await applications
             .Select(a => new ApplicationHomeProjection
             {
                 Application = a,
@@ -360,357 +378,137 @@ public sealed class ApplicationService : IApplicationService
         return response;
     }
 
-    public async Task<ApplicationResponse?> UpdateAsync(
-        int portfolioId,
+    public async Task<ApplicationResponse?> UpdateAuthorizedAsync(
+        WorkspaceReadScope scope,
         int id,
         UpdateApplicationRequest request,
         int userId,
+        string operationKey,
         CancellationToken ct = default)
     {
-        var entity = await _db.RentalApplications
-            .FirstOrDefaultAsync(a => a.Id == id && a.PortfolioId == portfolioId, ct);
-        if (entity == null)
-            return null;
-
-        if (entity.Status is not (ApplicationStatus.Submitted or ApplicationStatus.UnderReview))
-        {
-            throw new DomainValidationException(
-                "Only submitted or under-review applications can be edited.",
-                statusCode: 409);
-        }
-
-        if (request.ClearProperty)
-        {
-            entity.PropertyId = null;
-            entity.UnitId = null;
-        }
-
-        if (request.PropertyId is > 0)
-        {
-            var propertyExists = await _db.Properties
-                .AsNoTracking()
-                .AnyAsync(p => p.Id == request.PropertyId && p.PortfolioId == portfolioId, ct);
-            if (!propertyExists)
+        var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Application,
+            AtomicRentalMutationOperation.Update, id, operationKey, request);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        return outcome.Value.Found ? await GetAsync(scope.PortfolioId, id, ct) : null;
+    }
+    public async Task<ApproveApplicationResult?> ApproveAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        int userId,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Application,
+            AtomicRentalMutationOperation.Approve, id, operationKey, new object());
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        return outcome.Value.Found
+            ? new ApproveApplicationResult
             {
-                throw new DomainValidationException("Selected property was not found in this portfolio.");
+                ApplicationId = outcome.Value.EntityId,
+                Status = ApplicationStatus.Approved.ToString(),
+                TenantId = outcome.Value.RelatedEntityId
+                    ?? throw new InvalidOperationException("Approved application receipt has no tenant."),
             }
-
-            entity.PropertyId = request.PropertyId;
-
-            if (entity.UnitId is > 0)
-            {
-                var unitStillMatches = await _db.Units
-                    .AsNoTracking()
-                    .AnyAsync(u => u.Id == entity.UnitId
-                        && u.PropertyId == request.PropertyId
-                        && u.Property != null
-                        && u.Property.PortfolioId == portfolioId, ct);
-                if (!unitStillMatches)
-                {
-                    entity.UnitId = null;
-                }
-            }
-        }
-
-        if (request.ClearUnit)
-        {
-            entity.UnitId = null;
-        }
-
-        if (request.UnitId is > 0)
-        {
-            var unit = await _db.Units
-                .AsNoTracking()
-                .Where(u => u.Id == request.UnitId
-                    && u.Property != null
-                    && u.Property.PortfolioId == portfolioId)
-                .Select(u => new { u.Id, u.PropertyId })
-                .FirstOrDefaultAsync(ct);
-            if (unit == null)
-            {
-                throw new DomainValidationException("Selected unit was not found in this portfolio.");
-            }
-
-            if (entity.PropertyId is > 0 && entity.PropertyId != unit.PropertyId)
-            {
-                throw new DomainValidationException("Selected unit does not belong to the selected property.");
-            }
-
-            entity.PropertyId = unit.PropertyId;
-            entity.UnitId = unit.Id;
-        }
-
-        if (request.FirstName != null)
-        {
-            entity.FirstName = RequireNonBlank(request.FirstName, "First name");
-        }
-        if (request.LastName != null)
-        {
-            entity.LastName = RequireNonBlank(request.LastName, "Last name");
-        }
-        if (request.Email != null) entity.Email = TrimToNull(request.Email);
-        if (request.Phone != null) entity.Phone = TrimToNull(request.Phone);
-
-        if (request.ClearDateOfBirth)
-        {
-            entity.DateOfBirth = null;
-        }
-        else if (request.DateOfBirth.HasValue)
-        {
-            entity.DateOfBirth = request.DateOfBirth.ToUtc();
-        }
-
-        var structuredAddressChanged =
-            request.CurrentAddressLine1 != null ||
-            request.CurrentAddressLine2 != null ||
-            request.CurrentCity != null ||
-            request.CurrentState != null ||
-            request.CurrentPostalCode != null;
-
-        if (request.CurrentAddressLine1 != null) entity.CurrentAddressLine1 = TrimToNull(request.CurrentAddressLine1);
-        if (request.CurrentAddressLine2 != null) entity.CurrentAddressLine2 = TrimToNull(request.CurrentAddressLine2);
-        if (request.CurrentCity != null) entity.CurrentCity = TrimToNull(request.CurrentCity);
-        if (request.CurrentState != null) entity.CurrentState = TrimToNull(request.CurrentState);
-        if (request.CurrentPostalCode != null) entity.CurrentPostalCode = TrimToNull(request.CurrentPostalCode);
-
-        if (structuredAddressChanged)
-        {
-            entity.CurrentAddress = AddressComposer.Compose(
-                entity.CurrentAddressLine1,
-                entity.CurrentAddressLine2,
-                entity.CurrentCity,
-                entity.CurrentState,
-                entity.CurrentPostalCode);
-        }
-        else if (request.CurrentAddress != null)
-        {
-            entity.CurrentAddressLine1 = null;
-            entity.CurrentAddressLine2 = null;
-            entity.CurrentCity = null;
-            entity.CurrentState = null;
-            entity.CurrentPostalCode = null;
-            entity.CurrentAddress = TrimToNull(request.CurrentAddress);
-        }
-
-        if (request.Employer != null) entity.Employer = TrimToNull(request.Employer);
-
-        if (request.ClearMonthlyIncome)
-        {
-            entity.MonthlyIncome = null;
-        }
-        else if (request.MonthlyIncome.HasValue)
-        {
-            entity.MonthlyIncome = request.MonthlyIncome;
-        }
-
-        if (request.ClearDesiredMoveInDate)
-        {
-            entity.DesiredMoveInDate = null;
-        }
-        else if (request.DesiredMoveInDate.HasValue)
-        {
-            entity.DesiredMoveInDate = request.DesiredMoveInDate.ToUtc();
-        }
-
-        if (request.Notes != null) entity.Notes = TrimToNull(request.Notes);
-
-        entity.UpdatedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
-
-        await _audit.LogAsync(
-            portfolioId,
-            EntityType,
-            entity.Id,
-            AuditLogOperation.Updated,
-            userId: userId,
-            changeReason: "Application corrected by landlord",
-            ct: ct);
-
-        var response = await GetAsync(portfolioId, entity.Id, ct)
-            ?? ApplicationResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
+            : null;
+    }
+    public async Task<ApplicationResponse?> DeclineAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        int userId,
+        string? reason,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Application,
+            AtomicRentalMutationOperation.Decline, id, operationKey, reason);
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        return outcome.Value.Found ? await GetAsync(scope.PortfolioId, id, ct) : null;
+    }
+    public async Task<ApplicationResponse?> WithdrawAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        int userId,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Application,
+            AtomicRentalMutationOperation.Withdraw, id, operationKey, new object());
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        return outcome.Value.Found ? await GetAsync(scope.PortfolioId, id, ct) : null;
     }
 
-    public async Task<ApproveApplicationResult?> ApproveAsync(
-        int portfolioId, int id, int userId, CancellationToken ct = default)
+    public async Task<bool> DeleteAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        int userId,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        var entity = await _db.RentalApplications
-            .FirstOrDefaultAsync(a => a.Id == id && a.PortfolioId == portfolioId, ct);
-        if (entity == null)
-            return null;
-
-        if (entity.Status is ApplicationStatus.Approved)
-            throw new InvalidOperationException("Application is already approved.");
-        if (entity.Status is ApplicationStatus.Declined or ApplicationStatus.Withdrawn)
-            throw new InvalidOperationException($"Application is {entity.Status.ToString().ToLowerInvariant()} and cannot be approved.");
-
-        var now = _timeProvider.UtcNow();
-
-        // Mirror Tenant creation: the approved applicant becomes a real tenant record.
-        var tenant = new Tenant
-        {
-            PortfolioId = portfolioId,
-            FirstName = entity.FirstName,
-            LastName = entity.LastName,
-            Email = entity.Email,
-            Phone = entity.Phone,
-            DateOfBirth = entity.DateOfBirth,
-            Notes = BuildTenantNote(entity),
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _db.Tenants.Add(tenant);
-        await _db.SaveChangesAsync(ct);
-
-        entity.Status = ApplicationStatus.Approved;
-        entity.ReviewedAtUtc = now;
-        entity.ApprovedTenantId = tenant.Id;
-        entity.UpdatedAt = now;
-        await _db.SaveChangesAsync(ct);
-
-        // The approved applicant is now a tenant — provision their portal login immediately (silent;
-        // the invite email is a separate on-demand staff action). Best-effort: a tenant with no email
-        // is a normal no-op, and a provisioning hiccup must never fail the approval.
-        try
-        {
-            await _portalProvisioning.EnsurePortalAccountForTenantAsync(tenant.Id, portfolioId, ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Failed to provision portal access for tenant {TenantId} created from application {ApplicationId}; approval still succeeds.",
-                tenant.Id, entity.Id);
-        }
-
-        // Audit the PII-touching mutation: an application was approved and a tenant was created.
-        await _audit.LogAsync(
-            portfolioId,
-            "Tenant",
-            tenant.Id,
-            AuditLogOperation.Created,
-            userId: userId,
-            changeReason: $"Created from approved rental application #{entity.Id}",
-            ct: ct);
-
-        var tenantResponse = TenantResponse.FromEntity(tenant);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, "Tenant", tenant.Id, tenantResponse, ct);
-
-        var appResponse = ApplicationResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, appResponse, ct);
-
-        return new ApproveApplicationResult
-        {
-            ApplicationId = entity.Id,
-            Status = entity.Status.ToString(),
-            TenantId = tenant.Id,
-        };
+        var command = AtomicRentalMutation.Command(scope, AtomicRentalMutationDomain.Application,
+            AtomicRentalMutationOperation.Delete, id, operationKey, new object());
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicRentalMutation.Identity(command), command, AtomicRentalMutation.Codec, ct);
+        return outcome.Value.Found;
     }
-
-    public async Task<ApplicationResponse?> DeclineAsync(
-        int portfolioId, int id, int userId, string? reason, CancellationToken ct = default)
+    public async Task<ApplicationLinkResult> GenerateLinkAsync(
+        WorkspaceReadScope scope,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        var entity = await _db.RentalApplications
-            .FirstOrDefaultAsync(a => a.Id == id && a.PortfolioId == portfolioId, ct);
-        if (entity == null)
-            return null;
-
-        if (entity.Status is ApplicationStatus.Approved)
-            throw new InvalidOperationException("An approved application cannot be declined.");
-
-        var now = _timeProvider.UtcNow();
-        entity.Status = ApplicationStatus.Declined;
-        entity.DecisionReason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim();
-        entity.ReviewedAtUtc = now;
-        entity.UpdatedAt = now;
-        await _db.SaveChangesAsync(ct);
-
-        await _audit.LogAsync(
-            portfolioId,
-            EntityType,
-            entity.Id,
-            AuditLogOperation.Updated,
-            userId: userId,
-            changeReason: "Application declined" + (entity.DecisionReason is null ? "" : $": {entity.DecisionReason}"),
-            ct: ct);
-
-        var response = ApplicationResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
-    }
-
-    public async Task<ApplicationResponse?> WithdrawAsync(
-        int portfolioId, int id, int userId, CancellationToken ct = default)
-    {
-        var entity = await _db.RentalApplications
-            .FirstOrDefaultAsync(a => a.Id == id && a.PortfolioId == portfolioId, ct);
-        if (entity == null)
-            return null;
-
-        if (entity.Status is ApplicationStatus.Approved)
-            throw new InvalidOperationException("An approved application cannot be withdrawn.");
-
-        var now = _timeProvider.UtcNow();
-        entity.Status = ApplicationStatus.Withdrawn;
-        entity.ReviewedAtUtc = now;
-        entity.UpdatedAt = now;
-        await _db.SaveChangesAsync(ct);
-
-        var response = ApplicationResponse.FromEntity(entity);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
-    }
-
-    public async Task<bool> DeleteAsync(int portfolioId, int id, int userId, CancellationToken ct = default)
-    {
-        var entity = await _db.RentalApplications
-            .FirstOrDefaultAsync(a => a.Id == id && a.PortfolioId == portfolioId, ct);
-        if (entity == null)
-        {
-            return false;
-        }
-
-        var now = _timeProvider.UtcNow();
-        entity.DeletedAt = now;
-        entity.UpdatedAt = now;
-        await _db.SaveChangesAsync(ct);
-
-        await _audit.LogAsync(
-            portfolioId,
-            EntityType,
-            id,
-            AuditLogOperation.Deleted,
-            userId: userId,
-            changeReason: $"Application #{id} deleted",
-            ct: ct);
-
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
-        return true;
-    }
-
-    public async Task<ApplicationLinkResult> GenerateLinkAsync(int portfolioId, CancellationToken ct = default)
-    {
-        var portfolio = await _db.Portfolios
-            .FirstOrDefaultAsync(p => p.Id == portfolioId, ct)
-            ?? throw new InvalidOperationException("Portfolio not found.");
-
-        // URL-safe opaque token. Rotating invalidates the previous link, which is the intended
-        // "regenerate to revoke the old link" behavior.
-        var token = GenerateToken();
-        portfolio.PublicApplicationToken = token;
-        portfolio.UpdatedAt = _timeProvider.UtcNow();
-        await _db.SaveChangesAsync(ct);
+        var command = AtomicWorkspaceCoreMutation.Command(
+            scope, AtomicWorkspaceCoreMutationOperation.RotateApplicationLink,
+            operationKey, new { });
+        var outcome = await Atomic.ExecuteAsync(
+            AtomicWorkspaceCoreMutation.Identity(command), command,
+            AtomicWorkspaceCoreMutation.Codec, ct);
+        if (!outcome.Value.Found || outcome.Value.PublicApplicationToken is null)
+            throw new InvalidOperationException("Portfolio not found.");
 
         return new ApplicationLinkResult
         {
-            Token = token,
-            ApplyPath = $"/apply/{token}",
+            Token = outcome.Value.PublicApplicationToken,
+            ApplyPath = $"/apply/{outcome.Value.PublicApplicationToken}",
         };
     }
 
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// A landlord can still decide without screening. Once a completed screening exists, however,
+    /// its explicit landlord decision must be recorded first and must agree with the application
+    /// outcome. The latest row is selected and sorted entirely in PostgreSQL.
+    /// </summary>
+    private async Task RequireCompatibleScreeningDecisionAsync(
+        int portfolioId,
+        int applicationId,
+        ScreeningDecision allowed,
+        ScreeningDecision? alsoAllowed,
+        CancellationToken ct)
+    {
+        var latest = await _db.ApplicantScreenings
+            .AsNoTracking()
+            .Where(screening => screening.PortfolioId == portfolioId
+                && screening.ApplicationId == applicationId
+                && screening.Status == ApplicantScreeningStatus.Completed)
+            .OrderByDescending(screening => screening.CompletedAtUtc)
+            .Select(screening => new { screening.Decision })
+            .FirstOrDefaultAsync(ct);
+
+        if (latest == null)
+            return;
+        if (latest.Decision == null)
+            throw new InvalidOperationException(
+                "Record the screening decision before approving or declining this application.");
+        if (latest.Decision != allowed && latest.Decision != alsoAllowed)
+            throw new InvalidOperationException(
+                "Update the recorded screening decision so it matches this application outcome.");
+    }
 
     /// <summary>
     /// Resolves a portfolio from a public link token. Tokens are matched exactly; an empty/whitespace
@@ -724,16 +522,6 @@ public sealed class ApplicationService : IApplicationService
         return await _db.Portfolios
             .AsNoTracking()
             .FirstOrDefaultAsync(p => p.PublicApplicationToken == token, ct);
-    }
-
-    private static string GenerateToken()
-    {
-        // 32 random bytes → ~43-char URL-safe string, well within the 64-char column.
-        var bytes = RandomNumberGenerator.GetBytes(32);
-        return Convert.ToBase64String(bytes)
-            .Replace('+', '-')
-            .Replace('/', '_')
-            .TrimEnd('=');
     }
 
     private static string? NormalizeEmailForComparison(string? email)
@@ -811,4 +599,6 @@ public sealed class ApplicationService : IApplicationService
         var note = string.Join(" ", parts);
         return note.Length > 2000 ? note[..2000] : note;
     }
+
+    private IAtomicUnitOfWork Atomic => _atomic;
 }

@@ -8,7 +8,6 @@
 	import { portfolios } from '$lib/api/endpoints/portfolios';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { conversationReadKey, markConversationRead } from '$lib/messages/conversation-read-state';
-	import { conversationSelectionUrl, readConversationId } from '$lib/messages/conversation-url-state';
 	import { showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatRelative } from '$lib/utils/date';
 	import { ApiError, type FairHousingConcern } from '$lib/api/client';
@@ -26,9 +25,12 @@
 
 	// --- Selected thread --------------------------------------------------------
 	let selectedId = $state<number | null>(null);
+	const canonicalConversationId = $derived.by(() => {
+		const routeId = Number(page.params.id);
+		return Number.isInteger(routeId) && routeId > 0 ? routeId : null;
+	});
 	$effect(() => {
-		const queryId = readConversationId(page.url.searchParams);
-		if (selectedId !== queryId) selectedId = queryId;
+		if (selectedId !== canonicalConversationId) selectedId = canonicalConversationId;
 	});
 
 	// --- Conversation list (left pane) -----------------------------------------
@@ -40,6 +42,7 @@
 			skip: (conversationPage - 1) * CONVERSATION_PAGE_SIZE,
 			take: CONVERSATION_PAGE_SIZE,
 		}),
+		enabled: canonicalConversationId === null
 	}));
 
 	$effect(() => {
@@ -96,8 +99,7 @@
 
 	function openConversation(id: number) {
 		selectedId = id;
-		void goto(conversationSelectionUrl(page.url, id), {
-			replaceState: true,
+		void goto(`/messages/${id}`, {
 			noScroll: true,
 			keepFocus: true
 		});
@@ -105,8 +107,7 @@
 
 	function backToList() {
 		selectedId = null;
-		void goto(conversationSelectionUrl(page.url, null), {
-			replaceState: true,
+		void goto('/messages', {
 			noScroll: true,
 			keepFocus: true
 		});
@@ -116,6 +117,7 @@
 	const portfolioQuery = createQuery(() => ({
 		queryKey: ['portfolio', portfolioId],
 		queryFn: () => portfolios.get(portfolioId),
+		enabled: canonicalConversationId === null
 	}));
 
 	// Read Email/SMS defaults out of Portfolio.settings JSON ("messaging" key).
@@ -189,14 +191,17 @@
 
 	const replyAnyChannel = $derived(replyChannels.portal || replyChannels.email || replyChannels.sms);
 	const canSendReply = $derived(!!replyBody.trim() && replyAnyChannel && selectedId !== null);
+	let replyOperationKey = $state<string | null>(null);
 
 	const replyMutation = createMutation(() => ({
-		mutationFn: () =>
+		mutationFn: (operationKey: string) =>
 			messages.sendMessage(selectedId as number, {
+				operationKey,
 				body: replyBody.trim(),
 				channels: channelsToList(replyChannels),
 			}),
 		onSuccess: (updated) => {
+			replyOperationKey = null;
 			replyBody = '';
 			// Seed the detail cache with the server's fresh thread, then refresh the list.
 			queryClient.setQueryData(['conversation', updated.id], updated);
@@ -208,7 +213,8 @@
 
 	function sendReply() {
 		if (!canSendReply || replyMutation.isPending) return;
-		replyMutation.mutate();
+		replyOperationKey ??= crypto.randomUUID();
+		replyMutation.mutate(replyOperationKey);
 	}
 
 	// Enter sends, Shift+Enter makes a newline.
@@ -243,6 +249,7 @@
 
 	function closeCompose() {
 		composeOpen = false;
+		composeOperationKey = null;
 		composeForm = { ...composeEmpty };
 		tenantSearch = '';
 	}
@@ -252,10 +259,12 @@
 	let fhReviewOpen = $state(false);
 	let fhDetail = $state('');
 	let fhConcerns = $state<FairHousingConcern[]>([]);
+	let composeOperationKey = $state<string | null>(null);
 
 	const startMutation = createMutation(() => ({
 		mutationFn: (acknowledgedFairHousingReview: boolean = false) =>
 			messages.start({
+				operationKey: (composeOperationKey ??= crypto.randomUUID()),
 				tenantId: Number(composeForm.tenantId),
 				subject: composeForm.subject.trim(),
 				body: composeForm.body.trim(),
@@ -263,6 +272,7 @@
 				...(acknowledgedFairHousingReview ? { acknowledgedFairHousingReview: true } : {}),
 			}),
 		onSuccess: (created) => {
+			composeOperationKey = null;
 			fhReviewOpen = false;
 			queryClient.setQueryData(['conversation', created.id], created);
 			refreshConversationList();
@@ -282,6 +292,7 @@
 
 	function startConversation() {
 		if (!canStart || startMutation.isPending) return;
+		composeOperationKey ??= crypto.randomUUID();
 		startMutation.mutate(false);
 	}
 
@@ -324,6 +335,7 @@
 	<div class="flex min-h-0 flex-1 overflow-hidden">
 		<!-- LEFT: thread list ------------------------------------------------ -->
 		<aside
+			class:hidden={canonicalConversationId !== null}
 			class="flex w-full shrink-0 flex-col border-r border-border md:w-80 lg:w-96
 				{selectedId !== null ? 'hidden md:flex' : 'flex'}"
 			data-testid="conversation-list-pane"
@@ -417,7 +429,7 @@
 					<Button
 						variant="ghost"
 						size="icon"
-						class="md:hidden"
+						class={canonicalConversationId === null ? 'md:hidden' : ''}
 						data-testid="conversation-back"
 						onclick={backToList}
 						aria-label="Back to conversations"

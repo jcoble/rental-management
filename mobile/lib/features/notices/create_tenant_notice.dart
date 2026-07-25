@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../settings/notification_foundation_repository.dart';
 import 'notices_models.dart';
 import 'notices_repository.dart';
 
@@ -10,31 +11,31 @@ import 'notices_repository.dart';
 const _noticeTypeChoices =
     <({String type, String label, String hint, IconData icon})>[
       (
-        type: 'RentReminder',
+        type: 'rent-reminder',
         label: 'Rent reminder (coming due)',
         hint: 'Friendly heads-up that rent is coming due.',
         icon: Icons.event_available_outlined,
       ),
       (
-        type: 'RenewalOffer',
+        type: 'lease-renewal-offer',
         label: 'Lease renewal offer',
         hint: 'Offer to extend the lease for another term.',
         icon: Icons.event_repeat_outlined,
       ),
       (
-        type: 'MonthToMonthConversion',
+        type: 'month-to-month-offer',
         label: 'Convert to month-to-month',
         hint: 'Offer to continue month-to-month after the lease ends.',
         icon: Icons.sync_alt_outlined,
       ),
       (
-        type: 'MoveOutReminder',
+        type: 'lease-non-renewal',
         label: 'Lease expiration / move-out',
         hint: 'Let them know the lease is ending and coordinate move-out.',
         icon: Icons.logout_outlined,
       ),
       (
-        type: 'LateRentNotice',
+        type: 'late-rent-late-fee',
         label: 'Late rent / late fee',
         hint: 'Remind the tenant about an overdue balance.',
         icon: Icons.warning_amber_outlined,
@@ -47,9 +48,7 @@ const _noticeTypeChoices =
 Future<void> showCreateTenantNoticeFlow(
   BuildContext context,
   WidgetRef ref, {
-  int? tenantId,
-  int? leaseId,
-  int? paymentId,
+  int? recipientTenantId,
   String? initialNoticeType,
   required String tenantName,
 }) async {
@@ -112,12 +111,7 @@ Future<void> showCreateTenantNoticeFlow(
   try {
     drafts = await ref
         .read(noticesRepositoryProvider)
-        .generateForTenant(
-          tenantId,
-          leaseId: leaseId,
-          paymentId: paymentId,
-          noticeType: choice,
-        );
+        .generateScoped(recipientTenantId, noticeType: choice);
   } on ApiException catch (e) {
     messenger
       ..hideCurrentSnackBar()
@@ -129,8 +123,9 @@ Future<void> showCreateTenantNoticeFlow(
 
   if (drafts.isEmpty) {
     final why = switch (choice) {
-      'LateRentNotice' => 'No overdue payment to base a late-rent notice on.',
-      'RentReminder' || 'MonthToMonthConversion' =>
+      'late-rent-late-fee' =>
+        'No overdue payment to base a late-rent notice on.',
+      'rent-reminder' || 'month-to-month-offer' =>
         'This tenant needs an active lease to create that notice.',
       _ => 'There is already an open draft of this notice for this tenant.',
     };
@@ -166,12 +161,14 @@ class _ReviewNoticeSheet extends ConsumerStatefulWidget {
 class _ReviewNoticeSheetState extends ConsumerState<_ReviewNoticeSheet> {
   final Map<int, TextEditingController> _subjectCtrls = {};
   final Map<int, TextEditingController> _bodyCtrls = {};
+  final Map<int, List<TenantNoticeRecipientPreview>> _recipientPreviews = {};
 
   bool _portal = true;
   bool _email = true;
   bool _sms = true;
   bool _busy = false;
   String? _error;
+  int? _previewingDraftId;
 
   @override
   void initState() {
@@ -247,6 +244,28 @@ class _ReviewNoticeSheetState extends ConsumerState<_ReviewNoticeSheet> {
       );
   }
 
+  Future<void> _previewRecipients(NoticeDraft draft) async {
+    setState(() {
+      _previewingDraftId = draft.id;
+      _error = null;
+    });
+    try {
+      final recipients = await ref
+          .read(notificationFoundationRepositoryProvider)
+          .previewTenantNoticeRecipients(
+            automationKey: draft.noticeType,
+            leaseManagementId: draft.leaseManagementId,
+          );
+      if (mounted) {
+        setState(() => _recipientPreviews[draft.id] = recipients);
+      }
+    } on ApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } finally {
+      if (mounted) setState(() => _previewingDraftId = null);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -312,6 +331,53 @@ class _ReviewNoticeSheetState extends ConsumerState<_ReviewNoticeSheet> {
                               border: OutlineInputBorder(),
                             ),
                           ),
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'Effective recipients and available destinations',
+                                  style: theme.textTheme.labelMedium,
+                                ),
+                              ),
+                              OutlinedButton.icon(
+                                onPressed: _previewingDraftId == d.id
+                                    ? null
+                                    : () => _previewRecipients(d),
+                                icon: const Icon(Icons.visibility_outlined),
+                                label: Text(
+                                  _previewingDraftId == d.id
+                                      ? 'Loading…'
+                                      : 'Preview',
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (_recipientPreviews[d.id] != null) ...[
+                            const SizedBox(height: 6),
+                            for (final recipient in _recipientPreviews[d.id]!)
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                dense: true,
+                                title: Text(
+                                  '${recipient.displayName} · ${recipient.role}',
+                                ),
+                                subtitle: Text(
+                                  'Channels: ${recipient.availableChannels.isEmpty ? 'None' : recipient.availableChannels.join(', ')}\n'
+                                  'Email: ${recipient.email ?? 'Not available'} · Phone: ${recipient.phone ?? 'Not available'}\n'
+                                  '${recipient.reason}',
+                                ),
+                                trailing: Text(
+                                  recipient.eligible ? 'Eligible' : 'Excluded',
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                    color: recipient.eligible
+                                        ? Colors.green
+                                        : cs.onSurfaceVariant,
+                                  ),
+                                ),
+                                isThreeLine: true,
+                              ),
+                          ],
                           if (!editable) ...[
                             const SizedBox(height: 8),
                             Text(

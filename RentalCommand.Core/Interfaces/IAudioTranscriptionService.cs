@@ -1,6 +1,6 @@
 namespace RentalCommand.Core.Interfaces;
 
-public interface IAudioTranscriptionService
+public interface IAudioTranscriptionService : RentalCommand.Core.Atomic.IAtomicRemoteDependency
 {
     Task<string> TranscribeAsync(
         byte[] audioBytes,

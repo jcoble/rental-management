@@ -1,805 +1,563 @@
 using FluentAssertions;
-using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Tests;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public class UnitDashboardServiceTests : IDisposable
+/// <summary>
+/// Focused Unit Command Center tests against the migrated PostgreSQL schema and its canonical
+/// LeaseManagement, Agreement, Party, Account, ledger, and operational-period read models.
+/// </summary>
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class UnitDashboardServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
+    private const int ActorUserId = 1;
 
-    private readonly SqliteConnection _conn;
+    private readonly MigratedPostgreSqlFixture _fixture;
     private readonly List<string> _executedSql = [];
-    private readonly RentalCommandDbContext _db;
-    private readonly UnitDashboardService _sut;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private RentalCommandDbContext _db = null!;
+    private UnitDashboardService _sut = null!;
 
-    public UnitDashboardServiceTests()
+    public UnitDashboardServiceTests(MigratedPostgreSqlFixture fixture)
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
-        _conn.Open();
+        _fixture = fixture;
+    }
 
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .AddInterceptors(new RecordingCommandInterceptor(_executedSql))
-            .Options;
-
-        _db = new AccountingServiceTestDbContext(options);
-        _db.Database.EnsureCreated();
-
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = PortfolioId,
-            Name = "Test Portfolio",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.SaveChanges();
-
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_executedSql)]);
+        _db = _ctx.Db;
         _sut = new UnitDashboardService(_db, new AuditDescriber(), new AuditDiffBuilder(), TimeProvider.System);
     }
 
-    public void Dispose()
-    {
-        _db.Dispose();
-        _conn.Dispose();
-    }
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
-    public async Task GetTimelineAsync_ScopesChildAuditRowsInSqlWithoutPreloadingIds()
+    public async Task GetTimelineAsync_ScopesCanonicalChildAuditRowsInSqlWithoutPreloadingIds()
     {
         var seeded = SeedUnitWithTimelineChildren();
-        _db.AuditLogs.AddRange(
-            Audit("Unit", seeded.Unit.Id, 6),
-            Audit("Lease", seeded.Lease.Id, 5),
-            Audit("Payment", seeded.Payment.Id, 4),
-            Audit("WorkOrder", seeded.WorkOrder.Id, 3),
-            Audit("Expense", seeded.Expense.Id, 2),
-            Audit("Lease", seeded.ForeignLease.Id, 1));
+        _db.AtomicAuditLogs.AddRange(
+            Audit(nameof(Unit), seeded.Unit.Id, 8),
+            Audit(nameof(LeaseManagement), seeded.Relationship.Id, 7),
+            Audit(nameof(LeaseAgreement), seeded.Agreement.Id, 6),
+            Audit(nameof(TenantAccount), seeded.Account.Id, 5),
+            Audit(nameof(WorkOrder), seeded.WorkOrder.Id, 4),
+            Audit(nameof(Expense), seeded.Expense.Id, 3),
+            Audit(nameof(LeaseManagement), seeded.ForeignRelationship.Id, 2));
         _db.SaveChanges();
 
         _executedSql.Clear();
 
-        var rows = await _sut.GetTimelineAsync(PortfolioId, seeded.Unit.Id, skip: 0, take: 10, ct: CancellationToken.None);
+        var rows = await _sut.GetTimelineAsync(PortfolioId, seeded.Unit.Id, 0, 10, CancellationToken.None);
 
-        rows.Select(r => r.EntityType).Should().BeEquivalentTo(["Unit", "Lease", "Payment", "WorkOrder", "Expense"]);
-        rows.Should().NotContain(r => r.EntityId == seeded.ForeignLease.Id);
+        rows.Select(row => row.EntityType).Should().BeEquivalentTo([
+            nameof(Unit), nameof(LeaseManagement), nameof(LeaseAgreement), nameof(TenantAccount),
+            nameof(WorkOrder), nameof(Expense),
+        ]);
+        rows.Should().NotContain(row => row.EntityType == nameof(LeaseManagement)
+            && row.EntityId == seeded.ForeignRelationship.Id);
 
         _executedSql.Should().NotContain(command => IsChildIdPreload(command),
-            "unit timeline child scoping must stay inside the paged AuditLogs query instead of materializing child id lists");
+            "canonical child scopes must remain correlated subqueries inside the paged audit query");
 
-        var auditSql = _executedSql.Single(command => command.Contains("FROM \"AuditLogs\"", StringComparison.OrdinalIgnoreCase));
-        auditSql.Should().Contain("ORDER BY", "timeline sorting must be DB-side");
-        auditSql.Should().Contain("LIMIT", "timeline paging must be DB-side");
-        auditSql.Should().Contain("Leases", "lease child scope should be translated as a SQL subquery");
-        auditSql.Should().Contain("Payments", "payment child scope should be translated as a SQL subquery");
-        auditSql.Should().Contain("WorkOrders", "work-order child scope should be translated as a SQL subquery");
-        auditSql.Should().Contain("Expenses", "expense child scope should be translated as a SQL subquery");
+        var auditSql = _executedSql.Single(command => command.Contains("FROM \"AtomicAuditLogs\"", StringComparison.OrdinalIgnoreCase));
+        auditSql.Should().Contain("ORDER BY");
+        auditSql.Should().Contain("LIMIT");
+        auditSql.Should().Contain("LeaseManagements");
+        auditSql.Should().Contain("LeaseAgreements");
+        auditSql.Should().Contain("TenantAccounts");
+        auditSql.Should().Contain("WorkOrders");
+        auditSql.Should().Contain("Expenses");
+        auditSql.Should().NotContain("FROM \"Leases\"");
+        auditSql.Should().NotContain("FROM \"Payments\"");
     }
 
     [Fact]
-    public async Task GetDashboardAsync_IncludesExpenseDocumentsLinkedToTheUnitOrItsWorkOrders()
+    public async Task GetDashboardAsync_IncludesExpenseAndCanonicalLedgerSourceDocuments()
     {
         var seeded = SeedUnitWithTimelineChildren();
         var now = new DateTime(2026, 1, 2, 12, 0, 0, DateTimeKind.Utc);
-        var directExpense = new Expense
-        {
-            PortfolioId = PortfolioId,
-            PropertyId = seeded.Unit.PropertyId,
-            UnitId = seeded.Unit.Id,
-            Description = "Direct unit receipt",
-            Amount = 55m,
-            IncurredAt = now,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var foreignExpense = new Expense
-        {
-            PortfolioId = PortfolioId,
-            PropertyId = seeded.ForeignLease.Unit!.PropertyId,
-            UnitId = seeded.ForeignLease.UnitId,
-            Description = "Other unit receipt",
-            Amount = 75m,
-            IncurredAt = now,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
+        var directExpense = ExpenseFor(seeded.Unit, seeded.Property, "Direct unit receipt", 55m, now);
+        var foreignExpense = ExpenseFor(
+            seeded.ForeignUnit, seeded.ForeignUnit.Property!, "Other unit receipt", 75m, now);
         _db.Expenses.AddRange(directExpense, foreignExpense);
         _db.SaveChanges();
 
-        _db.StoredFiles.AddRange(
-            File("Expense", seeded.Expense.Id, "work-order-receipt.pdf", now),
-            File("Expense", directExpense.Id, "direct-unit-receipt.png", now.AddMinutes(-1)),
-            File("Expense", foreignExpense.Id, "foreign-unit-receipt.pdf", now.AddMinutes(1)),
-            File("Payment", seeded.Payment.Id, "rent-check.png", now.AddMinutes(-2)));
+        var workOrderReceipt = File(nameof(Expense), seeded.Expense.Id, "work-order-receipt.pdf", now);
+        var directReceipt = File(nameof(Expense), directExpense.Id, "direct-unit-receipt.png", now.AddMinutes(-1));
+        var foreignReceipt = File(nameof(Expense), foreignExpense.Id, "foreign-unit-receipt.pdf", now.AddMinutes(1));
+        var rentCheck = File(nameof(TenantLedgerEntry), seeded.Account.Id, "rent-check.png", now.AddMinutes(-2));
+        _db.StoredFiles.AddRange(workOrderReceipt, directReceipt, foreignReceipt, rentCheck);
+        _db.SaveChanges();
+
+        _db.TenantLedgerEntries.Add(new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            TenantAccountId = seeded.Account.Id,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = 1200m,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(now),
+            PostedAtUtc = now,
+            Description = "Rent check",
+            BusinessKey = "dashboard-doc-rent-check",
+            SourceStoredFileId = rentCheck.Id,
+            CreatedByUserId = ActorUserId,
+        });
         _db.SaveChanges();
 
         _executedSql.Clear();
-
         var dashboard = await _sut.GetDashboardAsync(PortfolioId, seeded.Unit.Id, CancellationToken.None);
 
         dashboard.Should().NotBeNull();
-        dashboard!.Header.DocsNeedingReviewCount.Should().Be(3);
-        dashboard.Overview.PendingDocs.Select(d => d.FileName)
-            .Should().BeEquivalentTo(["work-order-receipt.pdf", "direct-unit-receipt.png", "rent-check.png"]);
-        dashboard.Overview.PendingDocs.Should().NotContain(d => d.FileName == "foreign-unit-receipt.pdf");
-        dashboard.Overview.PendingDocs.Count(d => d.EntityType == "Expense").Should().Be(2);
+        dashboard!.Header.DocsNeedingReviewCount.Should().Be(5);
+        dashboard.Overview.PendingDocs.Select(document => document.FileName)
+            .Should().BeEquivalentTo([
+                $"agreement-{seeded.Relationship.Id}-issued.pdf",
+                $"agreement-{seeded.Relationship.Id}-executed.pdf",
+                "work-order-receipt.pdf",
+                "direct-unit-receipt.png",
+                "rent-check.png",
+            ]);
+        dashboard.Overview.PendingDocs.Should().NotContain(document => document.FileName == "foreign-unit-receipt.pdf");
 
-        _executedSql
+        var documentSql = _executedSql
             .Where(command => command.Contains("FROM \"StoredFiles\"", StringComparison.OrdinalIgnoreCase))
-            .Should().OnlyContain(command => command.Contains("Expenses", StringComparison.OrdinalIgnoreCase),
-                "unit document list/count queries must scope expense attachments in SQL, not after materialization");
+            .ToList();
+        documentSql.Should().NotBeEmpty();
+        documentSql.Should().OnlyContain(command =>
+            command.Contains("Expenses", StringComparison.OrdinalIgnoreCase)
+            && command.Contains("TenantLedgerEntries", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
-    public async Task GetDashboardAsync_ReturnsTurnoverSummaryFromSqlAggregates()
+    public async Task GetDashboardAsync_ReturnsTurnoverSummaryFromSqlAggregatesAndOperationalPeriod()
     {
         var now = DateTime.UtcNow;
-        var property = new Property
-        {
-            PortfolioId = PortfolioId,
-            Name = "Turnover Flats",
-            AddressLine1 = "12 Make Ready",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43219",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var unit = new Unit
-        {
-            Property = property,
-            UnitNumber = "7",
-            Status = UnitStatus.Offline,
-            MarketRent = 1400m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var openWork = new WorkOrder
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Title = "Paint bedrooms",
-            Description = "Patch and paint",
-            Status = WorkOrderStatus.InProgress,
-            EstimatedCost = 200m,
-            RequestedAt = now.AddDays(-4),
-            ScheduledFor = now.AddDays(3),
-            UpdatedAt = now.AddDays(-1),
-        };
-        var completedWork = new WorkOrder
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Title = "Trash-out",
-            Description = "Remove items",
-            Status = WorkOrderStatus.Completed,
-            EstimatedCost = 100m,
-            ActualCost = 120m,
-            RequestedAt = now.AddDays(-6),
-            CompletedAt = now.AddDays(-2),
-            UpdatedAt = now.AddDays(-2),
-        };
-        var linkedReceipt = new Expense
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            WorkOrder = openWork,
-            Description = "Paint supplies",
-            Amount = 75m,
-            IncurredAt = now.AddDays(-1),
-            CreatedAt = now.AddDays(-1),
-            UpdatedAt = now.AddDays(-1),
-        };
-        var directReceipt = new Expense
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Description = "Key copies",
-            Amount = 25m,
-            IncurredAt = now.AddDays(-3),
-            CreatedAt = now.AddDays(-3),
-            UpdatedAt = now.AddDays(-3),
-        };
-        var foreignUnit = new Unit
-        {
-            Property = property,
-            UnitNumber = "8",
-            MarketRent = 900m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var foreignReceipt = new Expense
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = foreignUnit,
-            Description = "Other unit",
-            Amount = 999m,
-            IncurredAt = now,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _db.AddRange(property, unit, openWork, completedWork, linkedReceipt, directReceipt, foreignUnit, foreignReceipt);
-        _db.SaveChanges();
-        _executedSql.Clear();
+        var (property, unit) = SeedPropertyUnit("Turnover Flats", "7", 1400m, now);
+        var source = SeedHistoricalRelationship(
+            property, unit, "Former", "Resident", 1400m, now.AddYears(-1), now.AddDays(-6));
+        SeedOperationalState(
+            unit, UnitOperationalPeriodType.Turnover, now.AddDays(-6), source.Relationship);
 
+        var openWork = WorkOrderFor(unit, property, "Paint bedrooms", WorkOrderStatus.InProgress,
+            now.AddDays(-4), estimatedCost: 200m, scheduledFor: now.AddDays(3));
+        var completedWork = WorkOrderFor(unit, property, "Trash-out", WorkOrderStatus.Completed,
+            now.AddDays(-6), estimatedCost: 100m, actualCost: 120m, completedAt: now.AddDays(-2));
+        var linkedReceipt = ExpenseFor(unit, property, "Paint supplies", 75m, now.AddDays(-1), openWork);
+        var directReceipt = ExpenseFor(unit, property, "Key copies", 25m, now.AddDays(-3));
+        var (_, foreignUnit) = SeedPropertyUnit("Other Building", "8", 900m, now);
+        var foreignReceipt = ExpenseFor(foreignUnit, foreignUnit.Property!, "Other unit", 999m, now);
+        _db.AddRange(openWork, completedWork, linkedReceipt, directReceipt, foreignReceipt);
+        _db.SaveChanges();
+
+        _executedSql.Clear();
         var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
 
         dashboard.Should().NotBeNull();
-        dashboard!.Turnover.Status.Should().Be("InProgress");
+        dashboard!.LifecycleStage.Should().Be("Turnover");
+        dashboard.Turnover.Status.Should().Be("InProgress");
         dashboard.Turnover.TotalTaskCount.Should().Be(2);
         dashboard.Turnover.OpenTaskCount.Should().Be(1);
         dashboard.Turnover.CompletedTaskCount.Should().Be(1);
         dashboard.Turnover.ReceiptCount.Should().Be(2);
         dashboard.Turnover.EstimatedCost.Should().Be(300m);
         dashboard.Turnover.ActualCost.Should().Be(220m);
-        dashboard.Turnover.TargetReadyDate.Should().Be(openWork.ScheduledFor);
-        dashboard.Turnover.StartedAt.Should().Be(completedWork.RequestedAt);
-        dashboard.Turnover.DaysInTurnover.Should().BeGreaterThan(0);
+        dashboard.Turnover.TargetReadyDate.Should().BeCloseTo(
+            openWork.ScheduledFor!.Value,
+            TimeSpan.FromMilliseconds(1));
 
-        _executedSql.Should().Contain(command =>
-            command.Contains("FROM \"WorkOrders\"", StringComparison.OrdinalIgnoreCase)
-            && command.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase)
-            && command.Contains("SUM", StringComparison.OrdinalIgnoreCase));
-        _executedSql.Should().Contain(command =>
-            command.Contains("FROM \"Expenses\"", StringComparison.OrdinalIgnoreCase)
-            && command.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase)
-            && command.Contains("SUM", StringComparison.OrdinalIgnoreCase));
+        _executedSql.Should().Contain(command => command.Contains("FROM \"WorkOrders\"")
+            && command.Contains("GROUP BY")
+            && command.Contains("sum(", StringComparison.OrdinalIgnoreCase));
+        _executedSql.Should().Contain(command => command.Contains("FROM \"Expenses\"")
+            && command.Contains("GROUP BY")
+            && command.Contains("sum(", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
     public async Task GetDashboardAsync_LinksReadyNextActionToUnitApplicationLinkFlow()
     {
         var now = DateTime.UtcNow;
-        var property = new Property
-        {
-            PortfolioId = PortfolioId,
-            Name = "Oak Ridge",
-            AddressLine1 = "100 Oak",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43219",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var unit = new Unit
-        {
-            Property = property,
-            UnitNumber = "3B",
-            Status = UnitStatus.Vacant,
-            MarketRent = 975m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _db.AddRange(property, unit);
-        _db.SaveChanges();
+        var (_, unit) = SeedPropertyUnit("Oak Ridge", "3B", 975m, now);
 
         var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
 
         dashboard.Should().NotBeNull();
-        dashboard!.LifecycleStage.Should().Be(UnitLifecycleStage.Ready.ToString());
+        dashboard!.LifecycleStage.Should().Be("Ready");
         dashboard.NextBestAction.Label.Should().Be("List this unit");
-        dashboard.NextBestAction.Href.Should().Be($"/units/{unit.Id}?tab=listing");
+        dashboard.NextBestAction.Href.Should().Be($"/units/{unit.Id}?tab=leasing&view=listing");
     }
 
     [Fact]
     public async Task GetDashboardAsync_LinksRenewalNextActionToTenantRenewalNoticeFlow()
     {
         var now = DateTime.UtcNow;
-        var (property, unit, tenant, _) = SeedRenewalUnit(now);
+        var graph = SeedCanonicalRelationship("Oak Ridge", "3B", "Riley", "Tenant", 975m,
+            now, possessionGivenAtUtc: now.AddMonths(-10), agreementEndOn: DateOnly.FromDateTime(now.AddDays(44)));
 
-        var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
+        var dashboard = await _sut.GetDashboardAsync(PortfolioId, graph.Unit.Id, CancellationToken.None);
 
         dashboard.Should().NotBeNull();
-        dashboard!.LifecycleStage.Should().Be(UnitLifecycleStage.Renewal.ToString());
-        dashboard.NextBestAction.Label.Should().StartWith("Send renewal");
+        dashboard!.LifecycleStage.Should().Be("Renewal");
+        dashboard.NextBestAction.Label.Should().StartWith("Prepare renewal");
         dashboard.NextBestAction.Href.Should()
-            .Be($"/tenants/{tenant.Id}?action=create-notice&noticeType=RenewalOffer");
+            .Be($"/tenants/{graph.Tenant.Id}?action=create-notice&noticeType=lease-renewal-offer");
     }
 
     [Fact]
-    public async Task GetDashboardAsync_LinksApprovedRenewalNoticeToConversation()
+    public async Task GetDashboardAsync_LinksPlannedPossessionToConcreteMoveInWorkflow()
     {
         var now = DateTime.UtcNow;
-        var (property, unit, tenant, lease) = SeedRenewalUnit(now);
-        var conversation = new Conversation
-        {
-            PortfolioId = PortfolioId,
-            Tenant = tenant,
-            Subject = "Lease renewal for Oak Ridge 3B",
-            Property = property,
-            StartedByLandlord = true,
-            CreatedAt = now.AddMinutes(-2),
-            LastMessageAt = now.AddMinutes(-2),
-            LastMessagePreview = "Renewal offer",
-            TenantUnreadCount = 1,
-        };
-        _db.Conversations.Add(conversation);
-        _db.SaveChanges();
+        var graph = SeedCanonicalRelationship("Maple Heights", "2A", "Morgan", "Movein", 1200m,
+            now, plannedPossessionAtUtc: now.AddDays(3));
 
-        _db.NoticeDrafts.Add(new NoticeDraft
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            Tenant = tenant,
-            Property = property,
-            NoticeType = "RenewalOffer",
-            Status = "Approved",
-            Subject = conversation.Subject,
-            Body = "Please review your renewal offer.",
-            Reason = "Lease ending soon",
-            TriggerDate = now.Date,
-            Conversation = conversation,
-            ApprovedChannels = "Portal",
-            CreatedAt = now.AddMinutes(-5),
-            UpdatedAt = now.AddMinutes(-2),
-            ApprovedAt = now.AddMinutes(-2),
-        });
-        _db.SaveChanges();
-        _executedSql.Clear();
-
-        var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
+        var dashboard = await _sut.GetDashboardAsync(PortfolioId, graph.Unit.Id, CancellationToken.None);
 
         dashboard.Should().NotBeNull();
-        dashboard!.LifecycleStage.Should().Be(UnitLifecycleStage.Renewal.ToString());
-        dashboard.NextBestAction.Label.Should().Be("Renewal sent - open conversation");
-        dashboard.NextBestAction.Href.Should().Be($"/messages?conversation={conversation.Id}");
-
-        var noticeSql = _executedSql.Single(command =>
-            command.Contains("FROM \"NoticeDrafts\"", StringComparison.OrdinalIgnoreCase));
-        noticeSql.Should().Contain("ORDER BY", "the renewal notice lookup must choose the latest relevant row in SQL");
-        noticeSql.Should().Contain("LIMIT", "the renewal notice lookup must not materialize all matching notices");
-    }
-
-    [Fact]
-    public async Task GetDashboardAsync_LinksDraftRenewalNoticeToReviewFlow()
-    {
-        var now = DateTime.UtcNow;
-        var (_, unit, tenant, lease) = SeedRenewalUnit(now);
-        _db.NoticeDrafts.Add(new NoticeDraft
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            Tenant = tenant,
-            NoticeType = "RenewalOffer",
-            Status = "Draft",
-            Subject = "Lease renewal",
-            Body = "Draft renewal offer",
-            Reason = "Lease ending soon",
-            TriggerDate = now.Date,
-            CreatedAt = now.AddMinutes(-5),
-            UpdatedAt = now.AddMinutes(-5),
-        });
-        _db.SaveChanges();
-
-        var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
-
-        dashboard.Should().NotBeNull();
-        dashboard!.LifecycleStage.Should().Be(UnitLifecycleStage.Renewal.ToString());
-        dashboard.NextBestAction.Label.Should().Be("Review renewal draft");
+        dashboard!.LifecycleStage.Should().Be("MoveIn");
+        dashboard.NextBestAction.Label.Should().Be("Confirm possession / collect deposit");
         dashboard.NextBestAction.Href.Should()
-            .Be($"/tenants/{tenant.Id}?action=create-notice&noticeType=RenewalOffer");
+            .Be($"/units/{graph.Unit.Id}?tab=tenant-lease&view=agreements&action=confirm-move-in");
     }
 
     [Fact]
-    public async Task GetDashboardAsync_LinksMoveInNextActionToConcreteWorkflow()
+    public async Task GetDashboardAsync_PossessionGivenResolvesToActive()
     {
         var now = DateTime.UtcNow;
-        var (_, unit, _, _) = SeedMoveInUnit(now);
+        var graph = SeedCanonicalRelationship("Maple Heights", "2A", "Morgan", "Movein", 1200m,
+            now, possessionGivenAtUtc: now.AddDays(-5));
 
-        var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
-
-        dashboard.Should().NotBeNull();
-        dashboard!.LifecycleStage.Should().Be(UnitLifecycleStage.MoveIn.ToString());
-        dashboard.NextBestAction.Label.Should().Be("Confirm move-in / collect deposit");
-        dashboard.NextBestAction.Href.Should()
-            .Be($"/units/{unit.Id}?tab=lease&action=confirm-move-in");
-    }
-
-    [Fact]
-    public async Task GetDashboardAsync_RecentMoveInWithHeldDepositResolvesToActive()
-    {
-        var now = DateTime.UtcNow;
-        var (_, unit, _, lease) = SeedMoveInUnit(now);
-        _db.SecurityDepositHoldings.Add(new SecurityDepositHolding
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            Amount = lease.SecurityDeposit,
-            Status = SecurityDepositStatus.Held,
-            HeldAt = now,
-            DeductionsJson = "[]",
-            CreatedAt = now,
-            UpdatedAt = now,
-        });
-        _db.SaveChanges();
-
-        var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
+        var dashboard = await _sut.GetDashboardAsync(PortfolioId, graph.Unit.Id, CancellationToken.None);
 
         dashboard.Should().NotBeNull();
-        dashboard!.LifecycleStage.Should().Be(UnitLifecycleStage.Active.ToString());
+        dashboard!.LifecycleStage.Should().Be("Active");
         dashboard.NextBestAction.Label.Should().Be("Rent on track");
+        dashboard.Header.CurrentTenantName.Should().Be("Morgan Movein");
     }
 
     [Fact]
-    public async Task GetDashboardAsync_PartialPaymentContributesOnlyItsRemainderToOutstanding()
+    public async Task GetDashboardAsync_ReadsOutstandingFromCurrentTenantAccountBalanceProjection()
     {
         var now = DateTime.UtcNow;
-        var property = new Property
-        {
-            PortfolioId = PortfolioId,
-            Name = "Birch Lane",
-            AddressLine1 = "300 Birch",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43219",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var unit = new Unit
-        {
-            Property = property,
-            UnitNumber = "101",
-            Status = UnitStatus.Occupied,
-            MarketRent = 1000m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var tenant = new Tenant
-        {
-            PortfolioId = PortfolioId,
-            FirstName = "Quincy",
-            LastName = "Tenant",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var lease = new Lease
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = "L-101",
-            Status = LeaseStatus.Active,
-            StartDate = now.AddMonths(-1),
-            EndDate = now.AddYears(1),
-            MonthlyRent = 1000m,
-            SecurityDeposit = 1000m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        // One rent paid in full, one rent partially paid ($700 collected of $1,000 → $300 still owed).
-        var paid = new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Paid,
-            Amount = 1000m,
-            DueDate = now.AddDays(-30),
-            PaidDate = now.AddDays(-30),
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var partial = new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Partial,
-            Amount = 1000m,
-            AmountPaid = 700m,
-            DueDate = now.AddDays(-1),
-            PaidDate = now.AddDays(-1),
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _db.AddRange(property, unit, tenant, lease, paid, partial);
-        _db.SaveChanges();
+        var graph = SeedCanonicalRelationship("Birch Lane", "101", "Quincy", "Tenant", 1000m,
+            now, possessionGivenAtUtc: now.AddMonths(-1), receivableBalance: 300m, pastDueAmount: 300m);
+
+        var dashboard = await _sut.GetDashboardAsync(PortfolioId, graph.Unit.Id, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        dashboard!.CurrentLease!.TenantAccountId.Should().Be(graph.Account.Id);
+        dashboard.Header.OutstandingRentBalance.Should().Be(300m);
+        dashboard.Header.RentState.Should().Be("Overdue");
+    }
+
+    [Fact]
+    public async Task GetDashboardAsync_UsesOnlySelectedCurrentRelationshipAccountBalance()
+    {
+        var now = DateTime.UtcNow;
+        var (property, unit) = SeedPropertyUnit("Cedar Court", "5C", 1000m, now);
+        SeedHistoricalRelationship(property, unit, "Pat", "Former", 950m, now.AddMonths(-18), now.AddMonths(-6));
+        var current = SeedRelationshipOnExistingUnit(property, unit, "Pat", "Current", 1000m, now,
+            possessionGivenAtUtc: now.AddMonths(-1), agreementEndOn: DateOnly.FromDateTime(now.AddYears(1)),
+            receivableBalance: 500m, nextDueOn: DateOnly.FromDateTime(now.AddDays(10)));
 
         var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
 
         dashboard.Should().NotBeNull();
-        // The Paid rent contributes $0 and the Partial contributes only its $300 remainder (not its full
-        // $1,000) — so the Unit Rent tab reconciles with the lease ledger Balance and the Accounting
-        // Outstanding KPI instead of over-counting the already-collected $700.
-        dashboard!.Header.OutstandingRentBalance.Should().Be(300m);
-    }
-
-    [Fact]
-    public async Task GetDashboardAsync_ExcludesLeftoverChargesFromEndedPriorLeaseFromOutstanding()
-    {
-        var now = DateTime.UtcNow;
-        var property = new Property
-        {
-            PortfolioId = PortfolioId,
-            Name = "Cedar Court",
-            AddressLine1 = "400 Cedar",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43219",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var unit = new Unit
-        {
-            Property = property,
-            UnitNumber = "5C",
-            Status = UnitStatus.Occupied,
-            MarketRent = 1000m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var tenant = new Tenant
-        {
-            PortfolioId = PortfolioId,
-            FirstName = "Pat",
-            LastName = "Tenant",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        // Prior lease ended six months ago but still carries unresolved owed charges on the SAME unit.
-        var priorLease = new Lease
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = "L-5C-OLD",
-            Status = LeaseStatus.Expired,
-            StartDate = now.AddMonths(-18),
-            EndDate = now.AddMonths(-6),
-            MonthlyRent = 950m,
-            SecurityDeposit = 950m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        // Current, active lease with one future-due scheduled charge.
-        var currentLease = new Lease
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = "L-5C",
-            Status = LeaseStatus.Active,
-            StartDate = now.AddMonths(-1),
-            EndDate = now.AddYears(1),
-            MonthlyRent = 1000m,
-            SecurityDeposit = 1000m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        // Leftover owed charges on the ended lease ($800 Late + $200 past-due Scheduled = $1,000).
-        var priorLate = new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = priorLease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Late,
-            Amount = 800m,
-            DueDate = now.AddMonths(-7),
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var priorScheduled = new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = priorLease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Scheduled,
-            Amount = 200m,
-            DueDate = now.AddMonths(-7),
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        // Current lease legitimately owes $500 (a future-due scheduled rent).
-        var currentScheduled = new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = currentLease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Scheduled,
-            Amount = 500m,
-            DueDate = now.AddDays(10),
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _db.AddRange(property, unit, tenant, priorLease, currentLease, priorLate, priorScheduled, currentScheduled);
-        _db.SaveChanges();
-
-        var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
-
-        dashboard.Should().NotBeNull();
-        // Only the current lease's $500 counts — the $1,000 of leftover Scheduled/Late charges on the
-        // ended prior lease is excluded (ForCurrentLeaseAttention), reconciling with the Accounting KPI.
-        dashboard!.Header.OutstandingRentBalance.Should().Be(500m);
-        dashboard.Header.OutstandingRentBalance.Should().NotBe(1500m, "leftover charges on the ended prior lease must not be summed");
-        // The prior lease's Late charge must not drive the unit's rent state; only the current lease's
-        // future-due charge does, so the unit reads "Due", not "Overdue".
+        dashboard!.CurrentLease!.LeaseManagementId.Should().Be(current.Relationship.Id);
+        dashboard.CurrentLease.TenantAccountId.Should().Be(current.Account.Id);
+        dashboard.Header.OutstandingRentBalance.Should().Be(500m);
         dashboard.Header.RentState.Should().Be("Due");
     }
 
     [Fact]
-    public async Task GetDashboardAsync_DoesNotPromoteEndedLeaseToCurrentLease()
+    public async Task GetDashboardAsync_DoesNotPromoteEndedRelationshipToCurrentLease()
     {
         var now = DateTime.UtcNow;
-        var property = new Property
-        {
-            PortfolioId = PortfolioId,
-            Name = "Historical Flats",
-            AddressLine1 = "210 Archive Ave",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43201",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var unit = new Unit
-        {
-            Property = property,
-            UnitNumber = "2",
-            Status = UnitStatus.Vacant,
-            MarketRent = 1100m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var tenant = new Tenant
-        {
-            PortfolioId = PortfolioId,
-            FirstName = "Former",
-            LastName = "Resident",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var endedLease = new Lease
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = "L-HIST",
-            Status = LeaseStatus.Expired,
-            StartDate = now.AddYears(-1),
-            EndDate = now.AddMonths(-1),
-            MonthlyRent = 1100m,
-            SecurityDeposit = 1100m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var leftoverCharge = new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = endedLease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Late,
-            Amount = 1100m,
-            DueDate = now.AddMonths(-2),
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _db.AddRange(property, unit, tenant, endedLease, leftoverCharge);
-        _db.SaveChanges();
+        var (property, unit) = SeedPropertyUnit("Historical Flats", "2", 1100m, now);
+        SeedHistoricalRelationship(property, unit, "Former", "Resident", 1100m,
+            now.AddYears(-1), now.AddMonths(-1));
 
         var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
 
         dashboard.Should().NotBeNull();
-        dashboard!.CurrentLease.Should().BeNull("ended leases should remain historical and not overwrite the unit's current lease slot");
+        dashboard!.CurrentLease.Should().BeNull();
         dashboard.CurrentTenant.Should().BeNull();
         dashboard.CurrentTenants.Should().BeEmpty();
         dashboard.Header.RentState.Should().Be("NoLease");
         dashboard.Header.OutstandingRentBalance.Should().Be(0m);
     }
 
-    private static bool IsChildIdPreload(string command)
-        => IsBareIdSelect(command, "Leases")
-            || IsBareIdSelect(command, "Payments")
-            || IsBareIdSelect(command, "WorkOrders")
-            || IsBareIdSelect(command, "Inspections")
-            || IsBareIdSelect(command, "Appointments")
-            || IsBareIdSelect(command, "Expenses");
-
-    private static bool IsBareIdSelect(string command, string table)
-        => command.Contains($"SELECT \"", StringComparison.OrdinalIgnoreCase)
-            && command.Contains($"\".\"Id\"", StringComparison.OrdinalIgnoreCase)
-            && command.Contains($"FROM \"{table}\"", StringComparison.OrdinalIgnoreCase)
-            && !command.Contains("FROM \"AuditLogs\"", StringComparison.OrdinalIgnoreCase)
-            && !command.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
-            && !command.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase);
-
-    private AuditLog Audit(string entityType, int entityId, int minutesAgo)
-        => new()
-        {
-            PortfolioId = PortfolioId,
-            EntityType = entityType,
-            EntityId = entityId,
-            Operation = AuditLogOperation.Created,
-            ActorLabel = "test",
-            Timestamp = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc).AddMinutes(-minutesAgo),
-        };
-
-    private static StoredFile File(string entityType, int entityId, string fileName, DateTime uploadedAt)
-        => new()
-        {
-            PortfolioId = PortfolioId,
-            EntityType = entityType,
-            EntityId = entityId,
-            FileName = fileName,
-            FilePath = fileName,
-            ContentType = fileName.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? "image/png" : "application/pdf",
-            FileSize = 1024,
-            UploadedAt = uploadedAt,
-        };
-
-    private (Property Property, Unit Unit, Tenant Tenant, Lease Lease) SeedRenewalUnit(DateTime now)
+    [Fact]
+    public async Task GetDashboardAsync_ReturnsRelationshipAndAccountWithoutGoverningAgreement()
     {
-        var property = new Property
-        {
-            PortfolioId = PortfolioId,
-            Name = "Oak Ridge",
-            AddressLine1 = "100 Oak",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43219",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var unit = new Unit
-        {
-            Property = property,
-            UnitNumber = "3B",
-            Status = UnitStatus.Occupied,
-            MarketRent = 975m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var tenant = new Tenant
-        {
-            PortfolioId = PortfolioId,
-            FirstName = "Riley",
-            LastName = "Tenant",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var lease = new Lease
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = "L-3B",
-            Status = LeaseStatus.Active,
-            StartDate = now.AddMonths(-10),
-            EndDate = now.AddDays(44),
-            MonthlyRent = 975m,
-            SecurityDeposit = 975m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _db.AddRange(property, unit, tenant, lease);
+        var now = DateTime.UtcNow;
+        var (property, unit) = SeedPropertyUnit("Hilliard Duplex", "Left", 1250m, now);
+        var tenant = Tenant("Darius", "Clark", now);
+        _db.Tenants.Add(tenant);
         _db.SaveChanges();
 
-        return (property, unit, tenant, lease);
+        var relationship = Relationship(
+            property, unit, now, plannedPossessionAtUtc: null, possessionGivenAtUtc: now.AddMonths(-2));
+        relationship.RelationshipNumber = "DEMO-LM-ACTIVE-017";
+        relationship.PossessionAgreementExceptionReason = "Verified imported possession without a governing Agreement.";
+        relationship.PossessionAgreementExceptionAuthorizedByUserId = ActorUserId;
+        _db.LeaseManagements.Add(relationship);
+        _db.SaveChanges();
+
+        var account = Account(relationship, now);
+        account.AccountNumber = "DEMO-TA-ACTIVE-017";
+        _db.AddRange(Party(relationship, tenant, DateOnly.FromDateTime(now.AddMonths(-2)), now), account);
+        _db.SaveChanges();
+
+        _executedSql.Clear();
+        var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        dashboard!.LeaseManagementId.Should().Be(relationship.Id);
+        dashboard.TenantAccountId.Should().Be(account.Id);
+        dashboard.CurrentLease.Should().BeNull();
+        dashboard.CurrentTenant!.Name.Should().Be("Darius Clark");
+        dashboard.Header.RentState.Should().NotBe("NoLease");
+        dashboard.OccupancyPossession.Status.Should().Be("Occupied");
+        dashboard.OccupancyPossession.LeaseManagementId.Should().Be(relationship.Id);
+        dashboard.MarketingAvailability.Status.Should().Be("NotAvailable");
+        dashboard.TenantAccountCondition.Status.Should().Be("Current");
+        dashboard.TenantAccountCondition.TenantAccountId.Should().Be(account.Id);
+        dashboard.LegalNoticeCondition.Status.Should().Be("NoGoverningAgreement");
+        dashboard.MaintenanceTurnover.Status.Should().NotBeNullOrWhiteSpace();
+
+        var canonicalSql = _executedSql.First(command =>
+            command.Contains("vw_unit_occupancy", StringComparison.OrdinalIgnoreCase));
+        canonicalSql.Should().Contain("vw_lease_management_lifecycle");
+        canonicalSql.Should().Contain("TenantAccountId");
+        canonicalSql.Should().Contain("NoticeDrafts");
+        canonicalSql.Should().Contain("WHERE");
     }
 
-    private (Property Property, Unit Unit, Tenant Tenant, Lease Lease) SeedMoveInUnit(DateTime now)
+    private CanonicalGraph SeedCanonicalRelationship(
+        string propertyName,
+        string unitNumber,
+        string firstName,
+        string lastName,
+        decimal rent,
+        DateTime now,
+        DateTime? possessionGivenAtUtc = null,
+        DateTime? plannedPossessionAtUtc = null,
+        DateOnly? agreementEndOn = null,
+        decimal receivableBalance = 0m,
+        decimal pastDueAmount = 0m,
+        DateOnly? nextDueOn = null)
+    {
+        var (property, unit) = SeedPropertyUnit(propertyName, unitNumber, rent, now);
+        return SeedRelationshipOnExistingUnit(property, unit, firstName, lastName, rent, now,
+            possessionGivenAtUtc, plannedPossessionAtUtc, agreementEndOn, receivableBalance,
+            pastDueAmount, nextDueOn);
+    }
+
+    private CanonicalGraph SeedRelationshipOnExistingUnit(
+        Property property,
+        Unit unit,
+        string firstName,
+        string lastName,
+        decimal rent,
+        DateTime now,
+        DateTime? possessionGivenAtUtc = null,
+        DateTime? plannedPossessionAtUtc = null,
+        DateOnly? agreementEndOn = null,
+        decimal receivableBalance = 0m,
+        decimal pastDueAmount = 0m,
+        DateOnly? nextDueOn = null)
+    {
+        var tenant = Tenant(firstName, lastName, now);
+        _db.Tenants.Add(tenant);
+        _db.SaveChanges();
+
+        var relationship = Relationship(property, unit, now, plannedPossessionAtUtc, possessionGivenAtUtc);
+        _db.LeaseManagements.Add(relationship);
+        _db.SaveChanges();
+
+        var startOn = DateOnly.FromDateTime(possessionGivenAtUtc ?? plannedPossessionAtUtc ?? now);
+        var agreement = Agreement(
+            relationship,
+            rent,
+            startOn,
+            agreementEndOn ?? startOn.AddYears(1),
+            now);
+        var party = Party(relationship, tenant, startOn, now);
+        var account = Account(relationship, now);
+        _db.AddRange(agreement, party, account);
+        _db.SaveChanges();
+        AddResponsibleSigner(agreement, party, tenant);
+        IssueAgreement(agreement, relationship.Id, now);
+
+        var graph = new CanonicalGraph(property, unit, tenant, relationship, agreement, account);
+        if (receivableBalance != 0m || pastDueAmount != 0m)
+        {
+            SeedBalance(graph, receivableBalance, pastDueAmount, nextDueOn);
+        }
+
+        return graph;
+    }
+
+    private CanonicalGraph SeedHistoricalRelationship(
+        Property property,
+        Unit unit,
+        string firstName,
+        string lastName,
+        decimal rent,
+        DateTime possessionGivenAtUtc,
+        DateTime possessionReturnedAtUtc)
+    {
+        var tenant = Tenant(firstName, lastName, possessionGivenAtUtc);
+        _db.Tenants.Add(tenant);
+        _db.SaveChanges();
+        var relationship = Relationship(property, unit, possessionGivenAtUtc, possessionGivenAtUtc, possessionGivenAtUtc);
+        _db.LeaseManagements.Add(relationship);
+        _db.SaveChanges();
+        var startOn = DateOnly.FromDateTime(possessionGivenAtUtc);
+        var agreement = Agreement(
+            relationship,
+            rent,
+            startOn,
+            DateOnly.FromDateTime(possessionReturnedAtUtc),
+            possessionGivenAtUtc);
+        var party = Party(relationship, tenant, startOn, possessionGivenAtUtc);
+        var account = Account(relationship, possessionGivenAtUtc);
+        _db.AddRange(agreement, party, account);
+        _db.SaveChanges();
+        AddResponsibleSigner(agreement, party, tenant);
+        IssueAgreement(agreement, relationship.Id, possessionGivenAtUtc);
+
+        party.EffectiveThrough = DateOnly.FromDateTime(possessionReturnedAtUtc);
+        relationship.PossessionReturnedAtUtc = possessionReturnedAtUtc;
+        relationship.AccountClosedAtUtc = possessionReturnedAtUtc;
+        account.ClosedAtUtc = possessionReturnedAtUtc;
+        account.CloseReasonCode = "MoveOutCompleted";
+        account.CloseNote = "Canonical historical dashboard fixture";
+        _db.SaveChanges();
+        return new CanonicalGraph(property, unit, tenant, relationship, agreement, account);
+    }
+
+    private void AddResponsibleSigner(
+        LeaseAgreement agreement,
+        LeaseManagementParty party,
+        Tenant tenant)
+    {
+        _db.LeaseAgreementSigners.Add(new LeaseAgreementSigner
+        {
+            PortfolioId = PortfolioId,
+            LeaseAgreementId = agreement.Id,
+            LeaseManagementPartyId = party.Id,
+            TenantId = tenant.Id,
+            SignerRole = LeaseLegalSignerRole.PrimaryTenant,
+            NameSnapshot = $"{tenant.FirstName} {tenant.LastName}",
+            EmailSnapshot = tenant.Email!,
+            SigningOrder = 1,
+            IsRequired = true,
+        });
+        _db.SaveChanges();
+    }
+
+    private void IssueAgreement(LeaseAgreement agreement, int relationshipId, DateTime now)
+    {
+        var (issuedArtifact, executedArtifact) = SeedAgreementArtifacts(relationshipId, now);
+        agreement.IssuedArtifactId = issuedArtifact.Id;
+        agreement.IssuedAtUtc = now;
+        agreement.ExecutedArtifactId = executedArtifact.Id;
+        agreement.FullyExecutedAtUtc = now;
+        _db.SaveChanges();
+    }
+
+    private (LegalDocumentArtifact Issued, LegalDocumentArtifact Executed) SeedAgreementArtifacts(
+        int relationshipId,
+        DateTime now)
+    {
+        var issuedFile = File(null, null, $"agreement-{relationshipId}-issued.pdf", now);
+        var executedFile = File(null, null, $"agreement-{relationshipId}-executed.pdf", now);
+        _db.StoredFiles.AddRange(issuedFile, executedFile);
+        _db.SaveChanges();
+
+        var issuedArtifact = new LegalDocumentArtifact
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            StoredFileId = issuedFile.Id,
+            ArtifactKind = LegalDocumentArtifactKind.IssuedAgreement,
+            StorageKey = issuedFile.FilePath,
+            FileName = issuedFile.FileName,
+            ContentType = issuedFile.ContentType,
+            ByteLength = issuedFile.FileSize,
+            ContentSha256 = new string('a', 64),
+            LegalIssuanceFingerprint = new string('b', 64),
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        };
+        var executedArtifact = new LegalDocumentArtifact
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            StoredFileId = executedFile.Id,
+            ArtifactKind = LegalDocumentArtifactKind.ExecutedAgreement,
+            StorageKey = executedFile.FilePath,
+            FileName = executedFile.FileName,
+            ContentType = executedFile.ContentType,
+            ByteLength = executedFile.FileSize,
+            ContentSha256 = new string('c', 64),
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        };
+        _db.LegalDocumentArtifacts.AddRange(issuedArtifact, executedArtifact);
+        _db.SaveChanges();
+        return (issuedArtifact, executedArtifact);
+    }
+
+    private void SeedBalance(CanonicalGraph graph, decimal receivable, decimal pastDue, DateOnly? nextDueOn)
+    {
+        if (pastDue > 0m)
+        {
+            AddLedgerEntry(
+                graph.Account,
+                graph.Agreement,
+                TenantLedgerEntryType.RentCharge,
+                TenantLedgerDirection.Debit,
+                pastDue,
+                $"dashboard-past-due-{Guid.NewGuid():N}",
+                DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1)));
+        }
+
+        var remainingReceivable = receivable - pastDue;
+        if (remainingReceivable > 0m)
+        {
+            AddLedgerEntry(
+                graph.Account,
+                graph.Agreement,
+                TenantLedgerEntryType.RentCharge,
+                TenantLedgerDirection.Debit,
+                remainingReceivable,
+                $"dashboard-current-due-{Guid.NewGuid():N}",
+                nextDueOn ?? DateOnly.FromDateTime(DateTime.UtcNow));
+        }
+
+        _db.SaveChanges();
+    }
+
+    private (Property Property, Unit Unit) SeedPropertyUnit(string propertyName, string unitNumber, decimal rent, DateTime now)
     {
         var property = new Property
         {
             PortfolioId = PortfolioId,
-            Name = "Maple Heights",
-            AddressLine1 = "200 Maple",
+            Name = propertyName,
+            AddressLine1 = $"{unitNumber} Main St",
             City = "Columbus",
             State = "OH",
             PostalCode = "43219",
@@ -808,156 +566,281 @@ public class UnitDashboardServiceTests : IDisposable
         };
         var unit = new Unit
         {
-            Property = property,
-            UnitNumber = "2A",
-            Status = UnitStatus.Occupied,
-            MarketRent = 1200m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var tenant = new Tenant
-        {
-            PortfolioId = PortfolioId,
-            FirstName = "Morgan",
-            LastName = "Movein",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var lease = new Lease
-        {
             PortfolioId = PortfolioId,
             Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = "L-MOVEIN",
-            Status = LeaseStatus.Active,
-            StartDate = now.AddDays(-5),
-            EndDate = now.AddMonths(12),
-            MonthlyRent = 1200m,
-            SecurityDeposit = 1200m,
+            UnitNumber = unitNumber,
+            MarketRent = rent,
             CreatedAt = now,
             UpdatedAt = now,
         };
-        _db.AddRange(property, unit, tenant, lease);
+        _db.AddRange(property, unit);
         _db.SaveChanges();
+        return (property, unit);
+    }
 
-        return (property, unit, tenant, lease);
+    private void SeedOperationalState(
+        Unit unit,
+        UnitOperationalPeriodType type,
+        DateTime startedAtUtc,
+        LeaseManagement? sourceRelationship = null)
+    {
+        _db.UnitOperationalPeriods.Add(new UnitOperationalPeriod
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = unit.PropertyId,
+            UnitId = unit.Id,
+            Type = type,
+            StartedAtUtc = startedAtUtc,
+            SourceLeaseManagementId = sourceRelationship?.Id,
+            Reason = "Canonical dashboard fixture",
+            CreatedAtUtc = startedAtUtc,
+            CreatedByUserId = ActorUserId,
+        });
+        _db.SaveChanges();
     }
 
     private SeededTimelineGraph SeedUnitWithTimelineChildren()
     {
         var now = DateTime.UtcNow;
-        var property = new Property
-        {
-            PortfolioId = PortfolioId,
-            Name = "Maple",
-            AddressLine1 = "1 Main",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43219",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var unit = new Unit
-        {
-            Property = property,
-            UnitNumber = "1A",
-            MarketRent = 1200m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var tenant = new Tenant
-        {
-            PortfolioId = PortfolioId,
-            FirstName = "Maria",
-            LastName = "Tenant",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var lease = new Lease
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = "L-1A",
-            Status = LeaseStatus.Active,
-            StartDate = now.AddMonths(-1),
-            EndDate = now.AddYears(1),
-            MonthlyRent = 1200m,
-            SecurityDeposit = 1200m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var payment = new Payment
-        {
-            PortfolioId = PortfolioId,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Paid,
-            Amount = 1200m,
-            DueDate = now.Date,
-            PaidDate = now.Date,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var workOrder = new WorkOrder
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            Title = "Fix sink",
-            Description = "Leak",
-            RequestedAt = now,
-            UpdatedAt = now,
-        };
-        var expense = new Expense
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = unit,
-            WorkOrder = workOrder,
-            Description = "Parts",
-            Amount = 40m,
-            IncurredAt = now,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var foreignUnit = new Unit
-        {
-            Property = property,
-            UnitNumber = "9Z",
-            MarketRent = 900m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        var foreignLease = new Lease
-        {
-            PortfolioId = PortfolioId,
-            Property = property,
-            Unit = foreignUnit,
-            Tenant = tenant,
-            LeaseNumber = "L-9Z",
-            Status = LeaseStatus.Active,
-            StartDate = now.AddMonths(-1),
-            EndDate = now.AddYears(1),
-            MonthlyRent = 900m,
-            SecurityDeposit = 900m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        _db.AddRange(property, unit, tenant, lease, payment, workOrder, expense, foreignUnit, foreignLease);
+        var graph = SeedCanonicalRelationship("Maple", "1A", "Maria", "Tenant", 1200m,
+            now, possessionGivenAtUtc: now.AddMonths(-1));
+        var workOrder = WorkOrderFor(graph.Unit, graph.Property, "Fix sink", WorkOrderStatus.InProgress, now);
+        var expense = ExpenseFor(graph.Unit, graph.Property, "Parts", 40m, now, workOrder);
+        var (foreignProperty, foreignUnit) = SeedPropertyUnit("Foreign Maple", "9Z", 900m, now);
+        var foreign = SeedRelationshipOnExistingUnit(foreignProperty, foreignUnit, "Other", "Tenant", 900m,
+            now, possessionGivenAtUtc: now.AddMonths(-1));
+        _db.AddRange(workOrder, expense);
         _db.SaveChanges();
-
-        return new SeededTimelineGraph(unit, lease, payment, workOrder, expense, foreignLease);
+        return new SeededTimelineGraph(
+            graph.Property, graph.Unit, graph.Relationship, graph.Agreement, graph.Account,
+            workOrder, expense, foreignUnit, foreign.Relationship);
     }
 
-    private sealed record SeededTimelineGraph(
+    private static Tenant Tenant(string firstName, string lastName, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        FirstName = firstName,
+        LastName = lastName,
+        Email = $"{firstName}.{lastName}@example.test".ToLowerInvariant(),
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+
+    private static LeaseManagement Relationship(
+        Property property,
+        Unit unit,
+        DateTime now,
+        DateTime? plannedPossessionAtUtc,
+        DateTime? possessionGivenAtUtc) => new()
+    {
+        PublicId = Guid.NewGuid(),
+        PortfolioId = PortfolioId,
+        PropertyId = property.Id,
+        UnitId = unit.Id,
+        RelationshipNumber = $"REL-{Guid.NewGuid():N}"[..12],
+        PlannedPossessionAtUtc = plannedPossessionAtUtc ?? possessionGivenAtUtc,
+        PossessionGivenAtUtc = possessionGivenAtUtc,
+        CreatedAtUtc = now,
+        CreatedByUserId = ActorUserId,
+        UpdatedAtUtc = now,
+        RowVersion = Guid.NewGuid(),
+    };
+
+    private static LeaseAgreement Agreement(
+        LeaseManagement relationship,
+        decimal rent,
+        DateOnly startOn,
+        DateOnly endOn,
+        DateTime now) => new()
+    {
+        PublicId = Guid.NewGuid(),
+        PortfolioId = PortfolioId,
+        LeaseManagementId = relationship.Id,
+        VersionNumber = 1,
+        AgreementNumber = $"AGR-{Guid.NewGuid():N}"[..12],
+        ChangeType = LeaseAgreementChangeType.Initial,
+        TermType = LeaseAgreementTermType.FixedTerm,
+        TermStartOn = startOn,
+        TermEndOn = endOn,
+        GoverningFromOn = startOn,
+        BaseRentAmount = rent,
+        RentDueDay = 1,
+        SecurityDepositObligation = rent,
+        LateFeeAmount = 50m,
+        GracePeriodDays = 5,
+        Currency = "USD",
+        TermsSchemaVersion = 1,
+        TermsPayload = "{}",
+        DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
+            PortfolioId, ActorUserId, now),
+        CreatedAtUtc = now,
+        CreatedByUserId = ActorUserId,
+        UpdatedAtUtc = now,
+    };
+
+    private static LeaseManagementParty Party(
+        LeaseManagement relationship,
+        Tenant tenant,
+        DateOnly effectiveFrom,
+        DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        LeaseManagementId = relationship.Id,
+        TenantId = tenant.Id,
+        Role = LeaseManagementPartyRole.PrimaryTenant,
+        EffectiveFrom = effectiveFrom,
+        ChangeReason = "Canonical dashboard fixture",
+        CreatedAtUtc = now,
+        CreatedByUserId = ActorUserId,
+    };
+
+    private static TenantAccount Account(LeaseManagement relationship, DateTime now) => new()
+    {
+        PublicId = Guid.NewGuid(),
+        PortfolioId = PortfolioId,
+        LeaseManagementId = relationship.Id,
+        AccountNumber = $"TA-{Guid.NewGuid():N}"[..12],
+        Currency = "USD",
+        OpenedAtUtc = now,
+        CreatedAtUtc = now,
+        CreatedByUserId = ActorUserId,
+    };
+
+    private void AddLedgerEntry(
+        TenantAccount account,
+        LeaseAgreement agreement,
+        TenantLedgerEntryType type,
+        TenantLedgerDirection direction,
+        decimal amount,
+        string businessKey,
+        DateOnly effectiveOn)
+    {
+        _db.TenantLedgerEntries.Add(new TenantLedgerEntry
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            TenantAccountId = account.Id,
+            LeaseAgreementId = agreement.Id,
+            EntryType = type,
+            Direction = direction,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = effectiveOn,
+            DueOn = direction == TenantLedgerDirection.Debit ? effectiveOn : null,
+            PostedAtUtc = effectiveOn.ToDateTime(new TimeOnly(12, 0), DateTimeKind.Utc),
+            Description = businessKey,
+            BusinessKey = businessKey,
+            CreatedByUserId = ActorUserId,
+        });
+    }
+
+    private static WorkOrder WorkOrderFor(
+        Unit unit,
+        Property property,
+        string title,
+        WorkOrderStatus status,
+        DateTime requestedAt,
+        decimal? estimatedCost = null,
+        decimal? actualCost = null,
+        DateTime? scheduledFor = null,
+        DateTime? completedAt = null) => new()
+    {
+        PortfolioId = PortfolioId,
+        PropertyId = property.Id,
+        UnitId = unit.Id,
+        Title = title,
+        Description = title,
+        Status = status,
+        EstimatedCost = estimatedCost,
+        ActualCost = actualCost,
+        RequestedAt = requestedAt,
+        ScheduledFor = scheduledFor,
+        CompletedAt = completedAt,
+        UpdatedAt = completedAt ?? requestedAt,
+    };
+
+    private static Expense ExpenseFor(
+        Unit unit,
+        Property property,
+        string description,
+        decimal amount,
+        DateTime incurredAt,
+        WorkOrder? workOrder = null) => new()
+    {
+        PortfolioId = PortfolioId,
+        OperationalScope = workOrder is null
+            ? ExpenseOperationalScope.Unit
+            : ExpenseOperationalScope.WorkOrder,
+        PropertyId = property.Id,
+        UnitId = unit.Id,
+        WorkOrder = workOrder,
+        Description = description,
+        Amount = amount,
+        IncurredAt = incurredAt,
+        CreatedAt = incurredAt,
+        UpdatedAt = incurredAt,
+    };
+
+    private AtomicAuditLog Audit(string entityType, int entityId, int minutesAgo) => new()
+    {
+        AttemptId = Guid.NewGuid(),
+        CommandType = "test.unit-dashboard.seed",
+        CommandIdempotencyKey = Guid.NewGuid().ToString("N"),
+        MutationOrdinal = 1,
+        PortfolioId = PortfolioId,
+        EntityType = entityType,
+        EntityId = entityId,
+        Operation = AuditLogOperation.Created,
+        ActorLabel = "test",
+        Timestamp = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc).AddMinutes(-minutesAgo),
+    };
+
+    private static StoredFile File(string? entityType, long? entityId, string fileName, DateTime uploadedAt) => new()
+    {
+        PortfolioId = PortfolioId,
+        EntityType = entityType,
+        EntityId = entityId,
+        FileName = fileName,
+        FilePath = fileName,
+        ContentType = fileName.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? "image/png" : "application/pdf",
+        FileSize = 1024,
+        UploadedAt = uploadedAt,
+    };
+
+    private static bool IsChildIdPreload(string command) =>
+        IsBareIdSelect(command, "LeaseManagements")
+        || IsBareIdSelect(command, "LeaseAgreements")
+        || IsBareIdSelect(command, "TenantAccounts")
+        || IsBareIdSelect(command, "WorkOrders")
+        || IsBareIdSelect(command, "Inspections")
+        || IsBareIdSelect(command, "Appointments")
+        || IsBareIdSelect(command, "Expenses");
+
+    private static bool IsBareIdSelect(string command, string table) =>
+        command.Contains("SELECT \"", StringComparison.OrdinalIgnoreCase)
+        && command.Contains("\".\"Id\"", StringComparison.OrdinalIgnoreCase)
+        && command.Contains($"FROM \"{table}\"", StringComparison.OrdinalIgnoreCase)
+        && !command.Contains("FROM \"AtomicAuditLogs\"", StringComparison.OrdinalIgnoreCase)
+        && !command.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
+        && !command.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase);
+
+    private sealed record CanonicalGraph(
+        Property Property,
         Unit Unit,
-        Lease Lease,
-        Payment Payment,
+        Tenant Tenant,
+        LeaseManagement Relationship,
+        LeaseAgreement Agreement,
+        TenantAccount Account);
+
+    private sealed record SeededTimelineGraph(
+        Property Property,
+        Unit Unit,
+        LeaseManagement Relationship,
+        LeaseAgreement Agreement,
+        TenantAccount Account,
         WorkOrder WorkOrder,
         Expense Expense,
-        Lease ForeignLease);
+        Unit ForeignUnit,
+        LeaseManagement ForeignRelationship);
+
 }

@@ -1,13 +1,16 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using RentalCommand.Api.Auth;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Controllers;
 
 /// <summary>
-/// Account-wide Sandbox/Live lifecycle for the caller's portfolio. Scope comes from the JWT
-/// <c>portfolioId</c> claim — never a request parameter — so a caller can only read or graduate their
-/// OWN portfolio (IDOR-safe). "Go Live" is a one-way graduation that wipes the seeded demo data.
+/// Account-wide Sandbox/Live lifecycle for the caller's workspace. Scope comes from the
+/// server-validated canonical access context — never a request parameter — so a caller can only read
+/// or graduate their own workspace. "Go Live" is a one-way graduation that wipes seeded demo data.
 /// </summary>
 [ApiController]
 [Route("api/v1/portfolio")]
@@ -36,6 +39,7 @@ public class SandboxController : ManagementControllerBase
     /// calling it on an already-Live account is a no-op that returns the Live state. Returns the new state.
     /// </summary>
     [HttpPost("go-live")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.AccountDestructiveActions)]
     [ProducesResponseType(typeof(SandboxStateResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<SandboxStateResponse>> GoLive(CancellationToken ct)
@@ -51,6 +55,7 @@ public class SandboxController : ManagementControllerBase
     /// re-seeding or wiping. Returns the resulting sandbox state.
     /// </summary>
     [HttpPost("onboarding-choice")]
+    [Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.AccountDestructiveActions)]
     [ProducesResponseType(typeof(SandboxStateResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

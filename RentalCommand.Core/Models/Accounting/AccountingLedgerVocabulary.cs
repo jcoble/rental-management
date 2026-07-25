@@ -55,6 +55,6 @@ public static class LocalEntityKind
     public const string ScheduleECategory = "ScheduleECategory";
 
     // Created/linked transaction targets.
-    public const string Payment = "Payment";
+    public const string TenantLedgerEntry = "TenantLedgerEntry";
     public const string Expense = "Expense";
 }

@@ -1,7 +1,10 @@
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Tests;
 using RentalCommand.Core;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -9,19 +12,36 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public sealed class UnitServiceDeleteTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public sealed class UnitServiceDeleteTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
-    private readonly SqliteTestContext _ctx = new();
-    private readonly UnitService _sut;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private ServiceProvider _services = null!;
+    private UnitService _sut = null!;
+    private WorkspaceReadScope _scope;
 
-    public UnitServiceDeleteTests()
+    public UnitServiceDeleteTests(MigratedPostgreSqlFixture fixture)
     {
-        _sut = new UnitService(_ctx.Db, Mock.Of<IDataUpdateService>(), Mock.Of<IAuditTrailService>(), TimeProvider.System);
+        _fixture = fixture;
     }
 
-    public void Dispose() => _ctx.Dispose();
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync();
+        _services = AtomicDomainTestKernel.CreateForRentalCrudPostgreSql(_ctx.ConnectionString);
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(UnitServiceDeleteTests));
+        _sut = new UnitService(_ctx.Db, Mock.Of<IDataUpdateService>(), Mock.Of<IAuditTrailService>(),
+            TimeProvider.System, _services.GetRequiredService<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
+    }
+
+    public async Task DisposeAsync()
+    {
+        await _services.DisposeAsync();
+        await _ctx.DisposeAsync();
+    }
 
     [Fact]
     public async Task DeleteAsync_RejectsUnitWithLeaseHistory()
@@ -29,10 +49,10 @@ public sealed class UnitServiceDeleteTests : IDisposable
         var unit = SeedUnit();
         SeedLease(unit);
 
-        var act = async () => await _sut.DeleteAsync(PortfolioId, unit.Id);
+        var act = async () => await _sut.DeleteAsync(_scope, unit.Id, Guid.NewGuid().ToString("N"));
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
-        ex.Which.Message.Should().Contain("lease").And.Contain("history");
+        ex.Which.Message.Should().Contain("rental relationship");
         (await _sut.GetAsync(PortfolioId, unit.Id)).Should().NotBeNull();
     }
 
@@ -52,7 +72,7 @@ public sealed class UnitServiceDeleteTests : IDisposable
         });
         _ctx.Db.SaveChanges();
 
-        var act = async () => await _sut.DeleteAsync(PortfolioId, unit.Id);
+        var act = async () => await _sut.DeleteAsync(_scope, unit.Id, Guid.NewGuid().ToString("N"));
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.Message.Should().Contain("work order").And.Contain("history");
@@ -75,7 +95,7 @@ public sealed class UnitServiceDeleteTests : IDisposable
         });
         _ctx.Db.SaveChanges();
 
-        var act = async () => await _sut.DeleteAsync(PortfolioId, unit.Id);
+        var act = async () => await _sut.DeleteAsync(_scope, unit.Id, Guid.NewGuid().ToString("N"));
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.Message.Should().Contain("application").And.Contain("history");
@@ -87,7 +107,7 @@ public sealed class UnitServiceDeleteTests : IDisposable
     {
         var unit = SeedUnit();
 
-        var deleted = await _sut.DeleteAsync(PortfolioId, unit.Id);
+        var deleted = await _sut.DeleteAsync(_scope, unit.Id, Guid.NewGuid().ToString("N"));
 
         deleted.Should().BeTrue();
         (await _sut.GetAsync(PortfolioId, unit.Id)).Should().BeNull();
@@ -122,30 +142,17 @@ public sealed class UnitServiceDeleteTests : IDisposable
     private void SeedLease(Unit unit)
     {
         var now = DateTime.UtcNow;
-        var tenant = new Tenant
+        _ctx.Db.LeaseManagements.Add(new LeaseManagement
         {
-            PortfolioId = PortfolioId,
-            FirstName = "History",
-            LastName = "Tenant",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _ctx.Db.Tenants.Add(tenant);
-        _ctx.Db.Leases.Add(new Lease
-        {
+            PublicId = Guid.NewGuid(),
             PortfolioId = PortfolioId,
             PropertyId = unit.PropertyId,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = "HISTORY-LEASE",
-            Status = LeaseStatus.Expired,
-            StartDate = now.AddYears(-2),
-            EndDate = now.AddYears(-1),
-            MonthlyRent = 1200m,
-            SecurityDeposit = 1200m,
-            RentDueDay = 1,
-            CreatedAt = now,
-            UpdatedAt = now,
+            UnitId = unit.Id,
+            RelationshipNumber = "HISTORY-RELATIONSHIP",
+            CreatedAtUtc = now,
+            CreatedByUserId = 1,
+            UpdatedAtUtc = now,
+            RowVersion = Guid.NewGuid(),
         });
         _ctx.Db.SaveChanges();
     }

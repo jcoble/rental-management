@@ -59,11 +59,13 @@ public class DashboardMaintenance
 
 public class DashboardLeasing
 {
+    /// <summary>Continuous household/account relationships, not immutable agreement-version rows.</summary>
     public int TotalLeases { get; set; }
+    /// <summary>Relationships currently occupied or ending.</summary>
     public int ActiveLeases { get; set; }
-    /// <summary>Active leases ending within the next 60 days, soonest first.</summary>
+    /// <summary>Governing agreements ending within 60 business days, soonest first.</summary>
     public IReadOnlyList<DashboardExpiringLease> ExpiringSoon { get; set; } = [];
-    /// <summary>Lease counts keyed by <c>LeaseStatus</c> string name.</summary>
+    /// <summary>Relationship counts keyed by database-derived lifecycle name.</summary>
     public IReadOnlyDictionary<string, int> ByStatus { get; set; } = new Dictionary<string, int>();
 }
 
@@ -80,7 +82,7 @@ public class DashboardExpiringLease
 
 public class DashboardActivity
 {
-    public int Id { get; set; }
+    public long Id { get; set; }
     /// <summary>Activity type as its string name (e.g. <c>PaymentRecorded</c>).</summary>
     public string Type { get; set; } = string.Empty;
     /// <summary>Primary key of the entity this row touched, so the web can deep-link to its detail page.</summary>

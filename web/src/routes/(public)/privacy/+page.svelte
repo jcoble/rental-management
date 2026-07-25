@@ -138,9 +138,14 @@
 					with the Fair Credit Reporting Act.
 				</li>
 				<li>
-					We store the screening outcome in summary form: a coarse credit band, yes/no flags for
-					criminal- and eviction-record findings, and a recommendation. The full raw report from
-					the provider is retained for audit/troubleshooting and is not displayed in full.
+					The screening provider's hosted experience collects the sensitive identity information
+					needed to perform the screening. Rental Command stores only workflow and compliance metadata,
+					such as provider/reference, status and dates, consumer-reporting-agency contact information,
+					and the landlord's decision and reason.
+				</li>
+				<li>
+					Rental Command does <strong>not</strong> store Social Security numbers, raw consumer reports,
+					criminal or eviction details, credit scores or bands, or a provider recommendation.
 				</li>
 				<li>Where required, we generate and store an adverse-action notice.</li>
 			</ul>

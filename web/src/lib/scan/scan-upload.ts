@@ -6,7 +6,7 @@ const TARGET_FILE_PREFIX: Record<string, string> = {
 	Expense: 'expense',
 	Payment: 'payment',
 	WorkOrder: 'work-order',
-	Lease: 'lease',
+	LeaseAgreement: 'lease',
 	Application: 'application'
 };
 

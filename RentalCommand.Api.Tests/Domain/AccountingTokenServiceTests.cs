@@ -4,11 +4,13 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Tests;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Models.Accounting;
+using RentalCommand.Data.Accounting;
 using RentalCommand.TestCommon;
 using Xunit;
 
@@ -21,14 +23,29 @@ namespace RentalCommand.Api.Tests.Domain;
 /// and blanks the tokens — never a silent failure. Tests the shared <see cref="AccountingTokenService"/>
 /// directly (the worker is a thin DB-claim + advisory-lock wrapper around it).
 /// </summary>
-public sealed class AccountingTokenServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public sealed class AccountingTokenServiceTests : IAsyncLifetime
 {
-    private const int PortfolioId = 1; // seeded by SqliteTestContext
+    private const int PortfolioId = 1;
 
-    private readonly SqliteTestContext _ctx = new();
+    private readonly MigratedPostgreSqlFixture _fixture;
     private readonly IDataProtectionProvider _dp = new EphemeralDataProtectionProvider();
+    private MigratedPostgreSqlTestContext _ctx = null!;
 
-    public void Dispose() => _ctx.Dispose();
+    public AccountingTokenServiceTests(MigratedPostgreSqlFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync();
+    }
+
+    public async Task DisposeAsync()
+    {
+        await _ctx.DisposeAsync();
+    }
 
     [Fact]
     public async Task RefreshAsync_RotatesAndReencryptsBothTokens_AndAdvancesExpiry()
@@ -41,15 +58,18 @@ public sealed class AccountingTokenServiceTests : IDisposable
         var fake = new FakeRefreshProvider(
             new AccountingTokenResult("new-access", "new-refresh", newExpiry, null, null));
         var sut = CreateService(fake);
+        var fence = BeginRotation(conn);
 
-        var result = await sut.RefreshAsync(_ctx.Db, conn, CancellationToken.None);
+        var result = await sut.RefreshAsync(conn, fence, CancellationToken.None);
 
         result.Outcome.Should().Be(AccountingTokenService.RefreshOutcome.Refreshed);
         result.AccessToken.Should().Be("new-access"); // decrypted, for a 401-retry caller to reuse
 
         var saved = await _ctx.Db.AccountingConnections.AsNoTracking().SingleAsync(c => c.Id == conn.Id);
         saved.Status.Should().Be(AccountingConnectionStatus.Connected);
-        saved.TokenExpiresAt.Should().Be(newExpiry);
+        saved.TokenExpiresAt.Should().BeCloseTo(newExpiry, TimeSpan.FromMicroseconds(1),
+            "PostgreSQL timestamps have microsecond precision while DateTime has 100 ns ticks");
+        saved.TokenGeneration.Should().Be(1);
 
         // BOTH tokens rotated and are stored ONLY as cipher text (not plaintext), and decrypt to the new pair.
         saved.AccessTokenCipherText.Should().NotBeNullOrEmpty();
@@ -72,8 +92,9 @@ public sealed class AccountingTokenServiceTests : IDisposable
         var fake = new FakeRefreshProvider(
             throwReconnect: new AccountingReconnectRequiredException("invalid_grant — refresh token dead"));
         var sut = CreateService(fake);
+        var fence = BeginRotation(conn);
 
-        var result = await sut.RefreshAsync(_ctx.Db, conn, CancellationToken.None);
+        var result = await sut.RefreshAsync(conn, fence, CancellationToken.None);
 
         result.Outcome.Should().Be(AccountingTokenService.RefreshOutcome.NeedsReconnect);
         result.AccessToken.Should().BeNull();
@@ -114,7 +135,20 @@ public sealed class AccountingTokenServiceTests : IDisposable
         var qbOptions = new QuickBooksOptions { ClientId = "id", ClientSecret = "secret", Environment = "sandbox" };
         var settingsResolver = new AccountingAppSettingsResolver(new StaticOptionsMonitor<QuickBooksOptions>(qbOptions));
         var providerResolver = new AccountingProviderResolver(new[] { provider });
-        return new AccountingTokenService(_dp, providerResolver, settingsResolver, TimeProvider.System, NullLogger<AccountingTokenService>.Instance);
+        return new AccountingTokenService(_dp, providerResolver, settingsResolver,
+            new AccountingConnectionClaimStore(_ctx.Db), TimeProvider.System,
+            NullLogger<AccountingTokenService>.Instance);
+    }
+
+    private AccountingWorkerFence BeginRotation(AccountingConnection connection)
+    {
+        var token = Guid.NewGuid();
+        connection.TokenRotationState = AccountingTokenRotationState.InFlight;
+        connection.TokenRotationClaimToken = token;
+        connection.TokenRotationClaimOwner = "unit-test";
+        connection.TokenRotationClaimExpiresAtUtc = DateTime.UtcNow.AddMinutes(3);
+        _ctx.Db.SaveChanges();
+        return new AccountingWorkerFence(AccountingWorkerOperation.TokenRotation, token);
     }
 
     /// <summary>Fake provider whose RefreshTokenAsync returns a fixed result or throws a reconnect-required.</summary>

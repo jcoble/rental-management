@@ -1,32 +1,34 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
-using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Services;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
 
 namespace RentalCommand.Api.Services.Domain;
 
 /// <inheritdoc cref="ICapitalAssetService"/>
 public class CapitalAssetService : ICapitalAssetService
 {
-    private const string EntityType = "CapitalAsset";
-    private const string ExpenseEntityType = "Expense";
+    private static readonly string[] ReadCapabilities =
+        [CapabilityKeys.ReportsRead, CapabilityKeys.MoneyOwnerReportsRead, CapabilityKeys.MoneyExpensesManage];
 
     private readonly RentalCommandDbContext _db;
-    private readonly IDataUpdateService _dataUpdate;
     private readonly TimeProvider _timeProvider;
+    private readonly IAtomicUnitOfWork _atomic;
 
     public CapitalAssetService(
         RentalCommandDbContext db,
-        IDataUpdateService dataUpdate,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IAtomicUnitOfWork atomic)
     {
         _db = db;
-        _dataUpdate = dataUpdate;
         _timeProvider = timeProvider;
+        _atomic = atomic;
     }
 
     public async Task<IReadOnlyList<CapitalAssetResponse>> ListAsync(
@@ -38,8 +40,25 @@ public class CapitalAssetService : ICapitalAssetService
 
     public async Task<CapitalAssetListResponse> ListPageAsync(
         int portfolioId, CapitalAssetListQuery query, CancellationToken ct = default)
+        => await ListPageFromQueryAsync(
+            _db.CapitalAssets.AsNoTracking().Where(asset => asset.PortfolioId == portfolioId),
+            query,
+            ct);
+
+    public async Task<IReadOnlyList<CapitalAssetResponse>> ListAuthorizedAsync(
+        WorkspaceReadScope scope, CapitalAssetListQuery query, CancellationToken ct = default)
+        => (await ListPageAuthorizedAsync(scope, query, ct)).Items;
+
+    public Task<CapitalAssetListResponse> ListPageAuthorizedAsync(
+        WorkspaceReadScope scope, CapitalAssetListQuery query, CancellationToken ct = default)
+        => ListPageFromQueryAsync(AuthorizedAssets(scope, ReadCapabilities), query, ct);
+
+    private async Task<CapitalAssetListResponse> ListPageFromQueryAsync(
+        IQueryable<CapitalAsset> assets,
+        CapitalAssetListQuery query,
+        CancellationToken ct)
     {
-        var filtered = BuildListQuery(portfolioId, query);
+        var filtered = BuildListQuery(assets, query);
         var totalCount = await filtered.CountAsync(ct);
         var depreciationYear = query.Year ?? _timeProvider.UtcNow().Year;
 
@@ -72,146 +91,81 @@ public class CapitalAssetService : ICapitalAssetService
         return response;
     }
 
-    public async Task<CapitalAssetResponse?> CreateAsync(
-        int portfolioId, CreateCapitalAssetRequest request, CancellationToken ct = default)
+    public async Task<CapitalAssetResponse?> GetAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        int? depreciationYear = null,
+        CancellationToken ct = default)
     {
-        if (!await ValidatePropertyUnitAsync(portfolioId, request.PropertyId, request.UnitId, ct))
-            return null;
-
-        var now = _timeProvider.UtcNow();
-        var entity = new CapitalAsset
-        {
-            PortfolioId = portfolioId,
-            PropertyId = request.PropertyId,
-            UnitId = request.UnitId,
-            Description = request.Description.Trim(),
-            CostBasis = request.CostBasis,
-            InServiceDate = request.InServiceDate.ToUtc(),
-            Method = request.Method,
-            RecoveryYears = request.RecoveryYears,
-            Convention = request.Convention,
-            AccumulatedDepreciation = request.AccumulatedDepreciation,
-            DisposedOnDate = request.DisposedOnDate.ToUtc(),
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        _db.CapitalAssets.Add(entity);
-        await _db.SaveChangesAsync(ct);
-
-        var response = await GetAsync(portfolioId, entity.Id, ct: ct) ?? CapitalAssetResponse.FromEntity(entity, now.Year);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        var year = depreciationYear ?? _timeProvider.UtcNow().Year;
+        var response = await ProjectResponse(
+                AuthorizedAssets(scope, ReadCapabilities).Where(asset => asset.Id == id),
+                year)
+            .FirstOrDefaultAsync(ct);
+        if (response != null)
+            PopulateDepreciation([response], year);
         return response;
     }
 
-    public async Task<CapitalAssetResponse?> UpdateAsync(
-        int portfolioId, int id, UpdateCapitalAssetRequest request, CancellationToken ct = default)
+    public async Task<CapitalAssetResponse?> CreateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        CreateCapitalAssetRequest request,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        var entity = await _db.CapitalAssets
-            .FirstOrDefaultAsync(a => a.Id == id && a.PortfolioId == portfolioId, ct);
-        if (entity is null)
-            return null;
-
-        var propertyId = request.PropertyId ?? entity.PropertyId;
-        int? unitId = entity.UnitId;
-        if (request.ClearUnit == true)
-            unitId = null;
-        if (request.UnitId.HasValue)
-            unitId = request.UnitId.Value;
-
-        if (!await ValidatePropertyUnitAsync(portfolioId, propertyId, unitId, ct))
-            return null;
-
-        entity.PropertyId = propertyId;
-        entity.UnitId = unitId;
-        if (request.Description != null) entity.Description = request.Description.Trim();
-        if (request.CostBasis.HasValue) entity.CostBasis = request.CostBasis.Value;
-        if (request.InServiceDate.HasValue) entity.InServiceDate = request.InServiceDate.Value.ToUtc();
-        if (request.Method.HasValue) entity.Method = request.Method.Value;
-        if (request.RecoveryYears.HasValue) entity.RecoveryYears = request.RecoveryYears.Value;
-        if (request.Convention.HasValue) entity.Convention = request.Convention.Value;
-        if (request.AccumulatedDepreciation.HasValue) entity.AccumulatedDepreciation = request.AccumulatedDepreciation.Value;
-        if (request.ClearDisposedOnDate == true) entity.DisposedOnDate = null;
-        else if (request.DisposedOnDate.HasValue) entity.DisposedOnDate = request.DisposedOnDate.Value.ToUtc();
-        entity.UpdatedAt = _timeProvider.UtcNow();
-
-        await _db.SaveChangesAsync(ct);
-
-        var response = await GetAsync(portfolioId, entity.Id, ct: ct) ?? CapitalAssetResponse.FromEntity(entity, entity.UpdatedAt.Year);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
-        return response;
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.CapitalAsset, AtomicMoneyOperation.Create, 0, operationKey, request);
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        return outcome.Value.Found
+            ? await GetAsync(scope.PortfolioId, outcome.Value.EntityId, ct: ct)
+            : null;
     }
 
-    public async Task<CapitalAssetResponse?> CapitalizeExpenseAsync(
-        int portfolioId, int expenseId, CapitalizeExpenseRequest request, CancellationToken ct = default)
+    public async Task<CapitalAssetResponse?> UpdateAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        UpdateCapitalAssetRequest request,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        var expense = await _db.Expenses
-            .FirstOrDefaultAsync(e => e.Id == expenseId && e.PortfolioId == portfolioId, ct);
-        if (expense is null || expense.PropertyId is null || expense.CapitalizedAssetId is not null)
-            return null;
-
-        var now = _timeProvider.UtcNow();
-        var asset = new CapitalAsset
-        {
-            PortfolioId = portfolioId,
-            PropertyId = expense.PropertyId.Value,
-            UnitId = expense.UnitId,
-            SourceExpenseId = expense.Id,
-            Description = string.IsNullOrWhiteSpace(request.Description)
-                ? expense.Description
-                : request.Description.Trim(),
-            CostBasis = expense.Amount,
-            InServiceDate = request.InServiceDate.ToUtc(),
-            Method = request.Method,
-            RecoveryYears = request.RecoveryYears,
-            Convention = request.Convention,
-            AccumulatedDepreciation = 0m,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        await using var tx = await _db.Database.BeginTransactionAsync(ct);
-        _db.CapitalAssets.Add(asset);
-        await _db.SaveChangesAsync(ct);
-
-        expense.CapitalizedAssetId = asset.Id;
-        expense.UpdatedAt = now;
-        await _db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
-
-        var response = await GetAsync(portfolioId, asset.Id, ct: ct) ?? CapitalAssetResponse.FromEntity(asset, now.Year);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, asset.Id, response, ct);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, ExpenseEntityType, expense.Id, ExpenseResponse.FromEntity(expense), ct);
-        return response;
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.CapitalAsset, AtomicMoneyOperation.Update, id, operationKey, request);
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        return outcome.Value.Found
+            ? await GetAsync(scope.PortfolioId, outcome.Value.EntityId, ct: ct)
+            : null;
     }
 
-    public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
+    public async Task<CapitalAssetResponse?> CapitalizeExpenseAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int expenseId,
+        CapitalizeExpenseRequest request,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        var entity = await _db.CapitalAssets
-            .FirstOrDefaultAsync(a => a.Id == id && a.PortfolioId == portfolioId, ct);
-        if (entity is null)
-            return false;
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.CapitalAsset, AtomicMoneyOperation.CapitalizeExpense,
+            expenseId, operationKey, request);
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        return outcome.Value.Found
+            ? await GetAsync(scope.PortfolioId, outcome.Value.EntityId, ct: ct)
+            : null;
+    }
 
-        var now = _timeProvider.UtcNow();
-        entity.DeletedAt = now;
-        entity.UpdatedAt = now;
-
-        var linkedExpenses = await _db.Expenses
-            .Where(e => e.PortfolioId == portfolioId && e.CapitalizedAssetId == id)
-            .ToListAsync(ct);
-        foreach (var expense in linkedExpenses)
-        {
-            expense.CapitalizedAssetId = null;
-            expense.UpdatedAt = now;
-        }
-
-        await _db.SaveChangesAsync(ct);
-
-        await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
-        foreach (var expense in linkedExpenses)
-            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, ExpenseEntityType, expense.Id, ExpenseResponse.FromEntity(expense), ct);
-
-        return true;
+    public async Task<bool> DeleteAuthorizedAsync(
+        WorkspaceReadScope scope,
+        int id,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.CapitalAsset, AtomicMoneyOperation.Delete, id, operationKey, new object());
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicMoneyMutation.Identity(command), command, AtomicMoneyMutation.Codec, ct);
+        return outcome.Value.Found;
     }
 
     public DepreciationResult AnnualDepreciationForYear(CapitalAsset asset, int year)
@@ -226,11 +180,11 @@ public class CapitalAssetService : ICapitalAssetService
             year);
     }
 
-    private IQueryable<CapitalAsset> BuildListQuery(int portfolioId, CapitalAssetListQuery query)
+    private static IQueryable<CapitalAsset> BuildListQuery(
+        IQueryable<CapitalAsset> assets,
+        CapitalAssetListQuery query)
     {
-        var q = _db.CapitalAssets
-            .AsNoTracking()
-            .Where(a => a.PortfolioId == portfolioId);
+        var q = assets;
 
         if (query.PropertyId.HasValue)
             q = q.Where(a => a.PropertyId == query.PropertyId.Value);
@@ -323,13 +277,16 @@ public class CapitalAssetService : ICapitalAssetService
         }
     }
 
-    private async Task<bool> ValidatePropertyUnitAsync(
-        int portfolioId, int propertyId, int? unitId, CancellationToken ct)
+    private IQueryable<CapitalAsset> AuthorizedAssets(
+        WorkspaceReadScope scope,
+        IReadOnlyCollection<string> capabilities)
     {
-        if (!await _db.EnsurePropertyInPortfolioAsync(portfolioId, propertyId, ct))
-            return false;
-
-        return unitId is null ||
-            await _db.EnsureUnitInPortfolioAsync(portfolioId, unitId.Value, propertyId, ct);
+        var authorizedProperties = _db.Properties.AsNoTracking()
+            .WhereAuthorized(_db, scope, capabilities, _timeProvider.UtcNow());
+        return _db.CapitalAssets.AsNoTracking().Where(asset =>
+            asset.PortfolioId == scope.PortfolioId &&
+            authorizedProperties.Any(property =>
+                property.Id == asset.PropertyId &&
+                property.PortfolioId == asset.PortfolioId));
     }
 }

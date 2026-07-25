@@ -9,12 +9,14 @@
 		type OwnerDistribution
 	} from '$lib/api/endpoints/owner-distributions';
 	import type { OwnerStatementSummary, OwnerStatementReport } from '$lib/types';
+	import { hasCapability } from '$lib/stores/auth.svelte';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { FileBarChart, Mail, Plus, Trash2 } from '@lucide/svelte';
 
 	const CURRENT_YEAR = new Date().getFullYear();
@@ -62,6 +64,10 @@
 		enabled: !!portfolioId && selectedOwnerId !== null
 	}));
 	const distributions = $derived((distributionQuery.data as OwnerDistribution[] | undefined) ?? []);
+	const canCreateDistribution = $derived(hasCapability('money.disbursements.manage'));
+	const canDeleteDistribution = $derived(
+		canCreateDistribution && hasCapability('money.reconciliation.destructive')
+	);
 
 	function money(value: number) {
 		return new Intl.NumberFormat('en-US', {
@@ -183,7 +189,7 @@
 
 	function handleDistributionSubmit(event: SubmitEvent) {
 		event.preventDefault();
-		if (selectedOwnerId === null) return;
+		if (!canCreateDistribution || selectedOwnerId === null) return;
 
 		const amount = parseAmount(distributionForm.amount);
 		if (!Number.isFinite(amount) || amount <= 0) {
@@ -246,13 +252,12 @@
 	</div>
 
 	{#if ownersQuery.isLoading}
-		<p class="py-12 text-center text-sm text-muted-foreground" data-testid="owners-report-loading">
-			Loading owners…
-		</p>
+		<LoadingState label="Loading owner reports" variant="page" testid="owners-report-loading" />
 	{:else if ownersQuery.isError}
-		<p class="py-12 text-center text-sm text-destructive" data-testid="owners-report-error">
-			Could not load owner data. Please try again.
-		</p>
+		<div class="flex flex-wrap items-center justify-center gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="owners-report-error">
+			<p class="text-sm text-destructive">Could not load owner data.</p>
+			<Button size="sm" variant="outline" onclick={() => ownersQuery.refetch()}>Retry owner reports</Button>
+		</div>
 	{:else if owners.length === 0}
 		<p class="py-12 text-center text-sm text-muted-foreground" data-testid="owners-report-empty">
 			No owner data for {selectedYear}.
@@ -289,13 +294,12 @@
 						Select an owner to view their statement.
 					</p>
 				{:else if reportQuery.isLoading}
-					<p class="py-12 text-center text-sm text-muted-foreground" data-testid="owners-report-detail-loading">
-						Loading statement…
-					</p>
+					<LoadingState label="Loading owner statement" testid="owners-report-detail-loading" />
 				{:else if reportQuery.isError}
-					<p class="py-12 text-center text-sm text-destructive" data-testid="owners-report-detail-error">
-						Could not load statement. Please try again.
-					</p>
+					<div class="flex flex-wrap items-center justify-center gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-6" role="alert" data-testid="owners-report-detail-error">
+						<p class="text-sm text-destructive">Could not load this owner statement.</p>
+						<Button size="sm" variant="outline" onclick={() => reportQuery.refetch()}>Retry statement</Button>
+					</div>
 				{:else if report}
 					<!-- Header + download -->
 					<div class="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -360,13 +364,14 @@
 						</Card.Root>
 					</div>
 
-					<div class="mb-6 grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-						<Card.Root class="gap-0 py-0" data-testid="owner-distribution-form-card">
-							<Card.Header class="border-b border-border px-4 py-3">
-								<Card.Title class="text-base font-semibold">Record distribution</Card.Title>
-							</Card.Header>
-							<Card.Content class="p-4">
-								<form class="grid gap-3 sm:grid-cols-2" onsubmit={handleDistributionSubmit}>
+						<div class="mb-6 grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+							{#if canCreateDistribution}
+								<Card.Root class="gap-0 py-0" data-testid="owner-distribution-form-card">
+									<Card.Header class="border-b border-border px-4 py-3">
+										<Card.Title class="text-base font-semibold">Record distribution</Card.Title>
+									</Card.Header>
+									<Card.Content class="p-4">
+										<form class="grid gap-3 sm:grid-cols-2" onsubmit={handleDistributionSubmit}>
 									<div>
 										<label for="owner-distribution-date" class="mb-1 block text-xs font-medium text-muted-foreground">Date</label>
 										<Input
@@ -437,9 +442,10 @@
 											{createDistributionMutation.isPending ? 'Recording…' : 'Record distribution'}
 										</Button>
 									</div>
-								</form>
-							</Card.Content>
-						</Card.Root>
+										</form>
+									</Card.Content>
+								</Card.Root>
+							{/if}
 
 						<Card.Root class="gap-0 py-0" data-testid="owner-distribution-list-card">
 							<Card.Header class="border-b border-border px-4 py-3">
@@ -447,9 +453,12 @@
 							</Card.Header>
 							<Card.Content class="p-0">
 								{#if distributionQuery.isLoading}
-									<p class="p-4 text-sm text-muted-foreground" data-testid="owner-distributions-loading">Loading distributions…</p>
+									<LoadingState label="Loading owner distributions" variant="spinner" testid="owner-distributions-loading" />
 								{:else if distributionQuery.isError}
-									<p class="p-4 text-sm text-destructive" data-testid="owner-distributions-error">Could not load distributions.</p>
+									<div class="flex flex-wrap items-center gap-3 p-4" role="alert" data-testid="owner-distributions-error">
+										<p class="text-sm text-destructive">Could not load distributions.</p>
+										<Button size="sm" variant="outline" onclick={() => distributionQuery.refetch()}>Retry distributions</Button>
+									</div>
 								{:else if distributions.length === 0}
 									<p class="p-4 text-sm text-muted-foreground" data-testid="owner-distributions-empty">No distributions recorded for {selectedYear}.</p>
 								{:else}
@@ -471,19 +480,21 @@
 														<td class="px-4 py-3 whitespace-nowrap">{methodLabel(distribution.method)}</td>
 														<td class="px-4 py-3">{distribution.propertyName ?? '—'}</td>
 														<td class="px-4 py-3 text-right font-mono tabular-nums">{money(distribution.amount)}</td>
-														<td class="px-4 py-3 text-right">
-															<Button
-																variant="ghost"
-																size="icon"
-																class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-																aria-label={`Delete distribution ${money(distribution.amount)}`}
-																title="Delete distribution"
-																disabled={deleteDistributionMutation.isPending}
-																onclick={() => deleteDistributionMutation.mutate(distribution.id)}
-																data-testid="owner-distribution-delete-{distribution.id}"
-															>
-																<Trash2 class="h-4 w-4" />
-															</Button>
+																<td class="px-4 py-3 text-right">
+																	{#if canDeleteDistribution}
+																		<Button
+																			variant="ghost"
+																			size="icon"
+																			class="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+																			aria-label={`Delete distribution ${money(distribution.amount)}`}
+																			title="Delete distribution"
+																			disabled={deleteDistributionMutation.isPending}
+																			onclick={() => deleteDistributionMutation.mutate(distribution.id)}
+																			data-testid="owner-distribution-delete-{distribution.id}"
+																		>
+																			<Trash2 class="h-4 w-4" />
+																		</Button>
+																	{/if}
 														</td>
 													</tr>
 												{/each}

@@ -10,8 +10,6 @@ Future<Unit?> showUnitFormSheet(
   BuildContext context, {
   required int propertyId,
   Unit? unit,
-  bool statusLocked = false,
-  String? statusLockMessage,
   ValueChanged<Unit>? onSaved,
 }) {
   return showModalBottomSheet<Unit>(
@@ -23,8 +21,6 @@ Future<Unit?> showUnitFormSheet(
     builder: (_) => UnitFormSheet(
       propertyId: propertyId,
       unit: unit,
-      statusLocked: statusLocked,
-      statusLockMessage: statusLockMessage,
       onSaved: onSaved,
     ),
   );
@@ -35,15 +31,11 @@ class UnitFormSheet extends ConsumerStatefulWidget {
     super.key,
     required this.propertyId,
     this.unit,
-    this.statusLocked = false,
-    this.statusLockMessage,
     this.onSaved,
   });
 
   final int propertyId;
   final Unit? unit;
-  final bool statusLocked;
-  final String? statusLockMessage;
   final ValueChanged<Unit>? onSaved;
 
   @override
@@ -51,8 +43,6 @@ class UnitFormSheet extends ConsumerStatefulWidget {
 }
 
 class _UnitFormSheetState extends ConsumerState<UnitFormSheet> {
-  static const _statuses = ['Vacant', 'Occupied', 'Reserved', 'Offline'];
-
   final _formKey = GlobalKey<FormState>();
 
   late final TextEditingController _numberCtrl;
@@ -65,7 +55,6 @@ class _UnitFormSheetState extends ConsumerState<UnitFormSheet> {
 
   bool _saving = false;
   String? _error;
-  late String _selectedStatus;
 
   bool get _isEdit => widget.unit != null;
 
@@ -88,9 +77,6 @@ class _UnitFormSheetState extends ConsumerState<UnitFormSheet> {
       text: _numberToText(unit?.marketRent ?? 1200),
     );
     _notesCtrl = TextEditingController(text: unit?.notes ?? '');
-    _selectedStatus = _statuses.contains(unit?.status)
-        ? unit!.status
-        : 'Vacant';
   }
 
   @override
@@ -144,7 +130,6 @@ class _UnitFormSheetState extends ConsumerState<UnitFormSheet> {
           : int.tryParse(squareFeetText),
       'marketRent':
           double.tryParse(_rentCtrl.text) ?? widget.unit?.marketRent ?? 0.0,
-      if (!widget.statusLocked) 'status': _selectedStatus,
       'notes': _notesCtrl.text.trim(),
     };
   }
@@ -244,27 +229,6 @@ class _UnitFormSheetState extends ConsumerState<UnitFormSheet> {
                       ? 'Enter an amount'
                       : null,
                 ),
-                gap,
-                DropdownButtonFormField<String>(
-                  initialValue: _selectedStatus,
-                  decoration: const InputDecoration(labelText: 'Status'),
-                  items: _statuses
-                      .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                      .toList(),
-                  onChanged: widget.statusLocked
-                      ? null
-                      : (v) {
-                          if (v != null) setState(() => _selectedStatus = v);
-                        },
-                ),
-                if (widget.statusLocked) ...[
-                  const SizedBox(height: 8),
-                  _StatusLockNote(
-                    message:
-                        widget.statusLockMessage ??
-                        'End, move out, or cancel notice on the current lease before changing status.',
-                  ),
-                ],
               ],
             ),
           ),
@@ -288,32 +252,5 @@ class _UnitFormSheetState extends ConsumerState<UnitFormSheet> {
       return asDouble.round().toString();
     }
     return value.toString();
-  }
-}
-
-class _StatusLockNote extends StatelessWidget {
-  const _StatusLockNote({required this.message});
-
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(Icons.lock_outline, size: 18, color: colorScheme.onSurfaceVariant),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            message,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ),
-      ],
-    );
   }
 }

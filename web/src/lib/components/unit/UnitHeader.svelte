@@ -91,5 +91,11 @@
 				{header.currentTenantName}
 			</span>
 		{/if}
+		<span class="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-xs font-medium text-muted-foreground" data-testid="chip-possession">
+			{dashboard.occupancyPossession.status}
+		</span>
+		<span class="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-xs font-medium text-muted-foreground" data-testid="chip-maintenance-condition">
+			{dashboard.maintenanceTurnover.status}
+		</span>
 	</div>
 </header>

@@ -1,23 +1,23 @@
-export const SCAN_DOC_TYPES = ['Expense', 'Payment', 'WorkOrder', 'Lease', 'Application', 'Loan'] as const;
+export const SCAN_DOC_TYPES = ['Expense', 'Payment', 'WorkOrder', 'LeaseAgreement', 'Application', 'Loan'] as const;
 export type ScanDocType = (typeof SCAN_DOC_TYPES)[number];
+export type ScanIntakeType = ScanDocType | 'Auto';
 
 export interface ScanContext {
 	type?: ScanDocType;
 	propertyId?: number;
 	unitId?: number;
-	leaseId?: number;
+	leaseManagementId?: number;
+	leaseAgreementId?: number;
+	tenantAccountId?: number;
+	tenantLedgerEntryId?: number;
 	workOrderId?: number;
+	applicationId?: number;
+	rentalListingId?: number;
+	sourceLabel?: string;
 	returnTo?: string;
 }
 
-interface LeaseContextCandidate {
-	id: number;
-	unitId?: number | null;
-	status?: string | null;
-}
-
 const DOC_TYPE_SET = new Set<string>(SCAN_DOC_TYPES);
-const PAYMENT_PREFERRED_LEASE_STATUSES = new Set(['Draft', 'PendingSignature', 'Active']);
 
 function parsePositiveInt(value: string | null): number | undefined {
 	if (!value) return undefined;
@@ -37,15 +37,27 @@ export function parseScanContext(searchParams: URLSearchParams): ScanContext {
 	const type = typeParam && DOC_TYPE_SET.has(typeParam) ? (typeParam as ScanDocType) : undefined;
 	const propertyId = parsePositiveInt(searchParams.get('propertyId'));
 	const unitId = parsePositiveInt(searchParams.get('unitId'));
-	const leaseId = parsePositiveInt(searchParams.get('leaseId'));
+	const leaseManagementId = parsePositiveInt(searchParams.get('leaseManagementId'));
+	const leaseAgreementId = parsePositiveInt(searchParams.get('leaseAgreementId'));
+	const tenantAccountId = parsePositiveInt(searchParams.get('tenantAccountId'));
+	const tenantLedgerEntryId = parsePositiveInt(searchParams.get('tenantLedgerEntryId'));
 	const workOrderId = parsePositiveInt(searchParams.get('workOrderId'));
+	const applicationId = parsePositiveInt(searchParams.get('applicationId'));
+	const rentalListingId = parsePositiveInt(searchParams.get('rentalListingId'));
+	const sourceLabel = searchParams.get('sourceLabel')?.trim() || undefined;
 	const returnTo = safeReturnTo(searchParams.get('returnTo'));
 	return {
 		...(type ? { type } : {}),
 		...(propertyId ? { propertyId } : {}),
 		...(unitId ? { unitId } : {}),
-		...(leaseId ? { leaseId } : {}),
+		...(leaseManagementId ? { leaseManagementId } : {}),
+		...(leaseAgreementId ? { leaseAgreementId } : {}),
+		...(tenantAccountId ? { tenantAccountId } : {}),
+		...(tenantLedgerEntryId ? { tenantLedgerEntryId } : {}),
 		...(workOrderId ? { workOrderId } : {}),
+		...(applicationId ? { applicationId } : {}),
+		...(rentalListingId ? { rentalListingId } : {}),
+		...(sourceLabel ? { sourceLabel } : {}),
 		...(returnTo ? { returnTo } : {})
 	};
 }
@@ -59,15 +71,27 @@ export function appendScanContext(href: string, context: ScanContext = {}): stri
 	url.searchParams.delete('type');
 	url.searchParams.delete('propertyId');
 	url.searchParams.delete('unitId');
-	url.searchParams.delete('leaseId');
+	url.searchParams.delete('leaseManagementId');
+	url.searchParams.delete('leaseAgreementId');
+	url.searchParams.delete('tenantAccountId');
+	url.searchParams.delete('tenantLedgerEntryId');
 	url.searchParams.delete('workOrderId');
+	url.searchParams.delete('applicationId');
+	url.searchParams.delete('rentalListingId');
+	url.searchParams.delete('sourceLabel');
 	url.searchParams.delete('returnTo');
 
 	if (context.type) url.searchParams.set('type', context.type);
 	if (context.propertyId) url.searchParams.set('propertyId', String(context.propertyId));
 	if (context.unitId) url.searchParams.set('unitId', String(context.unitId));
-	if (context.leaseId) url.searchParams.set('leaseId', String(context.leaseId));
+	if (context.leaseManagementId) url.searchParams.set('leaseManagementId', String(context.leaseManagementId));
+	if (context.leaseAgreementId) url.searchParams.set('leaseAgreementId', String(context.leaseAgreementId));
+	if (context.tenantAccountId) url.searchParams.set('tenantAccountId', String(context.tenantAccountId));
+	if (context.tenantLedgerEntryId) url.searchParams.set('tenantLedgerEntryId', String(context.tenantLedgerEntryId));
 	if (context.workOrderId) url.searchParams.set('workOrderId', String(context.workOrderId));
+	if (context.applicationId) url.searchParams.set('applicationId', String(context.applicationId));
+	if (context.rentalListingId) url.searchParams.set('rentalListingId', String(context.rentalListingId));
+	if (context.sourceLabel) url.searchParams.set('sourceLabel', context.sourceLabel);
 	const returnTo = safeReturnTo(context.returnTo);
 	if (returnTo) url.searchParams.set('returnTo', returnTo);
 
@@ -101,7 +125,8 @@ export function applyScanContextOverrides(
 	}
 
 	if (targetEntityType === 'Payment') {
-		setIfMissing(overrides, 'leaseId', context.leaseId);
+		setIfMissing(overrides, 'tenantAccountId', context.tenantAccountId);
+		setIfMissing(overrides, 'tenantLedgerEntryId', context.tenantLedgerEntryId);
 		return;
 	}
 
@@ -115,25 +140,4 @@ export function applyScanContextOverrides(
 		// The property the loan attaches to comes from the deep-link the landlord launched the scan from.
 		setIfMissing(overrides, 'propertyId', context.propertyId);
 	}
-}
-
-export function resolvePaymentLeaseIdFromContext(
-	context: ScanContext,
-	leases: LeaseContextCandidate[] | undefined | null
-): number | undefined {
-	if (!leases?.length) return undefined;
-
-	if (context.leaseId && leases.some((lease) => lease.id === context.leaseId)) {
-		return context.leaseId;
-	}
-
-	if (!context.unitId) return undefined;
-
-	const unitLeases = leases.filter((lease) => lease.unitId === context.unitId);
-	if (unitLeases.length === 1) return unitLeases[0].id;
-
-	const preferred = unitLeases.filter((lease) =>
-		lease.status ? PAYMENT_PREFERRED_LEASE_STATUSES.has(lease.status) : false
-	);
-	return preferred.length === 1 ? preferred[0].id : undefined;
 }

@@ -12,6 +12,11 @@ Every user action that writes an aggregate or workflow must be all-or-nothing in
 - On any failure, the transaction must roll back every row written by that action; no half-created or "half-cooked" state is acceptable.
 - Realtime broadcasts, emails, provider calls, and other external side effects run only after commit. Use the outbox for side effects that must be guaranteed or retried.
 - Validating before save is not enough for concurrency safety; retain database constraints and use appropriate isolation or locking where races are possible.
+- Prefer building the complete tracked object graph and saving once. If multiple saves are structurally required, use the EF execution strategy with an explicit transaction and commit only after the final save succeeds.
+- Never keep a database transaction open across an AI, storage, payment, e-sign, email, SMS, or other remote call. Persist an idempotent intent/inbox/outbox atomically, perform the remote work, then persist its result as a new explicit atomic command.
+- Required audit, ledger, inbox, and outbox rows fail and roll back with the business mutation. Do not preserve them independently after the business transaction fails.
+- Every intentionally separate commit requires a unique idempotency/business key plus a documented recovery and reconciliation path.
+- When changing a write path, inspect every `SaveChanges`, transaction, audit, ledger, inbox, outbox, signature, and document boundary in that operation and add failure-injection proof for all-or-nothing behavior.
 
 ## TypeScript 7 native compiler and Svelte compatibility
 

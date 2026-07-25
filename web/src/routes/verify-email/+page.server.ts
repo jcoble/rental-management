@@ -7,6 +7,7 @@
  */
 
 import type { PageServerLoad } from './$types';
+import { createHash } from 'node:crypto';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
 
 export const load: PageServerLoad = async ({ url }) => {
@@ -18,9 +19,12 @@ export const load: PageServerLoad = async ({ url }) => {
 	}
 
 	try {
+		const operationKey = createHash('sha256')
+			.update(JSON.stringify({ userId, token }))
+			.digest('hex');
 		const response = await fetch(`${SERVER_API_BASE_URL}/auth/confirm-email`, {
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
+			headers: { 'Content-Type': 'application/json', 'Idempotency-Key': operationKey },
 			body: JSON.stringify({ userId, token })
 		});
 

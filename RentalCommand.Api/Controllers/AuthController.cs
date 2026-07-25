@@ -7,6 +7,8 @@ using RentalCommand.Api.Auth;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Auth;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -19,28 +21,40 @@ namespace RentalCommand.Api.Controllers;
 public class AuthController : ControllerBase
 {
     private readonly IAuthService _authService;
-    private readonly IJwtTokenService _tokenService;
     private readonly IGoogleAuthService _googleAuthService;
     private readonly GoogleAuthOptions _googleOptions;
     private readonly IWebHostEnvironment _environment;
     private readonly IConfiguration _configuration;
     private readonly ILogger<AuthController> _logger;
+    private readonly IAtomicAuthSessionCredentialService _atomicCredentials;
+    private readonly ICanonicalAccessTokenService _canonicalTokens;
+    private readonly IAccessEnvelopeQuery _accessEnvelopes;
+    private readonly IEffectiveAccessContextSelectionQuery _contextSelection;
+    private readonly TimeProvider _timeProvider;
 
     public AuthController(
         IAuthService authService,
-        IJwtTokenService tokenService,
         IGoogleAuthService googleAuthService,
         IOptions<GoogleAuthOptions> googleOptions,
         IWebHostEnvironment environment,
         IConfiguration configuration,
+        IAtomicAuthSessionCredentialService atomicCredentials,
+        ICanonicalAccessTokenService canonicalTokens,
+        IAccessEnvelopeQuery accessEnvelopes,
+        IEffectiveAccessContextSelectionQuery contextSelection,
+        TimeProvider timeProvider,
         ILogger<AuthController> logger)
     {
         _authService = authService;
-        _tokenService = tokenService;
         _googleAuthService = googleAuthService;
         _googleOptions = googleOptions.Value;
         _environment = environment;
         _configuration = configuration;
+        _atomicCredentials = atomicCredentials;
+        _canonicalTokens = canonicalTokens;
+        _accessEnvelopes = accessEnvelopes;
+        _contextSelection = contextSelection;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -85,9 +99,21 @@ public class AuthController : ControllerBase
     [AllowAnonymous]
     public async Task<ActionResult<LoginResponse>> Login([FromBody] LoginRequest request)
     {
-        var result = await _authService.LoginAsync(request.Email, request.Password, GetIpAddress(), GetUserAgent());
+        var result = await _authService.LoginAsync(
+            request.Email,
+            request.Password,
+            request.AccessContextId,
+            GetIpAddress(),
+            GetUserAgent());
         if (!result.Success)
         {
+            if (result.AccessContexts is { Count: > 1 } contexts)
+            {
+                return Conflict(new AccessContextSelectionRequiredResponse
+                {
+                    Contexts = contexts,
+                });
+            }
             return Unauthorized(new { error = result.Error ?? "Login failed" });
         }
 
@@ -98,9 +124,14 @@ public class AuthController : ControllerBase
 
     [HttpPost("register")]
     [AllowAnonymous]
-    public async Task<IActionResult> Register([FromBody] RegisterRequest request)
+    public async Task<IActionResult> Register(
+        [FromBody] RegisterRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var result = await _authService.RegisterAsync(request);
+        if (!TryNormalizeOperationKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "A valid Idempotency-Key is required." });
+        var result = await _authService.RegisterAsync(request, operationKey, ct);
         if (!result.Success)
         {
             if (result.ErrorType == AuthErrorType.BadRequest)
@@ -108,30 +139,29 @@ public class AuthController : ControllerBase
                 return BadRequest(new
                 {
                     error = result.Error ?? "Registration failed",
-                    details = result.ValidationErrors
+                    details = result.ValidationErrors,
                 });
             }
+
             return Unauthorized(new { error = result.Error ?? "Registration failed" });
         }
 
-        const string genericMessage = "Registration successful. Please check your email to verify your account.";
-
-        // Tokens are sensitive: only expose for local dev convenience under an explicit opt-in.
+        const string message =
+            "Registration successful. Please check your email to verify your account.";
         if (ShouldExposeDevTokens)
         {
             _logger.LogWarning(
-                "Auth:ExposeDevTokens is enabled: returning emailConfirmationToken for user {UserId} in the registration response. This must never be enabled outside local development.",
+                "Auth:ExposeDevTokens is enabled: returning emailConfirmationToken for user {UserId}. This must never be enabled outside local development.",
                 result.UserId);
-
             return Ok(new
             {
-                message = genericMessage,
+                message,
                 userId = result.UserId,
-                emailConfirmationToken = result.EmailConfirmationToken
+                emailConfirmationToken = result.EmailConfirmationToken,
             });
         }
 
-        return Ok(new { message = genericMessage });
+        return Ok(new { message });
     }
 
     [HttpPost("refresh")]
@@ -158,11 +188,126 @@ public class AuthController : ControllerBase
         return Ok(result.Response);
     }
 
+    [HttpGet("access")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
+    public async Task<IActionResult> GetAccess(CancellationToken ct)
+    {
+        if (!TryGetActiveAccessContext(out var active))
+        {
+            return Unauthorized(new { error = "Active access context is unavailable." });
+        }
+
+        var envelope = await _accessEnvelopes.GetAsync(
+            active.SessionId,
+            active.UserId,
+            active.AccessContextId,
+            active.AccessRevision,
+            _timeProvider.GetUtcNow().UtcDateTime,
+            ct);
+        return envelope is null
+            ? Unauthorized(new { error = "Active access context is unavailable." })
+            : Ok(envelope);
+    }
+
+    [HttpGet("contexts")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
+    public async Task<IActionResult> ListAccessContexts(CancellationToken ct)
+    {
+        if (!TryGetActiveAccessContext(out var active))
+        {
+            return Unauthorized(new { error = "Active access context is unavailable." });
+        }
+
+        return Ok(await _contextSelection.ListAsync(
+            active.UserId,
+            null,
+            _timeProvider.GetUtcNow().UtcDateTime,
+            ct));
+    }
+
+    [HttpPost("contexts/select")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
+    public async Task<ActionResult<SwitchAccessContextResponse>> SelectAccessContext(
+        [FromBody] SwitchAccessContextRequest request,
+        CancellationToken ct)
+    {
+        if (!TryGetActiveAccessContext(out var active))
+        {
+            return Unauthorized(new { error = "Active access context is unavailable." });
+        }
+
+        try
+        {
+            var switched = await _atomicCredentials.SwitchContextAsync(
+                new SwitchAuthSessionContextCommand(
+                    active.SessionId,
+                    active.UserId,
+                    active.AccessContextId,
+                    active.AccessRevision,
+                    request.AccessContextId,
+                    _timeProvider.GetUtcNow().UtcDateTime),
+                Guid.NewGuid(),
+                ct);
+            if (!switched.Switched)
+            {
+                return Forbid();
+            }
+
+            var envelope = await _accessEnvelopes.GetAsync(
+                switched.AuthSessionId,
+                switched.UserId,
+                switched.AccessContextId,
+                switched.AccessRevision,
+                _timeProvider.GetUtcNow().UtcDateTime,
+                ct);
+            if (envelope is null)
+            {
+                return Forbid();
+            }
+
+            var access = _canonicalTokens.Issue(new CanonicalAccessCoordinates(
+                switched.UserId,
+                switched.AuthSessionId,
+                switched.AccessContextId,
+                switched.AccessRevision));
+            return Ok(new SwitchAccessContextResponse
+            {
+                AccessToken = access.Token,
+                AccessTokenExpiration = access.ExpiresAtUtc,
+                Access = envelope,
+            });
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
+        }
+    }
+
+    private bool TryGetActiveAccessContext(out ActiveAccessContext active)
+    {
+        if (HttpContext.Items.TryGetValue(
+                CanonicalAccessContextHttpItem.Key,
+                out var value) &&
+            value is ActiveAccessContext context)
+        {
+            active = context;
+            return true;
+        }
+
+        active = null!;
+        return false;
+    }
+
     [HttpPost("confirm-email")]
     [AllowAnonymous]
-    public async Task<IActionResult> ConfirmEmail([FromBody] ConfirmEmailRequest request)
+    public async Task<IActionResult> ConfirmEmail(
+        [FromBody] ConfirmEmailRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var result = await _authService.ConfirmEmailAsync(request.UserId, request.Token);
+        if (!TryNormalizeOperationKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "A valid Idempotency-Key is required." });
+        var result = await _authService.ConfirmEmailAsync(request.UserId, request.Token, operationKey, ct);
         if (!result.Success)
         {
             if (result.ErrorType == AuthErrorType.NotFound)
@@ -177,11 +322,16 @@ public class AuthController : ControllerBase
 
     [HttpPost("forgot-password")]
     [AllowAnonymous]
-    public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest request)
+    public async Task<IActionResult> ForgotPassword(
+        [FromBody] ForgotPasswordRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
+        if (!TryNormalizeOperationKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "A valid Idempotency-Key is required." });
         const string genericMessage = "If an account exists with that email, a password reset link has been sent.";
 
-        var token = await _authService.GeneratePasswordResetTokenAsync(request.Email);
+        var token = await _authService.GeneratePasswordResetTokenAsync(request.Email, operationKey, ct);
 
         // The reset token must never be returned in the response by default (account-takeover risk).
         // Only expose it for local dev convenience under an explicit opt-in, and warn when doing so.
@@ -202,9 +352,15 @@ public class AuthController : ControllerBase
 
     [HttpPost("reset-password")]
     [AllowAnonymous]
-    public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest request)
+    public async Task<IActionResult> ResetPassword(
+        [FromBody] ResetPasswordRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var result = await _authService.ResetPasswordAsync(request.UserId, request.Token, request.NewPassword);
+        if (!TryNormalizeOperationKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "A valid Idempotency-Key is required." });
+        var result = await _authService.ResetPasswordAsync(
+            request.UserId, request.Token, request.NewPassword, operationKey, ct);
         if (!result.Success)
         {
             return BadRequest(new { error = result.Error ?? "Password reset failed" });
@@ -215,9 +371,14 @@ public class AuthController : ControllerBase
 
     [HttpPost("resend-verification")]
     [AllowAnonymous]
-    public async Task<IActionResult> ResendVerification([FromBody] ResendVerificationRequest request)
+    public async Task<IActionResult> ResendVerification(
+        [FromBody] ResendVerificationRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var result = await _authService.ResendVerificationEmailAsync(request.Email);
+        if (!TryNormalizeOperationKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "A valid Idempotency-Key is required." });
+        var result = await _authService.ResendVerificationEmailAsync(request.Email, operationKey, ct);
 
         // Neutral response either way (no account enumeration). When the account is already
         // verified we can say so — that is not an enumeration signal a logged-out attacker can
@@ -232,7 +393,10 @@ public class AuthController : ControllerBase
 
     [HttpPost("change-password")]
     [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
-    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
+    public async Task<IActionResult> ChangePassword(
+        [FromBody] ChangePasswordRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
         var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         if (string.IsNullOrEmpty(userId))
@@ -240,7 +404,27 @@ public class AuthController : ControllerBase
             return Unauthorized(new { error = "Not authenticated" });
         }
 
-        var result = await _authService.ChangePasswordAsync(userId, request.CurrentPassword, request.NewPassword);
+        if (!TryGetActiveAccessContext(out var active))
+        {
+            return Unauthorized(new { error = "No active access context" });
+        }
+
+        if (string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            return BadRequest(new { error = "Idempotency-Key is required." });
+        }
+
+        var operationKey = idempotencyKey.Trim();
+        if (operationKey.Length > 200)
+        {
+            return BadRequest(new { error = "Idempotency-Key cannot exceed 200 characters." });
+        }
+        var result = await _authService.ChangePasswordAsync(
+            active,
+            request.CurrentPassword,
+            request.NewPassword,
+            operationKey,
+            ct);
         if (!result.Success)
         {
             if (result.ErrorType == AuthErrorType.NotFound)
@@ -273,16 +457,21 @@ public class AuthController : ControllerBase
     }
 
     [HttpPost("logout")]
-    [AllowAnonymous]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
     public async Task<IActionResult> Logout()
     {
-        var refreshToken = Request.Cookies[AuthCookieNames.RefreshToken];
-        if (!string.IsNullOrEmpty(refreshToken))
+        if (TryGetActiveAccessContext(out var active))
         {
-            // Explicit user logout ends ALL of the user's sessions (every device), not just the
-            // presenting one — revoke the whole token family. The token-expiry/401 auto-refresh path
-            // stays single-token (it rotates one token, never calls this).
-            await _tokenService.RevokeRefreshTokenFamilyAsync(refreshToken);
+            await _atomicCredentials.RevokeSessionAsync(
+                new RevokeAuthSessionCommand(
+                    active.SessionId,
+                    active.UserId,
+                    active.AccessContextId,
+                    active.AccessRevision,
+                    _timeProvider.GetUtcNow().UtcDateTime,
+                    "User signed out"),
+                Guid.NewGuid(),
+                HttpContext.RequestAborted);
         }
 
         ClearRefreshTokenCookies();
@@ -301,33 +490,38 @@ public class AuthController : ControllerBase
     {
         if (!_googleOptions.Enabled)
         {
-            return StatusCode(StatusCodes.Status501NotImplemented, new { error = "Google sign-in is not configured." });
+            return StatusCode(
+                StatusCodes.Status501NotImplemented,
+                new { error = "Google sign-in is not configured." });
         }
 
         GoogleAuthResult result;
-        if (!string.IsNullOrEmpty(request.IdToken))
+        if (!string.IsNullOrWhiteSpace(request.IdToken))
         {
-            // Native (mobile) flow — id_token obtained on-device.
-            result = await _googleAuthService.AuthenticateWithIdTokenAsync(request.IdToken);
+            result = await _googleAuthService.AuthenticateWithIdTokenAsync(
+                request.IdToken,
+                HttpContext.RequestAborted);
         }
-        else if (!string.IsNullOrEmpty(request.Code) && !string.IsNullOrEmpty(request.RedirectUri))
+        else if (!string.IsNullOrWhiteSpace(request.Code) &&
+                 !string.IsNullOrWhiteSpace(request.RedirectUri))
         {
-            // Web flow — exchange the authorization code server-side.
-            result = await _googleAuthService.AuthenticateAsync(request.Code, request.RedirectUri);
+            result = await _googleAuthService.AuthenticateAsync(
+                request.Code,
+                request.RedirectUri,
+                HttpContext.RequestAborted);
         }
         else
         {
             return BadRequest(new { error = "Provide an idToken (native) or code + redirectUri (web)." });
         }
 
-        if (!result.Success)
+        if (!result.Success || result.Response is null || result.Tokens is null)
         {
-            // Log detail is already emitted by GoogleAuthService; only return a safe generic message.
             _logger.LogInformation("Google sign-in attempt failed: {Error}", result.Error);
             return Unauthorized(new { error = "Google sign-in failed." });
         }
 
-        SetRefreshTokenCookie(result.Tokens!.RefreshToken, result.Tokens.RefreshTokenExpiration);
+        SetRefreshTokenCookie(result.Tokens.RefreshToken, result.Tokens.RefreshTokenExpiration);
         PopulateBodyRefreshTokenForMobile(result.Response, result.Tokens);
         return Ok(result.Response);
     }
@@ -341,17 +535,21 @@ public class AuthController : ControllerBase
             SameSite = SameSiteMode.Strict,
             Expires = expiration
         });
-        Response.Cookies.Delete(AuthCookieNames.LegacyRefreshToken);
     }
 
     private void ClearRefreshTokenCookies()
     {
         Response.Cookies.Delete(AuthCookieNames.RefreshToken);
-        Response.Cookies.Delete(AuthCookieNames.LegacyRefreshToken);
     }
 
     private string? GetIpAddress() => HttpContext.Connection.RemoteIpAddress?.ToString();
 
     private string? GetUserAgent() =>
         Request.Headers.TryGetValue("User-Agent", out var ua) ? ua.ToString() : null;
+
+    private static bool TryNormalizeOperationKey(string? raw, out string operationKey)
+    {
+        operationKey = raw?.Trim() ?? string.Empty;
+        return operationKey.Length is > 0 and <= 200;
+    }
 }

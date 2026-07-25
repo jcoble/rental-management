@@ -93,6 +93,22 @@ void main() {
     },
   );
 
+  test('tenant ledger rows preserve canonical tenant-account identity', () {
+    final transaction = AccountingTransaction.fromJson({
+      'kind': 'TenantLedger',
+      'id': 88,
+      'date': '2026-07-13T12:00:00Z',
+      'tenantAccountId': 42,
+      'detailHref': '/tenant-accounts/42/entries/88',
+    });
+
+    expect(transaction.isTenantLedger, isTrue);
+    expect(transaction.isTenantAccountEntry, isTrue);
+    expect(transaction.isExpense, isFalse);
+    expect(transaction.tenantAccountId, 42);
+    expect(transaction.detailHref, '/tenant-accounts/42/entries/88');
+  });
+
   testWidgets('Money insights renders dashboard without transaction selector', (
     tester,
   ) async {

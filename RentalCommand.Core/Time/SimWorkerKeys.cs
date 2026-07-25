@@ -10,7 +10,7 @@ public static class SimWorkerKeys
 {
     public const string RentCharge = "rent-charge";
     public const string NoticeDraft = "notice-draft";
-    public const string LeaseExpiryReminder = "lease-expiry-reminder";
+    public const string TenantNoticeCandidates = "tenant-notice-candidates";
     public const string LateFee = "late-fee";
     public const string Autopay = "autopay";
     public const string DebtService = "debt-service";
@@ -24,18 +24,18 @@ public static class SimWorkerKeys
     /// <summary>All individual worker keys (excludes <see cref="RunDue"/>).</summary>
     public static readonly IReadOnlyList<string> All = new[]
     {
-        RentCharge, NoticeDraft, LeaseExpiryReminder, LateFee, Autopay,
+        RentCharge, TenantNoticeCandidates, NoticeDraft, LateFee, Autopay,
         DebtService, RecurringExpense, RecurringMaintenance, DailyBriefing,
     };
 
     /// <summary>
-    /// run-due dependency order (M4): rent-charge → notice-draft → lease-expiry-reminder → late-fee →
+    /// run-due dependency order: rent-charge → tenant-notice candidates → notice-draft → late-fee →
     /// autopay → debt-service → recurring-expense → recurring-maintenance. daily-briefing is intentionally
     /// NOT part of run-due (E1 does not assert it).
     /// </summary>
     public static readonly IReadOnlyList<string> RunDueSequence = new[]
     {
-        RentCharge, NoticeDraft, LeaseExpiryReminder, LateFee, Autopay,
+        RentCharge, TenantNoticeCandidates, NoticeDraft, LateFee, Autopay,
         DebtService, RecurringExpense, RecurringMaintenance,
     };
 

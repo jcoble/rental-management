@@ -30,40 +30,92 @@ void main() {
     );
   });
 
-  test('payments page sends due-period query params', () async {
+  test('receipts page sends canonical tenant relationship filters', () async {
     final adapter = _RecordingPageAdapter(_paymentPageJson());
     final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
       ..httpClientAdapter = adapter;
     final repo = PaymentsRepository(dio);
 
-    final page = await repo.listPaymentsPage(
-      const PaymentListQuery(dueFrom: '2026-07-01', dueTo: '2026-07-31'),
+    final page = await repo.listTenantLedgerEntriesPage(
+      const TenantLedgerEntryListQuery(
+        tenantAccountId: 42,
+        from: '2026-07-01',
+        to: '2026-07-31',
+      ),
     );
 
-    expect(adapter.path, '/payments/page');
-    expect(adapter.queryParameters, containsPair('dueFrom', '2026-07-01'));
-    expect(adapter.queryParameters, containsPair('dueTo', '2026-07-31'));
-    expect(page.items.single.id, 12);
+    expect(adapter.path, '/tenant-accounts/entries/page');
+    expect(adapter.queryParameters, containsPair('tenantAccountId', 42));
+    expect(
+      adapter.queryParameters,
+      containsPair('entryType', 'PaymentReceipt'),
+    );
+    expect(adapter.queryParameters, containsPair('from', '2026-07-01'));
+    expect(adapter.queryParameters, containsPair('to', '2026-07-31'));
+    expect(page.items.single.tenantLedgerEntryId, 12);
   });
 
-  test('lease past-due mark-paid uses the server action endpoint', () async {
-    final adapter = _RecordingWriteAdapter({
-      'leaseId': 42,
-      'markedPaidCount': 2,
-      'paymentIds': [101, 102],
+  test('receipt detail carries the canonical account and entry ids', () async {
+    final adapter = _RecordingPageAdapter({
+      ..._paymentPageJson()['items']!.first as Map<String, dynamic>,
+      'portfolioId': 1,
+      'tenantName': 'Jesse Coble',
+      'providerAttempt': {
+        'paymentMethodSummary': 'Check',
+        'providerReference': 'RCPT-12',
+      },
     });
     final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
       ..httpClientAdapter = adapter;
     final repo = PaymentsRepository(dio);
 
-    final result = await repo.markLeasePastDuePaid(42, paidDate: '2026-07-08');
+    final detail = await repo.getTenantLedgerEntry(42, 12);
 
-    expect(adapter.method, 'POST');
-    expect(adapter.path, '/payments/leases/42/past-due/mark-paid');
-    expect(adapter.data, containsPair('paidDate', '2026-07-08'));
-    expect(result.markedPaidCount, 2);
-    expect(result.paymentIds, [101, 102]);
+    expect(adapter.path, '/tenant-accounts/42/entries/12');
+    expect(detail.tenantAccountId, 42);
+    expect(detail.tenantLedgerEntryId, 12);
+    expect(detail.paymentMethodSummary, 'Check');
   });
+
+  test(
+    'record receipt uses the tenant-account command and idempotency key',
+    () async {
+      final adapter = _RecordingWriteAdapter({
+        'value': {
+          'tenantAccountId': 42,
+          'ledgerEntryId': 101,
+          'paymentAttemptId': 102,
+          'amount': 1200,
+          'allocatedAmount': 1200,
+          'allocationCount': 1,
+        },
+        'replayed': false,
+      });
+      final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+        ..httpClientAdapter = adapter;
+      final repo = PaymentsRepository(dio);
+
+      final result = await repo.recordReceipt(
+        42,
+        RecordTenantReceiptInput(
+          amount: 1200,
+          effectiveOn: DateTime(2026, 7, 8),
+          description: 'July rent',
+          paymentMethodSummary: 'Check',
+        ),
+        operationKey: 'receipt-key-42',
+      );
+
+      expect(adapter.method, 'POST');
+      expect(adapter.path, '/tenant-accounts/42/receipts');
+      expect(adapter.data, containsPair('effectiveOn', '2026-07-08'));
+      expect(
+        adapter.headers,
+        containsPair('Idempotency-Key', 'receipt-key-42'),
+      );
+      expect(result.ledgerEntryId, 101);
+    },
+  );
 
   test('expenses page sends incurred-period query params', () async {
     final adapter = _RecordingPageAdapter(_expensePageJson());
@@ -84,19 +136,19 @@ void main() {
     expect(page.items.single.id, 21);
   });
 
-  test('leases page sends active-period query params', () async {
+  test('rental relationships page sends contextual query params', () async {
     final adapter = _RecordingPageAdapter(_leasePageJson());
     final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
       ..httpClientAdapter = adapter;
-    final repo = LeasesRepository(dio);
+    final repo = LeaseManagementsRepository(dio);
 
-    final page = await repo.listLeasesPage(
-      const LeaseListQuery(activeFrom: '2026-07-01', activeTo: '2026-07-31'),
+    final page = await repo.listPage(
+      const LeaseManagementListQuery(propertyId: 2, lifecycle: 'Occupied'),
     );
 
-    expect(adapter.path, '/leases/page');
-    expect(adapter.queryParameters, containsPair('activeFrom', '2026-07-01'));
-    expect(adapter.queryParameters, containsPair('activeTo', '2026-07-31'));
+    expect(adapter.path, '/lease-managements/page');
+    expect(adapter.queryParameters, containsPair('propertyId', 2));
+    expect(adapter.queryParameters, containsPair('lifecycle', 'Occupied'));
     expect(page.items.single.id, 31);
   });
 }
@@ -143,6 +195,7 @@ class _RecordingWriteAdapter implements HttpClientAdapter {
   String? method;
   String? path;
   Object? data;
+  Map<String, dynamic>? headers;
 
   @override
   Future<ResponseBody> fetch(
@@ -153,6 +206,7 @@ class _RecordingWriteAdapter implements HttpClientAdapter {
     method = options.method;
     path = options.path;
     data = options.data;
+    headers = Map<String, dynamic>.from(options.headers);
 
     return ResponseBody.fromString(
       jsonEncode(body),
@@ -170,15 +224,23 @@ class _RecordingWriteAdapter implements HttpClientAdapter {
 Map<String, dynamic> _paymentPageJson() => {
   'items': [
     {
-      'id': 12,
-      'portfolioId': 1,
-      'leaseId': 7,
-      'paymentType': 'Rent',
-      'status': 'Scheduled',
+      'tenantLedgerEntryId': 12,
+      'publicId': '7b5b31ec-a3ea-4d87-b515-01b76f42a34c',
+      'tenantAccountId': 42,
+      'leaseManagementId': 7,
+      'propertyId': 2,
+      'propertyName': 'Maple Ridge',
+      'unitId': 3,
+      'unitNumber': '2B',
+      'accountNumber': 'TA-42',
+      'relationshipNumber': 'LM-7',
+      'entryType': 'PaymentReceipt',
+      'direction': 'Credit',
       'amount': 1200,
-      'dueDate': '2026-07-01',
-      'createdAt': '2026-07-01T00:00:00Z',
-      'updatedAt': '2026-07-01T00:00:00Z',
+      'currency': 'USD',
+      'effectiveOn': '2026-07-01',
+      'postedAtUtc': '2026-07-01T00:00:00Z',
+      'description': 'July rent',
     },
   ],
   'totalCount': 1,
@@ -212,21 +274,27 @@ Map<String, dynamic> _expensePageJson() => {
 Map<String, dynamic> _leasePageJson() => {
   'items': [
     {
-      'id': 31,
-      'portfolioId': 1,
+      'leaseManagementId': 31,
+      'leaseManagementPublicId': '7b5b31ec-a3ea-4d87-b515-01b76f42a34c',
+      'relationshipNumber': 'LM-31',
       'propertyId': 2,
+      'propertyName': 'Maple Ridge',
       'unitId': 3,
-      'tenantId': 4,
-      'leaseNumber': 'L-31',
-      'status': 'Active',
-      'startDate': '2026-01-01',
-      'endDate': '2026-12-31',
-      'monthlyRent': 1200,
-      'securityDeposit': 1200,
-      'lateFeeAmount': 50,
-      'rentDueDay': 1,
-      'createdAt': '2026-01-01T00:00:00Z',
-      'updatedAt': '2026-07-01T00:00:00Z',
+      'unitNumber': '2B',
+      'lifecycle': 'Occupied',
+      'leaseAgreementId': 52,
+      'agreementNumber': 'L-31',
+      'agreementStatus': 'Executed',
+      'termStartOn': '2026-01-01',
+      'termEndOn': '2026-12-31',
+      'baseRentAmount': 1200,
+      'primaryTenantId': 4,
+      'primaryTenantName': 'Verify Tenant',
+      'currentPartyCount': 1,
+      'currentResidentCount': 1,
+      'hasReconciliationException': false,
+      'endingDisposition': 'Undecided',
+      'updatedAtUtc': '2026-07-01T00:00:00Z',
     },
   ],
   'totalCount': 1,

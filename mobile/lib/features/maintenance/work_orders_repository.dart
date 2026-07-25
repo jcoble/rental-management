@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -5,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
+import '../../core/auth/auth_controller.dart';
 import '../../core/models/models.dart';
 
 class WorkOrderListQuery {
@@ -268,9 +271,13 @@ class WorkOrdersRepository {
   /// Create body: { propertyId, title, description, priority, category }
   Future<WorkOrder> createWorkOrder(Map<String, dynamic> data) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/work-orders',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'work-order:create:${jsonEncode(data)}',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/work-orders',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -290,6 +297,7 @@ class WorkOrdersRepository {
     required Uint8List bytes,
     required String fileName,
     required String contentType,
+    required String clientOperationId,
   }) async {
     try {
       final formData = FormData.fromMap({
@@ -301,6 +309,7 @@ class WorkOrdersRepository {
         'entityType': 'WorkOrder',
         'entityId': workOrderId,
         'category': 'Maintenance photo',
+        'clientOperationId': clientOperationId,
       });
       await _dio.post<Map<String, dynamic>>('/documents', data: formData);
     } on DioException catch (e) {
@@ -311,9 +320,13 @@ class WorkOrdersRepository {
   /// Update body: any subset of work order fields (partial PATCH).
   Future<WorkOrder> updateWorkOrder(int id, Map<String, dynamic> data) async {
     try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/work-orders/$id',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'work-order:update:$id:${jsonEncode(data)}',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/work-orders/$id',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -328,18 +341,108 @@ class WorkOrdersRepository {
     }
   }
 
+  Future<void> updateTechnicianAssignment(
+    int id,
+    Map<String, dynamic> data,
+  ) async {
+    try {
+      await IdempotentMutation.run(
+        'technician:assignment-update:$id:${jsonEncode(data)}',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/technician/assignments/$id',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> listResponsibilities(
+    int workOrderId,
+  ) async {
+    try {
+      final response = await _dio.get<List<dynamic>>(
+        '/work-orders/$workOrderId/responsibilities',
+      );
+      return (response.data ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .toList(growable: false);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> listResponsibilityCandidates(
+    int workOrderId,
+  ) async {
+    try {
+      final response = await _dio.get<List<dynamic>>(
+        '/work-orders/$workOrderId/responsibilities/candidates',
+      );
+      return (response.data ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .toList(growable: false);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<void> assignResponsibility(
+    int workOrderId,
+    Map<String, dynamic> data,
+  ) async {
+    try {
+      await IdempotentMutation.run(
+        'work-order:responsibility:assign:$workOrderId:${jsonEncode(data)}',
+        (key) => _dio.put<Map<String, dynamic>>(
+          '/work-orders/$workOrderId/responsibilities/current',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<void> closeResponsibility(
+    int workOrderId,
+    String responsibilityId,
+    Map<String, dynamic> data,
+  ) async {
+    try {
+      await IdempotentMutation.run(
+        'work-order:responsibility:close:$workOrderId:$responsibilityId:${jsonEncode(data)}',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/work-orders/$workOrderId/responsibilities/$responsibilityId/close',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   /// PATCH /work-orders/{id}  body: { status, statusNote? }
   ///
   /// [statusNote] is recorded on the status timeline for this transition.
   Future<WorkOrder> updateStatus(int id, String status, {String? note}) async {
     try {
       final trimmed = note?.trim();
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/work-orders/$id',
-        data: {
-          'status': status,
-          if (trimmed != null && trimmed.isNotEmpty) 'statusNote': trimmed,
-        },
+      final body = {
+        'status': status,
+        if (trimmed != null && trimmed.isNotEmpty) 'statusNote': trimmed,
+      };
+      final response = await IdempotentMutation.run(
+        'work-order:status:$id:${jsonEncode(body)}',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/work-orders/$id',
+          data: body,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final data = response.data;
       if (data == null) {
@@ -472,7 +575,20 @@ class WorkOrderDetailNotifier extends Notifier<AsyncValue<WorkOrderDetail>> {
   /// reloads so the new timeline entry is shown.
   Future<void> updateStatus(String status, {String? note}) async {
     try {
-      await _repo.updateStatus(_id, status, note: note);
+      final auth = ref.read(authControllerProvider);
+      if (auth is AuthStateAuthenticated &&
+          auth.capabilities.contains('maintenance.assigned-work.update') &&
+          !auth.capabilities.contains('work.manage')) {
+        await _repo.updateTechnicianAssignment(_id, {
+          'status': status,
+          'expectedUpdatedAtUtc': state.value?.workOrder.updatedAt
+              .toUtc()
+              .toIso8601String(),
+          'technicianNote': ?note,
+        });
+      } else {
+        await _repo.updateStatus(_id, status, note: note);
+      }
       // Reload to pick up the freshly-appended timeline entry.
       final detail = await _repo.getWorkOrderDetail(_id);
       state = AsyncValue.data(detail);

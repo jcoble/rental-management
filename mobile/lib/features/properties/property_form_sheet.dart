@@ -9,12 +9,12 @@ import '../owners/owners_models.dart';
 import '../owners/owners_repository.dart';
 import '../places/address_autocomplete_field.dart';
 import 'properties_repository.dart';
-import 'property_labels.dart';
 
 Future<Property?> showPropertyFormSheet(
   BuildContext context, {
   Property? property,
   ValueChanged<Property>? onSaved,
+  ValueChanged<PropertySetupResult>? onSetupSaved,
 }) {
   return showModalBottomSheet<Property>(
     context: context,
@@ -24,7 +24,11 @@ Future<Property?> showPropertyFormSheet(
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
     ),
-    builder: (_) => _PropertyFormSheet(property: property, onSaved: onSaved),
+    builder: (_) => _PropertyFormSheet(
+      property: property,
+      onSaved: onSaved,
+      onSetupSaved: onSetupSaved,
+    ),
   );
 }
 
@@ -54,10 +58,11 @@ const _defaultCreatePropertyType = 'SingleFamily';
 const _unitNumberMaxLength = 50;
 
 class _PropertyFormSheet extends ConsumerStatefulWidget {
-  const _PropertyFormSheet({this.property, this.onSaved});
+  const _PropertyFormSheet({this.property, this.onSaved, this.onSetupSaved});
 
   final Property? property;
   final ValueChanged<Property>? onSaved;
+  final ValueChanged<PropertySetupResult>? onSetupSaved;
 
   @override
   ConsumerState<_PropertyFormSheet> createState() => _PropertyFormSheetState();
@@ -77,16 +82,23 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
   final _landValueCtrl = TextEditingController();
   final _inServiceDateCtrl = TextEditingController();
   final _manualDepreciationCtrl = TextEditingController();
+  final _unitNumbersCtrl = TextEditingController();
+  final _bedroomsCtrl = TextEditingController(text: '0');
+  final _bathroomsCtrl = TextEditingController(text: '0');
+  final _marketRentCtrl = TextEditingController(text: '0');
 
   String _selectedType = _defaultCreatePropertyType;
+  RentalStructure _rentalStructure = RentalStructure.singleRental;
   String _selectedStatus = 'Active';
   int? _selectedOwnerEntityId;
+  int? _initialOwnerEntityId;
   List<PropertyOwnerOption> _owners = const [];
   bool _ownersLoading = false;
   bool _ownerActionLoading = false;
   bool _saving = false;
   String? _error;
   String? _addressError;
+  String? _rentalsError;
 
   bool get _isEditing => widget.property != null;
 
@@ -110,8 +122,12 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
       _manualDepreciationCtrl.text =
           property.manualAnnualDepreciation?.toString() ?? '';
       _selectedType = _knownType(property.type);
+      _rentalStructure = property.rentalStructure;
       _selectedStatus = _knownStatus(property.status);
-      _selectedOwnerEntityId = property.ownerEntityId;
+      _selectedOwnerEntityId = property.ownerships.length == 1
+          ? property.ownerships.first.ownerEntityId
+          : null;
+      _initialOwnerEntityId = _selectedOwnerEntityId;
     }
     Future.microtask(_loadOwners);
   }
@@ -131,6 +147,10 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
     _landValueCtrl.dispose();
     _inServiceDateCtrl.dispose();
     _manualDepreciationCtrl.dispose();
+    _unitNumbersCtrl.dispose();
+    _bedroomsCtrl.dispose();
+    _bathroomsCtrl.dispose();
+    _marketRentCtrl.dispose();
     super.dispose();
   }
 
@@ -185,7 +205,9 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
         0,
         PropertyOwnerOption(
           id: selected,
-          name: widget.property?.ownerName ?? 'Current owner',
+          name: widget.property?.ownerships.length == 1
+              ? widget.property!.ownerships.first.ownerName
+              : 'Current owner',
         ),
       );
     }
@@ -237,6 +259,31 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
     final valid = _addressCtrl.text.trim().isNotEmpty;
     setState(() => _addressError = valid ? null : 'Address is required');
     return valid;
+  }
+
+  List<String> get _unitNumbers => _unitNumbersCtrl.text
+      .split(RegExp(r'[\n,]'))
+      .map((value) => value.trim())
+      .where((value) => value.isNotEmpty)
+      .toList(growable: false);
+
+  bool _validateRentalsStep() {
+    String? error;
+    if (_rentalStructure == RentalStructure.multiRental) {
+      final numbers = _unitNumbers;
+      if (numbers.isEmpty) {
+        error = 'Enter at least one unit name or number.';
+      } else if (numbers.toSet().length != numbers.length) {
+        error = 'Each unit name or number must be unique.';
+      } else if (numbers.any(
+        (number) => number.length > _unitNumberMaxLength,
+      )) {
+        error =
+            'Unit names or numbers cannot exceed $_unitNumberMaxLength characters.';
+      }
+    }
+    setState(() => _rentalsError = error);
+    return error == null;
   }
 
   String? _required(String label, String? value) {
@@ -327,6 +374,7 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
     final data = <String, dynamic>{
       'name': _nameCtrl.text.trim(),
       'type': _selectedType,
+      if (!_isEditing) 'rentalStructure': _rentalStructure.wireValue,
       'status': _selectedStatus,
       'addressLine1': _addressCtrl.text.trim(),
       'city': _cityCtrl.text.trim(),
@@ -334,8 +382,16 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
       'postalCode': _zipCtrl.text.trim(),
     };
 
-    if (_selectedOwnerEntityId != null) {
-      data['ownerEntityId'] = _selectedOwnerEntityId;
+    if (!_isEditing || _selectedOwnerEntityId != _initialOwnerEntityId) {
+      data['ownerships'] = _selectedOwnerEntityId == null
+          ? <Map<String, dynamic>>[]
+          : [
+              {
+                'ownerEntityId': _selectedOwnerEntityId,
+                'ownershipSharePercent': 100,
+              },
+            ];
+      data['clearOwnership'] = _selectedOwnerEntityId == null;
     }
     _putOptionalText(data, 'addressLine2', _address2Ctrl);
     _putOptionalText(data, 'notes', _notesCtrl);
@@ -362,27 +418,29 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
     return data;
   }
 
-  Future<Property> _createProperty(
+  List<Map<String, dynamic>> _initialUnitsPayload() {
+    if (_rentalStructure == RentalStructure.singleRental) {
+      return [
+        {
+          'unitNumber': _canonicalUnitNumber(_nameCtrl.text),
+          'bedrooms': int.tryParse(_bedroomsCtrl.text.trim()) ?? 0,
+          'bathrooms': double.tryParse(_bathroomsCtrl.text.trim()) ?? 0,
+          'marketRent': double.tryParse(_marketRentCtrl.text.trim()) ?? 0,
+        },
+      ];
+    }
+
+    return [
+      for (final number in _unitNumbers)
+        {'unitNumber': number, 'bedrooms': 0, 'bathrooms': 0, 'marketRent': 0},
+    ];
+  }
+
+  Future<PropertySetupResult> _createProperty(
     PropertiesRepository repo,
     Map<String, dynamic> payload,
   ) async {
-    final saved = await repo.createProperty(payload);
-    final type = payload['type'] as String? ?? saved.type;
-    if (!isPropertyUnitType(type)) return saved;
-
-    if ((saved.unitCount ?? 0) > 0) return saved;
-
-    final existingUnits = await repo.listUnits(saved.id);
-    if (existingUnits.isNotEmpty) return saved;
-
-    await repo.createUnit(saved.id, {
-      'unitNumber': _canonicalUnitNumber(saved.name),
-      'bedrooms': 0,
-      'bathrooms': 0,
-      'marketRent': 0,
-      'status': 'Vacant',
-    });
-    return saved;
+    return repo.setupProperty(property: payload, units: _initialUnitsPayload());
   }
 
   String _canonicalUnitNumber(String propertyName) {
@@ -402,9 +460,14 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
 
     try {
       final repo = ref.read(propertiesRepositoryProvider);
-      final saved = _isEditing
-          ? await repo.updateProperty(widget.property!.id, _payload())
-          : await _createProperty(repo, _payload());
+      late final Property saved;
+      if (_isEditing) {
+        saved = await repo.updateProperty(widget.property!.id, _payload());
+      } else {
+        final setup = await _createProperty(repo, _payload());
+        saved = setup.property;
+        widget.onSetupSaved?.call(setup);
+      }
 
       widget.onSaved?.call(saved);
       if (mounted) Navigator.of(context).pop(saved);
@@ -458,6 +521,45 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
                 onChanged: (value) {
                   if (value != null) setState(() => _selectedType = value);
                 },
+              ),
+              gap,
+              Text(
+                'How is this address rented?',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _isEditing
+                    ? 'Rental structure is set when the property is created.'
+                    : 'This changes how the rental is presented. Both choices use the same Property and Unit records underneath.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 8),
+              SegmentedButton<RentalStructure>(
+                key: const Key('property-rental-structure-field'),
+                segments: const [
+                  ButtonSegment(
+                    value: RentalStructure.singleRental,
+                    icon: Icon(Icons.home_outlined),
+                    label: Text('One rental'),
+                  ),
+                  ButtonSegment(
+                    value: RentalStructure.multiRental,
+                    icon: Icon(Icons.apartment_outlined),
+                    label: Text('Building with units'),
+                  ),
+                ],
+                selected: {_rentalStructure},
+                onSelectionChanged: _isEditing
+                    ? null
+                    : (selection) => setState(() {
+                        _rentalStructure = selection.single;
+                        _rentalsError = null;
+                      }),
               ),
               gap,
               DropdownButtonFormField<String>(
@@ -542,6 +644,87 @@ class _PropertyFormSheetState extends ConsumerState<_PropertyFormSheet> {
             ],
           ),
         ),
+        if (!_isEditing)
+          TabbedFormStepSpec(
+            label: 'Rentals',
+            validate: _validateRentalsStep,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  _rentalStructure == RentalStructure.singleRental
+                      ? 'Rental details'
+                      : 'Initial units',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  _rentalStructure == RentalStructure.singleRental
+                      ? 'The home is shown as one rental. Rental Command still creates one underlying Unit so leases, payments, work and listings use the same model as every other rental.'
+                      : 'Enter one unit name or number per line. You can fill in each unit’s bedrooms, rent and other details after setup.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                if (_rentalStructure == RentalStructure.singleRental) ...[
+                  TextFormField(
+                    key: const Key('property-rental-bedrooms-field'),
+                    controller: _bedroomsCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: 'Bedrooms'),
+                    validator: (value) =>
+                        _optionalIntRange('Bedrooms', value, min: 0, max: 100),
+                  ),
+                  gap,
+                  TextFormField(
+                    key: const Key('property-rental-bathrooms-field'),
+                    controller: _bathroomsCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(labelText: 'Bathrooms'),
+                    validator: (value) => _optionalNumberRange(
+                      'Bathrooms',
+                      value,
+                      min: 0,
+                      max: 100,
+                    ),
+                  ),
+                  gap,
+                  TextFormField(
+                    key: const Key('property-rental-market-rent-field'),
+                    controller: _marketRentCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Market rent',
+                      prefixText: r'$ ',
+                    ),
+                    validator: (value) =>
+                        _optionalNonNegative('Market rent', value),
+                  ),
+                ] else
+                  TextFormField(
+                    key: const Key('property-unit-numbers-field'),
+                    controller: _unitNumbersCtrl,
+                    minLines: 5,
+                    maxLines: 10,
+                    decoration: InputDecoration(
+                      labelText: 'Unit names or numbers',
+                      hintText: '1A\n1B\n2A\n2B',
+                      helperText:
+                          'One per line. You can add the remaining units later.',
+                      errorText: _rentalsError,
+                      alignLabelWithHint: true,
+                    ),
+                  ),
+              ],
+            ),
+          ),
         TabbedFormStepSpec(
           label: 'Address',
           validate: _validateAddressStep,

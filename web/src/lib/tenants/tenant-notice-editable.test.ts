@@ -25,12 +25,11 @@ describe('tenant create/send notice editing', () => {
 		assert.match(dialogSource, /onclick=\{\(\) => sendNoticeMutation\.mutate\(draft\)\}/);
 	});
 
-	it('supports lease and payment scoped generation without resending existing notices', () => {
-		assert.match(dialogSource, /leaseId\?: number/);
-		assert.match(dialogSource, /paymentId\?: number/);
+	it('supports canonical recipient-scoped generation without resending existing notices', () => {
+		assert.match(dialogSource, /recipientTenantId\?: number/);
 		assert.match(dialogSource, /function generateRequest\(noticeType\?: string\)/);
 		assert.match(dialogSource, /notices\.generate\(generateRequest\(noticeType\)\)/);
-		assert.match(dialogSource, /\.\.\.\(paymentId != null \? \{ paymentId \} : \{\}\)/);
+		assert.match(dialogSource, /\.\.\.\(recipientTenantId > 0 \? \{ recipientTenantId \} : \{\}\)/);
 		assert.match(dialogSource, /draft\.status === 'Draft'/);
 		assert.match(dialogSource, /disabled=\{!editable\}/);
 		assert.match(dialogSource, /This notice already exists and will not be sent again\./);

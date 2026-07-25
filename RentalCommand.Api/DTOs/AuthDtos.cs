@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.DTOs;
 
@@ -12,6 +13,12 @@ public class LoginRequest
     [Required]
     [MaxLength(200)]
     public string Password { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Required only when this identity has more than one effective workspace context. The API
+    /// never guesses a workspace from a legacy user column.
+    /// </summary>
+    public int? AccessContextId { get; set; }
 }
 
 public class RegisterRequest
@@ -43,11 +50,25 @@ public class RefreshRequest
     public string? RefreshToken { get; set; }
 }
 
+public sealed class SwitchAccessContextRequest
+{
+    [Range(1, int.MaxValue)]
+    public int AccessContextId { get; set; }
+}
+
+public sealed class SwitchAccessContextResponse
+{
+    public string AccessToken { get; set; } = string.Empty;
+    public DateTime AccessTokenExpiration { get; set; }
+    public AccessEnvelope Access { get; set; } = null!;
+}
+
 public class LoginResponse
 {
     public string AccessToken { get; set; } = string.Empty;
     public DateTime AccessTokenExpiration { get; set; }
     public UserDto User { get; set; } = new();
+    public AccessEnvelope Access { get; set; } = null!;
 
     /// <summary>
     /// The refresh token, in the response body. Populated ONLY for non-cookie (mobile) callers that
@@ -58,6 +79,18 @@ public class LoginResponse
     /// </summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? RefreshToken { get; set; }
+}
+
+/// <summary>
+/// Returned only after valid credentials identify more than one effective workspace context. The
+/// caller resubmits the same credentials with one opaque access-context id; no session or token is
+/// created until that choice is made.
+/// </summary>
+public sealed class AccessContextSelectionRequiredResponse
+{
+    public string Code { get; set; } = "ACCESS_CONTEXT_REQUIRED";
+    public string Error { get; set; } = "Select a workspace to continue.";
+    public IReadOnlyList<EffectiveAccessContextOption> Contexts { get; set; } = [];
 }
 
 public class ConfirmEmailRequest
@@ -136,9 +169,5 @@ public class UserDto
     public int Id { get; set; }
     public string Email { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
-    public int? PortfolioId { get; set; }
-    public int? OwnerEntityId { get; set; }
-    public int? TenantId { get; set; }
-    public List<string> Roles { get; set; } = new();
     public bool EmailVerified { get; set; }
 }

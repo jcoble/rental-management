@@ -24,6 +24,13 @@ public class SimWorkerCommand
     /// <summary>Lifecycle state — see <see cref="SimWorkerCommandStatus"/>.</summary>
     public string Status { get; set; } = SimWorkerCommandStatus.Pending;
 
+    /// <summary>Engine lease metadata. Terminal writes are fenced by <see cref="ClaimToken"/>.</summary>
+    public string? ClaimOwner { get; set; }
+    public Guid? ClaimToken { get; set; }
+    public DateTime? ClaimExpiresAtUtc { get; set; }
+    public int AttemptCount { get; set; }
+    public DateTime? LastAttemptAtUtc { get; set; }
+
     /// <summary>On success, the JSON result (e.g. <c>{"created":3}</c>).</summary>
     public string? ResultJson { get; set; }
 

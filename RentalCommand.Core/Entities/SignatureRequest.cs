@@ -1,70 +1,44 @@
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Core.Entities;
 
-/// <summary>
-/// A native e-sign "envelope": one document sent to one or more signers for electronic signature.
-/// Created by <c>NativeEsignProvider</c> from a lease agreement PDF; the provider envelope id surfaced
-/// on <see cref="Lease.EsignEnvelopeId"/> is this row's <see cref="PublicId"/> (an opaque GUID string).
-/// Portfolio-scoped. The signer-level trail (who viewed/signed, when, from where) lives on
-/// <see cref="SignatureSigner"/> and <see cref="SignatureAuditEvent"/>.
-/// </summary>
-public class SignatureRequest
+/// <summary>Delivery and signer-workflow evidence for exactly one immutable legal artifact.</summary>
+public class SignatureRequest : IPortfolioScoped
 {
     public int Id { get; set; }
-
-    /// <summary>Owning portfolio (IDOR scope). Always set from the lease's portfolio.</summary>
+    public Guid PublicId { get; set; }
     public int PortfolioId { get; set; }
-
-    /// <summary>
-    /// Opaque, stable public identifier returned as the e-sign envelope id (maps to
-    /// <see cref="Lease.EsignEnvelopeId"/>). A GUID string so it is unguessable and webhook/status code
-    /// can resolve the request without leaking the integer key.
-    /// </summary>
-    public string PublicId { get; set; } = string.Empty;
-
-    /// <summary>The lease this signature request executes (the only document type in v1).</summary>
-    public int LeaseId { get; set; }
-
-    /// <summary>Display name of the document the signer is asked to sign (e.g. "lease-7-agreement.pdf").</summary>
-    public string DocumentName { get; set; } = string.Empty;
-
-    /// <summary>Human-readable subject/title shown to the signer (e.g. "Lease L-2026-7").</summary>
-    public string? Subject { get; set; }
-
-    /// <summary>The <see cref="StoredFile"/> id of the original (unsigned) document under review.</summary>
-    public int OriginalStoredFileId { get; set; }
-
-    /// <summary>The <see cref="StoredFile"/> id of the final executed PDF (signatures + certificate). Null until completed.</summary>
-    public int? SignedStoredFileId { get; set; }
-
-    /// <summary>Document template used for this request, if the lease was rendered from a template.</summary>
-    public int? DocumentTemplateId { get; set; }
-
-    /// <summary>Template version frozen when this request was created.</summary>
-    public int? DocumentTemplateVersion { get; set; }
-
-    /// <summary>
-    /// JSON snapshot of the field anchors/signing tabs used for this request. Freezes placement even
-    /// when the landlord later edits the template.
-    /// </summary>
-    public string? TemplateFieldSnapshotJson { get; set; }
-
-    /// <summary>Lower-case hex SHA-256 of the final executed PDF bytes, set when the request completes.</summary>
-    public string? ContentSha256 { get; set; }
-
-    public SignatureRequestStatus Status { get; set; } = SignatureRequestStatus.Sent;
-
-    public DateTime CreatedAtUtc { get; set; }
-
-    /// <summary>When every signer had signed and the executed document was produced; null until then.</summary>
+    public int? LeaseAgreementId { get; set; }
+    public int? LeaseAddendumId { get; set; }
+    public string Provider { get; set; } = "native";
+    public string? ProviderEnvelopeId { get; set; }
+    public string IdempotencyKey { get; set; } = string.Empty;
+    public SignatureRequestStatus Status { get; set; } = SignatureRequestStatus.Prepared;
+    public string Subject { get; set; } = string.Empty;
+    public int IssuedArtifactId { get; set; }
+    public int? ExecutedArtifactId { get; set; }
+    public DateTime PreparedAtUtc { get; set; }
+    public DateTime? ProviderAcceptedAtUtc { get; set; }
     public DateTime? CompletedAtUtc { get; set; }
+    public DateTime? DeclinedAtUtc { get; set; }
+    public DateTime? VoidedAtUtc { get; set; }
+    public string? FailureCode { get; set; }
+    public string? LastError { get; set; }
+    public string? ExecutionClaimOwner { get; set; }
+    public Guid? ExecutionClaimToken { get; set; }
+    public DateTime? ExecutionClaimExpiresAtUtc { get; set; }
+    public int ExecutionAttemptCount { get; set; }
+    public DateTime? ExecutionLastAttemptAtUtc { get; set; }
+    public DateTime? NextAttemptAtUtc { get; set; }
+    public int CreatedByUserId { get; set; }
 
     public Portfolio? Portfolio { get; set; }
-    public Lease? Lease { get; set; }
-    public DocumentTemplate? DocumentTemplate { get; set; }
-    public StoredFile? OriginalStoredFile { get; set; }
-    public StoredFile? SignedStoredFile { get; set; }
+    public LeaseAgreement? LeaseAgreement { get; set; }
+    public LeaseAddendum? LeaseAddendum { get; set; }
+    public LegalDocumentArtifact? IssuedArtifact { get; set; }
+    public LegalDocumentArtifact? ExecutedArtifact { get; set; }
+    public ApplicationUser? CreatedByUser { get; set; }
     public List<SignatureSigner> Signers { get; set; } = [];
     public List<SignatureAuditEvent> AuditEvents { get; set; } = [];
 }

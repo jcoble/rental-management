@@ -9,11 +9,8 @@ export interface OnboardingLeaseConfirmInput {
 	securityDeposit: number;
 	lateFeeAmount: number;
 	rentDueDay: number;
-	rentTrackingStartMode?: string;
-	rentTrackingStartDate?: string | null;
-	openingBalanceAmount?: number | null;
-	openingBalanceAsOfDate?: string | null;
-	openingBalanceNote?: string | null;
+	reviewDisposition: 'AlreadyFullySigned' | 'NeedsSignatures';
+	documentTemplateId: number | null;
 }
 
 export function buildOnboardingLeaseScanOverrides(input: OnboardingLeaseConfirmInput): string {
@@ -28,10 +25,9 @@ export function buildOnboardingLeaseScanOverrides(input: OnboardingLeaseConfirmI
 		securityDeposit: input.securityDeposit,
 		lateFee: input.lateFeeAmount,
 		rentDueDay: input.rentDueDay,
-		rentTrackingStartMode: input.rentTrackingStartMode,
-		rentTrackingStartDate: input.rentTrackingStartDate,
-		openingBalanceAmount: input.openingBalanceAmount,
-		openingBalanceAsOfDate: input.openingBalanceAsOfDate,
-		openingBalanceNote: input.openingBalanceNote
+		reviewDisposition: input.reviewDisposition,
+		...(input.reviewDisposition === 'NeedsSignatures' && input.documentTemplateId
+			? { documentTemplateId: input.documentTemplateId }
+			: {})
 	});
 }

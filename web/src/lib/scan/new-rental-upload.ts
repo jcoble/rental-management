@@ -6,5 +6,5 @@ export async function prepareNewRentalPhotoUpload(
 	files: File[],
 	stitcher?: Stitcher
 ): Promise<File> {
-	return prepareScanDocumentUpload(files, { targetEntityType: 'Lease', stitcher });
+	return prepareScanDocumentUpload(files, { targetEntityType: 'LeaseAgreement', stitcher });
 }

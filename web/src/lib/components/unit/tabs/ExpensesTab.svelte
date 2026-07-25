@@ -2,19 +2,21 @@
 	import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { untrack } from 'svelte';
-	import type { UnitDashboard, Expense } from '$lib/types';
+	import type { UnitDashboard } from '$lib/types';
 	import type { ScanContext } from '$lib/scan/scan-context';
 	import { expenses as expensesApi } from '$lib/api/endpoints/expenses';
+	import { properties } from '$lib/api/endpoints/properties';
+	import { loans } from '$lib/api/endpoints/loans';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { expenseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
-	import { money } from '../money';
+	import { money, unitMoneySectionGates } from '../money';
 	import {
 		EXPENSE_CATEGORY_OPTIONS,
 		formatExpenseCategory
 	} from '$lib/accounting/expense-categories';
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
@@ -70,9 +72,20 @@
 		goto(unitUrl(), { replaceState: true, keepFocus: true, noScroll: true });
 	}
 
+	const propertyQuery = createQuery(() => ({
+		queryKey: ['property', propertyId],
+		enabled: propertyId > 0,
+		queryFn: () => properties.get(propertyId)
+	}));
+	const rentalStructure = $derived(propertyQuery.data?.rentalStructure);
+	const moneySections = $derived(unitMoneySectionGates({
+		rentalStructure,
+		propertyId,
+		tenantAccountId: dashboard.tenantAccountId
+	}));
+
 	// Unit-relevant expenses: tied to the unit OR to one of its work orders (DB-side correlated filter).
 	let expensePage = $state(1);
-	let expenseItems = $state<Expense[]>([]);
 	const expensesQuery = createQuery(() => ({
 		queryKey: ['unit-expenses', portfolioId, unitId, expensePage, EXPENSE_PAGE_SIZE],
 		enabled: portfolioId > 0 && unitId > 0,
@@ -87,37 +100,44 @@
 	$effect(() => {
 		void unitId;
 		expensePage = 1;
-		expenseItems = [];
 	});
 
-	$effect(() => {
-		const pageData = expensesQuery.data;
-		if (!pageData) return;
-		if (pageData.skip === 0) {
-			expenseItems = pageData.items;
-			return;
-		}
-		const currentItems = untrack(() => expenseItems);
-		const seen = new Set(currentItems.map((e) => e.id));
-		expenseItems = [...currentItems, ...pageData.items.filter((e) => !seen.has(e.id))];
-	});
+	const list = $derived(expensesQuery.data?.items ?? []);
 
-	const list = $derived(expenseItems);
-	const totalExpenses = $derived(expensesQuery.data?.totalCount ?? expenseItems.length);
-	const hasMoreExpenses = $derived(expenseItems.length < totalExpenses);
+	let propertyExpensePage = $state(1);
+	const propertyExpensesQuery = createQuery(() => ({
+		queryKey: ['property-expenses', portfolioId, propertyId, propertyExpensePage, EXPENSE_PAGE_SIZE],
+		enabled: portfolioId > 0 && moneySections.propertyExpenses,
+		queryFn: () => expensesApi.listPage(portfolioId, {
+			operationalScope: 'Property',
+			propertyId,
+			skip: (propertyExpensePage - 1) * EXPENSE_PAGE_SIZE,
+			take: EXPENSE_PAGE_SIZE,
+			sort: '-incurredAt'
+		})
+	}));
+
+	let financingPage = $state(1);
+	const financingQuery = createQuery(() => ({
+		queryKey: ['property-financing', propertyId, financingPage, EXPENSE_PAGE_SIZE],
+		enabled: moneySections.financing,
+		queryFn: () => loans.listPage({
+			propertyId,
+			skip: (financingPage - 1) * EXPENSE_PAGE_SIZE,
+			take: EXPENSE_PAGE_SIZE,
+			sort: '-startDate'
+		})
+	}));
 
 	function invalidate() {
-		expenseItems = [];
 		expensePage = 1;
+		propertyExpensePage = 1;
+		financingPage = 1;
 		queryClient.invalidateQueries({ queryKey: ['unit-expenses', portfolioId, unitId] });
+		queryClient.invalidateQueries({ queryKey: ['property-expenses', portfolioId, propertyId] });
 		queryClient.invalidateQueries({ queryKey: ['expenses', portfolioId] });
 		queryClient.invalidateQueries({ queryKey: ['unit-dashboard', unitId] });
 		queryClient.invalidateQueries({ queryKey: ['unit-timeline', unitId] });
-	}
-
-	function loadMoreExpenses() {
-		if (expensesQuery.isFetching || !hasMoreExpenses) return;
-		expensePage += 1;
 	}
 
 	// ── Inline "add expense" form (reuses expenseSchema + the app's form conventions; sets UnitId) ──
@@ -312,7 +332,12 @@
 	{/if}
 
 	{#if expensesQuery.isLoading}
-		<p class="rounded-xl border bg-card p-6 text-center text-sm text-muted-foreground">Loading expenses…</p>
+		<LoadingState label="Loading Unit expenses" testid="unit-expenses-loading" />
+	{:else if expensesQuery.isError}
+		<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="unit-expenses-error">
+			<p class="text-sm font-medium text-destructive">Unit expenses could not be loaded.</p>
+			<Button class="mt-3" variant="outline" size="sm" onclick={() => expensesQuery.refetch()}>Try again</Button>
+		</div>
 	{:else if list.length === 0}
 		<p class="rounded-xl border bg-card p-6 text-center text-sm text-muted-foreground">
 			No expenses yet. Add a unit cost (appliance, permit, repair) or snap a receipt.
@@ -331,13 +356,101 @@
 				</li>
 			{/each}
 		</ul>
-		{#if hasMoreExpenses}
-			<div class="flex justify-center">
-				<Button variant="outline" size="sm" onclick={loadMoreExpenses} disabled={expensesQuery.isFetching} data-testid="expenses-load-more">
-					{expensesQuery.isFetching ? 'Loading…' : 'Load more'}
-				</Button>
+		{#if expensesQuery.data && expensesQuery.data.totalCount > EXPENSE_PAGE_SIZE}
+			<div class="flex items-center justify-between" data-testid="unit-expenses-paging">
+				<Button variant="outline" size="sm" onclick={() => (expensePage -= 1)} disabled={expensePage === 1 || expensesQuery.isFetching}>Previous</Button>
+				<span class="text-sm text-muted-foreground">{expensesQuery.data.totalCount} Unit costs</span>
+				<Button variant="outline" size="sm" onclick={() => (expensePage += 1)} disabled={expensePage * EXPENSE_PAGE_SIZE >= expensesQuery.data.totalCount || expensesQuery.isFetching}>Next</Button>
 			</div>
 		{/if}
+	{/if}
+
+	{#if propertyQuery.isLoading}
+		<section class="border-t pt-6" data-testid="property-money-sections-loading">
+			<LoadingState label="Loading Property money details" testid="property-money-loading" />
+		</section>
+	{:else if propertyQuery.isError}
+		<section class="border-t pt-6" data-testid="property-money-sections-error">
+			<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert">
+				<p class="text-sm font-medium text-destructive">Property money details could not be loaded.</p>
+				<Button class="mt-3" variant="outline" size="sm" onclick={() => propertyQuery.refetch()}>Try again</Button>
+			</div>
+		</section>
+	{/if}
+
+	{#if !propertyQuery.isLoading && !propertyQuery.isError && moneySections.propertyExpenses}
+		<section class="space-y-3 border-t pt-6" data-testid="property-expenses-section">
+			<div>
+				<h3 class="font-semibold">Property expenses</h3>
+				<p class="text-sm text-muted-foreground">Costs persisted against this SingleRental Property rather than its Unit.</p>
+			</div>
+			{#if propertyExpensesQuery.isLoading}
+				<LoadingState label="Loading Property expenses" testid="property-expenses-loading" />
+			{:else if propertyExpensesQuery.isError}
+				<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="property-expenses-error">
+					<p class="text-sm font-medium text-destructive">Property expenses could not be loaded.</p>
+					<Button class="mt-3" variant="outline" size="sm" onclick={() => propertyExpensesQuery.refetch()}>Try again</Button>
+				</div>
+			{:else if (propertyExpensesQuery.data?.items.length ?? 0) === 0}
+				<p class="rounded-xl border bg-card p-4 text-sm text-muted-foreground">No Property expenses.</p>
+			{:else}
+				<ul class="space-y-2">
+					{#each propertyExpensesQuery.data?.items ?? [] as e (e.id)}
+						<li class="rounded-xl border bg-card p-3">
+							<div class="flex items-center justify-between gap-3">
+								<span class="truncate text-sm font-medium">{e.description}</span>
+								<span class="font-semibold">{money(e.amount)}</span>
+							</div>
+						</li>
+					{/each}
+				</ul>
+				{#if propertyExpensesQuery.data && propertyExpensesQuery.data.totalCount > EXPENSE_PAGE_SIZE}
+					<div class="flex items-center justify-between">
+						<Button variant="outline" size="sm" onclick={() => (propertyExpensePage -= 1)} disabled={propertyExpensePage === 1 || propertyExpensesQuery.isFetching}>Previous</Button>
+						<span class="text-sm text-muted-foreground">{propertyExpensesQuery.data.totalCount} Property expenses</span>
+						<Button variant="outline" size="sm" onclick={() => (propertyExpensePage += 1)} disabled={propertyExpensePage * EXPENSE_PAGE_SIZE >= propertyExpensesQuery.data.totalCount || propertyExpensesQuery.isFetching}>Next</Button>
+					</div>
+				{/if}
+			{/if}
+		</section>
+	{/if}
+
+	{#if !propertyQuery.isLoading && !propertyQuery.isError && moneySections.financing}
+		<section class="space-y-3 border-t pt-6" data-testid="financing-section">
+			<div>
+				<h3 class="font-semibold">Financing</h3>
+				<p class="text-sm text-muted-foreground">Property debt remains separate from operating costs.</p>
+			</div>
+			{#if financingQuery.isLoading}
+				<LoadingState label="Loading financing" testid="financing-loading" />
+			{:else if financingQuery.isError}
+				<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="financing-error">
+					<p class="text-sm font-medium text-destructive">Financing could not be loaded.</p>
+					<Button class="mt-3" variant="outline" size="sm" onclick={() => financingQuery.refetch()}>Try again</Button>
+				</div>
+			{:else if (financingQuery.data?.items.length ?? 0) === 0}
+				<p class="rounded-xl border bg-card p-4 text-sm text-muted-foreground">No financing recorded.</p>
+			{:else}
+				<ul class="space-y-2">
+					{#each financingQuery.data?.items ?? [] as loan (loan.id)}
+						<li class="rounded-xl border bg-card p-3">
+							<div class="flex items-center justify-between gap-3">
+								<span class="truncate text-sm font-medium">{loan.lender}</span>
+								<span class="font-semibold">{money(loan.currentBalance)}</span>
+							</div>
+							<p class="text-xs text-muted-foreground">{money(loan.monthlyPrincipalInterest + loan.monthlyEscrow)}/month · {loan.status}</p>
+						</li>
+					{/each}
+				</ul>
+				{#if financingQuery.data && financingQuery.data.totalCount > EXPENSE_PAGE_SIZE}
+					<div class="flex items-center justify-between">
+						<Button variant="outline" size="sm" onclick={() => (financingPage -= 1)} disabled={financingPage === 1 || financingQuery.isFetching}>Previous</Button>
+						<span class="text-sm text-muted-foreground">{financingQuery.data.totalCount} loans</span>
+						<Button variant="outline" size="sm" onclick={() => (financingPage += 1)} disabled={financingPage * EXPENSE_PAGE_SIZE >= financingQuery.data.totalCount || financingQuery.isFetching}>Next</Button>
+					</div>
+				{/if}
+			{/if}
+		</section>
 	{/if}
 {/if}
 </div>

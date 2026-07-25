@@ -23,14 +23,14 @@ public class ScanProcessingWorkerSchemaTests
     }
 
     [Fact]
-    public void ChooseExtractionSchema_WorkOrderTarget_AllowsGroundedLeaseIds()
+    public void ChooseExtractionSchema_WorkOrderTarget_AllowsGroundedLeaseManagementIds()
     {
         var schema = ScanProcessingWorker.ChooseExtractionSchema("WorkOrder");
-        var leaseField = schema.Fields.Single(f => f.Name == "lease_id");
+        var leaseField = schema.Fields.Single(f => f.Name == "lease_management_id");
 
-        schema.Instructions.Should().Contain("leases");
-        schema.Instructions.Should().Contain("lease_id");
-        leaseField.Description.Should().Contain("leases[].id");
+        schema.Instructions.Should().Contain("leaseManagements");
+        schema.Instructions.Should().Contain("lease_management_id");
+        leaseField.Description.Should().Contain("leaseManagements[].leaseManagementId");
         leaseField.Description.Should().NotContain("Leave empty");
     }
 
@@ -51,7 +51,7 @@ public class ScanProcessingWorkerSchemaTests
     [Fact]
     public void ChooseExtractionSchema_LeaseTarget_UsesLeaseSchema()
     {
-        var schema = ScanProcessingWorker.ChooseExtractionSchema("Lease");
+        var schema = ScanProcessingWorker.ChooseExtractionSchema("LeaseAgreement");
 
         schema.Instructions.Should().Be(LeaseExtractionSchema.Instructions);
         schema.Fields.Select(f => f.Name).Should().Contain([

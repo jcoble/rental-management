@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
 import '../activity/activity_history_screen.dart';
@@ -29,6 +30,7 @@ class _VendorDetailScreenState extends ConsumerState<VendorDetailScreen> {
   bool _requestingW9 = false;
   bool _savingW9OnFile = false;
   bool _deleting = false;
+  String? _requestW9OperationId;
 
   @override
   void initState() {
@@ -44,7 +46,11 @@ class _VendorDetailScreenState extends ConsumerState<VendorDetailScreen> {
     try {
       final result = await ref
           .read(vendorsRepositoryProvider)
-          .requestW9(_vendor.id);
+          .requestW9(
+            _vendor.id,
+            clientOperationId: _requestW9OperationId ??= const Uuid().v4(),
+          );
+      _requestW9OperationId = null;
       if (!mounted) return;
       final to = result.sentTo;
       messenger
@@ -59,6 +65,12 @@ class _VendorDetailScreenState extends ConsumerState<VendorDetailScreen> {
           ),
         );
     } on ApiException catch (e) {
+      if (e.statusCode >= 400 &&
+          e.statusCode < 500 &&
+          e.statusCode != 408 &&
+          e.statusCode != 429) {
+        _requestW9OperationId = null;
+      }
       if (!mounted) return;
       messenger
         ..hideCurrentSnackBar()

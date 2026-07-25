@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { scan, type ScanDraftResponse } from '$lib/api/scan';
 	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 	import * as Tabs from '$lib/components/ui/tabs';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
@@ -14,6 +15,10 @@
 	import { parseScanContext } from '$lib/scan/scan-context';
 	import { SCAN_HISTORY_FILTERS, formatScanHistoryEmptyMessage, resolveScanHistoryFilter, type ScanHistoryFilter } from '$lib/scans/scan-history-filters';
 	import { createdRecordHref } from '$lib/scans/scan-review-state';
+	import { getAuthState } from '$lib/stores/auth.svelte';
+	import { capabilityKeysForExperience } from '$lib/types/user';
+	import { technician } from '$lib/api/endpoints/technician';
+	import { canUseUnstructuredVoiceCapture, scanDocumentTypesForCapabilities } from '$lib/scan/scan-access';
 
 	const PAGE_SIZE = 20;
 
@@ -43,6 +48,35 @@
 	});
 
 	const scanContext = $derived(parseScanContext(page.url.searchParams));
+	const authState = getAuthState();
+	const currentAccess = $derived(page.data.access ?? authState.accessEnvelope);
+	const currentExperience = $derived(
+		authState.activeExperience ?? currentAccess?.selectedContext.activeExperience ?? null
+	);
+	const activeCapabilities = $derived(
+		capabilityKeysForExperience(currentAccess, currentExperience)
+	);
+	const allowedScanTypes = $derived(scanDocumentTypesForCapabilities(activeCapabilities));
+	const allowVoiceCapture = $derived(canUseUnstructuredVoiceCapture(allowedScanTypes));
+	const assignedTechnicianOnly = $derived(
+		activeCapabilities.has('maintenance.assigned-work.update') && !activeCapabilities.has('work.manage')
+	);
+	let assignedSearch = $state('');
+	let assignedPage = $state(1);
+	const assignedWorkOrdersQuery = createQuery(() => ({
+		queryKey: ['assigned-work-order-scan-picker', assignedSearch, assignedPage, PAGE_SIZE],
+		queryFn: () => technician.assignments({
+			openOnly: true,
+			search: assignedSearch.trim() || undefined,
+			sort: 'scheduledForUtc',
+			skip: (assignedPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE
+		}),
+		enabled: assignedTechnicianOnly && !scanContext.workOrderId
+	}));
+	const assignedPageCount = $derived(
+		Math.max(1, Math.ceil((assignedWorkOrdersQuery.data?.totalCount ?? 0) / PAGE_SIZE))
+	);
 
 	const scansQuery = createQuery(() => ({
 		queryKey: ['scans', activeFilter, 'page', gridSort, gridPage, PAGE_SIZE],
@@ -56,7 +90,8 @@
 	// Recent bulk-import batches (lease imports). Shown as quick links back into review.
 	const batchesQuery = createQuery(() => ({
 		queryKey: ['scan-batches'],
-		queryFn: () => scan.listBatches()
+		queryFn: () => scan.listBatches(),
+		enabled: !assignedTechnicianOnly
 	}));
 	const recentBatches = $derived((batchesQuery.data ?? []).slice(0, 5));
 
@@ -116,7 +151,10 @@
 		// A Loan has no standalone detail page (it lives under its property) — fall back to the
 		// read-only draft rather than linking to a non-existent loan record.
 		if (type === 'Loan') return null;
-		return createdRecordHref(type, id, draft.createdUnitId);
+		return createdRecordHref(type, id, {
+			unitId: draft.createdUnitId,
+			leaseManagementId: draft.captureContext?.leaseManagementId
+		});
 	}
 
 	// A confirmed draft is terminal: its action/row-click should jump straight to the created record
@@ -156,20 +194,66 @@
 			<h1 class="text-2xl font-bold">Scan / Add</h1>
 			<p class="text-sm text-muted-foreground">Upload a photo or PDF and the computer pulls out the details for you to confirm.</p>
 		</div>
-		<Button variant="outline" class="gap-2" href="/scan/batch" data-testid="scan-bulk-import-leases">
+		{#if !assignedTechnicianOnly}<Button variant="outline" class="gap-2" href="/scan/batch" data-testid="scan-bulk-import-leases">
 			<Layers class="h-4 w-4" />
 			Bulk import leases
-		</Button>
+		</Button>{/if}
 	</div>
 
 	<!-- Primary front door: guided, pre-filled new-rental-from-your-lease flow -->
-	<a href="/scan/new-rental" class="mb-6 block rounded-lg border border-accent/40 bg-accent/5 p-4 hover:bg-accent/10" data-testid="scan-new-rental-cta">
+	{#if !assignedTechnicianOnly}<a href="/scan/new-rental" class="mb-6 block rounded-lg border border-accent/40 bg-accent/5 p-4 hover:bg-accent/10" data-testid="scan-new-rental-cta">
 		<p class="text-sm font-semibold text-foreground">New rental from your lease</p>
 		<p class="text-xs text-muted-foreground">Snap or upload a lease → we pre-fill the property, unit, tenant, and lease for you to review.</p>
-	</a>
+	</a>{/if}
 
 	<div class="mb-6 border-b pb-6">
-		<ScanCapturePanel context={scanContext} />
+		{#if assignedTechnicianOnly && !scanContext.workOrderId}
+			<h2 class="mb-2 text-base font-semibold">Choose an assigned work order</h2>
+			<p class="mb-4 text-sm text-muted-foreground">Your scan will be attached to the work order you choose.</p>
+			<Input
+				class="mb-3 max-w-md"
+				bind:value={assignedSearch}
+				oninput={() => assignedPage = 1}
+				placeholder="Search assigned work"
+				aria-label="Search assigned work orders"
+			/>
+			<div class="grid gap-2">
+				{#each assignedWorkOrdersQuery.data?.items ?? [] as workOrder}
+					<Button variant="outline" class="justify-start" onclick={() => goto(`/scan?type=WorkOrder&workOrderId=${workOrder.id}`)}>{workOrder.title}</Button>
+				{:else}
+					<p class="text-sm text-muted-foreground">
+						{assignedWorkOrdersQuery.isPending ? 'Loading assigned work…' : 'No matching assigned work orders.'}
+					</p>
+				{/each}
+			</div>
+			{#if (assignedWorkOrdersQuery.data?.totalCount ?? 0) > PAGE_SIZE}
+				<div class="mt-3 flex items-center justify-end gap-2">
+					<span class="mr-2 text-xs text-muted-foreground">Page {assignedPage} of {assignedPageCount}</span>
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={assignedPage <= 1}
+						onclick={() => assignedPage = Math.max(1, assignedPage - 1)}
+					>
+						Previous
+					</Button>
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={assignedPage >= assignedPageCount}
+						onclick={() => assignedPage = Math.min(assignedPageCount, assignedPage + 1)}
+					>
+						Next
+					</Button>
+				</div>
+			{/if}
+		{:else}
+			<ScanCapturePanel
+				context={scanContext}
+				allowedTypes={allowedScanTypes}
+				allowVoice={allowVoiceCapture}
+			/>
+		{/if}
 	</div>
 
 	<!-- Recent lease imports -->

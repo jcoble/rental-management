@@ -1,34 +1,95 @@
 using FluentAssertions;
 using Microsoft.AspNetCore.Authorization;
+using RentalCommand.Api.Auth;
 using RentalCommand.Api.Controllers;
+using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 
 namespace RentalCommand.Api.Tests.Auth;
 
 public class BankingControllerAuthorizationTests
 {
-    [Fact]
-    public void BankingController_IsRestrictedToAdminAndManagerRoles()
+    [Theory]
+    [InlineData(nameof(BankingController.Summary), CapabilityKeys.BankConnectionsManage)]
+    [InlineData(nameof(BankingController.Connections), CapabilityKeys.BankConnectionsManage)]
+    [InlineData(nameof(BankingController.PlaidSettings), CapabilityKeys.BankConnectionsManage)]
+    [InlineData(nameof(BankingController.PlaidLinkToken), CapabilityKeys.BankConnectionsManage)]
+    [InlineData(nameof(BankingController.ExchangePlaidPublicToken), CapabilityKeys.BankConnectionsManage)]
+    [InlineData(nameof(BankingController.SyncConnection), CapabilityKeys.BankConnectionsManage)]
+    [InlineData(nameof(BankingController.Transactions), CapabilityKeys.BankConnectionsManage)]
+    [InlineData(nameof(BankingController.Import), CapabilityKeys.BankConnectionsManage)]
+    [InlineData(nameof(BankingController.ClearMatch), CapabilityKeys.MoneyReconciliationDestructive)]
+    [InlineData(nameof(BankingController.DismissMatch), CapabilityKeys.MoneyReconciliationDestructive)]
+    [InlineData(nameof(BankingController.Ignore), CapabilityKeys.MoneyReconciliationDestructive)]
+    public void BankingActions_RequireTheirExactCanonicalCapability(string actionName, string capabilityKey)
     {
-        // Banking declares its OWN tighter gate (Admin,Manager). It now also inherits the staff-role gate
-        // from ManagementControllerBase (Admin,Manager,Agent,Owner); the two [Authorize] attributes combine
-        // with AND, so the effective access is the intersection — still exactly Admin,Manager. Assert on the
-        // DECLARED attribute (inherit: false) so this stays a precise statement of Banking's own intent and
-        // isn't confused by the inherited base attribute.
-        var declared = typeof(BankingController)
+        var method = typeof(BankingController).GetMethods().Single(candidate => candidate.Name == actionName);
+        var declared = method
             .GetCustomAttributes(typeof(AuthorizeAttribute), inherit: false)
             .Cast<AuthorizeAttribute>()
-            .SingleOrDefault(a => !string.IsNullOrWhiteSpace(a.Roles));
+            .Single();
 
-        declared.Should().NotBeNull();
-        declared!.Roles.Should().Be("Admin,Manager");
+        declared.Roles.Should().BeNullOrWhiteSpace();
+        declared.Policy.Should().Be(CapabilityPolicy.Prefix + capabilityKey);
+    }
 
-        // And the effective (own + inherited) restriction must never admit a Tenant.
-        var effectiveRoleLists = typeof(BankingController)
-            .GetCustomAttributes(typeof(AuthorizeAttribute), inherit: true)
-            .Cast<AuthorizeAttribute>()
-            .Where(a => !string.IsNullOrWhiteSpace(a.Roles))
-            .Select(a => a.Roles!.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    [Theory]
+    [InlineData(nameof(BankingController.Match))]
+    [InlineData(nameof(BankingController.ReviewQueue))]
+    [InlineData(nameof(BankingController.ConfirmMatch))]
+    [InlineData(nameof(BankingController.Route))]
+    public void OperationalReconciliation_DelegatesPropertyAuthorizationToScopedSqlAndCommands(
+        string actionName)
+    {
+        var method = typeof(BankingController).GetMethods().Single(candidate => candidate.Name == actionName);
 
-        effectiveRoleLists.Should().OnlyContain(roles => !roles.Contains("Tenant"));
+        method.GetCustomAttributes(typeof(AuthorizeAttribute), inherit: false)
+            .Should().BeEmpty(
+                "an HTTP capability policy only has a workspace target; property authorization must use the bank line's DB-side property predicate");
+    }
+
+    [Fact]
+    public void Route_ReturnsThePurposeBuiltOperationalProjection()
+    {
+        var method = typeof(BankingController).GetMethods()
+            .Single(candidate => candidate.Name == nameof(BankingController.Route));
+
+        method.ReturnType.Should().Be(
+            typeof(Task<Microsoft.AspNetCore.Mvc.ActionResult<OperationalBankTransactionResponse>>));
+    }
+
+    [Fact]
+    public void BankingController_DoesNotUseOneWorkspacePolicyForEveryAction()
+    {
+        typeof(BankingController)
+            .GetCustomAttributes(typeof(AuthorizeAttribute), inherit: false)
+            .Should().BeEmpty();
+    }
+
+    [Fact]
+    public void OperationalDtos_DoNotSerializeBankAdministrationOrTargetIdentifiers()
+    {
+        var transactionProperties = typeof(OperationalBankTransactionResponse)
+            .GetProperties().Select(property => property.Name);
+        transactionProperties.Should().NotContain(property => new[]
+        {
+            "BankConnectionId",
+            "InstitutionName",
+            "AccountName",
+            "ProviderTransactionId",
+            "MatchedTenantAccountId",
+            "MatchedTenantLedgerEntryId",
+            "MatchedExpenseId",
+            "Notes",
+        }.Contains(property));
+
+        var suggestionProperties = typeof(OperationalBankMatchSuggestionResponse)
+            .GetProperties().Select(property => property.Name);
+        suggestionProperties.Should().NotContain(property => new[]
+        {
+            "EntityType",
+            "EntityId",
+            "TenantAccountId",
+        }.Contains(property));
     }
 }

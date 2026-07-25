@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -7,9 +8,12 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Scanning;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Scanning;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Tests.Scanning;
@@ -23,21 +27,13 @@ public class ScanServiceTests : IDisposable
 {
     // Shared portfolio id used by all seeds in a test.
     private const int PortfolioId = 1;
+    private static readonly Guid SessionId =
+        Guid.Parse("33333333-3333-3333-3333-333333333333");
 
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
-    private readonly Mock<IScanFileService> _filesMock;
-    private readonly RecordingExpenseService _expenses;
-    private readonly Mock<IPaymentService> _paymentsMock;
-    private readonly RecordingWorkOrderService _workOrders;
-    private readonly RecordingLeaseService _leases;
-    private readonly RecordingTenantService _tenants;
-    private readonly RecordingPropertyService _properties;
-    private readonly RecordingUnitService _units;
-    private readonly RecordingApplicationService _applications;
-    private readonly RecordingLoanService _loans;
-    private readonly RecordingAuditService _audit;
     private readonly ScanService _sut;
+    private readonly WorkspaceReadScope _scope;
 
     public ScanServiceTests()
     {
@@ -63,32 +59,12 @@ public class ScanServiceTests : IDisposable
             UpdatedAt = DateTime.UtcNow,
         });
         _db.SaveChanges();
-
-        _filesMock    = new Mock<IScanFileService>(MockBehavior.Strict);
-        _expenses     = new RecordingExpenseService();
-        _paymentsMock = new Mock<IPaymentService>();
-        _workOrders   = new RecordingWorkOrderService();
-        _leases       = new RecordingLeaseService();
-        _tenants      = new RecordingTenantService(_db);
-        _properties   = new RecordingPropertyService(_db);
-        _units        = new RecordingUnitService(_db);
-        _applications = new RecordingApplicationService();
-        _loans        = new RecordingLoanService();
-        _audit        = new RecordingAuditService();
+        _scope = CanonicalScanAuthorizationTestData.SeedWorkspaceAdministrator(
+            _db, PortfolioId, userId: 3, sessionId: SessionId).Scope;
 
         _sut = new ScanService(
             _db,
-            _filesMock.Object,
-            _expenses,
-            _paymentsMock.Object,
-            _workOrders,
-            _leases,
-            _tenants,
-            _properties,
-            _units,
-            _applications,
-            _loans,
-            _audit,
+            new ScanRejectAtomicUnitOfWork(_db),
             NullLogger<ScanService>.Instance,
             TimeProvider.System);
     }
@@ -99,1150 +75,435 @@ public class ScanServiceTests : IDisposable
         _conn.Dispose();
     }
 
-    // -------------------------------------------------------------------------
-    // Confirm: happy path
-    // -------------------------------------------------------------------------
-
     [Fact]
-    public async Task ConfirmAndCreateAsync_ReviewingExpenseDraft_SucceedsAndReKeysStoredFile()
+    public void CandidateQueries_KeepAuthorizationSearchSortAndPagingInSql()
     {
-        const string extractedJson =
-            """{"vendor_name":{"value":"ACME","confidence":0.9},"amount":{"value":"42.50","confidence":0.8},"transaction_date":{"value":"2026-01-15","confidence":0.95},"category":{"value":"Repairs","confidence":0.7},"notes":{"value":"","confidence":0.0},"payment_method":{"value":"Visa","confidence":0.8},"card_last4":{"value":"4242","confidence":0.8},"document_kind":{"value":"Receipt","confidence":0.9},"line_items":{"value":"[{\"description\":\"Washer hose\",\"quantity\":2,\"unit_price\":6.50,\"amount\":13.00},{\"description\":\"Pipe tape\",\"amount\":3.00}]","confidence":0.7}}""";
+        ScanService.TechnicianCandidateCapabilityKeys.Should().BeEquivalentTo([
+            CapabilityKeys.AssignedWorkUpdate,
+            CapabilityKeys.WorkManage,
+        ]);
+        ScanService.TargetCandidateCapabilityKeys.Should().BeEquivalentTo([
+            CapabilityKeys.RentalsManage,
+            CapabilityKeys.WorkManage,
+            CapabilityKeys.MoneyPaymentsManage,
+            CapabilityKeys.MoneyExpensesManage,
+            CapabilityKeys.LeasingApplicationsManage,
+            CapabilityKeys.LeasingAgreementsPrepare,
+        ]);
 
-        var draft = SeedDraft("Reviewing", extractedJson);
-        var file  = SeedStoredFile(draft.FilePath);
+        using var translationDb = new RentalCommandDbContext(
+            new DbContextOptionsBuilder<RentalCommandDbContext>()
+                .UseNpgsql(
+                    "Host=localhost;Database=translation_only;Username=translation_only;Password=translation_only")
+                .Options);
+        var translationService = new ScanService(
+            translationDb,
+            new ScanRejectAtomicUnitOfWork(translationDb),
+            NullLogger<ScanService>.Instance,
+            TimeProvider.System);
 
-        const int fixedExpenseId = 99;
-        _expenses.SetupResponse(new ExpenseResponse { Id = fixedExpenseId, PortfolioId = PortfolioId });
+        var technicianSql = NormalizeSql(translationService.BuildTechnicianCandidateQuery(
+                _scope,
+                "plumbing",
+                skip: 20,
+                take: 20)
+            .ToQueryString());
+        var targetSql = NormalizeSql(translationService.BuildTargetCandidateQuery(
+                _scope,
+                "main",
+                skip: 20,
+                take: 20)
+            .ToQueryString());
 
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
+        AssertPropertyAuthorizationShape(technicianSql, "w1");
+        AssertSqlContains(
+            technicianSql,
+            """
+            ) AS s8 ON m2."WorkspaceMembershipId" = s8."Id"
+                AND m2."PortfolioId" = s8."PortfolioId"
+            INNER JOIN "RoleProfiles" AS r1 ON m2."RoleProfileId" = r1."Id"
+            """);
+        AssertSqlContains(
+            technicianSql,
+            """
+            m2."ScopeKind" = 'AssignedWorkOrders'
+                AND m2."Status" = 'Active'
+                AND m2."SuspendedAtUtc" IS NULL
+                AND m2."RevokedAtUtc" IS NULL
+                AND m2."EffectiveFromUtc" <= @utcNow
+                AND (m2."EffectiveToUtc" IS NULL OR m2."EffectiveToUtc" > @utcNow)
+                AND s8."AccessContextId" = @scope_AccessContextId
+                AND s8."PortfolioId" = @scope_PortfolioId
+                AND s8."Status" = 'Active'
+                AND s8."SuspendedAtUtc" IS NULL
+                AND s8."RevokedAtUtc" IS NULL
+                AND s8."EffectiveFromUtc" <= @utcNow
+                AND (s8."EffectiveToUtc" IS NULL OR s8."EffectiveToUtc" > @utcNow)
+                AND s8."UserId" = @scope_UserId
+                AND s8."AccessRevision" = @scope_AccessRevision
+                AND s8."Status0" = 'Active'
+                AND s8."SuspendedAtUtc0" IS NULL
+                AND s8."RevokedAtUtc0" IS NULL
+            """);
+        AssertSqlContains(
+            technicianSql,
+            """
+            ) AS s9 ON a0."ActiveAccessContextId" = s9."Id" AND a0."UserId" = s9."UserId"
+            WHERE s9."DeletedAt" IS NULL
+                AND a0."Id" = @scope_SessionId
+                AND a0."UserId" = @scope_UserId
+                AND a0."ActiveAccessContextId" = @scope_AccessContextId
+                AND a0."Status" = 'Active'
+                AND a0."RevokedAtUtc" IS NULL
+                AND a0."ExpiresAtUtc" > @utcNow
+            """);
+        AssertSqlContains(
+            technicianSql,
+            """
+            FROM "RoleProfileCapabilities" AS r2
+            INNER JOIN "CapabilityDefinitions" AS c0
+                ON r2."CapabilityDefinitionId" = c0."Id"
+            WHERE r1."Id" = r2."RoleProfileId"
+                AND c0."Key" = ANY (@keys)
+                AND c0."AuthorizationTargetKind" = 'WorkOrder'
+            """);
+        AssertSqlContains(
+            technicianSql,
+            """
+            FROM "WorkOrderResponsibilities" AS w10
+            INNER JOIN (
+                SELECT w11."Id", w11."DeletedAt", w11."PortfolioId", w11."PropertyId"
+                FROM "WorkOrders" AS w11
+                WHERE w11."DeletedAt" IS NULL
+            ) AS w12 ON w10."WorkOrderId" = w12."Id"
+                AND w10."PropertyId" = w12."PropertyId"
+                AND w10."PortfolioId" = w12."PortfolioId"
+            """);
+        AssertSqlContains(
+            technicianSql,
+            """
+            w."Id" = w10."WorkOrderId"
+                AND w."PropertyId" = w10."PropertyId"
+                AND w."PortfolioId" = w10."PortfolioId"
+                AND w10."PortfolioId" = w."PortfolioId"
+                AND w10."WorkspaceMembershipId" = m2."WorkspaceMembershipId"
+                AND w10."MembershipRoleAssignmentId" = m2."Id"
+                AND w10."EffectiveFromUtc" <= @utcNow
+                AND (w10."EffectiveToUtc" IS NULL OR w10."EffectiveToUtc" > @utcNow)
+            """);
+        AssertSqlContains(
+            technicianSql,
+            """
+            p."Id" = w."PropertyId" AND p."PortfolioId" = w."PortfolioId"
+            """);
+        AssertSqlContains(
+            technicianSql,
+            """
+            w."Title" ILIKE @pattern ESCAPE ''
+                OR p17."Name" ILIKE @pattern ESCAPE ''
+                OR (u0."Id" IS NOT NULL AND u0."UnitNumber" ILIKE @pattern ESCAPE '')
+            """);
+        AssertSqlContains(
+            technicianSql,
+            """
+            ORDER BY COALESCE(w."ScheduledFor", TIMESTAMPTZ 'infinity'), w."Title", w."Id"
+            LIMIT @p OFFSET @p
+            """);
 
-        // If the result failed, expose the error message to aid debugging.
-        result.Error.Should().BeNull("ScanService returned an error: " + result.Error);
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        result.CreatedEntityId.Should().Be(fixedExpenseId);
+        AssertPropertyAuthorizationShape(targetSql, "w0");
+        AssertSqlContains(
+            targetSql,
+            """
+            FROM "Properties" AS p
+            INNER JOIN (
+                SELECT u."Id", u."PortfolioId", u."PropertyId", u."UnitNumber"
+                FROM "Units" AS u
+                WHERE u."DeletedAt" IS NULL
+            ) AS u0 ON p."Id" = u0."PropertyId" AND p."PortfolioId" = u0."PortfolioId"
+            """);
+        AssertSqlContains(
+            targetSql,
+            """
+            p."Name" ILIKE @pattern ESCAPE ''
+                OR p."AddressLine1" ILIKE @pattern ESCAPE ''
+                OR u0."UnitNumber" ILIKE @pattern ESCAPE ''
+            """);
+        AssertSqlContains(
+            targetSql,
+            """
+            ORDER BY p."Name", u0."UnitNumber", u0."Id"
+            LIMIT @p OFFSET @p
+            """);
+    }
 
-        // Typed scalar columns + line items are threaded into the create request from the extraction.
-        _expenses.LastRequest.Should().NotBeNull();
-        _expenses.LastRequest!.PaymentMethod.Should().Be("Visa");
-        _expenses.LastRequest.CardLast4.Should().Be("4242");
-        _expenses.LastRequest.DocumentKind.Should().Be("Receipt");
-        _expenses.LastRequest.LineItems.Should().HaveCount(2);
-        var firstLine = _expenses.LastRequest.LineItems[0];
-        firstLine.Description.Should().Be("Washer hose");
-        firstLine.Quantity.Should().Be(2m);
-        firstLine.UnitPrice.Should().Be(6.50m);
-        firstLine.Amount.Should().Be(13.00m);
-        firstLine.LineNumber.Should().Be(1);
-        _expenses.LastRequest.LineItems[1].LineNumber.Should().Be(2);
+    private static void AssertPropertyAuthorizationShape(string sql, string membershipAlias)
+    {
+        AssertSqlContains(
+            sql,
+            """
+            FROM "AuthSessions" AS a
+            INNER JOIN (
+            """);
+        AssertSqlContains(
+            sql,
+            """
+            ) AS s ON a."ActiveAccessContextId" = s."Id" AND a."UserId" = s."UserId"
+            LEFT JOIN (
+            """);
+        AssertSqlContains(
+            sql,
+            $"""
+            FROM "WorkspaceMemberships" AS {membershipAlias}
+            INNER JOIN (
+            """);
+        AssertSqlContains(
+            sql,
+            """
+            ) AS s1 ON s."Id" = s1."AccessContextId"
+                AND s."PortfolioId" = s1."PortfolioId"
+            """);
+        AssertSqlContains(
+            sql,
+            """
+            a."Id" = @scope_SessionId
+                AND a."UserId" = @scope_UserId
+                AND a."ActiveAccessContextId" = @scope_AccessContextId
+                AND a."Status" = 'Active'
+                AND a."RevokedAtUtc" IS NULL
+                AND a."ExpiresAtUtc" > @utcNow
+                AND s."Id" = @scope_AccessContextId
+                AND s."UserId" = @scope_UserId
+                AND s."PortfolioId" = @scope_PortfolioId
+                AND s."AccessRevision" = @scope_AccessRevision
+                AND s."Status" = 'Active'
+                AND s."SuspendedAtUtc" IS NULL
+                AND s."RevokedAtUtc" IS NULL
+                AND s1."Id" IS NOT NULL
+                AND s1."PortfolioId" = p."PortfolioId"
+                AND s1."Status" = 'Active'
+                AND s1."SuspendedAtUtc" IS NULL
+                AND s1."RevokedAtUtc" IS NULL
+                AND s1."EffectiveFromUtc" <= @utcNow
+                AND (s1."EffectiveToUtc" IS NULL OR s1."EffectiveToUtc" > @utcNow)
+            """);
+        AssertSqlContains(
+            sql,
+            """
+            FROM "MembershipRoleAssignments" AS m
+            INNER JOIN (
+            """);
+        AssertSqlContains(
+            sql,
+            """
+            ) AS s3 ON m."WorkspaceMembershipId" = s3."Id"
+                AND m."PortfolioId" = s3."PortfolioId"
+            INNER JOIN "RoleProfiles" AS r ON m."RoleProfileId" = r."Id"
+            """);
+        AssertSqlContains(
+            sql,
+            """
+            s1."Id" = m."WorkspaceMembershipId"
+                AND s1."PortfolioId" = m."PortfolioId"
+                AND m."PortfolioId" = p."PortfolioId"
+                AND m."Status" = 'Active'
+                AND m."SuspendedAtUtc" IS NULL
+                AND m."RevokedAtUtc" IS NULL
+                AND m."EffectiveFromUtc" <= @utcNow
+                AND (m."EffectiveToUtc" IS NULL OR m."EffectiveToUtc" > @utcNow)
+            """);
+        AssertSqlContains(
+            sql,
+            """
+            FROM "RoleProfileCapabilities" AS r0
+            INNER JOIN "CapabilityDefinitions" AS c
+                ON r0."CapabilityDefinitionId" = c."Id"
+            WHERE r."Id" = r0."RoleProfileId"
+                AND c."Key" = ANY (@keys)
+                AND c."AuthorizationTargetKind" = 'Property'
+            """);
+        AssertSqlContains(
+            sql,
+            """
+            m."ScopeKind" = 'AllProperties'
+                OR (m."ScopeKind" = 'SelectedProperties' AND EXISTS (
+                SELECT 1
+                FROM "MembershipRoleAssignmentProperties" AS m0
+            """);
+        AssertSqlContains(
+            sql,
+            """
+            ) AS p7 ON m0."PropertyId" = p7."Id"
+                AND m0."PortfolioId" = p7."PortfolioId"
+            """);
+        AssertSqlContains(
+            sql,
+            """
+            m."Id" = m0."MembershipRoleAssignmentId"
+                AND m."PortfolioId" = m0."PortfolioId"
+                AND m0."PortfolioId" = p."PortfolioId"
+                AND m0."PropertyId" = p."Id"
+            """);
+    }
 
-        // Draft should be Confirmed. Query the DB directly via raw SQL on the shared connection,
-        // bypassing EF's change tracker entirely.
-        string? draftStatus;
-        {
-            using var cmd = _conn.CreateCommand();
-            cmd.CommandText = $"SELECT Status FROM ScanDrafts WHERE Id = {draft.Id}";
-            draftStatus = (string?)cmd.ExecuteScalar();
-        }
-        draftStatus.Should().Be("Confirmed");
+    private static void AssertSqlContains(string sql, string expected) =>
+        sql.Should().Contain(NormalizeSql(expected));
 
-        string? storedFileEntityType;
-        int? storedFileEntityId;
-        {
-            using var cmd = _conn.CreateCommand();
-            cmd.CommandText = $"SELECT EntityType, EntityId FROM StoredFiles WHERE Id = {file.Id}";
-            using var reader = cmd.ExecuteReader();
-            reader.Read();
-            storedFileEntityType = reader.IsDBNull(0) ? null : reader.GetString(0);
-            storedFileEntityId   = reader.IsDBNull(1) ? null : (int?)reader.GetInt32(1);
-        }
-        storedFileEntityType.Should().Be("Expense");
-        storedFileEntityId.Should().Be(fixedExpenseId);
-
-        // Audit log should have been called once with Created.
-        _audit.Calls.Should().HaveCount(1);
-        _audit.Calls[0].operation.Should().Be(AuditLogOperation.Created);
+    private static string NormalizeSql(string sql)
+    {
+        var normalizedParameters = Regex.Replace(
+            sql,
+            @"@([A-Za-z_]+)\d+\b",
+            "@$1",
+            RegexOptions.CultureInvariant,
+            TimeSpan.FromSeconds(1));
+        return Regex.Replace(
+                normalizedParameters,
+                @"\s+",
+                " ",
+                RegexOptions.CultureInvariant,
+                TimeSpan.FromSeconds(1))
+            .Trim();
     }
 
     [Fact]
-    public async Task ConfirmAndCreateAsync_ReviewingExpenseDraft_WithExistingVendorName_LinksVendor()
+    public async Task PrepareConfirmationAsync_AppliesReviewedOverridesIntoSealedExpenseCommand()
     {
-        const string extractedJson =
-            """{"vendor_name":{"value":"clearline plumbing","confidence":0.92},"amount":{"value":"286.45","confidence":0.9},"transaction_date":{"value":"2026-06-22","confidence":0.9},"document_kind":{"value":"Receipt","confidence":0.9}}""";
+        var draft = SeedDraft(
+            "Reviewing",
+            """{"vendor_name":{"value":"ACME","confidence":0.9},"total":{"value":"42.50","confidence":0.9}}""");
 
-        var now = DateTime.UtcNow;
-        var vendor = new Vendor
-        {
-            PortfolioId = PortfolioId,
-            Name = "Clearline Plumbing",
-            ServiceType = "Plumbing",
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-        _db.Vendors.Add(vendor);
-        await _db.SaveChangesAsync();
-
-        var draft = SeedDraft("Reviewing", extractedJson);
-        SeedStoredFile(draft.FilePath);
-        _expenses.SetupResponse(new ExpenseResponse { Id = 100, PortfolioId = PortfolioId });
-
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
-
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        _expenses.LastRequest.Should().NotBeNull();
-        _expenses.LastRequest!.VendorId.Should().Be(vendor.Id);
-    }
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_ReviewingExpenseDraft_WithNewVendorName_CreatesAndLinksVendor()
-    {
-        const string extractedJson =
-            """{"vendor_name":{"value":"Franklin Hardware Supply","confidence":0.94},"vendor_phone":{"value":"614-555-0188","confidence":0.86},"vendor_website":{"value":"https://franklin.example.test","confidence":0.82},"vendor_tax_id":{"value":"12-3456789","confidence":0.81},"amount":{"value":"60.94","confidence":0.95},"transaction_date":{"value":"2026-07-03","confidence":0.9},"document_kind":{"value":"Receipt","confidence":0.9}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson);
-        SeedStoredFile(draft.FilePath);
-        _expenses.SetupResponse(new ExpenseResponse { Id = 102, PortfolioId = PortfolioId });
-
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
-
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-
-        var vendor = await _db.Vendors.AsNoTracking().SingleAsync(v => v.PortfolioId == PortfolioId);
-        vendor.Name.Should().Be("Franklin Hardware Supply");
-        vendor.ServiceType.Should().Be("General");
-        vendor.Phone.Should().Be("614-555-0188");
-        vendor.Website.Should().Be("https://franklin.example.test");
-        vendor.TaxId.Should().Be("12-3456789");
-
-        _expenses.LastRequest.Should().NotBeNull();
-        _expenses.LastRequest!.VendorId.Should().Be(vendor.Id);
-        _expenses.LastRequest.Description.Should().Be("Franklin Hardware Supply");
-    }
-
-    // -------------------------------------------------------------------------
-    // Confirm: overrides win
-    // -------------------------------------------------------------------------
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_WithAmountOverride_UsesOverrideAmount()
-    {
-        const string extractedJson =
-            """{"vendor_name":{"value":"Old Vendor","confidence":0.5},"amount":{"value":"10.00","confidence":0.5},"transaction_date":{"value":"2026-01-01","confidence":0.5},"category":{"value":"Other","confidence":0.5},"notes":{"value":"","confidence":0.0}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson);
-        SeedStoredFile(draft.FilePath);
-
-        _expenses.SetupResponse(new ExpenseResponse { Id = 55, PortfolioId = PortfolioId });
-
-        var overrides = """{"amount":99.99}""";
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 1, overridesJson: overrides);
-
-        result.Success.Should().BeTrue();
-
-        // The request that reached IExpenseService should have the overridden amount.
-        _expenses.LastRequest.Should().NotBeNull();
-        _expenses.LastRequest!.Amount.Should().Be(99.99m);
-    }
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_ExpenseDraft_WithUnitAndWorkOrderOverrides_PassesAssociationsToExpenseCreate()
-    {
-        const string extractedJson =
-            """{"vendor_name":{"value":"ComfortZone HVAC","confidence":0.9},"amount":{"value":"232.50","confidence":0.9},"transaction_date":{"value":"2026-06-22","confidence":0.9},"category":{"value":"Repairs","confidence":0.8},"document_kind":{"value":"Receipt","confidence":0.9}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson);
-        SeedStoredFile(draft.FilePath);
-        _expenses.SetupResponse(new ExpenseResponse { Id = 101, PortfolioId = PortfolioId });
-
-        var overrides = """{"propertyId":10,"unitId":20,"workOrderId":30}""";
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: overrides);
-
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        _expenses.LastRequest.Should().NotBeNull();
-        _expenses.LastRequest!.PropertyId.Should().Be(10);
-        _expenses.LastRequest.UnitId.Should().Be(20);
-        _expenses.LastRequest.WorkOrderId.Should().Be(30);
-    }
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_ExpenseDraft_WithSelectedPropertyAndUnitInNotes_GroundsUnit()
-    {
-        SeedPropertyAndUnit();
-
-        const string extractedJson =
-            """{"vendor_name":{"value":"Green Thumb Landscaping","confidence":0.99},"total":{"value":"63.75","confidence":0.99},"transaction_date":{"value":"2026-02-02","confidence":0.95},"document_kind":{"value":"Receipt","confidence":0.9},"notes":{"value":"Property: Maple Court, Unit 1. Lease reference: QA-2026-001.","confidence":0.97}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson);
-        SeedStoredFile(draft.FilePath);
-        _expenses.SetupResponse(new ExpenseResponse { Id = 103, PortfolioId = PortfolioId });
-
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: """{"propertyId":10}""");
-
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        _expenses.LastRequest.Should().NotBeNull();
-        _expenses.LastRequest!.PropertyId.Should().Be(10);
-        _expenses.LastRequest.UnitId.Should().Be(20);
-    }
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_ExpenseDraft_WithCategoryLabel_MapsScheduleECategory()
-    {
-        const string extractedJson =
-            """{"vendor_name":{"value":"Green Thumb Landscaping","confidence":0.99},"total":{"value":"63.75","confidence":0.99},"transaction_date":{"value":"2026-02-02","confidence":0.95},"document_kind":{"value":"Receipt","confidence":0.9},"category":{"value":"Repairs & maintenance","confidence":0.9}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson);
-        SeedStoredFile(draft.FilePath);
-        _expenses.SetupResponse(new ExpenseResponse { Id = 104, PortfolioId = PortfolioId });
-
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
-
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        _expenses.LastRequest.Should().NotBeNull();
-        _expenses.LastRequest!.Category.Should().Be(ScheduleECategory.Repairs);
-    }
-
-    // -------------------------------------------------------------------------
-    // Confirm: snake_case vendor/date overrides are honored (regression guard)
-    // The review UI keys edits by the extraction field names (vendor_name,
-    // transaction_date); ApplyOverrides must apply them or a corrected vendor/date
-    // is silently dropped — the exact trust-breaking bug for this human gate.
-    // -------------------------------------------------------------------------
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_WithSnakeCaseVendorAndDateOverrides_AppliesThem()
-    {
-        const string extractedJson =
-            """{"vendor_name":{"value":"Old Vendor","confidence":0.4},"amount":{"value":"10.00","confidence":0.9},"transaction_date":{"value":"2026-01-01","confidence":0.4},"category":{"value":"Other","confidence":0.9},"notes":{"value":"","confidence":0.0}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson);
-        SeedStoredFile(draft.FilePath);
-        _expenses.SetupResponse(new ExpenseResponse { Id = 77, PortfolioId = PortfolioId });
-
-        var overrides = """{"vendor_name":"Corrected Vendor","transaction_date":"2026-03-20"}""";
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 2, overridesJson: overrides);
-
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        _expenses.LastRequest.Should().NotBeNull();
-        _expenses.LastRequest!.Description.Should().Be("Corrected Vendor");
-        _expenses.LastRequest.IncurredAt.Should().Be(new DateTime(2026, 3, 20, 0, 0, 0, DateTimeKind.Utc));
-    }
-
-    // -------------------------------------------------------------------------
-    // Confirm: edited line items win over the extracted ones (TSK-29).
-    // The review UI now makes the line-items table editable and sends the full
-    // edited array under "line_items"; the persisted Expense must carry the edited
-    // rows (re-numbered 1..n), not the originally extracted ones.
-    // -------------------------------------------------------------------------
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_WithEditedLineItemsOverride_PersistsEditedItems()
-    {
-        // Extraction found two rows; the reviewer corrects them down to a single edited row.
-        const string extractedJson =
-            """{"vendor_name":{"value":"ACME","confidence":0.9},"amount":{"value":"42.50","confidence":0.8},"line_items":{"value":"[{\"description\":\"Washer hose\",\"quantity\":2,\"unit_price\":6.50,\"amount\":13.00},{\"description\":\"Pipe tape\",\"amount\":3.00}]","confidence":0.7}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson);
-        SeedStoredFile(draft.FilePath);
-        _expenses.SetupResponse(new ExpenseResponse { Id = 88, PortfolioId = PortfolioId });
-
-        // The web sends the edited rows as a real JSON array (snake_case item keys).
-        var overrides =
-            """{"line_items":[{"description":"Corrected hose","quantity":3,"unit_price":7.00,"amount":21.00}]}""";
-
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 4, overridesJson: overrides);
-
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        _expenses.LastRequest.Should().NotBeNull();
-        _expenses.LastRequest!.LineItems.Should().HaveCount(1);
-        var line = _expenses.LastRequest.LineItems[0];
-        line.Description.Should().Be("Corrected hose");
-        line.Quantity.Should().Be(3m);
-        line.UnitPrice.Should().Be(7.00m);
-        line.Amount.Should().Be(21.00m);
-        line.LineNumber.Should().Be(1);
-    }
-
-    // Clearing every row in the editable table sends an empty "line_items" array,
-    // which must remove the extracted rows entirely (not silently keep them).
-    [Fact]
-    public async Task ConfirmAndCreateAsync_WithEmptyLineItemsOverride_PersistsNoItems()
-    {
-        const string extractedJson =
-            """{"vendor_name":{"value":"ACME","confidence":0.9},"amount":{"value":"42.50","confidence":0.8},"line_items":{"value":"[{\"description\":\"Washer hose\",\"quantity\":2,\"unit_price\":6.50,\"amount\":13.00}]","confidence":0.7}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson);
-        SeedStoredFile(draft.FilePath);
-        _expenses.SetupResponse(new ExpenseResponse { Id = 89, PortfolioId = PortfolioId });
-
-        var result = await _sut.ConfirmAndCreateAsync(
-            PortfolioId, draft.Id, userId: 4, overridesJson: """{"line_items":[]}""");
-
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        _expenses.LastRequest.Should().NotBeNull();
-        _expenses.LastRequest!.LineItems.Should().BeEmpty();
-    }
-
-    // -------------------------------------------------------------------------
-    // Confirm: already confirmed draft returns failure (idempotency guard)
-    // -------------------------------------------------------------------------
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_AlreadyConfirmed_ReturnsFalse()
-    {
-        var draft = SeedDraft("Confirmed", extractedFields: null);
-
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 1, overridesJson: "{}");
-
-        result.Success.Should().BeFalse();
-        result.Error.Should().NotBeNullOrWhiteSpace();
-        _expenses.LastRequest.Should().BeNull(); // expense service was never called
-    }
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_ReviewingWorkOrderDraft_CreatesWorkOrder()
-    {
-        const string extractedJson =
-            """{"target_entity_type":{"value":"WorkOrder","confidence":0.9},"property_id":{"value":"10","confidence":0.9},"unit_id":{"value":"20","confidence":0.7},"title":{"value":"Ceiling leak","confidence":0.9},"description":{"value":"Tenant says water is coming through the kitchen ceiling.","confidence":0.85},"category":{"value":"Plumbing","confidence":0.8},"priority":{"value":"Emergency","confidence":0.8},"estimated_cost":{"value":"250.00","confidence":0.4}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "WorkOrder");
-        SeedStoredFile(draft.FilePath);
-        // The extracted property_id/unit_id are now re-validated against real in-portfolio rows
-        // (a hallucinated/cross-portfolio id is dropped to manual selection), so the grounded ids
-        // the draft carries must correspond to actual rows in this portfolio.
-        _db.Properties.Add(new Property
-        {
-            Id = 10,
-            PortfolioId = PortfolioId,
-            Name = "Maple Court",
-            AddressLine1 = "10 Maple Ct",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43215",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.Units.Add(new Unit
-        {
-            Id = 20,
-            PropertyId = 10,
-            UnitNumber = "1",
-            Bedrooms = 2,
-            Bathrooms = 1,
-            MarketRent = 1200m,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.SaveChanges();
-        _workOrders.SetupResponse(new WorkOrderResponse { Id = 123, PortfolioId = PortfolioId });
-
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
-
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        result.EntityType.Should().Be("WorkOrder");
-        result.CreatedEntityId.Should().Be(123);
-        _workOrders.LastRequest.Should().NotBeNull();
-        _workOrders.LastRequest!.PropertyId.Should().Be(10);
-        _workOrders.LastRequest.UnitId.Should().Be(20);
-        _workOrders.LastRequest.Title.Should().Be("Ceiling leak");
-        _workOrders.LastRequest.Description.Should().Contain("kitchen ceiling");
-        _workOrders.LastRequest.Category.Should().Be("Plumbing");
-        _workOrders.LastRequest.Priority.Should().Be(WorkOrderPriority.Emergency);
-        _workOrders.LastRequest.EstimatedCost.Should().Be(250.00m);
-
-        string? draftStatus;
-        using (var cmd = _conn.CreateCommand())
-        {
-            cmd.CommandText = $"SELECT Status FROM ScanDrafts WHERE Id = {draft.Id}";
-            draftStatus = (string?)cmd.ExecuteScalar();
-        }
-        draftStatus.Should().Be("Confirmed");
-        _audit.Calls.Should().Contain(c => c.entityType == "WorkOrder" && c.entityId == 123);
-    }
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_ReviewingWorkOrderDraft_WithSelectedPropertyAndUnitInDescription_GroundsUnit()
-    {
-        _db.Properties.Add(new Property
-        {
-            Id = 10,
-            PortfolioId = PortfolioId,
-            Name = "Summit Row",
-            AddressLine1 = "66 Northline Pkwy",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43207",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.Units.Add(new Unit
-        {
-            Id = 20,
-            PropertyId = 10,
-            UnitNumber = "4D",
-            Bedrooms = 3,
-            Bathrooms = 2,
-            MarketRent = 1650m,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.SaveChanges();
-
-        const string extractedJson =
-            """{"title":{"value":"Toilet runs continuously","confidence":0.9},"description":{"value":"Tenant reports the toilet runs continuously at Unit 4D and requests weekday afternoon entry.","confidence":0.9},"category":{"value":"Plumbing","confidence":0.8},"priority":{"value":"Normal","confidence":0.8}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "WorkOrder");
-        SeedStoredFile(draft.FilePath);
-        _workOrders.SetupResponse(new WorkOrderResponse { Id = 124, PortfolioId = PortfolioId });
-
-        var result = await _sut.ConfirmAndCreateAsync(
+        var result = await _sut.PrepareConfirmationAsync(
             PortfolioId,
             draft.Id,
             userId: 7,
-            overridesJson: """{"propertyId":10}""");
+            overridesJson: """{"vendor_name":"Reviewed Vendor","total":55.25,"is_paid":false,"propertyId":10}""");
 
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        _workOrders.LastRequest.Should().NotBeNull();
-        _workOrders.LastRequest!.PropertyId.Should().Be(10);
-        _workOrders.LastRequest.UnitId.Should().Be(20);
+        result.Outcome.Should().Be(ScanConfirmationPreparationOutcome.Ready);
+        result.Command.Should().NotBeNull();
+        var command = result.Command!;
+        command.PortfolioId.Should().Be(PortfolioId);
+        command.DraftId.Should().Be(draft.Id);
+        command.ConfirmedByUserId.Should().Be(7);
+        command.ExpectedDraftFingerprint.Should().Be(
+            ScanConfirmationDraftFingerprint.Create("Expense", null, draft.ExtractedFields));
+        command.Target.Kind.Should().Be(ScanConfirmationTargetKind.Expense);
+        command.Target.Expense.Should().NotBeNull();
+        command.Target.Expense!.Receipt.VendorName.Should().Be("Reviewed Vendor");
+        command.Target.Expense.Receipt.Total.Should().Be(55.25m);
+        command.Target.Expense.IsPaid.Should().BeFalse();
+        command.Target.Expense.PropertyId.Should().Be(10);
     }
 
-    // -------------------------------------------------------------------------
-    // Confirm: a scanned lease document becomes a Lease with the extracted terms, the unit
-    // linked, and a chained Tenant created from the extracted name (the "import your
-    // PDF leases" migration unlock).
-    // -------------------------------------------------------------------------
-
     [Fact]
-    public async Task ConfirmAndCreateAsync_ReviewingLeaseDraft_CreatesLeaseWithTermsAndChainsTenant()
+    public async Task PrepareConfirmationAsync_LeaseTarget_SealsCanonicalExecutedImportChoice()
     {
-        const string extractedJson =
-            """{"target_entity_type":{"value":"Lease","confidence":0.95},"tenant_name":{"value":"Marcus Williams","confidence":0.9},"property_id":{"value":"10","confidence":0.9},"unit_id":{"value":"20","confidence":0.85},"lease_number":{"value":"L-2026-7","confidence":0.8},"start_date":{"value":"2026-01-01","confidence":0.9},"end_date":{"value":"2026-12-31","confidence":0.9},"monthly_rent":{"value":"1450.00","confidence":0.9},"security_deposit":{"value":"1450.00","confidence":0.8},"late_fee":{"value":"75.00","confidence":0.7},"rent_due_day":{"value":"1","confidence":0.8}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Lease");
-        SeedStoredFile(draft.FilePath);
-        SeedPropertyAndUnit();
-        _leases.SetupResponse(new LeaseResponse { Id = 321, PortfolioId = PortfolioId });
-
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
-
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        result.EntityType.Should().Be("Lease");
-        result.CreatedEntityId.Should().Be(321);
-
-        _leases.LastRequest.Should().NotBeNull();
-        var req = _leases.LastRequest!;
-        req.PropertyId.Should().Be(10);
-        req.UnitId.Should().Be(20);
-        req.LeaseNumber.Should().Be("L-2026-7");
-        req.StartDate.Should().Be(new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
-        req.EndDate.Should().Be(new DateTime(2026, 12, 31, 0, 0, 0, DateTimeKind.Utc));
-        req.MonthlyRent.Should().Be(1450.00m);
-        req.SecurityDeposit.Should().Be(1450.00m);
-        req.LateFeeAmount.Should().Be(75.00m);
-        req.RentDueDay.Should().Be(1);
-        req.RentTrackingStartMode.Should().Be(RentTrackingStartMode.ForwardOnly);
-        req.Status.Should().Be(LeaseStatus.Active);
-        req.Notes.Should().Be("Imported from scanned lease document.");
-
-        // A chained Tenant was created from the extracted name and its id linked on the lease.
-        _tenants.LastRequest.Should().NotBeNull();
-        _tenants.LastRequest!.FirstName.Should().Be("Marcus");
-        _tenants.LastRequest.LastName.Should().Be("Williams");
-        var createdTenant = await _db.Tenants.FirstOrDefaultAsync(t => t.PortfolioId == PortfolioId);
-        createdTenant.Should().NotBeNull();
-        req.TenantId.Should().Be(createdTenant!.Id);
-
-        // Draft confirmed + source document re-keyed to the lease.
-        string? draftStatus;
-        using (var cmd = _conn.CreateCommand())
+        var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "LeaseAgreement");
+        _db.Users.Add(new ApplicationUser
         {
-            cmd.CommandText = $"SELECT Status FROM ScanDrafts WHERE Id = {draft.Id}";
-            draftStatus = (string?)cmd.ExecuteScalar();
-        }
-        draftStatus.Should().Be("Confirmed");
-        _audit.Calls.Should().Contain(c => c.entityType == "Lease" && c.entityId == 321);
-    }
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_ReviewingLeaseDraft_WithRentTrackingOverrides_PassesRentTrackingRequest()
-    {
-        const string extractedJson =
-            """{"target_entity_type":{"value":"Lease","confidence":0.95},"tenant_name":{"value":"Marcus Williams","confidence":0.9},"property_id":{"value":"10","confidence":0.9},"unit_id":{"value":"20","confidence":0.85},"lease_number":{"value":"L-2026-7","confidence":0.8},"start_date":{"value":"2026-01-01","confidence":0.9},"end_date":{"value":"2026-12-31","confidence":0.9},"monthly_rent":{"value":"1450.00","confidence":0.9},"security_deposit":{"value":"1450.00","confidence":0.8},"late_fee":{"value":"75.00","confidence":0.7},"rent_due_day":{"value":"1","confidence":0.8}}""";
-        const string overridesJson =
-            """{"rentTrackingStartMode":"CustomCutoffDate","rentTrackingStartDate":"2026-05-01"}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Lease");
-        SeedStoredFile(draft.FilePath);
-        SeedPropertyAndUnit();
-        _leases.SetupResponse(new LeaseResponse { Id = 321, PortfolioId = PortfolioId });
-
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson);
-
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        _leases.LastRequest.Should().NotBeNull();
-        _leases.LastRequest!.RentTrackingStartMode.Should().Be(RentTrackingStartMode.CustomCutoffDate);
-        _leases.LastRequest.RentTrackingStartDate.Should().Be(new DateTime(2026, 5, 1, 0, 0, 0, DateTimeKind.Utc));
-    }
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_ReviewingLeaseDraft_WithOpeningBalanceOverrides_PassesOpeningBalanceRequest()
-    {
-        const string extractedJson =
-            """{"target_entity_type":{"value":"Lease","confidence":0.95},"tenant_name":{"value":"Marcus Williams","confidence":0.9},"property_id":{"value":"10","confidence":0.9},"unit_id":{"value":"20","confidence":0.85},"lease_number":{"value":"L-2026-8","confidence":0.8},"start_date":{"value":"2026-01-01","confidence":0.9},"end_date":{"value":"2026-12-31","confidence":0.9},"monthly_rent":{"value":"1450.00","confidence":0.9},"security_deposit":{"value":"1450.00","confidence":0.8},"late_fee":{"value":"75.00","confidence":0.7},"rent_due_day":{"value":"1","confidence":0.8}}""";
-        const string overridesJson =
-            """{"rentTrackingStartMode":"OpeningBalanceOnly","openingBalanceAmount":2900.00,"openingBalanceAsOfDate":"2026-06-30","openingBalanceNote":"Imported current balance"}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Lease");
-        SeedStoredFile(draft.FilePath);
-        SeedPropertyAndUnit();
-        _leases.SetupResponse(new LeaseResponse { Id = 321, PortfolioId = PortfolioId });
-
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson);
-
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        _leases.LastRequest.Should().NotBeNull();
-        _leases.LastRequest!.RentTrackingStartMode.Should().Be(RentTrackingStartMode.OpeningBalanceOnly);
-        _leases.LastRequest.OpeningBalanceAmount.Should().Be(2900.00m);
-        _leases.LastRequest.OpeningBalanceAsOfDate.Should().Be(new DateTime(2026, 6, 30, 0, 0, 0, DateTimeKind.Utc));
-        _leases.LastRequest.OpeningBalanceNote.Should().Be("Imported current balance");
-    }
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_LeaseDraftWithExistingTenantNameMatch_ReusesTenant()
-    {
-        // Seed an existing tenant whose full name matches the extracted name (case-insensitive).
-        _db.Tenants.Add(new Tenant
-        {
-            Id = 50,
-            PortfolioId = PortfolioId,
-            FirstName = "Marcus",
-            LastName = "Williams",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
+            Id = 7,
+            UserName = "scan-reviewer@example.test",
+            NormalizedUserName = "SCAN-REVIEWER@EXAMPLE.TEST",
+            Email = "scan-reviewer@example.test",
+            NormalizedEmail = "SCAN-REVIEWER@EXAMPLE.TEST",
+            DisplayName = "Scan Reviewer",
         });
-        _db.SaveChanges();
-
-        const string extractedJson =
-            """{"tenant_name":{"value":"marcus williams","confidence":0.9},"property_id":{"value":"10","confidence":0.9},"unit_id":{"value":"20","confidence":0.85},"start_date":{"value":"2026-01-01","confidence":0.9},"end_date":{"value":"2026-12-31","confidence":0.9},"monthly_rent":{"value":"1450.00","confidence":0.9}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Lease");
-        SeedStoredFile(draft.FilePath);
-        SeedPropertyAndUnit();
-        _leases.SetupResponse(new LeaseResponse { Id = 322, PortfolioId = PortfolioId });
-
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
-
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        _leases.LastRequest!.TenantId.Should().Be(50);
-        // No new tenant was created — the existing one was matched.
-        _tenants.LastRequest.Should().BeNull();
-        (await _db.Tenants.CountAsync(t => t.PortfolioId == PortfolioId)).Should().Be(1);
-    }
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_LeaseDraftWithTenantContactOverrides_PersistsCreatedTenantContact()
-    {
-        const string extractedJson =
-            """{"tenant_name":{"value":"Maria Chen","confidence":0.9},"property_id":{"value":"10","confidence":0.9},"unit_id":{"value":"20","confidence":0.85},"start_date":{"value":"2026-06-01","confidence":0.9},"end_date":{"value":"2027-05-31","confidence":0.9},"monthly_rent":{"value":"1500.00","confidence":0.9}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Lease");
-        SeedStoredFile(draft.FilePath);
-        SeedPropertyAndUnit();
-        _leases.SetupResponse(new LeaseResponse { Id = 324, PortfolioId = PortfolioId });
-
-        var overrides = """
-            {
-                "tenantEmail": "maria.chen@example.local",
-                "tenantPhone": "555-010-3970",
-                "tenantEmergencyContact": "Sam Chen 555-010-3971"
-            }
-            """;
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: overrides);
-
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        _tenants.LastRequest.Should().NotBeNull();
-        _tenants.LastRequest!.Email.Should().Be("maria.chen@example.local");
-        _tenants.LastRequest.Phone.Should().Be("555-010-3970");
-        _tenants.LastRequest.EmergencyContact.Should().Be("Sam Chen 555-010-3971");
-
-        var createdTenant = await _db.Tenants.SingleAsync(t => t.PortfolioId == PortfolioId);
-        createdTenant.Email.Should().Be("maria.chen@example.local");
-        createdTenant.Phone.Should().Be("555-010-3970");
-        createdTenant.EmergencyContact.Should().Be("Sam Chen 555-010-3971");
-        _leases.LastRequest!.TenantId.Should().Be(createdTenant.Id);
-    }
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_LeaseDraftWithNullUnitOverride_CreatesReviewerEditedUnit()
-    {
-        const string extractedJson =
-            """{"tenant_name":{"value":"Lena Park","confidence":0.9},"property_id":{"value":"10","confidence":0.9},"unit_id":{"value":"20","confidence":0.85},"unit_number":{"value":"1","confidence":0.85},"start_date":{"value":"2026-06-01","confidence":0.9},"end_date":{"value":"2027-05-31","confidence":0.9},"monthly_rent":{"value":"1500.00","confidence":0.9}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Lease");
-        SeedStoredFile(draft.FilePath);
-        SeedPropertyAndUnit();
-        _leases.SetupResponse(new LeaseResponse { Id = 325, PortfolioId = PortfolioId });
-
-        var overrides = """
-            {
-                "propertyId": 10,
-                "unitId": null,
-                "unitNumber": "5C",
-                "unitBedrooms": 2,
-                "unitBathrooms": 1.5,
-                "tenantName": "Lena Park",
-                "tenantEmail": "lena.park@example.local",
-                "tenantPhone": "555-010-3972",
-                "tenantEmergencyContact": "Noah Park 555-010-3973",
-                "leaseNumber": "L-5C-2026-06"
-            }
-            """;
-
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: overrides);
-
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        var reviewerUnit = await _db.Units.SingleAsync(u => u.UnitNumber == "5C");
-        reviewerUnit.PropertyId.Should().Be(10);
-        reviewerUnit.Bedrooms.Should().Be(2m);
-        reviewerUnit.Bathrooms.Should().Be(1.5m);
-        _leases.LastRequest.Should().NotBeNull();
-        _leases.LastRequest!.UnitId.Should().Be(reviewerUnit.Id);
-        _leases.LastRequest.UnitId.Should().NotBe(20);
-        _leases.LastRequest.LeaseNumber.Should().Be("L-5C-2026-06");
-        _tenants.LastRequest!.Email.Should().Be("lena.park@example.local");
-    }
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_LeaseDraftWithForeignPropertyId_IsRejected()
-    {
-        // property_id 999 is NOT in this portfolio: it must be dropped to 0 (IDOR guard), and with no
-        // override property the confirm fails rather than linking a foreign property.
-        const string extractedJson =
-            """{"tenant_name":{"value":"Jane Doe","confidence":0.9},"property_id":{"value":"999","confidence":0.9},"unit_id":{"value":"20","confidence":0.85},"start_date":{"value":"2026-01-01","confidence":0.9},"end_date":{"value":"2026-12-31","confidence":0.9},"monthly_rent":{"value":"1000.00","confidence":0.9}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Lease");
-        SeedStoredFile(draft.FilePath);
-        SeedPropertyAndUnit();
-        _leases.SetupResponse(new LeaseResponse { Id = 999, PortfolioId = PortfolioId });
-
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
-
-        result.Success.Should().BeFalse();
-        result.Error.Should().Contain("property");
-        _leases.LastRequest.Should().BeNull(); // lease service was never called
-    }
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_LeaseDraftWithOverrideTenantId_UsesOverrideTenant()
-    {
-        // A tenant the reviewer selected via overrides wins; it must be validated in-portfolio.
-        _db.Tenants.Add(new Tenant
-        {
-            Id = 60,
-            PortfolioId = PortfolioId,
-            FirstName = "Selected",
-            LastName = "Tenant",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.SaveChanges();
-
-        const string extractedJson =
-            """{"tenant_name":{"value":"Someone Else","confidence":0.9},"property_id":{"value":"10","confidence":0.9},"unit_id":{"value":"20","confidence":0.85},"start_date":{"value":"2026-01-01","confidence":0.9},"end_date":{"value":"2026-12-31","confidence":0.9},"monthly_rent":{"value":"1200.00","confidence":0.9}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Lease");
-        SeedStoredFile(draft.FilePath);
-        SeedPropertyAndUnit();
-        _leases.SetupResponse(new LeaseResponse { Id = 323, PortfolioId = PortfolioId });
-
-        var result = await _sut.ConfirmAndCreateAsync(
-            PortfolioId, draft.Id, userId: 7, overridesJson: """{"tenantId":60}""");
-
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        _leases.LastRequest!.TenantId.Should().Be(60);
-        // The override tenant was used, so no chained tenant was created.
-        _tenants.LastRequest.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_LeaseDraftWithPropertyTypeOverride_CreatesPropertyWithSelectedType()
-    {
-        const string extractedJson =
-            """
-            {"target_entity_type":{"value":"Lease","confidence":0.95},
-             "tenant_name":{"value":"Taylor Stone","confidence":0.9},
-             "property_name":{"value":"Cedar House","confidence":0.7},
-             "property_address":{"value":"44 Cedar Ave","confidence":0.9},
-             "property_city":{"value":"Dayton","confidence":0.9},
-             "property_state":{"value":"OH","confidence":0.9},
-             "property_postal_code":{"value":"45402","confidence":0.9},
-             "unit_number":{"value":"Main","confidence":0.85},
-             "start_date":{"value":"2026-04-01","confidence":0.9},
-             "end_date":{"value":"2027-03-31","confidence":0.9},
-             "monthly_rent":{"value":"1450.00","confidence":0.9}}
-            """;
-
-        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Lease");
-        SeedStoredFile(draft.FilePath);
-        _leases.SetupResponse(new LeaseResponse { Id = 903, PortfolioId = PortfolioId });
-
-        var result = await _sut.ConfirmAndCreateAsync(
-            PortfolioId,
-            draft.Id,
-            userId: 7,
-            overridesJson: """{"propertyType":"SingleFamily"}""");
-
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        _properties.LastRequest!.PropertyType.Should().Be(PropertyType.SingleFamily);
-
-        var property = await _db.Properties.SingleAsync();
-        property.PropertyType.Should().Be(PropertyType.SingleFamily);
-    }
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_LeaseDomainValidation_ReturnsSpecificUserMessage()
-    {
-        const string error =
-            "This unit already has an active lease (QA-2026-006-2B) overlapping these dates.";
-        const string extractedJson =
-            """{"tenant_name":{"value":"Riley Patel","confidence":0.9},"property_id":{"value":"10","confidence":0.9},"unit_id":{"value":"20","confidence":0.85},"lease_number":{"value":"L-2026-8","confidence":0.8},"start_date":{"value":"2026-02-01","confidence":0.9},"end_date":{"value":"2027-02-01","confidence":0.9},"monthly_rent":{"value":"1200.00","confidence":0.9}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Lease");
-        SeedStoredFile(draft.FilePath);
-        SeedPropertyAndUnit();
-        _leases.ThrowOnCreate(new DomainValidationException(error));
-
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
-
-        result.Success.Should().BeFalse();
-        result.Error.Should().Be(error);
-    }
-
-    // -------------------------------------------------------------------------
-    // Scan-import bootstrap (the load-bearing invariant): scanning a lease into an EMPTY
-    // portfolio creates Property → Unit → Tenant → Lease from the document; a SECOND scan
-    // for the same address links to the existing Property/Unit rather than duplicating them.
-    // -------------------------------------------------------------------------
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_LeaseIntoEmptyPortfolio_CreatesPropertyUnitTenantAndLease_ThenDedupesOnRescan()
-    {
-        // No property_id / unit_id — a brand-new landlord with an EMPTY portfolio. The leased premises
-        // (address + unit) and the tenant come straight off the document.
-        const string extractedJson =
-            """
-            {"target_entity_type":{"value":"Lease","confidence":0.95},
-             "tenant_name":{"value":"Dana Brooks","confidence":0.9},
-             "property_name":{"value":"Riverside Flats","confidence":0.7},
-             "property_address":{"value":"742 Evergreen St","confidence":0.9},
-             "property_city":{"value":"Springfield","confidence":0.9},
-             "property_state":{"value":"OH","confidence":0.9},
-             "property_postal_code":{"value":"45503","confidence":0.9},
-             "unit_number":{"value":"3C","confidence":0.85},
-             "unit_bedrooms":{"value":"2","confidence":0.7},
-             "unit_bathrooms":{"value":"1.5","confidence":0.7},
-             "start_date":{"value":"2026-02-01","confidence":0.9},
-             "end_date":{"value":"2027-01-31","confidence":0.9},
-             "monthly_rent":{"value":"1325.00","confidence":0.9}}
-            """;
-
-        var draft1 = SeedDraft("Reviewing", extractedJson, targetEntityType: "Lease");
-        SeedStoredFile(draft1.FilePath);
-        _leases.SetupResponse(new LeaseResponse { Id = 901, PortfolioId = PortfolioId });
-
-        // Sanity: the portfolio really is empty before the scan.
-        (await _db.Properties.CountAsync()).Should().Be(0);
-        (await _db.Units.CountAsync()).Should().Be(0);
-        (await _db.Tenants.CountAsync()).Should().Be(0);
-
-        var result1 = await _sut.ConfirmAndCreateAsync(PortfolioId, draft1.Id, userId: 5, overridesJson: "{}");
-
-        result1.Success.Should().BeTrue("Unexpected: " + result1.Error);
-        result1.EntityType.Should().Be("Lease");
-
-        // A Property, a Unit, and a Tenant were all created from the document.
-        var property = await _db.Properties.SingleAsync();
-        property.AddressLine1.Should().Be("742 Evergreen St");
-        property.City.Should().Be("Springfield");
-        property.State.Should().Be("OH");
-        property.PostalCode.Should().Be("45503");
-        property.Name.Should().Be("Riverside Flats");
-        property.Notes.Should().Be("Created from scanned lease document.");
-
-        var unit = await _db.Units.SingleAsync();
-        unit.PropertyId.Should().Be(property.Id);
-        unit.UnitNumber.Should().Be("3C");
-        unit.Bedrooms.Should().Be(2m);
-        unit.Bathrooms.Should().Be(1.5m);
-        unit.Notes.Should().Be("Created from scanned lease document.");
-
-        var tenant = await _db.Tenants.SingleAsync();
-        tenant.FirstName.Should().Be("Dana");
-        tenant.LastName.Should().Be("Brooks");
-        tenant.Notes.Should().Be("Created from scanned lease document.");
-
-        // The Lease that was created links the freshly-created property, unit, and tenant.
-        var leaseReq1 = _leases.LastRequest!;
-        leaseReq1.PropertyId.Should().Be(property.Id);
-        leaseReq1.UnitId.Should().Be(unit.Id);
-        leaseReq1.TenantId.Should().Be(tenant.Id);
-        leaseReq1.MonthlyRent.Should().Be(1325.00m);
-        leaseReq1.Notes.Should().Be("Imported from scanned lease document.");
-
-        _properties.CreateCount.Should().Be(1);
-        _units.CreateCount.Should().Be(1);
-
-        // ---- Second scan of the SAME premises (address formatted differently: "St" vs "Street") ----
-        // It must LINK to the existing property + unit, not create duplicates (the dedupe invariant).
-        const string rescanJson =
-            """
-            {"target_entity_type":{"value":"Lease","confidence":0.95},
-             "tenant_name":{"value":"Evan Cole","confidence":0.9},
-             "property_address":{"value":"742 Evergreen Street","confidence":0.9},
-             "property_city":{"value":"Springfield","confidence":0.9},
-             "property_state":{"value":"OH","confidence":0.9},
-             "property_postal_code":{"value":"45503","confidence":0.9},
-             "unit_number":{"value":"3C","confidence":0.85},
-             "start_date":{"value":"2026-03-01","confidence":0.9},
-             "end_date":{"value":"2027-02-28","confidence":0.9},
-             "monthly_rent":{"value":"1350.00","confidence":0.9}}
-            """;
-
-        var draft2 = SeedDraft("Reviewing", rescanJson, targetEntityType: "Lease");
-        SeedStoredFile(draft2.FilePath);
-        _leases.SetupResponse(new LeaseResponse { Id = 902, PortfolioId = PortfolioId });
-
-        var result2 = await _sut.ConfirmAndCreateAsync(PortfolioId, draft2.Id, userId: 5, overridesJson: "{}");
-
-        result2.Success.Should().BeTrue("Unexpected: " + result2.Error);
-
-        // No new Property/Unit — the second lease links the SAME rows the first scan created.
-        (await _db.Properties.CountAsync()).Should().Be(1);
-        (await _db.Units.CountAsync()).Should().Be(1);
-        _properties.CreateCount.Should().Be(1);
-        _units.CreateCount.Should().Be(1);
-
-        var leaseReq2 = _leases.LastRequest!;
-        leaseReq2.PropertyId.Should().Be(property.Id);
-        leaseReq2.UnitId.Should().Be(unit.Id);
-        // A different tenant on the second lease was chained as a new tenant (now two tenants total).
-        (await _db.Tenants.CountAsync()).Should().Be(2);
-        leaseReq2.TenantId.Should().NotBe(tenant.Id);
-    }
-
-    // -------------------------------------------------------------------------
-    // Confirm: a scanned rent check becomes a paid Payment (the "scan the check"
-    // money flow). MAKE-SURE-DONE-E2E: locks the RentCheck -> Payment confirm path.
-    // -------------------------------------------------------------------------
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_ReviewingRentCheckDraft_CreatesPaidPayment()
-    {
-        const string extractedJson =
-            """{"document_kind":{"value":"RentCheck","confidence":0.95},"payer_name":{"value":"Marcus Williams","confidence":0.9},"bank_name":{"value":"First National","confidence":0.8},"amount":{"value":"1200.00","confidence":0.9},"transaction_date":{"value":"2026-03-03","confidence":0.9},"check_number":{"value":"1487","confidence":0.8}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Payment");
-        SeedStoredFile(draft.FilePath);
-
-        CreatePaymentRequest? captured = null;
-        _paymentsMock
-            .Setup(p => p.CreateAsync(PortfolioId, It.IsAny<CreatePaymentRequest>(), It.IsAny<CancellationToken>()))
-            .Callback<int, CreatePaymentRequest, CancellationToken>((_, req, _) => captured = req)
-            .ReturnsAsync(new PaymentResponse { Id = 555, PortfolioId = PortfolioId });
-
-        // The review UI supplies the lease for payment routing via overrides.
-        var result = await _sut.ConfirmAndCreateAsync(
-            PortfolioId, draft.Id, userId: 9, overridesJson: """{"leaseId":42}""");
-
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        result.EntityType.Should().Be("Payment");
-        result.CreatedEntityId.Should().Be(555);
-
-        captured.Should().NotBeNull();
-        captured!.LeaseId.Should().Be(42);
-        captured.PaymentType.Should().Be(PaymentType.Rent);
-        captured.Status.Should().Be(PaymentStatus.Paid);
-        captured.Amount.Should().Be(1200.00m);
-        captured.Method.Should().Be("Check");
-        captured.ExternalReference.Should().Be("1487");
-        // The promoted check fields + the full extraction superset are threaded through to the payment.
-        captured.PayerName.Should().Be("Marcus Williams");
-        captured.CheckNumber.Should().Be("1487");
-        captured.BankName.Should().Be("First National");
-        captured.ExtractedData.Should().Contain("RentCheck");
-    }
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_ReviewingApplicationDraft_WithApplyingForText_LinksRequestedHome()
-    {
-        var now = DateTime.UtcNow;
         _db.Properties.Add(new Property
         {
-            Id = 110,
+            Id = 12,
             PortfolioId = PortfolioId,
-            Name = "Summit Row",
-            AddressLine1 = "66 Northline Pkwy",
-            City = "Columbus",
+            Name = "Imported Lease Property",
+            AddressLine1 = "12 Test Street",
+            City = "Akron",
             State = "OH",
-            PostalCode = "43207",
-            CreatedAt = now,
-            UpdatedAt = now,
+            PostalCode = "44301",
         });
         _db.Units.Add(new Unit
         {
-            Id = 120,
-            PropertyId = 110,
-            UnitNumber = "4D",
-            Bedrooms = 3,
-            Bathrooms = 2,
-            MarketRent = 1650m,
-            CreatedAt = now,
-            UpdatedAt = now,
+            Id = 34,
+            PortfolioId = PortfolioId,
+            PropertyId = 12,
+            UnitNumber = "A",
         });
+        _db.LeaseManagements.Add(new LeaseManagement
+        {
+            Id = 56,
+            PortfolioId = PortfolioId,
+            PropertyId = 12,
+            UnitId = 34,
+            RelationshipNumber = "LM-TEST-56",
+            CreatedByUserId = 7,
+        });
+        _db.TenantAccounts.Add(new TenantAccount
+        {
+            Id = 78,
+            PortfolioId = PortfolioId,
+            LeaseManagementId = 56,
+            AccountNumber = "TA-TEST-78",
+            Currency = "USD",
+            CreatedByUserId = 7,
+        });
+        _db.StoredFiles.Add(new StoredFile
+        {
+            Id = 44,
+            PortfolioId = PortfolioId,
+            FileName = "signed-lease.pdf",
+            FilePath = "uploads/signed-lease.pdf",
+            ContentType = "application/pdf",
+            FileSize = 1024,
+        });
+        draft.SourceStoredFileId = 44;
+        draft.SourceContentSha256 = new string('a', 64);
+        draft.SourceLabel = "Zillow signed lease import";
+        draft.CapturePropertyId = 12;
+        draft.CaptureUnitId = 34;
+        draft.CaptureLeaseManagementId = 56;
+        draft.CaptureTenantAccountId = 78;
         await _db.SaveChangesAsync();
 
-        const string extractedJson =
-            """{"first_name":{"value":"Harper","confidence":0.95},"last_name":{"value":"Kim","confidence":0.95},"email":{"value":"qa.applicant.002@example.local","confidence":0.9},"phone":{"value":"555-0102","confidence":0.9},"monthly_income":{"value":"4100.00","confidence":0.9},"applying_for":{"value":"Summit Row Unit 4D","confidence":0.86}}""";
+        var result = await _sut.PrepareConfirmationAsync(
+            PortfolioId,
+            draft.Id,
+            userId: 7,
+            overridesJson:
+                """{"reviewDisposition":"AlreadyFullySigned","tenantName":"Jordan Tenant","startDate":"2026-08-01","endDate":"2027-07-31","monthlyRent":1250,"rentDueDay":1}""");
 
-        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Application");
-        SeedStoredFile(draft.FilePath);
-        _applications.SetupResponse(new ApplicationResponse { Id = 707, PortfolioId = PortfolioId });
-
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
-
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        result.EntityType.Should().Be("Application");
-        result.CreatedEntityId.Should().Be(707);
-
-        _applications.LastRequest.Should().NotBeNull();
-        var request = _applications.LastRequest!;
-        request.PropertyId.Should().Be(110);
-        request.UnitId.Should().Be(120);
-        request.Notes.Should().Contain("Applying for: Summit Row Unit 4D.");
-        request.FirstName.Should().Be("Harper");
-        request.LastName.Should().Be("Kim");
-    }
-
-    // -------------------------------------------------------------------------
-    // Confirm: a scanned mortgage statement / closing disclosure becomes an Active Loan on the
-    // property (the "scan your mortgage" path). The DebtServiceWorker then owns the schedule.
-    // -------------------------------------------------------------------------
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_ReviewingLoanDraft_CreatesActiveLoanWithMappedFields()
-    {
-        const string extractedJson =
-            """
-            {"target_entity_type":{"value":"Loan","confidence":0.95},
-             "lender":{"value":"Rocket Mortgage","confidence":0.95},
-             "original_amount":{"value":"250000","confidence":0.9},
-             "current_balance":{"value":"238450.55","confidence":0.9},
-             "annual_interest_rate_pct":{"value":"6.5","confidence":0.9},
-             "term_months":{"value":"360","confidence":0.9},
-             "start_date":{"value":"2021-03-01","confidence":0.9},
-             "day_of_month_due":{"value":"1","confidence":0.8},
-             "monthly_principal_interest":{"value":"1580.17","confidence":0.9},
-             "monthly_escrow":{"value":"420.33","confidence":0.85},
-             "escrow_covers_taxes":{"value":"true","confidence":0.8},
-             "escrow_covers_insurance":{"value":"false","confidence":0.8},
-             "property_id":{"value":"10","confidence":0.7}}
-            """;
-
-        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Loan");
-        SeedStoredFile(draft.FilePath);
-        SeedPropertyAndUnit(); // property 10 is the grounded id the draft carries
-        _loans.SetupResponse(new LoanResponse { Id = 770, PortfolioId = PortfolioId });
-
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
-
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        result.EntityType.Should().Be("Loan");
-        result.CreatedEntityId.Should().Be(770);
-
-        _loans.LastRequest.Should().NotBeNull();
-        var req = _loans.LastRequest!;
-        req.PropertyId.Should().Be(10);
-        req.Lender.Should().Be("Rocket Mortgage");
-        req.OriginalAmount.Should().Be(250000m);
-        req.CurrentBalance.Should().Be(238450.55m);
-        req.AnnualInterestRatePct.Should().Be(6.5m);
-        req.TermMonths.Should().Be(360);
-        req.StartDate.Should().Be(new DateTime(2021, 3, 1, 0, 0, 0, DateTimeKind.Utc));
-        req.DayOfMonthDue.Should().Be(1);
-        req.MonthlyPrincipalInterest.Should().Be(1580.17m);
-        req.MonthlyEscrow.Should().Be(420.33m);
-        req.EscrowCoversTaxes.Should().BeTrue();
-        req.EscrowCoversInsurance.Should().BeFalse();
-        // Active so the Engine's DebtServiceWorker generates the amortization schedule.
-        req.Status.Should().Be(LoanStatus.Active);
-        req.Notes.Should().Contain("Imported from scanned mortgage document.");
-
-        // Draft confirmed + source document re-keyed to the loan.
-        string? draftStatus;
-        using (var cmd = _conn.CreateCommand())
-        {
-            cmd.CommandText = $"SELECT Status FROM ScanDrafts WHERE Id = {draft.Id}";
-            draftStatus = (string?)cmd.ExecuteScalar();
-        }
-        draftStatus.Should().Be("Confirmed");
-        _audit.Calls.Should().Contain(c => c.entityType == "Loan" && c.entityId == 770);
+        result.Outcome.Should().Be(ScanConfirmationPreparationOutcome.Ready);
+        result.Command.Should().NotBeNull();
+        var command = result.Command!;
+        command.SourceStoredFileId.Should().Be(44);
+        command.SourceContentSha256.Should().Be(new string('a', 64));
+        command.SourceLabel.Should().Be("Zillow signed lease import");
+        command.Target.Kind.Should().Be(ScanConfirmationTargetKind.LeaseAgreement);
+        command.Target.LeaseAgreement.Should().NotBeNull();
+        command.Target.LeaseAgreement!.ReviewDisposition.Should().Be(LeaseScanReviewDisposition.AlreadyFullySigned);
+        command.Target.LeaseAgreement.PropertyId.Should().Be(12);
+        command.Target.LeaseAgreement.UnitId.Should().Be(34);
+        command.Target.LeaseAgreement.LeaseManagementId.Should().Be(56);
+        command.Target.LeaseAgreement.TenantAccountId.Should().Be(78);
+        command.Target.LeaseAgreement.DocumentTemplateId.Should().BeNull();
     }
 
     [Fact]
-    public async Task ConfirmAndCreateAsync_LoanDraft_WithLikelyMisreadInterestRate_ReturnsReviewError()
+    public async Task PrepareConfirmationAsync_LeaseTarget_RequiresExplicitSignatureDisposition()
     {
-        const string extractedJson =
-            """
-            {"target_entity_type":{"value":"Loan","confidence":0.95},
-             "lender":{"value":"Rocket Mortgage","confidence":0.95},
-             "original_amount":{"value":"250000","confidence":0.9},
-             "annual_interest_rate_pct":{"value":"65","confidence":0.9},
-             "property_id":{"value":"10","confidence":0.7}}
-            """;
+        var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "LeaseAgreement");
 
-        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Loan");
-        SeedStoredFile(draft.FilePath);
-        SeedPropertyAndUnit();
-        _loans.SetupResponse(new LoanResponse { Id = 770, PortfolioId = PortfolioId });
+        var action = () => _sut.PrepareConfirmationAsync(
+            PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
 
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
-
-        result.Success.Should().BeFalse();
-        result.Error.Should().Contain("Annual interest rate");
-        _loans.LastRequest.Should().BeNull();
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>()
+            .WithMessage("*AlreadyFullySigned*NeedsSignatures*");
     }
 
     [Fact]
-    public async Task ConfirmAndCreateAsync_LoanDraft_WithOverPrecisionFinancialFields_RoundsToStorageScale()
+    public async Task PrepareConfirmationAsync_InvalidOverrideJson_IsRejectedBeforeAtomicBoundary()
     {
-        const string extractedJson =
-            """
-            {"target_entity_type":{"value":"Loan","confidence":0.95},
-             "lender":{"value":"Rocket Mortgage","confidence":0.95},
-             "original_amount":{"value":"250000.129","confidence":0.9},
-             "current_balance":{"value":"238450.555","confidence":0.9},
-             "annual_interest_rate_pct":{"value":"6.12345","confidence":0.9},
-             "monthly_principal_interest":{"value":"1580.175","confidence":0.9},
-             "monthly_escrow":{"value":"420.335","confidence":0.85},
-             "property_id":{"value":"10","confidence":0.7}}
-            """;
+        var draft = SeedDraft("Reviewing", extractedFields: null);
 
-        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Loan");
-        SeedStoredFile(draft.FilePath);
-        SeedPropertyAndUnit();
-        _loans.SetupResponse(new LoanResponse { Id = 770, PortfolioId = PortfolioId });
+        var action = () => _sut.PrepareConfirmationAsync(
+            PortfolioId, draft.Id, userId: 7, overridesJson: "not-json");
 
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
-
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        _loans.LastRequest.Should().NotBeNull();
-        _loans.LastRequest!.OriginalAmount.Should().Be(250000.13m);
-        _loans.LastRequest.CurrentBalance.Should().Be(238450.56m);
-        _loans.LastRequest.AnnualInterestRatePct.Should().Be(6.1235m);
-        _loans.LastRequest.MonthlyPrincipalInterest.Should().Be(1580.18m);
-        _loans.LastRequest.MonthlyEscrow.Should().Be(420.34m);
-    }
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_LoanDraft_WithOverridePropertyId_UsesScanContextPropertyAndDefaultsBalance()
-    {
-        // No property_id on the document — the property comes from the scan-context deep-link the
-        // landlord launched the scan from (sent as a propertyId override). current_balance is absent,
-        // so ScanService passes null and LoanService defaults it to the original amount.
-        const string extractedJson =
-            """{"lender":{"value":"Wells Fargo Home Mortgage","confidence":0.9},"original_amount":{"value":"180000","confidence":0.9},"annual_interest_rate_pct":{"value":"5.25","confidence":0.9},"term_months":{"value":"360","confidence":0.9},"start_date":{"value":"2020-07-01","confidence":0.9},"monthly_principal_interest":{"value":"993.61","confidence":0.9}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Loan");
-        SeedStoredFile(draft.FilePath);
-        SeedPropertyAndUnit();
-        _loans.SetupResponse(new LoanResponse { Id = 771, PortfolioId = PortfolioId });
-
-        var result = await _sut.ConfirmAndCreateAsync(
-            PortfolioId, draft.Id, userId: 7, overridesJson: """{"propertyId":10}""");
-
-        result.Success.Should().BeTrue("Unexpected: " + result.Error);
-        _loans.LastRequest.Should().NotBeNull();
-        _loans.LastRequest!.PropertyId.Should().Be(10);
-        _loans.LastRequest.Lender.Should().Be("Wells Fargo Home Mortgage");
-        // Null balance is intentional: LoanService.CreateAsync defaults it to OriginalAmount.
-        _loans.LastRequest.CurrentBalance.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_LoanDraft_WithForeignExtractedPropertyId_RequiresPropertySelection()
-    {
-        // property_id 999 is NOT in this portfolio: it must be dropped to 0 (IDOR guard), and with no
-        // override property the confirm fails rather than linking a foreign property.
-        const string extractedJson =
-            """{"lender":{"value":"Some Bank","confidence":0.9},"original_amount":{"value":"100000","confidence":0.9},"property_id":{"value":"999","confidence":0.9}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Loan");
-        SeedStoredFile(draft.FilePath);
-        SeedPropertyAndUnit();
-        _loans.SetupResponse(new LoanResponse { Id = 999, PortfolioId = PortfolioId });
-
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
-
-        result.Success.Should().BeFalse();
-        result.Error.Should().Contain("property");
-        _loans.LastRequest.Should().BeNull(); // loan service was never called
-    }
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_LoanDraft_WithForeignOverridePropertyId_IsRejected()
-    {
-        // A raw override propertyId is never trusted — 999 is not in this portfolio, so confirm is
-        // rejected before the loan service is called (cross-tenant IDOR guard).
-        const string extractedJson =
-            """{"lender":{"value":"Some Bank","confidence":0.9},"original_amount":{"value":"100000","confidence":0.9},"property_id":{"value":"10","confidence":0.9}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Loan");
-        SeedStoredFile(draft.FilePath);
-        SeedPropertyAndUnit();
-        _loans.SetupResponse(new LoanResponse { Id = 999, PortfolioId = PortfolioId });
-
-        var result = await _sut.ConfirmAndCreateAsync(
-            PortfolioId, draft.Id, userId: 7, overridesJson: """{"propertyId":999}""");
-
-        result.Success.Should().BeFalse();
-        result.Error.Should().Contain("not in this portfolio");
-        _loans.LastRequest.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_LoanDraft_WithoutLender_ReturnsError()
-    {
-        const string extractedJson =
-            """{"original_amount":{"value":"100000","confidence":0.9},"property_id":{"value":"10","confidence":0.9}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Loan");
-        SeedStoredFile(draft.FilePath);
-        SeedPropertyAndUnit();
-        _loans.SetupResponse(new LoanResponse { Id = 772, PortfolioId = PortfolioId });
-
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
-
-        result.Success.Should().BeFalse();
-        result.Error.Should().Contain("Lender");
-        _loans.LastRequest.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task ConfirmAndCreateAsync_LoanDraft_WhenCreateThrows_ReturnsLoanCreationFailed()
-    {
-        const string extractedJson =
-            """{"lender":{"value":"Some Bank","confidence":0.9},"original_amount":{"value":"100000","confidence":0.9},"property_id":{"value":"10","confidence":0.9}}""";
-
-        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Loan");
-        SeedStoredFile(draft.FilePath);
-        SeedPropertyAndUnit();
-        _loans.ThrowOnCreate(new InvalidOperationException("database rejected the loan"));
-
-        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
-
-        result.Success.Should().BeFalse();
-        result.Error.Should().Be("Loan creation failed");
-        _loans.LastRequest.Should().NotBeNull();
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>();
     }
 
     // -------------------------------------------------------------------------
@@ -1254,17 +515,18 @@ public class ScanServiceTests : IDisposable
     {
         var draft = SeedDraft("Reviewing", extractedFields: null);
 
-        var rejected = await _sut.RejectDraftAsync(PortfolioId, draft.Id, userId: 3, reason: "Not a valid receipt");
+        var rejected = await _sut.RejectDraftAsync(
+            _scope, draft.Id, userId: 3, reason: "Not a valid receipt");
 
         rejected.Should().BeTrue();
 
-        var rejectedDraft = await _db.ScanDrafts.FindAsync(draft.Id);
+        _db.ChangeTracker.Clear();
+        var rejectedDraft = await _db.ScanDrafts.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == draft.Id);
         rejectedDraft!.Status.Should().Be("Rejected");
         rejectedDraft.ReviewedBy.Should().Be("3");
         rejectedDraft.FailureReason.Should().Be("Not a valid receipt");
 
-        _audit.Calls.Should().HaveCount(1);
-        _audit.Calls[0].operation.Should().Be(AuditLogOperation.Rejected);
     }
 
     [Fact]
@@ -1274,11 +536,14 @@ public class ScanServiceTests : IDisposable
         draft.FailureReason = "Extraction timed out";
         await _db.SaveChangesAsync();
 
-        var rejected = await _sut.RejectDraftAsync(PortfolioId, draft.Id, userId: 3, reason: "   ");
+        var rejected = await _sut.RejectDraftAsync(
+            _scope, draft.Id, userId: 3, reason: "   ");
 
         rejected.Should().BeTrue();
 
-        var rejectedDraft = await _db.ScanDrafts.FindAsync(draft.Id);
+        _db.ChangeTracker.Clear();
+        var rejectedDraft = await _db.ScanDrafts.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == draft.Id);
         rejectedDraft!.Status.Should().Be("Rejected");
         rejectedDraft.FailureReason.Should().Be("Extraction timed out");
     }
@@ -1303,480 +568,41 @@ public class ScanServiceTests : IDisposable
         return draft;
     }
 
-    /// <summary>Seeds property 10 + unit 20 in the test portfolio (the grounded ids the lease drafts carry).</summary>
-    private void SeedPropertyAndUnit()
-    {
-        _db.Properties.Add(new Property
-        {
-            Id = 10,
-            PortfolioId = PortfolioId,
-            Name = "Maple Court",
-            AddressLine1 = "10 Maple Ct",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43215",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.Units.Add(new Unit
-        {
-            Id = 20,
-            PropertyId = 10,
-            UnitNumber = "1",
-            Bedrooms = 2,
-            Bathrooms = 1,
-            MarketRent = 1200m,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.SaveChanges();
-    }
-
-    private StoredFile SeedStoredFile(string filePath)
-    {
-        var file = new StoredFile
-        {
-            PortfolioId = PortfolioId,
-            FileName    = "receipt.jpg",
-            FilePath    = filePath,
-            ContentType = "image/jpeg",
-            FileSize    = 1024,
-            EntityType  = "ScanDraft",
-            EntityId    = null,
-            UploadedAt  = DateTime.UtcNow,
-        };
-        _db.StoredFiles.Add(file);
-        _db.SaveChanges();
-        return file;
-    }
-
     // -------------------------------------------------------------------------
     // Test doubles
     // -------------------------------------------------------------------------
 
-    private sealed class RecordingExpenseService : IExpenseService
+    private sealed class ScanRejectAtomicUnitOfWork(RentalCommandDbContext db) : IAtomicUnitOfWork
     {
-        private ExpenseResponse? _response;
-
-        public CreateExpenseRequest? LastRequest { get; private set; }
-
-        public void SetupResponse(ExpenseResponse response) => _response = response;
-
-        public Task<ExpenseResponse?> CreateAsync(int portfolioId, CreateExpenseRequest request, CancellationToken ct = default)
-        {
-            LastRequest = request;
-            return Task.FromResult(_response);
-        }
-
-        public Task<IReadOnlyList<ExpenseResponse>> ListAsync(int portfolioId, int? propertyId, int? unitId, int? workOrderId, ListQuery query, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<ExpenseListResponse> ListPageAsync(
-            int portfolioId,
-            int? propertyId,
-            int? unitId,
-            int? workOrderId,
-            bool workOrderLinkedOnly,
-            ListQuery query,
+        public async Task<AtomicCommandOutcome<TResult>> ExecuteAsync<TCommand, TResult>(
+            AtomicCommandIdentity identity,
+            TCommand command,
+            IAtomicResultCodec<TResult> resultCodec,
             CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<ExpenseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<ExpenseResponse?> UpdateAsync(int portfolioId, int id, UpdateExpenseRequest request, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-    }
-
-    private sealed class RecordingAuditService : IAuditTrailService
-    {
-        public List<(int portfolioId, string entityType, int entityId, AuditLogOperation operation)> Calls { get; } = [];
-
-        public Task LogAsync(
-            int portfolioId, string entityType, int entityId, AuditLogOperation operation,
-            int? userId = null, string? actorLabel = null, string? oldValues = null,
-            string? newValues = null, string? changeReason = null, string? ipAddress = null,
-            CancellationToken ct = default)
+            where TCommand : notnull, IAtomicCommandData
+            where TResult : notnull
         {
-            Calls.Add((portfolioId, entityType, entityId, operation));
-            return Task.CompletedTask;
-        }
-    }
-
-    private sealed class RecordingWorkOrderService : IWorkOrderService
-    {
-        private WorkOrderResponse? _response;
-
-        public CreateWorkOrderRequest? LastRequest { get; private set; }
-
-        public void SetupResponse(WorkOrderResponse response) => _response = response;
-
-        public Task<WorkOrderResponse?> CreateAsync(int portfolioId, CreateWorkOrderRequest request, int? changedByUserId = null, string? changedByLabel = null, CancellationToken ct = default)
-        {
-            LastRequest = request;
-            return Task.FromResult(_response);
-        }
-
-        public Task<IReadOnlyList<WorkOrderResponse>> ListAsync(int portfolioId, int? propertyId, int? unitId, int? vendorId, ListQuery query, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<WorkOrderListResponse> ListPageAsync(int portfolioId, WorkOrderListQuery query, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<WorkOrderDetailResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<WorkOrderResponse?> UpdateAsync(int portfolioId, int id, UpdateWorkOrderRequest request, int? changedByUserId = null, string? changedByLabel = null, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-    }
-
-    private sealed class RecordingApplicationService : IApplicationService
-    {
-        private ApplicationResponse _response = new() { Id = 0, PortfolioId = PortfolioId };
-
-        public CreateApplicationRequest? LastRequest { get; private set; }
-
-        public void SetupResponse(ApplicationResponse response) => _response = response;
-
-        public Task<ApplicationResponse> CreateFromScanAsync(
-            int portfolioId, CreateApplicationRequest request, int userId, CancellationToken ct = default)
-        {
-            LastRequest = request;
-            return Task.FromResult(_response);
-        }
-
-        public Task<PublicApplicationFormInfo?> GetPublicFormInfoAsync(string token, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<SubmitApplicationResult?> SubmitAsync(
-            string token, SubmitApplicationRequest request, string? ipAddress, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<IReadOnlyList<ApplicationResponse>> ListAsync(
-            int portfolioId, string? status, ListQuery query, int? unitId = null, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<ApplicationListResponse> ListPageAsync(
-            int portfolioId, string? status, ListQuery query, int? unitId = null, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<ApplicationResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<ApplicationResponse?> UpdateAsync(
-            int portfolioId,
-            int id,
-            UpdateApplicationRequest request,
-            int userId,
-            CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<ApproveApplicationResult?> ApproveAsync(
-            int portfolioId, int id, int userId, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<ApplicationResponse?> DeclineAsync(
-            int portfolioId, int id, int userId, string? reason, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<ApplicationResponse?> WithdrawAsync(int portfolioId, int id, int userId, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<bool> DeleteAsync(int portfolioId, int id, int userId, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<ApplicationLinkResult> GenerateLinkAsync(int portfolioId, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-    }
-
-    private sealed class RecordingLoanService : ILoanService
-    {
-        private LoanResponse? _response = new() { Id = 0, PortfolioId = PortfolioId };
-        private Exception? _createException;
-
-        public CreateLoanRequest? LastRequest { get; private set; }
-
-        public void SetupResponse(LoanResponse? response) => _response = response;
-
-        public void ThrowOnCreate(Exception exception) => _createException = exception;
-
-        public Task<LoanResponse?> CreateAsync(int portfolioId, CreateLoanRequest request, CancellationToken ct = default)
-        {
-            LastRequest = request;
-            if (_createException is not null)
-                throw _createException;
-            return Task.FromResult(_response);
-        }
-
-        public Task<IReadOnlyList<LoanResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<LoanListResponse> ListPageAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<LoanResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<LoanResponse?> UpdateAsync(int portfolioId, int id, UpdateLoanRequest request, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(int portfolioId, int loanId, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-    }
-
-    private sealed class RecordingLeaseService : ILeaseService
-    {
-        private LeaseResponse? _response = new() { Id = 0, PortfolioId = PortfolioId };
-        private Exception? _createException;
-
-        public CreateLeaseRequest? LastRequest { get; private set; }
-
-        public void SetupResponse(LeaseResponse? response) => _response = response;
-
-        public void ThrowOnCreate(Exception exception) => _createException = exception;
-
-        public Task<LeaseResponse?> CreateAsync(int portfolioId, CreateLeaseRequest request, CancellationToken ct = default)
-        {
-            LastRequest = request;
-            if (_createException is not null)
-                throw _createException;
-            return Task.FromResult(_response);
-        }
-
-        public Task<IReadOnlyList<LeaseResponse>> ListAsync(int portfolioId, int? tenantId, int? propertyId, ListQuery query, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<LeaseListResponse> ListPageAsync(int portfolioId, LeaseListQuery query, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<LeaseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<LeaseLedgerResponse?> GetLedgerAsync(int portfolioId, int id, int? restrictToTenantId = null, int skip = 0, int? take = null, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<LeaseResponse?> UpdateAsync(int portfolioId, int id, UpdateLeaseRequest request, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<LeaseDocumentResponse?> GenerateDocumentAsync(int portfolioId, int id, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<LeaseDocumentStatusResponse?> GetDocumentStatusAsync(int portfolioId, int id, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<(Stream Stream, string FileName, string ContentType)?> GetDocumentAsync(int portfolioId, int id, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-    }
-
-    /// <summary>
-    /// Recording tenant service that actually persists a Tenant to the shared test DbContext so the
-    /// "chained tenant" path produces a real, in-portfolio tenant id (mirrors production TenantService).
-    /// </summary>
-    private sealed class RecordingTenantService : ITenantService
-    {
-        private readonly RentalCommandDbContext _db;
-
-        public RecordingTenantService(RentalCommandDbContext db) => _db = db;
-
-        public CreateTenantRequest? LastRequest { get; private set; }
-
-        public async Task<TenantResponse> CreateAsync(int portfolioId, CreateTenantRequest request, CancellationToken ct = default)
-        {
-            LastRequest = request;
-            var now = DateTime.UtcNow;
-            var entity = new Tenant
+            var reject = command.Should().BeOfType<RejectScanDraftCommand>().Subject;
+            var draft = await db.ScanDrafts.SingleAsync(item => item.Id == reject.DraftId, ct);
+            var rejected = draft.Status is not ("Confirmed" or "Rejected" or "Confirming");
+            if (rejected)
             {
-                PortfolioId = portfolioId,
-                FirstName = request.FirstName,
-                LastName = request.LastName,
-                Email = request.Email,
-                Phone = request.Phone,
-                EmergencyContact = request.EmergencyContact,
-                Notes = request.Notes,
-                CreatedAt = now,
-                UpdatedAt = now,
-            };
-            _db.Tenants.Add(entity);
-            await _db.SaveChangesAsync(ct);
-            return TenantResponse.FromEntity(entity);
+                draft.Status = "Rejected";
+                draft.ReviewedAt = DateTime.UtcNow;
+                draft.ReviewedBy = reject.UserId.ToString();
+                if (!string.IsNullOrWhiteSpace(reject.Reason)) draft.FailureReason = reject.Reason;
+                await db.SaveChangesAsync(ct);
+            }
+            var result = new RejectScanDraftResult(rejected, reject.DraftId);
+            return new AtomicCommandOutcome<TResult>(
+                (TResult)(object)result,
+                AtomicCommandDisposition.Executed,
+                Guid.NewGuid());
         }
-
-        public Task<IReadOnlyList<TenantResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<TenantListResponse> ListPageAsync(int portfolioId, TenantListQuery query, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<TenantResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<TenantResponse?> UpdateAsync(int portfolioId, int id, UpdateTenantRequest request, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-    }
-
-    /// <summary>
-    /// Recording property service that actually persists a Property to the shared test DbContext so the
-    /// scan-import bootstrap creates a real, in-portfolio property whose id downstream code (and a second
-    /// scan's dedupe match) can find — mirrors production PropertyService.
-    /// </summary>
-    private sealed class RecordingPropertyService : IPropertyService
-    {
-        private readonly RentalCommandDbContext _db;
-
-        public RecordingPropertyService(RentalCommandDbContext db) => _db = db;
-
-        public int CreateCount { get; private set; }
-        public CreatePropertyRequest? LastRequest { get; private set; }
-
-        public async Task<PropertyResponse?> CreateAsync(int portfolioId, CreatePropertyRequest request, CancellationToken ct = default)
-        {
-            CreateCount++;
-            LastRequest = request;
-            var now = DateTime.UtcNow;
-            var entity = new Property
-            {
-                PortfolioId = portfolioId,
-                Name = request.Name,
-                PropertyType = request.PropertyType,
-                Status = request.Status,
-                AddressLine1 = request.AddressLine1,
-                AddressLine2 = request.AddressLine2,
-                City = request.City,
-                State = request.State,
-                PostalCode = request.PostalCode,
-                Notes = request.Notes,
-                CreatedAt = now,
-                UpdatedAt = now,
-            };
-            _db.Properties.Add(entity);
-            await _db.SaveChangesAsync(ct);
-            return PropertyResponse.FromEntity(entity);
-        }
-
-        public Task<IReadOnlyList<PropertyResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<PropertyListResponse> ListPageAsync(int portfolioId, PropertyListQuery query, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<PropertyResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<PropertyResponse?> UpdateAsync(int portfolioId, int id, UpdatePropertyRequest request, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-    }
-
-    /// <summary>
-    /// Recording unit service that actually persists a Unit (scoped to its property) to the shared test
-    /// DbContext so the scan-import bootstrap creates a real unit whose id downstream code (and a second
-    /// scan's dedupe match) can find — mirrors production UnitService.
-    /// </summary>
-    private sealed class RecordingUnitService : IUnitService
-    {
-        private readonly RentalCommandDbContext _db;
-
-        public RecordingUnitService(RentalCommandDbContext db) => _db = db;
-
-        public int CreateCount { get; private set; }
-        public CreateUnitRequest? LastRequest { get; private set; }
-
-        public async Task<UnitResponse?> CreateAsync(int portfolioId, CreateUnitRequest request, CancellationToken ct = default)
-        {
-            // Mirror production scoping: the target property must be in the caller's portfolio.
-            if (!await _db.EnsurePropertyInPortfolioAsync(portfolioId, request.PropertyId, ct))
-                return null;
-
-            CreateCount++;
-            LastRequest = request;
-            var now = DateTime.UtcNow;
-            var entity = new Unit
-            {
-                PropertyId = request.PropertyId,
-                UnitNumber = request.UnitNumber,
-                FloorPlan = request.FloorPlan,
-                Bedrooms = request.Bedrooms,
-                Bathrooms = request.Bathrooms,
-                SquareFeet = request.SquareFeet,
-                MarketRent = request.MarketRent,
-                Status = request.Status,
-                Notes = request.Notes,
-                CreatedAt = now,
-                UpdatedAt = now,
-            };
-            _db.Units.Add(entity);
-            await _db.SaveChangesAsync(ct);
-            return UnitResponse.FromEntity(entity);
-        }
-
-        public Task<IReadOnlyList<UnitResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<IReadOnlyList<UnitHealthResponse>> ListWithHealthAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<UnitHealthListResponse> ListWithHealthPageAsync(int portfolioId, UnitHealthListQuery query, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<UnitResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<UnitResponse?> UpdateAsync(int portfolioId, int id, UpdateUnitRequest request, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
-
-        public Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
-            => throw new NotSupportedException("Not needed for ScanService tests.");
     }
 }
 
-/// <summary>
-/// Derived DbContext that overrides Postgres-specific configurations (jsonb column type,
-/// check constraints) so the schema is valid on SQLite.
-/// </summary>
-internal sealed class RentalCommandTestDbContext : RentalCommandDbContext
+internal sealed class RentalCommandTestDbContext : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext
 {
     public RentalCommandTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
-
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
-    {
-        base.OnModelCreating(modelBuilder);
-
-        // jsonb is not understood by SQLite — remap those columns to plain text.
-        modelBuilder.Entity<ScanDraft>().Property(e => e.ExtractedFields).HasColumnType("TEXT");
-        modelBuilder.Entity<Expense>().Property(e => e.ReceiptData).HasColumnType("TEXT");
-        modelBuilder.Entity<Payment>().Property(e => e.ExtractedData).HasColumnType("TEXT");
-        modelBuilder.Entity<Lease>().Property(e => e.ExtractedData).HasColumnType("TEXT");
-        modelBuilder.Entity<WorkOrder>().Property(e => e.ExtractedData).HasColumnType("TEXT");
-
-        // Remove Postgres-specific jsonb from AuditLog, OutboxMessage, QueuedJob.
-        modelBuilder.Entity<AuditLog>()
-            .Property(e => e.OldValues).HasColumnType("TEXT");
-        modelBuilder.Entity<AuditLog>()
-            .Property(e => e.NewValues).HasColumnType("TEXT");
-        modelBuilder.Entity<OutboxMessage>()
-            .Property(e => e.Payload).HasColumnType("TEXT");
-        modelBuilder.Entity<QueuedJob>()
-            .Property(e => e.Payload).HasColumnType("TEXT");
-
-        // Remove check constraints that SQLite cannot execute (Lease StartDate < EndDate, RentDueDay).
-        // EF Core lets us replace the table builder to drop all constraints.
-        modelBuilder.Entity<Lease>().ToTable("Leases");
-    }
 }

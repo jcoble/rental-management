@@ -35,7 +35,7 @@ public class PublicUnitOption
 {
     public int Id { get; set; }
     public string UnitNumber { get; set; } = string.Empty;
-    public UnitStatus Status { get; set; }
+    public DerivedUnitStatus Status { get; set; }
 }
 
 /// <summary>
@@ -344,8 +344,7 @@ public class DeclineApplicationRequest
 }
 
 /// <summary>
-/// Records a real application/screening fee as income against an application, before any lease exists.
-/// The property is taken from the application; the payment is created Paid.
+/// Records a collected application/screening fee in the application's append-only financial account.
 /// </summary>
 public class RecordApplicationFeeRequest
 {
@@ -356,8 +355,45 @@ public class RecordApplicationFeeRequest
     [MaxLength(100)]
     public string? Method { get; set; }
 
-    /// <summary>When the fee was received; defaults to now when omitted.</summary>
-    public DateTime? PaidDate { get; set; }
+    [Required, RegularExpression("^[A-Za-z]{3}$")]
+    public string Currency { get; set; } = "USD";
+
+    /// <summary>Business-effective receipt date; defaults to the database business date.</summary>
+    public DateOnly? EffectiveOn { get; set; }
+}
+
+public class RefundApplicationFeeRequest
+{
+    [Range(1, int.MaxValue)]
+    public int CollectionEntryId { get; set; }
+
+    [Range(0.01, 99999999)]
+    public decimal Amount { get; set; }
+
+    public DateOnly? EffectiveOn { get; set; }
+
+    [MaxLength(100)]
+    public string? Method { get; set; }
+
+    [Required]
+    [MaxLength(500)]
+    public string Reason { get; set; } = string.Empty;
+}
+
+public sealed class ApplicationFinanceMutationResponse
+{
+    public int ApplicationId { get; init; }
+    public int AccountId { get; init; }
+    public int EntryId { get; init; }
+    public int? RelatedEntryId { get; init; }
+    public ApplicationFinancialEntryType EntryType { get; init; }
+    public ApplicationFinancialDirection Direction { get; init; }
+    public decimal Amount { get; init; }
+    public string Currency { get; init; } = string.Empty;
+    public DateOnly EffectiveOn { get; init; }
+    public DateTime OccurredAtUtc { get; init; }
+    public bool AccountCreated { get; init; }
+    public bool Replayed { get; init; }
 }
 
 /// <summary>Result of approving an application: the new status plus the tenant that was created.</summary>
@@ -384,38 +420,163 @@ public class ApplicationLinkResult
 // Screening (FCRA) shapes
 // ---------------------------------------------------------------------------
 
-/// <summary>Wire shape for a persisted <see cref="ScreeningResult"/> returned to the landlord.</summary>
-public class ScreeningResultResponse
+public sealed class ScreeningProviderCapabilitiesResponse
 {
-    public int Id { get; set; }
-    public int ApplicationId { get; set; }
-    public string Status { get; set; } = string.Empty;
-    public string? CreditScoreBand { get; set; }
-    public bool? HasCriminalRecord { get; set; }
-    public bool? HasEvictionRecord { get; set; }
-    public string? Recommendation { get; set; }
-    public string? ProviderReference { get; set; }
-    public DateTime RequestedAtUtc { get; set; }
-    public DateTime? CompletedAtUtc { get; set; }
+    public string? Key { get; init; }
+    public string? DisplayName { get; init; }
+    public bool IsConfigured { get; init; }
+    public bool CreatesHostedInvitation { get; init; }
+    public bool SupportsStatusWebhooks { get; init; }
+    public bool SuppliesAdverseActionAgency { get; init; }
+    public bool SupportsApplicantPaidOrders { get; init; }
+    public bool SupportsLandlordPaidOrders { get; init; }
+}
 
-    public static ScreeningResultResponse FromEntity(ScreeningResult e) => new()
+public sealed class ApplicantScreeningResponse
+{
+    public int Id { get; init; }
+    public int ApplicationId { get; init; }
+    public ScreeningMode Mode { get; init; }
+    public ApplicantScreeningStatus Status { get; init; }
+    public string ProviderDisplayName { get; init; } = string.Empty;
+    public string? ProviderReference { get; init; }
+    public string? ProviderHostedUrl { get; init; }
+    public bool ConsentConfirmed { get; init; }
+    public DateTime? InvitedAtUtc { get; init; }
+    public DateTime? ApplicantSubmittedAtUtc { get; init; }
+    public DateTime? CompletedAtUtc { get; init; }
+    public DateTime? FailedAtUtc { get; init; }
+    public DateTime LastStatusAtUtc { get; init; }
+    public ScreeningDecision? Decision { get; init; }
+    public string? DecisionReason { get; init; }
+    public bool ConsumerReportUsedForDecision { get; init; }
+    public string? CreditReportingAgencyName { get; init; }
+    public string? CreditReportingAgencyAddress { get; init; }
+    public string? CreditReportingAgencyPhone { get; init; }
+    public bool HasCompleteCreditReportingAgencyContact { get; init; }
+    public bool CanGenerateAdverseAction { get; init; }
+    public string StatusSummary { get; init; } = string.Empty;
+    public string NextAction { get; init; } = string.Empty;
+    public bool IsTerminal { get; init; }
+    public bool CanOpenProvider { get; init; }
+
+    public static ApplicantScreeningResponse FromEntity(ApplicantScreening e) => new()
     {
         Id = e.Id,
         ApplicationId = e.ApplicationId,
-        Status = e.Status.ToString(),
-        CreditScoreBand = e.CreditScoreBand,
-        HasCriminalRecord = e.HasCriminalRecord,
-        HasEvictionRecord = e.HasEvictionRecord,
-        Recommendation = e.Recommendation?.ToString(),
+        Mode = e.Mode,
+        Status = e.Status,
+        ProviderDisplayName = e.ProviderDisplayName,
         ProviderReference = e.ProviderReference,
-        RequestedAtUtc = e.RequestedAtUtc,
+        ProviderHostedUrl = e.ProviderHostedUrl,
+        ConsentConfirmed = e.ConsentConfirmed,
+        InvitedAtUtc = e.InvitedAtUtc,
+        ApplicantSubmittedAtUtc = e.ApplicantSubmittedAtUtc,
         CompletedAtUtc = e.CompletedAtUtc,
+        FailedAtUtc = e.FailedAtUtc,
+        LastStatusAtUtc = e.LastStatusAtUtc,
+        Decision = e.Decision,
+        DecisionReason = e.DecisionReason,
+        ConsumerReportUsedForDecision = e.ConsumerReportUsedForDecision,
+        CreditReportingAgencyName = e.CreditReportingAgencyName,
+        CreditReportingAgencyAddress = e.CreditReportingAgencyAddress,
+        CreditReportingAgencyPhone = e.CreditReportingAgencyPhone,
+        HasCompleteCreditReportingAgencyContact = HasCompleteCraContact(e),
+        CanGenerateAdverseAction = e.Status == ApplicantScreeningStatus.Completed
+            && e.Decision == ScreeningDecision.Decline
+            && e.ConsumerReportUsedForDecision
+            && HasCompleteCraContact(e),
+        StatusSummary = StatusSummaryFor(e.Status),
+        NextAction = NextActionFor(e.Status, e.Decision, e.Mode),
+        IsTerminal = e.Status is ApplicantScreeningStatus.Completed
+            or ApplicantScreeningStatus.Failed
+            or ApplicantScreeningStatus.Cancelled,
+        CanOpenProvider = !string.IsNullOrWhiteSpace(e.ProviderHostedUrl),
     };
+
+    private static bool HasCompleteCraContact(ApplicantScreening e) =>
+        !string.IsNullOrWhiteSpace(e.CreditReportingAgencyName)
+        && !string.IsNullOrWhiteSpace(e.CreditReportingAgencyAddress)
+        && !string.IsNullOrWhiteSpace(e.CreditReportingAgencyPhone);
+
+    public static string StatusSummaryFor(ApplicantScreeningStatus status) => status switch
+    {
+        ApplicantScreeningStatus.Created => "The screening record is ready to start.",
+        ApplicantScreeningStatus.AwaitingProvider => "Rental Command is creating the secure provider invitation.",
+        ApplicantScreeningStatus.AwaitingApplicant => "The invitation was created and is waiting for the applicant.",
+        ApplicantScreeningStatus.InProgress => "The applicant submitted their information and the provider is processing it.",
+        ApplicantScreeningStatus.Completed => "The provider has completed the screening.",
+        ApplicantScreeningStatus.Failed => "The screening could not be completed.",
+        ApplicantScreeningStatus.Cancelled => "The screening was cancelled.",
+        _ => "Screening status is unavailable.",
+    };
+
+    public static string NextActionFor(
+        ApplicantScreeningStatus status, ScreeningDecision? decision, ScreeningMode mode) => status switch
+    {
+        ApplicantScreeningStatus.Created => "Start the screening when the applicant is ready.",
+        ApplicantScreeningStatus.AwaitingProvider => "No action is needed yet. Retry with the same request if this does not update.",
+        ApplicantScreeningStatus.AwaitingApplicant => "Ask the applicant to complete the secure provider invitation.",
+        ApplicantScreeningStatus.InProgress => "Wait for the provider to finish, or open the provider site for details.",
+        ApplicantScreeningStatus.Completed when decision == null => "Review the result at the provider and record your screening decision.",
+        ApplicantScreeningStatus.Completed => "The screening decision is recorded.",
+        ApplicantScreeningStatus.Failed when mode == ScreeningMode.Integrated => "Retry the integrated screening or track an outside screening.",
+        ApplicantScreeningStatus.Failed => "Update this outside screening or start another one.",
+        ApplicantScreeningStatus.Cancelled => "Start another screening if it is still needed.",
+        _ => "Review the screening record.",
+    };
+}
+
+public sealed class ScreeningWorkspaceResponse
+{
+    public ScreeningProviderCapabilitiesResponse IntegratedProvider { get; init; } = new();
+    public IReadOnlyList<ApplicantScreeningResponse> Screenings { get; init; } = [];
+}
+
+public sealed class StartIntegratedScreeningRequest
+{
+    [Required, MaxLength(200)] public string OperationKey { get; init; } = string.Empty;
+}
+
+public sealed class TrackExternalScreeningRequest
+{
+    [Required, MaxLength(200)] public string OperationKey { get; init; } = string.Empty;
+    [Required, MaxLength(160)] public string ProviderDisplayName { get; init; } = string.Empty;
+    [MaxLength(200)] public string? ProviderReference { get; init; }
+    [Url, MaxLength(2000)] public string? ProviderHostedUrl { get; init; }
+    [MaxLength(300)] public string? CreditReportingAgencyName { get; init; }
+    [MaxLength(500)] public string? CreditReportingAgencyAddress { get; init; }
+    [MaxLength(80)] public string? CreditReportingAgencyPhone { get; init; }
+    public ApplicantScreeningStatus Status { get; init; } = ApplicantScreeningStatus.InProgress;
+}
+
+public sealed class UpdateExternalScreeningRequest
+{
+    [Required, MaxLength(200)] public string OperationKey { get; init; } = string.Empty;
+    public ApplicantScreeningStatus? Status { get; init; }
+    [MaxLength(200)] public string? ProviderReference { get; init; }
+    [Url, MaxLength(2000)] public string? ProviderHostedUrl { get; init; }
+    [MaxLength(300)] public string? CreditReportingAgencyName { get; init; }
+    [MaxLength(500)] public string? CreditReportingAgencyAddress { get; init; }
+    [MaxLength(80)] public string? CreditReportingAgencyPhone { get; init; }
+    public DateTime? OccurredAtUtc { get; init; }
+}
+
+public sealed class RecordScreeningDecisionRequest
+{
+    [Required, MaxLength(200)] public string OperationKey { get; init; } = string.Empty;
+    public ScreeningDecision? Decision { get; init; }
+    [MaxLength(1000)] public string? Reason { get; init; }
+    public bool ConsumerReportUsed { get; init; }
 }
 
 /// <summary>Body for <c>POST /api/v1/applications/{id}/adverse-action</c>.</summary>
 public class GenerateAdverseActionRequest
 {
+    /// <summary>Stable client-generated key reused when this logical generation attempt is retried.</summary>
+    [Required, MaxLength(200)]
+    public string OperationKey { get; set; } = string.Empty;
+
     /// <summary>
     /// Optional override for the principal reason printed on the notice. When omitted, the reason is
     /// derived from the application's decision reason / screening recommendation.

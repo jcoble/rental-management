@@ -24,13 +24,34 @@ public class UnitDashboardResponse
     /// <summary>The compact health summary rendered as chips in the page header.</summary>
     public UnitDashboardHeader Header { get; set; } = new();
 
-    /// <summary>The unit's current lease (in-force Active/NoticeGiven or pending signature), null when only historical leases remain.</summary>
+    /// <summary>Canonical occupancy and possession truth, independent of Agreement state.</summary>
+    public UnitOccupancyPossessionCondition OccupancyPossession { get; set; } = new();
+
+    /// <summary>Canonical marketing availability, independent of tenancy and Agreement state.</summary>
+    public UnitMarketingAvailabilityCondition MarketingAvailability { get; set; } = new();
+
+    /// <summary>Canonical TenantAccount condition, independent of Agreement state.</summary>
+    public UnitTenantAccountCondition TenantAccountCondition { get; set; } = new();
+
+    /// <summary>Canonical legal and notice condition, without inferring other condition families.</summary>
+    public UnitLegalNoticeCondition LegalNoticeCondition { get; set; } = new();
+
+    /// <summary>Canonical maintenance and turnover condition.</summary>
+    public UnitMaintenanceTurnoverCondition MaintenanceTurnover { get; set; } = new();
+
+    /// <summary>The canonical current/planned LeaseManagement identity, independent of Agreement state.</summary>
+    public int? LeaseManagementId { get; set; }
+
+    /// <summary>The canonical open TenantAccount identity, independent of Agreement state.</summary>
+    public int? TenantAccountId { get; set; }
+
+    /// <summary>The governing or upcoming immutable agreement for the Unit's current relationship.</summary>
     public UnitLeaseSummary? CurrentLease { get; set; }
 
-    /// <summary>The current lease's tenant, null when there is no current lease.</summary>
+    /// <summary>The current relationship's primary tenant, null when there is no current relationship.</summary>
     public UnitTenantSummary? CurrentTenant { get; set; }
 
-    /// <summary>All tenants tied to the current lease, primary tenant first.</summary>
+    /// <summary>All currently effective household parties, primary tenant first.</summary>
     public IReadOnlyList<UnitTenantSummary> CurrentTenants { get; set; } = [];
 
     /// <summary>Small, capped lists for the Overview tab (each ~5 rows).</summary>
@@ -41,6 +62,45 @@ public class UnitDashboardResponse
 
     /// <summary>The most recent unit history events (~15), for the persistent timeline rail.</summary>
     public IReadOnlyList<AuditEntryResponse> RecentTimeline { get; set; } = [];
+}
+
+public class UnitOccupancyPossessionCondition
+{
+    public string Status { get; set; } = "Vacant";
+    public bool IsOccupied { get; set; }
+    public bool HasScheduledMoveIn { get; set; }
+    public int? LeaseManagementId { get; set; }
+}
+
+public class UnitMarketingAvailabilityCondition
+{
+    public string Status { get; set; } = "Available";
+    public bool IsAvailable { get; set; }
+}
+
+public class UnitTenantAccountCondition
+{
+    public string Status { get; set; } = "NoAccount";
+    public int? TenantAccountId { get; set; }
+    public decimal ReceivableBalance { get; set; }
+    public decimal PastDueAmount { get; set; }
+}
+
+public class UnitLegalNoticeCondition
+{
+    public string Status { get; set; } = "NoGoverningAgreement";
+    public int? AgreementId { get; set; }
+    public string? AgreementStatus { get; set; }
+    public int OpenNoticeCount { get; set; }
+}
+
+public class UnitMaintenanceTurnoverCondition
+{
+    public string Status { get; set; } = "Clear";
+    public int OpenWorkOrderCount { get; set; }
+    public bool IsInTurnover { get; set; }
+    public bool IsOutOfService { get; set; }
+    public bool IsOnManagementHold { get; set; }
 }
 
 /// <summary>A stage's recommended next action plus the web route it deep-links to.</summary>
@@ -58,7 +118,7 @@ public class UnitDashboardHeader
     /// <summary>One-word rent state for the chip: <c>Overdue</c>, <c>Due</c>, <c>Current</c>, or <c>NoLease</c>.</summary>
     public string RentState { get; set; } = "NoLease";
 
-    /// <summary>Outstanding (still-owed) rent for the current lease — drives the rent chip / Collect action.</summary>
+    /// <summary>Outstanding (still-owed) rent on the current tenant account — drives the rent chip / Collect action.</summary>
     public decimal OutstandingRentBalance { get; set; }
 
     /// <summary>Count of open (not Completed/Cancelled/Archived) work orders on the unit.</summary>
@@ -68,7 +128,7 @@ public class UnitDashboardHeader
     public int? LeaseEndsInDays { get; set; }
 
     /// <summary>
-    /// Documents on file for the unit and its child records (lease, work orders, expenses, payments, inspections).
+    /// Documents on file for the unit and its related records (agreements, work orders, expenses, ledger entries, inspections).
     /// NOTE: scan drafts are not unit-scoped until confirmed, so this is the unit's document count
     /// (what the Documents tab lists) rather than a strict "pending AI review" queue.
     /// </summary>
@@ -119,13 +179,19 @@ public class UnitTurnoverSummary
     public int? DaysInTurnover { get; set; }
 }
 
-/// <summary>Compact current-lease projection for the header / overview.</summary>
+/// <summary>Compact canonical relationship/agreement projection for the header / overview.</summary>
 public class UnitLeaseSummary
 {
+    /// <summary>The immutable governing or upcoming LeaseAgreement id.</summary>
     public int Id { get; set; }
+
+    /// <summary>The continuous household/account relationship containing this agreement.</summary>
+    public int LeaseManagementId { get; set; }
+
+    public int? TenantAccountId { get; set; }
     public string LeaseNumber { get; set; } = string.Empty;
 
-    /// <summary>Lease status as its string name (e.g. <c>Active</c>).</summary>
+    /// <summary>Database-derived agreement status (for example Governing or Upcoming).</summary>
     public string Status { get; set; } = string.Empty;
     public DateTime StartDate { get; set; }
     public DateTime EndDate { get; set; }
@@ -153,8 +219,11 @@ public class UnitDashboardOverview
 
 public class UnitPaymentSummary
 {
-    public int Id { get; set; }
-    public int LeaseId { get; set; }
+    /// <summary>The same immutable TenantLedgerEntry id used by global account history.</summary>
+    public long Id { get; set; }
+    public int TenantAccountId { get; set; }
+    public int LeaseManagementId { get; set; }
+    public int? LeaseAgreementId { get; set; }
 
     /// <summary>Payment type as its string name (e.g. <c>Rent</c>).</summary>
     public string Type { get; set; } = string.Empty;
@@ -185,9 +254,9 @@ public class UnitDocumentSummary
     public string FileName { get; set; } = string.Empty;
     public string ContentType { get; set; } = string.Empty;
 
-    /// <summary>The kind of record the file is attached to (e.g. <c>Lease</c>, <c>WorkOrder</c>).</summary>
+    /// <summary>The kind of record the file is attached to (e.g. <c>LeaseAgreement</c>, <c>WorkOrder</c>).</summary>
     public string? EntityType { get; set; }
-    public int? EntityId { get; set; }
+    public long? EntityId { get; set; }
     public DateTime UploadedAt { get; set; }
 }
 

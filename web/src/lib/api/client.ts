@@ -17,13 +17,56 @@
 
 import { browser } from '$app/environment';
 import { CLIENT_API_BASE_URL } from '$lib/config';
-import { getAuthState, updateToken, clearAuth, isTokenExpired } from '$lib/stores/auth.svelte';
+import {
+	getAuthState,
+	updateToken,
+	clearAuth,
+	isTokenExpired,
+	setAccessEnvelope,
+	waitForAuthInitialization
+} from '$lib/stores/auth.svelte';
 import { createSingleFlightWithReuse } from '$lib/utils/single-flight';
+import type { AccessEnvelope } from '$lib/types/user';
+import { isAccessTransitionInProgress } from '$lib/auth/access-transition-state';
+import { accessEnvelopeAuthorityChanged } from '$lib/auth/access-envelope-change';
 
 export const API_BASE_URL = CLIENT_API_BASE_URL;
 
 const REFRESH_FETCH_TIMEOUT_MS = 10_000;
 const API_FETCH_TIMEOUT_MS = 20_000;
+const ACCESS_REFRESH_HEADER = 'x-access-envelope-refresh';
+
+export type AccessChangeReason =
+	| 'context'
+	| 'experience'
+	| 'refresh'
+	| 'refresh-signalr';
+export type TokenRefreshSource = 'api' | 'signalr';
+
+let accessRecoveryCallback:
+	| ((access: AccessEnvelope, reason: AccessChangeReason) => Promise<void> | void)
+	| null = null;
+
+/** Shell-owned cache/realtime cleanup invoked whenever the effective access view changes. */
+export function setAccessRecoveryCallback(
+	callback: ((access: AccessEnvelope, reason: AccessChangeReason) => Promise<void> | void) | null
+): void {
+	accessRecoveryCallback = callback;
+}
+
+export async function adoptAccessSession(
+	accessToken: string,
+	accessTokenExpiration: string,
+	access: AccessEnvelope
+): Promise<void> {
+	updateToken(accessToken, new Date(accessTokenExpiration), access);
+	await accessRecoveryCallback?.(access, 'context');
+}
+
+export async function adoptAccessEnvelope(access: AccessEnvelope): Promise<void> {
+	setAccessEnvelope(access);
+	await accessRecoveryCallback?.(access, 'experience');
+}
 
 /** Structured error mirroring a StandardErrorResponse entry. */
 export interface StandardError {
@@ -71,7 +114,10 @@ export class ApiError extends Error {
 		if (!Array.isArray(raw)) return undefined;
 		const concerns = raw
 			.filter((c): c is Record<string, unknown> => !!c && typeof c === 'object')
-			.map((c) => ({ phrase: String(c.phrase ?? ''), concern: String(c.concern ?? '') }))
+			.map((c) => ({
+				phrase: String(c.phrase ?? ''),
+				concern: String(c.concern ?? '')
+			}))
 			.filter((c) => c.phrase || c.concern);
 		return concerns.length > 0 ? concerns : undefined;
 	}
@@ -124,7 +170,7 @@ function fallbackHttpErrorMessage(response: Response): string {
  * Refresh the access token via the same-origin proxy endpoint, then update the
  * client auth store. Deduplicated so concurrent 401s share one refresh.
  */
-async function performTokenRefresh(): Promise<void> {
+async function performTokenRefresh(source: TokenRefreshSource = 'api'): Promise<void> {
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), REFRESH_FETCH_TIMEOUT_MS);
 	const response = await fetch('/api/auth/refresh', {
@@ -137,8 +183,20 @@ async function performTokenRefresh(): Promise<void> {
 		throw new ApiError(response.status, 'Token refresh failed');
 	}
 
-	const data = await response.json();
-	updateToken(data.accessToken, new Date(data.accessTokenExpiration));
+	const data = (await response.json()) as {
+		accessToken: string;
+		accessTokenExpiration: string;
+		access: AccessEnvelope;
+	};
+	const previousAccess = getAuthState().accessEnvelope;
+	const authorityChanged = accessEnvelopeAuthorityChanged(previousAccess, data.access);
+	updateToken(data.accessToken, new Date(data.accessTokenExpiration), data.access);
+	if (authorityChanged) {
+		await accessRecoveryCallback?.(
+			data.access,
+			source === 'signalr' ? 'refresh-signalr' : 'refresh'
+		);
+	}
 }
 
 /**
@@ -160,14 +218,22 @@ export const refreshToken = createSingleFlightWithReuse(
 	REFRESH_REUSE_WINDOW_MS
 );
 
+async function recoverStaleAccess(): Promise<void> {
+	// The refresh operation itself compares the old/new authority coordinates and performs the
+	// single-flight recovery before resolving. Do not invoke the callback again here.
+	await refreshToken();
+}
+
+function isMutation(method: string | undefined): boolean {
+	return !['GET', 'HEAD', 'OPTIONS'].includes((method ?? 'GET').toUpperCase());
+}
+
 function buildErrorFromBody(response: Response, errorData: unknown): ApiError {
 	const body = (errorData ?? {}) as Record<string, unknown>;
 
 	// StandardErrorResponse: { error: { code, message, ... }, errors: [...] }
 	const primaryError: StandardError | undefined =
-		body.error && typeof body.error === 'object'
-			? (body.error as StandardError)
-			: undefined;
+		body.error && typeof body.error === 'object' ? (body.error as StandardError) : undefined;
 	const errors: StandardError[] | undefined = Array.isArray(body.errors)
 		? (body.errors as StandardError[])
 		: undefined;
@@ -211,6 +277,19 @@ function buildErrorFromBody(response: Response, errorData: unknown): ApiError {
 /** Low-level authenticated fetch. Throws {@link ApiError} on non-2xx. */
 export async function fetchApi<T>(endpoint: string, options: FetchOptions = {}): Promise<T> {
 	const { requireAuth = true, timeoutMs = API_FETCH_TIMEOUT_MS, ...fetchOptions } = options;
+	if (
+		browser &&
+		isAccessTransitionInProgress() &&
+		isMutation(fetchOptions.method) &&
+		endpoint !== '/auth/experience/select' &&
+		endpoint !== '/auth/contexts/select'
+	) {
+		throw new ApiError(
+			409,
+			'Your work area is changing. Wait for the new page before submitting this action.',
+			'ACCESS_TRANSITION_IN_PROGRESS'
+		);
+	}
 	const headers: Record<string, string> = {
 		...(fetchOptions.headers as Record<string, string>)
 	};
@@ -220,6 +299,7 @@ export async function fetchApi<T>(endpoint: string, options: FetchOptions = {}):
 	}
 
 	if (requireAuth) {
+		await waitForAuthInitialization();
 		// Refresh BEFORE sending when the token is MISSING or expires within 120s. isTokenExpired()
 		// returns true when the in-memory token/expiration is absent too — e.g. a query/mutation that
 		// fires before hydration, or after idling on one page. The previous guard (`&& auth.accessToken`)
@@ -253,6 +333,32 @@ export async function fetchApi<T>(endpoint: string, options: FetchOptions = {}):
 	}
 
 	if (!response.ok) {
+		if (
+			response.status === 401 &&
+			response.headers.get(ACCESS_REFRESH_HEADER) === 'required' &&
+			browser
+		) {
+			await recoverStaleAccess();
+			if (isMutation(fetchOptions.method)) {
+				throw new ApiError(
+					409,
+					'Your access changed while this action was open. Nothing was submitted; review the refreshed screen and try again.',
+					'ACCESS_REVISION_CHANGED'
+				);
+			}
+			const recoveredAuth = getAuthState();
+			if (recoveredAuth.accessToken) {
+				headers['Authorization'] = `Bearer ${recoveredAuth.accessToken}`;
+				const recoveredResponse = await fetchWithTimeout(
+					`${API_BASE_URL}${endpoint}`,
+					{ ...fetchOptions, headers, credentials: 'include' },
+					timeoutMs
+				);
+				if (recoveredResponse.ok) return parseJsonOrEmpty<T>(recoveredResponse);
+				const recoveredError = await recoveredResponse.json().catch(() => ({}));
+				throw buildErrorFromBody(recoveredResponse, recoveredError);
+			}
+		}
 		if (response.status === 401 && browser) {
 			// Refresh and retry once.
 			try {
@@ -296,15 +402,28 @@ export async function fetchPublicApi<T>(endpoint: string, options: RequestInit =
  */
 export const api = {
 	get: <T>(path: string) => fetchApi<T>(path),
-	post: <T>(path: string, data?: unknown) =>
-		fetchApi<T>(path, { method: 'POST', body: data ? JSON.stringify(data) : undefined }),
-	patch: <T>(path: string, data: unknown) =>
-		fetchApi<T>(path, { method: 'PATCH', body: JSON.stringify(data) }),
-	put: <T>(path: string, data: unknown) =>
-		fetchApi<T>(path, { method: 'PUT', body: JSON.stringify(data) }),
-	delete: <T = void>(path: string) => fetchApi<T>(path, { method: 'DELETE' }),
-	upload: <T>(path: string, formData: FormData) =>
-		fetchApi<T>(path, { method: 'POST', body: formData })
+	post: <T>(path: string, data?: unknown, options: RequestInit = {}) =>
+		fetchApi<T>(path, {
+			...options,
+			method: 'POST',
+			body: data ? JSON.stringify(data) : undefined
+		}),
+	patch: <T>(path: string, data: unknown, options: RequestInit = {}) =>
+		fetchApi<T>(path, {
+			...options,
+			method: 'PATCH',
+			body: JSON.stringify(data)
+		}),
+	put: <T>(path: string, data: unknown, options: RequestInit = {}) =>
+		fetchApi<T>(path, {
+			...options,
+			method: 'PUT',
+			body: JSON.stringify(data)
+		}),
+	delete: <T = void>(path: string, options: RequestInit = {}) =>
+		fetchApi<T>(path, { ...options, method: 'DELETE' }),
+	upload: <T>(path: string, formData: FormData, options: RequestInit = {}) =>
+		fetchApi<T>(path, { ...options, method: 'POST', body: formData })
 };
 
 /**
@@ -338,6 +457,16 @@ export async function downloadFile(endpoint: string): Promise<Blob> {
 	};
 
 	let response = await send();
+
+	if (
+		!response.ok &&
+		response.status === 401 &&
+		response.headers.get(ACCESS_REFRESH_HEADER) === 'required' &&
+		browser
+	) {
+		await recoverStaleAccess();
+		response = await send();
+	}
 
 	if (!response.ok && response.status === 401 && browser) {
 		try {

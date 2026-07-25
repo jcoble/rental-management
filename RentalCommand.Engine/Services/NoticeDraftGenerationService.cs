@@ -1,146 +1,130 @@
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Core.Configuration;
+using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Automation;
 using RentalCommand.Core.Enums;
-using RentalCommand.Data;
+using RentalCommand.Data.Notifications;
 
 namespace RentalCommand.Engine.Services;
 
-/// <inheritdoc cref="INoticeDraftGenerationService"/>
-/// <remarks>
-/// Runs inside a fresh DI scope (scoped <see cref="RentalCommandDbContext"/>). Delegates the actual
-/// per-portfolio draft composition (and its LLM copy + de-dup idempotency) to the shared
-/// <see cref="INoticeDraftService"/> from the Api project — the same service the manual
-/// "Generate" button calls — so behaviour is identical whether triggered by the worker or the user.
-/// </remarks>
+/// <summary>Consumes one DB-side, fenced batch. It never loops portfolios to discover work.</summary>
 public sealed class NoticeDraftGenerationService : INoticeDraftGenerationService
 {
-    private readonly RentalCommandDbContext _db;
-    private readonly INoticeDraftService _notices;
-    private readonly INotificationSettingsService _settings;
+    private readonly ITenantNoticeWorkClaimStore _claims;
+    private readonly IAtomicUnitOfWork _atomic;
+    private readonly INotificationFoundationService _foundation;
     private readonly ILogger<NoticeDraftGenerationService> _logger;
+    private readonly TimeProvider _clock;
 
     public NoticeDraftGenerationService(
-        RentalCommandDbContext db,
-        INoticeDraftService notices,
-        INotificationSettingsService settings,
-        ILogger<NoticeDraftGenerationService> logger)
+        ITenantNoticeWorkClaimStore claims,
+        IAtomicUnitOfWork atomic,
+        INotificationFoundationService foundation,
+        ILogger<NoticeDraftGenerationService> logger,
+        TimeProvider clock)
     {
-        _db = db;
-        _notices = notices;
-        _settings = settings;
+        _claims = claims;
+        _atomic = atomic;
+        _foundation = foundation;
         _logger = logger;
+        _clock = clock;
     }
 
-    /// <inheritdoc/>
     public async Task<int> GenerateAllAsync(CancellationToken ct = default)
     {
-        var portfolioIds = await _db.Portfolios
-            .Where(p => p.DeletedAt == null)
-            .OrderBy(p => p.Id)
-            .Select(p => p.Id)
-            .ToListAsync(ct);
+        var now = _clock.GetUtcNow().UtcDateTime;
+        var token = Guid.NewGuid();
+        var owner = $"{Environment.MachineName}:{Environment.ProcessId}";
+        var work = await _claims.ClaimReadyAsync(owner, token, now, now.AddMinutes(5), 50, ct);
+        if (work.Count == 0) return 0;
 
-        var created = 0;
-        foreach (var portfolioId in portfolioIds)
+        var command = new ApplyClaimedTenantNoticeDraftBatchCommand(token);
+        var outcome = await _atomic.ExecuteAsync(
+            TenantNoticeDraftAutomation.Identity(command),
+            command,
+            TenantNoticeDraftAutomation.Codec,
+            ct);
+        var generated = outcome.Value.Drafts;
+        var byWorkItem = generated
+            .ToDictionary(row => row.WorkItemId
+                ?? throw new InvalidOperationException("Claimed notice batch returned an unbound draft."));
+        var created = outcome.Value.CreatedCount;
+
+        foreach (var item in work)
         {
-            ct.ThrowIfCancellationRequested();
-
-            // NoticeAutopilot is a per-portfolio master gate now.
-            var cfg = await _settings.GetRuntimeAsync(portfolioId, ct);
-            if (!cfg.EnableNoticeAutopilot)
-            {
-                _logger.LogDebug("notice autopilot disabled for portfolio {PortfolioId}", portfolioId);
-                continue;
-            }
-
+            var draftPersisted = false;
             try
             {
-                // GenerateAsync is idempotent (it skips notice types that already have an open Draft
-                // for the lease), so re-running daily never produces duplicates. The autopilot runs
-                // portfolio-wide (no per-tenant/type scoping).
-                var result = await _notices.GenerateAsync(portfolioId, ct: ct);
-                created += result.CreatedCount;
-
-                // Auto-send: for each freshly-created draft whose type is set to AutoSend AND has an
-                // active template, approve+send it now. Gated by NotifyTenants. Load the portfolio's
-                // settings + active-template types once (DB-side) — no per-draft queries.
-                if (cfg.NotifyTenants && result.Drafts.Count > 0)
+                if (!byWorkItem.TryGetValue(item.Id, out var draft))
                 {
-                    var settings = await _db.NotificationSettings
-                        .AsNoTracking()
-                        .FirstOrDefaultAsync(s => s.PortfolioId == portfolioId, ct);
+                    throw new InvalidOperationException($"Tenant notice work item {item.Id} produced no canonical draft.");
+                }
 
-                    var templatedTypes = await _db.NoticeTemplates
-                        .AsNoTracking()
-                        .Where(t => t.PortfolioId == portfolioId && t.IsActive)
-                        .Select(t => t.NoticeType)
-                        .ToListAsync(ct);
-                    var templated = templatedTypes.ToHashSet();
+                draftPersisted = true;
+                if (item.IsAuto && draft.Status == "Draft")
+                {
+                    await _foundation.ApproveAndQueueAsync(
+                        NoticeApprovalExecutionContext.ForAutomation(item.PortfolioId),
+                        draft.DraftId,
+                        new ApproveAndQueueNoticeRequest(EnabledChannels(item)),
+                        new TenantNoticeWorkFence(item.Id, token),
+                        $"tenant-notice-work:{item.Id}:approve",
+                        ct);
+                    continue;
+                }
 
-                    foreach (var draft in result.Drafts)
-                    {
-                        if (draft.Status != "Draft") continue;
-                        if (!AutoSendEnabled(settings, draft.NoticeType)) continue;
-                        if (!templated.Contains(draft.NoticeType)) continue;
-
-                        var channels = ChannelsFor(cfg, draft.NoticeType);
-                        if (channels.Count == 0) continue;
-
-                        try
-                        {
-                            await _notices.ApproveAsync(
-                                portfolioId,
-                                draft.Id,
-                                new RentalCommand.Api.DTOs.ApproveNoticeDraftRequest { Channels = channels },
-                                ct);
-                        }
-                        catch (Exception ex)
-                        {
-                            // A blocked/failed auto-send leaves the draft for manual review.
-                            _logger.LogWarning(ex, "Auto-send failed for draft {DraftId} ({Type}); left as draft.", draft.Id, draft.NoticeType);
-                        }
-                    }
+                // Draft-mode work stops after producing editable copy. A replay of Auto work can
+                // resolve the already-approved exact draft, in which case only the fenced work closes.
+                if (!await _claims.CompleteAsync(item.Id, token, ct))
+                {
+                    _logger.LogWarning("Lost tenant notice work fencing token for {WorkItemId}", item.Id);
                 }
             }
             catch (Exception ex)
             {
-                // Isolate one portfolio's failure so the rest of the run still proceeds.
-                _logger.LogWarning(ex, "Notice autopilot failed for portfolio {PortfolioId}; continuing.", portfolioId);
+                _logger.LogWarning(ex, "Tenant notice work {WorkItemId} failed; releasing for retry", item.Id);
+                await ApplyFailureBehaviorAsync(item, token, now, draftPersisted, ct);
             }
         }
-
-        if (created > 0)
-            _logger.LogInformation("Notice autopilot created {Count} draft(s) across {Portfolios} portfolio(s).",
-                created, portfolioIds.Count);
-
         return created;
     }
 
-    private static bool AutoSendEnabled(Core.Entities.NotificationSettings? s, string noticeType) => s != null && noticeType switch
+    private async Task ApplyFailureBehaviorAsync(
+        ClaimedTenantNoticeWorkItem item,
+        Guid token,
+        DateTime now,
+        bool draftPersisted,
+        CancellationToken ct)
     {
-        "RentReminder" => s.AutoSendRentReminder,
-        "LateRentNotice" => s.AutoSendLateRent,
-        "RenewalOffer" => s.LeaseEndAutoAction == LeaseEndAutoAction.Renewal,
-        "MonthToMonthConversion" => s.LeaseEndAutoAction == LeaseEndAutoAction.MonthToMonth,
-        "MoveOutReminder" => s.LeaseEndAutoAction == LeaseEndAutoAction.NonRenewal,
-        _ => false,
-    };
-
-    private static List<string> ChannelsFor(NotificationsConfig cfg, string noticeType)
-    {
-        var category = noticeType switch
+        var terminalAttempt = item.AttemptCount >= 3;
+        if (item.FailureBehavior == nameof(NoticeFailureBehavior.StopAndRequireReview)
+            || (terminalAttempt && item.FailureBehavior == nameof(NoticeFailureBehavior.RetryThenFail))
+            || (terminalAttempt && !draftPersisted
+                && item.FailureBehavior == nameof(NoticeFailureBehavior.RetryThenDraft)))
         {
-            "RentReminder" => Core.Enums.NotificationType.RentCharge,
-            "LateRentNotice" => Core.Enums.NotificationType.LateFee,
-            _ => Core.Enums.NotificationType.LeaseExpiry, // renewal / month-to-month / move-out
-        };
-        var pref = cfg.ResolveChannels(category);
-        var channels = new List<string>();
-        if (pref.EnableInApp) channels.Add("Portal");
-        if (pref.EnableEmail) channels.Add("Email");
-        if (pref.EnableSms) channels.Add("Sms");
+            await _claims.BlockAsync(item.Id, token, ct);
+            return;
+        }
+
+        if (terminalAttempt
+            && draftPersisted
+            && item.FailureBehavior == nameof(NoticeFailureBehavior.RetryThenDraft))
+        {
+            await _claims.CompleteAsync(item.Id, token, ct);
+            return;
+        }
+
+        await _claims.ReleaseAsync(item.Id, token, now.AddMinutes(15), ct);
+    }
+
+    private static IReadOnlyList<NoticeDeliveryChannel> EnabledChannels(ClaimedTenantNoticeWorkItem item)
+    {
+        var channels = new List<NoticeDeliveryChannel>(4);
+        if (item.SendTenantPortal) channels.Add(NoticeDeliveryChannel.TenantPortal);
+        if (item.SendMobilePush) channels.Add(NoticeDeliveryChannel.MobilePush);
+        if (item.SendEmail) channels.Add(NoticeDeliveryChannel.Email);
+        if (item.SendSms) channels.Add(NoticeDeliveryChannel.Sms);
         return channels;
     }
 }

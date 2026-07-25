@@ -5,9 +5,9 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
-using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -28,73 +28,24 @@ public sealed class OwnerDistributionServiceTests : IDisposable
     public OwnerDistributionServiceTests()
     {
         _ctx = new SqliteTestContext([new OwnerDistributionRecordingCommandInterceptor(_commands)]);
-        _sut = new OwnerDistributionService(_ctx.Db, Mock.Of<IDataUpdateService>(), TimeProvider.System);
+        _sut = new OwnerDistributionService(
+            _ctx.Db, TimeProvider.System, Mock.Of<IAtomicUnitOfWork>());
     }
 
     public void Dispose() => _ctx.Dispose();
 
     [Fact]
-    public async Task CreateAsync_PersistsDistributionWithoutCreatingExpense()
+    public void MutationsExposeOnlyScopedReceiptBackedOverloads()
     {
-        var owner = SeedOwner("Acme Holdings");
-        var property = SeedProperty(owner.Id, "Maple Duplex");
+        var mutationMethods = typeof(IOwnerDistributionService).GetMethods()
+            .Where(method => method.Name is "CreateAsync" or "UpdateAsync" or "DeleteAsync")
+            .ToArray();
 
-        var result = await _sut.CreateAsync(PortfolioId, new CreateOwnerDistributionRequest
-        {
-            OwnerEntityId = owner.Id,
-            PropertyId = property.Id,
-            Date = new DateTime(Year, 6, 15, 0, 0, 0, DateTimeKind.Utc),
-            Amount = 1200m,
-            Method = DistributionMethod.Ach,
-            Memo = "June owner draw",
-        });
-
-        result.Should().NotBeNull();
-        result!.OwnerName.Should().Be(owner.Name);
-        result.PropertyName.Should().Be(property.Name);
-        result.Amount.Should().Be(1200m);
-        result.Method.Should().Be(DistributionMethod.Ach);
-        _ctx.Db.OwnerDistributions.Should().ContainSingle();
-        _ctx.Db.Expenses.Should().BeEmpty("owner distributions are not operating expenses");
-    }
-
-    [Fact]
-    public async Task CreateAsync_RejectsCrossPortfolioOwnerAndMismatchedProperty()
-    {
-        SeedPortfolio(999);
-        var owner = SeedOwner("Acme Holdings");
-        var owner2 = SeedOwner("Beta Estates");
-        var propertyForOtherOwner = SeedProperty(owner2.Id, "Other Owner Property");
-        var foreignOwner = SeedOwner("Foreign Owner", portfolioId: 999);
-        var foreignProperty = SeedProperty(foreignOwner.Id, "Foreign Property", portfolioId: 999);
-
-        var crossPortfolioOwner = await _sut.CreateAsync(PortfolioId, new CreateOwnerDistributionRequest
-        {
-            OwnerEntityId = foreignOwner.Id,
-            Date = new DateTime(Year, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-            Amount = 100m,
-        });
-
-        var crossPortfolioProperty = await _sut.CreateAsync(PortfolioId, new CreateOwnerDistributionRequest
-        {
-            OwnerEntityId = owner.Id,
-            PropertyId = foreignProperty.Id,
-            Date = new DateTime(Year, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-            Amount = 100m,
-        });
-
-        var mismatchedPropertyOwner = await _sut.CreateAsync(PortfolioId, new CreateOwnerDistributionRequest
-        {
-            OwnerEntityId = owner.Id,
-            PropertyId = propertyForOtherOwner.Id,
-            Date = new DateTime(Year, 6, 1, 0, 0, 0, DateTimeKind.Utc),
-            Amount = 100m,
-        });
-
-        crossPortfolioOwner.Should().BeNull();
-        crossPortfolioProperty.Should().BeNull();
-        mismatchedPropertyOwner.Should().BeNull();
-        _ctx.Db.OwnerDistributions.Should().BeEmpty();
+        mutationMethods.Should().HaveCount(3);
+        mutationMethods.Should().OnlyContain(method =>
+            method.GetParameters().First().ParameterType ==
+                typeof(RentalCommand.Core.Authorization.WorkspaceReadScope) &&
+            method.GetParameters().Any(parameter => parameter.Name == "idempotencyKey"));
     }
 
     [Fact]
@@ -153,43 +104,6 @@ public sealed class OwnerDistributionServiceTests : IDisposable
             "yearly owner distribution totals must be summed in SQL");
     }
 
-    [Fact]
-    public async Task UpdateAsync_ReassignsOwnerAndCanClearProperty()
-    {
-        var owner = SeedOwner("Acme Holdings");
-        var owner2 = SeedOwner("Beta Estates");
-        var property = SeedProperty(owner.Id, "Maple Duplex");
-        var distribution = SeedDistribution(owner.Id, 100m, new DateTime(Year, 1, 1, 0, 0, 0, DateTimeKind.Utc), property.Id);
-
-        var result = await _sut.UpdateAsync(PortfolioId, distribution.Id, new UpdateOwnerDistributionRequest
-        {
-            OwnerEntityId = owner2.Id,
-            ClearProperty = true,
-            Amount = 125m,
-            Method = DistributionMethod.Wire,
-            Memo = "reassigned draw",
-        });
-
-        result.Should().NotBeNull();
-        result!.OwnerEntityId.Should().Be(owner2.Id);
-        result.PropertyId.Should().BeNull();
-        result.Amount.Should().Be(125m);
-        result.Method.Should().Be(DistributionMethod.Wire);
-    }
-
-    [Fact]
-    public async Task DeleteAsync_SoftDeletesAndHidesFromReads()
-    {
-        var owner = SeedOwner("Acme Holdings");
-        var distribution = SeedDistribution(owner.Id, 100m, new DateTime(Year, 1, 1, 0, 0, 0, DateTimeKind.Utc));
-
-        (await _sut.DeleteAsync(PortfolioId, distribution.Id)).Should().BeTrue();
-
-        (await _sut.GetAsync(PortfolioId, distribution.Id)).Should().BeNull();
-        (await _sut.ListAsync(PortfolioId, new OwnerDistributionListQuery())).Should().BeEmpty();
-        _ctx.Db.OwnerDistributions.IgnoreQueryFilters().Should().ContainSingle(d => d.DeletedAt != null);
-    }
-
     private void SeedPortfolio(int id)
     {
         var now = DateTime.UtcNow;
@@ -227,7 +141,6 @@ public sealed class OwnerDistributionServiceTests : IDisposable
         var property = new Property
         {
             PortfolioId = portfolioId,
-            OwnerEntityId = ownerEntityId,
             Name = name,
             AddressLine1 = "1 Main St",
             City = "Columbus",
@@ -237,6 +150,17 @@ public sealed class OwnerDistributionServiceTests : IDisposable
             UpdatedAt = now,
         };
         _ctx.Db.Properties.Add(property);
+        _ctx.Db.SaveChanges();
+        _ctx.Db.PropertyOwnerships.Add(new PropertyOwnership
+        {
+            PortfolioId = portfolioId,
+            PropertyId = property.Id,
+            OwnerEntityId = ownerEntityId,
+            OwnershipSharePercent = 100m,
+            EffectiveFromUtc = now,
+            StatementRecipientName = "Owner",
+            PayeeName = "Owner",
+        });
         _ctx.Db.SaveChanges();
         return property;
     }

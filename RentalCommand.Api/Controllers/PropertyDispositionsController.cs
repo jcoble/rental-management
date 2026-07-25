@@ -21,7 +21,7 @@ public class PropertyDispositionsController : ManagementControllerBase
     public async Task<ActionResult<IReadOnlyList<PropertyDispositionResponse>>> List(
         [FromQuery] PropertyDispositionListQuery query, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), query, ct);
+        var items = await _service.ListAuthorizedAsync(GetWorkspaceReadScope(), query, ct);
         return Ok(items);
     }
 
@@ -30,7 +30,7 @@ public class PropertyDispositionsController : ManagementControllerBase
     public async Task<ActionResult<PropertyDispositionListResponse>> ListPage(
         [FromQuery] PropertyDispositionListQuery query, CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), query, ct);
+        var page = await _service.ListPageAuthorizedAsync(GetWorkspaceReadScope(), query, ct);
         return Ok(page);
     }
 
@@ -39,7 +39,7 @@ public class PropertyDispositionsController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<PropertyDispositionResponse>> Get(int id, CancellationToken ct)
     {
-        var item = await _service.GetAsync(GetPortfolioId(), id, ct);
+        var item = await _service.GetAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
         return item is null ? NotFound(new { error = "Property disposition not found" }) : Ok(item);
     }
 
@@ -47,9 +47,15 @@ public class PropertyDispositionsController : ManagementControllerBase
     [ProducesResponseType(typeof(PropertyDispositionResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<PropertyDispositionResponse>> Create(
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         [FromBody] CreatePropertyDispositionRequest request, CancellationToken ct)
     {
-        var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
+        if (string.IsNullOrWhiteSpace(idempotencyKey))
+            return BadRequest(new { error = "Idempotency-Key is required." });
+        if (idempotencyKey.Trim().Length > 200)
+            return BadRequest(new { error = "Idempotency-Key cannot exceed 200 characters." });
+        var created = await _service.CreateAsync(
+            GetActiveAccessContext(), request, idempotencyKey.Trim(), ct);
         return created is null
             ? NotFound(new { error = "Property not found in this portfolio or already has an active disposition" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
@@ -59,18 +65,26 @@ public class PropertyDispositionsController : ManagementControllerBase
     [ProducesResponseType(typeof(PropertyDispositionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<PropertyDispositionResponse>> Update(
-        int id, [FromBody] UpdatePropertyDispositionRequest request, CancellationToken ct)
+        int id, [FromBody] UpdatePropertyDispositionRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var updated = await _service.UpdateAuthorizedAsync(
+            GetWorkspaceReadScope(), id, request, operationKey, ct);
         return updated is null ? NotFound(new { error = "Property disposition not found" }) : Ok(updated);
     }
 
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        int id, [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
-        var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var deleted = await _service.DeleteAuthorizedAsync(GetWorkspaceReadScope(), id, operationKey, ct);
         return deleted ? NoContent() : NotFound(new { error = "Property disposition not found" });
     }
 }

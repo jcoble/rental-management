@@ -5,15 +5,15 @@
 	import { notifications } from '$lib/api/endpoints/notifications';
 	import type { NotificationItem } from '$lib/api/types/notification';
 	import type { Appointment } from '$lib/types';
-	import { getCurrentUser } from '$lib/stores/auth.svelte';
+	import { getAuthState, getCurrentUser } from '$lib/stores/auth.svelte';
 	import { notificationStore } from '$lib/stores/notifications.svelte';
-	import { portalActionUrl } from '$lib/utils/portalLinks';
-	import { paymentTypeLabel } from '$lib/utils/payment-labels';
-	import { formatDateOnly, daysFromTodayUtc } from '$lib/utils/date';
+	import { notificationIntentUrl } from '$lib/utils/portalLinks';
+	import { formatDateOnly } from '$lib/utils/date';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import * as Select from '$lib/components/ui/select';
 	import {
@@ -30,6 +30,7 @@
 	} from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
+	const authState = getAuthState();
 	const currentUser = $derived(getCurrentUser());
 
 	const leasesQuery = createQuery(() => ({
@@ -38,16 +39,24 @@
 		queryFn: () => portal.leases()
 	}));
 
-	const balanceQuery = createQuery(() => ({
-		queryKey: ['portal-balance'],
+	let selectedAccountId = $state<number | null>(null);
+	const accountsQuery = createQuery(() => ({
+		queryKey: ['portal-tenant-accounts', 'dashboard'],
 		enabled: !!currentUser,
-		queryFn: () => portal.balance()
+		queryFn: () => portal.tenantAccountsPage({ take: 200, sort: 'propertyName' })
 	}));
 
-	const paymentsQuery = createQuery(() => ({
-		queryKey: ['portal-payments'],
-		enabled: !!currentUser,
-		queryFn: () => portal.payments()
+	$effect(() => {
+		const accounts = accountsQuery.data;
+		if (selectedAccountId == null && accounts?.totalCount === 1 && accounts.items[0]) {
+			selectedAccountId = accounts.items[0].tenantAccountId;
+		}
+	});
+
+	const accountQuery = createQuery(() => ({
+		queryKey: ['portal-tenant-account', selectedAccountId],
+		enabled: !!currentUser && selectedAccountId != null,
+		queryFn: () => portal.tenantAccount(selectedAccountId as number)
 	}));
 
 	const appointmentsQuery = createQuery(() => ({
@@ -57,9 +66,9 @@
 	}));
 
 	const workOrdersQuery = createQuery(() => ({
-		queryKey: ['portal-work-orders'],
+		queryKey: ['portal-work-orders', 'dashboard-open'],
 		enabled: !!currentUser,
-		queryFn: () => portal.workOrders()
+		queryFn: () => portal.workOrders({ openOnly: true, take: 5, sort: '-requestedAt' })
 	}));
 
 	const conversationsQuery = createQuery(() => ({
@@ -81,32 +90,18 @@
 	}));
 
 	const leases = $derived((leasesQuery.data ?? []) as any[]);
-	const payments = $derived((paymentsQuery.data ?? []) as any[]);
 	const appointments = $derived((appointmentsQuery.data ?? []) as Appointment[]);
-	const workOrders = $derived((workOrdersQuery.data ?? []) as any[]);
+	const workOrders = $derived(workOrdersQuery.data?.items ?? []);
 	const conversations = $derived(conversationsQuery.data ?? []);
 	const notificationItems = $derived(notificationsQuery.data ?? []);
-	const balance = $derived((balanceQuery.data ?? {}) as any);
+	const account = $derived(accountQuery.data ?? null);
 
 	const unreadMessages = $derived(conversations.reduce((sum, c) => sum + (c.unreadCount || 0), 0));
 	const unreadNotifications = $derived(unreadNotificationsQuery.data?.count ?? 0);
-	const openWorkOrders = $derived(
-		workOrders.filter((w) => !['Completed', 'Cancelled', 'Archived'].includes(String(w.status)))
-	);
-	// Overdue count comes straight from the server balance so the dollar amount and the item count are
-	// always the same source of truth (the server includes Failed payments — money still owed).
-	const overdueCount = $derived(Number(balance.overdueCount ?? 0));
-	const upcomingPayments = $derived(
-		payments
-			.filter((p) => !['Paid', 'Waived', 'Refunded'].includes(String(p.status)))
-			.sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
-	);
-	const nextPayment = $derived(
-		upcomingPayments.find((p) => (daysFromTodayUtc(p.dueDate) ?? -1) >= 0) ?? null
-	);
+	const openWorkOrders = $derived(workOrders);
+	const openWorkOrderCount = $derived(workOrdersQuery.data?.totalCount ?? 0);
 	const upcomingAppointments = $derived(appointments);
-	const nextRentDays = $derived(nextPayment ? daysUntil(nextPayment.dueDate) : null);
-	const activeLease = $derived(leases.find((l) => l.status === 'Active') ?? leases[0] ?? null);
+	const activeLease = $derived(leases.find((relationship) => relationship.lifecycle === 'Occupied') ?? leases[0] ?? null);
 
 	const APPOINTMENT_TYPE_LABELS: Record<string, string> = {
 		Showing: 'Showing',
@@ -166,23 +161,21 @@
 				queryClient.invalidateQueries({ queryKey: ['notifications-unread-count'] })
 			]);
 		}
-		await goto(portalActionUrl(item.actionUrl), { invalidateAll: true });
+		await goto(
+			notificationIntentUrl(item.navigationIntent, authState.accessEnvelope?.selectedContext),
+			{ invalidateAll: true }
+		);
 	}
 
-	function money(value: number | string | null | undefined) {
+	function money(value: number | string | null | undefined, currency = 'USD') {
 		const amount = Number(value ?? 0);
-		return amount.toLocaleString(undefined, { style: 'currency', currency: 'USD' });
+		return amount.toLocaleString(undefined, { style: 'currency', currency });
 	}
 
 	function date(value: string | null | undefined) {
 		if (!value) return '-';
 		// dueDate / endDate are UTC-midnight calendar dates — format in UTC to avoid the off-by-one shift.
 		return formatDateOnly(value);
-	}
-
-	function daysUntil(value: string) {
-		// Whole-day count in UTC so a date due "today" reads 0, not -1, in behind-UTC zones.
-		return daysFromTodayUtc(value) ?? 0;
 	}
 
 	function appointmentTypeLabel(type: string | null | undefined): string {
@@ -237,6 +230,22 @@
 			</h1>
 		</header>
 
+		{#if accountsQuery.data && accountsQuery.data.totalCount > 1}
+			<label class="mb-5 block max-w-lg text-sm font-medium" data-testid="portal-dashboard-account-selector">
+				Account
+				<select
+					class="mt-1 block w-full rounded-md border border-border bg-background px-3 py-2"
+					value={selectedAccountId ?? ''}
+					onchange={(event) => (selectedAccountId = event.currentTarget.value ? Number(event.currentTarget.value) : null)}
+				>
+					<option value="">Choose an account</option>
+					{#each accountsQuery.data.items as tenantAccount (tenantAccount.tenantAccountId)}
+						<option value={tenantAccount.tenantAccountId}>{tenantAccount.propertyName} · Unit {tenantAccount.unitNumber} · {tenantAccount.accountNumber}</option>
+					{/each}
+				</select>
+			</label>
+		{/if}
+
 		<section id="notifications" class="mb-5 rounded-lg border border-border bg-card p-4">
 			<div class="mb-3 flex items-center justify-between gap-3">
 				<div class="flex items-center gap-2">
@@ -273,23 +282,23 @@
 			</a>
 			<div class="rounded-lg border border-border bg-card p-4">
 				<div class="mb-3 flex items-center gap-2 text-[var(--warning)]"><AlertTriangle class="h-4 w-4" /><span class="text-sm font-medium">Overdue</span></div>
-				<p class="text-3xl font-semibold">{money(balance.overdue ?? 0)}</p>
-				<p class="mt-1 text-sm text-muted-foreground">{overdueCount} overdue item{overdueCount === 1 ? '' : 's'}</p>
+				<p class="text-3xl font-semibold">{account ? money(account.pastDueAmount, account.currency) : '-'}</p>
+				<p class="mt-1 text-sm text-muted-foreground">{account ? `${account.pastDueCount} overdue item${account.pastDueCount === 1 ? '' : 's'}` : 'Choose an account'}</p>
 			</div>
 			<div class="rounded-lg border border-border bg-card p-4">
-				<div class="mb-3 flex items-center gap-2 text-[var(--success)]"><CreditCard class="h-4 w-4" /><span class="text-sm font-medium">Next Rent</span></div>
-				<p class="text-3xl font-semibold">{nextRentDays === null ? '-' : nextRentDays}</p>
+				<div class="mb-3 flex items-center gap-2 text-[var(--success)]"><CreditCard class="h-4 w-4" /><span class="text-sm font-medium">Next due</span></div>
+				<p class="text-3xl font-semibold">{account?.nextDueOn ? money(account.nextDueAmount, account.currency) : '-'}</p>
 				<p class="mt-1 text-sm text-muted-foreground">
-					{#if nextPayment}
-						day{nextRentDays === 1 ? '' : 's'} until {money(nextPayment.amount)} is due
+					{#if account?.nextDueOn}
+						Due {date(account.nextDueOn)}
 					{:else}
-						No future rent scheduled
+						{account ? 'No upcoming charge' : 'Choose an account'}
 					{/if}
 				</p>
 			</div>
 			<a href="/portal/maintenance" class="rounded-lg border border-border bg-card p-4 transition-colors hover:bg-muted/40">
 				<div class="mb-3 flex items-center gap-2 text-[var(--m3c-error)]"><Wrench class="h-4 w-4" /><span class="text-sm font-medium">Maintenance</span></div>
-				<p class="text-3xl font-semibold">{openWorkOrders.length}</p>
+				<p class="text-3xl font-semibold">{openWorkOrderCount}</p>
 				<p class="mt-1 text-sm text-muted-foreground">Open requests</p>
 			</a>
 		</section>
@@ -300,22 +309,17 @@
 					<CreditCard class="h-5 w-5 text-primary" />
 					<h2 class="font-semibold">Payments</h2>
 				</div>
-				{#if upcomingPayments.length === 0}
-					<p class="text-sm text-muted-foreground">No outstanding payments.</p>
-				{:else}
-					<div class="space-y-2">
-						{#each upcomingPayments.slice(0, 5) as payment}
-							<div class="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
-								<div>
-									<p class="text-sm font-medium">{paymentTypeLabel(payment.paymentType ?? payment.type)} · {money(payment.amount)}</p>
-									<p class="text-xs text-muted-foreground">Due {date(payment.dueDate)} · {payment.status}</p>
-								</div>
-								<span class="text-xs text-muted-foreground">
-									{daysUntil(payment.dueDate) < 0 ? `${Math.abs(daysUntil(payment.dueDate))} days late` : `${daysUntil(payment.dueDate)} days`}
-								</span>
-							</div>
-						{/each}
+				{#if account}
+					<div class="space-y-3">
+						<div>
+							<p class="text-xs text-muted-foreground">Current balance</p>
+							<p class="text-2xl font-semibold">{money(account.receivableBalance, account.currency)}</p>
+						</div>
+						<p class="text-sm text-muted-foreground">{account.propertyName} · Unit {account.unitNumber} · {account.accountNumber}</p>
+						<Button href={`/portal/payments?account=${account.tenantAccountId}`}>View charges and payment options</Button>
 					</div>
+				{:else}
+					<p class="text-sm text-muted-foreground">Choose an account to view its balance.</p>
 				{/if}
 			</section>
 
@@ -324,13 +328,22 @@
 					<FileText class="h-5 w-5 text-primary" />
 					<h2 class="font-semibold">Lease</h2>
 				</div>
-				{#if activeLease}
+				{#if leasesQuery.isLoading}
+					<LoadingState label="Loading lease" variant="spinner" />
+				{:else if leasesQuery.isError}
+					<div role="alert">
+						<p class="text-sm text-destructive">Your lease could not be loaded.</p>
+						<Button type="button" variant="outline" size="sm" class="mt-2" onclick={() => leasesQuery.refetch()}>
+							Try again
+						</Button>
+					</div>
+				{:else if activeLease}
 					<div class="space-y-3 text-sm">
-						<p class="font-medium">{activeLease.leaseNumber}</p>
-						<p class="text-muted-foreground">{activeLease.propertyName ?? activeLease.property} {activeLease.unitNumber ? `Unit ${activeLease.unitNumber}` : ''}</p>
+						<p class="font-medium">{activeLease.agreement?.agreementNumber ?? activeLease.relationshipNumber}</p>
+						<p class="text-muted-foreground">{activeLease.propertyName} {activeLease.unitNumber ? `Unit ${activeLease.unitNumber}` : ''}</p>
 						<div class="grid grid-cols-2 gap-3">
-							<div><p class="text-xs text-muted-foreground">Rent</p><p>{money(activeLease.monthlyRent)}</p></div>
-							<div><p class="text-xs text-muted-foreground">Ends</p><p>{date(activeLease.endDate)}</p></div>
+							<div><p class="text-xs text-muted-foreground">Rent</p><p>{money(activeLease.agreement?.baseRentAmount)}</p></div>
+							<div><p class="text-xs text-muted-foreground">Ends</p><p>{activeLease.agreement?.termEndOn ? date(activeLease.agreement.termEndOn) : 'Month-to-month'}</p></div>
 						</div>
 					</div>
 				{:else}
@@ -347,7 +360,7 @@
 					{#if openWorkOrders.length === 0}
 						<p class="text-sm text-muted-foreground">No open requests.</p>
 					{:else}
-						{#each openWorkOrders.slice(0, 5) as order}
+						{#each openWorkOrders as order}
 							<div class="rounded-md border border-border px-3 py-2">
 								<p class="text-sm font-medium">{order.title}</p>
 								<p class="text-xs text-muted-foreground">{order.status} · {order.priority}</p>
@@ -422,9 +435,12 @@
 					<h2 class="font-semibold">Appointments</h2>
 				</div>
 				{#if appointmentsQuery.isLoading}
-					<p class="text-sm text-muted-foreground">Loading appointments...</p>
+					<LoadingState label="Loading upcoming appointments" testid="tenant-dashboard-appointments-loading" />
 				{:else if appointmentsQuery.isError}
-					<p class="text-sm text-destructive">Couldn't load appointments.</p>
+					<div class="rounded-md border border-destructive/40 bg-destructive/5 p-3">
+						<p class="text-sm font-medium text-destructive">Couldn't load appointments.</p>
+						<Button type="button" variant="outline" size="sm" class="mt-2" onclick={() => appointmentsQuery.refetch()}>Try again</Button>
+					</div>
 				{:else if upcomingAppointments.length === 0}
 					<p class="text-sm text-muted-foreground">No appointments scheduled.</p>
 				{:else}

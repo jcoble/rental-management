@@ -96,6 +96,9 @@
 	let selectedPropertyIds = $state<number[]>([]); // empty = all properties
 	let year = $state(String(currentYear));
 	let days = $state('90');
+	let reportSkip = $state(0);
+	let reportTake = $state(20);
+	let reportSort = $state('property');
 
 	// The applied params snapshot — only changes when the user clicks Generate, so the table is stable.
 	let applied = $state<ReportRequestParams>({});
@@ -109,6 +112,9 @@
 		selectedPropertyIds = [];
 		year = String(currentYear);
 		days = '90';
+		reportSkip = 0;
+		reportTake = 20;
+		reportSort = 'property';
 		applied = {};
 		hasGenerated = false;
 	});
@@ -122,11 +128,22 @@
 		if (accepts.has('propertyId') && selectedPropertyIds.length) p.propertyId = selectedPropertyIds[0];
 		if (accepts.has('year') && year) p.year = Number(year);
 		if (accepts.has('days') && days) p.days = Number(days);
+		if (accepts.has('skip')) p.skip = reportSkip;
+		if (accepts.has('take')) p.take = reportTake;
+		if (accepts.has('sort')) p.sort = reportSort;
 		return p;
 	}
 
 	function generate() {
-		applied = collectParams();
+		reportSkip = 0;
+		applied = { ...collectParams(), skip: accepts.has('skip') ? 0 : undefined };
+		hasGenerated = true;
+	}
+
+	function setReportPage(skip: number) {
+		const nextSkip = Math.max(0, skip);
+		reportSkip = nextSkip;
+		applied = { ...collectParams(), skip: nextSkip };
 		hasGenerated = true;
 	}
 
@@ -241,15 +258,15 @@
 
 		if (rentRoll) {
 			headers = ['Property', 'Unit', 'Lease', 'Tenant', 'Monthly Rent', 'Deposit', 'Start', 'End', 'Status'];
-			rows = rentRoll.rows.map((r) => [r.propertyName, r.unitNumber, r.leaseNumber, r.tenantName, r.monthlyRent, r.securityDeposit, formatDateOnly(r.startDate), formatDateOnly(r.endDate), r.statusName]);
+			rows = rentRoll.rows.map((r) => [r.propertyName, r.unitNumber, r.agreementNumber, r.tenantName, r.monthlyRent, r.securityDeposit, formatDateOnly(r.startOn), r.endOn ? formatDateOnly(r.endOn) : '', r.statusName]);
 		} else if (rentLedger) {
 			headers = ['Property', 'Unit', 'Lease', 'Tenant', 'Date', 'Type', 'Description', 'Charge', 'Payment', 'Balance'];
 			rows = rentLedger.leases.flatMap((l) =>
-				l.entries.map((e) => [l.propertyName, l.unitNumber, l.leaseNumber, l.tenantName, formatDateOnly(e.date), e.type, e.description, e.charge, e.payment, e.balance])
+				l.entries.map((e) => [l.propertyName, l.unitNumber, l.relationshipNumber, l.tenantName, formatDateOnly(e.date), e.type, e.description, e.charge, e.credit, e.balance])
 			);
 		} else if (delinquency) {
 			headers = ['Property', 'Unit', 'Lease', 'Tenant', '0-30', '31-60', '61-90', '90+', 'Total', 'Oldest (days)'];
-			rows = delinquency.rows.map((r) => [r.propertyName, r.unitNumber, r.leaseNumber, r.tenantName, r.buckets.current, r.buckets.days31To60, r.buckets.days61To90, r.buckets.over90, r.total, r.oldestOverdueDays]);
+			rows = delinquency.rows.map((r) => [r.propertyName, r.unitNumber, r.relationshipNumber, r.tenantName, r.buckets.current, r.buckets.days31To60, r.buckets.days61To90, r.buckets.over90, r.total, r.oldestOverdueDays]);
 		} else if (cashFlow) {
 			headers = ['Month', 'Income', 'Expense', 'Net'];
 			rows = cashFlow.months.map((m) => [m.label, m.income, m.expense, m.net]);
@@ -264,10 +281,10 @@
 			rows = occupancy.rows.map((r) => [r.propertyName, r.totalUnits, r.occupiedUnits, r.vacantUnits, r.occupancyPercent]);
 		} else if (leaseExp) {
 			headers = ['Property', 'Unit', 'Lease', 'Tenant', 'Monthly Rent', 'End Date', 'Days Until', 'Status'];
-			rows = leaseExp.rows.map((r) => [r.propertyName, r.unitNumber, r.leaseNumber, r.tenantName, r.monthlyRent, formatDateOnly(r.endDate), r.daysUntilExpiry, r.statusName]);
+			rows = leaseExp.rows.map((r) => [r.propertyName, r.unitNumber, r.agreementNumber, r.tenantName, r.monthlyRent, formatDateOnly(r.endOn), r.daysUntilExpiry, r.statusName]);
 		} else if (deposits) {
 			headers = ['Property', 'Unit', 'Lease', 'Tenant', 'Held', 'Deductions', 'Returned', 'Balance', 'Status', 'Held At'];
-			rows = deposits.rows.map((r) => [r.propertyName, r.unitNumber, r.leaseNumber, r.tenantName, r.held, r.deductions, r.returned, r.currentBalance, r.statusName, formatDateOnly(r.heldAt)]);
+			rows = deposits.rows.map((r) => [r.propertyName, r.unitNumber, r.relationshipNumber, r.tenantName, r.held, r.deductions, r.returned, r.currentBalance, r.statusName, formatDateOnly(r.heldAt)]);
 		} else if (vendor1099) {
 			headers = ['Vendor', 'Tax ID', 'Total Paid', '1099 Eligible', 'W-9 On File', 'Needs W-9', 'Needs 1099 Review'];
 			rows = vendor1099.rows.map((r) => [r.vendorName, r.taxId ?? '', r.totalPaid, r.is1099Eligible ? 'Yes' : 'No', r.w9OnFile ? 'Yes' : 'No', r.needsW9 ? 'Yes' : 'No', r.needs1099Review ? 'Yes' : 'No']);
@@ -465,14 +482,14 @@
 								</tr>
 							</thead>
 							<tbody>
-								{#each rentRoll.rows as r (r.leaseId)}
+								{#each rentRoll.rows as r (r.agreementId)}
 									<tr class="border-b last:border-0 hover:bg-muted/30">
 										<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div><div class="text-xs text-muted-foreground">Unit {r.unitNumber}</div></td>
-										<td class="px-3 py-2">{r.leaseNumber}</td>
+										<td class="px-3 py-2">{r.agreementNumber}</td>
 										<td class="px-3 py-2">{r.tenantName}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(r.monthlyRent)}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums">{money(r.securityDeposit)}</td>
-										<td class="px-3 py-2 text-xs text-muted-foreground">{formatDateOnly(r.startDate)} – {formatDateOnly(r.endDate)}</td>
+										<td class="px-3 py-2 text-xs text-muted-foreground">{formatDateOnly(r.startOn)} – {r.endOn ? formatDateOnly(r.endOn) : 'Month to month'}</td>
 										<td class="px-3 py-2">{r.statusName}</td>
 									</tr>
 								{/each}
@@ -499,9 +516,9 @@
 								</tr>
 							</thead>
 							<tbody>
-								{#each rentLedger.leases as l (l.leaseId)}
+								{#each rentLedger.leases as l (l.leaseManagementId)}
 									<tr class="border-b bg-muted/20">
-										<td class="px-3 py-2 font-semibold" colspan="6">{l.propertyName} · Unit {l.unitNumber} · {l.tenantName} ({l.leaseNumber})</td>
+										<td class="px-3 py-2 font-semibold" colspan="6">{l.propertyName} · Unit {l.unitNumber} · {l.tenantName} ({l.relationshipNumber})</td>
 									</tr>
 									{#each l.entries as e, ei (ei)}
 										<tr class="border-b last:border-0 hover:bg-muted/30">
@@ -509,14 +526,14 @@
 											<td class="px-3 py-2">{e.type}</td>
 											<td class="px-3 py-2 text-muted-foreground">{e.description}</td>
 											<td class="px-3 py-2 text-right font-mono tabular-nums">{e.charge ? money(e.charge) : '—'}</td>
-											<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{e.payment ? money(e.payment) : '—'}</td>
+											<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{e.credit ? money(e.credit) : '—'}</td>
 											<td class="px-3 py-2 text-right font-mono tabular-nums {e.balance > 0 ? 'text-destructive' : ''}">{money(e.balance)}</td>
 										</tr>
 									{/each}
 									<tr class="border-b bg-muted/10 font-medium">
 										<td class="px-3 py-1.5" colspan="3">Subtotal</td>
 										<td class="px-3 py-1.5 text-right font-mono tabular-nums">{money(l.totalCharged)}</td>
-										<td class="px-3 py-1.5 text-right font-mono tabular-nums text-success">{money(l.totalPaid)}</td>
+										<td class="px-3 py-1.5 text-right font-mono tabular-nums text-success">{money(l.totalCredits)}</td>
 										<td class="px-3 py-1.5 text-right font-mono tabular-nums {l.balance > 0 ? 'text-destructive' : ''}">{money(l.balance)}</td>
 									</tr>
 								{/each}
@@ -525,7 +542,7 @@
 								<tr>
 									<td class="px-3 py-2" colspan="3">Portfolio total</td>
 									<td class="px-3 py-2 text-right font-mono tabular-nums">{money(rentLedger.totalCharged)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(rentLedger.totalPaid)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(rentLedger.totalCredits)}</td>
 									<td class="px-3 py-2 text-right font-mono tabular-nums {rentLedger.totalBalance > 0 ? 'text-destructive' : ''}">{money(rentLedger.totalBalance)}</td>
 								</tr>
 							</tfoot>
@@ -544,9 +561,9 @@
 								</tr>
 							</thead>
 							<tbody>
-								{#each delinquency.rows as r (r.leaseId)}
+								{#each delinquency.rows as r (r.leaseManagementId)}
 									<tr class="border-b last:border-0 hover:bg-muted/30">
-										<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div><div class="text-xs text-muted-foreground">Unit {r.unitNumber} · {r.leaseNumber}</div></td>
+										<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div><div class="text-xs text-muted-foreground">Unit {r.unitNumber} · {r.relationshipNumber}</div></td>
 										<td class="px-3 py-2">{r.tenantName}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums">{r.buckets.current ? money(r.buckets.current) : '—'}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{r.buckets.days31To60 ? money(r.buckets.days31To60) : '—'}</td>
@@ -704,12 +721,12 @@
 								</tr>
 							</thead>
 							<tbody>
-								{#each leaseExp.rows as r (r.leaseId)}
+								{#each leaseExp.rows as r (r.agreementId)}
 									<tr class="border-b last:border-0 hover:bg-muted/30">
-										<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div><div class="text-xs text-muted-foreground">Unit {r.unitNumber} · {r.leaseNumber}</div></td>
+										<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div><div class="text-xs text-muted-foreground">Unit {r.unitNumber} · {r.agreementNumber}</div></td>
 										<td class="px-3 py-2">{r.tenantName}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(r.monthlyRent)}</td>
-										<td class="px-3 py-2">{formatDateOnly(r.endDate)}</td>
+										<td class="px-3 py-2">{formatDateOnly(r.endOn)}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums {r.daysUntilExpiry < 0 ? 'text-destructive' : r.daysUntilExpiry <= 30 ? 'text-[var(--warning)]' : ''}">{r.daysUntilExpiry}</td>
 										<td class="px-3 py-2">{r.statusName}</td>
 									</tr>
@@ -739,7 +756,7 @@
 							<tbody>
 								{#each deposits.rows as r (r.depositId)}
 									<tr class="border-b last:border-0 hover:bg-muted/30">
-										<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div><div class="text-xs text-muted-foreground">Unit {r.unitNumber} · {r.leaseNumber}</div></td>
+										<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div><div class="text-xs text-muted-foreground">Unit {r.unitNumber} · {r.relationshipNumber}</div></td>
 										<td class="px-3 py-2">{r.tenantName}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums">{money(r.held)}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums {r.deductions > 0 ? 'text-[var(--warning)]' : ''}">{r.deductions ? money(r.deductions) : '—'}</td>
@@ -757,6 +774,19 @@
 									<td class="px-3 py-2 text-right font-mono tabular-nums">{money(deposits.totalReturned)}</td>
 									<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(deposits.totalCurrentBalance)}</td>
 									<td></td>
+								</tr>
+								<tr class="border-t bg-background font-normal print:hidden">
+									<td class="px-3 py-2 text-xs text-muted-foreground" colspan="4">
+										Showing {deposits.totalCount === 0 ? 0 : deposits.skip + 1}-{Math.min(deposits.skip + deposits.rows.length, deposits.totalCount)} of {deposits.totalCount}
+									</td>
+									<td class="px-3 py-2 text-right" colspan="3">
+										<Button variant="outline" size="sm" onclick={() => setReportPage(deposits.skip - deposits.take)} disabled={deposits.skip <= 0 || reportQuery.isFetching}>
+											Previous
+										</Button>
+										<Button class="ml-2" variant="outline" size="sm" onclick={() => setReportPage(deposits.skip + deposits.take)} disabled={deposits.skip + deposits.take >= deposits.totalCount || reportQuery.isFetching}>
+											Next
+										</Button>
+									</td>
 								</tr>
 							</tfoot>
 

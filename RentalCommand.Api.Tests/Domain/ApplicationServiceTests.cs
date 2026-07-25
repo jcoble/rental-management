@@ -3,11 +3,14 @@ using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Tests;
 using RentalCommand.Core;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -32,11 +35,13 @@ public class ApplicationServiceTests : IDisposable
     private readonly RentalCommandDbContext _db;
     private readonly Mock<IFileStorage> _files = new();
     private readonly RecordingAuditService _audit = new();
+    private readonly ServiceProvider _services;
     private readonly ApplicationService _sut;
+    private readonly WorkspaceReadScope _scope;
 
     public ApplicationServiceTests()
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
+        _conn = new SqliteConnection($"Data Source=application-{Guid.NewGuid():N};Mode=Memory;Cache=Shared");
         _conn.Open();
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
@@ -69,14 +74,18 @@ public class ApplicationServiceTests : IDisposable
             UpdatedAt = DateTime.UtcNow,
         });
         _db.SaveChanges();
+        _scope = _db.SeedAdministratorScope(PortfolioId, nameof(ApplicationServiceTests));
+        _services = AtomicDomainTestKernel.CreateForApplications(_conn.ConnectionString);
 
         _sut = new ApplicationService(
             _db, _files.Object, Mock.Of<IDataUpdateService>(), _audit,
-            new NoopTenantPortalProvisioningService(), NullLogger<ApplicationService>.Instance, TimeProvider.System);
+            TimeProvider.System,
+            _services.GetRequiredService<IAtomicUnitOfWork>());
     }
 
     public void Dispose()
     {
+        _services.Dispose();
         _db.Dispose();
         _conn.Dispose();
     }
@@ -130,17 +139,17 @@ public class ApplicationServiceTests : IDisposable
 
         var unitA = new Unit
         {
+            PortfolioId = PortfolioId,
             PropertyId = property.Id,
             UnitNumber = "A",
-            Status = UnitStatus.Vacant,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         };
         var unitB = new Unit
         {
+            PortfolioId = PortfolioId,
             PropertyId = property.Id,
             UnitNumber = "B",
-            Status = UnitStatus.Vacant,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         };
@@ -157,11 +166,27 @@ public class ApplicationServiceTests : IDisposable
 
         result.TotalCount.Should().Be(2, "only the two applications tied to unit A are in scope");
         result.Items.Select(a => a.LastName).Should().BeEquivalentTo(["Alpha", "Bravo"]);
+        result.Items.Should().OnlyContain(a =>
+            a.PropertyName == "Maple Grove" && (a.UnitNumber == "A"));
 
-        // The unit scope must run as a SQL WHERE on UnitId (DB-side), never an in-memory filter.
-        _commands.Should().Contain(sql =>
-            sql.Contains("\"UnitId\"", StringComparison.OrdinalIgnoreCase) &&
+        _commands.Should().HaveCount(2, "the application page is one count plus one page statement");
+        var countSql = _commands.Single(sql =>
             sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase));
+        var pageSql = _commands.Single(sql =>
+            !sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase));
+        countSql.Should().Contain("\"UnitId\"");
+        pageSql.Should().Contain("\"UnitId\"");
+        pageSql.Should().Contain("ORDER BY");
+        pageSql.Should().Contain("LIMIT");
+        pageSql.Should().Contain("LEFT JOIN");
+        pageSql.Should().Contain("\"PropertyName\"");
+        pageSql.Should().Contain("\"UnitNumber\"");
+        pageSql.Should().Contain("\"FirstName\"");
+        pageSql.Should().Contain("\"ApprovedTenantId\"");
+        pageSql.Should().NotContain("SELECT *");
+        _commands.Should().OnlyContain(sql =>
+            sql.Contains("\"UnitId\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("RentalApplications", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -175,7 +200,7 @@ public class ApplicationServiceTests : IDisposable
             ConsentGiven = true,
         };
 
-        var result = await _sut.SubmitAsync(Token, request, "203.0.113.7");
+        var result = await _sut.SubmitAsync(Token, request, "203.0.113.7", Guid.NewGuid().ToString("N"));
 
         result.Should().NotBeNull();
         result!.Status.Should().Be("Submitted");
@@ -214,11 +239,11 @@ public class ApplicationServiceTests : IDisposable
             ConsentGiven = true,
         };
 
-        var act = () => _sut.SubmitAsync(Token, request, "203.0.113.7");
+        var act = () => _sut.SubmitAsync(Token, request, "203.0.113.7", Guid.NewGuid().ToString("N"));
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.StatusCode.Should().Be(409);
-        ex.Which.Message.Should().Contain("application #1");
+        ex.Which.Message.Should().Contain("already exists");
         (await _db.RentalApplications.CountAsync()).Should().Be(1);
     }
 
@@ -232,7 +257,7 @@ public class ApplicationServiceTests : IDisposable
             ConsentGiven = true,
         };
 
-        var result = await _sut.SubmitAsync("not-a-real-token", request, "203.0.113.9");
+        var result = await _sut.SubmitAsync("not-a-real-token", request, "203.0.113.9", Guid.NewGuid().ToString("N"));
 
         result.Should().BeNull();
         (await _db.RentalApplications.CountAsync()).Should().Be(0);
@@ -246,69 +271,7 @@ public class ApplicationServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task GetPublicFormInfoAsync_ReturnsUnitStatusesAndFiltersOfflineUnitsDbSide()
-    {
-        var property = new Property
-        {
-            PortfolioId = PortfolioId,
-            Name = "Maple Grove",
-            Status = PropertyStatus.Active,
-            AddressLine1 = "1100 Maple Ave",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43215",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        };
-        _db.Properties.Add(property);
-        await _db.SaveChangesAsync();
-
-        _db.Units.AddRange(
-            new Unit
-            {
-                PropertyId = property.Id,
-                UnitNumber = "1A",
-                Status = UnitStatus.Vacant,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow,
-            },
-            new Unit
-            {
-                PropertyId = property.Id,
-                UnitNumber = "2B",
-                Status = UnitStatus.Occupied,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow,
-            },
-            new Unit
-            {
-                PropertyId = property.Id,
-                UnitNumber = "3C",
-                Status = UnitStatus.Offline,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow,
-            });
-        await _db.SaveChangesAsync();
-
-        _commands.Clear();
-        var info = await _sut.GetPublicFormInfoAsync(Token);
-
-        info.Should().NotBeNull();
-        var units = info!.Properties.Should().ContainSingle().Subject.Units;
-        units.Select(u => u.UnitNumber).Should().Equal("1A", "2B");
-        units.Single(u => u.UnitNumber == "1A").Status.Should().Be(UnitStatus.Vacant);
-        units.Single(u => u.UnitNumber == "2B").Status.Should().Be(UnitStatus.Occupied);
-
-        _commands.Should().HaveCountLessThanOrEqualTo(3);
-        _commands.Should().Contain(sql =>
-            sql.Contains("\"Units\"", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("\"Status\"", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
-            (sql.Contains("<>") || sql.Contains("!=")));
-    }
-
-    [Fact]
-    public async Task SubmitAsync_ForeignPropertyId_IsDroppedNotLeaked()
+    public async Task SubmitAsync_ForeignPropertyId_IsRejectedWithoutLeakingOrPersisting()
     {
         // A property in a DIFFERENT portfolio must never attach to this submission (IDOR guard).
         _db.Properties.Add(new Property
@@ -333,11 +296,12 @@ public class ApplicationServiceTests : IDisposable
             ConsentGiven = true,
         };
 
-        var result = await _sut.SubmitAsync(Token, request, null);
+        var act = () => _sut.SubmitAsync(Token, request, null, Guid.NewGuid().ToString("N"));
 
-        result.Should().NotBeNull();
-        var saved = await _db.RentalApplications.SingleAsync();
-        saved.PropertyId.Should().BeNull("a property from another portfolio must be dropped");
+        var error = await act.Should().ThrowAsync<DomainValidationException>();
+        error.Which.Message.Should().Be("Selected property was not found.");
+        (await _db.RentalApplications.CountAsync()).Should().Be(0,
+            "a property from another portfolio must reject the complete submission");
     }
 
     [Fact]
@@ -367,12 +331,13 @@ public class ApplicationServiceTests : IDisposable
         _db.RentalApplications.Add(app);
         await _db.SaveChangesAsync();
 
-        var result = await _sut.ApproveAsync(PortfolioId, app.Id, userId: 7);
+        var result = await _sut.ApproveAuthorizedAsync(_scope, app.Id, 7, Guid.NewGuid().ToString("N"));
 
         result.Should().NotBeNull();
         result!.Status.Should().Be("Approved");
         result.TenantId.Should().BeGreaterThan(0);
 
+        _db.ChangeTracker.Clear();
         var tenant = await _db.Tenants.SingleAsync();
         tenant.Id.Should().Be(result.TenantId);
         tenant.PortfolioId.Should().Be(PortfolioId);
@@ -388,8 +353,9 @@ public class ApplicationServiceTests : IDisposable
         reloaded.ApprovedTenantId.Should().Be(tenant.Id);
 
         // The PII-touching approval is audited (a Tenant was created).
-        _audit.Calls.Should().Contain(c => c.entityType == "Tenant" && c.entityId == tenant.Id
-            && c.operation == AuditLogOperation.Created);
+        (await _db.AtomicAuditLogs.AsNoTracking().AnyAsync(c =>
+            c.EntityType == "Tenant" && c.EntityId == tenant.Id
+            && c.Operation == AuditLogOperation.Created)).Should().BeTrue();
     }
 
     [Fact]
@@ -407,7 +373,7 @@ public class ApplicationServiceTests : IDisposable
             ConsentGiven = true,
         };
 
-        var result = await _sut.SubmitAsync(Token, request, "203.0.113.7");
+        var result = await _sut.SubmitAsync(Token, request, "203.0.113.7", Guid.NewGuid().ToString("N"));
 
         result.Should().NotBeNull();
         var saved = await _db.RentalApplications.SingleAsync();
@@ -433,12 +399,12 @@ public class ApplicationServiceTests : IDisposable
 
         var unit = new Unit
         {
+            PortfolioId = PortfolioId,
             PropertyId = property.Id,
             UnitNumber = "B",
             Bedrooms = 2,
             Bathrooms = 1,
             MarketRent = 1450m,
-            Status = UnitStatus.Vacant,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         };
@@ -496,8 +462,8 @@ public class ApplicationServiceTests : IDisposable
         _db.RentalApplications.Add(app);
         await _db.SaveChangesAsync();
 
-        var result = await _sut.UpdateAsync(
-            PortfolioId,
+        var result = await _sut.UpdateAuthorizedAsync(
+            _scope,
             app.Id,
             new UpdateApplicationRequest
             {
@@ -512,7 +478,8 @@ public class ApplicationServiceTests : IDisposable
                 ClearDesiredMoveInDate = true,
                 Notes = "Corrected by landlord",
             },
-            userId: 7);
+            userId: 7,
+            operationKey: Guid.NewGuid().ToString("N"));
 
         result.Should().NotBeNull();
         result!.FirstName.Should().Be("JESSE");
@@ -526,11 +493,13 @@ public class ApplicationServiceTests : IDisposable
         result.DesiredMoveInDate.Should().BeNull();
         result.Notes.Should().Be("Corrected by landlord");
 
+        _db.ChangeTracker.Clear();
         var reloaded = await _db.RentalApplications.SingleAsync(a => a.Id == app.Id);
         reloaded.Status.Should().Be(ApplicationStatus.Submitted);
         reloaded.UpdatedAt.Should().BeAfter(app.CreatedAt);
-        _audit.Calls.Should().Contain(c => c.entityType == "RentalApplication" && c.entityId == app.Id
-            && c.operation == AuditLogOperation.Updated);
+        (await _db.AtomicAuditLogs.AsNoTracking().AnyAsync(c =>
+            c.EntityType == "RentalApplication" && c.EntityId == app.Id
+            && c.Operation == AuditLogOperation.Updated)).Should().BeTrue();
     }
 
     [Fact]
@@ -549,11 +518,12 @@ public class ApplicationServiceTests : IDisposable
         _db.RentalApplications.Add(app);
         await _db.SaveChangesAsync();
 
-        var result = await _sut.UpdateAsync(
-            PortfolioId,
+        var result = await _sut.UpdateAuthorizedAsync(
+            _scope,
             app.Id,
             new UpdateApplicationRequest { LastName = "Corrected" },
-            userId: 7);
+            userId: 7,
+            operationKey: Guid.NewGuid().ToString("N"));
 
         result.Should().NotBeNull();
         result!.Status.Should().Be(ApplicationStatus.UnderReview.ToString());
@@ -588,11 +558,12 @@ public class ApplicationServiceTests : IDisposable
         _db.RentalApplications.Add(app);
         await _db.SaveChangesAsync();
 
-        var act = async () => await _sut.UpdateAsync(
-            PortfolioId,
+        var act = async () => await _sut.UpdateAuthorizedAsync(
+            _scope,
             app.Id,
             new UpdateApplicationRequest { PropertyId = foreignProperty.Id },
-            userId: 7);
+            userId: 7,
+            operationKey: Guid.NewGuid().ToString("N"));
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.Message.Should().Contain("Selected property was not found");
@@ -616,11 +587,12 @@ public class ApplicationServiceTests : IDisposable
         _db.RentalApplications.Add(app);
         await _db.SaveChangesAsync();
 
-        var act = async () => await _sut.UpdateAsync(
-            PortfolioId,
+        var act = async () => await _sut.UpdateAuthorizedAsync(
+            _scope,
             app.Id,
             new UpdateApplicationRequest { FirstName = "Changed" },
-            userId: 7);
+            userId: 7,
+            operationKey: Guid.NewGuid().ToString("N"));
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.Message.Should().Contain("Only submitted or under-review applications");
@@ -682,7 +654,7 @@ public class ApplicationServiceTests : IDisposable
         _db.RentalApplications.Add(app);
         await _db.SaveChangesAsync();
 
-        var act = async () => await _sut.ApproveAsync(PortfolioId, app.Id, userId: 7);
+        var act = async () => await _sut.ApproveAuthorizedAsync(_scope, app.Id, 7, Guid.NewGuid().ToString("N"));
         await act.Should().ThrowAsync<InvalidOperationException>();
     }
 
@@ -711,11 +683,11 @@ public class ApplicationServiceTests : IDisposable
             CurrentAddress = "110 Cedar St, Columbus, OH 43215",
         };
 
-        var act = async () => await _sut.CreateFromScanAsync(PortfolioId, request, userId: 7);
+        var act = async () => await _sut.CreateFromScanAsync(_scope, request, Guid.NewGuid().ToString("N"));
 
         var ex = await act.Should().ThrowAsync<DomainValidationException>();
         ex.Which.Message.Should().Contain("qa.applicant.001@example.local");
-        ex.Which.Message.Should().Contain($"application #{existing.Id}");
+        ex.Which.Message.Should().Contain("already exists");
         (await _db.RentalApplications.CountAsync()).Should().Be(1);
     }
 
@@ -746,7 +718,7 @@ public class ApplicationServiceTests : IDisposable
             Email = "qa.applicant.001@example.local",
         };
 
-        var result = await _sut.CreateFromScanAsync(PortfolioId, request, userId: 7);
+        var result = await _sut.CreateFromScanAsync(_scope, request, Guid.NewGuid().ToString("N"));
 
         result.Id.Should().NotBe(existing.Id);
         result.Status.Should().Be(ApplicationStatus.Submitted.ToString());
@@ -756,12 +728,13 @@ public class ApplicationServiceTests : IDisposable
     [Fact]
     public async Task GenerateLinkAsync_RotatesTokenAndReturnsApplyPath()
     {
-        var result = await _sut.GenerateLinkAsync(OtherPortfolioId);
+        var result = await _sut.GenerateLinkAsync(_scope, Guid.NewGuid().ToString("N"));
 
         result.Token.Should().NotBeNullOrWhiteSpace();
         result.ApplyPath.Should().Be($"/apply/{result.Token}");
 
-        var portfolio = await _db.Portfolios.SingleAsync(p => p.Id == OtherPortfolioId);
+        _db.ChangeTracker.Clear();
+        var portfolio = await _db.Portfolios.AsNoTracking().SingleAsync(p => p.Id == PortfolioId);
         portfolio.PublicApplicationToken.Should().Be(result.Token);
     }
 
@@ -782,17 +755,19 @@ public class ApplicationServiceTests : IDisposable
         _db.RentalApplications.Add(app);
         await _db.SaveChangesAsync();
 
-        var deleted = await _sut.DeleteAsync(PortfolioId, app.Id, userId: 42);
+        var deleted = await _sut.DeleteAuthorizedAsync(_scope, app.Id, 42, Guid.NewGuid().ToString("N"));
 
         deleted.Should().BeTrue();
+        _db.ChangeTracker.Clear();
         (await _sut.GetAsync(PortfolioId, app.Id)).Should().BeNull();
         var stored = await _db.RentalApplications
             .IgnoreQueryFilters()
             .SingleAsync(a => a.Id == app.Id);
         stored.DeletedAt.Should().NotBeNull();
         stored.UpdatedAt.Should().Be(stored.DeletedAt);
-        _audit.Calls.Should().Contain(c => c.entityType == "RentalApplication" && c.entityId == app.Id
-            && c.operation == AuditLogOperation.Deleted);
+        (await _db.AtomicAuditLogs.AsNoTracking().AnyAsync(c =>
+            c.EntityType == "RentalApplication" && c.EntityId == app.Id
+            && c.Operation == AuditLogOperation.Deleted)).Should().BeTrue();
     }
 
     private void SeedApplication(string firstName, string lastName, ApplicationStatus status)
@@ -835,6 +810,8 @@ public class ApplicationServiceTests : IDisposable
     {
         public List<(int portfolioId, string entityType, int entityId, AuditLogOperation operation)> Calls { get; } = [];
 
+        public void EnsureAtomicCommand() { }
+
         public Task LogAsync(
             int portfolioId, string entityType, int entityId, AuditLogOperation operation,
             int? userId = null, string? actorLabel = null, string? oldValues = null,
@@ -869,27 +846,170 @@ public class ApplicationServiceTests : IDisposable
     }
 }
 
+[Collection(MigratedPostgreSqlCollection.Name)]
+public sealed class ApplicationServicePostgreSqlTests : IAsyncLifetime
+{
+    private const int PortfolioId = 1;
+    private const int ActorId = 1;
+    private const string Token = "good-token-abc";
+
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private readonly List<string> _commands = [];
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private ApplicationService _sut = null!;
+
+    public ApplicationServicePostgreSqlTests(MigratedPostgreSqlFixture fixture)
+    {
+        _fixture = fixture;
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_commands)]);
+
+        var portfolio = await _ctx.Db.Portfolios.SingleAsync(p => p.Id == PortfolioId);
+        portfolio.PublicApplicationToken = Token;
+        await _ctx.Db.SaveChangesAsync();
+
+        _sut = new ApplicationService(
+            _ctx.Db,
+            Mock.Of<IFileStorage>(),
+            Mock.Of<IDataUpdateService>(),
+            Mock.Of<IAuditTrailService>(),
+            TimeProvider.System,
+            Mock.Of<RentalCommand.Core.Atomic.IAtomicUnitOfWork>());
+    }
+
+    public async Task DisposeAsync()
+    {
+        await _ctx.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task GetPublicFormInfoAsync_ReturnsDerivedAvailabilityAndFiltersOfflineUnitsDbSide()
+    {
+        var now = DateTime.UtcNow;
+        var emptyProperty = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Aspen House",
+            Status = PropertyStatus.Active,
+            AddressLine1 = "900 Aspen Way",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Maple Grove",
+            Status = PropertyStatus.Active,
+            AddressLine1 = "1100 Maple Ave",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Properties.AddRange(emptyProperty, property);
+        await _ctx.Db.SaveChangesAsync();
+
+        var vacant = Unit(property.Id, "1A", now);
+        var occupied = Unit(property.Id, "2B", now);
+        var offline = Unit(property.Id, "3C", now);
+        _ctx.Db.Units.AddRange(vacant, occupied, offline);
+        await _ctx.Db.SaveChangesAsync();
+
+        _ctx.Db.LeaseManagements.Add(new LeaseManagement
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = occupied.Id,
+            RelationshipNumber = "LM-APPLICATION-PUBLIC-OCCUPIED",
+            PossessionGivenAtUtc = now.AddDays(-1),
+            PossessionAgreementExceptionReason = "Test fixture proves occupancy independently of legal status.",
+            PossessionAgreementExceptionAuthorizedByUserId = ActorId,
+            CreatedAtUtc = now.AddDays(-1),
+            CreatedByUserId = ActorId,
+            UpdatedAtUtc = now.AddDays(-1),
+        });
+        _ctx.Db.UnitOperationalPeriods.Add(new UnitOperationalPeriod
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = offline.Id,
+            Type = UnitOperationalPeriodType.OutOfService,
+            StartedAtUtc = now.AddDays(-1),
+            Reason = "Offline public-application fixture",
+            CreatedAtUtc = now.AddDays(-1),
+            CreatedByUserId = ActorId,
+        });
+        await _ctx.Db.SaveChangesAsync();
+
+        _commands.Clear();
+        var info = await _sut.GetPublicFormInfoAsync(Token);
+
+        info.Should().NotBeNull();
+        info!.Properties.Select(propertyOption => propertyOption.Name)
+            .Should().Equal("Aspen House", "Maple Grove");
+        info.Properties.Single(propertyOption => propertyOption.Id == emptyProperty.Id).Units
+            .Should().BeEmpty();
+
+        var units = info.Properties.Single(propertyOption => propertyOption.Id == property.Id).Units;
+        units.Select(u => u.UnitNumber).Should().Equal("1A", "2B");
+        units.Single(u => u.UnitNumber == "1A").Status.Should().Be(DerivedUnitStatus.Vacant);
+        units.Single(u => u.UnitNumber == "2B").Status.Should().Be(DerivedUnitStatus.Occupied);
+
+        _commands.Should().HaveCountLessThanOrEqualTo(3);
+        _commands.Should().Contain(sql =>
+            sql.Contains("\"Units\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("vw_unit_occupancy", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("\"IsOutOfService\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LEFT JOIN", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("jsonb_agg", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("FILTER", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static Unit Unit(int propertyId, string unitNumber, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        PropertyId = propertyId,
+        UnitNumber = unitNumber,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
+}
+
 /// <summary>
-/// Derived DbContext that remaps Postgres-specific column types to SQLite-friendly ones for tests.
+/// SQLite application context using the shared test-only compatibility model.
 /// </summary>
-internal sealed class ApplicationTestDbContext : RentalCommandDbContext
+internal sealed class ApplicationTestDbContext : SqliteCompatibleRentalCommandDbContext
 {
     public ApplicationTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
-
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
-    {
-        base.OnModelCreating(modelBuilder);
-
-        // jsonb is not understood by SQLite — remap those columns to plain text.
-        modelBuilder.Entity<RentalApplication>().Property(e => e.IdExtractedFields).HasColumnType("TEXT");
-        modelBuilder.Entity<ScreeningResult>().Property(e => e.RawResultJson).HasColumnType("TEXT");
-        modelBuilder.Entity<ScanDraft>().Property(e => e.ExtractedFields).HasColumnType("TEXT");
-        modelBuilder.Entity<AuditLog>().Property(e => e.OldValues).HasColumnType("TEXT");
-        modelBuilder.Entity<AuditLog>().Property(e => e.NewValues).HasColumnType("TEXT");
-        modelBuilder.Entity<OutboxMessage>().Property(e => e.Payload).HasColumnType("TEXT");
-        modelBuilder.Entity<QueuedJob>().Property(e => e.Payload).HasColumnType("TEXT");
-
-        // Drop the Postgres check constraints SQLite can't execute.
-        modelBuilder.Entity<Lease>().ToTable("Leases");
-    }
 }

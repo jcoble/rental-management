@@ -1,15 +1,33 @@
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Documents;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
+using RentalCommand.Data.Documents;
 
 namespace RentalCommand.Api.Services.Domain;
 
 /// <summary>
 /// Portfolio-scoped CRUD for <see cref="StoredFile"/> rows surfaced via the Documents hub.
-/// Blob storage is handled directly by <see cref="Core.Interfaces.IFileStorage"/>; this service
-/// manages the DB rows and validation.
+/// Upload is completed against a durable admission before this boundary. This service owns
+/// receipt-backed database mutation and finalizes that admission atomically with the StoredFile row.
 /// </summary>
 public interface IDocumentService
 {
+    Task<PendingFileUploadAdmission> PrepareUploadAsync(
+        int portfolioId,
+        int actorUserId,
+        string clientOperationId,
+        string requestFingerprint,
+        string fileName,
+        string contentType,
+        long sizeBytes,
+        CancellationToken ct = default);
+
+    Task<DocumentDto?> GetFinalizedUploadAsync(
+        int portfolioId,
+        PendingFileUploadAdmission admission,
+        CancellationToken ct = default);
+
     /// <summary>
     /// List non-deleted <see cref="StoredFile"/>s for a given entity in the portfolio,
     /// newest first.
@@ -17,16 +35,24 @@ public interface IDocumentService
     Task<IReadOnlyList<DocumentDto>> ListAsync(
         int portfolioId,
         string entityType,
-        int entityId,
+        long entityId,
         CancellationToken ct = default);
 
     /// <summary>
     /// Persist a <see cref="StoredFile"/> row for an already-stored blob. Returns the DTO.
     /// </summary>
-    Task<DocumentDto> CreateAsync(
+    Task<DocumentDto?> CreateAsync(
+        Guid pendingUploadId,
         int portfolioId,
-        string entityType,
-        int entityId,
+        StoredDocumentTarget target,
+        long entityId,
+        int userId,
+        int? tenantId,
+        bool isStaff,
+        WorkspaceReadScope? staffScope,
+        string clientOperationId,
+        string requestFingerprint,
+        string contentSha256,
         string fileName,
         string contentType,
         long sizeBytes,
@@ -43,5 +69,13 @@ public interface IDocumentService
     /// Soft-delete a <see cref="StoredFile"/> row (set <c>DeletedAt</c>).
     /// Returns false when not found or already deleted.
     /// </summary>
-    Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default);
+    Task<bool> DeleteAsync(
+        int portfolioId,
+        int id,
+        int userId,
+        int? tenantId,
+        bool isStaff,
+        WorkspaceReadScope? staffScope,
+        string clientOperationId,
+        CancellationToken ct = default);
 }

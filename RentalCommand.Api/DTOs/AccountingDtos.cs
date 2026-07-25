@@ -42,7 +42,7 @@ public class ScheduleECategoryTotal
 /// <summary>Rent/payment collection status rolled up for a portfolio.</summary>
 public class PaymentRollup
 {
-    /// <summary>Sum of payments marked <see cref="PaymentStatus.Paid"/>.</summary>
+    /// <summary>Sum of posted tenant-account payment receipts.</summary>
     public decimal Collected { get; set; }
 
     /// <summary>Sum of payments still owed (Scheduled, Partial, or Late, due now or in the future).</summary>
@@ -124,31 +124,48 @@ public class MoneySnapshotExplanations
 }
 
 /// <summary>
-/// The "Who's behind" list: one row per lease/tenant currently behind on rent, plus the headline
+/// The "Who's behind" list: one row per tenant account currently behind on rent, plus the headline
 /// totals. This is the actionable destination behind the dashboard "tenants behind" KPI — the same
-/// past-due definition powers both, so <see cref="TotalCount"/> always equals the KPI count and the
-/// number of <see cref="Items"/>. Computed DB-side in a single grouped query (no rows loaded to count).
+/// past-due definition powers both, so <see cref="TotalCount"/> always equals the KPI count while
+/// <see cref="Items"/> contains one bounded server page. Totals are computed DB-side without loading
+/// rows to count or sum.
 /// </summary>
 public class PastDueResponse
 {
-    /// <summary>One row per behind lease, ordered by who's been waiting longest (oldest due date first).</summary>
+    /// <summary>One row per behind tenant account, ordered by who's been waiting longest (oldest due date first).</summary>
     public IReadOnlyList<PastDueLeaseResponse> Items { get; set; } = [];
 
-    /// <summary>Number of leases/tenants behind — equal to <see cref="Items"/>.Count and the KPI's PastDueCount.</summary>
+    /// <summary>Number of tenant accounts behind across every page — equal to the KPI's PastDueCount.</summary>
     public int TotalCount { get; set; }
 
     /// <summary>Total amount past due across all behind leases — equal to the KPI's PastDueAmount.</summary>
     public decimal TotalPastDueAmount { get; set; }
+
+    /// <summary>
+    /// Portfolio-local date used by the database projections to decide which charges are past due.
+    /// Null only when the authorized scope has no current tenant-account projection rows.
+    /// </summary>
+    public DateOnly? BusinessDate { get; set; }
+
+    public int Skip { get; set; }
+    public int Take { get; set; }
+}
+
+/// <summary>Bounded page request for the canonical tenant-account past-due relation.</summary>
+public sealed class PastDueQuery : ListQuery
+{
 }
 
 /// <summary>
-/// One lease/tenant that is behind on rent, with everything the landlord needs to act: who they are,
-/// how much they owe, how many payments are past due, how long they've been late, and a deep-link
-/// anchor to the oldest past-due payment.
+/// One tenant account that is behind on rent, with everything the landlord needs to act: who they are,
+    /// how much they owe, how many charges are past due, how long they've been late, and a deep-link
+    /// anchor to the oldest past-due charge.
 /// </summary>
 public class PastDueLeaseResponse
 {
-    public int LeaseId { get; set; }
+    public int LeaseManagementId { get; set; }
+    public int TenantAccountId { get; set; }
+    public int? CurrentAgreementId { get; set; }
 
     /// <summary>Unit id on the behind lease, so the "open oldest payment" link can deep-link into the
     /// unit's Command Center Rent tab rather than the generic payment detail page.</summary>
@@ -161,7 +178,7 @@ public class PastDueLeaseResponse
     public string? TenantPhone { get; set; }
 
     /// <summary>Human lease number (e.g. "L-001").</summary>
-    public string? LeaseNumber { get; set; }
+    public string? RelationshipNumber { get; set; }
 
     /// <summary>Property name for context in the list.</summary>
     public string? PropertyName { get; set; }
@@ -176,10 +193,10 @@ public class PastDueLeaseResponse
     public int OverduePaymentCount { get; set; }
 
     /// <summary>Due date of this lease's oldest past-due payment (drives the "N days late" label).</summary>
-    public DateTime OldestDueDate { get; set; }
+    public DateOnly OldestDueOn { get; set; }
 
     /// <summary>Id of this lease's oldest past-due payment, so the row can deep-link into its detail.</summary>
-    public int OldestPaymentId { get; set; }
+    public long OldestLedgerEntryId { get; set; }
 }
 
 /// <summary>
@@ -230,7 +247,7 @@ public class AccountingTransactionsResponse
 public class AccountingTransactionResponse
 {
     public string Kind { get; set; } = string.Empty;
-    public int Id { get; set; }
+    public long Id { get; set; }
     public DateTime Date { get; set; }
 
     /// <summary>When the row entered the system (created). Powers the ledger's "Entered" column and the
@@ -244,6 +261,10 @@ public class AccountingTransactionResponse
     public string Category { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
     public decimal Amount { get; set; }
+
+    /// <summary>Canonical tenant-account id for tenant-ledger rows; null for other source kinds.</summary>
+    public int? TenantAccountId { get; set; }
+
     public int? PropertyId { get; set; }
 
     /// <summary>Unit id for the row (via Lease for payments, direct for expenses; null for bank rows).
@@ -303,9 +324,10 @@ public class LedgerTransactionResponse
 {
     public DateTime Date { get; set; }
     public string Type { get; set; } = string.Empty;
-    public int Id { get; set; }
+    public long Id { get; set; }
     public string Description { get; set; } = string.Empty;
     public decimal Amount { get; set; }
+    public int? TenantAccountId { get; set; }
     public int? PropertyId { get; set; }
     public string? PropertyName { get; set; }
     public string? Counterparty { get; set; }

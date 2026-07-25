@@ -15,7 +15,7 @@ public sealed class AuditDiffBuilderTests
 {
     private readonly AuditDiffBuilder _builder = new();
 
-    private static AuditLog Updated(string oldJson, string newJson, string entityType = "Expense") => new()
+    private static AtomicAuditLog Updated(string oldJson, string newJson, string entityType = "Expense") => new()
     {
         EntityType = entityType,
         EntityId = 5,
@@ -93,13 +93,13 @@ public sealed class AuditDiffBuilderTests
     [Fact]
     public void Build_CreatedAndDeleted_ReturnEmpty()
     {
-        var created = new AuditLog
+        var created = new AtomicAuditLog
         {
             EntityType = "Expense",
             Operation = AuditLogOperation.Created,
             NewValues = JsonSerializer.Serialize(new { Amount = 50 }),
         };
-        var deleted = new AuditLog
+        var deleted = new AtomicAuditLog
         {
             EntityType = "Expense",
             Operation = AuditLogOperation.Deleted,

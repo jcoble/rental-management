@@ -57,6 +57,12 @@
 		if (!f) return;
 		const pull = f.querySelector<HTMLInputElement>('input[name="pullEnabled"]');
 		if (pull) pull.value = pullEnabled ? 'true' : 'false';
+		const operationKey = f.querySelector<HTMLInputElement>('input[name="operationKey"]');
+		if (operationKey) {
+			operationKey.value = pullEnabled
+				? operationKey.dataset.enableKey ?? ''
+				: operationKey.dataset.disableKey ?? '';
+		}
 		f.requestSubmit();
 	}
 
@@ -117,7 +123,8 @@
 		switch (type) {
 			case 'Tenant':
 				return 'Tenant';
-			case 'Lease':
+			case 'LeaseManagement':
+			case 'LeaseAgreement':
 				return 'Lease';
 			case 'Vendor':
 				return 'Vendor';
@@ -255,6 +262,7 @@
 								}}
 							>
 								<input type="hidden" name="provider" value={s.provider} />
+								<input type="hidden" name="operationKey" value={view.connectOperationId} />
 								<Button
 									type="submit"
 									disabled={connectingProvider === s.provider}
@@ -296,6 +304,7 @@
 											}}
 										>
 											<input type="hidden" name="provider" value={s.provider} />
+											<input type="hidden" name="operationKey" value={view.connectOperationId} />
 											<Button
 												type="submit"
 												size="sm"
@@ -346,12 +355,18 @@
 												await update({ reset: false });
 											} else if (result.type === 'failure') {
 												showError((result.data?.error as string) ?? 'Could not save the direction.');
-												await update({ reset: false });
 											}
 										};
 									}}
 								>
 									<input type="hidden" name="provider" value={s.provider} />
+									<input
+										type="hidden"
+										name="operationKey"
+										value={s.pullEnabled ? view.pullDisableOperationId : view.pullEnableOperationId}
+										data-enable-key={view.pullEnableOperationId}
+										data-disable-key={view.pullDisableOperationId}
+									/>
 									<!-- Desired direction is carried in hidden inputs the toggle rewrites before submit.
 									     Push stays off in v1 (its UI control is disabled below). -->
 									<input type="hidden" name="pullEnabled" value={s.pullEnabled ? 'true' : 'false'} />
@@ -633,6 +648,7 @@
 									}}
 								>
 									<input type="hidden" name="provider" value={s.provider} />
+									<input type="hidden" name="operationKey" value={view.disconnectOperationId} />
 									<Button
 										type="submit"
 										variant="ghost"

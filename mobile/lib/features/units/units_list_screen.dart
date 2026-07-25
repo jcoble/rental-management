@@ -3,10 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/navigation/mobile_restoration_state.dart';
 import '../../core/widgets/mobile_grid_controls.dart';
 import '../../core/widgets/mobile_m3_list.dart';
 import '../home/mobile_domain_chrome.dart';
 import 'unit_navigation.dart';
+import 'unit_command_center_tabs.dart';
 import 'units_repository.dart';
 
 class UnitsListScreen extends ConsumerStatefulWidget {
@@ -20,6 +22,11 @@ class _UnitsListScreenState extends ConsumerState<UnitsListScreen> {
   static const _pageSize = 20;
 
   final _searchCtrl = TextEditingController();
+  final _scrollController = ScrollController();
+  RestorableMobileRestorationState? _restoration;
+  bool _restorationLoaded = false;
+  double? _pendingRestoredScrollOffset;
+  bool _scrollRestorationScheduled = false;
   String? _search;
   String _sort = 'propertyName';
   String? _stageFilter;
@@ -34,7 +41,59 @@ class _UnitsListScreenState extends ConsumerState<UnitsListScreen> {
   );
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_restorationLoaded) return;
+    _restorationLoaded = true;
+    _restoration = MobileRestorationScope.maybeOf(context);
+    final restored = _restoration?.value;
+    if (restored == null) return;
+    _search = restored.query;
+    _searchCtrl.text = restored.query ?? '';
+    _sort = restored.sort;
+    _stageFilter = restored.stage;
+    _skip = restored.skip;
+    _pendingRestoredScrollOffset = restored.scrollOffset;
+    _scrollController.addListener(_saveRestoration);
+  }
+
+  void _scheduleScrollRestoration() {
+    if (_pendingRestoredScrollOffset == null || _scrollRestorationScheduled) {
+      return;
+    }
+    _scrollRestorationScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollRestorationScheduled = false;
+      final restoredOffset = _pendingRestoredScrollOffset;
+      if (!mounted || restoredOffset == null || !_scrollController.hasClients) {
+        return;
+      }
+      _pendingRestoredScrollOffset = null;
+      _scrollController.jumpTo(
+        restoredOffset.clamp(0, _scrollController.position.maxScrollExtent),
+      );
+    });
+  }
+
+  void _saveRestoration() {
+    final restoration = _restoration;
+    if (restoration == null) return;
+    final scrollOffset = _scrollController.hasClients
+        ? _scrollController.offset
+        : _pendingRestoredScrollOffset ?? restoration.value.scrollOffset;
+    restoration.value = restoration.value.updateCollection(
+      query: _search,
+      sort: _sort,
+      stage: _stageFilter,
+      skip: _skip,
+      scrollOffset: scrollOffset,
+    );
+  }
+
+  @override
   void dispose() {
+    _saveRestoration();
+    _scrollController.dispose();
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -49,6 +108,7 @@ class _UnitsListScreenState extends ConsumerState<UnitsListScreen> {
       _search = next.isEmpty ? null : next;
       _skip = 0;
     });
+    _saveRestoration();
   }
 
   void _clearSearch() {
@@ -62,6 +122,7 @@ class _UnitsListScreenState extends ConsumerState<UnitsListScreen> {
       _sort = value;
       _skip = 0;
     });
+    _saveRestoration();
   }
 
   void _setStageFilter(String? value) {
@@ -69,9 +130,17 @@ class _UnitsListScreenState extends ConsumerState<UnitsListScreen> {
       _stageFilter = value;
       _skip = 0;
     });
+    _saveRestoration();
   }
 
   void _openUnit(UnitHealth unit) {
+    final restoration = _restoration;
+    if (restoration != null) {
+      restoration.value = restoration.value.updateUnit(
+        unitId: unit.id,
+        destination: UnitCommandCenterTab.summary.name,
+      );
+    }
     openUnitCommandCenter(context, unitId: unit.id);
   }
 
@@ -162,7 +231,9 @@ class _UnitsListScreenState extends ConsumerState<UnitsListScreen> {
                   }
 
                   final bottomInset = MediaQuery.paddingOf(context).bottom;
+                  _scheduleScrollRestoration();
                   return ListView.separated(
+                    controller: _scrollController,
                     padding: EdgeInsets.fromLTRB(
                       16,
                       8,
@@ -183,14 +254,20 @@ class _UnitsListScreenState extends ConsumerState<UnitsListScreen> {
                           previousTooltip: 'Previous units page',
                           nextTooltip: 'Next units page',
                           onPrevious: page.hasPrevious
-                              ? () => setState(() {
-                                  _skip = _skip <= _pageSize
-                                      ? 0
-                                      : _skip - _pageSize;
-                                })
+                              ? () {
+                                  setState(() {
+                                    _skip = _skip <= _pageSize
+                                        ? 0
+                                        : _skip - _pageSize;
+                                  });
+                                  _saveRestoration();
+                                }
                               : null,
                           onNext: page.hasNext
-                              ? () => setState(() => _skip += _pageSize)
+                              ? () {
+                                  setState(() => _skip += _pageSize);
+                                  _saveRestoration();
+                                }
                               : null,
                         );
                       }

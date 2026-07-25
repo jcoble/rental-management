@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
+import type { NotificationNavigationIntent } from '../api/types/notification.ts';
+import type { SelectedAccessContextSummary } from '../types/user.ts';
+import { notificationIntentUrl } from '../utils/portalLinks.ts';
 
 function assertOccursBefore(source: string, before: string, after: string) {
 	const beforeIndex = source.indexOf(before);
@@ -20,13 +23,13 @@ describe('portal notifications page', () => {
 
 		assert.match(source, /notificationStore\.markAsRead\(item\.id\)/);
 		assert.match(source, /notificationStore\.refresh\(\)/);
-		assert.match(source, /goto\(portalActionUrl\(item\.actionUrl\)/);
+		assert.match(source, /notificationIntentUrl\(item\.navigationIntent/);
 		assertOccursBefore(
 			source,
 			'await notificationStore.markAsRead(item.id);',
-			'await goto(portalActionUrl(item.actionUrl), { invalidateAll: true });'
+			'notificationIntentUrl(item.navigationIntent'
 		);
-		assert.doesNotMatch(source, /<a\s+href=\{portalActionUrl\(item\.actionUrl\)\}/);
+		assert.doesNotMatch(source, /actionUrl/);
 	});
 
 	it('marks notifications read when a tenant opens them from the dashboard summary', () => {
@@ -38,17 +41,96 @@ describe('portal notifications page', () => {
 		assert.match(source, /function openDashboardNotification\(item: NotificationItem\)/);
 		assert.match(source, /notificationStore\.markAsRead\(item\.id\)/);
 		assert.match(source, /notificationStore\.refresh\(\)/);
-		assert.match(source, /goto\(portalActionUrl\(item\.actionUrl\)/);
+		assert.match(source, /notificationIntentUrl\(item\.navigationIntent/);
 		assertOccursBefore(
 			source,
 			'await notificationStore.markAsRead(item.id);',
-			'await goto(portalActionUrl(item.actionUrl), { invalidateAll: true });'
+			'notificationIntentUrl(item.navigationIntent'
 		);
 		assertOccursBefore(
 			source,
 			"queryClient.invalidateQueries({ queryKey: ['notifications-unread-count'] })",
-			'await goto(portalActionUrl(item.actionUrl), { invalidateAll: true });'
+			'notificationIntentUrl(item.navigationIntent'
 		);
-		assert.doesNotMatch(source, /<a\s+href=\{portalActionUrl\(item\.actionUrl\)\}/);
+		assert.doesNotMatch(source, /actionUrl/);
+	});
+});
+
+const tenantAuthority: SelectedAccessContextSummary = {
+	accessContextId: 31,
+	portfolioId: 9,
+	workspaceName: 'Tenant home',
+	accessRevision: 7,
+	activeExperience: 'Tenant'
+};
+
+function tenantMessageIntent(
+	overrides: Partial<NotificationNavigationIntent> = {}
+): NotificationNavigationIntent {
+	return {
+		experience: 'Tenant',
+		destination: 'Message',
+		accessContextId: 31,
+		accessRevision: 7,
+		resource: { kind: 'Conversation', id: 42 },
+		parentResource: null,
+		childResource: null,
+		action: 'Open',
+		expiresAtUtc: '2099-01-01T00:00:00Z',
+		fallbackDestination: 'Home',
+		...overrides
+	};
+}
+
+describe('notification intent URL mapping', () => {
+	it('maps a current typed tenant message intent without accepting a raw URL', () => {
+		assert.equal(
+			notificationIntentUrl(tenantMessageIntent(), tenantAuthority, Date.UTC(2026, 0, 1)),
+			'/portal/messages?conversation=42'
+		);
+		assert.equal(
+			notificationIntentUrl(
+				{ ...tenantMessageIntent(), actionUrl: 'https://evil.example' } as never,
+				tenantAuthority,
+				Date.UTC(2026, 0, 1)
+			),
+			'/portal'
+		);
+	});
+
+	it('falls back internally for expired, revised, cross-context, and malformed intents', () => {
+		const now = Date.UTC(2026, 0, 2);
+		assert.equal(
+			notificationIntentUrl(
+				tenantMessageIntent({ expiresAtUtc: '2026-01-01T00:00:00Z' }),
+				tenantAuthority,
+				now
+			),
+			'/portal'
+		);
+		assert.equal(
+			notificationIntentUrl(tenantMessageIntent({ accessRevision: 6 }), tenantAuthority, now),
+			'/portal'
+		);
+		assert.equal(
+			notificationIntentUrl(tenantMessageIntent({ accessContextId: 99 }), tenantAuthority, now),
+			'/portal'
+		);
+		assert.equal(
+			notificationIntentUrl(
+				tenantMessageIntent({ destination: 'https://evil.example' as never }),
+				tenantAuthority,
+				now
+			),
+			'/portal'
+		);
+		assert.equal(
+			notificationIntentUrl(
+				tenantMessageIntent({ resource: { kind: 'WorkOrder', id: 42 } }),
+				tenantAuthority,
+				now
+			),
+			'/portal'
+		);
 	});
 });

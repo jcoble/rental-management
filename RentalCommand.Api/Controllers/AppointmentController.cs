@@ -6,8 +6,8 @@ namespace RentalCommand.Api.Controllers;
 
 /// <summary>
 /// CRUD for showings/move-in/move-out and other appointments within the caller's portfolio. Scope comes
-/// from the JWT <c>portfolioId</c> claim; list supports <c>?propertyId&amp;tenantId&amp;skip&amp;take&amp;search&amp;sort</c>.
-/// Create validates the referenced property/unit/lease/tenant are in the portfolio. Appointments have no
+/// from the server-validated workspace context; list supports <c>?propertyId&amp;tenantId&amp;skip&amp;take&amp;search&amp;sort</c>.
+/// Create validates the referenced property/unit/lease relationship/application/tenant are in the portfolio. Appointments have no
 /// soft-delete column, so removal is a hard delete.
 /// </summary>
 [ApiController]
@@ -27,7 +27,8 @@ public class AppointmentController : ManagementControllerBase
     public async Task<ActionResult<IReadOnlyList<AppointmentResponse>>> List(
         [FromQuery] ListQuery query, [FromQuery] int? propertyId, [FromQuery] int? tenantId, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), propertyId, tenantId, query, ct);
+        var items = await _service.ListAuthorizedAsync(
+            GetWorkspaceReadScope(), propertyId, tenantId, query, ct);
         return Ok(items);
     }
 
@@ -36,8 +37,22 @@ public class AppointmentController : ManagementControllerBase
     public async Task<ActionResult<AppointmentListResponse>> ListPage(
         [FromQuery] AppointmentListQuery query, CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), query, ct);
+        var page = await _service.ListPageAuthorizedAsync(GetWorkspaceReadScope(), query, ct);
         return Ok(page);
+    }
+
+    /// <summary>
+    /// Returns the current staff user's authorized appointment count for the half-open
+    /// <c>[now, now + 7 days)</c> window. The service performs authorization and aggregation in one
+    /// PostgreSQL statement; this endpoint does not accept client-owned scope or clock values.
+    /// </summary>
+    [HttpGet("schedule-summary")]
+    [ProducesResponseType(typeof(AppointmentScheduleSummaryResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<AppointmentScheduleSummaryResponse>> ScheduleSummary(
+        CancellationToken ct)
+    {
+        var summary = await _service.GetScheduleSummaryAuthorizedAsync(GetWorkspaceReadScope(), ct);
+        return Ok(summary);
     }
 
     [HttpGet("{id:int}")]
@@ -45,36 +60,52 @@ public class AppointmentController : ManagementControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<AppointmentResponse>> Get(int id, CancellationToken ct)
     {
-        var item = await _service.GetAsync(GetPortfolioId(), id, ct);
+        var item = await _service.GetAuthorizedAsync(GetWorkspaceReadScope(), id, ct);
         return item == null ? NotFound(new { error = "Appointment not found" }) : Ok(item);
     }
 
     [HttpPost]
     [ProducesResponseType(typeof(AppointmentResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<AppointmentResponse>> Create([FromBody] CreateAppointmentRequest request, CancellationToken ct)
+    public async Task<ActionResult<AppointmentResponse>> Create(
+        [FromBody] CreateAppointmentRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var created = await _service.CreateAuthorizedAsync(GetWorkspaceReadScope(), request, operationKey, ct);
         return created == null
-            ? NotFound(new { error = "Referenced property, unit, lease, or tenant not found in this portfolio" })
+            ? NotFound(new { error = "Referenced property, unit, lease relationship, application, or tenant not found in this portfolio" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
     }
 
     [HttpPatch("{id:int}")]
     [ProducesResponseType(typeof(AppointmentResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<AppointmentResponse>> Update(int id, [FromBody] UpdateAppointmentRequest request, CancellationToken ct)
+    public async Task<ActionResult<AppointmentResponse>> Update(
+        int id, [FromBody] UpdateAppointmentRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
-        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var updated = await _service.UpdateAuthorizedAsync(
+            GetWorkspaceReadScope(), id, request, operationKey, ct);
         return updated == null ? NotFound(new { error = "Appointment not found" }) : Ok(updated);
     }
 
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        int id, [FromQuery] int? expectedPropertyId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey, CancellationToken ct)
     {
-        var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+            return BadRequest(new { error = "Idempotency-Key is required and must be at most 128 characters." });
+        var deleted = await _service.DeleteAuthorizedAsync(
+            GetWorkspaceReadScope(), id, expectedPropertyId, operationKey, ct);
         return deleted ? NoContent() : NotFound(new { error = "Appointment not found" });
     }
 }

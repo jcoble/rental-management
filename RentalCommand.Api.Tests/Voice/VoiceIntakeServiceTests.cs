@@ -1,9 +1,13 @@
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using RentalCommand.Api.Tests.Domain;
 using RentalCommand.Api.Services.Voice;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
@@ -17,8 +21,20 @@ public class VoiceIntakeServiceTests : IDisposable
     private readonly Mock<ILlmProvider> _llm = new();
     private readonly Mock<IAudioTranscriptionService> _transcriber = new();
     private readonly Mock<IFileStorage> _storage = new();
+    private readonly WorkspaceReadScope _scope;
+    private readonly ServiceProvider _services;
 
-    public void Dispose() => _ctx.Dispose();
+    public VoiceIntakeServiceTests()
+    {
+        _scope = _ctx.Db.SeedAdministratorScope(1, nameof(VoiceIntakeServiceTests));
+        _services = VoiceAtomicTestKernel.Create(_ctx.ConnectionString);
+    }
+
+    public void Dispose()
+    {
+        _services.Dispose();
+        _ctx.Dispose();
+    }
 
     [Fact]
     public async Task CreateDraftAsync_NonExpenseIntent_CreatesAmbiguousExpenseDraft()
@@ -52,6 +68,7 @@ public class VoiceIntakeServiceTests : IDisposable
 
         var sut = new VoiceIntakeService(
             _ctx.Db,
+            _services.GetRequiredService<IAtomicUnitOfWork>(),
             _llm.Object,
             _transcriber.Object,
             _storage.Object,
@@ -59,10 +76,11 @@ public class VoiceIntakeServiceTests : IDisposable
             TimeProvider.System);
 
         var draft = await sut.CreateDraftAsync(
-            portfolioId: 1,
+            scope: _scope,
             audioBytes: Array.Empty<byte>(),
             contentType: null,
             providedTranscript: "Frank says water is coming through Unit 3 ceiling.",
+            operationKey: "voice-intake-non-expense",
             ct: CancellationToken.None);
 
         draft.Status.Should().Be("Reviewing");
@@ -91,6 +109,7 @@ public class VoiceIntakeServiceTests : IDisposable
     {
         var sut = new VoiceIntakeService(
             _ctx.Db,
+            _services.GetRequiredService<IAtomicUnitOfWork>(),
             _llm.Object,
             _transcriber.Object,
             _storage.Object,
@@ -98,10 +117,11 @@ public class VoiceIntakeServiceTests : IDisposable
             TimeProvider.System);
 
         var act = () => sut.CreateDraftAsync(
-            portfolioId: 1,
+            scope: _scope,
             audioBytes: Array.Empty<byte>(),
             contentType: null,
             providedTranscript: transcript,
+            operationKey: $"voice-intake-low-quality-{transcript}",
             ct: CancellationToken.None);
 
         await act.Should()

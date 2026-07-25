@@ -3,7 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
+import '../../core/api/api_exception.dart';
 import '../../core/auth/auth_controller.dart';
+import '../../core/auth/mobile_access_policy.dart';
+import '../../core/auth/auth_models.dart';
+import '../../core/auth/auth_repository.dart';
 import '../notifications/notifications_repository.dart';
 import 'mobile_destination.dart';
 import 'mobile_domain_navigation.dart';
@@ -16,12 +20,23 @@ class MobileNotificationBell extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final auth = ref.watch(authControllerProvider);
+    if (auth is! AuthStateAuthenticated ||
+        (!auth.isTenantExperience &&
+            auth.activeExperience != WorkspaceExperience.owner &&
+            !canOpenInboxHub(auth.capabilities))) {
+      return const SizedBox.shrink();
+    }
     final count = ref
         .watch(unreadCountProvider)
         .maybeWhen(data: (c) => c, orElse: () => 0);
     return IconButton(
       tooltip: 'Notifications',
       onPressed: () {
+        if (auth.activeExperience != WorkspaceExperience.management) {
+          context.push('/notifications');
+          return;
+        }
         final shellNavigator = mobileShellNavigatorOf(context);
         if (shellNavigator?.openRoute('/notifications') == true) {
           revealMobileShellIfDetached(context);
@@ -46,6 +61,19 @@ class MobileAccountMenu extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final auth = ref.watch(authControllerProvider);
+    if (auth is! AuthStateAuthenticated) return const SizedBox.shrink();
+    final capabilities = auth.capabilities;
+    final managementMode =
+        auth.activeExperience == WorkspaceExperience.management;
+    final canOpenGettingStarted =
+        managementMode && capabilities.contains('security.manage');
+    final canOpenTeam =
+        managementMode &&
+        (capabilities.contains('team.read') ||
+            capabilities.contains('team.manage'));
+    final canOpenSettings = canManageOwnMobileAlerts(auth.activeExperience);
+
     return IconButton(
       tooltip: 'Account',
       icon: const Icon(Symbols.account_circle_rounded),
@@ -64,25 +92,30 @@ class MobileAccountMenu extends ConsumerWidget {
                 shrinkWrap: true,
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                 children: [
-                  _AccountMenuRow(
-                    icon: Symbols.rocket_launch_rounded,
-                    label: 'Getting started',
-                    subtitle: 'Set-up checklist',
-                    onTap: () => closeAndOpen(gettingStartedDestination),
-                  ),
-                  const Divider(height: 20),
-                  _AccountMenuRow(
-                    icon: Symbols.groups_rounded,
-                    label: 'Team',
-                    subtitle: 'Members and access',
-                    onTap: () => closeAndOpen(teamDestination),
-                  ),
-                  _AccountMenuRow(
-                    icon: Symbols.settings_rounded,
-                    label: 'Settings',
-                    subtitle: 'Notifications and security',
-                    onTap: () => closeAndOpen(settingsDestination),
-                  ),
+                  const _AccessSelectors(),
+                  if (canOpenGettingStarted) ...[
+                    _AccountMenuRow(
+                      icon: Symbols.rocket_launch_rounded,
+                      label: 'Getting started',
+                      subtitle: 'Set-up checklist',
+                      onTap: () => closeAndOpen(gettingStartedDestination),
+                    ),
+                  ],
+                  if (canOpenTeam || canOpenSettings) const Divider(height: 20),
+                  if (canOpenTeam)
+                    _AccountMenuRow(
+                      icon: Symbols.groups_rounded,
+                      label: 'Team',
+                      subtitle: 'Members and access',
+                      onTap: () => closeAndOpen(teamDestination),
+                    ),
+                  if (canOpenSettings)
+                    _AccountMenuRow(
+                      icon: Symbols.settings_rounded,
+                      label: 'Settings',
+                      subtitle: 'My alerts and account',
+                      onTap: () => closeAndOpen(settingsDestination),
+                    ),
                   const Divider(height: 20),
                   _AccountMenuRow(
                     icon: Symbols.logout_rounded,
@@ -101,6 +134,110 @@ class MobileAccountMenu extends ConsumerWidget {
       },
     );
   }
+}
+
+class _AccessSelectors extends ConsumerStatefulWidget {
+  const _AccessSelectors();
+
+  @override
+  ConsumerState<_AccessSelectors> createState() => _AccessSelectorsState();
+}
+
+class _AccessSelectorsState extends ConsumerState<_AccessSelectors> {
+  bool _selectionInFlight = false;
+
+  Future<void> _runSelection(Future<void> Function() selection) async {
+    if (_selectionInFlight) return;
+    setState(() => _selectionInFlight = true);
+    try {
+      await selection();
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
+      }
+    } finally {
+      if (mounted) setState(() => _selectionInFlight = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = ref.watch(authControllerProvider);
+    if (auth is! AuthStateAuthenticated) return const SizedBox.shrink();
+    final contexts =
+        ref.watch(accessContextsProvider).asData?.value ??
+        const <EffectiveAccessContextOption>[];
+    final showContext = contexts.length > 1;
+    final showExperience = auth.access.availableExperiences.length > 1;
+    if (!showContext && !showExperience) return const SizedBox.shrink();
+
+    return Column(
+      children: [
+        if (showContext)
+          DropdownButtonFormField<int>(
+            initialValue: auth.access.selectedContext.accessContextId,
+            decoration: const InputDecoration(labelText: 'Workspace'),
+            items: contexts
+                .map(
+                  (item) => DropdownMenuItem<int>(
+                    value: item.accessContextId,
+                    child: Text(item.workspaceName),
+                  ),
+                )
+                .toList(growable: false),
+            onChanged: _selectionInFlight
+                ? null
+                : (value) async {
+                    if (value != null &&
+                        value != auth.access.selectedContext.accessContextId) {
+                      await _runSelection(
+                        () => ref
+                            .read(authControllerProvider.notifier)
+                            .selectContext(value),
+                      );
+                    }
+                  },
+          ),
+        if (showContext && showExperience) const SizedBox(height: 12),
+        if (showExperience)
+          DropdownButtonFormField<WorkspaceExperience>(
+            initialValue: auth.activeExperience,
+            decoration: const InputDecoration(labelText: 'Work area'),
+            items: auth.access.availableExperiences
+                .map(
+                  (experience) => DropdownMenuItem<WorkspaceExperience>(
+                    value: experience,
+                    child: Text(_experienceLabel(experience)),
+                  ),
+                )
+                .toList(growable: false),
+            onChanged: _selectionInFlight
+                ? null
+                : (value) async {
+                    if (value != null && value != auth.activeExperience) {
+                      await _runSelection(
+                        () => ref
+                            .read(authControllerProvider.notifier)
+                            .selectExperience(value),
+                      );
+                    }
+                  },
+          ),
+        const Divider(height: 20),
+      ],
+    );
+  }
+
+  String _experienceLabel(WorkspaceExperience experience) =>
+      switch (experience) {
+        WorkspaceExperience.management => 'Management',
+        WorkspaceExperience.leasing => 'Leasing',
+        WorkspaceExperience.maintenance => 'Maintenance',
+        WorkspaceExperience.owner => 'Owner',
+        WorkspaceExperience.tenant => 'Tenant',
+      };
 }
 
 class _AccountMenuRow extends StatelessWidget {

@@ -1,40 +1,19 @@
-using RentalCommand.Core.Entities;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Scanning;
 
 namespace RentalCommand.Core.Interfaces;
 
 /// <summary>
-/// Orchestrates the flagship scan-&gt;LLM intake flow: store the upload, run extraction, and
-/// produce a reviewable <see cref="ScanDraft"/>. Phase 0 defines the contract only;
-/// the implementation is Phase 2.
+/// Prepares confirmation facts and handles review lifecycle transitions after an upload has been
+/// durably admitted by <see cref="IScanUploadService"/>.
 /// </summary>
 public interface IScanService
 {
     /// <summary>
-    /// Create a draft from an uploaded document for the given portfolio and target entity type
-    /// (e.g. "Lease", "Expense"). Runs extraction and returns the persisted draft for review.
+    /// Reads the reviewed draft and applies API overrides into the sealed command accepted by the
+    /// atomic confirmation boundary. This method prepares immutable facts only; it never writes.
     /// </summary>
-    Task<ScanDraft> CreateDraftAsync(
-        int portfolioId,
-        byte[] fileBytes,
-        string contentType,
-        string targetEntityType,
-        CancellationToken ct = default);
-
-    /// <summary>
-    /// Create a draft for one file inside a bulk-scan batch: stores the file, generates the preview,
-    /// and persists a Pending <see cref="ScanDraft"/> linked to <paramref name="batchId"/>. The Engine
-    /// worker then extracts it the same way it processes any Pending draft (no batch awareness needed).
-    /// </summary>
-    Task<ScanDraft> CreateBatchDraftAsync(
-        int portfolioId,
-        int batchId,
-        byte[] fileBytes,
-        string contentType,
-        string targetEntityType,
-        CancellationToken ct = default);
-
-    /// <summary>Confirm a reviewed draft, creating the real record (Receipt→Expense in Phase 2).</summary>
-    Task<ScanConfirmResult> ConfirmAndCreateAsync(
+    Task<ScanConfirmationPreparation> PrepareConfirmationAsync(
         int portfolioId, int draftId, int userId,
         string overridesJson, CancellationToken ct = default);
 
@@ -50,35 +29,34 @@ public interface IScanService
 
     /// <summary>Reject a draft; no record is created.</summary>
     Task<bool> RejectDraftAsync(
-        int portfolioId, int draftId, int userId, string? reason, CancellationToken ct = default);
+        WorkspaceReadScope scope, int draftId, int userId, string? reason, CancellationToken ct = default);
 }
 
-/// <summary>Result returned from <see cref="IScanService.ConfirmAndCreateAsync"/>.</summary>
-/// <param name="Success">Whether the confirm succeeded.</param>
-/// <param name="CreatedEntityId">The id of the created entity, or null on failure.</param>
-/// <param name="Error">Human-readable error message, or null on success.</param>
-/// <param name="EntityType">The type of the created entity ("Expense", "Payment", "WorkOrder", or "Lease"), or null on failure.</param>
-public sealed record ScanConfirmResult(
-    bool Success,
-    int? CreatedEntityId,
-    string? Error,
-    string? EntityType = null,
-    int? UnitId = null);
+public enum ScanConfirmationPreparationOutcome
+{
+    Ready,
+    DraftNotFound,
+    UnsupportedTarget,
+    TemporarilyUnavailable,
+}
+
+public sealed record ScanConfirmationPreparation(
+    ScanConfirmationPreparationOutcome Outcome,
+    ConfirmScanDraftCommand? Command = null,
+    string? Error = null);
 
 /// <summary>
-/// What confirming a scanned lease would do with the property/unit, surfaced to the review UI so a
-/// brand-new landlord scanning into an empty portfolio can SEE that a Property/Unit will be created
-/// (vs. linked to an existing one) and correct it via overrides before committing. The confirm path
-/// performs the same match-or-create; this is the read-only "what will happen" preview.
+/// How a scanned lease resolves its Property and Unit, surfaced to the review UI before committing.
+/// Canonical lease import links existing physical inventory; extracted labels remain suggestions when
+/// the reviewer still needs to select (or first add) the correct Property or Unit.
 /// </summary>
 public sealed record LeaseImportProposal(ProposedRecord Property, ProposedRecord Unit);
 
 /// <summary>
-/// One proposed entity in a <see cref="LeaseImportProposal"/>. <see cref="Action"/> is "link" when an
-/// existing in-portfolio record was matched (its <see cref="ExistingId"/> is set), "create" when one
-/// would be created from the extracted document fields (shown in <see cref="Label"/> / <see cref="Detail"/>),
-/// or "select" when there isn't enough on the document to match or create so the reviewer must choose
-/// (e.g. no property address was extracted).
+/// One resolved or proposed entity in a <see cref="LeaseImportProposal"/>. <see cref="Action"/> is
+/// "link" when an existing in-portfolio record was matched (its <see cref="ExistingId"/> is set), or
+/// "select" when the reviewer must choose an inventory row. Extracted suggestions may still appear in
+/// <see cref="Label"/> / <see cref="Detail"/> for a select action.
 /// </summary>
 public sealed record ProposedRecord(
     string Action,

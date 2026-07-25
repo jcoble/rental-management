@@ -25,6 +25,7 @@ public class AuthControllerCookieTests
             .Setup(service => service.LoginAsync(
                 "admin@rentalcommand.local",
                 "Admin123!",
+                null,
                 It.IsAny<string?>(),
                 It.IsAny<string?>()))
             .ReturnsAsync(AuthResult.Ok(CreateLoginResponse(tokens), tokens));
@@ -77,6 +78,7 @@ public class AuthControllerCookieTests
         authService
             .Setup(service => service.LoginAsync(
                 It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<int?>(),
                 It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(AuthResult.Ok(CreateLoginResponse(tokens), tokens));
 
@@ -103,6 +105,7 @@ public class AuthControllerCookieTests
         authService
             .Setup(service => service.LoginAsync(
                 It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<int?>(),
                 It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(AuthResult.Ok(CreateLoginResponse(tokens), tokens));
 
@@ -121,44 +124,72 @@ public class AuthControllerCookieTests
             .Should().Contain("rc_refresh_token=issued-refresh-token");
     }
 
-    // Explicit user logout must end ALL sessions (sign out everywhere) — it revokes the whole token
-    // family, not just the presenting device's token.
     [Fact]
-    public async Task Logout_revokes_the_whole_token_family_not_just_one_token()
+    public async Task Google_web_sign_in_uses_canonical_result_and_sets_refresh_cookie()
     {
-        var tokenService = new Mock<IJwtTokenService>();
-        tokenService.Setup(t => t.RevokeRefreshTokenFamilyAsync("presented-refresh-token"))
-            .ReturnsAsync(true)
+        var tokens = CreateTokens("google-refresh-token");
+        var googleAuthService = new Mock<IGoogleAuthService>();
+        googleAuthService
+            .Setup(service => service.AuthenticateAsync(
+                "authorization-code",
+                "https://rental-command.example/auth/google/callback",
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(GoogleAuthResult.Ok(CreateLoginResponse(tokens), tokens))
             .Verifiable();
 
-        var controller = CreateController(Mock.Of<IAuthService>(), tokenService);
+        var controller = CreateController(
+            Mock.Of<IAuthService>(),
+            googleAuthService.Object,
+            new GoogleAuthOptions
+            {
+                ClientId = "configured-client",
+                ClientSecret = "configured-secret"
+            });
+
+        var result = await controller.GoogleSignIn(new GoogleAuthRequest
+        {
+            Code = "authorization-code",
+            RedirectUri = "https://rental-command.example/auth/google/callback"
+        });
+
+        result.Result.Should().BeOfType<OkObjectResult>();
+        googleAuthService.Verify();
+        controller.Response.Headers.SetCookie.ToString()
+            .Should().Contain("rc_refresh_token=google-refresh-token");
+    }
+
+    [Fact]
+    public async Task Logout_clears_the_namespaced_refresh_cookie()
+    {
+        var controller = CreateController(Mock.Of<IAuthService>());
         controller.Request.Headers.Cookie = "rc_refresh_token=presented-refresh-token";
 
         var result = await controller.Logout();
 
         result.Should().BeOfType<OkObjectResult>();
-        tokenService.Verify();
-        tokenService.Verify(t => t.RevokeRefreshTokenAsync(It.IsAny<string>()), Times.Never);
+        controller.Response.Headers.SetCookie.ToString().Should().Contain("rc_refresh_token=");
     }
 
-    private static AuthController CreateController(IAuthService authService)
-        => CreateController(authService, new Mock<IJwtTokenService>());
-
-    private static AuthController CreateController(IAuthService authService, Mock<IJwtTokenService> tokenService)
+    private static AuthController CreateController(
+        IAuthService authService,
+        IGoogleAuthService? googleAuthService = null,
+        GoogleAuthOptions? googleOptions = null)
     {
-        var googleAuthService = new Mock<IGoogleAuthService>();
-        var googleOptions = Options.Create(new GoogleAuthOptions());
         var environment = new Mock<IWebHostEnvironment>();
         environment.SetupGet(env => env.EnvironmentName).Returns(Environments.Development);
         var configuration = new ConfigurationBuilder().Build();
 
         return new AuthController(
             authService,
-            tokenService.Object,
-            googleAuthService.Object,
-            googleOptions,
+            googleAuthService ?? Mock.Of<IGoogleAuthService>(),
+            Options.Create(googleOptions ?? new GoogleAuthOptions()),
             environment.Object,
             configuration,
+            Mock.Of<IAtomicAuthSessionCredentialService>(),
+            Mock.Of<ICanonicalAccessTokenService>(),
+            Mock.Of<RentalCommand.Core.Authorization.IAccessEnvelopeQuery>(),
+            Mock.Of<RentalCommand.Core.Authorization.IEffectiveAccessContextSelectionQuery>(),
+            TimeProvider.System,
             NullLogger<AuthController>.Instance)
         {
             ControllerContext = new ControllerContext
@@ -189,7 +220,6 @@ public class AuthControllerCookieTests
             Id = 1,
             Email = "admin@rentalcommand.local",
             DisplayName = "Rental Command Admin",
-            Roles = ["Admin"],
             EmailVerified = true
         }
     };

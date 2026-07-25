@@ -1,13 +1,74 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import '../../core/models/models.dart' show Property, Unit;
 import '../properties/properties_repository.dart';
 import '../vendors/vendors_models.dart' show Vendor;
 import '../vendors/vendors_repository.dart';
 import 'recurring_maintenance_models.dart';
+
+class RecurringMaintenanceListQuery {
+  const RecurringMaintenanceListQuery({
+    required this.unitId,
+    this.skip = 0,
+    this.take = 20,
+    this.search,
+    this.sort = 'nextDueDate',
+    this.activeOnly,
+  });
+
+  final int unitId;
+  final int skip;
+  final int take;
+  final String? search;
+  final String sort;
+  final bool? activeOnly;
+
+  @override
+  bool operator ==(Object other) =>
+      other is RecurringMaintenanceListQuery &&
+      other.unitId == unitId &&
+      other.skip == skip &&
+      other.take == take &&
+      other.search == search &&
+      other.sort == sort &&
+      other.activeOnly == activeOnly;
+
+  @override
+  int get hashCode => Object.hash(unitId, skip, take, search, sort, activeOnly);
+}
+
+class RecurringMaintenanceListPage {
+  const RecurringMaintenanceListPage({
+    required this.items,
+    required this.totalCount,
+    required this.skip,
+    required this.take,
+  });
+
+  final List<RecurringMaintenanceTask> items;
+  final int totalCount;
+  final int skip;
+  final int take;
+
+  factory RecurringMaintenanceListPage.fromJson(Map<String, dynamic> json) {
+    final items = (json['items'] as List<dynamic>? ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(RecurringMaintenanceTask.fromJson)
+        .toList();
+    return RecurringMaintenanceListPage(
+      items: items,
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? items.length,
+      skip: (json['skip'] as num?)?.toInt() ?? 0,
+      take: (json['take'] as num?)?.toInt() ?? items.length,
+    );
+  }
+}
 
 /// Repository for recurring maintenance tasks.
 ///
@@ -22,6 +83,30 @@ class RecurringMaintenanceRepository {
   RecurringMaintenanceRepository(this._dio);
 
   final Dio _dio;
+
+  Future<RecurringMaintenanceListPage> listUnitPage(
+    RecurringMaintenanceListQuery query,
+  ) async {
+    final params = <String, dynamic>{
+      'unitId': query.unitId,
+      'skip': query.skip,
+      'take': query.take,
+      'search': query.search,
+      'sort': query.sort,
+      'activeOnly': query.activeOnly,
+    }..removeWhere((_, value) => value == null || value == '');
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/recurring-maintenance/page',
+        queryParameters: params,
+      );
+      return RecurringMaintenanceListPage.fromJson(
+        response.data ?? const <String, dynamic>{},
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
 
   Future<List<RecurringMaintenanceTask>> list({
     int? propertyId,
@@ -65,9 +150,13 @@ class RecurringMaintenanceRepository {
   /// category?, recurrenceInterval, nextDueDate, isActive, priority }
   Future<RecurringMaintenanceTask> create(Map<String, dynamic> data) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/recurring-maintenance',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'recurring-maintenance:create:${jsonEncode(data)}',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/recurring-maintenance',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -88,9 +177,13 @@ class RecurringMaintenanceRepository {
     Map<String, dynamic> data,
   ) async {
     try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/recurring-maintenance/$id',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'recurring-maintenance:update:$id:${jsonEncode(data)}',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/recurring-maintenance/$id',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -108,9 +201,13 @@ class RecurringMaintenanceRepository {
   /// PATCH /recurring-maintenance/{id}/active  body: { isActive }
   Future<RecurringMaintenanceTask> setActive(int id, bool isActive) async {
     try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/recurring-maintenance/$id/active',
-        data: {'isActive': isActive},
+      final response = await IdempotentMutation.run(
+        'recurring-maintenance:active:$id:$isActive',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/recurring-maintenance/$id/active',
+          data: {'isActive': isActive},
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final data = response.data;
       if (data == null) {
@@ -128,7 +225,13 @@ class RecurringMaintenanceRepository {
   /// Soft delete.
   Future<void> delete(int id) async {
     try {
-      await _dio.delete<dynamic>('/recurring-maintenance/$id');
+      await IdempotentMutation.run(
+        'recurring-maintenance:delete:$id',
+        (key) => _dio.delete<dynamic>(
+          '/recurring-maintenance/$id',
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
+      );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -141,6 +244,13 @@ final recurringMaintenanceRepositoryProvider =
     Provider<RecurringMaintenanceRepository>((ref) {
   return RecurringMaintenanceRepository(ref.watch(dioProvider));
 });
+
+final unitRecurringMaintenancePageProvider = FutureProvider.autoDispose
+    .family<RecurringMaintenanceListPage, RecurringMaintenanceListQuery>(
+      (ref, query) => ref
+          .watch(recurringMaintenanceRepositoryProvider)
+          .listUnitPage(query),
+    );
 
 // ── Task list ─────────────────────────────────────────────────────────────────
 

@@ -28,7 +28,7 @@ void main() {
         isApplication: false,
         isLoan: true,
         isPaid: true,
-        selectedLeaseId: null,
+        selectedTenantAccountId: null,
         applicationPropertyId: null,
         applicationUnitId: null,
         createNewProperty: false,
@@ -88,6 +88,7 @@ void main() {
     );
 
     await tester.ensureVisible(find.byType(DropdownButtonFormField<int>));
+    await tester.pumpAndSettle();
     await tester.tap(find.byType(DropdownButtonFormField<int>));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Lake House').last);
@@ -157,6 +158,7 @@ class _FakePropertiesRepository extends PropertiesRepository {
       portfolioId: 1,
       name: 'Lake House',
       type: 'SingleFamily',
+      rentalStructure: RentalStructure.singleRental,
       status: 'Active',
       addressLine1: '12 Lake Dr',
       city: 'Akron',

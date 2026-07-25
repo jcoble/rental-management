@@ -1,10 +1,12 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
-using RentalCommand.Core.Services;
 using RentalCommand.Core.Time;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Reporting;
 
 namespace RentalCommand.Api.Services.Domain;
 
@@ -15,7 +17,9 @@ public class AccountingService : IAccountingService
     private const decimal Vendor1099Threshold = 600m;
     private const string KindExpense = "Expense";
     private const string KindPayment = "Payment";
+    private const string KindTenantLedger = "TenantLedger";
     private const string KindBank = "Bank";
+    private const string KindApplicationFee = "ApplicationFee";
 
     private readonly RentalCommandDbContext _db;
     private readonly IScheduleEService _scheduleE;
@@ -34,13 +38,27 @@ public class AccountingService : IAccountingService
         _timeProvider = timeProvider;
     }
 
-    public async Task<AccountingSummaryResponse> GetSummaryAsync(int portfolioId, CancellationToken ct = default)
+    public Task<AccountingSummaryResponse> GetSummaryAsync(
+        WorkspaceReadScope scope,
+        CancellationToken ct = default) =>
+        GetSummaryCoreAsync(scope.PortfolioId, AuthorizedProperties(scope, CapabilityKeys.MoneyBalancesRead), ct);
+
+    private async Task<AccountingSummaryResponse> GetSummaryCoreAsync(
+        int portfolioId,
+        IQueryable<Property> authorizedProperties,
+        CancellationToken ct)
     {
         // Expense totals grouped by Schedule E category (soft-deleted expenses are excluded by the
-        // global query filter).
-        var categoryGroups = await _db.Expenses
+        // global query filter). Keep the authorized source reusable so the category breakdown and
+        // the headline rollup are the only two database statements required by this page.
+        var authorizedExpenses = _db.Expenses
             .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId)
+            .Where(e =>
+                e.PortfolioId == portfolioId &&
+                e.PropertyId != null &&
+                authorizedProperties.Any(property => property.Id == e.PropertyId));
+
+        var categoryGroups = await authorizedExpenses
             .GroupBy(e => e.Category)
             .Select(g => new
             {
@@ -61,174 +79,138 @@ public class AccountingService : IAccountingService
             })
             .ToList();
 
-        var unmatchedBankWithdrawals = await _db.BankTransactions
-            .AsNoTracking()
-            .Where(t =>
-                t.PortfolioId == portfolioId &&
-                t.MatchStatus != "Removed" &&
-                t.Amount < 0 &&
-                t.MatchedExpenseId == null)
-            .SumAsync(t => (decimal?)-t.Amount, ct) ?? 0m;
-
-        var expenseTotal = await _db.Expenses
-            .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId)
-            .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
-
-        var totalExpenses = expenseTotal + unmatchedBankWithdrawals;
-
-        // Payment collection rollup. Collected cash remains historical; active receivables (outstanding
-        // and overdue) are limited to current leases so old fixed-term lease balances do not become
-        // dashboard/Money TODOs after the lease ended without an extension.
-        var now = _timeProvider.UtcNow();
-        var collectedRaw = await _db.Payments
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId &&
-                        p.PaymentType != PaymentType.SecurityDeposit)
+        // Payment collection rollup. Collected cash remains historical; operational receivables are
+        // limited to possession-backed Occupied/Ending relationships. Agreement expiry by itself does
+        // not end possession or erase an amount still owed by a current resident. Each source is
+        // aggregated before joining to the one portfolio anchor, so PostgreSQL scans each relation
+        // once and returns the complete headline rollup in one statement.
+        var expenseRollupQuery = authorizedExpenses
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                // Collected: Paid contributes its full Amount; a Partial contributes only what's been
-                // paid so far (AmountPaid). Both summed SQL-side.
-                Collected = g.Sum(p =>
-                    p.Status == PaymentStatus.Paid ? p.Amount
-                    : p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m)
-                    : 0m),
-            })
-            .FirstOrDefaultAsync(ct);
+                Key = g.Key,
+                TotalExpenses = g.Sum(expense => (decimal?)expense.Amount),
+            });
 
-        var receivablesRaw = await _db.Payments
-            .AsNoTracking()
-            .ForCurrentLeaseAttention(now)
-            .Where(p => p.PortfolioId == portfolioId)
+        var collectedRollupQuery = TenantIncomeQuery(portfolioId, authorizedProperties)
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                // Owed = Scheduled/Partial/Late (Waived/Failed/Refunded are not money to collect). A
-                // Partial only owes its unpaid remainder (Amount − AmountPaid); Scheduled/Late owe in full.
-                Outstanding = g.Sum(p =>
-                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Late) ? p.Amount
-                    : p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m)
-                    : 0m),
-                Overdue = g.Sum(p =>
-                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
-                    && (p.Status == PaymentStatus.Late || p.DueDate < now)
-                        ? (p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount)
-                        : 0m),
-                OverdueCount = g.Count(p =>
-                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
-                    && (p.Status == PaymentStatus.Late || p.DueDate < now)),
-            })
-            .FirstOrDefaultAsync(ct);
+                Key = g.Key,
+                Collected = g.Sum(row => (decimal?)row.Amount),
+            });
+
+        var receivablesRollupQuery = CurrentTenantBalanceQuery(portfolioId, authorizedProperties)
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Key = g.Key,
+                Outstanding = g.Sum(balance => (decimal?)(balance.ReceivableBalance > 0m
+                    ? balance.ReceivableBalance
+                    : 0m)),
+                Overdue = g.Sum(balance => (decimal?)balance.PastDueAmount),
+                OverdueCount = g.Sum(balance => (int?)balance.PastDueCount),
+            });
+
+        var raw = await (
+                from portfolio in _db.Portfolios.AsNoTracking()
+                where portfolio.Id == portfolioId
+                join expense in expenseRollupQuery on 1 equals expense.Key into expenseRows
+                from expense in expenseRows.DefaultIfEmpty()
+                join collected in collectedRollupQuery on 1 equals collected.Key into collectedRows
+                from collected in collectedRows.DefaultIfEmpty()
+                join receivables in receivablesRollupQuery on 1 equals receivables.Key into receivableRows
+                from receivables in receivableRows.DefaultIfEmpty()
+                select new
+                {
+                    TotalExpenses = expense.TotalExpenses ?? 0m,
+                    Collected = collected.Collected ?? 0m,
+                    Outstanding = receivables.Outstanding ?? 0m,
+                    Overdue = receivables.Overdue ?? 0m,
+                    OverdueCount = receivables.OverdueCount ?? 0,
+                })
+            .SingleAsync(ct);
 
         var rollup = new PaymentRollup
         {
-            Collected = collectedRaw?.Collected ?? 0m,
-            Outstanding = receivablesRaw?.Outstanding ?? 0m,
-            Overdue = receivablesRaw?.Overdue ?? 0m,
-            OverdueCount = receivablesRaw?.OverdueCount ?? 0,
+            Collected = raw.Collected,
+            Outstanding = raw.Outstanding,
+            Overdue = raw.Overdue,
+            OverdueCount = raw.OverdueCount,
         };
-
-        var unmatchedBankDeposits = await _db.BankTransactions
-            .AsNoTracking()
-            .Where(t =>
-                t.PortfolioId == portfolioId &&
-                t.MatchStatus != "Removed" &&
-                t.Amount > 0 &&
-                t.MatchedPaymentId == null)
-            .SumAsync(t => (decimal?)t.Amount, ct) ?? 0m;
-        rollup.Collected += unmatchedBankDeposits;
 
         return new AccountingSummaryResponse
         {
             PortfolioId = portfolioId,
             ExpensesByCategory = expensesByCategory,
-            TotalExpenses = totalExpenses,
+            TotalExpenses = raw.TotalExpenses,
             Payments = rollup,
-            Snapshot = BuildMoneySnapshot(rollup, totalExpenses, expensesByCategory),
+            Snapshot = BuildMoneySnapshot(rollup, raw.TotalExpenses, expensesByCategory),
         };
     }
 
-    public async Task<MoneySnapshotResponse> GetSnapshotAsync(int portfolioId, CancellationToken ct = default)
+    public Task<MoneySnapshotResponse> GetSnapshotAsync(
+        WorkspaceReadScope scope,
+        CancellationToken ct = default) =>
+        GetSnapshotCoreAsync(scope.PortfolioId, AuthorizedProperties(scope, CapabilityKeys.MoneyBalancesRead), ct);
+
+    private async Task<MoneySnapshotResponse> GetSnapshotCoreAsync(
+        int portfolioId,
+        IQueryable<Property> authorizedProperties,
+        CancellationToken ct)
     {
         var now = _timeProvider.UtcNow();
-        var monthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
-        var last30Start = now.AddDays(-30);
+        var monthStart = new DateOnly(now.Year, now.Month, 1);
+        var last30Start = DateOnly.FromDateTime(now.AddDays(-30));
 
         // Money in: payments actually collected. "Collected" means Status == Paid AND a real PaidDate
         // (the date the cash landed) — a row marked Paid but lacking a PaidDate is not yet collected and
         // must NOT count, otherwise scheduled/expected rent would inflate money-in by its due date. This
         // matches the DashboardService "PaidThisMonth" KPI (Paid + PaidDate in period) so the two figures
-        // can't disagree. Bank deposits not yet matched to a payment also count as money in, so the
-        // snapshot reflects real cash movement. Both period figures (month-to-date and trailing 30 days)
+        // can't disagree. Both period figures (month-to-date and trailing 30 days)
         // are computed SQL-side as conditional SUMs in one grouped round-trip per source — no rows are
         // loaded into memory.
         // A Partial payment's collected cash also lands on its PaidDate, so it counts as money-in for the
         // period — contributing its AmountPaid (not its full Amount). Paid contributes the full Amount.
-        var paymentsCollected = await _db.Payments
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId
-                && (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial)
-                && p.PaymentType != PaymentType.SecurityDeposit
-                && p.PaidDate != null)
+        var paymentsCollected = await TenantIncomeQuery(portfolioId, authorizedProperties)
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                Mtd = g.Sum(p => p.PaidDate >= monthStart
-                    ? (p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount) : 0m),
-                Last30 = g.Sum(p => p.PaidDate >= last30Start
-                    ? (p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount) : 0m),
+                Mtd = g.Sum(row => row.EffectiveOn >= monthStart
+                    ? row.Amount
+                    : 0m),
+                Last30 = g.Sum(row => row.EffectiveOn >= last30Start
+                    ? row.Amount
+                    : 0m),
             })
             .FirstOrDefaultAsync(ct);
 
-        var depositsCollected = await _db.BankTransactions
-            .AsNoTracking()
-            .Where(t => t.PortfolioId == portfolioId && t.MatchStatus != "Removed" &&
-                        t.Amount > 0 && t.MatchedPaymentId == null)
-            .GroupBy(_ => 1)
-            .Select(g => new
-            {
-                Mtd = g.Sum(t => t.PostedAt >= monthStart ? t.Amount : 0m),
-                Last30 = g.Sum(t => t.PostedAt >= last30Start ? t.Amount : 0m),
-            })
-            .FirstOrDefaultAsync(ct);
+        var collectedMtd = paymentsCollected?.Mtd ?? 0m;
+        var collected30 = paymentsCollected?.Last30 ?? 0m;
 
-        var collectedMtd = (paymentsCollected?.Mtd ?? 0m) + (depositsCollected?.Mtd ?? 0m);
-        var collected30 = (paymentsCollected?.Last30 ?? 0m) + (depositsCollected?.Last30 ?? 0m);
-
-        // Money out: expenses (paid date when present, else incurred date) plus unmatched bank
-        // withdrawals — same approach as the summary, kept period-scoped.
+        // Money out: authorized-property expenses, using paid date when present and incurred date otherwise.
         var expensesSpent = await _db.Expenses
             .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId)
+            .Where(e =>
+                e.PortfolioId == portfolioId &&
+                e.PropertyId != null &&
+                authorizedProperties.Any(property => property.Id == e.PropertyId))
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                Mtd = g.Sum(e => (e.PaidAt ?? e.IncurredAt) >= monthStart ? e.Amount : 0m),
-                Last30 = g.Sum(e => (e.PaidAt ?? e.IncurredAt) >= last30Start ? e.Amount : 0m),
+                Mtd = g.Sum(e => (e.PaidAt ?? e.IncurredAt) >= monthStart.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc) ? e.Amount : 0m),
+                Last30 = g.Sum(e => (e.PaidAt ?? e.IncurredAt) >= last30Start.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc) ? e.Amount : 0m),
             })
             .FirstOrDefaultAsync(ct);
 
-        var withdrawalsSpent = await _db.BankTransactions
-            .AsNoTracking()
-            .Where(t => t.PortfolioId == portfolioId && t.MatchStatus != "Removed" &&
-                        t.Amount < 0 && t.MatchedExpenseId == null)
-            .GroupBy(_ => 1)
-            .Select(g => new
-            {
-                Mtd = g.Sum(t => t.PostedAt >= monthStart ? -t.Amount : 0m),
-                Last30 = g.Sum(t => t.PostedAt >= last30Start ? -t.Amount : 0m),
-            })
-            .FirstOrDefaultAsync(ct);
-
-        var spentMtd = (expensesSpent?.Mtd ?? 0m) + (withdrawalsSpent?.Mtd ?? 0m);
-        var spent30 = (expensesSpent?.Last30 ?? 0m) + (withdrawalsSpent?.Last30 ?? 0m);
+        var spentMtd = expensesSpent?.Mtd ?? 0m;
+        var spent30 = expensesSpent?.Last30 ?? 0m;
 
         // Past due: anyone behind right now (not period-bound). The amount and the distinct-lease count
         // (= tenants behind) come from the SAME per-lease grouped query that powers the "Who's behind"
         // list (GetPastDueAsync), so this KPI can never disagree with the destination row count.
         // Both figures are derived SQL-side; no payment rows are loaded to count.
-        var pastDueSummary = await PastDueSummaryQuery(portfolioId, now).FirstOrDefaultAsync(ct);
+        var pastDueSummary = await PastDueSummaryQuery(portfolioId, authorizedProperties).FirstOrDefaultAsync(ct);
         var pastDueAmount = pastDueSummary?.TotalPastDueAmount ?? 0m;
         var pastDueCount = pastDueSummary?.TotalCount ?? 0;
 
@@ -239,7 +221,7 @@ public class AccountingService : IAccountingService
         {
             PortfolioId = portfolioId,
             PeriodLabel = $"{monthStart:MMMM yyyy} (so far)",
-            PeriodStart = monthStart,
+            PeriodStart = monthStart.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
             PeriodEnd = now,
             Collected = collectedMtd,
             Spent = spentMtd,
@@ -253,50 +235,81 @@ public class AccountingService : IAccountingService
         };
     }
 
-    public async Task<PastDueResponse> GetPastDueAsync(int portfolioId, CancellationToken ct = default)
-    {
-        var now = _timeProvider.UtcNow();
+    public Task<PastDueResponse> GetPastDueAsync(
+        WorkspaceReadScope scope,
+        PastDueQuery query,
+        CancellationToken ct = default) =>
+        GetPastDueCoreAsync(
+            scope.PortfolioId,
+            AuthorizedProperties(scope, CapabilityKeys.MoneyBalancesRead),
+            query.NormalizedSkip,
+            query.NormalizedTake,
+            ct);
 
-        // One grouped round-trip: per behind lease, sum the past-due amount, count its past-due
-        // payments, and find the oldest past-due due date — the single source of truth for "behind".
-        var summary = await PastDueSummaryQuery(portfolioId, now).FirstOrDefaultAsync(ct);
+    private async Task<PastDueResponse> GetPastDueCoreAsync(
+        int portfolioId,
+        IQueryable<Property> authorizedProperties,
+        int skip,
+        int take,
+        CancellationToken ct)
+    {
+        var summary = await PastDueSummaryQuery(portfolioId, authorizedProperties).FirstOrDefaultAsync(ct);
         var totalCount = summary?.TotalCount ?? 0;
         var totalPastDueAmount = summary?.TotalPastDueAmount ?? 0m;
+        var businessDate = summary?.BusinessDate;
 
         if (totalCount == 0)
         {
-            return new PastDueResponse { Items = [], TotalCount = 0, TotalPastDueAmount = 0m };
+            return new PastDueResponse
+            {
+                Items = [],
+                TotalCount = 0,
+                TotalPastDueAmount = 0m,
+                BusinessDate = businessDate,
+                Skip = skip,
+                Take = take,
+            };
         }
 
-        var items = await PastDueByLeaseQuery(portfolioId, now)
-            .Join(
-                _db.Leases.AsNoTracking().Where(l => l.PortfolioId == portfolioId),
-                g => g.LeaseId,
-                l => l.Id,
-                (g, l) => new { Group = g, Lease = l })
-            .OrderBy(x => x.Group.OldestDueDate)
-            .Select(x => new PastDueLeaseResponse
+        var items = await (
+                from balance in CurrentTenantBalanceQuery(portfolioId, authorizedProperties)
+                join management in _db.LeaseManagements.AsNoTracking()
+                    on new { balance.PortfolioId, Id = balance.LeaseManagementId }
+                    equals new { management.PortfolioId, management.Id }
+                where balance.PortfolioId == portfolioId &&
+                    balance.PastDueAmount > 0m
+                let oldest = _db.TenantChargeBalanceProjections
+                    .Where(charge => charge.PortfolioId == balance.PortfolioId
+                        && charge.TenantAccountId == balance.TenantAccountId
+                        && charge.IsPastDue)
+                    .OrderBy(charge => charge.DueOn)
+                    .ThenBy(charge => charge.TenantLedgerEntryId)
+                    .Select(charge => new { charge.TenantLedgerEntryId, charge.DueOn })
+                    .First()
+                orderby oldest.DueOn, oldest.TenantLedgerEntryId
+                select new PastDueLeaseResponse
             {
-                LeaseId = x.Group.LeaseId,
-                UnitId = x.Lease.UnitId,
-                TenantName = x.Lease.Tenant == null
-                    ? null
-                    : (x.Lease.Tenant.FirstName + " " + x.Lease.Tenant.LastName).Trim(),
-                TenantPhone = x.Lease.Tenant == null ? null : x.Lease.Tenant.Phone,
-                LeaseNumber = x.Lease.LeaseNumber,
-                PropertyName = x.Lease.Property == null ? null : x.Lease.Property.Name,
-                UnitNumber = x.Lease.Unit == null ? null : x.Lease.Unit.UnitNumber,
-                PastDueAmount = x.Group.PastDueAmount,
-                OverduePaymentCount = x.Group.OverduePaymentCount,
-                OldestDueDate = x.Group.OldestDueDate,
-                // Oldest by due date, then by id for a stable pick when due dates tie.
-                OldestPaymentId = PastDuePaymentsQuery(portfolioId, now)
-                    .Where(p => p.LeaseId == x.Group.LeaseId)
-                    .OrderBy(p => p.DueDate)
-                    .ThenBy(p => p.Id)
-                    .Select(p => p.Id)
-                    .First(),
+                LeaseManagementId = management.Id,
+                TenantAccountId = balance.TenantAccountId,
+                CurrentAgreementId = balance.CurrentAgreementId,
+                UnitId = management.UnitId,
+                TenantName = balance.CurrentPrimaryTenantName,
+                TenantPhone = _db.LeaseManagementParties
+                    .Where(party => party.PortfolioId == management.PortfolioId
+                        && party.LeaseManagementId == management.Id
+                        && party.Id == balance.CurrentPrimaryPartyId)
+                    .Select(party => party.Tenant!.Phone)
+                    .FirstOrDefault(),
+                RelationshipNumber = management.RelationshipNumber,
+                PropertyName = management.Property!.Name,
+                UnitNumber = management.Unit!.UnitNumber,
+                PastDueAmount = balance.PastDueAmount,
+                OverduePaymentCount = balance.PastDueCount,
+                OldestDueOn = oldest.DueOn!.Value,
+                OldestLedgerEntryId = oldest.TenantLedgerEntryId,
             })
+            .Skip(skip)
+            .Take(take)
             .ToListAsync(ct);
 
         return new PastDueResponse
@@ -304,61 +317,64 @@ public class AccountingService : IAccountingService
             Items = items,
             TotalCount = totalCount,
             TotalPastDueAmount = totalPastDueAmount,
+            BusinessDate = businessDate,
+            Skip = skip,
+            Take = take,
         };
     }
 
     /// <summary>
-    /// The canonical "is past due" payment predicate, shared by the snapshot KPI, the "Who's behind"
-    /// list, and the per-property overdue rollup so they never diverge: a payment is past due when it
-    /// is still owed (Scheduled/Partial/Late) AND is either explicitly Late or has a DueDate before
-    /// <paramref name="now"/>. Defined once here as the single source of truth.
+    /// The canonical current past-due relation shared by the snapshot KPI, the "Who's behind" list,
+    /// summary rollup, and per-property report. Charge aging comes from the balance view; whether the
+    /// relationship remains operational comes from the lifecycle view.
     /// </summary>
-    private IQueryable<Payment> PastDuePaymentsQuery(int portfolioId, DateTime now) => _db.Payments
-        .AsNoTracking()
-        .ForCurrentLeaseAttention(now)
-        .Where(p => p.PortfolioId == portfolioId &&
-                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late) &&
-                    (p.Status == PaymentStatus.Late || p.DueDate < now));
-
-    /// <summary>
-    /// The past-due payments rolled up per lease (one group = one behind tenant). The distinct-lease
-    /// count of this query is the KPI's "tenants behind", its summed amount is the KPI's past-due
-    /// amount, and its rows are the "Who's behind" list — all from one definition, computed SQL-side.
-    /// </summary>
-    private IQueryable<PastDueLeaseGroup> PastDueByLeaseQuery(int portfolioId, DateTime now) =>
-        PastDuePaymentsQuery(portfolioId, now)
-            .GroupBy(p => p.LeaseId)
-            .Select(g => new PastDueLeaseGroup
-            {
-                // Past-due payments are lease-scoped (ForCurrentLeaseAttention requires a live lease).
-                LeaseId = g.Key!.Value,
-                // A Partial past-due payment only owes its unpaid remainder (Amount − AmountPaid);
-                // Scheduled/Late owe in full. Summed SQL-side.
-                PastDueAmount = g.Sum(p =>
-                    p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount),
-                OverduePaymentCount = g.Count(),
-                OldestDueDate = g.Min(p => p.DueDate),
-            });
-
-    private IQueryable<PastDueSummary> PastDueSummaryQuery(int portfolioId, DateTime now) =>
-        PastDueByLeaseQuery(portfolioId, now)
-            .GroupBy(_ => 1)
+    private IQueryable<PastDueSummary> PastDueSummaryQuery(
+        int portfolioId,
+        IQueryable<Property> authorizedProperties) =>
+        CurrentTenantBalanceQuery(portfolioId, authorizedProperties)
+            .GroupBy(balance => balance.BusinessDate)
             .Select(g => new PastDueSummary
             {
-                TotalCount = g.Count(),
-                TotalPastDueAmount = g.Sum(x => x.PastDueAmount),
+                BusinessDate = g.Key,
+                TotalCount = g.Count(balance => balance.PastDueAmount > 0m),
+                TotalPastDueAmount = g.Sum(balance =>
+                    balance.PastDueAmount > 0m ? balance.PastDueAmount : 0m),
             });
 
-    private sealed class PastDueLeaseGroup
-    {
-        public int LeaseId { get; set; }
-        public decimal PastDueAmount { get; set; }
-        public int OverduePaymentCount { get; set; }
-        public DateTime OldestDueDate { get; set; }
-    }
+    /// <summary>
+    /// Canonical tenant balances that still belong on current operational money surfaces. Agreement
+    /// expiration does not end a resident relationship: open possession remains Occupied (and is
+    /// separately exposed as a reconciliation exception when no agreement governs). Returned possession,
+    /// cancellation, and accounting closeout are excluded by the lifecycle projection.
+    /// </summary>
+    private IQueryable<CurrentTenantBalanceRow> CurrentTenantBalanceQuery(
+        int portfolioId,
+        IQueryable<Property> authorizedProperties) =>
+        from balance in _db.TenantAccountBalanceProjections.AsNoTracking()
+        join lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+            on new { balance.PortfolioId, balance.LeaseManagementId }
+            equals new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+        where balance.PortfolioId == portfolioId
+            && authorizedProperties.Any(property => property.Id == lifecycle.PropertyId)
+            && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
+        select new CurrentTenantBalanceRow
+        {
+            PortfolioId = balance.PortfolioId,
+            PropertyId = lifecycle.PropertyId,
+            LeaseManagementId = balance.LeaseManagementId,
+            TenantAccountId = balance.TenantAccountId,
+            BusinessDate = balance.BusinessDate,
+            ReceivableBalance = balance.ReceivableBalance,
+            PastDueAmount = balance.PastDueAmount,
+            PastDueCount = balance.PastDueCount,
+            CurrentAgreementId = lifecycle.CurrentAgreementId,
+            CurrentPrimaryPartyId = lifecycle.CurrentPrimaryPartyId,
+            CurrentPrimaryTenantName = lifecycle.CurrentPrimaryTenantName,
+        };
 
     private sealed class PastDueSummary
     {
+        public DateOnly BusinessDate { get; set; }
         public int TotalCount { get; set; }
         public decimal TotalPastDueAmount { get; set; }
     }
@@ -436,18 +452,162 @@ public class AccountingService : IAccountingService
         return value.ToString(hasCents ? "$#,0.00;$-#,0.00;$0.00" : "$#,0;$-#,0;$0");
     }
 
-    public async Task<AccountingTransactionsResponse> GetTransactionsAsync(
+    public Task<AccountingTransactionsResponse> GetTransactionsAsync(
+        WorkspaceReadScope scope,
+        AccountingTransactionsQuery query,
+        CancellationToken ct = default) =>
+        GetTransactionsCoreAsync(
+            scope.PortfolioId,
+            query,
+            AuthorizedProperties(scope, CapabilityKeys.MoneyBalancesRead),
+            ct);
+
+    private async Task<AccountingTransactionsResponse> GetTransactionsCoreAsync(
         int portfolioId,
         AccountingTransactionsQuery query,
-        CancellationToken ct = default)
+        IQueryable<Property> authorizedProperties,
+        CancellationToken ct)
     {
-        // Source the unified ledger from the vw_accounting_transactions Postgres view (keyless entity)
-        // so the whole filter → sort → page runs as ONE SQL statement against the DB, rather than
-        // materializing Payments/Expenses/BankTransactions and merging in memory. RLS + soft-delete
-        // are enforced inside the view; we still apply the app-layer portfolio scope here.
-        IQueryable<AccountingTransactionView> rows = _db.AccountingTransactionViews
+        // Build the canonical transaction surface as one translated UNION ALL over tenant-account
+        // ledger entries, expenses, bank movements, and the separate application-fee subledger.
+        // Posted ledger debits are negative and credits are positive; no mutable Payment status is
+        // consulted and security-deposit receipts remain visibly typed rather than misreported as rent.
+        IQueryable<AccountingTransactionView> rows = _db.TenantLedgerEntries
             .AsNoTracking()
-            .Where(r => r.PortfolioId == portfolioId);
+            .Where(entry =>
+                entry.PortfolioId == portfolioId &&
+                authorizedProperties.Any(property =>
+                    property.Id == entry.TenantAccount!.LeaseManagement!.PropertyId))
+            .Select(entry => new AccountingTransactionView
+            {
+                Kind = entry.EntryType == TenantLedgerEntryType.PaymentReceipt
+                    ? KindPayment
+                    : KindTenantLedger,
+                Id = entry.Id,
+                PortfolioId = entry.PortfolioId,
+                Date = entry.PostedAtUtc,
+                CreatedAt = entry.PostedAtUtc,
+                UpdatedAt = entry.PostedAtUtc,
+                Description = entry.Description,
+                Category = entry.EntryType.ToString(),
+                Status = entry.Direction == TenantLedgerDirection.Credit ? "Credit" : "Debit",
+                Amount = entry.Direction == TenantLedgerDirection.Credit ? entry.Amount : -entry.Amount,
+                TenantAccountId = entry.TenantAccountId,
+                PropertyId = entry.TenantAccount!.LeaseManagement!.PropertyId,
+                UnitId = entry.TenantAccount.LeaseManagement.UnitId,
+                PropertyName = entry.TenantAccount.LeaseManagement.Property!.Name,
+                Counterparty = _db.LeaseManagementLifecycleProjections
+                    .Where(lifecycle => lifecycle.PortfolioId == entry.PortfolioId
+                        && lifecycle.LeaseManagementId == entry.TenantAccount.LeaseManagementId)
+                    .Select(lifecycle => lifecycle.CurrentPrimaryTenantName)
+                    .FirstOrDefault(),
+                Reference = entry.TenantAccount.AccountNumber,
+                Notes = null,
+                HasReceipt = false,
+                ReceiptIsImage = false,
+                Reconciled = false,
+                ClearedBankName = null,
+                ClearedAt = null,
+            })
+            .Concat(_db.Expenses.AsNoTracking()
+                .Where(expense =>
+                    expense.PortfolioId == portfolioId &&
+                    expense.PropertyId != null &&
+                    authorizedProperties.Any(property => property.Id == expense.PropertyId))
+                .Select(expense => new AccountingTransactionView
+                {
+                    Kind = KindExpense,
+                    Id = expense.Id,
+                    PortfolioId = expense.PortfolioId,
+                    Date = expense.PaidAt ?? expense.IncurredAt,
+                    CreatedAt = expense.CreatedAt,
+                    UpdatedAt = expense.UpdatedAt,
+                    Description = expense.Description,
+                    Category = expense.Category.ToString(),
+                    Status = expense.Status.ToString(),
+                    Amount = -expense.Amount,
+                    TenantAccountId = null,
+                    PropertyId = expense.PropertyId,
+                    UnitId = expense.UnitId,
+                    PropertyName = expense.Property == null ? null : expense.Property.Name,
+                    Counterparty = expense.Vendor == null ? null : expense.Vendor.Name,
+                    Reference = expense.WorkOrder == null ? null : expense.WorkOrder.Title,
+                    Notes = expense.Notes,
+                    HasReceipt = _db.StoredFiles.Any(file =>
+                        file.PortfolioId == expense.PortfolioId &&
+                        file.EntityType == "Expense" &&
+                        file.EntityId == expense.Id &&
+                        file.DeletedAt == null),
+                    ReceiptIsImage = _db.StoredFiles
+                        .Where(file =>
+                            file.PortfolioId == expense.PortfolioId &&
+                            file.EntityType == "Expense" &&
+                            file.EntityId == expense.Id &&
+                            file.DeletedAt == null)
+                        .OrderByDescending(file => file.UploadedAt)
+                        .Select(file => file.ContentType.StartsWith("image/"))
+                        .FirstOrDefault(),
+                    Reconciled = _db.BankTransactions.Any(bank =>
+                        bank.PortfolioId == expense.PortfolioId &&
+                        bank.MatchStatus == "Matched" &&
+                        bank.MatchedExpenseId == expense.Id),
+                    ClearedBankName = _db.BankTransactions
+                        .Where(bank =>
+                            bank.PortfolioId == expense.PortfolioId &&
+                            bank.MatchStatus == "Matched" &&
+                            bank.MatchedExpenseId == expense.Id)
+                        .OrderByDescending(bank => bank.PostedAt)
+                        .Select(bank => bank.BankConnection!.InstitutionName)
+                        .FirstOrDefault(),
+                    ClearedAt = _db.BankTransactions
+                        .Where(bank =>
+                            bank.PortfolioId == expense.PortfolioId &&
+                            bank.MatchStatus == "Matched" &&
+                            bank.MatchedExpenseId == expense.Id)
+                        .OrderByDescending(bank => bank.PostedAt)
+                        .Select(bank => (DateTime?)bank.PostedAt)
+                        .FirstOrDefault(),
+                }))
+            .Concat(_db.ApplicationFinancialEntries
+                .IgnoreQueryFilters()
+                .AsNoTracking()
+                .Where(entry =>
+                    entry.PortfolioId == portfolioId &&
+                    entry.PropertyId != null &&
+                    authorizedProperties.Any(property => property.Id == entry.PropertyId))
+                .Select(entry => new AccountingTransactionView
+                {
+                    Kind = KindApplicationFee,
+                    Id = entry.Id,
+                    PortfolioId = entry.PortfolioId,
+                    Date = entry.OccurredAtUtc,
+                    CreatedAt = entry.OccurredAtUtc,
+                    UpdatedAt = entry.OccurredAtUtc,
+                    Description = entry.Description,
+                    Category = entry.EntryType == ApplicationFinancialEntryType.FeeCollection
+                        ? "ApplicationFee"
+                        : entry.EntryType == ApplicationFinancialEntryType.Refund
+                            ? "ApplicationFeeRefund"
+                            : "ApplicationFeeAdjustment",
+                    Status = "Posted",
+                    Amount = entry.Direction == ApplicationFinancialDirection.Increase
+                        ? entry.Amount
+                        : -entry.Amount,
+                    TenantAccountId = null,
+                    PropertyId = entry.PropertyId,
+                    UnitId = entry.UnitId,
+                    PropertyName = entry.Property == null ? null : entry.Property.Name,
+                    // Deleted applications remain absent from normal navigations. Preserve the
+                    // immutable financial row without re-exposing deleted applicant PII.
+                    Counterparty = "Rental application",
+                    Reference = entry.ProviderReference ?? entry.SourceReference ?? entry.Method,
+                    Notes = null,
+                    HasReceipt = false,
+                    ReceiptIsImage = false,
+                    Reconciled = false,
+                    ClearedBankName = null,
+                    ClearedAt = null,
+                }));
 
         if (!string.IsNullOrWhiteSpace(query.Kind))
         {
@@ -456,6 +616,10 @@ public class AccountingService : IAccountingService
             {
                 rows = rows.Where(r => r.Kind == KindExpense);
             }
+            else if (kind.Equals(KindTenantLedger, StringComparison.OrdinalIgnoreCase))
+            {
+                rows = rows.Where(r => r.Kind == KindTenantLedger);
+            }
             else if (kind.Equals(KindPayment, StringComparison.OrdinalIgnoreCase))
             {
                 rows = rows.Where(r => r.Kind == KindPayment);
@@ -463,6 +627,10 @@ public class AccountingService : IAccountingService
             else if (kind.Equals(KindBank, StringComparison.OrdinalIgnoreCase))
             {
                 rows = rows.Where(r => r.Kind == KindBank);
+            }
+            else if (kind.Equals(KindApplicationFee, StringComparison.OrdinalIgnoreCase))
+            {
+                rows = rows.Where(r => r.Kind == KindApplicationFee);
             }
         }
 
@@ -548,25 +716,6 @@ public class AccountingService : IAccountingService
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
-        var expenseIds = pageRows
-            .Where(r => r.Kind == KindExpense)
-            .Select(r => r.Id)
-            .ToList();
-
-        var filesByExpenseId = await _db.StoredFiles
-            .AsNoTracking()
-            .Where(f =>
-                f.PortfolioId == portfolioId &&
-                f.EntityType == "Expense" &&
-                f.EntityId != null &&
-                expenseIds.Contains(f.EntityId.Value) &&
-                f.DeletedAt == null)
-            .GroupBy(f => f.EntityId!.Value)
-            .Select(g => new { EntityId = g.Key, ContentType = g.OrderByDescending(f => f.UploadedAt).First().ContentType })
-            .ToDictionaryAsync(x => x.EntityId, x => x.ContentType, ct);
-
-        var reconciliation = await BuildReconciliationAsync(portfolioId, pageRows, ct);
-
         return new AccountingTransactionsResponse
         {
             Items = pageRows.Select(r =>
@@ -582,27 +731,18 @@ public class AccountingService : IAccountingService
                     Category = r.Category,
                     Status = r.Status,
                     Amount = r.Amount,
+                    TenantAccountId = r.TenantAccountId,
                     PropertyId = r.PropertyId,
                     UnitId = r.UnitId,
                     PropertyName = r.PropertyName,
                     Counterparty = r.Counterparty,
-                    DetailHref = DetailHrefFor(r.Kind, r.Id),
+                    DetailHref = DetailHrefFor(r.Kind, r.Id, r.TenantAccountId),
+                    HasReceipt = r.HasReceipt,
+                    ReceiptIsImage = r.ReceiptIsImage,
+                    Reconciled = r.Reconciled,
+                    ClearedBankName = r.ClearedBankName,
+                    ClearedAt = r.ClearedAt,
                 };
-
-                if (r.Kind == KindExpense && filesByExpenseId.TryGetValue(r.Id, out var contentType))
-                {
-                    item.HasReceipt = true;
-                    item.ReceiptIsImage = contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
-                }
-
-                if ((r.Kind == KindPayment || r.Kind == KindExpense) &&
-                    reconciliation.TryGetValue((r.Kind, r.Id), out var recon))
-                {
-                    item.Reconciled = recon.Reconciled;
-                    item.ClearedBankName = recon.ClearedBankName;
-                    item.ClearedAt = recon.ClearedAt;
-                    item.SuggestedBankMatch = recon.Suggested;
-                }
 
                 return item;
             }).ToList(),
@@ -613,232 +753,33 @@ public class AccountingService : IAccountingService
     }
 
     /// <summary>The grid row's deep-link, derived from its source kind + id (was a view column).</summary>
-    private static string DetailHrefFor(string kind, int id) => kind switch
+    internal static string DetailHrefFor(string kind, long id, int? tenantAccountId) => kind switch
     {
-        KindPayment => $"/accounting/payments/{id}",
+        KindTenantLedger or KindPayment when tenantAccountId.HasValue =>
+            $"/tenant-accounts/{tenantAccountId.Value}/entries/{id}",
+        KindTenantLedger or KindPayment => throw new InvalidOperationException(
+            "A tenant-ledger accounting row must carry TenantAccountId."),
         KindExpense => $"/accounting/expenses/{id}",
+        KindApplicationFee => "/applications",
         _ => "/banking",
     };
 
-    /// <summary>
-    /// For the Payment/Expense rows on the current page, look up their bank-reconciliation state in a
-    /// single pair of queries (no N+1): a CONFIRMED match (a Matched bank line linked to the row) wins
-    /// and yields "✓ Cleared · {bank} · {date}"; otherwise a high-confidence still-unmatched bank line
-    /// is surfaced as a one-tap "Match?" suggestion. Nothing is auto-matched here.
-    /// </summary>
-    private async Task<Dictionary<(string Kind, int Id), ReconciliationState>> BuildReconciliationAsync(
+    public Task<AccountingReportsResponse> GetReportsAsync(
+        WorkspaceReadScope scope,
+        CancellationToken ct = default) =>
+        GetReportsCoreAsync(
+            scope.PortfolioId,
+            AuthorizedProperties(scope, CapabilityKeys.ReportsRead),
+            ct);
+
+    private async Task<AccountingReportsResponse> GetReportsCoreAsync(
         int portfolioId,
-        IReadOnlyList<AccountingTransactionView> pageRows,
+        IQueryable<Property> authorizedProperties,
         CancellationToken ct)
-    {
-        var result = new Dictionary<(string, int), ReconciliationState>();
-
-        var paymentRows = pageRows.Where(r => r.Kind == KindPayment).ToList();
-        var expenseRows = pageRows.Where(r => r.Kind == KindExpense).ToList();
-        if (paymentRows.Count == 0 && expenseRows.Count == 0) return result;
-
-        var paymentIds = paymentRows.Select(r => r.Id).ToHashSet();
-        var expenseIds = expenseRows.Select(r => r.Id).ToHashSet();
-
-        // 1) Confirmed (Matched) bank lines that link to a row on this page → "cleared".
-        var cleared = await _db.BankTransactions
-            .AsNoTracking()
-            .Where(t =>
-                t.PortfolioId == portfolioId &&
-                t.MatchStatus == "Matched" &&
-                ((t.MatchedPaymentId != null && paymentIds.Contains(t.MatchedPaymentId.Value)) ||
-                 (t.MatchedExpenseId != null && expenseIds.Contains(t.MatchedExpenseId.Value))))
-            .Select(t => new
-            {
-                t.MatchedPaymentId,
-                t.MatchedExpenseId,
-                t.PostedAt,
-                InstitutionName = t.BankConnection!.InstitutionName,
-            })
-            .ToListAsync(ct);
-
-        foreach (var c in cleared)
-        {
-            if (c.MatchedPaymentId is int pid && paymentIds.Contains(pid))
-            {
-                result[(KindPayment, pid)] = new ReconciliationState
-                {
-                    Reconciled = true,
-                    ClearedBankName = c.InstitutionName,
-                    ClearedAt = c.PostedAt,
-                };
-            }
-            else if (c.MatchedExpenseId is int eid && expenseIds.Contains(eid))
-            {
-                result[(KindExpense, eid)] = new ReconciliationState
-                {
-                    Reconciled = true,
-                    ClearedBankName = c.InstitutionName,
-                    ClearedAt = c.PostedAt,
-                };
-            }
-        }
-
-        // 2) For rows not already cleared, suggest a still-unmatched bank line. Amount/date/name
-        // gates, scoring, and top-1 ranking all stay DB-side; the in-memory step only attaches the
-        // already-ranked DTO to the page row.
-        var openPaymentIds = paymentIds
-            .Where(id => !result.ContainsKey((KindPayment, id)))
-            .ToArray();
-        var openExpenseIds = expenseIds
-            .Where(id => !result.ContainsKey((KindExpense, id)))
-            .ToArray();
-
-        if (openPaymentIds.Length == 0 && openExpenseIds.Length == 0) return result;
-
-        var suggestions = await LoadSqlRankedInlineSuggestionsAsync(portfolioId, openPaymentIds, openExpenseIds, ct);
-        foreach (var suggestion in suggestions)
-        {
-            result[(suggestion.Kind, suggestion.EntityId)] = new ReconciliationState
-            {
-                Suggested = new SuggestedBankMatchResponse
-                {
-                    BankTransactionId = suggestion.BankTransactionId,
-                    Name = string.IsNullOrWhiteSpace(suggestion.Name) ? suggestion.FallbackName : suggestion.Name,
-                    Amount = suggestion.Amount,
-                    Date = suggestion.Date,
-                    Confidence = suggestion.Confidence > 0.99m ? 0.99m : suggestion.Confidence,
-                },
-            };
-        }
-
-        return result;
-    }
-
-    private async Task<List<InlineBankSuggestionRankRow>> LoadSqlRankedInlineSuggestionsAsync(
-        int portfolioId,
-        int[] paymentIds,
-        int[] expenseIds,
-        CancellationToken ct)
-    {
-        var paymentCandidates =
-            from t in _db.BankTransactions.AsNoTracking()
-            from p in _db.Payments.AsNoTracking()
-            let anchor = p.PaidDate ?? p.DueDate
-            let bankText = ((t.MerchantName ?? "") + " " + t.Description).ToLower()
-            let tenantName = (p.Lease!.Tenant!.FirstName + " " + p.Lease!.Tenant!.LastName).Trim().ToLower()
-            let leaseNumber = p.Lease!.LeaseNumber.ToLower()
-            let propertyName = p.Lease!.Property!.Name.ToLower()
-            let hasNameMatch =
-                (tenantName != "" && bankText.Contains(tenantName)) ||
-                (leaseNumber != "" && bankText.Contains(leaseNumber)) ||
-                (propertyName != "" && bankText.Contains(propertyName))
-            let dateScore =
-                t.PostedAt >= anchor.AddDays(-1) && t.PostedAt < anchor.AddDays(2) ? 0.80m :
-                t.PostedAt >= anchor.AddDays(-2) && t.PostedAt < anchor.AddDays(3) ? 0.72m :
-                t.PostedAt >= anchor.AddDays(-4) && t.PostedAt < anchor.AddDays(5) ? 0.62m :
-                t.PostedAt >= anchor.AddDays(-7) && t.PostedAt < anchor.AddDays(8) ? 0.52m :
-                t.PostedAt >= anchor.AddDays(-14) && t.PostedAt < anchor.AddDays(15) && hasNameMatch ? 0.42m :
-                0m
-            where
-                paymentIds.Contains(p.Id) &&
-                t.PortfolioId == portfolioId &&
-                t.MatchStatus == "Unmatched" &&
-                t.MatchedPaymentId == null &&
-                t.MatchedExpenseId == null &&
-                t.Amount > 0m &&
-                p.PortfolioId == portfolioId &&
-                p.Status != PaymentStatus.Failed &&
-                p.Status != PaymentStatus.Refunded &&
-                t.Amount >= p.Amount - 0.01m &&
-                t.Amount <= p.Amount + 0.01m &&
-                t.PostedAt >= anchor.AddDays(-14) &&
-                t.PostedAt < anchor.AddDays(15) &&
-                dateScore > 0m
-            select new InlineBankSuggestionRankRow
-            {
-                Kind = KindPayment,
-                EntityId = p.Id,
-                BankTransactionId = t.Id,
-                Name = t.MerchantName,
-                FallbackName = t.BankConnection!.InstitutionName,
-                Amount = t.Amount,
-                Date = t.PostedAt,
-                Confidence = hasNameMatch ? dateScore + 0.19m : dateScore,
-            };
-
-        var expenseCandidates =
-            from t in _db.BankTransactions.AsNoTracking()
-            from e in _db.Expenses.AsNoTracking()
-            let anchor = e.PaidAt ?? e.IncurredAt
-            let bankText = ((t.MerchantName ?? "") + " " + t.Description).ToLower()
-            let vendorName = e.Vendor != null ? e.Vendor.Name.ToLower() : ""
-            let expenseDescription = e.Description.ToLower()
-            let hasNameMatch =
-                (vendorName != "" && bankText.Contains(vendorName)) ||
-                (expenseDescription != "" && bankText.Contains(expenseDescription))
-            let dateScore =
-                t.PostedAt >= anchor.AddDays(-1) && t.PostedAt < anchor.AddDays(2) ? 0.80m :
-                t.PostedAt >= anchor.AddDays(-2) && t.PostedAt < anchor.AddDays(3) ? 0.72m :
-                t.PostedAt >= anchor.AddDays(-4) && t.PostedAt < anchor.AddDays(5) ? 0.62m :
-                t.PostedAt >= anchor.AddDays(-7) && t.PostedAt < anchor.AddDays(8) ? 0.52m :
-                t.PostedAt >= anchor.AddDays(-14) && t.PostedAt < anchor.AddDays(15) && hasNameMatch ? 0.42m :
-                0m
-            where
-                expenseIds.Contains(e.Id) &&
-                t.PortfolioId == portfolioId &&
-                t.MatchStatus == "Unmatched" &&
-                t.MatchedPaymentId == null &&
-                t.MatchedExpenseId == null &&
-                t.Amount < 0m &&
-                e.PortfolioId == portfolioId &&
-                t.Amount >= -e.Amount - 0.01m &&
-                t.Amount <= -e.Amount + 0.01m &&
-                t.PostedAt >= anchor.AddDays(-14) &&
-                t.PostedAt < anchor.AddDays(15) &&
-                dateScore > 0m
-            select new InlineBankSuggestionRankRow
-            {
-                Kind = KindExpense,
-                EntityId = e.Id,
-                BankTransactionId = t.Id,
-                Name = t.MerchantName,
-                FallbackName = t.BankConnection!.InstitutionName,
-                Amount = t.Amount,
-                Date = t.PostedAt,
-                Confidence = hasNameMatch ? dateScore + 0.19m : dateScore,
-            };
-
-        return await paymentCandidates
-            .Concat(expenseCandidates)
-            .GroupBy(c => new { c.Kind, c.EntityId })
-            .Select(g => g
-                .OrderByDescending(c => c.Confidence)
-                .ThenBy(c => c.BankTransactionId)
-                .First())
-            .ToListAsync(ct);
-    }
-
-    private sealed class ReconciliationState
-    {
-        public bool Reconciled { get; set; }
-        public string? ClearedBankName { get; set; }
-        public DateTime? ClearedAt { get; set; }
-        public SuggestedBankMatchResponse? Suggested { get; set; }
-    }
-
-    private sealed class InlineBankSuggestionRankRow
-    {
-        public string Kind { get; set; } = string.Empty;
-        public int EntityId { get; set; }
-        public int BankTransactionId { get; set; }
-        public string? Name { get; set; }
-        public string FallbackName { get; set; } = string.Empty;
-        public decimal Amount { get; set; }
-        public DateTime Date { get; set; }
-        public decimal Confidence { get; set; }
-    }
-
-    public async Task<AccountingReportsResponse> GetReportsAsync(int portfolioId, CancellationToken ct = default)
     {
         var generatedAt = _timeProvider.UtcNow();
 
-        var ledgerQuery = ReportLedgerQuery(portfolioId);
+        var ledgerQuery = ReportLedgerQuery(portfolioId, authorizedProperties);
         var ledgerTotalCount = await ledgerQuery.CountAsync(ct);
         var ledgerRows = await ledgerQuery
             .OrderByDescending(l => l.Date)
@@ -847,47 +788,61 @@ public class AccountingService : IAccountingService
             .ToListAsync(ct);
         var recentLedger = ledgerRows.Select(ToLedgerTransaction).ToList();
 
-        // Per-property rollups stay in SQL as correlated aggregates. Only final DTO formatting and
-        // the simple Net arithmetic happen after materialization.
-        var propertyRows = await _db.Properties
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId)
-            .OrderBy(p => p.Name)
-            .Select(p => new
+        // Aggregate each financial source by property before joining it to the authorized property
+        // relation. This produces one translated statement with three derived tables and avoids
+        // embedding the complete authorization query inside a correlated tenant-income projection.
+        var incomeByProperty = TenantIncomeQuery(portfolioId, authorizedProperties)
+            .GroupBy(income => income.PropertyId)
+            .Select(group => new
             {
-                p.Id,
-                p.Name,
-                Income = _db.Payments
-                    .Where(pay => pay.PortfolioId == portfolioId &&
-                                  pay.Lease != null &&
-                                  pay.Lease.PropertyId == p.Id &&
-                                  pay.PaymentType != PaymentType.SecurityDeposit &&
-                                  (pay.Status == PaymentStatus.Paid || pay.Status == PaymentStatus.Partial))
-                    .Sum(pay => (decimal?)(pay.Status == PaymentStatus.Partial
-                        ? (pay.AmountPaid ?? 0m)
-                        : pay.Amount)) ?? 0m,
-                Expenses = _db.Expenses
-                    .Where(e => e.PortfolioId == portfolioId && e.PropertyId == p.Id)
-                    .Sum(e => (decimal?)e.Amount) ?? 0m,
-                Overdue = _db.Payments
-                    .ForCurrentLeaseAttention(generatedAt)
-                    .Where(pay => pay.PortfolioId == portfolioId &&
-                                  pay.Lease != null &&
-                                  pay.Lease.PropertyId == p.Id &&
-                                  (pay.Status == PaymentStatus.Scheduled || pay.Status == PaymentStatus.Partial || pay.Status == PaymentStatus.Late) &&
-                                  (pay.Status == PaymentStatus.Late || pay.DueDate < generatedAt))
-                    .Sum(pay => (decimal?)(pay.Status == PaymentStatus.Partial
-                        ? pay.Amount - (pay.AmountPaid ?? 0m)
-                        : pay.Amount)) ?? 0m,
-                OverdueCount = _db.Payments
-                    .ForCurrentLeaseAttention(generatedAt)
-                    .Count(pay =>
-                        pay.PortfolioId == portfolioId &&
-                        pay.Lease != null &&
-                        pay.Lease.PropertyId == p.Id &&
-                        (pay.Status == PaymentStatus.Scheduled || pay.Status == PaymentStatus.Partial || pay.Status == PaymentStatus.Late) &&
-                        (pay.Status == PaymentStatus.Late || pay.DueDate < generatedAt)),
-            })
+                PropertyId = group.Key,
+                Total = group.Sum(income => (decimal?)income.Amount),
+            });
+        var expensesByProperty = _db.Expenses
+            .AsNoTracking()
+            .Where(expense =>
+                expense.PortfolioId == portfolioId &&
+                expense.PropertyId != null &&
+                authorizedProperties.Any(property => property.Id == expense.PropertyId))
+            .GroupBy(expense => expense.PropertyId!.Value)
+            .Select(group => new
+            {
+                PropertyId = group.Key,
+                Total = group.Sum(expense => (decimal?)expense.Amount),
+            });
+        var pastDueByProperty =
+            from balance in CurrentTenantBalanceQuery(portfolioId, authorizedProperties)
+            where balance.PastDueAmount > 0m
+            group balance by balance.PropertyId
+            into balances
+            select new
+            {
+                PropertyId = balances.Key,
+                Total = balances.Sum(balance => (decimal?)balance.PastDueAmount),
+                Count = balances.Sum(balance => (int?)balance.PastDueCount),
+            };
+
+        var propertyRows = await (
+                from property in authorizedProperties
+                join income in incomeByProperty
+                    on property.Id equals income.PropertyId into propertyIncome
+                from income in propertyIncome.DefaultIfEmpty()
+                join expense in expensesByProperty
+                    on property.Id equals expense.PropertyId into propertyExpenses
+                from expense in propertyExpenses.DefaultIfEmpty()
+                join pastDue in pastDueByProperty
+                    on property.Id equals pastDue.PropertyId into propertyPastDue
+                from pastDue in propertyPastDue.DefaultIfEmpty()
+                orderby property.Name
+                select new
+                {
+                    property.Id,
+                    property.Name,
+                    Income = income.Total ?? 0m,
+                    Expenses = expense.Total ?? 0m,
+                    Overdue = pastDue.Total ?? 0m,
+                    OverdueCount = pastDue.Count ?? 0,
+                })
             .ToListAsync(ct);
 
         var propertyReports = propertyRows
@@ -906,11 +861,16 @@ public class AccountingService : IAccountingService
             })
             .ToList();
 
-        var scheduleE = await BuildEmbeddedScheduleETotalsAsync(portfolioId, generatedAt.Year, ct);
+        var scheduleE = await BuildEmbeddedScheduleETotalsAsync(
+            portfolioId, generatedAt.Year, authorizedProperties, ct);
 
         var vendors1099 = await _db.Vendors
             .AsNoTracking()
-            .Where(v => v.PortfolioId == portfolioId)
+            .Where(v =>
+                v.PortfolioId == portfolioId &&
+                v.Expenses.Any(expense =>
+                    expense.PropertyId != null &&
+                    authorizedProperties.Any(property => property.Id == expense.PropertyId)))
             .Select(v => new
             {
                 v.Id,
@@ -918,7 +878,10 @@ public class AccountingService : IAccountingService
                 v.Is1099Eligible,
                 v.W9OnFile,
                 TotalPaid = v.Expenses
-                    .Where(e => e.Status == ExpenseStatus.Paid || e.PaidAt != null)
+                    .Where(e =>
+                        (e.Status == ExpenseStatus.Paid || e.PaidAt != null) &&
+                        e.PropertyId != null &&
+                        authorizedProperties.Any(property => property.Id == e.PropertyId))
                     .Sum(e => (decimal?)e.Amount) ?? 0m,
             })
             .Where(v => v.Is1099Eligible || v.TotalPaid > 0m)
@@ -941,32 +904,19 @@ public class AccountingService : IAccountingService
         // Portfolio totals computed SQL-side (SUM aggregates), not by re-summing the materialized
         // ledger rows in memory.
         // Collected income: Paid contributes its full Amount, Partial contributes its AmountPaid.
-        var paidPaymentTotal = await _db.Payments
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId &&
-                        p.PaymentType != PaymentType.SecurityDeposit &&
-                        (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial))
-            .SumAsync(p => (decimal?)(p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount), ct) ?? 0m;
-
-        var unmatchedDepositTotal = await _db.BankTransactions
-            .AsNoTracking()
-            .Where(t => t.PortfolioId == portfolioId && t.MatchStatus != "Removed" &&
-                        t.Amount > 0 && t.MatchedPaymentId == null)
-            .SumAsync(t => (decimal?)t.Amount, ct) ?? 0m;
+        var paidPaymentTotal = await TenantIncomeQuery(portfolioId, authorizedProperties)
+            .SumAsync(row => (decimal?)row.Amount, ct) ?? 0m;
 
         var expenseTotal = await _db.Expenses
             .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId)
+            .Where(e =>
+                e.PortfolioId == portfolioId &&
+                e.PropertyId != null &&
+                authorizedProperties.Any(property => property.Id == e.PropertyId))
             .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
 
-        var unmatchedWithdrawalTotal = await _db.BankTransactions
-            .AsNoTracking()
-            .Where(t => t.PortfolioId == portfolioId && t.MatchStatus != "Removed" &&
-                        t.Amount < 0 && t.MatchedExpenseId == null)
-            .SumAsync(t => (decimal?)-t.Amount, ct) ?? 0m;
-
-        var totalIncome = paidPaymentTotal + unmatchedDepositTotal;
-        var totalExpenses = expenseTotal + unmatchedWithdrawalTotal;
+        var totalIncome = paidPaymentTotal;
+        var totalExpenses = expenseTotal;
 
         return new AccountingReportsResponse
         {
@@ -987,6 +937,7 @@ public class AccountingService : IAccountingService
     private async Task<IReadOnlyList<ScheduleECategoryTotal>> BuildEmbeddedScheduleETotalsAsync(
         int portfolioId,
         int year,
+        IQueryable<Property> authorizedProperties,
         CancellationToken ct)
     {
         var yearStart = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -994,78 +945,21 @@ public class AccountingService : IAccountingService
 
         var loanPropertyIdsQuery = _db.Loans
             .AsNoTracking()
-            .Where(l => l.PortfolioId == portfolioId)
+            .Where(l =>
+                l.PortfolioId == portfolioId &&
+                authorizedProperties.Any(property => property.Id == l.PropertyId))
             .Select(l => l.PropertyId)
             .Distinct();
 
-        var propertyBases = await _db.Properties
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId)
-            .Select(p => new
-            {
-                p.Id,
-                p.PurchasePrice,
-                p.LandValue,
-                p.InServiceDate,
-                p.ManualAnnualDepreciation,
-                p.AccumulatedDepreciation,
-            })
-            .ToListAsync(ct);
+        var depreciationQuery = ScheduleEDepreciationQuery.Build(
+            _db, portfolioId, year, authorizedProperties);
 
-        var depreciationByProperty = new Dictionary<int, decimal>();
-        foreach (var basis in propertyBases)
-        {
-            var depreciation = DepreciationCalculator.AnnualForYear(
-                new PropertyDepreciationBasis(
-                    basis.PurchasePrice,
-                    basis.LandValue,
-                    basis.InServiceDate,
-                    basis.ManualAnnualDepreciation,
-                    basis.AccumulatedDepreciation),
-                year);
-            if (depreciation.Amount > 0m)
-                depreciationByProperty[basis.Id] = depreciation.Amount;
-        }
-
-        var capitalAssets = await _db.CapitalAssets
-            .AsNoTracking()
-            .Where(a =>
-                a.PortfolioId == portfolioId &&
-                a.InServiceDate < yearEndExclusive &&
-                a.DisposedOnDate == null)
-            .Select(a => new
-            {
-                a.PropertyId,
-                a.CostBasis,
-                a.InServiceDate,
-                a.Method,
-                a.RecoveryYears,
-                a.Convention,
-                a.AccumulatedDepreciation,
-            })
-            .ToListAsync(ct);
-
-        foreach (var asset in capitalAssets)
-        {
-            var depreciation = DepreciationCalculator.AnnualForYear(
-                asset.CostBasis,
-                asset.InServiceDate,
-                asset.Method,
-                asset.RecoveryYears,
-                asset.Convention,
-                asset.AccumulatedDepreciation,
-                year);
-            if (depreciation.Amount > 0m)
-                depreciationByProperty[asset.PropertyId] =
-                    depreciationByProperty.GetValueOrDefault(asset.PropertyId) + depreciation.Amount;
-        }
-
-        var depreciationPropertyIds = depreciationByProperty.Keys.ToArray();
-
-        var expenseTotals = await _db.Expenses
+        var expenseComponents = _db.Expenses
             .AsNoTracking()
             .Where(e =>
                 e.PortfolioId == portfolioId &&
+                e.PropertyId != null &&
+                authorizedProperties.Any(property => property.Id == e.PropertyId) &&
                 e.CapitalizedAssetId == null &&
                 e.IncurredAt >= yearStart &&
                 e.IncurredAt < yearEndExclusive &&
@@ -1074,97 +968,86 @@ public class AccountingService : IAccountingService
                   loanPropertyIdsQuery.Contains(e.PropertyId.Value)) &&
                 !(e.Category == ScheduleECategory.Depreciation &&
                   e.PropertyId != null &&
-                  depreciationPropertyIds.Contains(e.PropertyId.Value)))
-            .GroupBy(e => e.Category)
-            .Select(g => new
+                  depreciationQuery.Any(row => row.PropertyId == e.PropertyId.Value)))
+            .Select(e => new
             {
-                Category = g.Key,
-                Total = g.Sum(e => e.Amount),
-                Count = g.Count(),
-            })
-            .ToListAsync(ct);
+                e.Category,
+                Total = e.Amount,
+                Count = 1,
+            });
 
-        var modeledInterest = await _db.LoanPayments
+        var modeledInterestComponents = _db.LoanPayments
             .AsNoTracking()
             .Where(lp =>
                 lp.PortfolioId == portfolioId &&
                 lp.Loan != null &&
+                authorizedProperties.Any(property => property.Id == lp.Loan.PropertyId) &&
                 lp.DueDate >= yearStart &&
                 lp.DueDate < yearEndExclusive)
-            .GroupBy(_ => 1)
-            .Select(g => new
+            .Select(lp => new
             {
-                Total = g.Sum(lp => lp.InterestAmount),
-                Count = g.Count(),
-            })
-            .FirstOrDefaultAsync(ct);
+                Category = ScheduleECategory.MortgageInterest,
+                Total = lp.InterestAmount,
+                Count = 1,
+            });
 
-        var totals = new Dictionary<ScheduleECategory, (decimal Total, int Count)>();
-
-        foreach (var row in expenseTotals)
+        var depreciationComponents = depreciationQuery.Select(row => new
         {
-            totals[row.Category] = (row.Total, row.Count);
-        }
+            Category = ScheduleECategory.Depreciation,
+            Total = row.Amount,
+            Count = 1,
+        });
 
-        if ((modeledInterest?.Total ?? 0m) != 0m)
-        {
-            var existing = totals.GetValueOrDefault(ScheduleECategory.MortgageInterest);
-            totals[ScheduleECategory.MortgageInterest] = (
-                existing.Total + modeledInterest!.Total,
-                existing.Count + modeledInterest.Count);
-        }
-
-        var totalDepreciation = depreciationByProperty.Values.Sum();
-        if (totalDepreciation != 0m)
-        {
-            var existing = totals.GetValueOrDefault(ScheduleECategory.Depreciation);
-            totals[ScheduleECategory.Depreciation] = (
-                existing.Total + totalDepreciation,
-                existing.Count + depreciationByProperty.Count);
-        }
-
-        return totals
-            .OrderByDescending(kvp => kvp.Value.Total)
-            .Select(kvp => new ScheduleECategoryTotal
+        return await expenseComponents
+            .Concat(modeledInterestComponents)
+            .Concat(depreciationComponents)
+            .GroupBy(component => component.Category)
+            .Select(group => new ScheduleECategoryTotal
             {
-                Category = kvp.Key,
-                CategoryName = kvp.Key.ToString(),
-                Total = kvp.Value.Total,
-                Count = kvp.Value.Count,
+                Category = group.Key,
+                CategoryName = group.Key.ToString(),
+                Total = group.Sum(component => component.Total),
+                Count = group.Sum(component => component.Count),
             })
-            .ToList();
+            .OrderByDescending(row => row.Total)
+            .ToListAsync(ct);
     }
 
-    private IQueryable<AccountingReportLedgerRow> ReportLedgerQuery(int portfolioId)
+    private IQueryable<AccountingReportLedgerRow> ReportLedgerQuery(
+        int portfolioId,
+        IQueryable<Property> authorizedProperties)
     {
-        var payments = _db.Payments
-            .AsNoTracking()
-            // Lease-scoped ledger rows (property/tenant resolved via the lease): a lease-less payment
-            // (application fee) has no lease to render, so it is excluded here — it surfaces on Schedule E
-            // + cash flow + the vw_accounting_transactions ledger instead.
-            .Where(p => p.PortfolioId == portfolioId && p.Lease != null)
-            .Select(p => new AccountingReportLedgerRow
+        var tenantReceipts = TenantIncomeQuery(portfolioId, authorizedProperties)
+            .GroupBy(row => new
             {
-                Date = p.PaidDate ?? p.DueDate,
-                Type = KindPayment,
-                Id = p.Id,
-                Amount = p.Status == PaymentStatus.Paid ? p.Amount
-                    : p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m)
-                    : 0m,
-                PropertyId = (int?)p.Lease!.PropertyId,
-                PropertyName = p.Lease!.Property!.Name,
-                CounterpartyFirstName = p.Lease!.Tenant!.FirstName,
-                CounterpartyLastName = p.Lease!.Tenant!.LastName,
-                PaymentType = p.PaymentType,
-                PaymentStatus = p.Status,
-                OriginalPaymentAmount = p.Amount,
-                PaymentDueDate = p.DueDate,
-                PaymentPaidDate = p.PaidDate,
-                PaymentMethod = p.Method,
-                Description = null,
-                CounterpartyName = null,
-                Category = null,
-                Status = null,
+                row.ReceiptId,
+                row.TenantAccountId,
+                row.LeaseManagementId,
+                row.PostedAtUtc,
+                row.Description,
+                row.PropertyId,
+                row.UnitId,
+            })
+            .Select(g => new AccountingReportLedgerRow
+            {
+                Date = g.Key.PostedAtUtc,
+                Type = KindTenantLedger,
+                Id = g.Key.ReceiptId,
+                TenantAccountId = g.Key.TenantAccountId,
+                Amount = g.Sum(row => row.Amount),
+                PropertyId = g.Key.PropertyId,
+                PropertyName = _db.Properties
+                    .Where(property => property.PortfolioId == portfolioId && property.Id == g.Key.PropertyId)
+                    .Select(property => property.Name)
+                    .FirstOrDefault(),
+                CounterpartyName = _db.LeaseManagementLifecycleProjections
+                    .Where(lifecycle => lifecycle.PortfolioId == portfolioId
+                        && lifecycle.LeaseManagementId == g.Key.LeaseManagementId)
+                    .Select(lifecycle => lifecycle.CurrentPrimaryTenantName)
+                    .FirstOrDefault(),
+                Description = g.Key.Description,
+                Category = nameof(TenantLedgerEntryType.PaymentReceipt),
+                Status = nameof(TenantLedgerDirection.Credit),
                 ExpenseCategory = null,
                 ExpenseStatus = null,
                 OriginalExpenseAmount = 0m,
@@ -1173,7 +1056,10 @@ public class AccountingService : IAccountingService
 
         var expenses = _db.Expenses
             .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId)
+            .Where(e =>
+                e.PortfolioId == portfolioId &&
+                e.PropertyId != null &&
+                authorizedProperties.Any(property => property.Id == e.PropertyId))
             .Select(e => new AccountingReportLedgerRow
             {
                 Date = e.PaidAt ?? e.IncurredAt,
@@ -1181,6 +1067,7 @@ public class AccountingService : IAccountingService
                 Id = e.Id,
                 Description = e.Description,
                 Amount = -e.Amount,
+                TenantAccountId = null,
                 PropertyId = e.PropertyId,
                 PropertyName = e.Property != null ? e.Property.Name : null,
                 CounterpartyName = e.Vendor != null ? e.Vendor.Name : null,
@@ -1188,80 +1075,32 @@ public class AccountingService : IAccountingService
                 ExpenseStatus = e.Status,
                 OriginalExpenseAmount = e.Amount,
                 ExpenseDate = e.PaidAt ?? e.IncurredAt,
-                PaymentType = null,
-                PaymentStatus = null,
-                OriginalPaymentAmount = 0m,
-                PaymentDueDate = null,
-                PaymentPaidDate = null,
-                PaymentMethod = null,
-                CounterpartyFirstName = null,
-                CounterpartyLastName = null,
                 Category = null,
                 Status = null,
             });
 
-        var bankTransactions = _db.BankTransactions
-            .AsNoTracking()
-            .Where(t =>
-                t.PortfolioId == portfolioId &&
-                t.MatchStatus != "Removed" &&
-                t.MatchedPaymentId == null &&
-                t.MatchedExpenseId == null)
-            .Select(t => new AccountingReportLedgerRow
-            {
-                Date = t.PostedAt,
-                Type = KindBank,
-                Id = t.Id,
-                Description = t.Description,
-                Amount = t.Amount,
-                PropertyId = null,
-                PropertyName = null,
-                CounterpartyName = t.MerchantName ?? t.BankConnection!.InstitutionName,
-                Category = t.Category ?? (t.Amount >= 0m ? "Deposit" : "Withdrawal"),
-                Status = t.MatchStatus,
-                PaymentType = null,
-                PaymentStatus = null,
-                OriginalPaymentAmount = 0m,
-                PaymentDueDate = null,
-                PaymentPaidDate = null,
-                PaymentMethod = null,
-                CounterpartyFirstName = null,
-                CounterpartyLastName = null,
-                ExpenseCategory = null,
-                ExpenseStatus = null,
-                OriginalExpenseAmount = 0m,
-                ExpenseDate = null,
-            });
-
-        return payments.Concat(expenses).Concat(bankTransactions);
+        return tenantReceipts.Concat(expenses);
     }
 
     private static LedgerTransactionResponse ToLedgerTransaction(AccountingReportLedgerRow row)
     {
-        if (row.Type == KindPayment)
+        if (row.Type == KindTenantLedger)
         {
-            var paymentType = row.PaymentType.GetValueOrDefault();
-            var paymentStatus = row.PaymentStatus.GetValueOrDefault();
             return new LedgerTransactionResponse
             {
                 Date = row.Date,
-                Type = KindPayment,
+                Type = KindTenantLedger,
                 Id = row.Id,
-                Description = paymentType.ToString(),
+                TenantAccountId = row.TenantAccountId,
+                Description = row.Description ?? "Tenant receipt",
                 Amount = row.Amount,
                 PropertyId = row.PropertyId,
                 PropertyName = row.PropertyName,
-                Counterparty = FullName(row.CounterpartyFirstName ?? string.Empty, row.CounterpartyLastName ?? string.Empty),
-                Category = row.PaymentMethod,
-                Status = paymentStatus.ToString(),
-                SourceHref = $"/accounting/payments/{row.Id}",
-                Explanation = LedgerExplanation.ForPayment(
-                    paymentType,
-                    paymentStatus,
-                    row.OriginalPaymentAmount,
-                    row.PaymentDueDate ?? row.Date,
-                    row.PaymentPaidDate,
-                    row.PaymentMethod),
+                Counterparty = row.CounterpartyName,
+                Category = row.Category,
+                Status = row.Status ?? nameof(TenantLedgerDirection.Credit),
+                SourceHref = $"/tenant-accounts/{row.TenantAccountId}/entries/{row.Id}",
+                Explanation = $"Tenant receipt posted on {row.Date:MMM d, yyyy}.",
             };
         }
 
@@ -1309,226 +1148,271 @@ public class AccountingService : IAccountingService
         };
     }
 
-    public async Task<byte[]> GetYearEndPacketAsync(int portfolioId, int year, CancellationToken ct = default)
+    public async Task<byte[]> GetYearEndPacketAsync(
+        WorkspaceReadScope scope,
+        int year,
+        CancellationToken ct = default)
     {
-        var data = await GetYearEndPacketDataAsync(portfolioId, year, ct);
+        var data = await GetYearEndPacketDataAsync(scope, year, ct);
         return _packetPdf.Generate(data);
     }
 
-    public async Task<YearEndPacketData> GetYearEndPacketDataAsync(
-        int portfolioId, int year, CancellationToken ct = default)
+    public Task<YearEndPacketData> GetYearEndPacketDataAsync(
+        WorkspaceReadScope scope,
+        int year,
+        CancellationToken ct = default) =>
+        GetYearEndPacketDataCoreAsync(
+            scope.PortfolioId,
+            year,
+            AuthorizedProperties(scope, CapabilityKeys.ReportsRead),
+            scope,
+            ct);
+
+    private async Task<YearEndPacketData> GetYearEndPacketDataCoreAsync(
+        int portfolioId,
+        int year,
+        IQueryable<Property> authorizedProperties,
+        WorkspaceReadScope workspaceScope,
+        CancellationToken ct)
     {
         var now = _timeProvider.UtcNow();
 
         // ── Portfolio header ────────────────────────────────────────────────────────────────────
         var portfolio = await _db.Portfolios
             .AsNoTracking()
-            .Where(p => p.Id == portfolioId)
+            .Where(p =>
+                p.Id == portfolioId &&
+                authorizedProperties.Any())
             .Select(p => new { p.Name, p.ManagementCompanyName })
             .FirstOrDefaultAsync(ct);
 
         // ── Schedule E (reused so the packet matches the existing CSV/report exactly) ─────────────
-        var scheduleE = await _scheduleE.GetReportAsync(portfolioId, year, ct: ct);
+        var scheduleE = await _scheduleE.GetReportAsync(workspaceScope, year, ct: ct);
 
         // ── Per-property P&L for the year ─────────────────────────────────────────────────────────
         var yearStart = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var yearEndExclusive = yearStart.AddYears(1);
 
-        // Category rows are grouped SQL-side and only reshaped into the packet's nested DTO structure
-        // after materialization. Property-level income, total expense, and net are projected below with
-        // the property rows themselves, avoiding in-memory joins from aggregate dictionaries.
-        var expenseCategoryTotals = await _db.Expenses
-            .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId &&
-                        e.Status == ExpenseStatus.Paid &&
-                        (e.PaidAt ?? e.IncurredAt) >= yearStart &&
-                        (e.PaidAt ?? e.IncurredAt) < yearEndExclusive &&
-                        e.PropertyId != null)
-            .GroupBy(e => new { PropertyId = e.PropertyId!.Value, e.Category })
-            .Select(g => new { g.Key.PropertyId, g.Key.Category, Total = g.Sum(e => e.Amount) })
-            .ToListAsync(ct);
+        var paidExpenseQuery = FinancialReportProjections.BuildExpenseAllocationProjection(_db, portfolioId)
+            .Where(expense =>
+                expense.Status == ExpenseStatus.Paid &&
+                expense.EffectiveAt >= yearStart &&
+                expense.EffectiveAt < yearEndExclusive &&
+                ((expense.PropertyId != null &&
+                    authorizedProperties.Any(property => property.Id == expense.PropertyId.Value)) ||
+                 (expense.PropertyId == null &&
+                    BuildAllPropertiesAuthorityQuery(workspaceScope, CapabilityKeys.ReportsRead).Any())));
+        var yearStartOn = new DateOnly(year, 1, 1);
+        var yearEndOn = yearStartOn.AddYears(1);
+        var tenantIncomeForYear = TenantIncomeQuery(portfolioId, authorizedProperties)
+            .Where(income => income.EffectiveOn >= yearStartOn && income.EffectiveOn < yearEndOn);
 
-        var expensesByProperty = new Dictionary<int, Dictionary<ScheduleECategory, decimal>>();
-        foreach (var row in expenseCategoryTotals)
-        {
-            if (!expensesByProperty.TryGetValue(row.PropertyId, out var categories))
+        var propertyFinancialTotalsQuery = tenantIncomeForYear
+            .Select(income => new
             {
-                categories = [];
-                expensesByProperty[row.PropertyId] = categories;
-            }
-
-            categories[row.Category] = row.Total;
-        }
-
-        var properties = await _db.Properties
-            .AsNoTracking()
-            .Where(p =>
-                p.PortfolioId == portfolioId &&
-                (_db.Payments.Any(pay =>
-                    pay.PortfolioId == portfolioId &&
-                    pay.PaymentType == PaymentType.Rent &&
-                    (pay.Status == PaymentStatus.Paid || pay.Status == PaymentStatus.Partial) &&
-                    pay.PaidDate != null &&
-                    pay.PaidDate.Value >= yearStart &&
-                    pay.PaidDate.Value < yearEndExclusive &&
-                    pay.Lease != null &&
-                    pay.Lease.PropertyId == p.Id) ||
-                 _db.Expenses.Any(e =>
-                    e.PortfolioId == portfolioId &&
-                    e.Status == ExpenseStatus.Paid &&
-                    (e.PaidAt ?? e.IncurredAt) >= yearStart &&
-                    (e.PaidAt ?? e.IncurredAt) < yearEndExclusive &&
-                    e.PropertyId == p.Id)))
-            .OrderBy(p => p.Name)
-            .Select(p => new
-            {
-                p.Id,
-                p.Name,
-                Income = _db.Payments
-                    .AsNoTracking()
-                    .Where(pay =>
-                        pay.PortfolioId == portfolioId &&
-                        pay.PaymentType == PaymentType.Rent &&
-                        (pay.Status == PaymentStatus.Paid || pay.Status == PaymentStatus.Partial) &&
-                        pay.PaidDate != null &&
-                        pay.PaidDate.Value >= yearStart &&
-                        pay.PaidDate.Value < yearEndExclusive &&
-                        pay.Lease != null &&
-                        pay.Lease.PropertyId == p.Id)
-                    .Sum(pay => (decimal?)(pay.Status == PaymentStatus.Partial
-                        ? (pay.AmountPaid ?? 0m)
-                        : pay.Amount)) ?? 0m,
-                TotalExpenses = _db.Expenses
-                    .AsNoTracking()
-                    .Where(e =>
-                        e.PortfolioId == portfolioId &&
-                        e.Status == ExpenseStatus.Paid &&
-                        (e.PaidAt ?? e.IncurredAt) >= yearStart &&
-                        (e.PaidAt ?? e.IncurredAt) < yearEndExclusive &&
-                        e.PropertyId == p.Id)
-                    .Sum(e => (decimal?)e.Amount) ?? 0m,
+                income.PropertyId,
+                Income = income.Amount,
+                Expense = 0m,
+                ExpenseCategory = (ScheduleECategory?)null,
             })
+            .Concat(paidExpenseQuery
+                .Where(expense => expense.PropertyId != null)
+                .Select(expense => new
+                {
+                    PropertyId = expense.PropertyId!.Value,
+                    Income = 0m,
+                    Expense = expense.Amount,
+                    ExpenseCategory = (ScheduleECategory?)expense.Category,
+                }))
+            .GroupBy(component => component.PropertyId)
+            .Select(group => new
+            {
+                PropertyId = group.Key,
+                Income = group.Sum(component => component.Income),
+                TotalExpenses = group.Sum(component => component.Expense),
+                Advertising = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.Advertising ? component.Expense : 0m),
+                AutoTravel = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.AutoTravel ? component.Expense : 0m),
+                CleaningMaintenance = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.CleaningMaintenance ? component.Expense : 0m),
+                Commissions = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.Commissions ? component.Expense : 0m),
+                Insurance = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.Insurance ? component.Expense : 0m),
+                LegalProfessional = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.LegalProfessional ? component.Expense : 0m),
+                ManagementFees = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.ManagementFees ? component.Expense : 0m),
+                MortgageInterest = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.MortgageInterest ? component.Expense : 0m),
+                Repairs = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.Repairs ? component.Expense : 0m),
+                Supplies = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.Supplies ? component.Expense : 0m),
+                Taxes = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.Taxes ? component.Expense : 0m),
+                Utilities = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.Utilities ? component.Expense : 0m),
+                Depreciation = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.Depreciation ? component.Expense : 0m),
+                Other = group.Sum(component =>
+                    component.ExpenseCategory == ScheduleECategory.Other ? component.Expense : 0m),
+            });
+
+        var properties = await (
+                from property in authorizedProperties
+                join totals in propertyFinancialTotalsQuery on property.Id equals totals.PropertyId
+                orderby property.Name
+                select new
+                {
+                    property.Id,
+                    property.Name,
+                    totals.Income,
+                    totals.TotalExpenses,
+                    totals.Advertising,
+                    totals.AutoTravel,
+                    totals.CleaningMaintenance,
+                    totals.Commissions,
+                    totals.Insurance,
+                    totals.LegalProfessional,
+                    totals.ManagementFees,
+                    totals.MortgageInterest,
+                    totals.Repairs,
+                    totals.Supplies,
+                    totals.Taxes,
+                    totals.Utilities,
+                    totals.Depreciation,
+                    totals.Other,
+                })
             .ToListAsync(ct);
 
-        var propertyPnL = new List<YearEndPropertyPnL>(properties.Count);
-        foreach (var prop in properties)
-        {
-            var catMap = expensesByProperty.GetValueOrDefault(prop.Id);
-
-            var categories = new List<ScheduleECategoryAmount>();
-            if (catMap != null)
+        var propertyPnL = properties
+            .Select(property => new YearEndPropertyPnL
             {
-                // Enum-declared order, zero amounts omitted — same shape as ScheduleEService.
-                foreach (ScheduleECategory cat in Enum.GetValues<ScheduleECategory>())
-                {
-                    if (catMap.TryGetValue(cat, out var amount) && amount != 0m)
-                        categories.Add(new ScheduleECategoryAmount(cat.ToString(), amount));
-                }
-            }
-
-            propertyPnL.Add(new YearEndPropertyPnL
-            {
-                PropertyId = prop.Id,
-                PropertyName = prop.Name,
-                Income = prop.Income,
-                ExpensesByCategory = categories,
-                TotalExpenses = prop.TotalExpenses,
-                Net = prop.Income - prop.TotalExpenses,
-            });
-        }
+                PropertyId = property.Id,
+                PropertyName = property.Name,
+                Income = property.Income,
+                ExpensesByCategory = BuildYearEndExpenseCategories(
+                    property.Advertising,
+                    property.AutoTravel,
+                    property.CleaningMaintenance,
+                    property.Commissions,
+                    property.Insurance,
+                    property.LegalProfessional,
+                    property.ManagementFees,
+                    property.MortgageInterest,
+                    property.Repairs,
+                    property.Supplies,
+                    property.Taxes,
+                    property.Utilities,
+                    property.Depreciation,
+                    property.Other),
+                TotalExpenses = property.TotalExpenses,
+                Net = property.Income - property.TotalExpenses,
+            })
+            .ToList();
 
         // ── Cash flow by month ────────────────────────────────────────────────────────────────────
-        // Money in: paid payments (cash landed on PaidDate, falling back to DueDate) in the year.
-        // Grouped by calendar month and summed SQL-side, with the year filter pushed into the query
-        // so the whole payment history is never loaded just to bucket one year in memory.
-        var moneyInByMonth = (await _db.Payments
+        // Derive a guaranteed 12-row calendar relation from the authorized portfolio itself. EF emits
+        // one UNION ALL query whose correlated sums fill every month; no dictionary join or per-month
+        // query occurs in application code.
+        var authorizedPortfolio = _db.Portfolios
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId &&
-                        p.PaymentType != PaymentType.SecurityDeposit &&
-                        (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial) &&
-                        (p.PaidDate ?? p.DueDate).Year == year)
-            .GroupBy(p => (p.PaidDate ?? p.DueDate).Month)
-            // Paid contributes full Amount; Partial contributes the collected AmountPaid.
-            .Select(g => new
-            {
-                Month = g.Key,
-                Total = g.Sum(p =>
-                p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount)
-            })
-            .ToListAsync(ct))
-            .ToDictionary(g => g.Month, g => g.Total);
-
-        // Money out: expenses paid (PaidAt, falling back to IncurredAt) in the year — same SQL-side
-        // monthly grouping.
-        var moneyOutByMonth = (await _db.Expenses
-            .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId && (e.PaidAt ?? e.IncurredAt).Year == year)
-            .GroupBy(e => (e.PaidAt ?? e.IncurredAt).Month)
-            .Select(g => new { Month = g.Key, Total = g.Sum(e => e.Amount) })
-            .ToListAsync(ct))
-            .ToDictionary(g => g.Month, g => g.Total);
-
-        var cashFlow = new List<YearEndCashFlowMonth>(12);
-        for (var month = 1; month <= 12; month++)
-        {
-            var moneyIn = moneyInByMonth.GetValueOrDefault(month, 0m);
-            var moneyOut = moneyOutByMonth.GetValueOrDefault(month, 0m);
-
-            cashFlow.Add(new YearEndCashFlowMonth
+            .Where(candidate => candidate.Id == portfolioId && authorizedProperties.Any());
+        var months = authorizedPortfolio.Select(_ => 1)
+            .Concat(authorizedPortfolio.Select(_ => 2))
+            .Concat(authorizedPortfolio.Select(_ => 3))
+            .Concat(authorizedPortfolio.Select(_ => 4))
+            .Concat(authorizedPortfolio.Select(_ => 5))
+            .Concat(authorizedPortfolio.Select(_ => 6))
+            .Concat(authorizedPortfolio.Select(_ => 7))
+            .Concat(authorizedPortfolio.Select(_ => 8))
+            .Concat(authorizedPortfolio.Select(_ => 9))
+            .Concat(authorizedPortfolio.Select(_ => 10))
+            .Concat(authorizedPortfolio.Select(_ => 11))
+            .Concat(authorizedPortfolio.Select(_ => 12));
+        var cashFlowRows = await months
+            .OrderBy(month => month)
+            .Select(month => new YearEndCashFlowSqlRow
             {
                 Month = month,
+                MoneyIn = tenantIncomeForYear
+                    .Where(income => income.EffectiveOn.Month == month)
+                    .Sum(income => (decimal?)income.Amount) ?? 0m,
+                MoneyOut = paidExpenseQuery
+                    .Where(expense => expense.EffectiveAt.Month == month)
+                    .Sum(expense => (decimal?)expense.Amount) ?? 0m,
+                TotalMoneyIn = tenantIncomeForYear.Sum(income => (decimal?)income.Amount) ?? 0m,
+                TotalMoneyOut = paidExpenseQuery.Sum(expense => (decimal?)expense.Amount) ?? 0m,
+            })
+            .ToListAsync(ct);
+        var cashFlow = cashFlowRows
+            .Select(row => new YearEndCashFlowMonth
+            {
+                Month = row.Month,
                 MonthName = System.Globalization.CultureInfo.InvariantCulture
-                    .DateTimeFormat.GetAbbreviatedMonthName(month),
-                MoneyIn = moneyIn,
-                MoneyOut = moneyOut,
-                Net = moneyIn - moneyOut,
-            });
-        }
-
-        var cashIn = await _db.Payments
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId &&
-                        p.PaymentType != PaymentType.SecurityDeposit &&
-                        (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial) &&
-                        (p.PaidDate ?? p.DueDate).Year == year)
-            .SumAsync(p => (decimal?)(p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount), ct) ?? 0m;
-
-        var cashOut = await _db.Expenses
-            .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId && (e.PaidAt ?? e.IncurredAt).Year == year)
-            .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
+                    .DateTimeFormat.GetAbbreviatedMonthName(row.Month),
+                MoneyIn = row.MoneyIn,
+                MoneyOut = row.MoneyOut,
+                Net = row.MoneyIn - row.MoneyOut,
+            })
+            .ToList();
+        var cashIn = cashFlowRows.Count == 0 ? 0m : cashFlowRows[0].TotalMoneyIn;
+        var cashOut = cashFlowRows.Count == 0 ? 0m : cashFlowRows[0].TotalMoneyOut;
 
         // ── Rent roll ─────────────────────────────────────────────────────────────────────────────
-        // Current leases (active or under notice). Past-due balance is projected with each lease row as
-        // a correlated SQL sum, so the packet does not load a separate aggregate and join it in memory.
-        var rentRollRows = await _db.Leases
-            .AsNoTracking()
-            .Where(l => l.PortfolioId == portfolioId &&
-                        (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven))
-            .OrderBy(l => l.Property!.Name)
-            .ThenBy(l => l.Unit!.UnitNumber)
-            .Select(l => new
-            {
-                PropertyName = l.Property!.Name,
-                UnitNumber = l.Unit!.UnitNumber,
-                TenantFirstName = l.Tenant!.FirstName,
-                TenantLastName = l.Tenant!.LastName,
-                l.MonthlyRent,
-                l.StartDate,
-                l.EndDate,
-                l.Status,
-                PastDueBalance = _db.Payments
-                    .AsNoTracking()
-                    .Where(p => p.PortfolioId == portfolioId &&
-                                p.LeaseId == l.Id &&
-                                (p.Status == PaymentStatus.Scheduled ||
-                                 p.Status == PaymentStatus.Partial ||
-                                 p.Status == PaymentStatus.Late) &&
-                                (p.Status == PaymentStatus.Late || p.DueDate < now))
-                    .Sum(p => (decimal?)(p.Status == PaymentStatus.Partial
-                        ? p.Amount - (p.AmountPaid ?? 0m)
-                        : p.Amount)) ?? 0m,
-            })
+        var rentRollRows = await (
+                from lifecycle in _db.LeaseManagementLifecycleProjections.AsNoTracking()
+                join management in _db.LeaseManagements.AsNoTracking()
+                    on new { lifecycle.PortfolioId, Id = lifecycle.LeaseManagementId }
+                    equals new { management.PortfolioId, management.Id }
+                join occupancy in _db.UnitOccupancyProjections.AsNoTracking()
+                    on new { lifecycle.PortfolioId, lifecycle.UnitId }
+                    equals new { occupancy.PortfolioId, occupancy.UnitId }
+                join agreement in _db.LeaseAgreements.AsNoTracking()
+                    on new { management.PortfolioId, LeaseManagementId = management.Id }
+                    equals new { agreement.PortfolioId, agreement.LeaseManagementId }
+                join status in _db.LeaseAgreementStatusProjections.AsNoTracking()
+                    on new { lifecycle.PortfolioId, AgreementId = agreement.Id }
+                    equals new { status.PortfolioId, status.AgreementId }
+                join balance in _db.TenantAccountBalanceProjections.AsNoTracking()
+                    on new { lifecycle.PortfolioId, lifecycle.LeaseManagementId }
+                    equals new { balance.PortfolioId, balance.LeaseManagementId }
+                where lifecycle.PortfolioId == portfolioId
+                    && authorizedProperties.Any(property => property.Id == management.PropertyId)
+                    && occupancy.IsOccupied
+                    && occupancy.CurrentLeaseManagementId == lifecycle.LeaseManagementId
+                    && (lifecycle.Lifecycle == "Occupied" || lifecycle.Lifecycle == "Ending")
+                    && agreement.FullyExecutedAtUtc != null
+                    && agreement.VoidedAtUtc == null
+                    && agreement.DraftCanceledAtUtc == null
+                    && agreement.GoverningFromOn <= lifecycle.BusinessDate
+                    && !_db.LeaseAgreements.Any(candidate =>
+                        candidate.PortfolioId == agreement.PortfolioId &&
+                        candidate.LeaseManagementId == agreement.LeaseManagementId &&
+                        candidate.FullyExecutedAtUtc != null &&
+                        candidate.VoidedAtUtc == null &&
+                        candidate.DraftCanceledAtUtc == null &&
+                        candidate.GoverningFromOn <= lifecycle.BusinessDate &&
+                        (candidate.GoverningFromOn > agreement.GoverningFromOn ||
+                         (candidate.GoverningFromOn == agreement.GoverningFromOn &&
+                          candidate.VersionNumber > agreement.VersionNumber) ||
+                         (candidate.GoverningFromOn == agreement.GoverningFromOn &&
+                          candidate.VersionNumber == agreement.VersionNumber &&
+                          candidate.Id > agreement.Id)))
+                orderby management.Property!.Name, management.Unit!.UnitNumber
+                select new
+                {
+                    PropertyName = management.Property!.Name,
+                    UnitNumber = management.Unit!.UnitNumber,
+                    TenantName = lifecycle.CurrentPrimaryTenantName ?? "Tenant",
+                    MonthlyRent = agreement.BaseRentAmount,
+                    agreement.TermStartOn,
+                    agreement.TermEndOn,
+                    status.AgreementStatus,
+                    PastDueBalance = balance.PastDueAmount,
+                })
             .ToListAsync(ct);
 
         var rentRoll = rentRollRows
@@ -1536,11 +1420,11 @@ public class AccountingService : IAccountingService
             {
                 PropertyName = l.PropertyName,
                 UnitNumber = l.UnitNumber,
-                TenantName = FullName(l.TenantFirstName, l.TenantLastName),
+                TenantName = l.TenantName,
                 MonthlyRent = l.MonthlyRent,
-                LeaseStart = l.StartDate,
-                LeaseEnd = l.EndDate,
-                LeaseStatus = l.Status.ToString(),
+                LeaseStart = l.TermStartOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+                LeaseEnd = (l.TermEndOn ?? l.TermStartOn).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+                LeaseStatus = l.AgreementStatus,
                 PastDueBalance = l.PastDueBalance,
             })
             .ToList();
@@ -1561,39 +1445,159 @@ public class AccountingService : IAccountingService
         };
     }
 
-    private static bool IsOwedPayment(PaymentStatus status) =>
-        status is PaymentStatus.Scheduled or PaymentStatus.Partial or PaymentStatus.Late;
+    private IQueryable<TenantIncomeRow> TenantIncomeQuery(
+        int portfolioId,
+        IQueryable<Property> authorizedProperties) =>
+        from allocation in _db.TenantLedgerAllocations.AsNoTracking()
+        join receipt in _db.TenantLedgerEntries.AsNoTracking()
+            on new { allocation.PortfolioId, allocation.TenantAccountId, Id = allocation.CreditEntryId }
+            equals new { receipt.PortfolioId, receipt.TenantAccountId, receipt.Id }
+        join charge in _db.TenantLedgerEntries.AsNoTracking()
+            on new { allocation.PortfolioId, allocation.TenantAccountId, Id = allocation.DebitEntryId }
+            equals new { charge.PortfolioId, charge.TenantAccountId, charge.Id }
+        join account in _db.TenantAccounts.AsNoTracking()
+            on new { allocation.PortfolioId, Id = allocation.TenantAccountId }
+            equals new { account.PortfolioId, account.Id }
+        join management in _db.LeaseManagements.AsNoTracking()
+            on new { account.PortfolioId, Id = account.LeaseManagementId }
+            equals new { management.PortfolioId, management.Id }
+        where allocation.PortfolioId == portfolioId
+            && authorizedProperties.Any(property => property.Id == management.PropertyId)
+            && receipt.EntryType == TenantLedgerEntryType.PaymentReceipt
+            && charge.EntryType != TenantLedgerEntryType.DepositCharge
+        select new TenantIncomeRow
+        {
+            ReceiptId = receipt.Id,
+            TenantAccountId = account.Id,
+            LeaseManagementId = management.Id,
+            EffectiveOn = receipt.EffectiveOn,
+            PostedAtUtc = receipt.PostedAtUtc,
+            Description = receipt.Description,
+            Amount = allocation.Amount,
+            PropertyId = management.PropertyId,
+            UnitId = management.UnitId,
+        };
+
+    private IQueryable<Property> AuthorizedProperties(
+        WorkspaceReadScope scope,
+        string capabilityKey) =>
+        _db.Properties
+            .AsNoTracking()
+            .WhereAuthorized(
+                _db,
+                scope,
+                capabilityKey,
+                _timeProvider.UtcNow());
+
+    private IQueryable<int> BuildAllPropertiesAuthorityQuery(
+        WorkspaceReadScope scope,
+        string capabilityKey) =>
+        _db.AuthorizedWorkspaceAssignments(
+                scope,
+                [capabilityKey],
+                CapabilityAuthorizationTargetKind.Property,
+                _timeProvider.GetUtcNow().UtcDateTime)
+            .Select(_ => 1);
+
+    private static IReadOnlyList<ScheduleECategoryAmount> BuildYearEndExpenseCategories(
+        decimal advertising,
+        decimal autoTravel,
+        decimal cleaningMaintenance,
+        decimal commissions,
+        decimal insurance,
+        decimal legalProfessional,
+        decimal managementFees,
+        decimal mortgageInterest,
+        decimal repairs,
+        decimal supplies,
+        decimal taxes,
+        decimal utilities,
+        decimal depreciation,
+        decimal other)
+    {
+        var categories = new List<ScheduleECategoryAmount>(14);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.Advertising, advertising);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.AutoTravel, autoTravel);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.CleaningMaintenance, cleaningMaintenance);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.Commissions, commissions);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.Insurance, insurance);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.LegalProfessional, legalProfessional);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.ManagementFees, managementFees);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.MortgageInterest, mortgageInterest);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.Repairs, repairs);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.Supplies, supplies);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.Taxes, taxes);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.Utilities, utilities);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.Depreciation, depreciation);
+        AddYearEndExpenseCategory(categories, ScheduleECategory.Other, other);
+        return categories;
+    }
+
+    private static void AddYearEndExpenseCategory(
+        ICollection<ScheduleECategoryAmount> categories,
+        ScheduleECategory category,
+        decimal amount)
+    {
+        if (amount != 0m)
+        {
+            categories.Add(new ScheduleECategoryAmount(category.ToString(), amount));
+        }
+    }
+
+    private sealed class TenantIncomeRow
+    {
+        public long ReceiptId { get; set; }
+        public int TenantAccountId { get; set; }
+        public int LeaseManagementId { get; set; }
+        public DateOnly EffectiveOn { get; set; }
+        public DateTime PostedAtUtc { get; set; }
+        public string Description { get; set; } = string.Empty;
+        public decimal Amount { get; set; }
+        public int PropertyId { get; set; }
+        public int UnitId { get; set; }
+    }
+
+    private sealed class CurrentTenantBalanceRow
+    {
+        public int PortfolioId { get; set; }
+        public int PropertyId { get; set; }
+        public int LeaseManagementId { get; set; }
+        public int TenantAccountId { get; set; }
+        public DateOnly BusinessDate { get; set; }
+        public decimal ReceivableBalance { get; set; }
+        public decimal PastDueAmount { get; set; }
+        public int PastDueCount { get; set; }
+        public int? CurrentAgreementId { get; set; }
+        public int? CurrentPrimaryPartyId { get; set; }
+        public string? CurrentPrimaryTenantName { get; set; }
+    }
+
+    private sealed class YearEndCashFlowSqlRow
+    {
+        public int Month { get; set; }
+        public decimal MoneyIn { get; set; }
+        public decimal MoneyOut { get; set; }
+        public decimal TotalMoneyIn { get; set; }
+        public decimal TotalMoneyOut { get; set; }
+    }
 
     private sealed class AccountingReportLedgerRow
     {
         public DateTime Date { get; set; }
         public string Type { get; set; } = string.Empty;
-        public int Id { get; set; }
+        public long Id { get; set; }
         public string? Description { get; set; }
         public decimal Amount { get; set; }
+        public int? TenantAccountId { get; set; }
         public int? PropertyId { get; set; }
         public string? PropertyName { get; set; }
         public string? CounterpartyName { get; set; }
-        public string? CounterpartyFirstName { get; set; }
-        public string? CounterpartyLastName { get; set; }
         public string? Category { get; set; }
         public string? Status { get; set; }
-        public PaymentType? PaymentType { get; set; }
-        public PaymentStatus? PaymentStatus { get; set; }
-        public decimal OriginalPaymentAmount { get; set; }
-        public DateTime? PaymentDueDate { get; set; }
-        public DateTime? PaymentPaidDate { get; set; }
-        public string? PaymentMethod { get; set; }
         public ScheduleECategory? ExpenseCategory { get; set; }
         public ExpenseStatus? ExpenseStatus { get; set; }
         public decimal OriginalExpenseAmount { get; set; }
         public DateTime? ExpenseDate { get; set; }
-    }
-
-    private static string FullName(string firstName, string lastName)
-    {
-        var fullName = $"{firstName} {lastName}".Trim();
-        return string.IsNullOrWhiteSpace(fullName) ? "Tenant" : fullName;
     }
 
 }

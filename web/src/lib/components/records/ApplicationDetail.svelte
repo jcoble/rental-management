@@ -4,25 +4,24 @@
 	import {
 		applications,
 		type ApplicationResponse,
-		type ScreeningResultResponse,
+		type ApplicantScreeningResponse,
+		type ScreeningRecommendation,
 		type AdverseActionNoticeResponse,
 		type UpdateApplicationRequest,
 		type RecordApplicationFeeRequest,
 	} from '$lib/api/endpoints/applications';
 	import { downloadDocument } from '$lib/api/endpoints/documents';
-	import { payments } from '$lib/api/endpoints/payments';
 	import { ApiError } from '$lib/api/client';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { parseForm, applicationFeeSchema } from '$lib/schemas';
 	import { showSuccess, showWarning, showError, apiErrorMessage } from '$lib/utils/toast';
-	import { paymentTypeLabel } from '$lib/utils/payment-labels';
 	import {
 		formatApplicationAddress,
 		canRunApplicationScreening,
 		formatRequestedProperty,
 		formatRequestedUnit,
 	} from '$lib/applications/application-display';
-	import { leaseCreateHrefForApprovedTenant } from '$lib/leases/lease-create-prefill';
+	import { prepareMoveInHrefForApprovedTenant } from '$lib/leases/prepare-move-in-prefill';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
@@ -77,17 +76,6 @@
 	}));
 
 	const application = $derived<ApplicationResponse | undefined>(applicationQuery.data);
-	const applicationFeesQuery = createQuery(() => ({
-		queryKey: ['payments', portfolioId, { applicationId: id }],
-		queryFn: () =>
-			payments.listPage(portfolioId, {
-				applicationId: id,
-				take: 10,
-				sort: '-createdAt',
-			}),
-		enabled: !isNaN(id) && id > 0 && portfolioId > 0,
-	}));
-	const applicationFees = $derived(applicationFeesQuery.data?.items ?? []);
 
 	$effect(() => {
 		if (isMismatchedUnitSelection(application, expectedUnitId)) onUnitMismatch?.();
@@ -153,31 +141,35 @@
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
-	// ── Record application fee (lease-less income against the application's property) ──────────────
+	// ── Record application fee in the application's pre-tenancy financial account ─────────────────
 	let showRecordFee = $state(false);
 	let feeAmount = $state('');
 	let feeMethod = $state('');
-	let feePaidDate = $state('');
+	let feeEffectiveOn = $state('');
+	let feeOperationKey = $state<string | null>(null);
 	let feeErrors = $state<Record<string, string>>({});
 
 	function openRecordFee() {
 		feeAmount = '';
 		feeMethod = '';
-		feePaidDate = '';
+		feeEffectiveOn = '';
+		feeOperationKey = null;
 		feeErrors = {};
 		showRecordFee = true;
 	}
 
 	const recordFeeMutation = createMutation(() => ({
-		mutationFn: (body: RecordApplicationFeeRequest) => applications.recordFee(id, body),
+		mutationFn: (body: RecordApplicationFeeRequest) => {
+			feeOperationKey ??= crypto.randomUUID();
+			return applications.recordFee(id, feeOperationKey, body);
+		},
 		onSuccess: () => {
+			feeOperationKey = null;
 			showRecordFee = false;
 			showSuccess('Application fee recorded.');
 			queryClient.invalidateQueries({ queryKey: ['application', id] });
 			queryClient.invalidateQueries({ queryKey: ['accounting-summary', portfolioId] });
 			queryClient.invalidateQueries({ queryKey: ['accounting-transactions'] });
-			queryClient.invalidateQueries({ queryKey: ['payments', portfolioId, { applicationId: id }] });
-			queryClient.invalidateQueries({ queryKey: ['payments'] });
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
@@ -186,7 +178,7 @@
 		const result = parseForm(applicationFeeSchema, {
 			amount: feeAmount,
 			method: feeMethod,
-			paidDate: feePaidDate,
+			effectiveOn: feeEffectiveOn,
 		});
 		if (result.errors) {
 			feeErrors = result.errors;
@@ -196,7 +188,8 @@
 		recordFeeMutation.mutate({
 			amount: result.data.amount,
 			method: result.data.method ?? null,
-			paidDate: result.data.paidDate ?? null,
+			currency: 'USD',
+			effectiveOn: result.data.effectiveOn ?? null,
 		});
 	}
 
@@ -323,8 +316,8 @@
 		enabled: !isNaN(id) && id > 0,
 	}));
 
-	const latestScreening = $derived<ScreeningResultResponse | undefined>(
-		screeningQuery.data?.[0]
+	const latestScreening = $derived<ApplicantScreeningResponse | undefined>(
+		screeningQuery.data?.screenings[0]
 	);
 	const hasScreening = $derived(!!latestScreening);
 	const canScreen = $derived(
@@ -337,15 +330,44 @@
 		Decline: { label: 'Decline', class: 'm3-tone-chip border m3-tone--error' },
 	};
 	const SCREEN_STATUS_MAP = {
-		Requested: { label: 'Requested', class: 'm3-tone-chip border m3-tone--info' },
+		Created: { label: 'Created', class: 'm3-tone-chip border m3-tone--info' },
+		AwaitingProvider: { label: 'Connecting', class: 'm3-tone-chip border m3-tone--info' },
+		AwaitingApplicant: { label: 'Waiting for applicant', class: 'm3-tone-chip border m3-tone--warning' },
+		InProgress: { label: 'In progress', class: 'm3-tone-chip border m3-tone--primary' },
 		Completed: { label: 'Completed', class: 'm3-tone-chip border m3-tone--success' },
 		Failed: { label: 'Failed', class: 'm3-tone-chip border m3-tone--error' },
+		Cancelled: { label: 'Cancelled', class: 'm3-tone-chip border' },
 	};
+	let screeningMode = $state<'Integrated' | 'External'>('Integrated');
+	let externalProvider = $state('Zillow');
+	let externalReference = $state('');
+	let externalUrl = $state('');
+	let externalCraName = $state('');
+	let externalCraAddress = $state('');
+	let externalCraPhone = $state('');
+	let integratedScreeningOperationKey = $state<string | null>(null);
+	let externalScreeningOperationKey = $state<string | null>(null);
+	let completeExternalOperationKey = $state<string | null>(null);
+	let updateCraOperationKey = $state<string | null>(null);
+	let screeningDecisionOperationKey = $state<string | null>(null);
+	let showCraContact = $state(false);
+	let showScreeningDecision = $state(false);
+	let craName = $state('');
+	let craAddress = $state('');
+	let craPhone = $state('');
+	let screeningDecision = $state<ScreeningRecommendation>('Accept');
+	let screeningDecisionReason = $state('');
+	let consumerReportUsed = $state(false);
 
 	const screenMutation = createMutation(() => ({
-		mutationFn: () => applications.screen(id),
+		mutationFn: () =>
+			applications.startIntegratedScreening(
+				id,
+				(integratedScreeningOperationKey ??= crypto.randomUUID())
+			),
 		onSuccess: () => {
-			showSuccess('Screening complete.');
+			showSuccess('Screening invitation created.');
+			integratedScreeningOperationKey = null;
 			queryClient.invalidateQueries({ queryKey: ['application-screening', id] });
 			invalidate(); // screening flips the application to UnderReview
 		},
@@ -358,26 +380,139 @@
 		},
 	}));
 
+	const externalScreeningMutation = createMutation(() => ({
+		mutationFn: () =>
+			applications.trackExternalScreening(id, {
+				operationKey: (externalScreeningOperationKey ??= crypto.randomUUID()),
+				providerDisplayName: externalProvider.trim(),
+				providerReference: externalReference.trim() || null,
+				providerHostedUrl: externalUrl.trim() || null,
+				creditReportingAgencyName: externalCraName.trim() || null,
+				creditReportingAgencyAddress: externalCraAddress.trim() || null,
+				creditReportingAgencyPhone: externalCraPhone.trim() || null,
+				status: 'InProgress',
+			}),
+		onSuccess: () => {
+			showSuccess('External screening added.');
+			externalScreeningOperationKey = null;
+			externalReference = '';
+			externalUrl = '';
+			externalCraName = '';
+			externalCraAddress = '';
+			externalCraPhone = '';
+			queryClient.invalidateQueries({ queryKey: ['application-screening', id] });
+			invalidate();
+		},
+		onError: (err) => showError(apiErrorMessage(err, 'External screening could not be added.')),
+	}));
+
+	const completeExternalScreeningMutation = createMutation(() => ({
+		mutationFn: (screeningId: number) =>
+			applications.updateExternalScreening(id, screeningId, {
+				operationKey: (completeExternalOperationKey ??= crypto.randomUUID()),
+				status: 'Completed',
+			}),
+		onSuccess: () => {
+			showSuccess('Outside screening marked complete.');
+			completeExternalOperationKey = null;
+			queryClient.invalidateQueries({ queryKey: ['application-screening', id] });
+		},
+		onError: (err) => showError(apiErrorMessage(err, 'Screening status could not be updated.')),
+	}));
+
+	function openCraContact(screening: ApplicantScreeningResponse) {
+		craName = screening.creditReportingAgencyName ?? '';
+		craAddress = screening.creditReportingAgencyAddress ?? '';
+		craPhone = screening.creditReportingAgencyPhone ?? '';
+		updateCraOperationKey = crypto.randomUUID();
+		showCraContact = true;
+	}
+
+	const updateCraMutation = createMutation(() => ({
+		mutationFn: (screeningId: number) =>
+			applications.updateExternalScreening(id, screeningId, {
+				operationKey: (updateCraOperationKey ??= crypto.randomUUID()),
+				creditReportingAgencyName: craName.trim(),
+				creditReportingAgencyAddress: craAddress.trim(),
+				creditReportingAgencyPhone: craPhone.trim(),
+			}),
+		onSuccess: () => {
+			updateCraOperationKey = null;
+			showCraContact = false;
+			showSuccess('Consumer reporting agency contact saved.');
+			queryClient.invalidateQueries({ queryKey: ['application-screening', id] });
+		},
+		onError: (err) => showError(apiErrorMessage(err, 'Agency contact could not be saved.')),
+	}));
+
+	function openScreeningDecision(screening: ApplicantScreeningResponse) {
+		screeningDecision = screening.decision ?? 'Accept';
+		screeningDecisionReason = screening.decisionReason ?? '';
+		consumerReportUsed = screening.consumerReportUsedForDecision;
+		screeningDecisionOperationKey = crypto.randomUUID();
+		showScreeningDecision = true;
+	}
+
+	const screeningDecisionMutation = createMutation(() => ({
+		mutationFn: (screeningId: number) =>
+			applications.recordScreeningDecision(id, screeningId, {
+				operationKey: (screeningDecisionOperationKey ??= crypto.randomUUID()),
+				decision: screeningDecision,
+				reason: screeningDecisionReason.trim() || null,
+				consumerReportUsed,
+			}),
+		onSuccess: () => {
+			screeningDecisionOperationKey = null;
+			showScreeningDecision = false;
+			showSuccess('Screening decision recorded.');
+			queryClient.invalidateQueries({ queryKey: ['application-screening', id] });
+		},
+		onError: (err) => showError(apiErrorMessage(err, 'Screening decision could not be recorded.')),
+	}));
+
+	function openApplicationOutcome(outcome: 'Approve' | 'Decline') {
+		if (latestScreening?.status === 'Completed') {
+			const compatible = outcome === 'Approve'
+				? latestScreening.decision === 'Accept' || latestScreening.decision === 'Conditional'
+				: latestScreening.decision === 'Decline';
+			if (!compatible) {
+				showWarning(`Record a ${outcome.toLowerCase()} screening decision first.`);
+				openScreeningDecision(latestScreening);
+				return;
+			}
+		}
+		if (outcome === 'Approve') showApprove = true;
+		else showDecline = true;
+	}
+
 	// ── Adverse-action notice ──────────────────────────────────────────────────────
 	let showAdverseAction = $state(false);
 	let adverseReason = $state('');
 	let adverseSendToApplicant = $state(false);
 	let adverseNotice = $state<AdverseActionNoticeResponse | null>(null);
+	let adverseOperationKey = $state<string | null>(null);
 
 	function openAdverseAction() {
 		adverseReason = application?.decisionReason ?? '';
 		adverseSendToApplicant = false;
+		adverseOperationKey = crypto.randomUUID();
 		showAdverseAction = true;
+	}
+
+	function adverseActionOperationKey(): string {
+		return (adverseOperationKey ??= crypto.randomUUID());
 	}
 
 	const adverseActionMutation = createMutation(() => ({
 		mutationFn: () =>
 			applications.adverseAction(id, {
+				operationKey: adverseActionOperationKey(),
 				reason: adverseReason.trim() || undefined,
 				sendToApplicant: adverseSendToApplicant,
 			}),
 		onSuccess: (notice) => {
 			adverseNotice = notice;
+			adverseOperationKey = null;
 			showAdverseAction = false;
 			showSuccess(
 				notice.sentAtUtc
@@ -466,10 +601,10 @@
 					<Button variant="outline" class="gap-2" onclick={openRecordFee} data-testid="application-record-fee">
 						<DollarSign class="h-4 w-4" /> Record fee
 					</Button>
-					<Button class="gap-2" onclick={() => (showApprove = true)} data-testid="application-approve">
+					<Button class="gap-2" onclick={() => openApplicationOutcome('Approve')} data-testid="application-approve">
 						<CheckCircle2 class="h-4 w-4" /> Approve
 					</Button>
-					<Button variant="outline" class="gap-2" onclick={() => (showDecline = true)} data-testid="application-decline">
+					<Button variant="outline" class="gap-2" onclick={() => openApplicationOutcome('Decline')} data-testid="application-decline">
 						<XCircle class="h-4 w-4" /> Decline
 					</Button>
 					<Button variant="outline" class="gap-2" onclick={() => (showWithdraw = true)} data-testid="application-withdraw">
@@ -490,8 +625,8 @@
 					<span>This applicant was approved and a tenant record was created.</span>
 				</div>
 				<div class="flex flex-wrap items-center gap-2">
-					<Button class="gap-2" href={leaseCreateHrefForApprovedTenant(tenantLinkId)} data-testid="application-create-lease">
-						<Home class="h-4 w-4" /> Create lease <ArrowRight class="h-4 w-4" />
+					<Button class="gap-2" href={prepareMoveInHrefForApprovedTenant(tenantLinkId, id, application?.unitId ?? '')} data-testid="application-prepare-move-in">
+						<Home class="h-4 w-4" /> Prepare move-in <ArrowRight class="h-4 w-4" />
 					</Button>
 					<Button variant="outline" class="gap-2" onclick={() => goto(`/tenants/${tenantLinkId}`)} data-testid="application-view-tenant">
 						<User class="h-4 w-4" /> View tenant <ArrowRight class="h-4 w-4" />
@@ -580,46 +715,6 @@
 				</Card.Root>
 			{/if}
 
-			<Card.Root class="lg:col-span-2" data-testid="application-fees-card">
-				<Card.Header>
-					<Card.Title class="flex items-center gap-2 text-base"><DollarSign class="h-4 w-4" /> Application fees</Card.Title>
-				</Card.Header>
-				<Card.Content>
-					{#if applicationFeesQuery.isLoading}
-						<div class="flex items-center gap-2 text-sm text-muted-foreground" data-testid="application-fees-loading">
-							<div class="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"></div>
-							<span>Loading fees…</span>
-						</div>
-					{:else if applicationFeesQuery.isError}
-						<p class="text-sm text-destructive" data-testid="application-fees-error">
-							{apiErrorMessage(applicationFeesQuery.error, 'Could not load application fees.')}
-						</p>
-					{:else if applicationFees.length === 0}
-						<p class="text-sm text-muted-foreground" data-testid="application-fees-empty">
-							No application fees recorded.
-						</p>
-					{:else}
-						<div class="divide-y divide-border" data-testid="application-fees-list">
-							{#each applicationFees as payment (payment.id)}
-								<div class="flex flex-wrap items-start justify-between gap-3 py-3 first:pt-0 last:pb-0" data-testid="application-fee-row">
-									<div class="min-w-0">
-										<p class="text-sm font-medium text-foreground">{paymentTypeLabel(payment.paymentType)}</p>
-										<p class="mt-1 text-xs text-muted-foreground">
-											{payment.status}
-											· {fmtDate(payment.paidDate ?? payment.dueDate)}
-											{#if payment.method}
-												· {payment.method}
-											{/if}
-										</p>
-									</div>
-									<p class="text-sm font-semibold text-foreground">{fmtMoney(payment.amount)}</p>
-								</div>
-							{/each}
-						</div>
-					{/if}
-				</Card.Content>
-			</Card.Root>
-
 			{#if application.hasScan}
 				<Card.Root class="lg:col-span-2" data-testid="application-scan-card">
 					<Card.Header>
@@ -662,33 +757,92 @@
 			<!-- Screening -->
 			<Card.Root class="lg:col-span-2" data-testid="application-screening-card">
 				<Card.Header>
-					<div class="flex flex-wrap items-center justify-between gap-3">
-						<Card.Title class="flex items-center gap-2 text-base"><ScanSearch class="h-4 w-4" /> Screening</Card.Title>
-							<div class="flex flex-col items-end gap-1">
-								{#if isOpen}
-									<Button
-										class="gap-2"
-										disabled={!canScreen || screenMutation.isPending}
-										onclick={() => screenMutation.mutate()}
-										data-testid="application-run-screening"
-									>
-										<ScanSearch class="h-4 w-4" />
-										{screenMutation.isPending ? 'Screening…' : hasScreening ? 'Re-run screening' : 'Run screening'}
-									</Button>
-								{/if}
-								{#if !isOpen}
-									<p class="text-xs text-muted-foreground" data-testid="application-screening-terminal-note">
-										Screening can only be run before a decision
-									</p>
-								{:else if !canScreen}
-									<p class="text-xs text-muted-foreground" data-testid="application-screening-consent-note">
-										Applicant consent is required to screen
-									</p>
-								{/if}
-						</div>
-					</div>
+					<Card.Title class="flex items-center gap-2 text-base"><ScanSearch class="h-4 w-4" /> Applicant screening</Card.Title>
+					<p class="text-sm text-muted-foreground">
+						Invite through Rental Command once a provider is connected, or track a screening completed in Zillow or another service.
+					</p>
+					<p class="text-xs text-muted-foreground">
+						Do not paste Social Security numbers, identity answers, or report contents here. Review those only in the provider's secure site.
+					</p>
 				</Card.Header>
-				<Card.Content>
+				<Card.Content class="space-y-5">
+					<div class="grid gap-3 sm:grid-cols-2" data-testid="screening-mode-picker">
+						<button
+							type="button"
+							class="rounded-xl border p-4 text-left transition {screeningMode === 'Integrated' ? 'border-primary bg-primary/5' : 'border-border'}"
+							onclick={() => (screeningMode = 'Integrated')}
+						>
+							<p class="font-medium">Screen through Rental Command</p>
+							<p class="mt-1 text-xs text-muted-foreground">The applicant securely enters sensitive information on the screening provider's site.</p>
+						</button>
+						<button
+							type="button"
+							class="rounded-xl border p-4 text-left transition {screeningMode === 'External' ? 'border-primary bg-primary/5' : 'border-border'}"
+							onclick={() => (screeningMode = 'External')}
+						>
+							<p class="font-medium">Track an outside screening</p>
+							<p class="mt-1 text-xs text-muted-foreground">Use Zillow or any other checker. Rental Command records progress but does not claim to sync it.</p>
+						</button>
+					</div>
+
+					{#if screeningMode === 'Integrated'}
+						<div class="rounded-xl border border-border p-4">
+							<div class="flex flex-wrap items-center justify-between gap-3">
+								<div>
+									<p class="font-medium">{screeningQuery.data?.integratedProvider.displayName ?? 'Integrated screening'}</p>
+									<p class="text-xs text-muted-foreground">
+										{screeningQuery.data?.integratedProvider.isConfigured
+											? 'Ready to create a secure applicant invitation.'
+											: 'Provider selection is still being finalized. Outside screening remains available.'}
+									</p>
+								</div>
+								<Button
+									class="gap-2"
+									disabled={!canScreen || !screeningQuery.data?.integratedProvider.isConfigured || screenMutation.isPending}
+									onclick={() => screenMutation.mutate()}
+									data-testid="application-run-screening"
+								>
+									<ScanSearch class="h-4 w-4" />
+									{screenMutation.isPending ? 'Creating invitation…' : 'Invite applicant'}
+								</Button>
+							</div>
+							{#if !application?.consentGiven}
+								<p class="mt-3 text-xs text-muted-foreground">Applicant consent is required before an integrated screening can start.</p>
+							{/if}
+						</div>
+					{:else}
+						<div class="grid gap-3 rounded-xl border border-border p-4 sm:grid-cols-2" data-testid="external-screening-form">
+							<label class="space-y-1 text-sm">
+								<span class="font-medium">Screening service</span>
+								<Input bind:value={externalProvider} placeholder="Zillow, another service, local agency…" />
+							</label>
+							<label class="space-y-1 text-sm">
+								<span class="font-medium">Reference (optional)</span>
+								<Input bind:value={externalReference} placeholder="Order or application number" />
+							</label>
+							<label class="space-y-1 text-sm sm:col-span-2">
+								<span class="font-medium">Provider link (optional)</span>
+								<Input bind:value={externalUrl} type="url" placeholder="https://…" />
+							</label>
+							<div class="space-y-3 rounded-lg bg-muted/40 p-3 sm:col-span-2">
+								<p class="text-xs text-muted-foreground">Add the consumer reporting agency name, mailing address, and phone if its report may influence your decision. These are not required when no consumer report is used.</p>
+								<div class="grid gap-3 sm:grid-cols-2">
+									<Input bind:value={externalCraName} placeholder="Credit reporting agency name" />
+									<Input bind:value={externalCraPhone} placeholder="Agency phone" />
+									<Input class="sm:col-span-2" bind:value={externalCraAddress} placeholder="Agency mailing address" />
+								</div>
+							</div>
+							<div class="sm:col-span-2">
+								<Button
+									disabled={!isOpen || !externalProvider.trim() || externalScreeningMutation.isPending}
+									onclick={() => externalScreeningMutation.mutate()}
+								>
+									{externalScreeningMutation.isPending ? 'Adding…' : 'Add outside screening'}
+								</Button>
+							</div>
+						</div>
+					{/if}
+
 					{#if screeningQuery.isLoading}
 						<div class="flex items-center gap-2 text-sm text-muted-foreground">
 							<div class="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"></div>
@@ -698,49 +852,64 @@
 						<div class="space-y-4" data-testid="application-screening-result">
 							<div class="flex flex-wrap items-center gap-2">
 								<StatusBadge status={latestScreening.status} map={SCREEN_STATUS_MAP} />
-								{#if latestScreening.recommendation}
+								<span class="m3-tone-chip border">{latestScreening.mode}</span>
+								{#if latestScreening.decision}
 									<StatusBadge
-										status={latestScreening.recommendation}
+										status={latestScreening.decision}
 										map={RECOMMENDATION_MAP}
 									/>
 								{/if}
 								<span class="text-xs text-muted-foreground">
-									Screened {fmtDateTime(latestScreening.completedAtUtc ?? latestScreening.requestedAtUtc)}
+									Updated {fmtDateTime(latestScreening.lastStatusAtUtc)}
 								</span>
 							</div>
-							<div class="grid grid-cols-2 gap-x-4 gap-y-4 text-sm sm:grid-cols-3">
-								{@render fieldRow('Credit score band', latestScreening.creditScoreBand || '—')}
-								<div class="min-w-0">
-									<p class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Criminal records</p>
-									<p
-										class="mt-0.5 flex items-center gap-1.5 text-sm {latestScreening.hasCriminalRecord ? 'text-[var(--m3c-error)]' : 'text-foreground'}"
-										data-testid="application-screening-criminal"
-									>
-										{#if latestScreening.hasCriminalRecord}
-											<AlertCircle class="h-4 w-4 shrink-0" /> Records found — review
-										{:else}
-											<CheckCircle2 class="h-4 w-4 shrink-0 text-[var(--success)]" /> No criminal records found
-										{/if}
-									</p>
-								</div>
-								<div class="min-w-0">
-									<p class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Eviction records</p>
-									<p
-										class="mt-0.5 flex items-center gap-1.5 text-sm {latestScreening.hasEvictionRecord ? 'text-[var(--m3c-error)]' : 'text-foreground'}"
-										data-testid="application-screening-eviction"
-									>
-										{#if latestScreening.hasEvictionRecord}
-											<AlertCircle class="h-4 w-4 shrink-0" /> Records found — review
-										{:else}
-											<CheckCircle2 class="h-4 w-4 shrink-0 text-[var(--success)]" /> No eviction records found
-										{/if}
-									</p>
-								</div>
+							<div class="rounded-lg border border-border bg-muted/30 p-3 text-sm">
+								<p class="font-medium text-foreground">{latestScreening.statusSummary}</p>
+								<p class="mt-1 text-muted-foreground">Next: {latestScreening.nextAction}</p>
 							</div>
+							<div class="grid gap-x-4 gap-y-4 text-sm sm:grid-cols-3">
+								{@render fieldRow('Provider', latestScreening.providerDisplayName)}
+								{@render fieldRow('Reference', latestScreening.providerReference || '—')}
+								{@render fieldRow('Consumer report used', latestScreening.decision ? (latestScreening.consumerReportUsedForDecision ? 'Yes' : 'No') : 'Not recorded yet')}
+								{@render fieldRow('Agency contact', latestScreening.hasCompleteCreditReportingAgencyContact ? 'Complete' : (latestScreening.decision && !latestScreening.consumerReportUsedForDecision ? 'Not required for this decision' : 'Missing'))}
+								{#if latestScreening.decisionReason}
+									{@render fieldRow('Decision reason', latestScreening.decisionReason)}
+								{/if}
+								{#if latestScreening.providerHostedUrl}
+									<a class="text-primary underline underline-offset-2" href={latestScreening.providerHostedUrl} target="_blank" rel="noopener noreferrer">Open provider</a>
+								{/if}
+							</div>
+							{#if latestScreening.mode === 'External' && latestScreening.status !== 'Completed' && latestScreening.status !== 'Cancelled'}
+								<Button
+									variant="outline"
+									disabled={completeExternalScreeningMutation.isPending}
+									onclick={() => completeExternalScreeningMutation.mutate(latestScreening.id)}
+								>
+									Mark outside screening complete
+								</Button>
+							{/if}
+							<div class="flex flex-wrap gap-2">
+								{#if latestScreening.mode === 'External'}
+									<Button variant="outline" onclick={() => openCraContact(latestScreening)}>
+										{latestScreening.hasCompleteCreditReportingAgencyContact ? 'Update agency contact' : 'Add agency contact'}
+									</Button>
+								{/if}
+								{#if latestScreening.status === 'Completed'}
+									<Button variant="outline" onclick={() => openScreeningDecision(latestScreening)}>
+										{latestScreening.decision ? 'Update screening decision' : 'Record screening decision'}
+									</Button>
+								{/if}
+							</div>
+							{#if latestScreening.status === 'Completed' && !latestScreening.decision}
+								<p class="text-xs text-muted-foreground">Record whether the consumer report influenced your decision before approving or declining this application.</p>
+							{/if}
+							{#if latestScreening.decision && latestScreening.consumerReportUsedForDecision && !latestScreening.hasCompleteCreditReportingAgencyContact}
+								<p class="text-xs text-destructive">Agency name, mailing address, and phone are required for a report-based decision. Add them to continue to adverse action.</p>
+							{/if}
 						</div>
 					{:else}
 						<p class="text-sm text-muted-foreground" data-testid="application-screening-empty">
-							No screening has been run yet.
+							No screening has been added yet. Choose either path above.
 						</p>
 					{/if}
 				</Card.Content>
@@ -749,7 +918,9 @@
 				{#if hasScreening && application.status === 'Declined'}
 					<Card.Footer class="flex-col items-stretch gap-3 border-t pt-4">
 						<p class="text-xs text-muted-foreground" data-testid="application-adverse-action-help">
-							When you decline based on a report, the law requires sending the applicant this notice.
+							{latestScreening?.consumerReportUsedForDecision
+								? 'When you decline based on a report, the law requires sending the applicant this notice.'
+								: 'No adverse-action notice is offered here unless you record that a consumer report influenced the decline.'}
 						</p>
 						{#if adverseNotice}
 							<div
@@ -781,7 +952,7 @@
 									</Button>
 								</div>
 							</div>
-						{:else}
+						{:else if latestScreening?.canGenerateAdverseAction}
 							<div>
 								<Button
 									variant="outline"
@@ -928,6 +1099,86 @@
 	</Dialog.Content>
 </Dialog.Root>
 
+<!-- Correct consumer reporting agency contact without creating another screening -->
+<Dialog.Root open={showCraContact} onOpenChange={(v) => { if (!v) showCraContact = false; }}>
+	<Dialog.Content class="max-w-lg">
+		<Dialog.Header>
+			<Dialog.Title>Consumer reporting agency contact</Dialog.Title>
+			<Dialog.Description>
+				Required only when a consumer report influences the decision. Correcting this contact updates the existing screening; it does not create a new one.
+			</Dialog.Description>
+		</Dialog.Header>
+		<div class="space-y-3">
+			<label class="space-y-1 text-sm">
+				<span class="font-medium">Agency name</span>
+				<Input bind:value={craName} placeholder="Consumer reporting agency" />
+			</label>
+			<label class="space-y-1 text-sm">
+				<span class="font-medium">Mailing address</span>
+				<Input bind:value={craAddress} placeholder="Street, city, state, postal code" />
+			</label>
+			<label class="space-y-1 text-sm">
+				<span class="font-medium">Phone</span>
+				<Input bind:value={craPhone} placeholder="Agency phone" />
+			</label>
+		</div>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => (showCraContact = false)}>Cancel</Button>
+			<Button
+				onclick={() => latestScreening && updateCraMutation.mutate(latestScreening.id)}
+				disabled={!craName.trim() || !craAddress.trim() || !craPhone.trim() || updateCraMutation.isPending}
+			>
+				{updateCraMutation.isPending ? 'Saving…' : 'Save agency contact'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<!-- Explicit landlord decision about the completed screening -->
+<Dialog.Root open={showScreeningDecision} onOpenChange={(v) => { if (!v) showScreeningDecision = false; }}>
+	<Dialog.Content class="max-w-lg">
+		<Dialog.Header>
+			<Dialog.Title>Record screening decision</Dialog.Title>
+			<Dialog.Description>
+				Record your decision and whether a consumer report influenced it. Rental Command stores this workflow metadata, not the report or its findings.
+			</Dialog.Description>
+		</Dialog.Header>
+		<div class="space-y-4">
+			<label class="space-y-1 text-sm">
+				<span class="font-medium">Decision</span>
+				<select bind:value={screeningDecision} class="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">
+					<option value="Accept">Accept</option>
+					<option value="Conditional">Conditional</option>
+					<option value="Decline">Decline</option>
+				</select>
+			</label>
+			<label class="space-y-1 text-sm">
+				<span class="font-medium">Principal reason</span>
+				<textarea bind:value={screeningDecisionReason} rows="3" class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm" placeholder="Required when a consumer report influenced the decision"></textarea>
+			</label>
+			<label class="flex items-start gap-3 rounded-lg border border-border p-3 text-sm">
+				<Checkbox bind:checked={consumerReportUsed} />
+				<span>
+					<strong class="block">A consumer report influenced this decision</strong>
+					<span class="text-xs text-muted-foreground">Turn this on even if the report was only one factor. Adverse-action guidance is enabled for a decline.</span>
+				</span>
+			</label>
+			{#if consumerReportUsed && !latestScreening?.hasCompleteCreditReportingAgencyContact}
+				<p class="text-xs text-destructive">Save the agency name, mailing address, and phone before recording a report-based decision.</p>
+			{/if}
+		</div>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => (showScreeningDecision = false)}>Cancel</Button>
+			<Button
+				onclick={() => latestScreening && screeningDecisionMutation.mutate(latestScreening.id)}
+				disabled={screeningDecisionMutation.isPending || (consumerReportUsed && (!screeningDecisionReason.trim() || !latestScreening?.hasCompleteCreditReportingAgencyContact))}
+			>
+				{screeningDecisionMutation.isPending ? 'Saving…' : 'Save decision'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
 <!-- Adverse-action notice -->
 <Dialog.Root open={showAdverseAction} onOpenChange={(v) => { if (!v) showAdverseAction = false; }}>
 	<Dialog.Content class="max-w-lg">
@@ -1000,12 +1251,12 @@
 				/>
 			</div>
 			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Paid date (optional)</span>
+				<span class="mb-1 block text-xs text-muted-foreground">Effective date (optional)</span>
 				<DatePicker
 					id="application-fee-paid-date-input"
 					testid="application-fee-paid-date-input"
-					value={feePaidDate}
-					onchange={(v) => (feePaidDate = v)}
+					value={feeEffectiveOn}
+					onchange={(v) => (feeEffectiveOn = v)}
 					placeholder="Defaults to today"
 				/>
 			</div>

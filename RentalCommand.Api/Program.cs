@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using RentalCommand.Api.Auth;
@@ -16,9 +17,12 @@ using RentalCommand.Api.Services.Payments;
 using RentalCommand.Api.Services.Voice;
 using RentalCommand.Api.Simulation;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Atomic;
 
 // QuestPDF Community license (free for small businesses / OSS) — required before any PDF is generated.
 QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
@@ -45,7 +49,8 @@ builder.Services.Configure<FormOptions>(o => o.MultipartBodyLengthLimit = 64_000
 
 // --- Configuration binding ---
 builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection(JwtSettings.SectionName));
-builder.Services.Configure<ApiKeySettings>(builder.Configuration.GetSection(ApiKeySettings.SectionName));
+builder.Services.Configure<AtomicAuthSessionCredentialOptions>(
+    builder.Configuration.GetSection(AtomicAuthSessionCredentialOptions.SectionName));
 builder.Services.Configure<SeedSettings>(builder.Configuration.GetSection(SeedSettings.SectionName));
 builder.Services.Configure<RentalCommand.Core.Configuration.PlatformAdminOptions>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.PlatformAdminOptions.SectionName));
@@ -57,17 +62,29 @@ builder.Services.Configure<RentalCommand.Core.Configuration.GoogleAuthOptions>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.GoogleAuthOptions.SectionName));
 builder.Services.Configure<RentalCommand.Core.Configuration.StripeConfig>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.StripeConfig.SectionName));
-builder.Services.Configure<RentalCommand.Core.Configuration.ReportsConfig>(
-    builder.Configuration.GetSection(RentalCommand.Core.Configuration.ReportsConfig.SectionName));
-builder.Services.Configure<RentalCommand.Core.Configuration.EsignConfig>(
-    builder.Configuration.GetSection(RentalCommand.Core.Configuration.EsignConfig.SectionName));
 builder.Services.Configure<RentalCommand.Core.Configuration.ScreeningConfig>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.ScreeningConfig.SectionName));
 builder.Services.Configure<RentalCommand.Core.Configuration.QuickBooksOptions>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.QuickBooksOptions.SectionName));
+builder.Services.Configure<RentalCommand.Core.Configuration.NotificationsConfig>(
+    builder.Configuration.GetSection(RentalCommand.Core.Configuration.NotificationsConfig.SectionName));
 var llmProvider = builder.Configuration.GetValue<string>("Assistant:Provider") ?? "openai";
 builder.Services.AddSingleton<RentalCommand.Api.Scanning.IImageTextExtractor,
     RentalCommand.Api.Scanning.TesseractImageTextExtractor>();
+builder.Services.AddHttpClient<RentalCommand.Api.Scanning.OpenAiLlmProvider>(c =>
+{
+    c.BaseAddress = new Uri("https://api.openai.com/");
+    c.Timeout = TimeSpan.FromSeconds(90);
+});
+builder.Services.AddHttpClient<RentalCommand.Api.Scanning.AnthropicLlmProvider>(c =>
+{
+    c.BaseAddress = new Uri("https://api.anthropic.com/");
+    c.Timeout = TimeSpan.FromSeconds(90);
+});
+builder.Services.AddScoped<RentalCommand.Core.Interfaces.ILlmCredentialProbe>(sp =>
+    sp.GetRequiredService<RentalCommand.Api.Scanning.OpenAiLlmProvider>());
+builder.Services.AddScoped<RentalCommand.Core.Interfaces.ILlmCredentialProbe>(sp =>
+    sp.GetRequiredService<RentalCommand.Api.Scanning.AnthropicLlmProvider>());
 if (string.Equals(llmProvider, "anthropic", StringComparison.OrdinalIgnoreCase))
 {
     builder.Services.AddHttpClient<RentalCommand.Core.Interfaces.ILlmProvider, RentalCommand.Api.Scanning.AnthropicLlmProvider>(c =>
@@ -124,25 +141,696 @@ var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<
 JwtSecretGuard.Validate(jwtSettings.SecretKey, builder.Environment.IsDevelopment());
 
 // --- Database ---
-// The scoped AuditSaveChangesInterceptor is resolved from the same scope as the DbContext (the
-// (sp, options) overload), so it can read the per-request ICurrentActor / IAuditScope.
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? throw new InvalidOperationException("Missing connection string 'DefaultConnection'.");
+var migratorConnectionString = builder.Configuration.GetConnectionString("MigratorConnection");
+var migrateOnly = args.Any(argument =>
+    string.Equals(argument, "--migrate-only", StringComparison.OrdinalIgnoreCase));
+string? engineConnectionStringForMigration = null;
+
+if (migrateOnly)
+{
+    if (string.IsNullOrWhiteSpace(migratorConnectionString))
+    {
+        throw new InvalidOperationException(
+            "The one-shot migration process requires ConnectionStrings:MigratorConnection.");
+    }
+
+    engineConnectionStringForMigration = builder.Configuration.GetConnectionString("EngineConnection")
+        ?? throw new InvalidOperationException(
+            "The one-shot migration process requires ConnectionStrings:EngineConnection.");
+}
+else if (!string.IsNullOrWhiteSpace(migratorConnectionString))
+{
+    throw new InvalidOperationException(
+        "ConnectionStrings:MigratorConnection must not be available to the long-running API process.");
+}
+
+if (!migrateOnly)
+{
+    RentalCommand.Data.Security.RuntimeDatabaseRoleProvisioner.ValidateRuntimeConnectionString(
+        connectionString,
+        RentalCommand.Data.Security.DatabaseRuntimeIdentity.ApiRole,
+        allowDevelopmentDefault: builder.Environment.IsDevelopment());
+}
 
 builder.Services.AddHttpContextAccessor();
 
-// Row-Level Security backstop (audit M-1): a connection interceptor sets the per-request
-// app.current_portfolio_id / app.is_admin session GUCs that the tenant_isolation policies read, so
-// tenant isolation is enforced at the DB layer in addition to the app-layer PortfolioId filters.
-// Registered alongside the audit interceptor on the same DbContext.
+// Production persistence is fail-closed: auditable writes and raw DML must be admitted by the
+// atomic executor or by one exact infrastructure mutation lease.
+builder.Services.AddAtomicPersistenceKernel(allowUnconvertedWrites: false);
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.AtomicMoneyMutationCommand,
+    RentalCommand.Api.Services.Domain.AtomicMoneyMutationResult,
+    RentalCommand.Api.Services.Domain.AtomicMoneyMutationHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.QueueOwnerStatementEmailCommand,
+    RentalCommand.Api.Services.Domain.QueueOwnerStatementEmailResult,
+    RentalCommand.Api.Services.Domain.QueueOwnerStatementEmailHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.ChangePasswordCommand,
+    RentalCommand.Core.Auth.ChangePasswordResult,
+    RentalCommand.Data.Auth.ChangePasswordHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.BootstrapAccountCommand,
+    RentalCommand.Core.Auth.BootstrapAccountResult,
+    RentalCommand.Data.Auth.BootstrapAccountHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.ConfirmAccountEmailCommand,
+    RentalCommand.Core.Auth.ConfirmAccountEmailResult,
+    RentalCommand.Data.Auth.ConfirmAccountEmailHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.ResetAccountPasswordCommand,
+    RentalCommand.Core.Auth.ResetAccountPasswordResult,
+    RentalCommand.Data.Auth.ResetAccountPasswordHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.ConfirmGoogleAccountEmailCommand,
+    RentalCommand.Core.Auth.ConfirmAccountEmailResult,
+    RentalCommand.Data.Auth.ConfirmGoogleAccountEmailHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.AuthEmailOutboxCommand,
+    RentalCommand.Core.Auth.AuthEmailOutboxResult,
+    RentalCommand.Data.Auth.AuthEmailOutboxHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Authorization.SelectWorkspaceExperienceCommand,
+    RentalCommand.Core.Authorization.SelectWorkspaceExperienceResult,
+    RentalCommand.Data.Authorization.SelectWorkspaceExperienceHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Scanning.RejectScanDraftCommand,
+    RentalCommand.Core.Scanning.RejectScanDraftResult,
+    RentalCommand.Data.Scanning.RejectScanDraftHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Scanning.RetryScanDraftCommand,
+    RentalCommand.Core.Scanning.ScanDraftMutationResult,
+    RentalCommand.Data.Scanning.RetryScanDraftHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Scanning.CreateVoiceScanDraftCommand,
+    RentalCommand.Core.Scanning.ScanDraftMutationResult,
+    RentalCommand.Data.Scanning.CreateVoiceScanDraftHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Scanning.AnswerVoiceScanDraftCommand,
+    RentalCommand.Core.Scanning.ScanDraftMutationResult,
+    RentalCommand.Data.Scanning.AnswerVoiceScanDraftHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.AtomicRentalMutationCommand,
+    RentalCommand.Api.Services.Domain.AtomicRentalMutationResult,
+    RentalCommand.Api.Services.Domain.AtomicRentalMutationHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.AtomicCoreCrudMutationCommand,
+    RentalCommand.Api.Services.Domain.AtomicCoreCrudMutationResult,
+    RentalCommand.Api.Services.Domain.AtomicCoreCrudMutationHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.AtomicGuidedTenantSetupCommand,
+    RentalCommand.Api.Services.Domain.AtomicGuidedTenantSetupResult,
+    RentalCommand.Api.Services.Domain.AtomicGuidedTenantSetupHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.AtomicWorkspaceCoreMutationCommand,
+    RentalCommand.Api.Services.Domain.AtomicWorkspaceCoreMutationResult,
+    RentalCommand.Api.Services.Domain.AtomicWorkspaceCoreMutationHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.PrepareAccountingConnectCommand,
+    RentalCommand.Api.Services.Domain.PrepareAccountingConnectResult,
+    RentalCommand.Api.Services.Domain.PrepareAccountingConnectHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.PrepareAccountingDisconnectCommand,
+    RentalCommand.Api.Services.Domain.PrepareAccountingDisconnectResult,
+    RentalCommand.Api.Services.Domain.PrepareAccountingDisconnectHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.FinalizeAccountingDisconnectCommand,
+    RentalCommand.Api.Services.Domain.FinalizeAccountingDisconnectResult,
+    RentalCommand.Api.Services.Domain.FinalizeAccountingDisconnectHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.SetAccountingDirectionCommand,
+    RentalCommand.Api.Services.Domain.SetAccountingDirectionResult,
+    RentalCommand.Api.Services.Domain.SetAccountingDirectionHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.CancelTenantAutopayCommand,
+    RentalCommand.Api.Services.Domain.CancelTenantAutopayResult,
+    RentalCommand.Api.Services.Domain.CancelTenantAutopayHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.AtomicInspectionMutationCommand,
+    RentalCommand.Api.Services.Domain.AtomicInspectionMutationResult,
+    RentalCommand.Api.Services.Domain.AtomicInspectionMutationHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.AtomicRecurringMaintenanceMutationCommand,
+    RentalCommand.Api.Services.Domain.AtomicRecurringMaintenanceMutationResult,
+    RentalCommand.Api.Services.Domain.AtomicRecurringMaintenanceMutationHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.AtomicPublicApplicationSubmissionCommand,
+    RentalCommand.Api.Services.Domain.AtomicPublicApplicationSubmissionResult,
+    RentalCommand.Api.Services.Domain.AtomicPublicApplicationSubmissionHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Import.AtomicUnitCsvImportCommand,
+    RentalCommand.Api.Services.Import.AtomicUnitCsvImportResult,
+    RentalCommand.Api.Services.Import.AtomicUnitCsvImportHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Import.AtomicCoreCsvImportCommand,
+    RentalCommand.Api.Services.Import.AtomicCoreCsvImportResult,
+    RentalCommand.Api.Services.Import.AtomicCoreCsvImportHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Import.AtomicPaymentCsvImportCommand,
+    RentalCommand.Api.Services.Import.AtomicPaymentCsvImportResult,
+    RentalCommand.Api.Services.Import.AtomicPaymentCsvImportHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.CreatePropertyDispositionCommand,
+    RentalCommand.Core.Leasing.CreatePropertyDispositionResult,
+    RentalCommand.Data.Leasing.CreatePropertyDispositionHandler>();
+builder.Services.AddAtomicCommandHandler<
+    ChangeWorkspaceAssignmentScopeCommand,
+    WorkspaceAccessMutationResult,
+    ChangeWorkspaceAssignmentScopeHandler>();
+builder.Services.AddAtomicCommandHandler<
+    ChangeWorkspaceAssignmentEndCommand,
+    WorkspaceAccessMutationResult,
+    ChangeWorkspaceAssignmentEndHandler>();
+builder.Services.AddAtomicCommandHandler<
+    CreateWorkspaceMembershipCommand,
+    CreateWorkspaceMembershipResult,
+    CreateWorkspaceMembershipHandler>();
+builder.Services.AddAtomicCommandHandler<
+    ActivateWorkspaceInvitationCommand,
+    ActivateWorkspaceInvitationResult,
+    ActivateWorkspaceInvitationHandler>();
+builder.Services.AddAtomicCommandHandler<
+    AddWorkspaceRoleAssignmentCommand,
+    WorkspaceTeamMutationResult,
+    AddWorkspaceRoleAssignmentHandler>();
+builder.Services.AddAtomicCommandHandler<
+    EndWorkspaceRoleAssignmentCommand,
+    WorkspaceTeamMutationResult,
+    EndWorkspaceRoleAssignmentHandler>();
+builder.Services.AddAtomicCommandHandler<
+    ReplaceWorkspaceAssignmentPropertyScopeCommand,
+    WorkspaceTeamMutationResult,
+    ReplaceWorkspaceAssignmentPropertyScopeHandler>();
+builder.Services.AddAtomicCommandHandler<
+    ChangeWorkspaceMembershipStatusCommand,
+    WorkspaceTeamMutationResult,
+    ChangeWorkspaceMembershipStatusHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.AssignWorkOrderResponsibilityCommand,
+    RentalCommand.Core.Operations.AssignWorkOrderResponsibilityResult,
+    RentalCommand.Data.Operations.AssignWorkOrderResponsibilityHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.CloseWorkOrderResponsibilityCommand,
+    RentalCommand.Core.Operations.CloseWorkOrderResponsibilityResult,
+    RentalCommand.Data.Operations.CloseWorkOrderResponsibilityHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.UpdateAssignedWorkOrderCommand,
+    RentalCommand.Core.Operations.UpdateAssignedWorkOrderResult,
+    RentalCommand.Data.Operations.UpdateAssignedWorkOrderHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.CreateWorkOrderCommand,
+    RentalCommand.Core.Operations.OperationMutationResult,
+    RentalCommand.Data.Operations.CreateWorkOrderHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.UpdateWorkOrderCommand,
+    RentalCommand.Core.Operations.OperationMutationResult,
+    RentalCommand.Data.Operations.UpdateWorkOrderHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.DeleteWorkOrderCommand,
+    RentalCommand.Core.Operations.OperationMutationResult,
+    RentalCommand.Data.Operations.DeleteWorkOrderHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.CreateTenantWorkOrderCommand,
+    RentalCommand.Core.Operations.OperationMutationResult,
+    RentalCommand.Data.Operations.CreateTenantWorkOrderHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.CreateAppointmentCommand,
+    RentalCommand.Core.Operations.OperationMutationResult,
+    RentalCommand.Data.Operations.CreateAppointmentHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.UpdateAppointmentCommand,
+    RentalCommand.Core.Operations.OperationMutationResult,
+    RentalCommand.Data.Operations.UpdateAppointmentHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.DeleteAppointmentCommand,
+    RentalCommand.Core.Operations.OperationMutationResult,
+    RentalCommand.Data.Operations.DeleteAppointmentHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Documents.CreateDocumentTemplateCommand,
+    RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+    RentalCommand.Data.Documents.CreateDocumentTemplateHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Documents.FinalizeDocumentTemplateUploadCommand,
+    RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+    RentalCommand.Data.Documents.FinalizeDocumentTemplateUploadHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Documents.UpdateDocumentTemplateCommand,
+    RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+    RentalCommand.Data.Documents.UpdateDocumentTemplateHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Documents.AddDocumentTemplateFieldCommand,
+    RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+    RentalCommand.Data.Documents.AddDocumentTemplateFieldHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Documents.UpdateDocumentTemplateFieldCommand,
+    RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+    RentalCommand.Data.Documents.UpdateDocumentTemplateFieldHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Documents.DeleteDocumentTemplateFieldCommand,
+    RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+    RentalCommand.Data.Documents.DeleteDocumentTemplateFieldHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.CreateEvictionCaseCommand,
+    RentalCommand.Core.Operations.OperationMutationResult,
+    RentalCommand.Data.Operations.CreateEvictionCaseHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.UpdateEvictionCaseCommand,
+    RentalCommand.Core.Operations.OperationMutationResult,
+    RentalCommand.Data.Operations.UpdateEvictionCaseHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.AddEvictionCaseEventCommand,
+    RentalCommand.Core.Operations.OperationMutationResult,
+    RentalCommand.Data.Operations.AddEvictionCaseEventHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.DeleteEvictionCaseCommand,
+    RentalCommand.Core.Operations.OperationMutationResult,
+    RentalCommand.Data.Operations.DeleteEvictionCaseHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.CreateVendorRatingCommand,
+    RentalCommand.Core.Operations.VendorRatingMutationResult,
+    RentalCommand.Data.Operations.CreateVendorRatingHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Esign.IssueLeaseAgreementCommand,
+    RentalCommand.Core.Esign.IssueLeaseAgreementResult,
+    RentalCommand.Data.Esign.IssueLeaseAgreementHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Esign.IssueLeaseAddendumCommand,
+    RentalCommand.Core.Esign.IssueLeaseAddendumResult,
+    RentalCommand.Data.Esign.IssueLeaseAddendumHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Esign.RecordNativeEsignViewCommand,
+    RentalCommand.Core.Esign.RecordNativeEsignViewResult,
+    RentalCommand.Data.Esign.RecordNativeEsignViewHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Esign.RecordNativeSignatureCommand,
+    RentalCommand.Core.Esign.NativeSignerActionResult,
+    RentalCommand.Data.Esign.RecordNativeSignatureHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Esign.RecordNativeDeclineCommand,
+    RentalCommand.Core.Esign.NativeSignerActionResult,
+    RentalCommand.Data.Esign.RecordNativeDeclineHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Esign.FinalizeNativeEsignRequestCommand,
+    RentalCommand.Core.Esign.FinalizeNativeEsignRequestResult,
+    RentalCommand.Data.Esign.FinalizeNativeEsignRequestHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.DispatchWorkOrderToVendorCommand,
+    RentalCommand.Core.Operations.DispatchWorkOrderToVendorResult,
+    RentalCommand.Data.Operations.DispatchWorkOrderToVendorHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.CompleteVendorDispatchFromInboundCommand,
+    RentalCommand.Core.Operations.CompleteVendorDispatchFromInboundResult,
+    RentalCommand.Data.Operations.CompleteVendorDispatchFromInboundHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Vendors.RequestVendorW9Command,
+    RentalCommand.Core.Vendors.RequestVendorW9Result,
+    RentalCommand.Data.Vendors.RequestVendorW9Handler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Screening.TrackExternalScreeningCommand,
+    RentalCommand.Core.Screening.ScreeningMutationResult,
+    RentalCommand.Data.Screening.TrackExternalScreeningHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Screening.PrepareIntegratedScreeningCommand,
+    RentalCommand.Core.Screening.PrepareIntegratedScreeningResult,
+    RentalCommand.Data.Screening.PrepareIntegratedScreeningHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Screening.FinalizeIntegratedScreeningCommand,
+    RentalCommand.Core.Screening.ScreeningMutationResult,
+    RentalCommand.Data.Screening.FinalizeIntegratedScreeningHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Screening.UpdateExternalScreeningCommand,
+    RentalCommand.Core.Screening.ScreeningMutationResult,
+    RentalCommand.Data.Screening.UpdateExternalScreeningHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Screening.RecordScreeningDecisionCommand,
+    RentalCommand.Core.Screening.ScreeningMutationResult,
+    RentalCommand.Data.Screening.RecordScreeningDecisionHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Screening.ApplyScreeningProviderDeliveryCommand,
+    RentalCommand.Core.Screening.ScreeningMutationResult,
+    RentalCommand.Data.Screening.ApplyScreeningProviderDeliveryHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Screening.PrepareAdverseActionNoticeCommand,
+    RentalCommand.Core.Screening.PrepareAdverseActionNoticeResult,
+    RentalCommand.Data.Screening.PrepareAdverseActionNoticeHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Screening.CreateAdverseActionNoticeCommand,
+    RentalCommand.Core.Screening.CreateAdverseActionNoticeResult,
+    RentalCommand.Data.Screening.CreateAdverseActionNoticeHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Documents.CreateStoredDocumentCommand,
+    RentalCommand.Core.Documents.CreateStoredDocumentResult,
+    RentalCommand.Data.Documents.CreateStoredDocumentHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Documents.DeleteStoredDocumentCommand,
+    RentalCommand.Core.Documents.DeleteStoredDocumentResult,
+    RentalCommand.Data.Documents.DeleteStoredDocumentHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Scanning.FinalizeScanUploadCommand,
+    RentalCommand.Core.Scanning.FinalizeScanUploadResult,
+    RentalCommand.Data.Scanning.FinalizeScanUploadHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Conversations.SendConversationMessageCommand,
+    RentalCommand.Core.Conversations.SendConversationMessageResult,
+    RentalCommand.Data.Conversations.SendConversationMessageHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.RecordTechnicianWorkEntryCommand,
+    RentalCommand.Core.Operations.RecordTechnicianWorkEntryResult,
+    RentalCommand.Data.Operations.RecordTechnicianWorkEntryHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.SendTechnicianAssignmentMessageCommand,
+    RentalCommand.Core.Operations.SendTechnicianAssignmentMessageResult,
+    RentalCommand.Data.Operations.SendTechnicianAssignmentMessageHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Operations.MarkTechnicianAssignmentConversationReadCommand,
+    RentalCommand.Core.Operations.MarkTechnicianAssignmentConversationReadResult,
+    RentalCommand.Data.Operations.MarkTechnicianAssignmentConversationReadHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Owners.DecideOwnerApprovalCommand,
+    RentalCommand.Core.Owners.OwnerPortalCommandResult,
+    RentalCommand.Data.Owners.DecideOwnerApprovalHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Owners.ReplyToOwnerMessageCommand,
+    RentalCommand.Core.Owners.OwnerPortalCommandResult,
+    RentalCommand.Data.Owners.ReplyToOwnerMessageHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.IssueSessionRefreshCredentialCommand,
+    RentalCommand.Core.Auth.SessionRefreshMutationResult,
+    RentalCommand.Data.Auth.IssueSessionRefreshCredentialHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.RotateSessionRefreshCredentialCommand,
+    RentalCommand.Core.Auth.SessionRefreshMutationResult,
+    RentalCommand.Data.Auth.RotateSessionRefreshCredentialHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.IssueLoginContextSelectionChallengeCommand,
+    RentalCommand.Core.Auth.LoginContextSelectionChallengeResult,
+    RentalCommand.Data.Auth.IssueLoginContextSelectionChallengeHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.StartAuthSessionCommand,
+    RentalCommand.Core.Auth.StartAuthSessionResult,
+    RentalCommand.Data.Auth.StartAuthSessionHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.SwitchAuthSessionContextCommand,
+    RentalCommand.Core.Auth.SwitchAuthSessionContextResult,
+    RentalCommand.Data.Auth.SwitchAuthSessionContextHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Auth.RevokeAuthSessionCommand,
+    RentalCommand.Core.Auth.RevokeAuthSessionResult,
+    RentalCommand.Data.Auth.RevokeAuthSessionHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.PrepareProviderPaymentCreateCommand,
+    RentalCommand.Core.Payments.PrepareProviderPaymentCreateResult,
+    RentalCommand.Data.Payments.PrepareProviderPaymentCreateHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.FinalizeProviderPaymentCreateCommand,
+    RentalCommand.Core.Payments.FinalizeProviderPaymentCreateResult,
+    RentalCommand.Data.Payments.FinalizeProviderPaymentCreateHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.FailProviderPaymentCreateCommand,
+    RentalCommand.Core.Payments.FailProviderPaymentCreateResult,
+    RentalCommand.Data.Payments.FailProviderPaymentCreateHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.PrepareProviderAutopaySetupCommand,
+    RentalCommand.Core.Payments.PrepareProviderAutopaySetupResult,
+    RentalCommand.Data.Payments.PrepareProviderAutopaySetupHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.RecordTenantReceiptCommand,
+    RentalCommand.Core.Payments.RecordTenantReceiptResult,
+    RentalCommand.Data.Payments.RecordTenantReceiptHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.PostTenantChargeCommand,
+    RentalCommand.Core.Payments.TenantChargeMutationResult,
+    RentalCommand.Data.Payments.PostTenantChargeHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.ReverseTenantChargeCommand,
+    RentalCommand.Core.Payments.TenantChargeMutationResult,
+    RentalCommand.Data.Payments.ReverseTenantChargeHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.PostTenantCreditCommand,
+    RentalCommand.Core.Payments.TenantLedgerMutationResult,
+    RentalCommand.Data.Payments.PostTenantCreditHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.PostTenantAdjustmentCommand,
+    RentalCommand.Core.Payments.TenantLedgerMutationResult,
+    RentalCommand.Data.Payments.PostTenantAdjustmentHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.ReverseTenantLedgerEntryCommand,
+    RentalCommand.Core.Payments.TenantLedgerMutationResult,
+    RentalCommand.Data.Payments.ReverseTenantLedgerEntryHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.RefundTenantPaymentCommand,
+    RentalCommand.Core.Payments.TenantPaymentRefundResult,
+    RentalCommand.Data.Payments.RefundTenantPaymentHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.FundSecurityDepositCommand,
+    RentalCommand.Core.Payments.SecurityDepositMutationResult,
+    RentalCommand.Data.Payments.FundSecurityDepositHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.DeductSecurityDepositCommand,
+    RentalCommand.Core.Payments.SecurityDepositMutationResult,
+    RentalCommand.Data.Payments.DeductSecurityDepositHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.RefundSecurityDepositCommand,
+    RentalCommand.Core.Payments.SecurityDepositMutationResult,
+    RentalCommand.Data.Payments.RefundSecurityDepositHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.ReverseSecurityDepositEntryCommand,
+    RentalCommand.Core.Payments.SecurityDepositMutationResult,
+    RentalCommand.Data.Payments.ReverseSecurityDepositEntryHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.RecordVerifiedProviderPaymentEventCommand,
+    RentalCommand.Core.Payments.RecordVerifiedProviderPaymentEventResult,
+    RentalCommand.Data.Payments.RecordVerifiedProviderPaymentEventHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Accounting.ConfirmAccountingMappingCommand,
+    RentalCommand.Core.Accounting.ConfirmAccountingMappingResult,
+    RentalCommand.Data.Accounting.ConfirmAccountingMappingHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Accounting.ContinueAccountingMappingPromotionCommand,
+    RentalCommand.Core.Accounting.ContinueAccountingMappingPromotionResult,
+    RentalCommand.Data.Accounting.ContinueAccountingMappingPromotionHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Accounting.ApplyAccountingPullResultCommand,
+    RentalCommand.Core.Accounting.ApplyAccountingPullResult,
+    RentalCommand.Data.Accounting.ApplyAccountingPullResultHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Banking.PreparePlaidTokenExchangeCommand,
+    RentalCommand.Core.Banking.PreparePlaidTokenExchangeResult,
+    RentalCommand.Data.Banking.PreparePlaidTokenExchangeHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Banking.AdmitPlaidTokenExchangeCommand,
+    RentalCommand.Core.Banking.AdmitPlaidTokenExchangeResult,
+    RentalCommand.Data.Banking.AdmitPlaidTokenExchangeHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Banking.RecordPlaidTokenExchangeReceiptCommand,
+    RentalCommand.Core.Banking.RecordPlaidTokenExchangeReceiptResult,
+    RentalCommand.Data.Banking.RecordPlaidTokenExchangeReceiptHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Banking.ApplyPlaidConnectionCommand,
+    RentalCommand.Core.Banking.ApplyPlaidConnectionResult,
+    RentalCommand.Data.Banking.ApplyPlaidConnectionHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Banking.ApplyPlaidSyncCommand,
+    RentalCommand.Core.Banking.ApplyPlaidSyncResult,
+    RentalCommand.Data.Banking.ApplyPlaidSyncHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Banking.ImportBankTransactionsCommand,
+    RentalCommand.Core.Banking.ImportBankTransactionsResult,
+    RentalCommand.Data.Banking.ImportBankTransactionsHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Banking.ReconcileBankTransactionCommand,
+    RentalCommand.Core.Banking.ReconcileBankTransactionResult,
+    RentalCommand.Data.Banking.ReconcileBankTransactionHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Banking.RouteBankTransactionCommand,
+    RentalCommand.Core.Banking.RouteBankTransactionResult,
+    RentalCommand.Data.Banking.RouteBankTransactionHandler>();
+// The live scan-confirm endpoint admits only the five completed non-lease targets through this
+// persistence-only writer. Lease confirmation returns 503 until its aggregate writer is complete.
+builder.Services.AddScoped<RentalCommand.Data.Scanning.ProductionScanConfirmationTargetWriter>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Scanning.ConfirmScanDraftCommand,
+    RentalCommand.Core.Scanning.ConfirmScanDraftResult,
+    RentalCommand.Data.Scanning.ConfirmScanDraftHandler<
+        RentalCommand.Data.Scanning.ProductionScanConfirmationTargetWriter>>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.PrepareMoveInCommand,
+    RentalCommand.Core.Leasing.PrepareMoveInResult,
+    RentalCommand.Data.Leasing.PrepareMoveInHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.AddEffectivePartyCommand,
+    RentalCommand.Core.Leasing.LeasePartyMutationResult,
+    RentalCommand.Data.Leasing.AddEffectivePartyHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.EndEffectivePartyCommand,
+    RentalCommand.Core.Leasing.LeasePartyMutationResult,
+    RentalCommand.Data.Leasing.EndEffectivePartyHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.ChangeEffectivePartyRoleCommand,
+    RentalCommand.Core.Leasing.LeasePartyMutationResult,
+    RentalCommand.Data.Leasing.ChangeEffectivePartyRoleHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.GrantTenantUserAccessCommand,
+    RentalCommand.Core.Leasing.LeasePartyMutationResult,
+    RentalCommand.Data.Leasing.GrantTenantUserAccessHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.RevokeTenantUserAccessCommand,
+    RentalCommand.Core.Leasing.LeasePartyMutationResult,
+    RentalCommand.Data.Leasing.RevokeTenantUserAccessHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Authorization.GrantOwnerUserAccessCommand,
+    RentalCommand.Core.Authorization.OwnerRelationshipAccessMutationResult,
+    RentalCommand.Data.Authorization.GrantOwnerUserAccessHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Authorization.RevokeOwnerUserAccessCommand,
+    RentalCommand.Core.Authorization.OwnerRelationshipAccessMutationResult,
+    RentalCommand.Data.Authorization.RevokeOwnerUserAccessHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.GivePossessionCommand,
+    RentalCommand.Core.Leasing.GivePossessionResult,
+    RentalCommand.Data.Leasing.GivePossessionHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.ConfirmMoveInCommand,
+    RentalCommand.Core.Leasing.ConfirmMoveInResult,
+    RentalCommand.Data.Leasing.ConfirmMoveInHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.ReturnPossessionCommand,
+    RentalCommand.Core.Leasing.ReturnPossessionResult,
+    RentalCommand.Data.Leasing.ReturnPossessionHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.RecordLeaseEndingDispositionCommand,
+    RentalCommand.Core.Leasing.RecordLeaseEndingDispositionResult,
+    RentalCommand.Data.Leasing.RecordLeaseEndingDispositionHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.CancelPlannedRelationshipCommand,
+    RentalCommand.Core.Leasing.CancelPlannedRelationshipResult,
+    RentalCommand.Data.Leasing.CancelPlannedRelationshipHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.AtomicNotificationMutationCommand,
+    RentalCommand.Api.Services.Domain.AtomicNotificationMutationResult,
+    RentalCommand.Api.Services.Domain.AtomicNotificationMutationHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.AtomicNoticeDraftMutationCommand,
+    RentalCommand.Api.Services.Domain.AtomicNoticeDraftMutationResult,
+    RentalCommand.Api.Services.Domain.AtomicNoticeDraftMutationHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.AtomicNoticeDeliveryCommand,
+    RentalCommand.Api.Services.Domain.AtomicNoticeDeliveryResult,
+    RentalCommand.Api.Services.Domain.AtomicNoticeDeliveryHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.TransferLeaseManagementCommand,
+    RentalCommand.Core.Leasing.TransferLeaseManagementResult,
+    RentalCommand.Data.Leasing.TransferLeaseManagementHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.EditLeaseAgreementDraftCommand,
+    RentalCommand.Core.Leasing.LeaseAgreementDraftMutationResult,
+    RentalCommand.Data.Leasing.EditLeaseAgreementDraftHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.CreateLeaseAgreementSuccessorDraftCommand,
+    RentalCommand.Core.Leasing.LeaseAgreementDraftMutationResult,
+    RentalCommand.Data.Leasing.CreateLeaseAgreementSuccessorDraftHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.ReplaceIssuedAgreementWithDraftCommand,
+    RentalCommand.Core.Leasing.LeaseAgreementDraftMutationResult,
+    RentalCommand.Data.Leasing.ReplaceIssuedAgreementWithDraftHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.CancelLeaseAgreementSuccessorDraftCommand,
+    RentalCommand.Core.Leasing.CancelLeaseAgreementSuccessorDraftResult,
+    RentalCommand.Data.Leasing.CancelLeaseAgreementSuccessorDraftHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.CreateLeaseAddendumDraftCommand,
+    RentalCommand.Core.Leasing.LeaseAddendumDraftMutationResult,
+    RentalCommand.Data.Leasing.CreateLeaseAddendumDraftHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.EditLeaseAddendumDraftCommand,
+    RentalCommand.Core.Leasing.LeaseAddendumDraftMutationResult,
+    RentalCommand.Data.Leasing.EditLeaseAddendumDraftHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.CorrectLeaseAddendumDraftCommand,
+    RentalCommand.Core.Leasing.LeaseAddendumDraftMutationResult,
+    RentalCommand.Data.Leasing.CorrectLeaseAddendumDraftHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.VoidLeaseAgreementCommand,
+    RentalCommand.Core.Leasing.VoidLegalArtifactResult,
+    RentalCommand.Data.Leasing.VoidLeaseAgreementHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.VoidLeaseAddendumCommand,
+    RentalCommand.Core.Leasing.VoidLegalArtifactResult,
+    RentalCommand.Data.Leasing.VoidLeaseAddendumHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.CloseTenantAccountCommand,
+    RentalCommand.Core.Leasing.CloseTenantAccountResult,
+    RentalCommand.Data.Leasing.CloseTenantAccountHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Leasing.CompleteTurnoverCommand,
+    RentalCommand.Core.Leasing.CompleteTurnoverResult,
+    RentalCommand.Data.Leasing.CompleteTurnoverHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Applications.RecordApplicationFeeCommand,
+    RentalCommand.Core.Applications.ApplicationFinanceMutationResult,
+    RentalCommand.Data.Applications.RecordApplicationFeeHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Applications.RefundApplicationFeeCommand,
+    RentalCommand.Core.Applications.ApplicationFinanceMutationResult,
+    RentalCommand.Data.Applications.RefundApplicationFeeHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Listings.GenerateListingWorkspaceCommand,
+    RentalCommand.Core.Listings.ListingWorkspaceMutationResult,
+    RentalCommand.Data.Listings.GenerateListingWorkspaceHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Listings.SaveListingWorkspaceCommand,
+    RentalCommand.Core.Listings.ListingWorkspaceMutationResult,
+    RentalCommand.Data.Listings.SaveListingWorkspaceHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Listings.FinalizeListingPhotoUploadCommand,
+    RentalCommand.Core.Listings.ListingWorkspaceMutationResult,
+    RentalCommand.Data.Listings.FinalizeListingPhotoUploadHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Listings.UpdateListingPhotoCommand,
+    RentalCommand.Core.Listings.ListingWorkspaceMutationResult,
+    RentalCommand.Data.Listings.UpdateListingPhotoHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Listings.RemoveListingPhotoCommand,
+    RentalCommand.Core.Listings.ListingWorkspaceMutationResult,
+    RentalCommand.Data.Listings.RemoveListingPhotoHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Listings.ReorderListingPhotosCommand,
+    RentalCommand.Core.Listings.ListingWorkspaceMutationResult,
+    RentalCommand.Data.Listings.ReorderListingPhotosHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Listings.AdmitConnectedListingIntentCommand,
+    RentalCommand.Core.Listings.ConnectedListingIntentResult,
+    RentalCommand.Data.Listings.AdmitConnectedListingIntentHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Listings.PersistConnectedListingResultCommand,
+    RentalCommand.Core.Listings.ConnectedListingPersistenceResult,
+    RentalCommand.Data.Listings.PersistConnectedListingResultHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Listings.ApplyConnectedListingResultCommand,
+    RentalCommand.Core.Listings.ConnectedListingPersistenceResult,
+    RentalCommand.Data.Listings.ApplyConnectedListingResultHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Listings.ConfirmExternalListingSignalCommand,
+    RentalCommand.Core.Listings.ListingWorkspaceMutationResult,
+    RentalCommand.Data.Listings.ConfirmExternalListingSignalHandler>();
+
+// Row-Level Security backstop: the interceptor supplies only compact canonical session coordinates.
+// PostgreSQL revalidates them against live session/access rows before admitting portfolio scope.
 builder.Services.AddSingleton<RentalCommand.Api.Data.RlsConnectionInterceptor>();
 builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
-    options.UseNpgsql(connectionString)
-        .AddInterceptors(
-            sp.GetRequiredService<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>(),
-            sp.GetRequiredService<RentalCommand.Api.Data.RlsConnectionInterceptor>()));
+{
+    options.UseNpgsql(migrateOnly ? migratorConnectionString! : connectionString)
+        .UseAtomicPersistenceKernel(sp);
+    if (!migrateOnly)
+    {
+        options.AddInterceptors(sp.GetRequiredService<RentalCommand.Api.Data.RlsConnectionInterceptor>());
+    }
+});
 
 // --- ASP.NET Identity (int keys) ---
-builder.Services.AddIdentity<ApplicationUser, IdentityRole<int>>(options =>
+builder.Services.AddIdentityCore<ApplicationUser>(options =>
     {
         options.Password.RequireDigit = true;
         options.Password.RequireLowercase = true;
@@ -153,11 +841,11 @@ builder.Services.AddIdentity<ApplicationUser, IdentityRole<int>>(options =>
         options.Lockout.MaxFailedAccessAttempts = 5;
         options.User.RequireUniqueEmail = true;
     })
-    .AddRoles<IdentityRole<int>>()
+    .AddSignInManager()
     .AddEntityFrameworkStores<RentalCommandDbContext>()
     .AddDefaultTokenProviders();
 
-// --- Authentication: JWT bearer (default) + API key scheme ---
+// --- Authentication: canonical JWT bearer ---
 // Called after AddIdentity so the JWT bearer scheme (not Identity's cookie) is the default.
 builder.Services.AddAuthentication(options =>
     {
@@ -204,14 +892,11 @@ builder.Services.AddAuthentication(options =>
                 return Task.CompletedTask;
             }
         };
-    })
-    .AddScheme<ApiKeyAuthenticationOptions, ApiKeyAuthenticationHandler>(
-        ApiKeyAuthenticationDefaults.AuthenticationScheme, _ => { });
+    });
 
-// Platform super-admin allowlist (F6 / TSK-212): operator endpoints (Engine Health) are gated
-// by a config email list, not a role. Fails closed when the list is empty. The policy logic and
-// its allowlist parsing live in RentalCommand.Api.Auth.PlatformAdminPolicy so the gate and its
-// security test share one source of truth.
+// Platform super-admin allowlist (F6 / TSK-212): operator endpoints resolve the canonical JWT
+// subject to the user's current database email, then evaluate the configured list. The gate fails
+// closed when the list is empty or the subject no longer resolves.
 var platformAdminAllowlist = RentalCommand.Api.Auth.PlatformAdminPolicy.BuildAllowlist(
     builder.Configuration
         .GetSection(RentalCommand.Core.Configuration.PlatformAdminOptions.SectionName)
@@ -220,18 +905,42 @@ var platformAdminAllowlist = RentalCommand.Api.Auth.PlatformAdminPolicy.BuildAll
 builder.Services.AddAuthorization(options =>
 {
     RentalCommand.Api.Auth.PlatformAdminPolicy.Register(options, platformAdminAllowlist);
+    options.AddPolicy(
+        RentalCommand.Api.Auth.CanonicalManagementPolicy.Name,
+        policy => policy
+            .RequireAuthenticatedUser()
+            .AddRequirements(new RentalCommand.Api.Auth.CanonicalManagementRequirement()));
 });
+builder.Services.AddSingleton<IAuthorizationPolicyProvider, CapabilityAuthorizationPolicyProvider>();
+builder.Services.AddScoped<IAuthorizationHandler, CapabilityAuthorizationHandler>();
+builder.Services.AddScoped<IAuthorizationHandler, CanonicalManagementAuthorizationHandler>();
+builder.Services.AddScoped<IAuthorizationHandler, PlatformAdminAuthorizationHandler>();
+builder.Services.AddScoped<RentalCommand.Core.Authorization.IActiveAccessContextResolver,
+    ActiveAccessContextResolver>();
+builder.Services.AddScoped<RentalCommand.Core.Authorization.IWorkspaceAuthorizationEvaluator,
+    WorkspaceAuthorizationEvaluator>();
+builder.Services.AddScoped<RentalCommand.Core.Authorization.IEffectiveAccessContextSelectionQuery,
+    EffectiveAccessContextSelectionQuery>();
+builder.Services.AddScoped<RentalCommand.Core.Authorization.IAccessEnvelopeQuery,
+    AccessEnvelopeQuery>();
+builder.Services.AddScoped<RentalCommand.Core.Authorization.IMembershipAssignmentScopeValidator,
+    MembershipAssignmentScopeValidator>();
+builder.Services.AddScoped<WorkspaceAccessRevisionGuard>();
 
 // --- Auth services ---
 builder.Services.AddHttpClient("GoogleAuth");
-builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
-builder.Services.AddScoped<IUserMigrationService, UserMigrationService>();
+builder.Services.AddScoped<ICanonicalAccessTokenService, CanonicalAccessTokenService>();
+builder.Services.AddSingleton(serviceProvider =>
+    new RentalCommand.Core.Auth.RefreshCredentialTokenFactory(
+        serviceProvider
+            .GetRequiredService<Microsoft.Extensions.Options.IOptions<AtomicAuthSessionCredentialOptions>>()
+            .Value
+            .SigningKey));
+builder.Services.AddScoped<IAtomicAuthSessionCredentialService, AtomicAuthSessionCredentialService>();
 builder.Services.AddScoped<IAuthEmailSender, OutboxAuthEmailSender>();
+builder.Services.AddScoped<ICanonicalAccountBootstrapService, CanonicalAccountBootstrapService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IGoogleAuthService, GoogleAuthService>();
-// On-demand tenant portal provisioning: shared by the startup seeder and the staff "grant portal
-// access" endpoint (TenantController) so a tenant added after boot can be given a login without a restart.
-builder.Services.AddScoped<ITenantPortalProvisioningService, TenantPortalProvisioningService>();
 builder.Services.AddScoped<IdentitySeeder>();
 builder.Services.AddScoped<DemoDataSeeder>();
 
@@ -245,6 +954,7 @@ builder.Services.AddCors(options =>
         policy.WithOrigins(corsOrigins)
             .WithMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
             .AllowAnyHeader()
+            .WithExposedHeaders("X-Access-Envelope-Refresh")
             .AllowCredentials();
     });
 });
@@ -289,54 +999,15 @@ builder.Services.AddHostedService<EntityChangeListener>();
 builder.Services.AddDomainServices();
 
 // --- Outbox message publisher (API-side: enqueues rows; Engine dispatches them) ---
-builder.Services.AddScoped<IMessagePublisher, RentalCommand.Api.Services.OutboxMessagePublisher>();
-
-// --- Scheduled owner statement worker (default OFF; set Reports:EmailOwnerStatementsMonthly=true to enable) ---
-builder.Services.AddHostedService<RentalCommand.Api.Services.ScheduledOwnerStatementWorker>();
+builder.Services.AddScoped<IMessagePublisher, RentalCommand.Data.Outbox.OutboxMessagePublisher>();
 
 // --- Stripe payment services (gated — no-ops when Stripe keys are absent) ---
 builder.Services.AddScoped<IStripePaymentService, StripePaymentService>();
 
-// --- E-sign provider. Out of the box this is the NATIVE, ESIGN/UETA-compliant provider (always
-// available — no third-party key needed). When a Dropbox Sign key IS configured the gated DropboxSign
-// provider takes over instead (unchanged). So e-sign works natively by default and can be swapped to a
-// hosted provider purely by setting Esign:ApiKey.
-var esignConfig = builder.Configuration.GetSection(RentalCommand.Core.Configuration.EsignConfig.SectionName)
-    .Get<RentalCommand.Core.Configuration.EsignConfig>() ?? new RentalCommand.Core.Configuration.EsignConfig();
-if (esignConfig.Enabled)
-{
-    builder.Services.AddHttpClient<RentalCommand.Core.Interfaces.IEsignProvider,
-        RentalCommand.Api.Services.Esign.DropboxSignEsignProvider>(c =>
-    {
-        c.BaseAddress = new Uri("https://api.hellosign.com/v3/");
-        c.Timeout = TimeSpan.FromSeconds(90);
-    });
-}
-else
-{
-    builder.Services.AddScoped<RentalCommand.Core.Interfaces.IEsignProvider,
-        RentalCommand.Api.Services.Esign.NativeEsignProvider>();
-}
-
-// --- Tenant-screening provider (gated — like Stripe/LLM/e-sign, the real TransUnion call is only wired
-// when a key is set; otherwise a no-op provider returns a clear "not configured" result and never
-// contacts a third party. FCRA: screening is also never run without recorded applicant consent). ---
-var screeningConfig = builder.Configuration.GetSection(RentalCommand.Core.Configuration.ScreeningConfig.SectionName)
-    .Get<RentalCommand.Core.Configuration.ScreeningConfig>() ?? new RentalCommand.Core.Configuration.ScreeningConfig();
-if (screeningConfig.Enabled)
-{
-    builder.Services.AddHttpClient<RentalCommand.Core.Interfaces.IScreeningProvider,
-        RentalCommand.Api.Services.Screening.TransUnionScreeningProvider>(c =>
-    {
-        c.BaseAddress = new Uri(screeningConfig.BaseUrl);
-        c.Timeout = TimeSpan.FromSeconds(90);
-    });
-}
-else
-{
-    builder.Services.AddScoped<RentalCommand.Core.Interfaces.IScreeningProvider,
-        RentalCommand.Api.Services.Screening.DisabledScreeningProvider>();
-}
+// A concrete screening vendor is installed as a provider-neutral adapter. Until one is selected,
+// integrated screening is honestly unavailable while external Zillow/other workflows remain usable.
+builder.Services.AddScoped<RentalCommand.Core.Interfaces.IScreeningProvider,
+    RentalCommand.Api.Services.Screening.DisabledScreeningProvider>();
 
 // Admin Engine Health: reads the Engine's worker-heartbeat table + active LLM config to back
 // the admin /admin/engine page (the Engine has no HTTP port, so the DB is the health contract).
@@ -352,33 +1023,35 @@ builder.Services.AddSimulationClock(builder.Configuration, builder.Environment, 
 
 var app = builder.Build();
 
-// Apply migrations + seed the default admin/roles/portfolio so login works on a fresh database.
-// Migration is idempotent (no-op when already applied); seeding is gated by Seed:Enabled (Development).
-using (var scope = app.Services.CreateScope())
+if (migrateOnly)
 {
-    var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-    // Advisory-locked so the API and Engine (both self-migrate on startup) don't race on a fresh batch.
-    await DatabaseMigrator.MigrateWithLockAsync(db);
-
-    var seeder = scope.ServiceProvider.GetRequiredService<IdentitySeeder>();
-    await seeder.SeedAsync();
-
-    // Demo data seeder — creates realistic interlinked data for portfolio 1 when enabled.
-    // Idempotent: skips immediately if any properties already exist for portfolio 1.
-    if (app.Configuration.GetValue<bool>("Seed:DemoData", false))
+    var migrationOptions = new DbContextOptionsBuilder<RentalCommandDbContext>()
+        .UseNpgsql(migratorConnectionString!)
+        .Options;
+    await using (var migrationDb = new RentalCommandDbContext(migrationOptions))
     {
-        var demoSeeder = scope.ServiceProvider.GetRequiredService<DemoDataSeeder>();
-        await demoSeeder.SeedAsync();
+        await DatabaseMigrator.MigrateWithLockAsync(migrationDb);
     }
 
-    // One-off self-owner backfill — gives pre-feature portfolios with no owners a primary self-owner.
-    // OFF by default and idempotent. It WRITES owner rows, so it must be explicitly enabled per
-    // environment (set Backfill:SelfOwners=true) and is intentionally NOT run unsupervised on prod.
-    if (app.Configuration.GetValue<bool>("Backfill:SelfOwners", false))
+    await RentalCommand.Data.Security.RuntimeDatabaseRoleProvisioner.ProvisionAsync(
+        migratorConnectionString!,
+        connectionString,
+        engineConnectionStringForMigration!,
+        allowDevelopmentDefaults: builder.Environment.IsDevelopment());
+
+    return;
+}
+
+// Application seed/bootstrap work must run through the long-running API connection. The
+// migration process deliberately exits above after schema and runtime-role provisioning so the
+// migrator identity can never invoke API-only authority functions such as
+// rc_bootstrap_initial_workspace.
+await using (var seedScope = app.Services.CreateAsyncScope())
+{
+    await seedScope.ServiceProvider.GetRequiredService<IdentitySeeder>().SeedAsync();
+    if (app.Configuration.GetValue<bool>("Seed:DemoData", false))
     {
-        var backfill = scope.ServiceProvider
-            .GetRequiredService<RentalCommand.Api.Services.Domain.SelfOwnerBackfillService>();
-        await backfill.RunAsync();
+        await seedScope.ServiceProvider.GetRequiredService<DemoDataSeeder>().SeedAsync();
     }
 }
 
@@ -434,8 +1107,8 @@ app.UseExceptionHandler();
 app.UseCors("WebApp");
 
 // Map auth-context failures to a clean 401 instead of a 500. GetPortfolioId()/GetUserId() throw
-// MissingAuthContextException when an authenticated request lacks the portfolioId/sub claim they
-// require (e.g. a token with no portfolio scope) — without this the throw would surface as a 500.
+// MissingAuthContextException when canonical access-context validation cannot establish the
+// required workspace/user coordinates — without this the throw would surface as a 500.
 // NOTE: catch the SPECIFIC type, NOT generic UnauthorizedAccessException — the BCL throws the latter
 // for filesystem permission errors (e.g. an unwritable upload volume), and treating those as 401
 // disguises infra failures as "session expired". Those now propagate to an honest 500.
@@ -458,6 +1131,7 @@ app.Use(async (context, next) =>
 });
 
 app.UseAuthentication();
+app.UseMiddleware<RentalCommand.Api.Auth.CanonicalAccessContextMiddleware>();
 app.UseAuthorization();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));

@@ -12,11 +12,12 @@ public class WorkOrderResponse
     public int PropertyId { get; set; }
     public int? UnitId { get; set; }
     public int? TenantId { get; set; }
-    public int? LeaseId { get; set; }
+    public int? LeaseManagementId { get; set; }
     public int? VendorId { get; set; }
     public int? RecurringMaintenanceTaskId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
+    public string? TechnicianAccessInstructions { get; set; }
     public string Category { get; set; } = "General";
     public WorkOrderPriority Priority { get; set; }
     public WorkOrderStatus Status { get; set; }
@@ -54,11 +55,12 @@ public class WorkOrderResponse
         PropertyId = e.PropertyId,
         UnitId = e.UnitId,
         TenantId = e.TenantId,
-        LeaseId = e.LeaseId,
+        LeaseManagementId = e.LeaseManagementId,
         VendorId = e.VendorId,
         RecurringMaintenanceTaskId = e.RecurringMaintenanceTaskId,
         Title = e.Title,
         Description = e.Description,
+        TechnicianAccessInstructions = e.TechnicianAccessInstructions,
         Category = e.Category,
         Priority = e.Priority,
         Status = e.Status,
@@ -160,11 +162,12 @@ public class WorkOrderDetailResponse : WorkOrderResponse
             PropertyId = e.PropertyId,
             UnitId = e.UnitId,
             TenantId = e.TenantId,
-            LeaseId = e.LeaseId,
+            LeaseManagementId = e.LeaseManagementId,
             VendorId = e.VendorId,
             RecurringMaintenanceTaskId = e.RecurringMaintenanceTaskId,
             Title = e.Title,
             Description = e.Description,
+            TechnicianAccessInstructions = e.TechnicianAccessInstructions,
             Category = e.Category,
             Priority = e.Priority,
             Status = e.Status,
@@ -199,7 +202,7 @@ public class CreateWorkOrderRequest
     public int? TenantId { get; set; }
 
     [Range(1, int.MaxValue)]
-    public int? LeaseId { get; set; }
+    public int? LeaseManagementId { get; set; }
 
     [Range(1, int.MaxValue)]
     public int? VendorId { get; set; }
@@ -211,6 +214,13 @@ public class CreateWorkOrderRequest
     [Required]
     [MaxLength(4000)]
     public string Description { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Access details that are safe to show to the assigned maintenance technician.
+    /// Do not place financial, lease, or unrelated resident information here.
+    /// </summary>
+    [MaxLength(2000)]
+    public string? TechnicianAccessInstructions { get; set; }
 
     [MaxLength(120)]
     public string Category { get; set; } = "General";
@@ -262,9 +272,9 @@ public class UpdateWorkOrderRequest
     public bool ClearTenant { get; set; }
 
     [Range(1, int.MaxValue)]
-    public int? LeaseId { get; set; }
+    public int? LeaseManagementId { get; set; }
 
-    public bool ClearLease { get; set; }
+    public bool ClearLeaseManagement { get; set; }
 
     [Range(1, int.MaxValue)]
     public int? VendorId { get; set; }
@@ -274,6 +284,10 @@ public class UpdateWorkOrderRequest
 
     [MaxLength(4000)]
     public string? Description { get; set; }
+
+    /// <summary>Replacement access details shown to the assigned technician.</summary>
+    [MaxLength(2000)]
+    public string? TechnicianAccessInstructions { get; set; }
 
     [MaxLength(120)]
     public string? Category { get; set; }

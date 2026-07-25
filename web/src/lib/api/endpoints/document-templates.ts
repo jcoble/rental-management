@@ -59,6 +59,7 @@ export interface DocumentTemplate {
 export interface DocumentTemplateListParams extends ListParams {
 	kind?: DocumentTemplateKind | '';
 	status?: DocumentTemplateStatus | '';
+	propertyId?: number;
 }
 
 export interface DocumentTemplateListResponse {
@@ -125,6 +126,7 @@ function buildTemplateQuery(params?: DocumentTemplateListParams): string {
 	return buildListQuery(params, {
 		kind: params?.kind || undefined,
 		status: params?.status || undefined,
+		propertyId: params?.propertyId
 	});
 }
 
@@ -134,35 +136,49 @@ export const documentTemplates = {
 	listPage: (params?: DocumentTemplateListParams) =>
 		api.get<DocumentTemplateListResponse>(`/document-templates/page${buildTemplateQuery(params)}`),
 	get: (id: number) => api.get<DocumentTemplate>(`/document-templates/${id}`),
-	update: (id: number, request: UpdateDocumentTemplateRequest) =>
-		api.patch<DocumentTemplate>(`/document-templates/${id}`, request),
+	update: (id: number, request: UpdateDocumentTemplateRequest, operationKey: string) =>
+		api.patch<DocumentTemplate>(`/document-templates/${id}`, request, {
+			headers: { 'Idempotency-Key': operationKey }
+		}),
 	fieldCatalog: (kind: DocumentTemplateKind = 'Lease') =>
-		api.get<DocumentTemplateFieldCatalogItem[]>(
-			`/document-templates/field-catalog?kind=${encodeURIComponent(kind)}`
-		),
-	addField: (templateId: number, request: CreateDocumentTemplateFieldRequest) =>
-		api.post<DocumentTemplateField>(`/document-templates/${templateId}/fields`, request),
+		api.get<DocumentTemplateFieldCatalogItem[]>(`/document-templates/field-catalog?kind=${encodeURIComponent(kind)}`),
+	addField: (templateId: number, request: CreateDocumentTemplateFieldRequest, operationKey: string) =>
+		api.post<DocumentTemplateField>(`/document-templates/${templateId}/fields`, request, {
+			headers: { 'Idempotency-Key': operationKey }
+		}),
 	updateField: (
 		templateId: number,
 		fieldId: number,
-		request: UpdateDocumentTemplateFieldRequest
-	) => api.put<DocumentTemplateField>(`/document-templates/${templateId}/fields/${fieldId}`, request),
-	deleteField: (templateId: number, fieldId: number) =>
-		api.delete<void>(`/document-templates/${templateId}/fields/${fieldId}`),
-	previewLeasePdf: (templateId: number, leaseId: number) =>
-		downloadFile(`/document-templates/${templateId}/preview/leases/${leaseId}`),
-	uploadLeasePdf: (file: File, values: {
-		name?: string;
-		description?: string;
-		defaultForPortfolio?: boolean;
-		propertyId?: number | null;
-	}) => {
+		request: UpdateDocumentTemplateFieldRequest,
+		operationKey: string
+	) =>
+		api.put<DocumentTemplateField>(`/document-templates/${templateId}/fields/${fieldId}`, request, {
+			headers: { 'Idempotency-Key': operationKey }
+		}),
+	deleteField: (templateId: number, fieldId: number, operationKey: string) =>
+		api.delete<void>(`/document-templates/${templateId}/fields/${fieldId}`, {
+			headers: { 'Idempotency-Key': operationKey }
+		}),
+	previewLeaseAgreementPdf: (templateId: number, leaseAgreementId: number) =>
+		downloadFile(`/document-templates/${templateId}/preview/lease-agreements/${leaseAgreementId}`),
+	uploadLeasePdf: (
+		file: File,
+		values: {
+			name?: string;
+			description?: string;
+			defaultForPortfolio?: boolean;
+			propertyId?: number | null;
+		},
+		operationKey: string
+	) => {
 		const form = new FormData();
 		form.append('file', file);
 		if (values.name) form.append('name', values.name);
 		if (values.description) form.append('description', values.description);
 		if (values.defaultForPortfolio) form.append('defaultForPortfolio', 'true');
 		if (values.propertyId != null) form.append('propertyId', String(values.propertyId));
-		return api.upload<DocumentTemplate>('/document-templates/upload', form);
-	},
+		return api.upload<DocumentTemplate>('/document-templates/upload', form, {
+			headers: { 'Idempotency-Key': operationKey }
+		});
+	}
 };

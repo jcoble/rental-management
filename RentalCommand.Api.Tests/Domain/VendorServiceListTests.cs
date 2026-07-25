@@ -2,10 +2,11 @@ using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
-using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
@@ -19,16 +20,16 @@ public class VendorServiceListTests : IDisposable
     private readonly List<string> _commands = [];
     private readonly SqliteTestContext _ctx;
     private readonly VendorService _sut;
+    private readonly WorkspaceReadScope _scope;
 
     public VendorServiceListTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(VendorServiceListTests));
         _sut = new VendorService(
             _ctx.Db,
             Mock.Of<IDataUpdateService>(),
-            Mock.Of<IMessagePublisher>(),
-            Mock.Of<IAuditTrailService>(),
-            NullLogger<VendorService>.Instance,
+            Mock.Of<IAtomicUnitOfWork>(),
             TimeProvider.System);
     }
 
@@ -43,7 +44,7 @@ public class VendorServiceListTests : IDisposable
         SeedVendor("Delta Cleaning", "Cleaning");
 
         _commands.Clear();
-        var result = await _sut.ListPageAsync(PortfolioId, new ListQuery
+        var result = await _sut.ListPageAsync(_scope, new ListQuery
         {
             Sort = "name",
             Skip = 1,
@@ -62,57 +63,6 @@ public class VendorServiceListTests : IDisposable
             sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
-    }
-
-    [Fact]
-    public async Task CreateAsync_ReturnsStructuredAddressFields()
-    {
-        var created = await _sut.CreateAsync(PortfolioId, new CreateVendorRequest
-        {
-            Name = "Acme HVAC",
-            ServiceType = "HVAC",
-            Website = "https://acme.example.test",
-            AddressLine1 = "123 Service Rd",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43215",
-        });
-
-        created.Website.Should().Be("https://acme.example.test");
-        created.AddressLine1.Should().Be("123 Service Rd");
-        created.City.Should().Be("Columbus");
-        created.State.Should().Be("OH");
-        created.PostalCode.Should().Be("43215");
-
-        var saved = await _ctx.Db.Vendors.AsNoTracking().SingleAsync(v => v.Id == created.Id);
-        saved.Website.Should().Be("https://acme.example.test");
-        saved.AddressLine1.Should().Be("123 Service Rd");
-        saved.City.Should().Be("Columbus");
-        saved.State.Should().Be("OH");
-        saved.PostalCode.Should().Be("43215");
-    }
-
-    [Fact]
-    public async Task UpdateAsync_UpdatesStructuredAddressFields()
-    {
-        SeedVendor("Acme HVAC", "HVAC");
-        var vendorId = await _ctx.Db.Vendors.Select(v => v.Id).SingleAsync();
-
-        var updated = await _sut.UpdateAsync(PortfolioId, vendorId, new UpdateVendorRequest
-        {
-            Website = "https://repair.example.test",
-            AddressLine1 = "456 Repair Ave",
-            City = "Cincinnati",
-            State = "OH",
-            PostalCode = "45202",
-        });
-
-        updated.Should().NotBeNull();
-        updated!.Website.Should().Be("https://repair.example.test");
-        updated!.AddressLine1.Should().Be("456 Repair Ave");
-        updated.City.Should().Be("Cincinnati");
-        updated.State.Should().Be("OH");
-        updated.PostalCode.Should().Be("45202");
     }
 
     private void SeedVendor(

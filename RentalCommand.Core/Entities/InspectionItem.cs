@@ -1,4 +1,5 @@
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Core.Entities;
 
@@ -8,7 +9,7 @@ namespace RentalCommand.Core.Entities;
 /// with a note and a photo. On <c>Complete</c>, every <see cref="InspectionItemResult.Fail"/> item spawns
 /// a <see cref="WorkOrder"/> whose id is recorded in <see cref="SpawnedWorkOrderId"/>.
 /// </summary>
-public class InspectionItem
+public class InspectionItem : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }

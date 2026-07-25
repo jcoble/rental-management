@@ -2,372 +2,287 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Outbox;
+using RentalCommand.Data.Outbox;
 using RentalCommand.Data;
 using RentalCommand.Engine.Services;
 
 namespace RentalCommand.Engine.Workers;
 
 /// <summary>
-/// Polls <see cref="OutboxMessage"/> rows that are unsent and still retryable, and routes
-/// each one to the registered <see cref="INotificationChannel"/> (SMS or email). On success
-/// the row's <see cref="OutboxMessage.SentAt"/> is set; on failure <see cref="OutboxMessage.FailedAt"/>
-/// is updated, <see cref="OutboxMessage.RetryCount"/> is incremented, and exponential backoff
-/// prevents the next attempt until <c>FailedAt + Backoff(RetryCount)</c> has elapsed. Once the
-/// retry budget is exhausted the row stays permanently failed.
-///
-/// Crash-safety: progress is persisted after each individual message so a hard restart only risks
-/// the single in-flight message rather than the whole batch.
+/// Claims ready deliveries with a database lease, calls providers with no database transaction
+/// open, and conditionally finalizes with the claim token. A zero-row finalization means ownership
+/// was lost and is never treated as success.
 /// </summary>
 public class OutboxDispatchWorker : EngineWorkerBase
 {
-    /// <summary>Messages with this many failed attempts are no longer retried.</summary>
-    public const int MaxRetryCount = 5;
-
-    /// <summary>Maximum number of messages drained per poll cycle.</summary>
+    public const int MaxAttemptCount = 5;
     private const int BatchSize = 50;
+    private static readonly TimeSpan ClaimLease = TimeSpan.FromMinutes(5);
 
-    /// <summary>
-    /// How many times to attempt the isolated SentAt commit after a successful external send
-    /// before giving up (and accepting that the message will be re-sent next cycle).
-    /// </summary>
-    private const int PersistRetryAttempts = 3;
-
-    /// <summary>Short delay between SentAt-commit retry attempts.</summary>
-    private static readonly TimeSpan PersistRetryDelay = TimeSpan.FromMilliseconds(200);
-
-    protected override string WorkerName => "OutboxDispatchWorker";
+    protected override string WorkerName => nameof(OutboxDispatchWorker);
     protected override TimeSpan PollInterval => TimeSpan.FromSeconds(10);
     protected override TimeSpan StepTimeout => TimeSpan.FromMinutes(2);
 
     public OutboxDispatchWorker(IServiceProvider serviceProvider, ILogger<OutboxDispatchWorker> logger)
-        : base(serviceProvider, logger)
-    {
-    }
+        : base(serviceProvider, logger) { }
 
-    /// <summary>
-    /// Exponential backoff: 30s * 2^retryCount, capped at 1 hour.
-    /// The backoff check (see <see cref="ExecuteCycleAsync"/>) passes the message's CURRENT
-    /// <see cref="OutboxMessage.RetryCount"/> — i.e. the count AFTER the failure was recorded
-    /// and incremented. So after the first failure RetryCount=1 and the wait before the next
-    /// attempt is Backoff(1)=60s; then RetryCount=2 → 120s, 3 → 240s, 4 → 480s, 5 → 960s
-    /// (all capped to 3600s). RetryCount=5 reaches <see cref="MaxRetryCount"/> and is no longer
-    /// retried, so the largest backoff actually used is Backoff(4)=480s.
-    /// </summary>
-    private static TimeSpan Backoff(int retryCount) =>
-        TimeSpan.FromSeconds(Math.Min(3600, 30 * Math.Pow(2, retryCount)));
-
-    protected override async Task<int> ExecuteCycleAsync(IServiceProvider scopedProvider, CancellationToken cancellationToken)
+    protected override async Task<int> ExecuteCycleAsync(
+        IServiceProvider scopedProvider,
+        CancellationToken cancellationToken)
     {
-        var db = scopedProvider.GetRequiredService<RentalCommandDbContext>();
+        var store = scopedProvider.GetRequiredService<IOutboxClaimStore>();
         var channel = scopedProvider.GetRequiredService<INotificationChannel>();
         var pushSender = scopedProvider.GetRequiredService<IPushSender>();
+        var fileStorage = scopedProvider.GetRequiredService<IFileStorage>();
+        var dataUpdate = scopedProvider.GetRequiredService<IDataUpdateService>();
+        var db = scopedProvider.GetRequiredService<RentalCommandDbContext>();
         var logger = scopedProvider.GetRequiredService<ILogger<OutboxDispatchWorker>>();
+        var owner = $"{Environment.MachineName}:{Environment.ProcessId}";
+        var claims = await store.ClaimAsync(owner, ClaimLease, BatchSize, cancellationToken);
+        var accepted = 0;
 
-        // Load all candidates (unsent, within retry budget) — oldest-first.
-        // Backoff filtering is applied in C# below to avoid a complex DB expression.
-        var candidates = await db.OutboxMessages
-            .Where(m => m.SentAt == null && m.RetryCount < MaxRetryCount)
-            .OrderBy(m => m.CreatedAt)
-            .ThenBy(m => m.Id)
-            .Take(BatchSize)
-            .ToListAsync(cancellationToken);
-
-        if (candidates.Count == 0)
-        {
-            return 0;
-        }
-
-        var now = DateTime.UtcNow;
-        var dispatched = 0;
-
-        foreach (var message in candidates)
+        foreach (var claim in claims)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            // Backoff check: skip messages whose last-failure timestamp is too recent.
-            if (message.FailedAt is not null &&
-                message.FailedAt.Value + Backoff(message.RetryCount) > now)
-            {
-                continue;
-            }
-
-            var isPush = string.Equals(message.MessageType?.Trim(), "push", StringComparison.OrdinalIgnoreCase);
-
             try
             {
-                // At-least-once semantics: we send the external message FIRST, then persist
-                // SentAt. We must NOT mark SentAt before the send — a pre-send crash would
-                // then silently drop the message. The cost of send-then-persist is a narrow
-                // duplicate-send window: if the process dies (or the DB write fails) AFTER a
-                // successful external send but BEFORE SentAt is committed, the message is
-                // re-sent next cycle. We minimise that window by committing SentAt in an
-                // isolated, retried SaveChanges immediately after the successful send.
-                if (isPush)
+                var receipt = await DispatchAsync(
+                    channel, pushSender, fileStorage, dataUpdate, db, claim, cancellationToken);
+                var changed = await store.MarkAcceptedAsync(
+                    claim.Id,
+                    claim.ClaimToken,
+                    receipt.Provider,
+                    receipt.ProviderMessageId,
+                    CancellationToken.None);
+                if (changed == 1)
                 {
-                    await DispatchPushAsync(db, pushSender, message, logger, cancellationToken);
+                    accepted++;
                 }
                 else
                 {
-                    await DispatchAsync(channel, message, cancellationToken);
-                }
-                message.SentAt = DateTime.UtcNow;
-                message.FailedAt = null;
-                message.Error = null;
-                dispatched++;
-
-                // Persist SentAt per-message. Retry a transient DB hiccup a few times so a
-                // momentary blip doesn't cause an avoidable duplicate send on the next cycle.
-                // Use CancellationToken.None: the external send already happened, so we must
-                // try hard to record it even if the cycle is being cancelled.
-                if (!await PersistSentWithRetryAsync(db, logger, message))
-                {
-                    // The send succeeded but SentAt could not be committed after several
-                    // attempts. The message will be re-sent next cycle (duplicate SMS/email).
-                    // Log loudly at Error level so this rare duplicate is observable.
                     logger.LogError(
-                        "OutboxMessage {MessageId} ({MessageType}) was sent successfully but SentAt " +
-                        "could NOT be persisted after {Attempts} attempts — it will be RE-SENT next " +
-                        "cycle (duplicate delivery). Manual reconciliation may be required.",
-                        message.Id, message.MessageType, PersistRetryAttempts);
+                        "Outbox delivery {MessageId} was accepted by {Provider}, but claim {ClaimToken} " +
+                        "was no longer current. Provider reconciliation is required.",
+                        claim.Id, receipt.Provider, claim.ClaimToken);
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                // Shutdown / cycle timeout — bail out; nothing to persist for this message yet.
                 break;
             }
             catch (NotificationDeliverySuppressedException ex)
             {
-                message.SentAt = DateTime.UtcNow;
-                message.FailedAt = null;
-                message.Error = ex.Message;
-                dispatched++;
-
-                logger.LogInformation(
-                    ex,
-                    "OutboxMessage {MessageId} ({MessageType}) delivery suppressed without retry.",
-                    message.Id, message.MessageType);
-
-                await db.SaveChangesAsync(CancellationToken.None);
+                await FinalizeTerminalAsync(
+                    store, claim, OutboxFailureKind.ConfigurationBlocked, ex.Message, logger);
+            }
+            catch (OutboxPermanentDeliveryException ex)
+            {
+                await FinalizeTerminalAsync(store, claim, OutboxFailureKind.Permanent, ex.Message, logger);
             }
             catch (Exception ex)
             {
-                // Set FailedAt on EVERY failure so backoff can be computed from the most recent attempt.
-                message.FailedAt = DateTime.UtcNow;
-                message.RetryCount++;
-                message.Error = ex.Message;
-
-                if (message.RetryCount >= MaxRetryCount)
+                if (claim.AttemptCount >= MaxAttemptCount)
                 {
-                    logger.LogError(
+                    await FinalizeTerminalAsync(
+                        store,
+                        claim,
+                        OutboxFailureKind.Permanent,
+                        $"Retry budget exhausted: {ex.Message}",
+                        logger);
+                    continue;
+                }
+
+                var retryDelay = Backoff(claim.AttemptCount);
+                var changed = await store.MarkRetryableAsync(
+                    claim.Id, claim.ClaimToken, retryDelay, ex.Message, CancellationToken.None);
+                if (changed == 1)
+                {
+                    logger.LogWarning(
                         ex,
-                        "OutboxMessage {MessageId} ({MessageType}) permanently failed after {RetryCount} attempt(s)",
-                        message.Id, message.MessageType, message.RetryCount);
+                        "Outbox delivery {MessageId} failed on attempt {Attempt}; retry after {RetryDelay}.",
+                        claim.Id, claim.AttemptCount, retryDelay);
                 }
                 else
                 {
                     logger.LogWarning(
                         ex,
-                        "OutboxMessage {MessageId} ({MessageType}) failed; will retry (attempt {RetryCount}/{Max}) after {Backoff}",
-                        message.Id, message.MessageType, message.RetryCount, MaxRetryCount,
-                        Backoff(message.RetryCount));
-                }
-
-                // Persist the failure record per-message; use CancellationToken.None so a
-                // cycle-timeout cancel doesn't discard the failure state.
-                await db.SaveChangesAsync(CancellationToken.None);
-            }
-        }
-
-        return dispatched;
-    }
-
-    /// <summary>
-    /// Commits the in-memory SentAt change for a single just-sent message, retrying a
-    /// transient DB failure up to <see cref="PersistRetryAttempts"/> times with a short delay.
-    /// Returns <c>true</c> if SentAt was persisted, <c>false</c> if every attempt failed (in
-    /// which case the message will be re-sent next cycle — the at-least-once duplicate window).
-    /// Uses <see cref="CancellationToken.None"/> because the external send has already happened
-    /// and we must try hard to record it regardless of cycle cancellation.
-    /// </summary>
-    private static async Task<bool> PersistSentWithRetryAsync(
-        RentalCommandDbContext db, ILogger<OutboxDispatchWorker> logger, OutboxMessage message)
-    {
-        for (var attempt = 1; attempt <= PersistRetryAttempts; attempt++)
-        {
-            try
-            {
-                await db.SaveChangesAsync(CancellationToken.None);
-                return true;
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(
-                    ex,
-                    "OutboxMessage {MessageId} ({MessageType}) was sent but persisting SentAt failed " +
-                    "(attempt {Attempt}/{MaxAttempts}).",
-                    message.Id, message.MessageType, attempt, PersistRetryAttempts);
-
-                if (attempt < PersistRetryAttempts)
-                {
-                    await Task.Delay(PersistRetryDelay, CancellationToken.None);
+                        "Outbox delivery {MessageId} failed after its claim was lost; stale failure was ignored.",
+                        claim.Id);
                 }
             }
         }
 
-        return false;
+        return accepted;
     }
 
-    /// <summary>
-    /// Fans a single <c>push</c> outbox message out to every device token registered for the
-    /// message's portfolio. The payload carries <c>title</c>/<c>body</c> plus a deep-link data map
-    /// (<c>actionUrl</c>, <c>type</c>, <c>relatedEntityType</c>, <c>relatedEntityId</c>) that the
-    /// mobile client routes on when the user taps the notification. Tokens the provider reports as
-    /// permanently invalid (app uninstalled / token rotated) are pruned. A transient provider error
-    /// on any token propagates so the whole message retries (at-least-once; a duplicate push is
-    /// acceptable). When no provider is configured the sender suppresses (logs) and the message is
-    /// marked sent.
-    /// </summary>
-    private static async Task DispatchPushAsync(
-        RentalCommandDbContext db,
+    private static TimeSpan Backoff(int attemptCount) =>
+        TimeSpan.FromSeconds(Math.Min(3600, 30 * Math.Pow(2, Math.Max(0, attemptCount - 1))));
+
+    private static async Task<NotificationDeliveryReceipt> DispatchAsync(
+        INotificationChannel channel,
         IPushSender pushSender,
-        OutboxMessage message,
-        ILogger<OutboxDispatchWorker> logger,
+        IFileStorage fileStorage,
+        IDataUpdateService dataUpdate,
+        RentalCommandDbContext db,
+        OutboxClaim claim,
         CancellationToken ct)
     {
-        if (message.PortfolioId is not int portfolioId || portfolioId <= 0)
-        {
-            // No portfolio → nothing to target; treat as a no-op (marked sent by the caller).
-            return;
-        }
+        using var document = JsonDocument.Parse(claim.Payload);
+        var root = document.RootElement;
+        var delivery = new NotificationDeliveryContext(
+            claim.Id,
+            claim.IdempotencyKey,
+            claim.AttemptCount);
 
-        using var doc = JsonDocument.Parse(
-            string.IsNullOrWhiteSpace(message.Payload) ? "{}" : message.Payload);
-        var root = doc.RootElement;
-
-        var title = GetString(root, "title") ?? "Rental Command";
-        var body = GetString(root, "body") ?? string.Empty;
-
-        var data = new Dictionary<string, string>();
-        foreach (var key in new[] { "actionUrl", "type", "relatedEntityType", "relatedEntityId" })
-        {
-            var value = GetString(root, key);
-            if (!string.IsNullOrWhiteSpace(value)) data[key] = value;
-        }
-
-        var targetUserIds = GetTargetUserIds(root);
-        var tokenQuery = db.DeviceTokens
-            .Where(d => d.PortfolioId == portfolioId);
-        if (targetUserIds.Count > 0)
-        {
-            tokenQuery = tokenQuery.Where(d => targetUserIds.Contains(d.UserId));
-        }
-
-        var tokens = await tokenQuery
-            .Select(d => d.Token)
-            .ToListAsync(ct);
-
-        if (tokens.Count == 0)
-        {
-            logger.LogInformation(
-                "[push] OutboxMessage {MessageId} — no registered devices for portfolio {PortfolioId}{Target}.",
-                message.Id, portfolioId,
-                targetUserIds.Count == 0 ? string.Empty : $" target user(s) {string.Join(",", targetUserIds)}");
-            return;
-        }
-
-        var invalidTokens = new List<string>();
-        foreach (var token in tokens)
-        {
-            var result = await pushSender.SendAsync(token, title, body, data, ct);
-            if (result.TokenInvalid) invalidTokens.Add(token);
-        }
-
-        if (invalidTokens.Count > 0)
-        {
-            await db.DeviceTokens
-                .Where(d => d.PortfolioId == portfolioId && invalidTokens.Contains(d.Token))
-                .ExecuteDeleteAsync(ct);
-            logger.LogInformation(
-                "[push] Pruned {Count} dead device token(s) for portfolio {PortfolioId}.",
-                invalidTokens.Count, portfolioId);
-        }
-    }
-
-    /// <summary>
-    /// Routes a single outbox message to the SMS or email transport based on its
-    /// <see cref="OutboxMessage.MessageType"/> ("sms" / "email"). The payload is a JSON
-    /// document whose shape depends on the channel.
-    /// </summary>
-    private static async Task DispatchAsync(INotificationChannel channel, OutboxMessage message, CancellationToken ct)
-    {
-        using var doc = JsonDocument.Parse(
-            string.IsNullOrWhiteSpace(message.Payload) ? "{}" : message.Payload);
-        var root = doc.RootElement;
-
-        var type = message.MessageType?.Trim().ToLowerInvariant();
-        switch (type)
+        switch (claim.MessageType.Trim().ToLowerInvariant())
         {
             case "sms":
-            {
-                var to = GetString(root, "to") ?? GetString(root, "toPhoneNumber")
-                    ?? throw new InvalidOperationException("SMS outbox message is missing a 'to' phone number.");
-                var body = GetString(root, "message") ?? GetString(root, "body") ?? string.Empty;
-                // Pass the portfolio so the dispatcher resolves THAT landlord's BYO SMS provider
-                // (falling back to platform env when they haven't configured one).
-                await channel.SendSmsAsync(to, body, message.PortfolioId, ct);
-                break;
-            }
+                return await channel.SendSmsAsync(
+                    Required(root, "to", "toPhoneNumber"),
+                    Optional(root, "message", "body") ?? string.Empty,
+                    delivery,
+                    claim.PortfolioId,
+                    ct);
+
             case "email":
+                return await channel.SendEmailAsync(
+                    Required(root, "to", "toEmail"),
+                    Optional(root, "subject") ?? string.Empty,
+                    Optional(root, "body", "message") ?? string.Empty,
+                    delivery,
+                    Optional(root, "htmlBody"),
+                    ct);
+
+            case "push":
             {
-                var to = GetString(root, "to") ?? GetString(root, "toEmail")
-                    ?? throw new InvalidOperationException("Email outbox message is missing a 'to' address.");
-                var subject = GetString(root, "subject") ?? string.Empty;
-                var body = GetString(root, "body") ?? GetString(root, "message") ?? string.Empty;
-                // Optional pre-composed HTML alternative (e.g. auth emails with a "Here" hyperlink).
-                var htmlBody = GetString(root, "htmlBody");
-                await channel.SendEmailAsync(to, subject, body, htmlBody, ct);
-                break;
+                var token = Required(root, "deviceToken");
+                var data = new Dictionary<string, string>();
+                if (root.TryGetProperty("navigationIntent", out var navigationIntent)
+                    && navigationIntent.ValueKind == JsonValueKind.Object)
+                {
+                    data["navigationIntent"] = navigationIntent.GetRawText();
+                }
+
+                var result = await pushSender.SendAsync(
+                    token,
+                    Optional(root, "title") ?? "Rental Command",
+                    Optional(root, "body") ?? string.Empty,
+                    data,
+                    delivery,
+                    ct);
+                if (result.TokenInvalid)
+                    throw new OutboxPermanentDeliveryException("The destination push token is no longer valid.");
+                if (!result.Sent)
+                    throw new NotificationDeliverySuppressedException(
+                        "Push delivery is not configured. No external provider accepted this message.");
+                return new NotificationDeliveryReceipt("fcm", result.ProviderMessageId);
             }
+
+            case "blob-delete":
+            {
+                var storagePath = Required(root, "storagePath");
+                var storedFileId = RequiredInt(root, "storedFileId");
+                var hasLiveReference = await db.StoredFiles
+                    .IgnoreQueryFilters()
+                    .AsNoTracking()
+                    .AnyAsync(file => file.Id != storedFileId
+                        && file.FilePath == storagePath
+                        && file.DeletedAt == null, ct);
+                if (hasLiveReference)
+                {
+                    return new NotificationDeliveryReceipt(
+                        "file-storage-reference-preserved", $"outbox-{claim.Id}");
+                }
+                await fileStorage.DeleteAsync(storagePath, ct);
+                return new NotificationDeliveryReceipt("file-storage", $"outbox-{claim.Id}");
+            }
+
+            case "data-update":
+            {
+                var entityType = Required(root, "entityType");
+                var entityId = RequiredInt(root, "entityId");
+                var data = root.TryGetProperty("data", out var value)
+                    ? value.Clone()
+                    : JsonSerializer.SerializeToElement(new { });
+                var portfolioId = claim.PortfolioId
+                    ?? throw new OutboxPermanentDeliveryException("Data-update outbox row has no portfolio.");
+                if (string.Equals(Optional(root, "operation"), "delete", StringComparison.OrdinalIgnoreCase))
+                {
+                    await dataUpdate.BroadcastEntityDeleteAsync(portfolioId, entityType, entityId, ct);
+                }
+                else
+                {
+                    await dataUpdate.BroadcastEntityUpdateAsync(
+                        portfolioId, entityType, entityId, data, ct);
+                }
+                return new NotificationDeliveryReceipt("postgres-notify", $"outbox-{claim.Id}");
+            }
+
             default:
-                throw new InvalidOperationException(
-                    $"Unknown outbox message type '{message.MessageType}'. Expected 'sms' or 'email'.");
+                throw new OutboxPermanentDeliveryException(
+                    $"Unknown outbox message type '{claim.MessageType}'.");
         }
     }
 
-    private static string? GetString(JsonElement root, string property) =>
-        root.ValueKind == JsonValueKind.Object
-        && root.TryGetProperty(property, out var value)
-        && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
-
-    private static IReadOnlyList<int> GetTargetUserIds(JsonElement root)
+    private static async Task FinalizeTerminalAsync(
+        IOutboxClaimStore store,
+        OutboxClaim claim,
+        OutboxFailureKind failureKind,
+        string error,
+        ILogger logger)
     {
-        if (root.ValueKind != JsonValueKind.Object)
-            return [];
-
-        if (root.TryGetProperty("userIds", out var userIds) &&
-            userIds.ValueKind == JsonValueKind.Array)
+        var changed = await store.MarkDeadLetteredAsync(
+            claim.Id, claim.ClaimToken, failureKind, error, CancellationToken.None);
+        if (changed == 1)
         {
-            return userIds.EnumerateArray()
-                .Where(e => e.ValueKind == JsonValueKind.Number && e.TryGetInt32(out _))
-                .Select(e => e.GetInt32())
-                .Where(id => id > 0)
-                .Distinct()
-                .ToList();
+            logger.LogError(
+                "Outbox delivery {MessageId} ended as {FailureKind}: {Error}",
+                claim.Id, failureKind, error);
+        }
+        else
+        {
+            logger.LogWarning(
+                "Terminal result for outbox delivery {MessageId} was ignored because its claim was stale.",
+                claim.Id);
+        }
+    }
+
+    private static string Required(JsonElement root, params string[] names) =>
+        Optional(root, names)
+        ?? throw new OutboxPermanentDeliveryException(
+            $"Outbox payload is missing required field '{string.Join("' or '", names)}'.");
+
+    private static string? Optional(JsonElement root, params string[] names)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return null;
+        foreach (var name in names)
+        {
+            if (root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
+                return value.GetString();
+        }
+        return null;
+    }
+
+    private static int RequiredInt(JsonElement root, string name)
+    {
+        if (root.ValueKind == JsonValueKind.Object
+            && root.TryGetProperty(name, out var value)
+            && value.TryGetInt32(out var result)
+            && result > 0)
+        {
+            return result;
         }
 
-        if (root.TryGetProperty("userId", out var userId) &&
-            userId.ValueKind == JsonValueKind.Number &&
-            userId.TryGetInt32(out var id) &&
-            id > 0)
-        {
-            return [id];
-        }
+        throw new OutboxPermanentDeliveryException(
+            $"Outbox payload is missing required integer field '{name}'.");
+    }
 
-        return [];
+    private sealed class OutboxPermanentDeliveryException : Exception
+    {
+        public OutboxPermanentDeliveryException(string message) : base(message) { }
     }
 }

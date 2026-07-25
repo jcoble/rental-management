@@ -287,7 +287,7 @@
 		uploadingPhotoFor = item.id;
 		try {
 			// 1. Upload the file as an Inspection document → returns a stored file (id).
-			const doc = await documents.upload('Inspection', id, file);
+			const doc = await documents.upload('Inspection', id, file, undefined, crypto.randomUUID());
 			// 2. Attach that stored file to this checklist item.
 			const updated = await inspections.setItemPhoto(id, item.id, doc.id);
 			patchItemInCache(updated);
@@ -335,8 +335,16 @@
 		},
 	}));
 
-	// Combine the just-completed result with any IDs already on a reloaded inspection.
-	const createdWorkOrderIds = $derived(completeResult?.createdWorkOrderIds ?? []);
+	// Keep follow-up work orders visible after reload. The completion response provides them
+	// immediately; the durable item relationship is the source of truth on later visits.
+	const createdWorkOrderIds = $derived.by(() => [
+		...new Set([
+			...(completeResult?.createdWorkOrderIds ?? []),
+			...(inspection?.items ?? [])
+				.map((item) => item.spawnedWorkOrderId)
+				.filter((workOrderId): workOrderId is number => typeof workOrderId === 'number' && workOrderId > 0),
+		]),
+	]);
 
 	// --- Report download ---
 	let downloadingReport = $state(false);

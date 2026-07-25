@@ -5,11 +5,18 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { buildScanReviewTarget, contextualScanTitle, scanLauncherMode } from '$lib/scan/scan-launcher';
-	import type { ScanContext, ScanDocType } from '$lib/scan/scan-context';
+	import {
+		SCAN_DOC_TYPES,
+		type ScanContext,
+		type ScanDocType,
+		type ScanIntakeType
+	} from '$lib/scan/scan-context';
 	import ScanCapturePanel from './ScanCapturePanel.svelte';
 
 	let {
 		context = {},
+		allowedTypes = SCAN_DOC_TYPES,
+		allowVoice = true,
 		open = $bindable(false),
 		triggerLabel,
 		ariaLabel,
@@ -20,6 +27,8 @@
 		showTrigger = true
 	}: {
 		context?: ScanContext;
+		allowedTypes?: readonly ScanDocType[];
+		allowVoice?: boolean;
 		open?: boolean;
 		triggerLabel?: string;
 		ariaLabel?: string;
@@ -38,9 +47,14 @@
 			: 'Choose a document type, upload a PDF or photos, then review what the app extracted before it creates a record.'
 	);
 
-	function handleCreated(draftId: number, docType: ScanDocType) {
+	function handleCreated(draftId: number, docType: ScanIntakeType) {
 		open = false;
-		goto(buildScanReviewTarget(draftId, { ...context, type: docType }));
+		goto(
+			buildScanReviewTarget(
+				draftId,
+				docType === 'Auto' ? { ...context, type: undefined } : { ...context, type: docType }
+			)
+		);
 	}
 </script>
 
@@ -55,7 +69,7 @@
 		data-testid={testid}
 	>
 		<ScanLine class="h-4 w-4" />
-		{triggerLabel ?? title}
+		<span>{triggerLabel ?? 'Scan / Add'}</span>
 	</Button>
 {/if}
 
@@ -68,8 +82,17 @@
 			</Dialog.Title>
 			<Dialog.Description>{description}</Dialog.Description>
 		</Dialog.Header>
+		{#if mode === 'contextual' && context.sourceLabel}
+			<div
+				class="mt-4 rounded-lg border border-accent/30 bg-accent/5 px-4 py-3 text-sm"
+				data-testid="scan-context-source"
+			>
+				<span class="text-muted-foreground">Connected to</span>
+				<strong class="ml-1 font-semibold text-foreground">{context.sourceLabel}</strong>
+			</div>
+		{/if}
 		<div class="mt-5">
-			<ScanCapturePanel {context} compact oncreated={handleCreated} />
+			<ScanCapturePanel {context} {allowedTypes} {allowVoice} compact oncreated={handleCreated} />
 		</div>
 	</Dialog.Content>
 </Dialog.Root>

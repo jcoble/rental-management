@@ -36,7 +36,7 @@ affected phases. (One earlier sub-agent claim about Identity auth breakage was o
   e-sign link expiry (`Esign/NativeSigningService.cs:505`, `NativeEsignProvider.cs:73,102`,
   `Domain/LeaseEsignService.cs:633,639`); OAuth refresh horizon (`AccountingTokenRefreshWorker.cs:43,51,74`);
   OAuth CSRF state-token TTL **write** (`AccountingConnectionService.cs:124` — plan only excluded the :164/:362 reads);
-  portal-disabled sentinel (`TenantPortalProvisioningService.cs:315`); outbox backoff `FailedAt`
+  outbox backoff `FailedAt`
   (`OutboxDispatchWorker.cs:82,91,115,143,158`).
 
 ## SHOULD-FIX

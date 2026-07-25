@@ -1,9 +1,12 @@
+using RentalCommand.Core.Interfaces;
+
 namespace RentalCommand.Core.Entities;
 
 /// <summary>
-/// Polymorphic attachment record (entity shape only in Phase 0; upload pipeline is Phase 1).
+/// Polymorphic attachment record. EntityId is bigint-compatible because canonical ledger entries use
+/// a 64-bit identity while the remaining document targets safely widen their 32-bit ids.
 /// </summary>
-public class StoredFile
+public class StoredFile : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
@@ -12,7 +15,7 @@ public class StoredFile
     public string ContentType { get; set; } = string.Empty;
     public long FileSize { get; set; }
     public string? EntityType { get; set; }
-    public int? EntityId { get; set; }
+    public long? EntityId { get; set; }
     public DateTime UploadedAt { get; set; }
 
     /// <summary>Soft-delete marker; null means active.</summary>

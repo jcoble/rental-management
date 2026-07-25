@@ -1,7 +1,3 @@
-const propertyUnitTypes = {'SingleFamily', 'Condo', 'Townhome'};
-
-bool isPropertyUnitType(String? type) => propertyUnitTypes.contains(type);
-
 String formatPropertyType(String type) {
   switch (type) {
     case 'SingleFamily':

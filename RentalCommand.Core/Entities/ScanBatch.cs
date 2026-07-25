@@ -17,8 +17,8 @@ public class ScanBatch
     /// <summary>Optional human label for the batch (e.g. "2026 lease imports"); null when not supplied.</summary>
     public string? Name { get; set; }
 
-    /// <summary>The entity every draft in the batch targets. Defaults to "Lease" (the migration on-ramp).</summary>
-    public string TargetEntityType { get; set; } = "Lease";
+    /// <summary>The entity every draft in the batch targets. Defaults to the canonical lease Agreement.</summary>
+    public string TargetEntityType { get; set; } = nameof(LeaseAgreement);
 
     public ScanBatchStatus Status { get; set; } = ScanBatchStatus.Processing;
 

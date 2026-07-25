@@ -68,7 +68,7 @@
 			recordLabel: 'payment',
 			recordPluralLabel: 'payments',
 			columns:
-				'leaseNumber, propertyName, unitNumber, paymentType, amount, paidDate, method, externalReference, notes',
+				'relationshipNumber, propertyName, unitNumber, paymentType, amount, paidDate, method, externalReference, notes',
 			listHref: '/accounting',
 			listLabel: 'accounting ledger'
 		},

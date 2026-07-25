@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart' hide Vendor;
@@ -64,6 +65,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
   final _formKey = GlobalKey<FormState>();
   final _titleCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
+  final _technicianAccessCtrl = TextEditingController();
   final _estCostCtrl = TextEditingController();
 
   int? _selectedPropertyId;
@@ -80,6 +82,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
   Uint8List? _photoBytes;
   String? _photoName;
   String? _photoContentType;
+  String? _photoUploadOperationId;
 
   bool _saving = false;
   String? _error;
@@ -113,6 +116,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
   void dispose() {
     _titleCtrl.dispose();
     _descCtrl.dispose();
+    _technicianAccessCtrl.dispose();
     _estCostCtrl.dispose();
     super.dispose();
   }
@@ -198,6 +202,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
       _photoBytes = bytes;
       _photoName = picked.name;
       _photoContentType = _mimeFromExtension(picked.name);
+      _photoUploadOperationId = const Uuid().v4();
     });
   }
 
@@ -282,6 +287,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
         'propertyId': _selectedPropertyId,
         'title': _titleCtrl.text.trim(),
         'description': _descCtrl.text.trim(),
+        'technicianAccessInstructions': _technicianAccessCtrl.text.trim(),
         'priority': _priority,
         'category': _category,
         'unitId': ?_selectedUnitId,
@@ -301,6 +307,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
           bytes: photoBytes,
           fileName: photoName,
           contentType: photoContentType,
+          clientOperationId: _photoUploadOperationId ??= const Uuid().v4(),
         );
       }
 
@@ -543,6 +550,19 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
                   validator: (v) => (v == null || v.trim().isEmpty)
                       ? 'Description is required'
                       : null,
+                ),
+                gap,
+                TextFormField(
+                  key: const Key('work-order-technician-access-field'),
+                  controller: _technicianAccessCtrl,
+                  maxLines: 3,
+                  maxLength: 2000,
+                  textInputAction: TextInputAction.newline,
+                  decoration: const InputDecoration(
+                    labelText: 'Safe technician access (optional)',
+                    helperText:
+                        'Entry, lockbox, pet, or contact guidance safe for the assigned technician.',
+                  ),
                 ),
               ],
             ),

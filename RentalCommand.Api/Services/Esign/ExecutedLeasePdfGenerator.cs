@@ -30,7 +30,7 @@ public sealed class ExecutedSigner
 /// <summary>Everything needed to render the final executed lease PDF.</summary>
 public sealed class ExecutedLeaseData
 {
-    public required LeaseAgreementData Agreement { get; init; }
+    public required LeaseAgreementRenderData Agreement { get; init; }
     public required IReadOnlyList<ExecutedSigner> Signers { get; init; }
 
     /// <summary>Management company / sender name (the landlord on the certificate).</summary>
@@ -367,7 +367,6 @@ public sealed class ExecutedLeasePdfGenerator : IExecutedLeasePdfGenerator
     private static void ComposeAgreementBody(IContainer container, ExecutedLeaseData data)
     {
         var a = data.Agreement;
-        var lease = a.Lease;
         var stateLabel = string.IsNullOrWhiteSpace(a.State) ? "the State" : $"the State of {a.State}";
         var premises = string.IsNullOrWhiteSpace(a.UnitNumber)
             ? a.PropertyAddress
@@ -392,18 +391,20 @@ public sealed class ExecutedLeasePdfGenerator : IExecutedLeasePdfGenerator
                 $"The Landlord leases to the Tenant the residential premises located at {premises} (the \"Premises\"). " +
                 "The Premises are to be used solely as a private residence for the Tenant and the Tenant's immediate family.");
             Clause(col, 2, "Term",
-                $"The lease term begins on {Date(lease.StartDate)} and ends on {Date(lease.EndDate)}, unless terminated earlier " +
-                "in accordance with this Agreement. Upon expiration, this Agreement does not automatically renew unless agreed in writing by both parties.");
+                a.TermEndOn is { } termEnd
+                    ? $"The lease term begins on {Date(a.TermStartOn)} and ends on {Date(termEnd)}, unless terminated earlier " +
+                      "in accordance with this Agreement. Upon expiration, this Agreement does not automatically renew unless agreed in writing by both parties."
+                    : $"The lease term begins on {Date(a.TermStartOn)} and continues month-to-month until terminated in accordance with this Agreement and applicable law.");
             Clause(col, 3, "Rent",
-                $"The Tenant agrees to pay monthly rent of {Money(lease.MonthlyRent)}, due on the {Ordinal(lease.RentDueDay)} day of each month. " +
+                $"The Tenant agrees to pay monthly rent of {Money(a.BaseRentAmount)}, due on the {Ordinal(a.RentDueDay)} day of each month. " +
                 "Rent shall be paid to the Landlord at the address designated by the Landlord, without demand, deduction, or set-off.");
             Clause(col, 4, "Late Charges",
-                lease.LateFeeAmount > 0m
-                    ? $"If rent is not received by the Landlord within the grace period allowed by applicable law, the Tenant shall pay a late charge of {Money(lease.LateFeeAmount)}."
+                a.LateFeeAmount > 0m
+                    ? $"If rent is not received by the Landlord within the grace period allowed by applicable law, the Tenant shall pay a late charge of {Money(a.LateFeeAmount)}."
                     : "If rent is not paid when due, the Tenant may be subject to late charges as permitted by applicable law.");
             Clause(col, 5, "Security Deposit",
-                lease.SecurityDeposit > 0m
-                    ? $"The Tenant shall pay a security deposit of {Money(lease.SecurityDeposit)} prior to occupancy. The deposit will be held and returned in accordance with applicable law, less any lawful deductions for unpaid rent or damage beyond normal wear and tear."
+                a.SecurityDepositObligation > 0m
+                    ? $"The Tenant shall pay a security deposit of {Money(a.SecurityDepositObligation)} prior to occupancy. The deposit will be held and returned in accordance with applicable law, less any lawful deductions for unpaid rent or damage beyond normal wear and tear."
                     : "No security deposit is required under this Agreement, except as the parties may otherwise agree in writing.");
             Clause(col, 6, "Utilities",
                 "Except as otherwise agreed in writing, the Tenant shall be responsible for arranging and paying for all utilities and services for the Premises.");
@@ -430,18 +431,19 @@ public sealed class ExecutedLeasePdfGenerator : IExecutedLeasePdfGenerator
     private static void ComposeTerms(IContainer container, ExecutedLeaseData data, string premises)
     {
         var a = data.Agreement;
-        var lease = a.Lease;
         container.Border(1).BorderColor(Colors.Grey.Lighten1).Padding(10).Column(col =>
         {
             col.Spacing(3);
             TermRow(col, "Landlord", string.IsNullOrWhiteSpace(a.LandlordName) ? "—" : a.LandlordName);
             TermRow(col, "Tenant", string.IsNullOrWhiteSpace(a.TenantName) ? "—" : a.TenantName);
             TermRow(col, "Premises", premises);
-            TermRow(col, "Lease Number", string.IsNullOrWhiteSpace(lease.LeaseNumber) ? "—" : lease.LeaseNumber);
-            TermRow(col, "Term", $"{Date(lease.StartDate)} to {Date(lease.EndDate)}");
-            TermRow(col, "Monthly Rent", $"{Money(lease.MonthlyRent)} (due the {Ordinal(lease.RentDueDay)} of each month)");
-            TermRow(col, "Security Deposit", Money(lease.SecurityDeposit));
-            TermRow(col, "Late Fee", lease.LateFeeAmount > 0m ? Money(lease.LateFeeAmount) : "—");
+            TermRow(col, "Lease Number", string.IsNullOrWhiteSpace(a.AgreementNumber) ? "—" : a.AgreementNumber);
+            TermRow(col, "Term", a.TermEndOn is { } termEnd
+                ? $"{Date(a.TermStartOn)} to {Date(termEnd)}"
+                : $"{Date(a.TermStartOn)} to month-to-month");
+            TermRow(col, "Monthly Rent", $"{Money(a.BaseRentAmount)} (due the {Ordinal(a.RentDueDay)} of each month)");
+            TermRow(col, "Security Deposit", Money(a.SecurityDepositObligation));
+            TermRow(col, "Late Fee", a.LateFeeAmount > 0m ? Money(a.LateFeeAmount) : "—");
         });
     }
 
@@ -516,7 +518,7 @@ public sealed class ExecutedLeasePdfGenerator : IExecutedLeasePdfGenerator
                     c.Spacing(2);
                     var documentLabel = !string.IsNullOrWhiteSpace(data.DocumentName)
                         ? data.DocumentName
-                        : data.Agreement.Lease.LeaseNumber is { Length: > 0 } ln
+                        : data.Agreement.AgreementNumber is { Length: > 0 } ln
                             ? $"Lease agreement - {ln}"
                             : "Lease agreement";
                     CertRow(c, "Document", documentLabel);
@@ -603,7 +605,7 @@ public sealed class ExecutedLeasePdfGenerator : IExecutedLeasePdfGenerator
 
     private static string Money(decimal value) => value.ToString("C2", System.Globalization.CultureInfo.GetCultureInfo("en-US"));
 
-    private static string Date(DateTime value) => value.ToString("MMMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture);
+    private static string Date(DateOnly value) => value.ToString("MMMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture);
 
     private static string Ordinal(int day)
     {

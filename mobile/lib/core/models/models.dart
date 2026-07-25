@@ -3,7 +3,6 @@ export 'document.dart';
 export 'expense.dart';
 export 'inspection.dart';
 export 'lease.dart';
-export 'payment.dart';
 export 'portfolio.dart';
 export 'property.dart';
 export 'tenant.dart';

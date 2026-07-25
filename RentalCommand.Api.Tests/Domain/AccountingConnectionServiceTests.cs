@@ -6,22 +6,21 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Models.Accounting;
+using RentalCommand.Core.Atomic;
 using RentalCommand.TestCommon;
 using Xunit;
 
 namespace RentalCommand.Api.Tests.Domain;
 
 /// <summary>
-/// Phase 1 backbone guard: the encrypted-token round trip (AC-4). Connecting through
-/// a fake provider must persist the OAuth tokens ONLY as cipher text — recoverable to
-/// the original value, never stored as plaintext — and disconnect must blank them.
-/// Deliberately the single focused unit test for Phase 1; the system is in flux and
-/// the sandbox flow is the real signal.
+/// Accounting integration contracts while provider callback admission is being moved into
+/// one database-validated command. The callback must remain fail-closed until that command lands.
 /// </summary>
 public class AccountingConnectionServiceTests : IDisposable
 {
@@ -37,12 +36,11 @@ public class AccountingConnectionServiceTests : IDisposable
     public void Dispose() => _ctx.Dispose();
 
     [Fact]
-    public async Task CompleteCallback_PersistsTokensAsCipherText_AndRoundTrips()
+    public async Task CompleteCallback_RemainsFailClosedUntilDatabaseValidatedAdmissionLands()
     {
-        const string access = "qbo-access-token-PLAINTEXT-secret";
-        const string refresh = "qbo-refresh-token-PLAINTEXT-secret";
         var provider = new FakeAccountingProvider(AccountingProvider.QuickBooks,
-            new AccountingTokenResult(access, refresh, DateTime.UtcNow.AddHours(1), "realm-123", "Acme Books"));
+            new AccountingTokenResult("unused-access", "unused-refresh", DateTime.UtcNow.AddHours(1),
+                "realm-123", "Acme Books"));
 
         var sut = CreateService(provider);
 
@@ -58,41 +56,16 @@ public class AccountingConnectionServiceTests : IDisposable
         });
         await _ctx.Db.SaveChangesAsync();
 
-        var (portfolioId, resolvedProvider) = await sut.CompleteCallbackFromStateAsync(
+        var act = () => sut.CompleteCallbackFromStateAsync(
             new AccountingCallback("auth-code", "state-token-abc", "realm-123", null),
             CancellationToken.None);
 
-        portfolioId.Should().Be(1);
-        resolvedProvider.Should().Be(AccountingProvider.QuickBooks);
-
-        var conn = await _ctx.Db.AccountingConnections.AsNoTracking()
-            .SingleAsync(c => c.PortfolioId == 1 && c.Provider == AccountingProvider.QuickBooks);
-
-        conn.Status.Should().Be(AccountingConnectionStatus.Connected);
-        conn.ExternalAccountId.Should().Be("realm-123");
-        conn.CompanyName.Should().Be("Acme Books");
-
-        // AC-4: at rest it is cipher text, NOT the plaintext token.
-        conn.AccessTokenCipherText.Should().NotBeNullOrEmpty();
-        conn.AccessTokenCipherText.Should().NotContain(access);
-        conn.RefreshTokenCipherText.Should().NotBeNullOrEmpty();
-        conn.RefreshTokenCipherText.Should().NotContain(refresh);
-
-        // …and it decrypts back to the original (the ProtectNullable/UnprotectNullable round trip).
-        var protector = _dp.CreateProtector("RentalCommand.Accounting.v1");
-        protector.Unprotect(conn.AccessTokenCipherText!).Should().Be(access);
-        protector.Unprotect(conn.RefreshTokenCipherText!).Should().Be(refresh);
-
-        // The single-use state row was consumed.
-        (await _ctx.Db.OAuthStates.CountAsync()).Should().Be(0);
-
-        // Disconnect blanks the tokens.
-        await sut.DisconnectAsync(1, AccountingProvider.QuickBooks, CancellationToken.None);
-        var afterDisconnect = await _ctx.Db.AccountingConnections.AsNoTracking()
-            .SingleAsync(c => c.PortfolioId == 1 && c.Provider == AccountingProvider.QuickBooks);
-        afterDisconnect.Status.Should().Be(AccountingConnectionStatus.Disconnected);
-        afterDisconnect.AccessTokenCipherText.Should().BeNull();
-        afterDisconnect.RefreshTokenCipherText.Should().BeNull();
+        var error = await act.Should().ThrowAsync<AccountingNotConfiguredException>();
+        error.Which.Message.Should().Contain("temporarily unavailable");
+        (await _ctx.Db.OAuthStates.CountAsync()).Should().Be(1,
+            "a disabled callback must not consume the single-use state");
+        (await _ctx.Db.AccountingConnections.CountAsync()).Should().Be(0,
+            "the disabled path must not partially persist provider state or credentials");
     }
 
     [Fact]
@@ -136,6 +109,44 @@ public class AccountingConnectionServiceTests : IDisposable
             && (sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase)
                 || sql.Contains("FETCH", StringComparison.OrdinalIgnoreCase)),
             "mapping review must filter and page in SQL before materialization");
+    }
+
+    [Fact]
+    public async Task GetStatusAsync_LoadsConnectionsAndLedgerCountsWithOneDatabaseCommand()
+    {
+        var now = DateTime.UtcNow;
+        var conn = new AccountingConnection
+        {
+            PortfolioId = 1,
+            Provider = AccountingProvider.QuickBooks,
+            Status = AccountingConnectionStatus.Connected,
+            ExternalAccountId = "realm-status",
+            PullEnabled = true,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.AccountingConnections.Add(conn);
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.AccountingSyncMaps.AddRange(
+            Parked(conn, "review-1", LedgerStatus.NeedsReview, now),
+            Parked(conn, "review-2", LedgerStatus.Unmatched, now),
+            Parked(conn, "imported-1", LedgerStatus.Imported, now));
+        await _ctx.Db.SaveChangesAsync();
+
+        var sut = CreateService(new FakeAccountingProvider(
+            AccountingProvider.QuickBooks,
+            new AccountingTokenResult("a", "r", now.AddHours(1), "realm-status", "Status Books")));
+        _commands.Clear();
+
+        var cards = await sut.GetStatusAsync(1, CancellationToken.None);
+
+        var quickBooks = cards.Single(card => card.Provider == AccountingProvider.QuickBooks);
+        quickBooks.PendingReviewCount.Should().Be(2);
+        quickBooks.ImportedCount.Should().Be(1);
+        _commands.Should().ContainSingle("connection rows and both conditional counts must share one SQL command");
+        _commands[0].Should().Contain("AccountingConnections")
+            .And.Contain("AccountingSyncMaps")
+            .And.Contain("COUNT");
     }
 
     [Fact]
@@ -189,15 +200,19 @@ public class AccountingConnectionServiceTests : IDisposable
         });
         var settingsResolver = new AccountingAppSettingsResolver(new StaticOptionsMonitor<QuickBooksOptions>(qbOptions.Value));
         var providerResolver = new AccountingProviderResolver(providers);
+        var claims = new RentalCommand.Data.Accounting.AccountingConnectionClaimStore(_ctx.Db);
         var tokenService = new AccountingTokenService(
-            _dp, providerResolver, settingsResolver, TimeProvider.System, NullLogger<AccountingTokenService>.Instance);
+            _dp, providerResolver, settingsResolver, claims,
+            TimeProvider.System, NullLogger<AccountingTokenService>.Instance);
         var importService = new AccountingImportService(
-            _ctx.Db, _dp, providerResolver, settingsResolver, tokenService,
+            _dp, providerResolver, settingsResolver, tokenService, claims,
+            Moq.Mock.Of<IAtomicUnitOfWork>(),
             TimeProvider.System,
             NullLogger<AccountingImportService>.Instance);
         return new AccountingConnectionService(
             _ctx.Db, _dp, providerResolver, settingsResolver, importService,
             TimeProvider.System,
+            null!,
             NullLogger<AccountingConnectionService>.Instance);
     }
 

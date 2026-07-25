@@ -9,10 +9,15 @@ using Npgsql;
 using RentalCommand.Api.Extensions;
 using RentalCommand.Api.Scanning;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Services.Sms;
 using RentalCommand.Api.Simulation;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Authorization;
+using RentalCommand.Data.Notifications;
 using RentalCommand.Engine.HealthChecks;
 using RentalCommand.Engine.Services;
 using RentalCommand.Engine.Workers;
@@ -34,26 +39,90 @@ if (!string.IsNullOrWhiteSpace(dataProtectionKeysPath))
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
     ?? throw new InvalidOperationException(
         "Missing connection string 'DefaultConnection'. Set it in appsettings.json or via configuration.");
+if (!string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("MigratorConnection")))
+{
+    throw new InvalidOperationException(
+        "ConnectionStrings:MigratorConnection must not be available to the long-running Engine process.");
+}
 
-// Unified audit trail: the Engine has no HttpContext, so it attributes audit rows to "system".
-// The scoped interceptor is resolved from the same scope as the DbContext (the (sp, options)
-// overload) and auto-records IAuditable CRUD that workers perform.
+RentalCommand.Data.Security.RuntimeDatabaseRoleProvisioner.ValidateRuntimeConnectionString(
+    connectionString,
+    RentalCommand.Data.Security.DatabaseRuntimeIdentity.EngineRole,
+    allowDevelopmentDefault: builder.Environment.IsDevelopment());
+
+// Atomic commands attribute Engine mutations to the system actor inside the canonical audit scope.
 builder.Services.AddScoped<RentalCommand.Core.Interfaces.ICurrentActor,
     RentalCommand.Data.Auditing.SystemCurrentActor>();
-builder.Services.AddScoped<RentalCommand.Core.Interfaces.IAuditScope,
-    RentalCommand.Data.Auditing.AuditScope>();
-builder.Services.AddScoped<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>();
 
-// Row-Level Security backstop (audit M-1): the Engine operates across all portfolios, so its RLS
-// interceptor always sets app.is_admin = true (no HTTP context, no single portfolio). It sets the
-// same session GUCs the tenant_isolation policies read, mirroring EdiPlatform's Engine.
+// The Engine's direct restricted database identity is the sole cross-workspace authority. It never
+// receives or sets a mutable administrator/bypass flag.
 builder.Services.AddSingleton<RentalCommand.Engine.Data.EngineRlsInterceptor>();
+builder.Services.AddAtomicPersistenceKernel(allowUnconvertedWrites: false);
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Esign.RecordNativeSignatureCommand,
+    RentalCommand.Core.Esign.NativeSignerActionResult,
+    RentalCommand.Data.Esign.RecordNativeSignatureHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Esign.RecordNativeDeclineCommand,
+    RentalCommand.Core.Esign.NativeSignerActionResult,
+    RentalCommand.Data.Esign.RecordNativeDeclineHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Esign.FinalizeNativeEsignRequestCommand,
+    RentalCommand.Core.Esign.FinalizeNativeEsignRequestResult,
+    RentalCommand.Data.Esign.FinalizeNativeEsignRequestHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Conversations.SendConversationMessageCommand,
+    RentalCommand.Core.Conversations.SendConversationMessageResult,
+    RentalCommand.Data.Conversations.SendConversationMessageHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.ReconcileClaimedProviderPaymentEventCommand,
+    RentalCommand.Core.Payments.ReconcileClaimedProviderPaymentEventResult,
+    RentalCommand.Data.Payments.ReconcileClaimedProviderPaymentEventHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.PrepareProviderPaymentCreateCommand,
+    RentalCommand.Core.Payments.PrepareProviderPaymentCreateResult,
+    RentalCommand.Data.Payments.PrepareProviderPaymentCreateHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.FinalizeProviderPaymentCreateCommand,
+    RentalCommand.Core.Payments.FinalizeProviderPaymentCreateResult,
+    RentalCommand.Data.Payments.FinalizeProviderPaymentCreateHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Payments.FailProviderPaymentCreateCommand,
+    RentalCommand.Core.Payments.FailProviderPaymentCreateResult,
+    RentalCommand.Data.Payments.FailProviderPaymentCreateHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Automation.ApplyClaimedDebtServiceBatchCommand,
+    RentalCommand.Core.Automation.ApplyScheduledFinanceBatchResult,
+    RentalCommand.Data.Automation.ApplyClaimedDebtServiceBatchHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Automation.ApplyClaimedRecurringExpenseBatchCommand,
+    RentalCommand.Core.Automation.ApplyScheduledFinanceBatchResult,
+    RentalCommand.Data.Automation.ApplyClaimedRecurringExpenseBatchHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Automation.ApplyClaimedRecurringMaintenanceBatchCommand,
+    RentalCommand.Core.Automation.ApplyScheduledFinanceBatchResult,
+    RentalCommand.Data.Automation.ApplyClaimedRecurringMaintenanceBatchHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Automation.ApplyScheduledTenantChargeBatchCommand,
+    RentalCommand.Core.Automation.ApplyScheduledTenantChargeBatchResult,
+    RentalCommand.Data.Payments.ApplyScheduledTenantChargeBatchHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Api.Services.Domain.AtomicNoticeDeliveryCommand,
+    RentalCommand.Api.Services.Domain.AtomicNoticeDeliveryResult,
+    RentalCommand.Api.Services.Domain.AtomicNoticeDeliveryHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Core.Automation.ApplyClaimedTenantNoticeDraftBatchCommand,
+    RentalCommand.Core.Automation.ApplyClaimedTenantNoticeDraftBatchResult,
+    RentalCommand.Data.Notifications.ApplyClaimedTenantNoticeDraftBatchHandler>();
+builder.Services.AddAtomicCommandHandler<
+    RentalCommand.Engine.Services.EnqueueMorningBriefingsCommand,
+    RentalCommand.Engine.Services.EnqueueMorningBriefingsResult,
+    RentalCommand.Engine.Services.EnqueueMorningBriefingsHandler>();
 
 builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
     options.UseNpgsql(connectionString)
-        .AddInterceptors(
-            sp.GetRequiredService<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>(),
-            sp.GetRequiredService<RentalCommand.Engine.Data.EngineRlsInterceptor>()));
+        .UseAtomicPersistenceKernel(sp)
+        .AddInterceptors(sp.GetRequiredService<RentalCommand.Engine.Data.EngineRlsInterceptor>()));
 
 // --- Master simulation clock (TSK-615) ---
 // Same ambient TimeProvider + IAppTimeZoneProvider registration as the API so both processes agree on
@@ -63,7 +132,15 @@ builder.Services.AddSimulationClock(builder.Configuration, builder.Environment);
 
 // DB-outbox publisher + notification channel (SignalWire/Twilio SMS; SMTP or SendGrid email,
 // config-selected; logs when unconfigured).
-builder.Services.AddScoped<IMessagePublisher, OutboxMessagePublisher>();
+builder.Services.AddScoped<IMessagePublisher, RentalCommand.Data.Outbox.OutboxMessagePublisher>();
+builder.Services.AddScoped<RentalCommand.Data.Outbox.IOutboxClaimStore, RentalCommand.Data.Outbox.OutboxClaimStore>();
+builder.Services.AddScoped<RentalCommand.Data.Notifications.ITenantNoticeWorkClaimStore, RentalCommand.Data.Notifications.TenantNoticeWorkClaimStore>();
+builder.Services.AddScoped<RentalCommand.Data.Scanning.IScanProcessingClaimStore,
+    RentalCommand.Data.Scanning.ScanProcessingClaimStore>();
+builder.Services.AddScoped<RentalCommand.Data.Simulation.ISimWorkerCommandClaimStore,
+    RentalCommand.Data.Simulation.SimWorkerCommandClaimStore>();
+builder.Services.AddScoped<RentalCommand.Data.Accounting.IAccountingConnectionClaimStore,
+    RentalCommand.Data.Accounting.AccountingConnectionClaimStore>();
 // SMTP sender (MailKit) the channel delegates to when Notifications:Email:Transport == "Smtp".
 builder.Services.AddSingleton<ISmtpEmailSender, SmtpEmailSender>();
 // Pluggable SMS providers (BYO per-portfolio; platform-env fallback). Shared registration with the
@@ -80,6 +157,26 @@ builder.Services.Configure<UploadSettings>(builder.Configuration.GetSection(Uplo
 builder.Services.Configure<NotificationsConfig>(builder.Configuration.GetSection(NotificationsConfig.SectionName));
 var llmProvider = builder.Configuration.GetValue<string>("Assistant:Provider") ?? "openai";
 builder.Services.AddSingleton<IImageTextExtractor, TesseractImageTextExtractor>();
+builder.Services.AddHttpClient<OpenAiLlmProvider>(c =>
+{
+    c.BaseAddress = new Uri("https://api.openai.com/");
+    c.Timeout = TimeSpan.FromSeconds(90);
+});
+builder.Services.AddHttpClient<AnthropicLlmProvider>(c =>
+{
+    c.BaseAddress = new Uri("https://api.anthropic.com/");
+    c.Timeout = TimeSpan.FromSeconds(90);
+});
+builder.Services.AddScoped<IWorkspaceLlmExtractionProvider>(sp =>
+    sp.GetRequiredService<OpenAiLlmProvider>());
+builder.Services.AddScoped<IWorkspaceLlmExtractionProvider>(sp =>
+    sp.GetRequiredService<AnthropicLlmProvider>());
+builder.Services.AddScoped<IWorkspaceAuthorizationEvaluator, WorkspaceAuthorizationEvaluator>();
+builder.Services.AddScoped<IWorkspaceLlmCredentialService, WorkspaceLlmCredentialService>();
+builder.Services.AddScoped<IWorkspaceLlmCredentialResolver>(sp =>
+    sp.GetRequiredService<IWorkspaceLlmCredentialService>());
+builder.Services.AddScoped<ILlmUsageEvidenceRecorder>(sp =>
+    sp.GetRequiredService<IWorkspaceLlmCredentialService>());
 if (string.Equals(llmProvider, "anthropic", StringComparison.OrdinalIgnoreCase))
 {
     builder.Services.AddHttpClient<ILlmProvider, AnthropicLlmProvider>(c =>
@@ -112,6 +209,23 @@ else // default: openai
     });
 }
 builder.Services.AddScoped<IFileStorage, DiskFileStorage>();
+builder.Services.AddScoped<RentalCommand.Data.Documents.IPendingFileUploadStore,
+    RentalCommand.Data.Documents.PendingFileUploadStore>();
+builder.Services.AddScoped<PendingFileUploadCleanupService>();
+// Native e-sign execution is shared with the API. Signatures are committed before PDF/blob work;
+// this service lets the Engine finish any durable ExecutionPending request after a transient failure.
+builder.Services.AddSingleton<RentalCommand.Api.Services.Esign.IExecutedLeasePdfGenerator,
+    RentalCommand.Api.Services.Esign.ExecutedLeasePdfGenerator>();
+builder.Services.AddScoped<RentalCommand.Api.Services.Esign.INativeEsignExecutionService,
+    RentalCommand.Api.Services.Esign.NativeEsignExecutionService>();
+builder.Services.AddScoped<RentalCommand.Data.Esign.INativeEsignExecutionClaimStore,
+    RentalCommand.Data.Esign.NativeEsignExecutionClaimStore>();
+builder.Services.AddScoped<NativeEsignReconciliationService>();
+builder.Services.AddScoped<RentalCommand.Data.Payments.IProviderInboxClaimStore,
+    RentalCommand.Data.Payments.ProviderInboxClaimStore>();
+builder.Services.AddScoped<ProviderInboxReconciliationService>();
+builder.Services.AddScoped<RentalCommand.Data.Automation.IScheduledAutomationClaimStore,
+    RentalCommand.Data.Automation.ScheduledAutomationClaimStore>();
 // Realtime backplane (TSK-624): the Engine can't reach the API's in-memory SignalR hub, so it
 // publishes each entity change as a Postgres NOTIFY on its own pooled connection. The API-hosted
 // EntityChangeListener LISTENs and re-broadcasts to the hub. Shared NpgsqlDataSource so publishes
@@ -128,23 +242,17 @@ builder.Services.AddScoped<IRecurringMaintenanceService, RecurringMaintenanceSer
 builder.Services.Configure<StripeConfig>(builder.Configuration.GetSection(StripeConfig.SectionName));
 builder.Services.AddScoped<IAutopayChargeService, AutopayChargeService>();
 builder.Services.AddScoped<ILateFeeService, LateFeeService>();
-builder.Services.AddScoped<ILeaseExpiryReminderService, LeaseExpiryReminderService>();
+builder.Services.AddScoped<ITenantNoticeCandidateGenerationService, TenantNoticeCandidateGenerationService>();
+builder.Services.AddScoped<ITenantNoticeDraftSetStore, TenantNoticeDraftSetStore>();
 builder.Services.AddScoped<IDailyBriefingService, DailyBriefingService>();
 builder.Services.AddScoped<IDailyBriefingDeliveryService, DailyBriefingDeliveryService>();
-builder.Services.AddScoped<INotificationSettingsService, NotificationSettingsService>();
+builder.Services.AddScoped<IMessagingProviderSettingsResolver, MessagingProviderSettingsResolver>();
 
-// Lease Lifecycle Autopilot: proactively draft renewal/late/move-out notices for one-tap approval.
-// Reuses the Api's NoticeDraftService (LLM copy + de-dup idempotency) — the same code the manual
-// "Generate" button runs. ConversationService is its constructor dependency (only used by the
-// approve path, which the worker never invokes; the Engine already provides IDataUpdateService).
-// ConversationService's own constructor needs IFairHousingReviewService, so the Engine MUST register
-// it too. Development host builds validate the whole DI graph on Build(), so a missing registration
-// here crashes the entire Engine on boot — killing every worker (outbox/scan dispatch, debt service,
-// late-fee sweep, notices), not just the notice path. FairHousingReviewService's only dependency is
-// ILlmProvider, which the Engine already registers for scan extraction, so this adds no further graph.
+// Tenant-notice work is drafted by one PostgreSQL set command, then Auto policies use the same
+// canonical approval/outbox command as the API. The Engine does not use the manual draft façade.
 builder.Services.AddScoped<IFairHousingReviewService, FairHousingReviewService>();
 builder.Services.AddScoped<IConversationService, ConversationService>();
-builder.Services.AddScoped<INoticeDraftService, NoticeDraftService>();
+builder.Services.AddScoped<INotificationFoundationService, NotificationFoundationService>();
 builder.Services.AddScoped<INoticeDraftGenerationService, NoticeDraftGenerationService>();
 
 // Accounting-integration pull worker dependencies (provider-agnostic). The Engine does not call
@@ -172,9 +280,12 @@ builder.Services.AddHostedService<RecurringExpenseWorker>();
 builder.Services.AddHostedService<AutopayChargeWorker>();
 builder.Services.AddHostedService<RecurringMaintenanceWorker>();
 builder.Services.AddHostedService<LateFeeWorker>();
-builder.Services.AddHostedService<LeaseExpiryReminderWorker>();
+builder.Services.AddHostedService<TenantNoticeCandidateWorker>();
 builder.Services.AddHostedService<DailyBriefingDeliveryWorker>();
 builder.Services.AddHostedService<NoticeDraftWorker>();
+builder.Services.AddHostedService<NativeEsignReconciliationWorker>();
+builder.Services.AddHostedService<ProviderInboxReconciliationWorker>();
+builder.Services.AddHostedService<PendingFileUploadCleanupWorker>();
 
 // Dev-only (Simulation:Enabled, non-prod): the command-bridge worker that runs automation jobs on demand
 // at sim-time when the API enqueues a SimWorkerCommand. Never registered in production.
@@ -203,41 +314,9 @@ builder.Services.AddHealthChecks()
 
 var host = builder.Build();
 
-// --- Self-migrate ---
-// The Engine applies EF Core migrations itself so it no longer depends on the API having
-// created the schema. Both the API and Engine self-migrate on startup, so the migration runs
-// under a shared PostgreSQL advisory lock (DatabaseMigrator) — concurrent MigrateAsync calls
-// would otherwise race on a fresh batch and crash one process. Done BEFORE acquiring the worker
-// advisory lock so the schema (incl. the heartbeat table the watchdog reads) exists first.
-{
-    var migrateLogger = host.Services.GetRequiredService<ILogger<Program>>();
-    const int maxMigrateAttempts = 30;
-    for (var attempt = 1; attempt <= maxMigrateAttempts; attempt++)
-    {
-        try
-        {
-            using var scope = host.Services.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-            // Advisory-locked so the Engine and API don't apply a fresh migration batch concurrently.
-            await DatabaseMigrator.MigrateWithLockAsync(db);
-            migrateLogger.LogInformation("Engine applied database migrations (or none pending).");
-            break;
-        }
-        catch (Exception ex) when (attempt < maxMigrateAttempts)
-        {
-            migrateLogger.LogWarning(
-                "Database not ready for migration yet (attempt {Attempt}/{Max}): {Message}. Retrying in 2s…",
-                attempt, maxMigrateAttempts, ex.Message);
-            await Task.Delay(TimeSpan.FromSeconds(2));
-        }
-    }
-}
-
-// --- Single-instance safety: PostgreSQL advisory lock TAKEOVER ---
-// A new Engine instance KILLS any existing holder and wins the lock, so a restart/redeploy
-// always succeeds rather than getting stuck behind a zombie process. The dedicated, non-pooled
-// connection is held open for the host's lifetime; AdvisoryLockWatcherService monitors it and
-// triggers graceful shutdown if a still-newer Engine later terminates it.
+// --- Single-instance safety: PostgreSQL advisory lock ---
+// The dedicated non-pooled connection already uses the direct restricted Engine login. A new Engine
+// waits for the prior holder instead of retaining owner authority merely to terminate it.
 var logger = host.Services.GetRequiredService<ILogger<Program>>();
 
 var lockConnString = new NpgsqlConnectionStringBuilder(connectionString) { Pooling = false }.ToString();
@@ -252,6 +331,9 @@ for (var attempt = 1; attempt <= maxDbAttempts; attempt++)
     {
         lockConnection = new NpgsqlConnection(lockConnString);
         await lockConnection.OpenAsync();
+        await RentalCommand.Data.Security.DatabaseRuntimeIdentity.ValidateOpenedConnectionAsync(
+            lockConnection,
+            RentalCommand.Data.Security.DatabaseRuntimeIdentity.EngineRole);
         break;
     }
     catch (Exception ex) when (attempt < maxDbAttempts)
@@ -269,29 +351,20 @@ if (lockConnection is null)
     return;
 }
 
-// If another Engine currently holds the advisory lock, terminate its backend so we can take over.
-await using (var checkCmd = lockConnection.CreateCommand())
+var acquiredImmediately = false;
+await using (var tryLockCmd = lockConnection.CreateCommand())
 {
-    checkCmd.CommandText =
-        $"SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND classid = 0 " +
-        $"AND objid = {Program.AdvisoryLockKey} AND granted = true";
-    var existingPid = await checkCmd.ExecuteScalarAsync();
-    if (existingPid != null)
-    {
-        logger.LogWarning(
-            "Another Engine instance detected (DB PID {Pid}). Terminating it to take over the advisory lock…",
-            existingPid);
-        await using var killCmd = lockConnection.CreateCommand();
-        killCmd.CommandText = $"SELECT pg_terminate_backend({existingPid})";
-        await killCmd.ExecuteScalarAsync();
-        await Task.Delay(1000); // give the old backend time to die and release the lock
-        Program.LockContested = true;
-    }
+    tryLockCmd.CommandText = $"SELECT pg_try_advisory_lock({Program.AdvisoryLockKey})";
+    acquiredImmediately = (bool?)await tryLockCmd.ExecuteScalarAsync() == true;
 }
 
-// Acquire the advisory lock (blocking — succeeds now that any prior holder is gone).
-await using (var lockCmd = lockConnection.CreateCommand())
+if (!acquiredImmediately)
 {
+    Program.LockContested = true;
+    logger.LogWarning(
+        "Another Engine holds advisory lock {LockKey}; waiting for it to stop.",
+        Program.AdvisoryLockKey);
+    await using var lockCmd = lockConnection.CreateCommand();
     lockCmd.CommandText = $"SELECT pg_advisory_lock({Program.AdvisoryLockKey})";
     await lockCmd.ExecuteScalarAsync();
 }
@@ -325,39 +398,6 @@ lifetime.ApplicationStopping.Register(() =>
     Program.AdvisoryLockHeld = false;
 });
 
-// --- Crash-recovery: re-arm scans stranded mid-extraction by a previous crash ---
-// ScanProcessingWorker atomically claims a draft Pending → Processing before calling the
-// LLM. If a prior Engine crashed / was killed (incl. the advisory-lock takeover above) after
-// that claim but before reaching a terminal state, the draft is left in "Processing" — a state
-// the worker never polls, so it would be invisible and unconfirmable forever. We run this only
-// AFTER the advisory lock is held, so single-instance is guaranteed: no other Engine can
-// legitimately own a "Processing" row, making every such row a genuine crash victim safe to
-// reset to "Pending" for a fresh attempt. Only "Processing" is touched — "Confirming" is the
-// API's mid-confirm claim and must be left alone.
-try
-{
-    using var recoveryScope = host.Services.CreateScope();
-    var recoveryDb = recoveryScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-    var reset = await recoveryDb.Database.ExecuteSqlRawAsync(
-        "UPDATE \"ScanDrafts\" SET \"Status\" = 'Pending', \"ReviewedAt\" = NULL WHERE \"Status\" = 'Processing'");
-    if (reset > 0)
-    {
-        logger.LogWarning(
-            "Crash-recovery: reset {Count} scan draft(s) stranded in 'Processing' back to 'Pending' for reprocessing.",
-            reset);
-    }
-    else
-    {
-        logger.LogInformation("Crash-recovery: no scan drafts were stranded in 'Processing'.");
-    }
-}
-catch (Exception ex)
-{
-    // Non-fatal: the worker's in-process failure handling still drives live timeouts/exceptions
-    // to 'Failed'. Don't block startup if this one-shot sweep fails (e.g. transient DB hiccup).
-    logger.LogError(ex, "Crash-recovery sweep for stranded 'Processing' scan drafts failed; continuing startup.");
-}
-
 await host.RunAsync();
 
 /// <summary>
@@ -380,7 +420,7 @@ public partial class Program
         set => _advisoryLockHeld = value;
     }
 
-    /// <summary>True if this instance had to terminate a prior holder to take over.</summary>
+    /// <summary>True if this instance encountered and waited for a prior lock holder.</summary>
     internal static bool LockContested
     {
         get => _lockContested;

@@ -25,7 +25,6 @@
 		History,
 		BarChart3,
 		MessageSquare,
-		CreditCard,
 		ClipboardList,
 		Home,
 		BellRing,
@@ -36,7 +35,10 @@
 		BookOpen,
 		HelpCircle,
 		Activity,
-		Upload
+		Landmark,
+		Upload,
+		Clock3,
+		UserRound
 	} from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
@@ -53,18 +55,20 @@
 	import M3NavGroup from '$lib/components/m3/NavGroup.svelte';
 	import M3NavItem from '$lib/components/m3/NavItem.svelte';
 	import MaterialSymbol from '$lib/components/m3/MaterialSymbol.svelte';
-	import CommandCenterNav from '$lib/components/CommandCenterNav.svelte';
-	import { clearAuthState } from '$lib/stores/auth.svelte';
-	import { hasRole, isPortalUser, isStaff } from '$lib/types/user';
+	import { clearAuthState, getAuthState } from '$lib/stores/auth.svelte';
+	import type { WorkspaceExperience } from '$lib/types/user';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { messages as messagesApi } from '$lib/api/endpoints/messages';
 	import { appointments as appointmentsApi } from '$lib/api/endpoints/appointments';
+	import { leasingWorkspace } from '$lib/api/endpoints/leasing-workspace';
 	import NavigationLoader from '$lib/components/NavigationLoader.svelte';
 	import SandboxBanner from '$lib/components/SandboxBanner.svelte';
 	import M3TooltipLayer from '$lib/components/shared/M3TooltipLayer.svelte';
 	import ThemeModeToggle from '$lib/components/shared/ThemeModeToggle.svelte';
 	import ScanLauncher from '$lib/components/scan/ScanLauncher.svelte';
 	import BrandMark from '$lib/components/BrandMark.svelte';
+	import { canAccessRoute, CAPABILITY, safeLandingForAccess } from '$lib/auth/experience-policy';
+	import { canUseUnstructuredVoiceCapture, scanDocumentTypesForCapabilities } from '$lib/scan/scan-access';
 
 	let { children }: { children: import('svelte').Snippet } = $props();
 
@@ -88,7 +92,6 @@
 		href: string;
 		label: string;
 		icon: typeof Building;
-		roles?: string[];
 	};
 
 	type NavGroup = {
@@ -99,11 +102,12 @@
 	};
 
 	// Pinned single links above all groups (IA Wave 1 §4.2): the dashboard + the flagship
-	// "Scan / Edit" action, one tap away and outside any group.
+	// "Scan / Add" action, one click away and outside any group. This is the persistent capture
+	// doorway; screen-specific Add buttons remain visible for people who already know the record type.
 	const pinnedNavItems: NavItem[] = [
 		{ href: '/', label: 'Dashboard', icon: LayoutDashboard },
 		{ href: '/onboarding', label: 'Guided Setup', icon: ClipboardList },
-		{ href: '/scan', label: 'Scan / Edit', icon: ScanLine, roles: ['Admin', 'Manager', 'Agent'] }
+		{ href: '/scan', label: 'Scan / Add', icon: ScanLine }
 	];
 
 	// Grouped navigation (IA Wave 1 §4.2): four landlord-noun groups in frequency order —
@@ -115,9 +119,10 @@
 			label: 'Money',
 			icon: Wallet,
 			items: [
-				{ href: '/accounting', label: 'Money', icon: Calculator, roles: ['Admin', 'Manager'] },
-				{ href: '/deposits', label: 'Security Deposits', icon: PiggyBank, roles: ['Admin', 'Manager'] },
-				{ href: '/reports', label: 'Reports', icon: BarChart3, roles: ['Admin', 'Manager'] }
+				{ href: '/accounting', label: 'Money', icon: Calculator },
+				{ href: '/banking', label: 'Reconciliation & banking', icon: Landmark },
+				{ href: '/deposits', label: 'Security Deposits', icon: PiggyBank },
+				{ href: '/reports', label: 'Reports', icon: BarChart3 }
 			]
 		},
 		{
@@ -125,12 +130,13 @@
 			label: 'Rentals',
 			icon: Briefcase,
 			items: [
-				{ href: '/properties', label: 'Properties', icon: Building, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/units', label: 'Units', icon: Home, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/tenants', label: 'Tenants', icon: Users, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/leases', label: 'Leases', icon: FileText, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/lease-templates', label: 'Lease Templates', icon: Upload, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/applications', label: 'Applications', icon: ClipboardList, roles: ['Admin', 'Manager', 'Agent'] }
+				{ href: '/properties', label: 'Properties', icon: Building },
+				{ href: '/owners', label: 'Owners', icon: BadgeDollarSign },
+				{ href: '/units', label: 'Units', icon: Home },
+				{ href: '/tenants', label: 'Tenants', icon: Users },
+				{ href: '/leases', label: 'Leases', icon: FileText },
+				{ href: '/lease-templates', label: 'Lease Templates', icon: Upload },
+				{ href: '/applications', label: 'Applications', icon: ClipboardList }
 			]
 		},
 		{
@@ -140,9 +146,9 @@
 			items: [
 				// A6: one professional term for the "things to fix" concept — "Work Orders" — used
 				// consistently across the staff nav, the page heading, and the dashboard.
-				{ href: '/maintenance', label: 'Work Orders', icon: Wrench, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/appointments', label: 'Appointments', icon: Calendar, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/vendors', label: 'Vendors', icon: Contact, roles: ['Admin', 'Manager'] }
+				{ href: '/maintenance', label: 'Work Orders', icon: Wrench },
+				{ href: '/appointments', label: 'Appointments', icon: Calendar },
+				{ href: '/vendors', label: 'Vendors', icon: Contact }
 			]
 		},
 		{
@@ -150,8 +156,8 @@
 			label: 'Inbox',
 			icon: MessageSquare,
 			items: [
-				{ href: '/messages', label: 'Messages', icon: MessageSquare, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/notices', label: 'Tenant notices', icon: BellRing, roles: ['Admin', 'Manager', 'Agent'] }
+				{ href: '/messages', label: 'Messages', icon: MessageSquare },
+				{ href: '/notices', label: 'Tenant notices', icon: BellRing }
 			]
 		}
 	];
@@ -162,7 +168,7 @@
 	// A4: ONE AI entry point. "Ask" (→ /ai) is the single doorway to the assistant; the redundant
 	// floating AssistantBubble was removed from this shell so there aren't multiple competing doorways.
 	const bottomRailItems: NavItem[] = [
-		{ href: '/ai', label: 'Ask', icon: Sparkles, roles: ['Admin', 'Manager', 'Agent'] },
+		{ href: '/ai', label: 'Ask', icon: Sparkles },
 		{ href: '/docs', label: 'Help', icon: BookOpen }
 	];
 
@@ -173,10 +179,12 @@
 		label: 'Settings',
 		icon: Settings,
 		items: [
-			{ href: '/settings', label: 'Settings', icon: Settings, roles: ['Admin', 'Manager'] },
-			{ href: '/admin/users', label: 'Team', icon: Shield, roles: ['Admin'] },
-			{ href: '/owners', label: 'Owners', icon: BadgeDollarSign, roles: ['Admin', 'Manager'] },
-			{ href: '/audit', label: 'Activity history', icon: History, roles: ['Admin', 'Manager'] }
+			{ href: '/settings/notifications/my-alerts', label: 'My alerts', icon: BellRing },
+			{ href: '/settings/notifications/team-routing', label: 'Team routing', icon: Users },
+			{ href: '/settings/notifications/tenant-notices', label: 'Tenant notices', icon: BellRing },
+			{ href: '/settings', label: 'Settings', icon: Settings },
+			{ href: '/admin/users', label: 'Team', icon: Shield },
+			{ href: '/audit', label: 'Activity history', icon: History }
 		]
 	};
 
@@ -189,6 +197,7 @@
 		'/onboarding': 'rocket_launch',
 		'/scan': 'document_scanner',
 		'/accounting': 'account_balance_wallet',
+		'/banking': 'account_balance',
 		'/deposits': 'savings',
 		'/reports': 'summarize',
 		'/properties': 'apartment',
@@ -204,10 +213,21 @@
 		'/notices': 'campaign',
 		'/ai': 'auto_awesome',
 		'/docs': 'menu_book',
+		'/settings/notifications/my-alerts': 'notifications',
+		'/settings/notifications/team-routing': 'group',
+		'/settings/notifications/tenant-notices': 'campaign',
 		'/settings': 'settings',
 		'/admin/users': 'shield',
 		'/owners': 'account_balance',
-		'/audit': 'history'
+		'/audit': 'history',
+		'/leasing': 'space_dashboard',
+		'/leasing/pipeline': 'assignment',
+		'/leasing/rentals': 'home',
+		'/leasing/calendar': 'event',
+		'/leasing/inbox': 'forum',
+		'/my-work': 'build',
+		'/my-schedule': 'event',
+		'/assignment-inbox': 'forum'
 	};
 	// Material Symbols glyph per staff nav group id (collapsible section headers).
 	const navGlyphByGroup: Record<string, string> = {
@@ -226,27 +246,93 @@
 	// wrong-state flash plus server/client markup divergence (M-15). The client store stays the
 	// source for outgoing Authorization headers and post-login mutations, not for shell rendering.
 	let currentUser = $derived(page.data.user ?? null);
-	let portalUser = $derived(isPortalUser(currentUser) && !isStaff(currentUser));
-	const userSecurityHref = $derived(portalUser ? '/portal/security' : '/settings/security');
+	const authState = getAuthState();
+	let currentAccess = $derived(page.data.access ?? authState.accessEnvelope ?? null);
+	let activeExperience = $derived(authState.activeExperience ?? currentAccess?.selectedContext.activeExperience ?? null);
+	let activeCapabilities = $derived<Set<string>>(new Set<string>(
+		currentAccess?.navigation.find((entry: { experience: WorkspaceExperience; capabilityKeys: string[] }) =>
+			entry.experience === activeExperience)?.capabilityKeys ?? []
+	));
+	let portalUser = $derived(activeExperience === 'Tenant');
+	let ownerUser = $derived(activeExperience === 'Owner');
+	let leasingUser = $derived(activeExperience === 'Leasing');
+	let technicianUser = $derived(activeExperience === 'Maintenance');
+	let relationshipUser = $derived(portalUser || ownerUser);
+	const userSecurityHref = $derived(
+		portalUser ? '/portal/security' : ownerUser ? '/owner/security' : '/settings/security'
+	);
+	const canOpenUserSecurity = $derived(true);
+	const homeHref = $derived(currentAccess ? (safeLandingForAccess(currentAccess) ?? '/logout') : '/');
+	const canOpenGuidedSetup = $derived(
+		canAccessRoute('/onboarding', activeExperience, activeCapabilities)
+	);
+	const canOpenSettings = $derived(
+		canAccessRoute('/settings', activeExperience, activeCapabilities)
+	);
+	const canOpenHeaderScan = $derived(
+		canAccessRoute('/scan', activeExperience, activeCapabilities)
+	);
+	const allowedHeaderScanTypes = $derived(scanDocumentTypesForCapabilities(activeCapabilities));
+	const allowHeaderVoiceCapture = $derived(canUseUnstructuredVoiceCapture(allowedHeaderScanTypes));
+	const headerMessagesHref = $derived(
+		technicianUser ? '/assignment-inbox' : leasingUser ? '/leasing/inbox' : '/messages'
+	);
+	const headerAppointmentsHref = $derived(leasingUser ? '/leasing/calendar' : '/appointments');
+	const canOpenHeaderMessages = $derived(
+		canAccessRoute(headerMessagesHref, activeExperience, activeCapabilities)
+	);
+	const canOpenHeaderAppointments = $derived(
+		canAccessRoute(headerAppointmentsHref, activeExperience, activeCapabilities)
+	);
 
 	const portalNavItems: NavItem[] = [
-		{ href: '/portal', label: 'Dashboard', icon: Home },
-		{ href: '/portal/messages', label: 'Messages', icon: MessageSquare },
-		{ href: '/portal/notifications', label: 'Notifications', icon: BellRing },
+		{ href: '/portal', label: 'Home', icon: Home },
+		{ href: '/portal/account', label: 'Account & lease', icon: FileText },
 		{ href: '/portal/maintenance', label: 'Maintenance', icon: Wrench },
-		{ href: '/portal/payments', label: 'Payments', icon: CreditCard },
-		{ href: '/portal/lease', label: 'Lease', icon: FileText },
-		{ href: '/portal/appointments', label: 'Appointments', icon: Calendar }
+		{ href: '/portal/messages', label: 'Messages', icon: MessageSquare },
+		{ href: '/portal/profile', label: 'Profile', icon: UserRound }
 	];
 
 	const portalUtilityItems: NavItem[] = [
-		{ href: '/portal/security', label: 'Security', icon: Shield }
+		{ href: '/portal/payments', label: 'Account & lease', icon: FileText },
+		{ href: '/portal/lease', label: 'Account & lease', icon: FileText },
+		{ href: '/portal/notifications', label: 'Notifications', icon: BellRing },
+		{ href: '/portal/appointments', label: 'Appointments', icon: Calendar },
+		{ href: '/portal/security', label: 'Profile', icon: Shield },
+		{ href: '/settings/notifications/my-alerts', label: 'Profile', icon: BellRing }
 	];
-	const commandCenterTitleItem: NavItem = { href: '/units/', label: 'Command Center', icon: Home };
+	const ownerUtilityItems: NavItem[] = [
+		{ href: '/owner/security', label: 'Security', icon: Shield }
+	];
+	const ownerNavItems: NavItem[] = [
+		{ href: '/owner', label: 'Overview', icon: LayoutDashboard },
+		{ href: '/owner/properties', label: 'Properties', icon: Building },
+		{ href: '/owner/statements', label: 'Statements & documents', icon: FileText },
+		{ href: '/owner/approvals', label: 'Approvals', icon: ClipboardList },
+		{ href: '/owner/messages', label: 'Messages', icon: MessageSquare },
+		{ href: '/settings/notifications/my-alerts', label: 'My alerts', icon: BellRing }
+	];
+	const leasingNavItems: NavItem[] = [
+		{ href: '/leasing', label: 'Today', icon: LayoutDashboard },
+		{ href: '/leasing/pipeline', label: 'Applications & move-ins', icon: ClipboardList },
+		{ href: '/leasing/rentals', label: 'Properties, units & listings', icon: Home },
+		{ href: '/leasing/calendar', label: 'Showings', icon: Calendar },
+		{ href: '/leasing/inbox', label: 'Inbox', icon: MessageSquare },
+		{ href: '/notices', label: 'Tenant notices', icon: BellRing },
+		{ href: '/settings/notifications/my-alerts', label: 'My alerts', icon: BellRing }
+	];
+	const technicianNavItems: NavItem[] = [
+		{ href: '/my-work', label: 'My work', icon: Wrench },
+		{ href: '/my-schedule', label: 'Schedule', icon: Clock3 },
+		{ href: '/assignment-inbox', label: 'Inbox', icon: MessageSquare },
+		{ href: '/settings/notifications/my-alerts', label: 'My alerts', icon: BellRing }
+	];
+	// Unit list and detail routes belong to Rentals. Keeping the detail prefix in title resolution
+	// preserves safe direct links without promoting a second peer-level Unit picker.
+	const commandCenterTitleItem: NavItem = { href: '/units/', label: 'Rentals', icon: Home };
 
 	function itemVisible(item: NavItem): boolean {
-		if (!item.roles || item.roles.length === 0) return true;
-		return hasRole(currentUser, ...item.roles);
+		return canAccessRoute(item.href, activeExperience, activeCapabilities);
 	}
 
 	// Staff groups filtered to the items the current user may see; empty groups dropped.
@@ -259,10 +345,6 @@
 	// Pinned single links (Dashboard, Scan / Edit) above the groups.
 	let visiblePinned = $derived.by(() => pinnedNavItems.filter(itemVisible));
 
-	// Command Center (the per-unit drill-down) is surfaced as its own pinned entry below Scan / Edit;
-	// staff-only, gated to the same roles as the Units nav item.
-	let canSeeCommandCenter = $derived(hasRole(currentUser, 'Admin', 'Manager', 'Agent'));
-
 	// Bottom-rail standalone links (Assistant, Help).
 	let visibleBottomRail = $derived.by(() => bottomRailItems.filter(itemVisible));
 
@@ -271,33 +353,41 @@
 		const items = settingsGroup.items.filter(itemVisible);
 		return items.length > 0 ? { ...settingsGroup, items } : null;
 	});
+	let visiblePortalNavItems = $derived.by(() => portalNavItems.filter(itemVisible));
+	let visibleOwnerNavItems = $derived.by(() => ownerNavItems.filter(itemVisible));
+	let visibleLeasingNavItems = $derived.by(() => leasingNavItems.filter(itemVisible));
+	let visibleTechnicianNavItems = $derived.by(() => technicianNavItems.filter(itemVisible));
 
 	// Flat list of every visible nav item (both modes) for title resolution.
 	let allItems = $derived.by(() =>
 		portalUser
-			? [...portalNavItems, ...portalUtilityItems]
-				: [
+				? [...visiblePortalNavItems, ...portalUtilityItems]
+				: ownerUser
+					? [...visibleOwnerNavItems, ...ownerUtilityItems]
+					: leasingUser
+						? [...visibleLeasingNavItems, { href: '/profile', label: 'Profile', icon: UserRound }]
+						: technicianUser
+							? [...visibleTechnicianNavItems, { href: '/profile', label: 'Profile', icon: UserRound }]
+						: [
 						...visiblePinned,
-						...(canSeeCommandCenter ? [commandCenterTitleItem] : []),
+						commandCenterTitleItem,
 						...visibleGroups.flatMap((g) => g.items),
 						...visibleBottomRail,
 						...(visibleSettingsGroup?.items ?? [])
-				]
+					]
 	);
 
 	function isActive(href: string): boolean {
 		const currentPath = page.url.pathname;
 		if (href === '/') return currentPath === '/';
-		if (href === '/units') return currentPath === '/units';
+		if (href === '/owner') return currentPath === '/owner';
+		if (href === '/leasing') return currentPath === '/leasing';
+		if (href === '/units') return currentPath === '/units' || currentPath.startsWith('/units/');
 		return currentPath.startsWith(href);
 	}
 
 	function groupHasActive(group: NavGroup): boolean {
 		return group.items.some((i) => isActive(i.href));
-	}
-
-	function commandCenterHasActive(): boolean {
-		return page.url.pathname.startsWith('/units/');
 	}
 
 	// --- Collapsible group open/closed state (remembered) -----------------------
@@ -338,12 +428,7 @@
 		const next = { ...current };
 		let changed = false;
 		const groupsForState = visibleSettingsGroup ? [...visibleGroups, visibleSettingsGroup] : visibleGroups;
-		const groupIdsForState = [
-			...groupsForState.map((g) => g.id),
-			...(canSeeCommandCenter ? ['command-center'] : [])
-		];
-		// Command Center is a selectable unit picker: keep its active highlight on unit pages, but do
-		// not auto-reopen it after a unit selection explicitly collapses the picker.
+		const groupIdsForState = groupsForState.map((g) => g.id);
 		const activeGroupId = groupsForState.find((g) => groupHasActive(g))?.id;
 		if (activeGroupId) {
 			for (const id of groupIdsForState) {
@@ -441,35 +526,45 @@
 	// Gate the live-count queries on the server-sourced identity too, so they don't fire a
 	// 401-bound request during the brief pre-hydration window. `enabled` is reactive (createQuery
 	// takes a thunk), so it flips on once page.data.user is present.
-	const isStaffSession = $derived(hasRole(currentUser, 'Admin', 'Manager', 'Agent'));
-	const showStaffHeader = $derived(!portalUser);
-
+	const isManagementSession = $derived(activeExperience === 'Management' && activeCapabilities.size > 0);
+	const isLeasingSession = $derived(activeExperience === 'Leasing' && activeCapabilities.size > 0);
+	const showStaffHeader = $derived(!relationshipUser);
 	const unreadMessagesQuery = createQuery(() => ({
-		queryKey: ['header-unread-messages'],
-		enabled: isStaffSession && !portalUser,
+		queryKey: ['header-unread-messages', 'management'],
+		enabled: isManagementSession && canOpenHeaderMessages,
 		queryFn: () => messagesApi.unreadCount(),
 		staleTime: 30_000,
 		refetchInterval: 60_000
 	}));
-	let unreadMessages = $derived(unreadMessagesQuery.data?.count ?? 0);
 
 	const upcomingApptsQuery = createQuery(() => ({
-		queryKey: ['header-upcoming-appointments', getCurrentPortfolioId()],
-		enabled: isStaffSession && !portalUser,
-		queryFn: () => appointmentsApi.list(getCurrentPortfolioId(), { take: 100 }),
+		queryKey: ['header-upcoming-appointments', 'management', getCurrentPortfolioId()],
+		enabled: isManagementSession && canOpenHeaderAppointments,
+		queryFn: () => appointmentsApi.scheduleSummary(),
 		staleTime: 60_000,
 		refetchInterval: 120_000
 	}));
-	let upcomingAppts = $derived.by(() => {
-		const list = upcomingApptsQuery.data ?? [];
-		const now = Date.now();
-		const horizon = now + 7 * 24 * 60 * 60 * 1000;
-		return list.filter((a) => {
-			if (a.status === 'Cancelled' || a.status === 'Completed' || a.status === 'NoShow') return false;
-			const t = new Date(a.scheduledStart).getTime();
-			return t >= now && t <= horizon;
-		}).length;
-	});
+	const leasingTodayQuery = createQuery(() => ({
+		queryKey: ['leasing-workspace', 'header-today'],
+		enabled: isLeasingSession && (canOpenHeaderMessages || canOpenHeaderAppointments),
+		queryFn: () => leasingWorkspace.today(),
+		staleTime: 30_000,
+		refetchInterval: 60_000
+	}));
+	let unreadMessages = $derived(
+		isLeasingSession
+			? (leasingTodayQuery.data?.unreadConversations ?? 0)
+			: isManagementSession
+				? (unreadMessagesQuery.data?.count ?? 0)
+				: 0
+	);
+	let upcomingAppts = $derived(
+		isLeasingSession
+			? (leasingTodayQuery.data?.showingsToday ?? 0)
+			: isManagementSession
+				? (upcomingApptsQuery.data?.nextSevenDaysCount ?? 0)
+				: 0
+	);
 </script>
 
 <NavigationLoader />
@@ -596,11 +691,11 @@
 		<!-- Logo / Brand -->
 		<div class="flex h-14 items-center gap-2 border-b border-sidebar-border px-4">
 			{#if sidebarCollapsed && !isMobile}
-				<a href="/" class="flex w-full items-center justify-center">
+				<a href={homeHref} class="flex w-full items-center justify-center">
 					<BrandMark class="h-7 w-7 shadow-sm" alt="Rental Command" />
 				</a>
 			{:else}
-				<a href="/" class="flex items-center gap-2">
+				<a href={homeHref} class="flex items-center gap-2">
 					<BrandMark class="h-7 w-7 shadow-sm" />
 					<span class="truncate font-semibold tracking-tight text-foreground">Rental Command</span>
 				</a>
@@ -608,7 +703,7 @@
 		</div>
 
 		<!-- Portfolio Selector -->
-		{#if !portalUser}
+		{#if !relationshipUser || (currentAccess?.availableExperiences.length ?? 0) > 1}
 			<div class="border-b border-sidebar-border py-2">
 				<PortfolioSelector collapsed={sidebarCollapsed && !isMobile} />
 			</div>
@@ -617,7 +712,7 @@
 		<!-- Navigation -->
 		<nav class="flex-1 overflow-y-auto px-2 py-3" data-testid="main-nav">
 			{#if portalUser}
-				{#each portalNavItems as item}
+				{#each visiblePortalNavItems as item}
 					{@const active = isActive(item.href)}
 					<a
 						href={item.href}
@@ -637,19 +732,35 @@
 						{/if}
 					</a>
 				{/each}
+			{:else if ownerUser}
+				{#each visibleOwnerNavItems as item}
+					{#if sidebarCollapsed && !isMobile}
+						{@render navLinkCollapsed(item)}
+					{:else}
+						{@render navLink(item)}
+					{/if}
+				{/each}
+			{:else if leasingUser}
+				{#each visibleLeasingNavItems as item}
+					{#if sidebarCollapsed && !isMobile}
+						{@render navLinkCollapsed(item)}
+					{:else}
+						{@render navLink(item)}
+					{/if}
+				{/each}
+			{:else if technicianUser}
+				{#each visibleTechnicianNavItems as item}
+					{#if sidebarCollapsed && !isMobile}
+						{@render navLinkCollapsed(item)}
+					{:else}
+						{@render navLink(item)}
+					{/if}
+				{/each}
 			{:else if sidebarCollapsed && !isMobile}
 				<!-- Collapsed rail: pinned links plus icon-only group headers, matching EdiPlatform. -->
 				{#each visiblePinned as item}
 					{@render navLinkCollapsed(item)}
 				{/each}
-				{#if canSeeCommandCenter}
-					<CommandCenterNav
-						collapsed
-						open={openGroups['command-center'] ?? false}
-						onOpenChange={(next) => setGroupOpen('command-center', next)}
-						onNavigate={handleNavClick}
-					/>
-				{/if}
 				{#each visibleGroups as group}
 					{@render navGroupCollapsed(group)}
 				{/each}
@@ -665,13 +776,6 @@
 				{#each visiblePinned as item}
 					{@render navLink(item)}
 				{/each}
-				{#if canSeeCommandCenter}
-					<CommandCenterNav
-						open={openGroups['command-center'] ?? false}
-						onOpenChange={(next) => setGroupOpen('command-center', next)}
-						onNavigate={handleNavClick}
-					/>
-				{/if}
 				<div class="my-2"></div>
 				{#each visibleGroups as group}
 					{@render navGroup(group)}
@@ -709,13 +813,23 @@
 							</div>
 						</DropdownMenuLabel>
 						<DropdownMenuSeparator />
-						{#if !portalUser}
+						{#if technicianUser || leasingUser}
+							<DropdownMenuItem data-testid="user-menu-profile-collapsed">
+								<a href="/profile" class="flex w-full items-center gap-2">
+									<UserRound class="h-4 w-4" />
+									Profile
+								</a>
+							</DropdownMenuItem>
+						{/if}
+						{#if canOpenGuidedSetup}
 							<DropdownMenuItem data-testid="user-menu-guided-setup-collapsed">
 								<a href="/onboarding?from=account-menu" class="flex w-full items-center gap-2">
 									<ClipboardList class="h-4 w-4" />
 									Guided Setup
 								</a>
 							</DropdownMenuItem>
+						{/if}
+						{#if canOpenSettings}
 							<DropdownMenuItem data-testid="user-menu-settings">
 								<a href="/settings" class="flex w-full items-center gap-2">
 									<Settings class="h-4 w-4" />
@@ -723,12 +837,14 @@
 								</a>
 							</DropdownMenuItem>
 						{/if}
-						<DropdownMenuItem data-testid="user-menu-security-collapsed">
-							<a href={userSecurityHref} class="flex w-full items-center gap-2">
-								<Shield class="h-4 w-4" />
-								Security
-							</a>
-						</DropdownMenuItem>
+						{#if canOpenUserSecurity}
+							<DropdownMenuItem data-testid="user-menu-security-collapsed">
+								<a href={userSecurityHref} class="flex w-full items-center gap-2">
+									<Shield class="h-4 w-4" />
+									Security
+								</a>
+							</DropdownMenuItem>
+						{/if}
 						<DropdownMenuSeparator />
 						<DropdownMenuItem
 							class="text-destructive focus:text-destructive"
@@ -766,13 +882,23 @@
 							</div>
 						</DropdownMenuLabel>
 						<DropdownMenuSeparator />
-						{#if !portalUser}
+						{#if technicianUser || leasingUser}
+							<DropdownMenuItem data-testid="user-menu-profile">
+								<a href="/profile" class="flex w-full items-center gap-2">
+									<UserRound class="h-4 w-4" />
+									Profile
+								</a>
+							</DropdownMenuItem>
+						{/if}
+						{#if canOpenGuidedSetup}
 							<DropdownMenuItem data-testid="user-menu-guided-setup">
 								<a href="/onboarding?from=account-menu" class="flex w-full items-center gap-2">
 									<ClipboardList class="h-4 w-4" />
 									Guided Setup
 								</a>
 							</DropdownMenuItem>
+						{/if}
+						{#if canOpenSettings}
 							<DropdownMenuItem data-testid="user-menu-settings">
 								<a href="/settings" class="flex w-full items-center gap-2">
 									<Settings class="h-4 w-4" />
@@ -780,12 +906,14 @@
 								</a>
 							</DropdownMenuItem>
 						{/if}
-						<DropdownMenuItem data-testid="user-menu-security">
-							<a href={userSecurityHref} class="flex w-full items-center gap-2">
-								<Shield class="h-4 w-4" />
-								Security
-							</a>
-						</DropdownMenuItem>
+						{#if canOpenUserSecurity}
+							<DropdownMenuItem data-testid="user-menu-security">
+								<a href={userSecurityHref} class="flex w-full items-center gap-2">
+									<Shield class="h-4 w-4" />
+									Security
+								</a>
+							</DropdownMenuItem>
+						{/if}
 						<DropdownMenuSeparator />
 						<DropdownMenuItem
 							class="text-destructive focus:text-destructive"
@@ -826,7 +954,7 @@
 				: 'ml-60'}"
 	>
 		<!-- Sandbox mode banner: slim, top of the shell, above the header. Hidden when Live. -->
-		{#if !portalUser}
+		{#if !relationshipUser}
 			<SandboxBanner variant="banner" />
 		{/if}
 
@@ -859,39 +987,53 @@
 
 			<div class="ml-auto flex items-center gap-1">
 				{#if showStaffHeader}
-					<!-- Scan / Edit -->
-					<ScanLauncher
-						triggerLabel=""
-						ariaLabel="Scan / Edit"
-						tooltip="Scan / Edit"
-						testid="header-scan"
-						triggerVariant="ghost"
-						triggerClass="m3-state-layer relative size-9 p-0 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-					/>
+					<!-- Persistent scan-first command. Keep the label visible at desktop widths so this
+					     differentiator does not collapse into an unexplained icon. -->
+					{#if canOpenHeaderScan}
+						{#if activeCapabilities.has('maintenance.assigned-work.update') && !activeCapabilities.has('work.manage')}
+							<Button href="/scan" variant="ghost" class="m3-state-layer relative gap-2 px-3 text-muted-foreground" aria-label="Scan / Add" data-testid="header-scan">
+								<ScanLine class="h-4 w-4" />
+								<span class="hidden xl:inline">Scan / Add</span>
+							</Button>
+						{:else}<ScanLauncher
+							triggerLabel="Scan / Add"
+							ariaLabel="Scan / Add"
+							tooltip="Scan a document or add a record"
+							testid="header-scan"
+							triggerVariant="ghost"
+							triggerClass="m3-state-layer relative gap-2 px-3 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground [&>span]:hidden xl:[&>span]:inline"
+							allowedTypes={allowedHeaderScanTypes}
+							allowVoice={allowHeaderVoiceCapture}
+						/>{/if}
+					{/if}
 
 					<!-- Messages -->
-					<a
-						href="/messages"
-						class="m3-state-layer relative flex items-center justify-center rounded-[var(--m3-shape-full)] p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-						aria-label="Messages{unreadMessages > 0 ? ` (${unreadMessages} unread)` : ''}"
-						data-m3-tooltip="Messages"
-						data-testid="header-messages"
-					>
-						<MessageSquare class="h-5 w-5" />
-						{@render countBadge(unreadMessages)}
-					</a>
+					{#if canOpenHeaderMessages}
+						<a
+							href={headerMessagesHref}
+							class="m3-state-layer relative flex items-center justify-center rounded-[var(--m3-shape-full)] p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+							aria-label="Messages{unreadMessages > 0 ? ` (${unreadMessages} unread)` : ''}"
+							data-m3-tooltip="Messages"
+							data-testid="header-messages"
+						>
+							<MessageSquare class="h-5 w-5" />
+							{@render countBadge(unreadMessages)}
+						</a>
+					{/if}
 
 					<!-- Appointments -->
-					<a
-						href="/appointments"
-						class="m3-state-layer relative flex items-center justify-center rounded-[var(--m3-shape-full)] p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-						aria-label="Appointments{upcomingAppts > 0 ? ` (${upcomingAppts} upcoming)` : ''}"
-						data-m3-tooltip="Upcoming appointments"
-						data-testid="header-appointments"
-					>
-						<Calendar class="h-5 w-5" />
-						{@render countBadge(upcomingAppts)}
-					</a>
+					{#if canOpenHeaderAppointments}
+						<a
+							href={headerAppointmentsHref}
+							class="m3-state-layer relative flex items-center justify-center rounded-[var(--m3-shape-full)] p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+							aria-label="Appointments{upcomingAppts > 0 ? ` (${upcomingAppts} upcoming)` : ''}"
+							data-m3-tooltip="Upcoming appointments"
+							data-testid="header-appointments"
+						>
+							<Calendar class="h-5 w-5" />
+							{@render countBadge(upcomingAppts)}
+						</a>
+					{/if}
 				{/if}
 
 				<!-- Help & Docs -->
@@ -909,7 +1051,9 @@
 				<ThemeModeToggle data-testid="header-theme-toggle" />
 
 				<!-- Notifications -->
-				<NotificationBell data-testid="notification-bell-header" placement="down" />
+				{#if !ownerUser}
+					<NotificationBell data-testid="notification-bell-header" placement="down" />
+				{/if}
 			</div>
 		</header>
 
@@ -917,7 +1061,7 @@
 		<main class="customer-shell-main flex min-h-0 flex-1 justify-center overflow-hidden">
 			<div class="h-full w-full max-w-[1600px]">
 				{#key page.url.pathname}
-					<div class="m3-route-transition" data-testid="route-transition-frame">
+					<div class="m3-route-transition h-full overflow-y-auto" data-testid="route-transition-frame">
 						{@render children()}
 					</div>
 				{/key}

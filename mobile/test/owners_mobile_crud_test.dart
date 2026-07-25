@@ -77,11 +77,10 @@ void main() {
     expect(repository.deletedOwnerId, isNull);
     expect(find.textContaining('is assigned to 2 properties'), findsOneWidget);
 
-    await tester.tap(find.text('Clear and delete'));
+    await tester.tap(find.text('Close'));
     await tester.pumpAndSettle();
 
-    expect(repository.deletedOwnerId, 12);
-    expect(repository.clearPropertyAssignments, isTrue);
+    expect(repository.deletedOwnerId, isNull);
   });
 
   test(
@@ -134,7 +133,7 @@ void main() {
 
       await repository.createOwner({'name': 'Maya Chen'});
       await repository.updateOwner(12, {'name': 'Maya Chen LLC'});
-      await repository.deleteOwner(12, clearPropertyAssignments: true);
+      await repository.deleteOwner(12);
 
       expect(adapter.requests[0].method, 'POST');
       expect(adapter.requests[0].path, '/owner-entities');
@@ -146,10 +145,7 @@ void main() {
 
       expect(adapter.requests[2].method, 'DELETE');
       expect(adapter.requests[2].path, '/owner-entities/12');
-      expect(
-        adapter.requests[2].queryParameters,
-        containsPair('clearPropertyAssignments', true),
-      );
+      expect(adapter.requests[2].queryParameters, isEmpty);
     },
   );
 }
@@ -158,7 +154,6 @@ class _FakeOwnersRepository extends OwnersRepository {
   _FakeOwnersRepository() : super(Dio());
 
   int? deletedOwnerId;
-  bool? clearPropertyAssignments;
   final queries = <OwnerListQuery>[];
 
   @override
@@ -185,12 +180,8 @@ class _FakeOwnersRepository extends OwnersRepository {
   }
 
   @override
-  Future<void> deleteOwner(
-    int id, {
-    bool clearPropertyAssignments = false,
-  }) async {
+  Future<void> deleteOwner(int id) async {
     deletedOwnerId = id;
-    this.clearPropertyAssignments = clearPropertyAssignments;
   }
 }
 

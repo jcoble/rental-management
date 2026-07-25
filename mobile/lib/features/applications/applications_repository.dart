@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
@@ -5,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import 'applications_models.dart';
 
 class ApplicationListQuery {
@@ -156,78 +158,141 @@ class ApplicationsRepository {
 
   /// Correct landlord-editable details while the application is still open.
   Future<RentalApplication> update(int id, UpdateApplicationInput input) async {
-    try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/applications/$id',
-        data: input.toJson(),
-      );
-      final data = response.data;
-      if (data == null) {
-        throw const ApiException(
-          statusCode: 0,
-          message: 'Empty response from server.',
+    final payload = input.toJson();
+    return IdempotentMutation.run('applications:update:$id:$payload', (
+      operationKey,
+    ) async {
+      try {
+        final response = await _dio.patch<Map<String, dynamic>>(
+          '/applications/$id',
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+          data: payload,
         );
+        final data = response.data;
+        if (data == null) {
+          throw const ApiException(
+            statusCode: 0,
+            message: 'Empty response from server.',
+          );
+        }
+        return RentalApplication.fromJson(data);
+      } on DioException catch (e) {
+        throw ApiException.fromDioException(e);
       }
-      return RentalApplication.fromJson(data);
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    });
   }
 
   Future<void> delete(int id) async {
-    try {
-      await _dio.delete<void>('/applications/$id');
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    await IdempotentMutation.run('applications:delete:$id', (
+      operationKey,
+    ) async {
+      try {
+        await _dio.delete<void>(
+          '/applications/$id',
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        );
+      } on DioException catch (e) {
+        throw ApiException.fromDioException(e);
+      }
+    });
   }
 
   /// Approve — returns { applicationId, status, tenantId }. Also creates a Tenant.
   Future<ApplicationApproval> approve(int id) async {
-    try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/applications/$id/approve',
-        data: {},
-      );
-      final data = response.data;
-      if (data == null) {
-        throw const ApiException(
-          statusCode: 0,
-          message: 'Empty response from server.',
+    return IdempotentMutation.run('applications:approve:$id', (
+      operationKey,
+    ) async {
+      try {
+        final response = await _dio.post<Map<String, dynamic>>(
+          '/applications/$id/approve',
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+          data: {},
         );
+        final data = response.data;
+        if (data == null) {
+          throw const ApiException(
+            statusCode: 0,
+            message: 'Empty response from server.',
+          );
+        }
+        return ApplicationApproval.fromJson(data);
+      } on DioException catch (e) {
+        throw ApiException.fromDioException(e);
       }
-      return ApplicationApproval.fromJson(data);
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    });
   }
 
   /// Decline with an optional reason — returns the updated application.
   Future<RentalApplication> decline(int id, {String? reason}) async {
-    try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/applications/$id/decline',
-        data: {if (reason != null && reason.isNotEmpty) 'reason': reason},
-      );
-      final data = response.data;
-      if (data == null) {
-        throw const ApiException(
-          statusCode: 0,
-          message: 'Empty response from server.',
+    return IdempotentMutation.run('applications:decline:$id:${reason ?? ''}', (
+      operationKey,
+    ) async {
+      try {
+        final response = await _dio.post<Map<String, dynamic>>(
+          '/applications/$id/decline',
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+          data: {if (reason != null && reason.isNotEmpty) 'reason': reason},
         );
+        final data = response.data;
+        if (data == null) {
+          throw const ApiException(
+            statusCode: 0,
+            message: 'Empty response from server.',
+          );
+        }
+        return RentalApplication.fromJson(data);
+      } on DioException catch (e) {
+        throw ApiException.fromDioException(e);
       }
-      return RentalApplication.fromJson(data);
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
+    });
   }
 
   /// Withdraw — returns the updated application.
   Future<RentalApplication> withdraw(int id) async {
+    return IdempotentMutation.run('applications:withdraw:$id', (
+      operationKey,
+    ) async {
+      try {
+        final response = await _dio.post<Map<String, dynamic>>(
+          '/applications/$id/withdraw',
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+          data: {},
+        );
+        final data = response.data;
+        if (data == null) {
+          throw const ApiException(
+            statusCode: 0,
+            message: 'Empty response from server.',
+          );
+        }
+        return RentalApplication.fromJson(data);
+      } on DioException catch (e) {
+        throw ApiException.fromDioException(e);
+      }
+    });
+  }
+
+  /// Records an immutable fee collection in the application's pre-tenancy
+  /// financial account. Dio reuses this request's operation key if an
+  /// interceptor retries the same submission.
+  Future<ApplicationFinanceMutation> recordFee(
+    int id, {
+    required String operationKey,
+    required double amount,
+    String? method,
+    DateTime? effectiveOn,
+  }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
-        '/applications/$id/withdraw',
-        data: {},
+        '/applications/$id/fee',
+        options: Options(headers: {'Idempotency-Key': operationKey}),
+        data: {
+          'amount': amount,
+          if (method != null && method.isNotEmpty) 'method': method,
+          'currency': 'USD',
+          if (effectiveOn != null)
+            'effectiveOn': effectiveOn.toIso8601String().split('T').first,
+        },
       );
       final data = response.data;
       if (data == null) {
@@ -236,40 +301,44 @@ class ApplicationsRepository {
           message: 'Empty response from server.',
         );
       }
-      return RentalApplication.fromJson(data);
-    } on DioException catch (e) {
-      throw ApiException.fromDioException(e);
-    }
-  }
-
-  /// Records a real application/screening fee as income — a lease-less payment
-  /// attributed to the application's property. Shows on accounting + Schedule E.
-  Future<void> recordFee(
-    int id, {
-    required double amount,
-    String? method,
-    DateTime? paidDate,
-  }) async {
-    try {
-      await _dio.post<Map<String, dynamic>>(
-        '/applications/$id/fee',
-        data: {
-          'amount': amount,
-          if (method != null && method.isNotEmpty) 'method': method,
-          if (paidDate != null) 'paidDate': paidDate.toUtc().toIso8601String(),
-        },
-      );
+      return ApplicationFinanceMutation.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
   }
 
   /// Mint a shareable apply link.
-  Future<ApplicationLink> createLink() async {
+  Future<ApplicationLink> createLink() => IdempotentMutation.run(
+    'applications:create-link',
+    (operationKey) async {
+      try {
+        final response = await _dio.post<Map<String, dynamic>>(
+          '/applications/link',
+          data: {},
+          options: Options(headers: {'Idempotency-Key': operationKey}),
+        );
+        final data = response.data;
+        if (data == null) {
+          throw const ApiException(
+            statusCode: 0,
+            message: 'Empty response from server.',
+          );
+        }
+        return ApplicationLink.fromJson(data);
+      } on DioException catch (e) {
+        throw ApiException.fromDioException(e);
+      }
+    },
+  );
+
+  Future<ApplicantScreening> startIntegratedScreening(
+    int id, {
+    required String operationKey,
+  }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
-        '/applications/link',
-        data: {},
+        '/applications/$id/screening/integrated',
+        data: {'operationKey': operationKey},
       );
       final data = response.data;
       if (data == null) {
@@ -278,22 +347,43 @@ class ApplicationsRepository {
           message: 'Empty response from server.',
         );
       }
-      return ApplicationLink.fromJson(data);
+      return ApplicantScreening.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
   }
 
-  /// Runs a tenant-screening request — returns the new result.
-  ///
-  /// Throws [ApiException] with `statusCode == 400` when FCRA consent is
-  /// missing, and `statusCode == 503` when screening is not configured (the
-  /// provider is dormant).
-  Future<ScreeningResult> screen(int id) async {
+  Future<ApplicantScreening> trackExternalScreening(
+    int id, {
+    required String operationKey,
+    required String providerDisplayName,
+    String? providerReference,
+    String? providerHostedUrl,
+    String? creditReportingAgencyName,
+    String? creditReportingAgencyAddress,
+    String? creditReportingAgencyPhone,
+  }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
-        '/applications/$id/screen',
-        data: {},
+        '/applications/$id/screening/external',
+        data: {
+          'operationKey': operationKey,
+          'providerDisplayName': providerDisplayName,
+          if (providerReference != null && providerReference.isNotEmpty)
+            'providerReference': providerReference,
+          if (providerHostedUrl != null && providerHostedUrl.isNotEmpty)
+            'providerHostedUrl': providerHostedUrl,
+          if (creditReportingAgencyName != null &&
+              creditReportingAgencyName.isNotEmpty)
+            'creditReportingAgencyName': creditReportingAgencyName,
+          if (creditReportingAgencyAddress != null &&
+              creditReportingAgencyAddress.isNotEmpty)
+            'creditReportingAgencyAddress': creditReportingAgencyAddress,
+          if (creditReportingAgencyPhone != null &&
+              creditReportingAgencyPhone.isNotEmpty)
+            'creditReportingAgencyPhone': creditReportingAgencyPhone,
+          'status': 'InProgress',
+        },
       );
       final data = response.data;
       if (data == null) {
@@ -302,22 +392,110 @@ class ApplicationsRepository {
           message: 'Empty response from server.',
         );
       }
-      return ScreeningResult.fromJson(data);
+      return ApplicantScreening.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
   }
 
-  /// Lists all screening results for an application (newest typically first).
-  Future<List<ScreeningResult>> screening(int id) async {
+  Future<ApplicantScreening> markExternalScreeningComplete(
+    int applicationId,
+    int screeningId, {
+    required String operationKey,
+  }) async {
     try {
-      final response = await _dio.get<List<dynamic>>(
+      final response = await _dio.patch<Map<String, dynamic>>(
+        '/applications/$applicationId/screening/$screeningId/external',
+        data: {'operationKey': operationKey, 'status': 'Completed'},
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ApplicantScreening.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<ApplicantScreening> updateExternalScreeningAgency(
+    int applicationId,
+    int screeningId, {
+    required String operationKey,
+    required String creditReportingAgencyName,
+    required String creditReportingAgencyAddress,
+    required String creditReportingAgencyPhone,
+  }) async {
+    try {
+      final response = await _dio.patch<Map<String, dynamic>>(
+        '/applications/$applicationId/screening/$screeningId/external',
+        data: {
+          'operationKey': operationKey,
+          'creditReportingAgencyName': creditReportingAgencyName,
+          'creditReportingAgencyAddress': creditReportingAgencyAddress,
+          'creditReportingAgencyPhone': creditReportingAgencyPhone,
+        },
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ApplicantScreening.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<ScreeningWorkspace> screening(int id) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
         '/applications/$id/screening',
       );
-      return (response.data ?? [])
-          .whereType<Map<String, dynamic>>()
-          .map(ScreeningResult.fromJson)
-          .toList();
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ScreeningWorkspace.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<ApplicantScreening> recordScreeningDecision(
+    int applicationId,
+    int screeningId, {
+    required String operationKey,
+    required String decision,
+    required bool consumerReportUsed,
+    String? reason,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/applications/$applicationId/screening/$screeningId/decision',
+        data: {
+          'operationKey': operationKey,
+          'decision': decision,
+          'consumerReportUsed': consumerReportUsed,
+          if (reason != null && reason.isNotEmpty) 'reason': reason,
+        },
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ApplicantScreening.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -326,6 +504,7 @@ class ApplicationsRepository {
   /// Generates an FCRA adverse-action notice for a declined application.
   Future<AdverseActionNotice> adverseAction(
     int id, {
+    required String operationKey,
     String? reason,
     required bool sendToApplicant,
   }) async {
@@ -333,6 +512,7 @@ class ApplicationsRepository {
       final response = await _dio.post<Map<String, dynamic>>(
         '/applications/$id/adverse-action',
         data: {
+          'operationKey': operationKey,
           if (reason != null && reason.isNotEmpty) 'reason': reason,
           'sendToApplicant': sendToApplicant,
         },
@@ -348,6 +528,12 @@ class ApplicationsRepository {
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
+  }
+
+  static String newOperationKey() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+    return bytes.map((value) => value.toRadixString(16).padLeft(2, '0')).join();
   }
 
   /// Raw bytes for a stored file (authed via the shared interceptor) — used to
@@ -440,6 +626,6 @@ final applicationDetailProvider = FutureProvider.autoDispose
 
 /// Screening results for an application (auto-disposes so it re-fetches on open).
 final applicationScreeningProvider = FutureProvider.autoDispose
-    .family<List<ScreeningResult>, int>((ref, id) {
+    .family<ScreeningWorkspace, int>((ref, id) {
       return ref.watch(applicationsRepositoryProvider).screening(id);
     });

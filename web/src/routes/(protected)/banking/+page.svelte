@@ -1,14 +1,21 @@
 <script lang="ts">
+	import { page } from '$app/state';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { CAPABILITY } from '$lib/auth/experience-policy';
 	import { banking } from '$lib/api/endpoints/banking';
+	import { properties } from '$lib/api/endpoints/properties';
 	import type {
 		BankReviewQueueResponse,
+		BankMatchSuggestion,
 		BankTransactionListResponse,
 		BankingSummary,
 		ExchangePlaidPublicTokenRequest,
 		ImportBankTransactionsRequest,
-		PlaidSettings
+		MatchBankTransactionRequest,
+		PlaidSettings,
+		Property
 	} from '$lib/types';
+	import type { WorkspaceExperience } from '$lib/types/user';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { formatDateOnly } from '$lib/utils/date';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
@@ -17,6 +24,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import Pagination from '$lib/components/shared/Pagination.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { Ban, Check, Landmark, Link2, RefreshCw, RotateCcw, Upload, X } from '@lucide/svelte';
 
 	type PlaidWindow = Window &
@@ -28,6 +36,15 @@
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
+	const activeExperience = $derived(page.data.access?.selectedContext.activeExperience ?? null);
+	const activeCapabilities = $derived(new Set(
+		page.data.access?.navigation.find((entry: { experience: WorkspaceExperience; capabilityKeys: string[] }) =>
+			entry.experience === activeExperience
+		)?.capabilityKeys ?? []
+	));
+	const canManageConnections = $derived(activeCapabilities.has(CAPABILITY.bankConnectionsManage));
+	const canOperateReconciliation = $derived(activeCapabilities.has(CAPABILITY.moneyReconciliationOperate));
+	const canDestructivelyReconcile = $derived(activeCapabilities.has(CAPABILITY.moneyReconciliationDestructive));
 
 	// shadcn Select binds a string; bits-ui treats '' as "no selection", so 'all' stands in for the
 	// "no filter" choice and `statusFilter` maps it back to '' for the query.
@@ -53,6 +70,7 @@
 	let exchangeAccountId = $state('');
 	let exchangeAccountName = $state('Operating checking');
 	let exchangeAccountMask = $state('');
+	let manualExchangeOperationId = $state('');
 	let importJson = $state(`{
   "provider": "Manual",
   "institutionName": "Sample Bank",
@@ -74,7 +92,7 @@
 	const summaryQuery = createQuery(() => ({
 		queryKey: ['banking-summary', portfolioId],
 		queryFn: () => banking.summary(),
-		enabled: !!portfolioId
+		enabled: !!portfolioId && canManageConnections
 	}));
 
 	const transactionsQuery = createQuery(() => ({
@@ -84,24 +102,31 @@
 			skip: transactionSkip,
 			take: TRANSACTION_PAGE_SIZE
 		}),
-		enabled: !!portfolioId
+		enabled: !!portfolioId && canManageConnections
+	}));
+
+	const propertiesQuery = createQuery(() => ({
+		queryKey: ['banking-route-properties', portfolioId],
+		queryFn: () => properties.list(portfolioId!, { take: 250 }),
+		enabled: !!portfolioId && canManageConnections
 	}));
 
 	const plaidSettingsQuery = createQuery(() => ({
 		queryKey: ['banking-plaid-settings', portfolioId],
 		queryFn: () => banking.plaidSettings(),
-		enabled: !!portfolioId
+		enabled: !!portfolioId && canManageConnections
 	}));
 
 	const reviewQueueQuery = createQuery(() => ({
 		queryKey: ['banking-review-queue', portfolioId, reviewSkip],
 		queryFn: () => banking.reviewQueue({ skip: reviewSkip, take: REVIEW_QUEUE_PAGE_SIZE }),
-		enabled: !!portfolioId
+		enabled: !!portfolioId && canOperateReconciliation
 	}));
 
 	const summary = $derived(summaryQuery.data as BankingSummary | undefined);
 	const transactionPage = $derived(transactionsQuery.data as BankTransactionListResponse | undefined);
 	const transactions = $derived(transactionPage?.items ?? []);
+	const routingProperties = $derived((propertiesQuery.data as Property[] | undefined) ?? []);
 	const transactionTotalCount = $derived(transactionPage?.totalCount ?? transactions.length);
 	const transactionPageEnd = $derived((transactionPage?.skip ?? transactionSkip) + transactions.length);
 	const plaidSettings = $derived(plaidSettingsQuery.data as PlaidSettings | undefined);
@@ -156,6 +181,7 @@
 		onSuccess: (connection) => {
 			showSuccess(`Connected ${connection.institutionName} ${connection.accountName}.`);
 			exchangePublicToken = '';
+			manualExchangeOperationId = '';
 			refreshBanking();
 		},
 		onError: (err) => showError(apiErrorMessage(err))
@@ -179,9 +205,30 @@
 		onError: (err) => showError(apiErrorMessage(err))
 	}));
 
+	const routeMutation = createMutation(() => ({
+		mutationFn: ({ id, propertyId, updatedAt, operationKey }: { id: number; propertyId?: number; updatedAt: string; operationKey: string }) =>
+			banking.routeTransaction(id, { propertyId, expectedUpdatedAtUtc: updatedAt, operationKey }),
+		onSuccess: () => {
+			showSuccess('Bank transaction route updated.');
+			refreshBanking();
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
+
+	function matchRequest(suggestion: BankMatchSuggestion, updatedAt: string): MatchBankTransactionRequest {
+		const operation = { operationKey: crypto.randomUUID(), expectedUpdatedAtUtc: updatedAt };
+		return suggestion.entityType === 'Expense'
+			? { ...operation, expenseId: suggestion.entityId }
+			: {
+					...operation,
+					tenantAccountId: suggestion.tenantAccountId,
+					tenantLedgerEntryId: suggestion.entityId
+				};
+	}
+
 	const matchMutation = createMutation(() => ({
-		mutationFn: ({ id, entityType, entityId }: { id: number; entityType: string; entityId: number }) =>
-			banking.match(id, { entityType, entityId }),
+		mutationFn: ({ id, request }: { id: number; request: MatchBankTransactionRequest }) =>
+			banking.match(id, request),
 		onSuccess: () => {
 			showSuccess('Bank transaction matched.');
 			refreshBanking();
@@ -189,8 +236,15 @@
 		onError: (err) => showError(apiErrorMessage(err))
 	}));
 
+	type BankMutation = { id: number; operationKey: string; expectedUpdatedAtUtc: string };
+	const mutationFor = (id: number, expectedUpdatedAtUtc: string): BankMutation => ({
+		id,
+		expectedUpdatedAtUtc,
+		operationKey: crypto.randomUUID()
+	});
+
 	const clearMutation = createMutation(() => ({
-		mutationFn: (id: number) => banking.clearMatch(id),
+		mutationFn: (mutation: BankMutation) => banking.clearMatch(mutation.id, mutation),
 		onSuccess: () => {
 			showSuccess('Match cleared.');
 			refreshBanking();
@@ -203,9 +257,9 @@
 	// be brought back via Clear (un-ignore). Tracks a pending id for per-row button disabling.
 	let pendingIgnoreId = $state<number | null>(null);
 	const ignoreMutation = createMutation(() => ({
-		mutationFn: (id: number) => banking.ignore(id),
-		onMutate: (id: number) => {
-			pendingIgnoreId = id;
+		mutationFn: (mutation: BankMutation) => banking.ignore(mutation.id, mutation),
+		onMutate: (mutation: BankMutation) => {
+			pendingIgnoreId = mutation.id;
 		},
 		onSuccess: () => {
 			showSuccess('Marked personal — kept out of your books.');
@@ -220,9 +274,9 @@
 	let pendingReviewId = $state<number | null>(null);
 
 	const confirmMatchMutation = createMutation(() => ({
-		mutationFn: (id: number) => banking.confirmMatch(id),
-		onMutate: (id: number) => {
-			pendingReviewId = id;
+		mutationFn: (mutation: BankMutation) => banking.confirmMatch(mutation.id, mutation),
+		onMutate: (mutation: BankMutation) => {
+			pendingReviewId = mutation.id;
 		},
 		onSuccess: () => {
 			showSuccess('Confirmed. We won’t count this one twice.');
@@ -236,9 +290,9 @@
 	}));
 
 	const dismissMatchMutation = createMutation(() => ({
-		mutationFn: (id: number) => banking.dismissMatch(id),
-		onMutate: (id: number) => {
-			pendingReviewId = id;
+		mutationFn: (mutation: BankMutation) => banking.dismissMatch(mutation.id, mutation),
+		onMutate: (mutation: BankMutation) => {
+			pendingReviewId = mutation.id;
 		},
 		onSuccess: () => {
 			showSuccess('Got it — not a match.');
@@ -288,6 +342,7 @@
 			const result = await linkTokenMutation.mutateAsync();
 			if (!result.configured || !result.linkToken) return;
 			sessionStorage.setItem('plaid:linkToken', result.linkToken);
+			sessionStorage.removeItem('plaid:exchangeOperationId');
 			await loadPlaidScript();
 			const handler = (window as PlaidWindow).Plaid?.create({
 				token: result.linkToken,
@@ -295,7 +350,10 @@
 					const accounts = (metadata.accounts as Array<Record<string, string | undefined>> | undefined) ?? [];
 					const account = accounts[0] ?? {};
 					const institution = metadata.institution as Record<string, string | undefined> | undefined;
+					const operationId = sessionStorage.getItem('plaid:exchangeOperationId') ?? crypto.randomUUID();
+					sessionStorage.setItem('plaid:exchangeOperationId', operationId);
 					await exchangeMutation.mutateAsync({
+						clientOperationId: operationId,
 						publicToken: public_token,
 						institutionName: institution?.name ?? 'Plaid bank',
 						accountId: account.id ?? '',
@@ -305,6 +363,7 @@
 						accountSubtype: account.subtype
 					});
 					sessionStorage.removeItem('plaid:linkToken');
+					sessionStorage.removeItem('plaid:exchangeOperationId');
 				},
 				onExit: () => {
 					sessionStorage.removeItem('plaid:linkToken');
@@ -322,6 +381,7 @@
 			return;
 		}
 		exchangeMutation.mutate({
+			clientOperationId: (manualExchangeOperationId ||= crypto.randomUUID()),
 			publicToken: exchangePublicToken,
 			institutionName: exchangeInstitutionName,
 			accountId: exchangeAccountId,
@@ -345,70 +405,80 @@
 				Banking
 			</h1>
 			<p class="mt-1 text-sm text-muted-foreground">
-				Read-only bank reconciliation. Import or sync deposits and withdrawals, then match them to rent payments and expenses.
+				{canManageConnections
+					? 'Connect bank accounts, import or sync bank lines, and review reconciliation.'
+					: 'Review suggested matches for the properties assigned to you.'}
 			</p>
 		</div>
-		<Button variant="outline" onclick={connectPlaid} disabled={linkTokenMutation.isPending || exchangeMutation.isPending || !plaidSettings?.configured}>
-			<Link2 class="mr-1.5 h-4 w-4" />
-			{linkTokenMutation.isPending || exchangeMutation.isPending ? 'Connecting...' : 'Connect Plaid'}
-		</Button>
+		{#if canManageConnections}
+			<Button variant="outline" onclick={connectPlaid} disabled={linkTokenMutation.isPending || exchangeMutation.isPending || !plaidSettings?.configured}>
+				<Link2 class="mr-1.5 h-4 w-4" />
+				{linkTokenMutation.isPending || exchangeMutation.isPending ? 'Connecting...' : 'Connect Plaid'}
+			</Button>
+		{/if}
 	</div>
 
-	<div class="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-		<Card.Root class="gap-0 py-0">
-			<Card.Content class="p-4">
-				<p class="text-xs text-muted-foreground">Bank connections</p>
-				<p class="font-mono text-2xl font-bold">{summary?.connectionCount ?? 0}</p>
-			</Card.Content>
-		</Card.Root>
-		<Card.Root class="gap-0 py-0">
-			<Card.Content class="p-4">
-				<p class="text-xs text-muted-foreground">Transactions</p>
-				<p class="font-mono text-2xl font-bold">{summary?.transactionCount ?? 0}</p>
-			</Card.Content>
-		</Card.Root>
-		<Card.Root class="gap-0 py-0">
-			<Card.Content class="p-4">
-				<p class="text-xs text-muted-foreground">Unmatched</p>
-				<p class="font-mono text-2xl font-bold text-[var(--warning)]">{summary?.unmatchedCount ?? 0}</p>
-			</Card.Content>
-		</Card.Root>
-		<Card.Root class="gap-0 py-0">
-			<Card.Content class="p-4">
-				<p class="text-xs text-muted-foreground">Suggestions</p>
-				<p class="font-mono text-2xl font-bold text-primary">{summary?.suggestedMatchCount ?? 0}</p>
-			</Card.Content>
-		</Card.Root>
-	</div>
+	{#if canManageConnections}
+		<div class="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+			<Card.Root class="gap-0 py-0">
+				<Card.Content class="p-4">
+					<p class="text-xs text-muted-foreground">Bank connections</p>
+					<p class="font-mono text-2xl font-bold">{summary?.connectionCount ?? 0}</p>
+				</Card.Content>
+			</Card.Root>
+			<Card.Root class="gap-0 py-0">
+				<Card.Content class="p-4">
+					<p class="text-xs text-muted-foreground">Transactions</p>
+					<p class="font-mono text-2xl font-bold">{summary?.transactionCount ?? 0}</p>
+				</Card.Content>
+			</Card.Root>
+			<Card.Root class="gap-0 py-0">
+				<Card.Content class="p-4">
+					<p class="text-xs text-muted-foreground">Unmatched</p>
+					<p class="font-mono text-2xl font-bold text-[var(--warning)]">{summary?.unmatchedCount ?? 0}</p>
+				</Card.Content>
+			</Card.Root>
+			<Card.Root class="gap-0 py-0">
+				<Card.Content class="p-4">
+					<p class="text-xs text-muted-foreground">Suggestions</p>
+					<p class="font-mono text-2xl font-bold text-primary">{summary?.suggestedMatchCount ?? 0}</p>
+				</Card.Content>
+			</Card.Root>
+		</div>
+	{/if}
 
-	<Card.Root class="mb-6 gap-0 py-0" data-testid="bank-review-queue">
-		<Card.Header class="border-b border-border px-4 py-3">
-			<div class="flex flex-wrap items-center justify-between gap-3">
-				<div>
-					<Card.Title class="flex items-center gap-2 text-base">
-						<Check class="h-4 w-4 text-primary" />
-						Review suggested matches
-						{#if reviewCount > 0}
-							<Badge variant="secondary" data-testid="bank-review-count">{reviewCount}</Badge>
-						{/if}
-					</Card.Title>
-					<Card.Description>
-						These bank deposits look like payments you already recorded — confirm so we don't count them twice.
-					</Card.Description>
+	{#if canOperateReconciliation}
+		<Card.Root class="mb-6 gap-0 py-0" data-testid="bank-review-queue">
+			<Card.Header class="border-b border-border px-4 py-3">
+				<div class="flex flex-wrap items-center justify-between gap-3">
+					<div>
+						<Card.Title class="flex items-center gap-2 text-base">
+							<Check class="h-4 w-4 text-primary" />
+							Review suggested matches
+							{#if reviewCount > 0}
+								<Badge variant="secondary" data-testid="bank-review-count">{reviewCount}</Badge>
+							{/if}
+						</Card.Title>
+						<Card.Description>
+							These bank deposits look like payments you already recorded — confirm so we don't count them twice.
+						</Card.Description>
+					</div>
 				</div>
-			</div>
-		</Card.Header>
-		<Card.Content class="p-0">
-			{#if reviewQueueQuery.isLoading}
-				<p class="py-12 text-center text-sm text-muted-foreground">Loading suggested matches...</p>
-			{:else if reviewQueueQuery.isError}
-				<p class="py-12 text-center text-sm text-destructive">Could not load suggested matches.</p>
-			{:else if reviewItems.length === 0}
-				<p class="py-12 text-center text-sm text-muted-foreground" data-testid="bank-review-empty">
-					Nothing to review.
-				</p>
-			{:else}
-				<ul class="divide-y divide-border">
+			</Card.Header>
+			<Card.Content class="p-0">
+				{#if reviewQueueQuery.isLoading}
+					<LoadingState label="Loading suggested matches" variant="spinner" testid="bank-review-loading" />
+				{:else if reviewQueueQuery.isError}
+					<div class="flex flex-wrap items-center justify-center gap-3 py-12" role="alert" data-testid="bank-review-error">
+						<p class="text-sm text-destructive">Could not load suggested matches.</p>
+						<Button size="sm" variant="outline" onclick={() => reviewQueueQuery.refetch()}>Retry matches</Button>
+					</div>
+				{:else if reviewItems.length === 0}
+					<p class="py-12 text-center text-sm text-muted-foreground" data-testid="bank-review-empty">
+						Nothing to review.
+					</p>
+				{:else}
+					<ul class="divide-y divide-border">
 					{#each reviewItems as item (item.transaction.id)}
 						<li
 							class="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between"
@@ -433,7 +503,6 @@
 										<Badge variant="outline">{percent(item.suggestion.confidence)} match</Badge>
 									</div>
 									<p class="mt-1 font-medium">{item.suggestion.label}</p>
-									<p class="text-xs text-muted-foreground">{item.suggestion.entityType}</p>
 									<p class="mt-1 text-xs text-muted-foreground">{item.suggestion.reason}</p>
 								</div>
 							</div>
@@ -441,29 +510,31 @@
 								<Button
 									size="sm"
 									class="flex-1 lg:flex-none"
-									onclick={() => confirmMatchMutation.mutate(item.transaction.id)}
+									onclick={() => confirmMatchMutation.mutate(mutationFor(item.transaction.id, item.transaction.updatedAt))}
 									disabled={pendingReviewId === item.transaction.id}
 									data-testid="bank-review-confirm-{item.transaction.id}"
 								>
 									<Check class="mr-1.5 h-4 w-4" />
 									Confirm match
 								</Button>
-								<Button
-									size="sm"
-									variant="outline"
-									class="flex-1 lg:flex-none"
-									onclick={() => dismissMatchMutation.mutate(item.transaction.id)}
-									disabled={pendingReviewId === item.transaction.id}
-									data-testid="bank-review-dismiss-{item.transaction.id}"
-								>
-									<X class="mr-1.5 h-4 w-4" />
-									Not a match
-								</Button>
+								{#if canDestructivelyReconcile}
+									<Button
+										size="sm"
+										variant="outline"
+										class="flex-1 lg:flex-none"
+										onclick={() => dismissMatchMutation.mutate(mutationFor(item.transaction.id, item.transaction.updatedAt))}
+										disabled={pendingReviewId === item.transaction.id}
+										data-testid="bank-review-dismiss-{item.transaction.id}"
+									>
+										<X class="mr-1.5 h-4 w-4" />
+										Not a match
+									</Button>
+								{/if}
 							</div>
 						</li>
 					{/each}
-				</ul>
-				{#if reviewCount > REVIEW_QUEUE_PAGE_SIZE}
+					</ul>
+					{#if reviewCount > REVIEW_QUEUE_PAGE_SIZE}
 					<div class="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3">
 						<p class="text-sm text-muted-foreground" data-testid="bank-review-page-status">
 							Showing {reviewPageStart}-{reviewPageEnd} of {reviewCount}
@@ -487,12 +558,14 @@
 							</Button>
 						</div>
 					</div>
+					{/if}
 				{/if}
-			{/if}
-		</Card.Content>
-	</Card.Root>
+			</Card.Content>
+		</Card.Root>
+	{/if}
 
-	<div class="grid gap-6 xl:grid-cols-[1fr_420px]">
+	{#if canManageConnections}
+		<div class="grid gap-6 xl:grid-cols-[1fr_420px]">
 		<Card.Root class="gap-0 py-0">
 			<Card.Header class="border-b border-border px-4 py-3">
 				<div class="flex flex-wrap items-center justify-between gap-3">
@@ -514,9 +587,12 @@
 			</Card.Header>
 			<Card.Content class="p-0">
 				{#if transactionsQuery.isLoading}
-					<p class="py-12 text-center text-sm text-muted-foreground">Loading bank transactions...</p>
+					<LoadingState label="Loading bank transactions" variant="spinner" testid="bank-transactions-loading" />
 				{:else if transactionsQuery.isError}
-					<p class="py-12 text-center text-sm text-destructive">Could not load bank transactions.</p>
+					<div class="flex flex-wrap items-center justify-center gap-3 py-12" role="alert" data-testid="bank-transactions-error">
+						<p class="text-sm text-destructive">Could not load bank transactions.</p>
+						<Button size="sm" variant="outline" onclick={() => transactionsQuery.refetch()}>Retry transactions</Button>
+					</div>
 				{:else if transactions.length === 0}
 					<p class="py-12 text-center text-sm text-muted-foreground">
 						{statusFilter === 'Removed' ? 'No ignored bank lines.' : 'No bank transactions yet.'}
@@ -529,6 +605,7 @@
 									<th class="px-4 py-3 text-left font-medium text-muted-foreground">Date</th>
 									<th class="px-4 py-3 text-left font-medium text-muted-foreground">Description</th>
 									<th class="px-4 py-3 text-right font-medium text-muted-foreground">Amount</th>
+									<th class="px-4 py-3 text-left font-medium text-muted-foreground">Property route</th>
 									<th class="px-4 py-3 text-left font-medium text-muted-foreground">Match</th>
 								</tr>
 							</thead>
@@ -543,75 +620,108 @@
 										<td class="whitespace-nowrap px-4 py-3 text-right font-mono {transaction.amount >= 0 ? 'text-[var(--success)]' : 'text-destructive'}">
 											{money(transaction.amount)}
 										</td>
+										<td class="min-w-56 px-4 py-3">
+											<Select.Root
+												type="single"
+												value={transaction.propertyId ? String(transaction.propertyId) : 'unassigned'}
+												onValueChange={(value) => routeMutation.mutate({
+													id: transaction.id,
+													propertyId: value === 'unassigned' ? undefined : Number(value),
+													updatedAt: transaction.updatedAt,
+													operationKey: crypto.randomUUID()
+												})}
+												disabled={routeMutation.isPending}
+											>
+												<Select.Trigger class="h-9 w-full" data-testid="bank-transaction-route-{transaction.id}">
+													{transaction.propertyName ?? 'Unassigned · admin only'}
+												</Select.Trigger>
+												<Select.Content>
+													<Select.Item value="unassigned" label="Unassigned · admin only">Unassigned · admin only</Select.Item>
+													{#each routingProperties as property (property.id)}
+														<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
+													{/each}
+												</Select.Content>
+											</Select.Root>
+											<p class="mt-1 text-xs text-muted-foreground">Controls which assigned managers may review this line.</p>
+										</td>
 										<td class="min-w-64 px-4 py-3">
-											{#if transaction.matchStatus === 'Matched'}
-												<div class="flex flex-wrap items-center gap-2">
-													<span class="m3-tone-chip border m3-tone--success rounded-full px-2 py-1 text-xs font-medium">Matched</span>
+										{#if transaction.matchStatus === 'Matched'}
+											<div class="flex flex-wrap items-center gap-2">
+												<span class="m3-tone-chip border m3-tone--success rounded-full px-2 py-1 text-xs font-medium">Matched</span>
+												{#if canDestructivelyReconcile}
 													<Button
 														size="sm"
 														variant="outline"
-														onclick={() => clearMutation.mutate(transaction.id)}
+												onclick={() => clearMutation.mutate(mutationFor(transaction.id, transaction.updatedAt))}
 														disabled={clearMutation.isPending}
 													>
 														Clear
 													</Button>
-												</div>
-											{:else if transaction.matchStatus === 'Removed'}
-												<div class="flex flex-wrap items-center gap-2">
-													<span class="rounded-full bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">Personal · Ignored</span>
+												{/if}
+											</div>
+										{:else if transaction.matchStatus === 'Removed'}
+											<div class="flex flex-wrap items-center gap-2">
+												<span class="rounded-full bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">Personal · Ignored</span>
+												{#if canDestructivelyReconcile}
 													<Button
 														size="sm"
 														variant="outline"
-														onclick={() => clearMutation.mutate(transaction.id)}
+												onclick={() => clearMutation.mutate(mutationFor(transaction.id, transaction.updatedAt))}
 														disabled={clearMutation.isPending}
 														data-testid="bank-transaction-unignore-{transaction.id}"
 													>
 														<RotateCcw class="mr-1.5 h-3.5 w-3.5" />
 														Un-ignore
 													</Button>
-												</div>
+												{/if}
+											</div>
 											{:else if transaction.suggestedMatch}
 												<div class="space-y-2">
 													<p class="text-xs text-muted-foreground">{transaction.suggestedMatch.reason}</p>
 													<div class="flex flex-wrap items-center gap-2">
-														<Button
-															size="sm"
-															onclick={() => matchMutation.mutate({
-																id: transaction.id,
-																entityType: transaction.suggestedMatch!.entityType,
-																entityId: transaction.suggestedMatch!.entityId
-															})}
-															disabled={matchMutation.isPending}
-														>
-															Match {transaction.suggestedMatch.label}
-														</Button>
-														<Button
-															size="sm"
-															variant="ghost"
-															class="text-muted-foreground"
-															onclick={() => ignoreMutation.mutate(transaction.id)}
-															disabled={pendingIgnoreId === transaction.id}
-															data-testid="bank-transaction-ignore-{transaction.id}"
-														>
-															<Ban class="mr-1.5 h-3.5 w-3.5" />
-															{pendingIgnoreId === transaction.id ? 'Ignoring…' : 'Ignore'}
-														</Button>
+														{#if canOperateReconciliation}
+															<Button
+																size="sm"
+																onclick={() => matchMutation.mutate({
+																	id: transaction.id,
+															request: matchRequest(transaction.suggestedMatch!, transaction.updatedAt)
+																})}
+																disabled={matchMutation.isPending}
+															>
+																Match {transaction.suggestedMatch.label}
+															</Button>
+														{/if}
+														{#if canDestructivelyReconcile}
+															<Button
+																size="sm"
+																variant="ghost"
+																class="text-muted-foreground"
+													onclick={() => ignoreMutation.mutate(mutationFor(transaction.id, transaction.updatedAt))}
+																disabled={pendingIgnoreId === transaction.id}
+																data-testid="bank-transaction-ignore-{transaction.id}"
+															>
+																<Ban class="mr-1.5 h-3.5 w-3.5" />
+																{pendingIgnoreId === transaction.id ? 'Ignoring…' : 'Ignore'}
+															</Button>
+														{/if}
 													</div>
 												</div>
 											{:else}
 												<div class="flex flex-wrap items-center gap-2">
 													<span class="text-xs text-muted-foreground">No suggestion yet</span>
+												{#if canDestructivelyReconcile}
 													<Button
 														size="sm"
 														variant="ghost"
 														class="text-muted-foreground"
-														onclick={() => ignoreMutation.mutate(transaction.id)}
+												onclick={() => ignoreMutation.mutate(mutationFor(transaction.id, transaction.updatedAt))}
 														disabled={pendingIgnoreId === transaction.id}
 														data-testid="bank-transaction-ignore-{transaction.id}"
 													>
 														<Ban class="mr-1.5 h-3.5 w-3.5" />
 														{pendingIgnoreId === transaction.id ? 'Ignoring…' : 'Ignore'}
 													</Button>
+												{/if}
 												</div>
 											{/if}
 										</td>
@@ -700,11 +810,11 @@
 						<Card.Description>Development-only Plaid sandbox/debug path when Link is not available.</Card.Description>
 					</Card.Header>
 					<Card.Content class="space-y-3 p-4">
-						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="public-sandbox-token" bind:value={exchangePublicToken} />
-						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Plaid account id" bind:value={exchangeAccountId} />
-						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Institution name" bind:value={exchangeInstitutionName} />
-						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Account name" bind:value={exchangeAccountName} />
-						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Mask" bind:value={exchangeAccountMask} />
+						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="public-sandbox-token" bind:value={exchangePublicToken} oninput={() => (manualExchangeOperationId = '')} />
+						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Plaid account id" bind:value={exchangeAccountId} oninput={() => (manualExchangeOperationId = '')} />
+						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Institution name" bind:value={exchangeInstitutionName} oninput={() => (manualExchangeOperationId = '')} />
+						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Account name" bind:value={exchangeAccountName} oninput={() => (manualExchangeOperationId = '')} />
+						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Mask" bind:value={exchangeAccountMask} oninput={() => (manualExchangeOperationId = '')} />
 						<Button class="w-full" variant="outline" onclick={exchangeManualPublicToken} disabled={exchangeMutation.isPending}>
 							Exchange public token
 						</Button>
@@ -732,5 +842,6 @@
 				</Card.Content>
 			</Card.Root>
 		</div>
-	</div>
+		</div>
+	{/if}
 </div>

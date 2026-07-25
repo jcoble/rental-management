@@ -1,8 +1,16 @@
 using System.ComponentModel.DataAnnotations;
 using RentalCommand.Core.Entities;
-using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.DTOs;
+
+/// <summary>Presentation-only availability derived from possession and operational periods.</summary>
+public enum DerivedUnitStatus
+{
+    Vacant,
+    Reserved,
+    Occupied,
+    Offline,
+}
 
 /// <summary>Wire shape returned for a <see cref="Unit"/>.</summary>
 public class UnitResponse
@@ -15,7 +23,7 @@ public class UnitResponse
     public decimal Bathrooms { get; set; }
     public int? SquareFeet { get; set; }
     public decimal MarketRent { get; set; }
-    public UnitStatus Status { get; set; }
+    public DerivedUnitStatus Status { get; set; }
     public string? Notes { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
@@ -23,28 +31,21 @@ public class UnitResponse
     /// <summary>Stable selector for frontend tests, e.g. <c>unit-1</c>.</summary>
     public string TestId => $"unit-{Id}";
 
-    public static UnitResponse FromEntity(Unit e) => new()
-    {
-        Id = e.Id,
-        PropertyId = e.PropertyId,
-        UnitNumber = e.UnitNumber,
-        FloorPlan = e.FloorPlan,
-        Bedrooms = e.Bedrooms,
-        Bathrooms = e.Bathrooms,
-        SquareFeet = e.SquareFeet,
-        MarketRent = e.MarketRent,
-        Status = e.Status,
-        Notes = e.Notes,
-        CreatedAt = e.CreatedAt,
-        UpdatedAt = e.UpdatedAt,
-    };
+}
+
+public class UnitListResponse
+{
+    public IReadOnlyList<UnitResponse> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
 }
 
 /// <summary>
-/// A units-list row with cheap health badges for the <c>/units</c> page (spec section 10). Every field
-/// is computed DB-side in one projection query (grouped counts + the current-lease scalars) — the list
+/// A units-list row with cheap health badges for the <c>/units</c> page (spec section 10). Fields
+/// come from the paged canonical health query plus one page-scoped DB aggregate for documents; the list
 /// never calls the per-unit dashboard per row. <see cref="SimpleStage"/> is a simplified label
-/// (Unit.Status + current-lease status), NOT the full 9-stage detail-page derivation.
+/// derived from possession, operational periods, lifecycle, and governing-agreement dates.
 /// </summary>
 public class UnitHealthResponse
 {
@@ -53,17 +54,29 @@ public class UnitHealthResponse
     public string PropertyName { get; set; } = string.Empty;
     public string UnitNumber { get; set; } = string.Empty;
 
-    /// <summary>Occupancy status as its string name (e.g. <c>Occupied</c>).</summary>
+    /// <summary>
+    /// Occupancy/availability status derived from possession and operational-period projections,
+    /// never the mutable legacy Unit.Status field.
+    /// </summary>
     public string Status { get; set; } = string.Empty;
     public decimal MarketRent { get; set; }
+
+    /// <summary>Canonical continuous household/possession relationship currently occupying the Unit.</summary>
+    public int? CurrentLeaseManagementId { get; set; }
+
+    /// <summary>Immutable agreement version governing the relationship on the portfolio business date.</summary>
+    public int? CurrentAgreementId { get; set; }
+
+    /// <summary>Continuous tenant-account identity for rent, charges, payments, and deposits.</summary>
+    public int? TenantAccountId { get; set; }
 
     /// <summary>Open (not Completed/Cancelled/Archived) work orders on the unit.</summary>
     public int OpenWorkOrderCount { get; set; }
 
-    /// <summary>Days until the unit's active lease ends; null when there is no active lease.</summary>
+    /// <summary>Days until the governing agreement ends; null for an open-ended/no-current agreement.</summary>
     public int? LeaseEndsInDays { get; set; }
 
-    /// <summary>Documents attached to the unit or its lease/payment/expense/work-order/inspection children.</summary>
+    /// <summary>Documents attached to the unit, canonical legal artifacts, expenses, work orders, or inspections.</summary>
     public int DocsNeedingReviewCount { get; set; }
 
     /// <summary>Simplified lifecycle label for the list badge (Active/Renewal/Move-Out/Lease/Vacant/Turnover).</summary>
@@ -91,6 +104,7 @@ public class UnitHealthListQuery : ListQuery
 public class UnitListQuery : ListQuery
 {
     public bool? AvailableForLease { get; set; }
+    public int? ExcludeUnitId { get; set; }
 }
 
 public class CreateUnitRequest
@@ -118,8 +132,6 @@ public class CreateUnitRequest
     [Range(0, 99999999)]
     public decimal MarketRent { get; set; }
 
-    public UnitStatus Status { get; set; } = UnitStatus.Vacant;
-
     [MaxLength(2000)]
     public string? Notes { get; set; }
 }
@@ -143,8 +155,6 @@ public class UpdateUnitRequest
 
     [Range(0, 99999999)]
     public decimal? MarketRent { get; set; }
-
-    public UnitStatus? Status { get; set; }
 
     [MaxLength(2000)]
     public string? Notes { get; set; }

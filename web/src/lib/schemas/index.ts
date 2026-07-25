@@ -158,14 +158,17 @@ const optionalNonNegative = (label: string) =>
 export const propertySchema = z.object({
 	name: required('Name').max(200, 'Name must be 200 characters or fewer'),
 	type: z.string(),
+	rentalStructure: z.enum(['SingleRental', 'MultiRental'], {
+		error: 'Choose whether this address is one rental or contains multiple rentals'
+	}),
 	status: z.string(),
 	addressLine1: required('Address').max(250, 'Address must be 250 characters or fewer'),
 	addressLine2: optionalTextMax('Apt / Suite / Unit #', 250),
 	city: required('City').max(100, 'City must be 100 characters or fewer'),
 	state: required('State').max(100, 'State must be 100 characters or fewer'),
 	postalCode: required('ZIP').max(20, 'ZIP must be 20 characters or fewer'),
-	// The property's owner is an OwnerEntity (the API validates ownerEntityId against OwnerEntities;
-	// ownerId is the legacy Owners table). owners.list() returns OwnerEntities, so this is their id.
+	// Form-only selection used to construct a canonical PropertyOwnership mutation. It is never
+	// emitted as a direct Property field.
 	ownerEntityId: idString,
 });
 
@@ -205,95 +208,17 @@ export const leaseSchema = z.object({
 	lateFeeAmount: nonNegativeNumeric('Late fee'),
 	// rentDueDay: server [Range(1, 31)]
 	rentDueDay: numericString('Due day').refine((v) => v >= 1 && v <= 31, 'Due day must be between 1 and 31'),
-	rentTrackingStartMode: z
-		.enum(['BackfillFromLeaseStart', 'ForwardOnly', 'CustomCutoffDate', 'OpeningBalanceOnly'])
-		.optional()
-		.default('ForwardOnly'),
-	rentTrackingStartDate: optionalText,
-	openingBalanceAmount: optionalNumeric('Opening balance'),
-	openingBalanceAsOfDate: optionalText,
-	openingBalanceNote: optionalTextMax('Opening balance note', 2000),
 	status: z.string(),
 	notes: optionalText,
 });
 
-export function leaseRentTrackingErrors(value: {
-	status?: unknown;
-	rentTrackingStartMode?: unknown;
-	rentTrackingStartDate?: unknown;
-	openingBalanceAmount?: unknown;
-	openingBalanceAsOfDate?: unknown;
-	openingBalanceNote?: unknown;
-}): Record<string, string> {
-	if (
-		value.status === 'Active' &&
-		value.rentTrackingStartMode === 'CustomCutoffDate' &&
-		!String(value.rentTrackingStartDate ?? '').trim()
-	) {
-		return { rentTrackingStartDate: 'Cutoff date is required' };
-	}
-
-	if (value.status === 'Active' && value.rentTrackingStartMode === 'OpeningBalanceOnly') {
-		const amount = String(value.openingBalanceAmount ?? '').trim();
-		const asOfDate = String(value.openingBalanceAsOfDate ?? '').trim();
-		const note = String(value.openingBalanceNote ?? '').trim();
-		if ((asOfDate || note) && !amount) {
-			return { openingBalanceAmount: 'Opening balance amount is required' };
-		}
-		if (amount && !asOfDate) {
-			return { openingBalanceAsOfDate: 'As-of date is required' };
-		}
-	}
-
-	return {};
-}
-
-export const paymentSchema = z
-	.object({
-		leaseId: numericString('Lease'),
-		// amount: server [Range(0.01, 99999999)] — must be > 0
-		amount: positiveNumeric('Amount'),
-		// amountPaid: only meaningful when status === 'Partial'. '' → null; otherwise coerced to a
-		// number. The cross-field invariant (0 < amountPaid < amount when Partial) is enforced below in
-		// .superRefine, mirroring PaymentService.NormalizeAmountPaid on the server (a bad value 400s).
-		amountPaid: optionalNonNegative('Amount paid'),
-		dueDate: required('Due date'),
-		paymentType: z.string(),
-		status: z.string(),
-		paidDate: optionalText,
-		method: optionalText,
-		externalReference: optionalText,
-		notes: optionalText,
-	})
-	.superRefine((val, ctx) => {
-		// Partial-payment split: the server requires an Amount paid strictly between 0 and the full
-		// Amount. Surface that inline (keyed to `amountPaid`) so the user fixes it before submit rather
-		// than bouncing off a 400. For any non-Partial status amountPaid is irrelevant (it's dropped on
-		// submit), so we don't validate it.
-		if (val.status !== 'Partial') return;
-		const paid = val.amountPaid;
-		if (paid == null) {
-			ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['amountPaid'], message: 'Amount paid is required for a partial payment' });
-			return;
-		}
-		if (paid <= 0) {
-			ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['amountPaid'], message: 'Amount paid must be greater than zero' });
-			return;
-		}
-		// `amount` may be NaN if its own field failed; only compare once it's a real number.
-		if (!Number.isNaN(val.amount) && paid >= val.amount) {
-			ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['amountPaid'], message: 'Amount paid must be less than the full amount' });
-		}
-	});
-
 /**
- * Record-application-fee form (a lease-less income entry against an application). Mirrors the server
- * RecordApplicationFeeRequest: amount is required and > 0; method + paid date are optional.
+ * Record-application-fee form for the application's pre-tenancy financial account.
  */
 export const applicationFeeSchema = z.object({
 	amount: positiveNumeric('Amount'),
 	method: optionalText,
-	paidDate: optionalText,
+	effectiveOn: optionalText,
 });
 
 export const expenseSchema = z.object({
@@ -361,6 +286,7 @@ export const workOrderSchema = z.object({
 	propertyId: numericString('Property'),
 	title: required('Title'),
 	description: required('Description'),
+	technicianAccessInstructions: optionalText,
 	priority: z.string(),
 	category: required('Category'),
 	// Optional maintenance context (all blank → null). unitId is filtered to the chosen property
@@ -553,18 +479,7 @@ export const vendorSchema = z.object({
 	preferred: z.boolean(),
 });
 
-/**
- * New security deposit holding: lease is required; amount is optional (defaults
- * to the lease's deposit amount server-side) but if provided must be > 0.
- */
-export const newDepositHoldingSchema = z.object({
-	leaseId: numericString('Lease'),
-	// amount is optional — blank means "use the lease default"
-	amount: optionalNonNegative('Amount'),
-	notes: optionalText,
-});
-
-/** Deduction to add to an existing deposit holding. */
+/** Deduction to append to an existing canonical deposit account. */
 export const depositDeductionSchema = z.object({
 	reason: required('Reason'),
 	// deduction amounts must be > 0

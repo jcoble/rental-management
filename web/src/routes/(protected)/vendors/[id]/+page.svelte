@@ -2,6 +2,7 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { page } from '$app/state';
 	import { vendors } from '$lib/api/endpoints/vendors';
+	import { ApiError } from '$lib/api/client';
 	import type { Vendor } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
@@ -70,13 +71,19 @@
 	}
 
 	// --- Text W-9 request ---
+	let requestW9OperationId = $state<string | null>(null);
 	const requestW9Mutation = createMutation(() => ({
-		mutationFn: () => vendors.requestW9(id),
+		mutationFn: () => vendors.requestW9(id, (requestW9OperationId ??= crypto.randomUUID())),
 		onSuccess: (res) => {
+			requestW9OperationId = null;
 			showSuccess(`W-9 request texted to ${res.sentTo}.`);
 		},
 		// The API returns 400 { error } when the vendor has no phone — surface it.
-		onError: (err) => showError(apiErrorMessage(err)),
+		onError: (err) => {
+			if (err instanceof ApiError && err.status >= 400 && err.status < 500
+				&& err.status !== 408 && err.status !== 429) requestW9OperationId = null;
+			showError(apiErrorMessage(err));
+		},
 	}));
 
 	// --- Toggle "W-9 on file" ---
@@ -202,6 +209,11 @@
 			<Card.Content>
 				{#if scorecardQuery.isLoading}
 					<p class="py-4 text-sm text-muted-foreground" data-testid="vendor-scorecard-loading">Loading scorecard…</p>
+				{:else if scorecardQuery.isError}
+					<div class="flex items-center justify-between gap-4 py-4" data-testid="vendor-scorecard-error">
+						<p class="text-sm text-destructive">The scorecard could not be loaded.</p>
+						<Button variant="outline" size="sm" onclick={() => scorecardQuery.refetch()}>Try again</Button>
+					</div>
 				{:else if scorecard}
 					<div class="grid gap-x-8 gap-y-6 sm:grid-cols-2 lg:grid-cols-4">
 						<div>

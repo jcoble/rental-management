@@ -1,12 +1,14 @@
-using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Identity;
-using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
-using RentalCommand.Core.Enums;
-using RentalCommand.Core.Interfaces;
 using RentalCommand.Core.Time;
-using RentalCommand.Data;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Auth;
+using RentalCommand.Core.Atomic;
+using Microsoft.Extensions.Options;
 
 namespace RentalCommand.Api.Services.Auth;
 
@@ -26,6 +28,7 @@ public class AuthResult
     public TokenResult? Tokens { get; set; }
     public IEnumerable<string>? ValidationErrors { get; set; }
     public AuthErrorType ErrorType { get; set; }
+    public IReadOnlyList<EffectiveAccessContextOption>? AccessContexts { get; set; }
 
     /// <summary>
     /// Email-confirmation token surfaced to the controller. Since no email transport is wired in
@@ -42,6 +45,16 @@ public class AuthResult
 
     public static AuthResult ValidationFail(string error, IEnumerable<string> details) =>
         new() { Success = false, Error = error, ValidationErrors = details, ErrorType = AuthErrorType.BadRequest };
+
+    public static AuthResult ContextSelectionRequired(
+        IReadOnlyList<EffectiveAccessContextOption> contexts) =>
+        new()
+        {
+            Success = false,
+            Error = "Select a workspace to continue.",
+            ErrorType = AuthErrorType.BadRequest,
+            AccessContexts = contexts,
+        };
 
     /// <summary>Registration succeeded but the user must confirm their email before logging in.</summary>
     public static AuthResult RegistrationPending(int userId, string emailConfirmationToken) =>
@@ -63,10 +76,11 @@ public class AuthUserResult
 
 public interface IAuthService
 {
-    Task<AuthResult> LoginAsync(string email, string password, string? ipAddress = null, string? userAgent = null);
-    Task<AuthResult> RegisterAsync(RegisterRequest request);
+    Task<AuthResult> LoginAsync(string email, string password, int? accessContextId = null, string? ipAddress = null, string? userAgent = null);
+    Task<AuthResult> LoginExternalAsync(int userId, int? accessContextId = null, CancellationToken ct = default);
+    Task<AuthResult> RegisterAsync(RegisterRequest request, string operationKey, CancellationToken ct = default);
     Task<AuthResult> RefreshAsync(string refreshToken, string? ipAddress = null, string? userAgent = null);
-    Task<AuthUserResult> ConfirmEmailAsync(string userId, string token);
+    Task<AuthUserResult> ConfirmEmailAsync(string userId, string token, string operationKey, CancellationToken ct = default);
     Task<AuthUserResult> GetCurrentUserAsync(string userId);
 
     /// <summary>
@@ -74,8 +88,9 @@ public interface IAuthService
     /// (no transport in Phase 0). Always succeeds to avoid email enumeration; returns the token
     /// for development convenience.
     /// </summary>
-    Task<string?> GeneratePasswordResetTokenAsync(string email);
-    Task<AuthUserResult> ResetPasswordAsync(string userId, string token, string newPassword);
+    Task<string?> GeneratePasswordResetTokenAsync(string email, string operationKey, CancellationToken ct = default);
+    Task<AuthUserResult> ResetPasswordAsync(
+        string userId, string token, string newPassword, string operationKey, CancellationToken ct = default);
 
     /// <summary>
     /// Re-sends the email-confirmation message for an unverified account. Always reports success
@@ -83,55 +98,72 @@ public interface IAuthService
     /// a silent no-op. Only an existing, still-unconfirmed account actually generates a fresh token
     /// and enqueues the email.
     /// </summary>
-    Task<AuthUserResult> ResendVerificationEmailAsync(string email);
+    Task<AuthUserResult> ResendVerificationEmailAsync(string email, string operationKey, CancellationToken ct = default);
 
     /// <summary>
     /// Changes the signed-in user's password. Rejects accounts with no local password (external
     /// login only, e.g. Google) and surfaces Identity's password-policy/validation failures.
     /// </summary>
-    Task<AuthUserResult> ChangePasswordAsync(string userId, string currentPassword, string newPassword);
+    Task<AuthUserResult> ChangePasswordAsync(
+        ActiveAccessContext active,
+        string currentPassword,
+        string newPassword,
+        string operationKey,
+        CancellationToken ct = default);
 
-    Task<UserDto> MapToUserDtoAsync(ApplicationUser user, IList<string> roles);
+    Task<UserDto> MapToUserDtoAsync(ApplicationUser user);
 }
 
 public class AuthService : IAuthService
 {
+    private static readonly AtomicJsonResultCodec<ChangePasswordResult> ChangePasswordCodec =
+        new("auth-password-change-result:v1");
+    private static readonly AtomicJsonResultCodec<ConfirmAccountEmailResult> ConfirmEmailCodec =
+        new("auth-email-confirm-result:v1");
+    private static readonly AtomicJsonResultCodec<ResetAccountPasswordResult> ResetPasswordCodec =
+        new("auth-password-reset-result:v1");
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly SignInManager<ApplicationUser> _signInManager;
-    private readonly IJwtTokenService _tokenService;
-    private readonly IUserMigrationService _userMigration;
+    private readonly IAtomicAuthSessionCredentialService _atomicCredentials;
+    private readonly ICanonicalAccessTokenService _canonicalTokens;
+    private readonly IEffectiveAccessContextSelectionQuery _contextSelection;
+    private readonly IAccessEnvelopeQuery _accessEnvelopes;
+    private readonly AtomicAuthSessionCredentialOptions _credentialOptions;
     private readonly IAuthEmailSender _emailSender;
-    private readonly RentalCommandDbContext _db;
-    private readonly IAuditTrailService _audit;
-    private readonly Domain.ISelfOwnerProvisioner _selfOwnerProvisioner;
+    private readonly ICanonicalAccountBootstrapService _accountBootstrap;
+    private readonly IAtomicUnitOfWork _atomic;
     private readonly ILogger<AuthService> _logger;
     private readonly TimeProvider _timeProvider;
 
     public AuthService(
         UserManager<ApplicationUser> userManager,
         SignInManager<ApplicationUser> signInManager,
-        IJwtTokenService tokenService,
-        IUserMigrationService userMigration,
+        IAtomicAuthSessionCredentialService atomicCredentials,
+        ICanonicalAccessTokenService canonicalTokens,
+        IEffectiveAccessContextSelectionQuery contextSelection,
+        IAccessEnvelopeQuery accessEnvelopes,
+        IOptions<AtomicAuthSessionCredentialOptions> credentialOptions,
         IAuthEmailSender emailSender,
-        RentalCommandDbContext db,
-        IAuditTrailService audit,
-        Domain.ISelfOwnerProvisioner selfOwnerProvisioner,
+        ICanonicalAccountBootstrapService accountBootstrap,
+        IAtomicUnitOfWork atomic,
         ILogger<AuthService> logger,
         TimeProvider timeProvider)
     {
         _userManager = userManager;
         _signInManager = signInManager;
-        _tokenService = tokenService;
-        _userMigration = userMigration;
+        _atomicCredentials = atomicCredentials;
+        _canonicalTokens = canonicalTokens;
+        _contextSelection = contextSelection;
+        _accessEnvelopes = accessEnvelopes;
+        _credentialOptions = credentialOptions.Value;
         _emailSender = emailSender;
-        _db = db;
-        _audit = audit;
-        _selfOwnerProvisioner = selfOwnerProvisioner;
+        _accountBootstrap = accountBootstrap;
+        _atomic = atomic;
         _logger = logger;
         _timeProvider = timeProvider;
     }
 
-    public async Task<AuthResult> LoginAsync(string email, string password, string? ipAddress = null, string? userAgent = null)
+    public async Task<AuthResult> LoginAsync(string email, string password, int? accessContextId = null, string? ipAddress = null, string? userAgent = null)
     {
         var user = await _userManager.FindByEmailAsync(email);
         if (user == null)
@@ -139,29 +171,15 @@ public class AuthService : IAuthService
             return AuthResult.Fail("Invalid email or password");
         }
 
-        // Rehash-on-first-login: a migrated account with no password hash can't sign in with a password.
-        // Route it into the reset flow rather than returning a confusing "invalid password".
-        if (await _userMigration.RequiresPasswordResetAsync(user))
-        {
-            _logger.LogInformation("Login for {Email} requires password reset (migrated account, no password set).", email);
-            return AuthResult.Fail(
-                "PASSWORD_RESET_REQUIRED: This account needs a password. Please use the reset-password flow.");
-        }
-
         // lockoutOnFailure: true enables Identity's lockout (configured in Program.cs: 5 attempts / 5 min).
-        // CheckPasswordSignInAsync also rejects an already-locked-out user up front (its PreSignInCheck),
-        // which is exactly how a tenant whose portal access was turned OFF is blocked — disabling sets a
-        // far-future lockout end (TenantPortalProvisioningService.SetPortalAccessAsync).
+        // CheckPasswordSignInAsync also rejects an already-locked-out identity up front. Relationship
+        // access is evaluated separately when selecting a canonical workspace context.
         var result = await _signInManager.CheckPasswordSignInAsync(user, password, lockoutOnFailure: true);
         if (!result.Succeeded)
         {
             if (result.IsLockedOut)
             {
-                // Distinguish a deliberate "portal access off" (indefinite lock) from a transient
-                // failed-login auto-lockout so the tenant gets a message that points them at their landlord.
-                return TenantPortalProvisioningService.IsPortalDisabled(user.LockoutEnd)
-                    ? AuthResult.Fail("Your portal access has been turned off. Please contact your landlord.")
-                    : AuthResult.Fail("Account is locked. Try again later.");
+                return AuthResult.Fail("Account is locked. Try again later.");
             }
             return AuthResult.Fail("Invalid email or password");
         }
@@ -172,148 +190,131 @@ public class AuthService : IAuthService
             return AuthResult.Fail("EMAIL_NOT_VERIFIED: Please verify your email address before logging in.");
         }
 
-        // Login timing stays on the REAL clock (auth/security tracking), never the simulation clock.
-        user.LastLoginAt = DateTime.UtcNow;
-        await _userManager.UpdateAsync(user);
-
-        var roles = await _userManager.GetRolesAsync(user);
-        var tokens = await _tokenService.GenerateTokensAsync(user, roles, ipAddress, userAgent);
-
-        return AuthResult.Ok(new LoginResponse
-        {
-            AccessToken = tokens.AccessToken,
-            AccessTokenExpiration = tokens.AccessTokenExpiration,
-            User = await MapToUserDtoAsync(user, roles)
-        }, tokens);
+        return await StartCanonicalLoginAsync(user, accessContextId);
     }
 
-    public async Task<AuthResult> RegisterAsync(RegisterRequest request)
+    public async Task<AuthResult> LoginExternalAsync(
+        int userId,
+        int? accessContextId = null,
+        CancellationToken ct = default)
     {
-        var existingUser = await _userManager.FindByEmailAsync(request.Email);
-        if (existingUser != null)
+        var user = await _userManager.FindByIdAsync(userId.ToString());
+        if (user is null || !user.EmailConfirmed)
         {
-            return AuthResult.Fail("Email is already registered", AuthErrorType.BadRequest);
+            return AuthResult.Fail("The external account is unavailable.");
         }
 
-        var user = new ApplicationUser
-        {
-            UserName = request.Email,
-            Email = request.Email,
-            EmailConfirmed = false, // email-confirm gate
-            DisplayName = request.DisplayName,
-            CreatedAt = _timeProvider.UtcNow()
-        };
+        return await StartCanonicalLoginAsync(user, accessContextId, ct);
+    }
 
-        var createResult = await _userManager.CreateAsync(user, request.Password);
-        if (!createResult.Succeeded)
+    private async Task<AuthResult> StartCanonicalLoginAsync(
+        ApplicationUser user,
+        int? accessContextId,
+        CancellationToken ct = default)
+    {
+        // Password/external-provider verification and the email-confirmation gate have already
+        // succeeded. The DB exposes only the narrow effective-context option projection here; it
+        // does not grant the runtime API generic cross-workspace table access.
+        var now = _timeProvider.UtcNow();
+        var contexts = await _contextSelection.ListAsync(user.Id, accessContextId, now, ct);
+        var firstContext = contexts.FirstOrDefault();
+        if (firstContext is null)
         {
-            return AuthResult.ValidationFail(
-                "Registration failed",
-                createResult.Errors.Select(e => e.Description));
+            return accessContextId is null
+                ? AuthResult.Fail("This account has no active workspace access.")
+                : AuthResult.Fail("The selected workspace is not available.", AuthErrorType.BadRequest);
         }
 
-        // New signups get an EMPTY portfolio with the first-login Sandbox-vs-Live choice still PENDING.
-        // We deliberately do NOT auto-seed demo data here: the user is asked, on first login, whether to
-        // "Explore with sample data (Sandbox)" or "Set up my real portfolio (Live)", and the demo seed
-        // runs only if they pick Sandbox (POST /api/v1/portfolio/onboarding-choice). Resilient: a
-        // provisioning failure must NOT fail registration — the account is still created and usable.
-        await ProvisionPendingPortfolioAsync(user);
+        if (accessContextId is null && firstContext.TotalEffectiveContexts > 1)
+        {
+            return AuthResult.ContextSelectionRequired(contexts);
+        }
 
+        // A supplied context is filtered by PostgreSQL; .NET never materializes all contexts and
+        // then selects one in memory. Without a supplied context, PostgreSQL's projected total
+        // proves that this first row is the only effective option.
+        var selected = firstContext;
+
+        Guid? challengeId = null;
+        string? challengeBearer = null;
+        if (selected.TotalEffectiveContexts > 1)
+        {
+            var challenge = await _atomicCredentials.IssueContextSelectionChallengeAsync(user.Id, ct);
+            if (!challenge.Issued || challenge.ChallengeBearer is null)
+            {
+                return AuthResult.Fail("Unable to authorize workspace selection.");
+            }
+
+            challengeId = challenge.ChallengeId;
+            challengeBearer = challenge.ChallengeBearer;
+        }
+
+        var session = await _atomicCredentials.StartAsync(new AtomicAuthSessionStartRequest(
+            Guid.NewGuid(), user.Id, selected.AccessContextId, selected.AccessRevision,
+            challengeId, challengeBearer), ct);
+        if (!session.Started || session.RefreshBearer is null)
+        {
+            return AuthResult.Fail("The selected workspace is no longer available.");
+        }
+
+        return await BuildCanonicalAuthResultAsync(
+            user,
+            session.AuthSessionId,
+            session.AccessContextId,
+            session.AccessRevision,
+            session.RefreshBearer,
+            ct);
+    }
+
+    public async Task<AuthResult> RegisterAsync(
+        RegisterRequest request,
+        string operationKey,
+        CancellationToken ct = default)
+    {
+        var bootstrap = await _accountBootstrap.CreateAsync(
+            request.Email,
+            request.DisplayName,
+            request.Password,
+            emailConfirmed: false,
+            operationKey: operationKey,
+            ct: ct);
+        if (!bootstrap.Succeeded)
+        {
+            var duplicate = bootstrap.Errors.Contains("Email is already registered");
+            return duplicate
+                ? AuthResult.Fail("Email is already registered", AuthErrorType.BadRequest)
+                : AuthResult.ValidationFail("Registration failed", bootstrap.Errors);
+        }
+
+        var user = bootstrap.User!;
         var emailToken = await _userManager.GenerateEmailConfirmationTokenAsync(user);
-
-        await _emailSender.SendEmailConfirmationAsync(user, emailToken);
-
-        _logger.LogInformation("New user registered: {Email} (id {UserId}). Awaiting email verification.", request.Email, user.Id);
-
+        await _emailSender.SendEmailConfirmationAsync(
+            user, bootstrap.PortfolioId, emailToken, $"{operationKey}:verification", ct);
+        _logger.LogInformation(
+            "Registered user {Email} (id {UserId}) with one canonical Administrator context; awaiting email verification.",
+            request.Email, user.Id);
         return AuthResult.RegistrationPending(user.Id, emailToken);
-    }
-
-    /// <summary>
-    /// Creates a fresh EMPTY <see cref="Portfolio"/> for a just-registered user with the first-login
-    /// Sandbox-vs-Live choice still PENDING, scopes the user to it, and provisions the self-owner + Admin
-    /// role + staff row. It deliberately does NOT seed demo data and does NOT set <c>IsSandbox</c>: the
-    /// account stays a blank Live-shaped portfolio until the user makes the first-login choice. Picking
-    /// "Sandbox" later seeds the demo data and flips the flag (POST /portfolio/onboarding-choice). Picking
-    /// "Live" keeps it empty. Best-effort and self-contained: any failure is logged and swallowed so it can
-    /// never fail the registration that already succeeded.
-    /// </summary>
-    private async Task ProvisionPendingPortfolioAsync(ApplicationUser user)
-    {
-        try
-        {
-            var now = _timeProvider.UtcNow();
-            var portfolio = new Portfolio
-            {
-                Name = string.IsNullOrWhiteSpace(user.DisplayName) ? "My Portfolio" : $"{user.DisplayName}'s Portfolio",
-                ManagementCompanyName = string.IsNullOrWhiteSpace(user.DisplayName) ? "My Company" : user.DisplayName!,
-                Status = PortfolioStatus.Active,
-                Currency = "USD",
-                // Pending the first-login choice: not a sandbox yet, no demo data. Settings carries the
-                // pending marker so the landing logic routes the user to the choice gate.
-                IsSandbox = false,
-                SandboxSeededAtUtc = null,
-                Settings = Domain.PortfolioOnboarding.WriteChoice(null, Domain.OnboardingChoice.Pending),
-                CreatedAt = now,
-                UpdatedAt = now,
-            };
-            _db.Portfolios.Add(portfolio);
-            await _db.SaveChangesAsync();
-
-            // Scope the new user to their portfolio so their first JWT carries this portfolioId.
-            user.PortfolioId = portfolio.Id;
-            await _userManager.UpdateAsync(user);
-
-            // The landlord IS the first owner: auto-create a primary self-owner from their account and
-            // link it, so onboarding never needs a separate "add an owner" step. Idempotent; needed for
-            // both the Sandbox and Live paths (the Go-Live wipe later recreates it).
-            await _selfOwnerProvisioner.EnsureSelfOwnerAsync(user, portfolio.Id);
-
-            // A self-service owner administers their own portfolio: grant the Admin role + a UserAccount
-            // staff row (mirrors the seeded admin). Without a role the nav only shows Dashboard + Help.
-            if (!await _userManager.IsInRoleAsync(user, nameof(UserRole.Admin)))
-            {
-                await _userManager.AddToRoleAsync(user, nameof(UserRole.Admin));
-            }
-            if (!await _db.UserAccounts.AnyAsync(a => a.PortfolioId == portfolio.Id && a.Email == user.Email))
-            {
-                _db.UserAccounts.Add(new UserAccount
-                {
-                    PortfolioId = portfolio.Id,
-                    Email = user.Email!,
-                    DisplayName = string.IsNullOrWhiteSpace(user.DisplayName) ? user.Email! : user.DisplayName!,
-                    PasswordHash = string.Empty, // Identity owns the credential
-                    Role = UserRole.Admin,
-                    IsActive = true,
-                    CreatedAt = now,
-                    UpdatedAt = now,
-                });
-                await _db.SaveChangesAsync();
-            }
-
-            _logger.LogInformation(
-                "Provisioned pending portfolio {PortfolioId} (Admin role + account, awaiting Sandbox/Live choice) for new user {Email} (id {UserId}).",
-                portfolio.Id, user.Email, user.Id);
-        }
-        catch (Exception ex)
-        {
-            // Never fail registration over portfolio provisioning — log and continue.
-            _logger.LogError(ex,
-                "Failed to provision pending portfolio for new user {Email} (id {UserId}); registration still succeeds.",
-                user.Email, user.Id);
-        }
     }
 
     public async Task<AuthResult> RefreshAsync(string refreshToken, string? ipAddress = null, string? userAgent = null)
     {
-        var tokens = await _tokenService.RefreshTokenAsync(refreshToken, ipAddress, userAgent);
-        if (tokens == null)
+        var rotation = await _atomicCredentials.RotateAsync(
+            new AtomicAuthSessionRotationRequest(Guid.NewGuid(), refreshToken));
+        if (rotation.Status is not (SessionRefreshMutationStatus.Rotated or SessionRefreshMutationStatus.Recovered) ||
+            rotation.ReplacementBearer is null)
         {
             return AuthResult.Fail("Invalid or expired refresh token");
         }
 
-        var principal = _tokenService.ValidateAccessToken(tokens.AccessToken);
-        var userId = principal?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-        var user = userId != null ? await _userManager.FindByIdAsync(userId) : null;
+        // The atomic rotation transaction validates the live session and effective context and
+        // returns only receipt-safe canonical coordinates. No cross-workspace follow-up read is
+        // needed by the runtime API credential.
+        if (rotation.UserId is null || rotation.AccessContextId is null || rotation.AccessRevision is null)
+        {
+            return AuthResult.Fail("Invalid or expired refresh token");
+        }
+
+        var user = await _userManager.FindByIdAsync(rotation.UserId.Value.ToString());
 
         if (user == null)
         {
@@ -325,33 +326,100 @@ public class AuthService : IAuthService
             return AuthResult.Fail("EMAIL_NOT_VERIFIED: Please verify your email address before logging in.");
         }
 
-        var roles = await _userManager.GetRolesAsync(user);
+        return await BuildCanonicalAuthResultAsync(
+            user,
+            rotation.AuthSessionId,
+            rotation.AccessContextId.Value,
+            rotation.AccessRevision.Value,
+            rotation.ReplacementBearer);
+    }
+
+    private async Task<AuthResult> BuildCanonicalAuthResultAsync(
+        ApplicationUser user,
+        Guid sessionId,
+        int accessContextId,
+        long accessRevision,
+        string refreshBearer,
+        CancellationToken ct = default)
+    {
+        var envelope = await _accessEnvelopes.GetAsync(
+            sessionId,
+            user.Id,
+            accessContextId,
+            accessRevision,
+            _timeProvider.UtcNow(),
+            ct);
+        if (envelope is null || envelope.SelectedContext.AccessRevision != accessRevision)
+        {
+            return AuthResult.Fail("The selected workspace access changed. Sign in again.");
+        }
+
+        var access = _canonicalTokens.Issue(new CanonicalAccessCoordinates(
+            user.Id, sessionId, accessContextId, accessRevision));
+        var refreshExpiresAt = _timeProvider.UtcNow().AddDays(_credentialOptions.CredentialLifetimeDays);
+        var tokens = new TokenResult
+        {
+            AccessToken = access.Token,
+            AccessTokenExpiration = access.ExpiresAtUtc,
+            RefreshToken = refreshBearer,
+            RefreshTokenExpiration = refreshExpiresAt,
+        };
 
         return AuthResult.Ok(new LoginResponse
         {
-            AccessToken = tokens.AccessToken,
-            AccessTokenExpiration = tokens.AccessTokenExpiration,
-            User = await MapToUserDtoAsync(user, roles)
+            AccessToken = access.Token,
+            AccessTokenExpiration = access.ExpiresAtUtc,
+            Access = envelope,
+            User = new UserDto
+            {
+                Id = user.Id,
+                Email = user.Email ?? string.Empty,
+                DisplayName = user.DisplayName ?? user.Email ?? string.Empty,
+                EmailVerified = user.EmailConfirmed,
+            },
         }, tokens);
     }
 
-    public async Task<AuthUserResult> ConfirmEmailAsync(string userId, string token)
+    public async Task<AuthUserResult> ConfirmEmailAsync(
+        string userId,
+        string token,
+        string operationKey,
+        CancellationToken ct = default)
     {
+        if (!int.TryParse(userId, out var parsedUserId) || parsedUserId <= 0)
+        {
+            return AuthUserResult.Fail("User not found");
+        }
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null)
         {
             return AuthUserResult.Fail("User not found");
         }
 
-        var result = await _userManager.ConfirmEmailAsync(user, token);
-        if (!result.Succeeded)
+        var tokenValid = await _userManager.VerifyUserTokenAsync(
+            user,
+            _userManager.Options.Tokens.EmailConfirmationTokenProvider,
+            UserManager<ApplicationUser>.ConfirmEmailTokenPurpose,
+            token);
+        var command = new ConfirmAccountEmailCommand(
+            parsedUserId,
+            user.SecurityStamp ?? string.Empty,
+            tokenValid,
+            CreateAuthIntentHash(parsedUserId.ToString(), token, "confirm-email"));
+        var result = (await _atomic.ExecuteAsync(
+            AuthIdentity("auth.email.confirm", parsedUserId, operationKey),
+            command,
+            ConfirmEmailCodec,
+            ct)).Value;
+        if (result.Outcome is ConfirmAccountEmailOutcome.InvalidToken)
         {
-            var errors = string.Join("; ", result.Errors.Select(e => e.Description));
-            return AuthUserResult.Fail($"Email confirmation failed: {errors}", AuthErrorType.BadRequest);
+            return AuthUserResult.Fail("Email confirmation failed: invalid or expired token", AuthErrorType.BadRequest);
         }
+        if (result.Outcome is ConfirmAccountEmailOutcome.UserNotFound)
+            return AuthUserResult.Fail("User not found");
 
-        var roles = await _userManager.GetRolesAsync(user);
-        return AuthUserResult.Ok(await MapToUserDtoAsync(user, roles));
+        user.EmailConfirmed = true;
+        return AuthUserResult.Ok(await MapToUserDtoAsync(user));
     }
 
     public async Task<AuthUserResult> GetCurrentUserAsync(string userId)
@@ -362,11 +430,13 @@ public class AuthService : IAuthService
             return AuthUserResult.Fail("User not found");
         }
 
-        var roles = await _userManager.GetRolesAsync(user);
-        return AuthUserResult.Ok(await MapToUserDtoAsync(user, roles));
+        return AuthUserResult.Ok(await MapToUserDtoAsync(user));
     }
 
-    public async Task<string?> GeneratePasswordResetTokenAsync(string email)
+    public async Task<string?> GeneratePasswordResetTokenAsync(
+        string email,
+        string operationKey,
+        CancellationToken ct = default)
     {
         var user = await _userManager.FindByEmailAsync(email);
         if (user == null)
@@ -376,41 +446,70 @@ public class AuthService : IAuthService
         }
 
         var token = await _userManager.GeneratePasswordResetTokenAsync(user);
-        await _emailSender.SendPasswordResetAsync(user, token);
+        await _emailSender.SendPasswordResetAsync(user, null, token, operationKey, ct);
         _logger.LogInformation("Password reset token generated for {Email} (id {UserId}). Reset email enqueued.", email, user.Id);
         return token;
     }
 
-    public async Task<AuthUserResult> ResetPasswordAsync(string userId, string token, string newPassword)
+    public async Task<AuthUserResult> ResetPasswordAsync(
+        string userId,
+        string token,
+        string newPassword,
+        string operationKey,
+        CancellationToken ct = default)
     {
+        if (!int.TryParse(userId, out var parsedUserId) || parsedUserId <= 0)
+        {
+            return AuthUserResult.Fail("Invalid or expired reset link.", AuthErrorType.BadRequest);
+        }
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null)
         {
             return AuthUserResult.Fail("Invalid or expired reset link.", AuthErrorType.BadRequest);
         }
 
-        var result = await _userManager.ResetPasswordAsync(user, token, newPassword);
-        if (!result.Succeeded)
+        var validationErrors = new List<IdentityError>();
+        foreach (var validator in _userManager.PasswordValidators)
         {
-            var errors = string.Join("; ", result.Errors.Select(e => e.Description));
-            return AuthUserResult.Fail(errors, AuthErrorType.BadRequest);
+            var validation = await validator.ValidateAsync(_userManager, user, newPassword);
+            if (!validation.Succeeded) validationErrors.AddRange(validation.Errors);
+        }
+        if (validationErrors.Count > 0)
+        {
+            return AuthUserResult.Fail(
+                string.Join("; ", validationErrors.Select(error => error.Description)),
+                AuthErrorType.BadRequest);
         }
 
-        await _userManager.SetLockoutEndDateAsync(user, null);
-        await _userManager.ResetAccessFailedCountAsync(user);
+        var tokenValid = await _userManager.VerifyUserTokenAsync(
+            user,
+            _userManager.Options.Tokens.PasswordResetTokenProvider,
+            UserManager<ApplicationUser>.ResetPasswordTokenPurpose,
+            token);
+        var command = new ResetAccountPasswordCommand(
+            parsedUserId,
+            user.SecurityStamp ?? string.Empty,
+            tokenValid,
+            _userManager.PasswordHasher.HashPassword(user, newPassword),
+            CreateAuthIntentHash(parsedUserId.ToString(), token, newPassword, "reset-password"));
+        var result = (await _atomic.ExecuteAsync(
+            AuthIdentity("auth.password.reset", parsedUserId, operationKey),
+            command,
+            ResetPasswordCodec,
+            ct)).Value;
+        if (result.Outcome != ResetAccountPasswordOutcome.Reset)
+            return AuthUserResult.Fail("Invalid or expired reset link.", AuthErrorType.BadRequest);
 
-        // Confirm the email too in case they reset before verifying.
-        if (!user.EmailConfirmed)
-        {
-            user.EmailConfirmed = true;
-            await _userManager.UpdateAsync(user);
-        }
-
-        var roles = await _userManager.GetRolesAsync(user);
-        return AuthUserResult.Ok(await MapToUserDtoAsync(user, roles));
+        user.EmailConfirmed = true;
+        user.AccessFailedCount = 0;
+        user.LockoutEnd = null;
+        return AuthUserResult.Ok(await MapToUserDtoAsync(user));
     }
 
-    public async Task<AuthUserResult> ResendVerificationEmailAsync(string email)
+    public async Task<AuthUserResult> ResendVerificationEmailAsync(
+        string email,
+        string operationKey,
+        CancellationToken ct = default)
     {
         var user = await _userManager.FindByEmailAsync(email);
 
@@ -431,102 +530,129 @@ public class AuthService : IAuthService
         }
 
         var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
-        await _emailSender.SendEmailConfirmationAsync(user, token);
+        await _emailSender.SendEmailConfirmationAsync(user, null, token, operationKey, ct);
         _logger.LogInformation("Verification email resent for {Email} (id {UserId}).", email, user.Id);
         return AuthUserResult.Ok(null!);
     }
 
-    public async Task<AuthUserResult> ChangePasswordAsync(string userId, string currentPassword, string newPassword)
+    public async Task<AuthUserResult> ChangePasswordAsync(
+        ActiveAccessContext active,
+        string currentPassword,
+        string newPassword,
+        string operationKey,
+        CancellationToken ct = default)
     {
-        var user = await _userManager.FindByIdAsync(userId);
+        var user = await _userManager.FindByIdAsync(active.UserId.ToString());
         if (user == null)
         {
             return AuthUserResult.Fail("User not found");
         }
 
-        // An external-login-only account (e.g. Google) has no local password to change. Reject
-        // clearly rather than letting Identity emit a confusing "incorrect password" error.
-        if (!await _userManager.HasPasswordAsync(user))
+        var validationErrors = new List<IdentityError>();
+        foreach (var validator in _userManager.PasswordValidators)
+        {
+            var validation = await validator.ValidateAsync(_userManager, user, newPassword);
+            if (!validation.Succeeded)
+            {
+                validationErrors.AddRange(validation.Errors);
+            }
+        }
+        if (validationErrors.Count > 0)
         {
             return AuthUserResult.Fail(
-                "This account signs in with Google and has no password to change.",
+                string.Join("; ", validationErrors.Select(error => error.Description)),
                 AuthErrorType.BadRequest);
         }
 
-        var result = await _userManager.ChangePasswordAsync(user, currentPassword, newPassword);
-        if (!result.Succeeded)
+        var command = new ChangePasswordCommand(
+            active.SessionId,
+            active.UserId,
+            active.AccessContextId,
+            active.AccessRevision,
+            currentPassword,
+            newPassword,
+            CreatePasswordIntentHash(active.UserId, currentPassword, newPassword));
+        var keyDigest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(operationKey)))
+            .ToLowerInvariant();
+        ChangePasswordResult changed;
+        try
         {
-            var errors = string.Join("; ", result.Errors.Select(e => e.Description));
-            return AuthUserResult.Fail(errors, AuthErrorType.BadRequest);
+            changed = (await _atomic.ExecuteAsync(
+                new AtomicCommandIdentity(
+                    "auth.password.change",
+                    $"{active.UserId}:{active.AccessContextId}:{keyDigest}"),
+                command,
+                ChangePasswordCodec,
+                ct)).Value;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return AuthUserResult.Fail("Active access context not found", AuthErrorType.BadRequest);
         }
 
-        await LogPasswordChangeAuditAsync(user);
-        _logger.LogInformation("Password changed for user {UserId}.", userId);
-        var roles = await _userManager.GetRolesAsync(user);
-        return AuthUserResult.Ok(await MapToUserDtoAsync(user, roles));
+        if (changed.Outcome != ChangePasswordOutcome.Changed)
+        {
+            return changed.Outcome switch
+            {
+                ChangePasswordOutcome.UserNotFound => AuthUserResult.Fail("User not found"),
+                ChangePasswordOutcome.NoLocalPassword => AuthUserResult.Fail(
+                    "This account signs in with Google and has no password to change.",
+                    AuthErrorType.BadRequest),
+                ChangePasswordOutcome.CurrentPasswordIncorrect => AuthUserResult.Fail(
+                    "The current password is incorrect.", AuthErrorType.BadRequest),
+                _ => AuthUserResult.Fail("Active access context not found", AuthErrorType.BadRequest),
+            };
+        }
+
+        _logger.LogInformation("Password changed for user {UserId}.", active.UserId);
+        return AuthUserResult.Ok(await MapToUserDtoAsync(user));
     }
 
-    private async Task LogPasswordChangeAuditAsync(ApplicationUser user)
+    private string CreatePasswordIntentHash(int userId, string currentPassword, string newPassword)
     {
-        if (!user.PortfolioId.HasValue)
+        var key = Convert.FromBase64String(_credentialOptions.SigningKey);
+        var payload = Encoding.UTF8.GetBytes($"{userId}\0{currentPassword}\0{newPassword}");
+        try
         {
-            return;
+            return Convert.ToHexString(HMACSHA256.HashData(key, payload)).ToLowerInvariant();
         }
-
-        var email = user.Email ?? user.UserName ?? string.Empty;
-        var account = string.IsNullOrWhiteSpace(email)
-            ? null
-            : await _db.UserAccounts
-                .AsNoTracking()
-                .Where(a => a.PortfolioId == user.PortfolioId.Value && a.Email == email)
-                .Select(a => new
-                {
-                    a.Id,
-                    a.Email,
-                    a.DisplayName,
-                    Role = a.Role.ToString(),
-                    a.IsActive,
-                })
-                .FirstOrDefaultAsync();
-
-        var entityType = account is null ? nameof(ApplicationUser) : nameof(UserAccount);
-        var entityId = account?.Id ?? user.Id;
-        await _audit.LogAsync(
-            user.PortfolioId.Value,
-            entityType,
-            entityId,
-            AuditLogOperation.Updated,
-            userId: user.Id,
-            oldValues: SerializeAudit(new
-            {
-                securityEvent = "PasswordChange",
-                email,
-            }),
-            newValues: SerializeAudit(new
-            {
-                securityEvent = "PasswordChanged",
-                targetUserId = user.Id,
-                email,
-                displayName = account?.DisplayName ?? user.DisplayName,
-                role = account?.Role,
-                isActive = account?.IsActive,
-            }),
-            changeReason: "Password changed by account user.");
+        finally
+        {
+            CryptographicOperations.ZeroMemory(key);
+            CryptographicOperations.ZeroMemory(payload);
+        }
     }
 
-    private static string SerializeAudit(object values) => JsonSerializer.Serialize(values);
+    private string CreateAuthIntentHash(params string[] values)
+    {
+        var key = Convert.FromBase64String(_credentialOptions.SigningKey);
+        var payload = Encoding.UTF8.GetBytes(string.Join("\0", values));
+        try
+        {
+            return Convert.ToHexString(HMACSHA256.HashData(key, payload)).ToLowerInvariant();
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(key);
+            CryptographicOperations.ZeroMemory(payload);
+        }
+    }
 
-    public Task<UserDto> MapToUserDtoAsync(ApplicationUser user, IList<string> roles)
+    private static AtomicCommandIdentity AuthIdentity(string commandType, int userId, string operationKey)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationKey);
+        var keyDigest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(operationKey)))
+            .ToLowerInvariant();
+        return new AtomicCommandIdentity(commandType, $"{userId}:{keyDigest}");
+    }
+
+    public Task<UserDto> MapToUserDtoAsync(ApplicationUser user)
     {
         return Task.FromResult(new UserDto
         {
             Id = user.Id,
             Email = user.Email ?? string.Empty,
             DisplayName = user.DisplayName ?? user.Email ?? string.Empty,
-            PortfolioId = user.PortfolioId,
-            OwnerEntityId = user.OwnerEntityId,
-            TenantId = user.TenantId,
-            Roles = roles.ToList(),
             EmailVerified = user.EmailConfirmed
         });
     }

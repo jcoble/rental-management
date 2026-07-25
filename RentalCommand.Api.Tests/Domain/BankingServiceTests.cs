@@ -1,37 +1,63 @@
 using System.Data.Common;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Tests;
+using RentalCommand.Core;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Core.Banking;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
+using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Banking;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public class BankingServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class BankingServiceTests : IAsyncLifetime
 {
-    private readonly SqliteTestContext _ctx = new();
-    private readonly BankingService _sut;
+    private readonly MigratedPostgreSqlFixture _fixture;
     private readonly Mock<IPlaidBankingProvider> _plaid = new();
+    private readonly List<IDisposable> _atomicHosts = [];
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private BankingService _sut = null!;
+    private WorkspaceReadScope _scope;
 
-    public BankingServiceTests()
+    public BankingServiceTests(MigratedPostgreSqlFixture fixture)
     {
+        _fixture = fixture;
         _plaid
             .Setup(p => p.SyncTransactionsAsync(
                 It.IsAny<PlaidRuntimeSettings>(),
                 It.IsAny<string>(),
                 It.IsAny<string?>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PlaidTransactionsSyncResult(null, [], [], [], "request-id"));
+            .ReturnsAsync(new PlaidTransactionsSyncResult(null, [], [], [], "initial-request-id"));
+    }
+
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync();
+        _scope = _ctx.Db.SeedAdministratorScope(1, nameof(BankingServiceTests));
         _sut = CreateService();
     }
 
-    public void Dispose() => _ctx.Dispose();
+    public async Task DisposeAsync()
+    {
+        foreach (var host in _atomicHosts) host.Dispose();
+        await _ctx.DisposeAsync();
+    }
 
     [Fact]
     public async Task ImportAsync_DeduplicatesBankLines_AndSuggestsPaymentMatch()
@@ -49,7 +75,7 @@ public class BankingServiceTests : IDisposable
                 new ImportBankTransactionItem
                 {
                     ProviderTransactionId = "plaid-txn-1",
-                    PostedAt = payment.PaidDate!.Value,
+                    PostedAt = payment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
                     Description = "ACH CREDIT EMILY CHEN RENT",
                     Amount = payment.Amount,
                     IsoCurrencyCode = "USD",
@@ -69,7 +95,7 @@ public class BankingServiceTests : IDisposable
                 new ImportBankTransactionItem
                 {
                     ProviderTransactionId = "plaid-txn-1",
-                    PostedAt = payment.PaidDate!.Value,
+                    PostedAt = payment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
                     Description = "Duplicate line",
                     Amount = payment.Amount,
                 },
@@ -77,11 +103,17 @@ public class BankingServiceTests : IDisposable
         });
 
         first.ImportedCount.Should().Be(1);
-        first.Transactions.Single().SuggestedMatch.Should().NotBeNull();
-        first.Transactions.Single().SuggestedMatch!.EntityType.Should().Be("Payment");
-        first.Transactions.Single().SuggestedMatch!.EntityId.Should().Be(payment.Id);
         duplicate.ImportedCount.Should().Be(0);
         duplicate.SkippedCount.Should().Be(1);
+
+        var transactionId = first.Transactions.Single().Id;
+        AssignRoute(_ctx, transactionId, payment.TenantAccount!.LeaseManagement!.PropertyId);
+        var suggestion = (await _sut.ListTransactionsAsync(1, "Unmatched"))
+            .Items.Should().ContainSingle().Subject
+            .SuggestedMatch;
+        suggestion.Should().NotBeNull();
+        suggestion!.EntityType.Should().Be("TenantLedgerEntry");
+        suggestion.EntityId.Should().Be(payment.Id);
     }
 
     [Fact]
@@ -98,27 +130,320 @@ public class BankingServiceTests : IDisposable
                 new ImportBankTransactionItem
                 {
                     ProviderTransactionId = "manual-txn-1",
-                    PostedAt = payment.PaidDate!.Value,
+                    PostedAt = payment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
                     Description = "Rent deposit",
                     Amount = payment.Amount,
                 },
             ],
         });
         var transactionId = imported.Transactions.Single().Id;
+        AssignRoute(_ctx, transactionId, payment.TenantAccount!.LeaseManagement!.PropertyId);
 
-        var matched = await _sut.MatchAsync(1, transactionId, new MatchBankTransactionRequest
+        var matched = await _sut.MatchAsync(_scope, transactionId, new MatchBankTransactionRequest
         {
-            EntityType = "Payment",
-            EntityId = payment.Id,
+            OperationKey = "match-payment",
+            ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
+            TenantAccountId = payment.TenantAccountId,
+            TenantLedgerEntryId = payment.Id,
         });
-        var cleared = await _sut.ClearMatchAsync(1, transactionId);
-
         matched.Should().NotBeNull();
         matched!.MatchStatus.Should().Be("Matched");
-        matched.MatchedPaymentId.Should().Be(payment.Id);
+        var matchedState = await _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(row => row.Id == transactionId)
+            .Select(row => new
+            {
+                row.MatchStatus,
+                row.MatchedTenantAccountId,
+                row.MatchedTenantLedgerEntryId,
+            })
+            .SingleAsync();
+        matchedState.MatchStatus.Should().Be("Matched");
+        matchedState.MatchedTenantAccountId.Should().Be(payment.TenantAccountId);
+        matchedState.MatchedTenantLedgerEntryId.Should().Be(payment.Id);
+
+        var cleared = await _sut.ClearMatchAsync(_scope, transactionId, Mutation(transactionId, "clear-match"));
         cleared.Should().NotBeNull();
         cleared!.MatchStatus.Should().Be("Unmatched");
-        cleared.MatchedPaymentId.Should().BeNull();
+        cleared.MatchedTenantLedgerEntryId.Should().BeNull();
+        var clearedState = await _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(row => row.Id == transactionId)
+            .Select(row => new
+            {
+                row.MatchStatus,
+                row.MatchedTenantAccountId,
+                row.MatchedTenantLedgerEntryId,
+            })
+            .SingleAsync();
+        clearedState.MatchStatus.Should().Be("Unmatched");
+        clearedState.MatchedTenantAccountId.Should().BeNull();
+        clearedState.MatchedTenantLedgerEntryId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ClearMatchAsync_AccessDenialRollsBackReceiptAndMutation()
+    {
+        var payment = SeedRentPayment(new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc));
+        var propertyId = payment.TenantAccount!.LeaseManagement!.PropertyId;
+        var imported = await _sut.ImportAsync(1, BankImport(
+            "reconcile-denial-rollback",
+            payment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            "Emily Chen",
+            payment.Amount));
+        var transactionId = imported.Transactions.Single().Id;
+        AssignRoute(_ctx, transactionId, propertyId);
+        await _sut.MatchAsync(_scope, transactionId, new MatchBankTransactionRequest
+        {
+            OperationKey = "reconcile-denial-seed-match",
+            ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
+            TenantAccountId = payment.TenantAccountId,
+            TenantLedgerEntryId = payment.Id,
+        });
+        var propertyManager = _ctx.Db.SeedPropertyManagerScope(
+            1, propertyId, "bank-clear-property-manager");
+
+        var denied = async () => await _sut.ClearMatchAsync(
+            propertyManager,
+            transactionId,
+            new BankTransactionMutationRequest
+            {
+                OperationKey = "property-manager-clear-denied",
+                ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
+            });
+        await denied.Should().ThrowAsync<UnauthorizedAccessException>();
+
+        _ctx.Db.ChangeTracker.Clear();
+        var transaction = await _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(row => row.Id == transactionId)
+            .Select(row => new { row.MatchStatus, row.MatchedTenantLedgerEntryId })
+            .SingleAsync();
+        transaction.MatchStatus.Should().Be("Matched");
+        transaction.MatchedTenantLedgerEntryId.Should().Be(payment.Id);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.transaction.reconcile" &&
+            receipt.IdempotencyKey.EndsWith(":property-manager-clear-denied")))
+            .Should().Be(0);
+    }
+
+    [Fact]
+    public async Task MatchAsync_ConcurrentSameOperation_ReplaysOneAuthorizedReconciliation()
+    {
+        var payment = SeedRentPayment(new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc));
+        var imported = await _sut.ImportAsync(1, new ImportBankTransactionsRequest
+        {
+            Provider = "Manual",
+            InstitutionName = "Replay Bank",
+            AccountName = "Operating checking",
+            Transactions =
+            [
+                new ImportBankTransactionItem
+                {
+                    ProviderTransactionId = "concurrent-reconciliation-replay",
+                    PostedAt = payment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+                    Description = "Rent deposit replay",
+                    Amount = payment.Amount,
+                },
+            ],
+        });
+        var transactionId = imported.Transactions.Single().Id;
+        AssignRoute(_ctx, transactionId, payment.TenantAccount!.LeaseManagement!.PropertyId);
+        var expectedUpdatedAt = TransactionUpdatedAt(_ctx, transactionId);
+
+        await using var firstDb = new RentalCommand.Data.RentalCommandDbContext(
+            new DbContextOptionsBuilder<RentalCommand.Data.RentalCommandDbContext>()
+                .UseNpgsql(_ctx.ConnectionString)
+                .Options);
+        await using var secondDb = new RentalCommand.Data.RentalCommandDbContext(
+            new DbContextOptionsBuilder<RentalCommand.Data.RentalCommandDbContext>()
+                .UseNpgsql(_ctx.ConnectionString)
+                .Options);
+        var firstService = CreateServiceFor(firstDb, _ctx.ConnectionString);
+        var secondService = CreateServiceFor(secondDb, _ctx.ConnectionString);
+        var request = new MatchBankTransactionRequest
+        {
+            OperationKey = "same-authorized-reconciliation",
+            ExpectedUpdatedAtUtc = expectedUpdatedAt,
+            TenantAccountId = payment.TenantAccountId,
+            TenantLedgerEntryId = payment.Id,
+        };
+
+        var outcomes = await Task.WhenAll(
+            firstService.MatchAsync(_scope, transactionId, request),
+            secondService.MatchAsync(_scope, transactionId, request));
+
+        outcomes.Should().OnlyContain(outcome =>
+            outcome != null && outcome.MatchStatus == "Matched");
+        _ctx.Db.ChangeTracker.Clear();
+        (await _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(transaction => transaction.Id == transactionId)
+            .Select(transaction => transaction.MatchedTenantLedgerEntryId)
+            .SingleAsync()).Should().Be(payment.Id);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.transaction.reconcile" &&
+            receipt.IdempotencyKey.EndsWith(":same-authorized-reconciliation")))
+            .Should().Be(1);
+        (await _ctx.Db.AtomicAuditLogs.CountAsync(audit =>
+            audit.CommandType == "banking.transaction.reconcile" &&
+            audit.CommandIdempotencyKey.EndsWith(":same-authorized-reconciliation")))
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RouteTransactionAsync_EnforcesTargetPropertyScopeAndDestructiveClearAuthority()
+    {
+        var postedAt = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
+        var allowedPayment = SeedRentPaymentInto(
+            _ctx, "Allowed", "Tenant", 1400m, postedAt, "L-route-allowed");
+        var deniedPayment = SeedRentPaymentInto(
+            _ctx, "Denied", "Tenant", 1500m, postedAt, "L-route-denied");
+        var allowedPropertyId = allowedPayment.TenantAccount!.LeaseManagement!.PropertyId;
+        var deniedPropertyId = deniedPayment.TenantAccount!.LeaseManagement!.PropertyId;
+        var imported = await _sut.ImportAsync(1, new ImportBankTransactionsRequest
+        {
+            Provider = "Manual",
+            InstitutionName = "Routing Bank",
+            AccountName = "Operating checking",
+            Transactions =
+            [
+                new ImportBankTransactionItem
+                {
+                    ProviderTransactionId = "administrator-routing-boundary",
+                    PostedAt = allowedPayment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+                    Description = "Needs property route",
+                    Amount = allowedPayment.Amount,
+                },
+            ],
+        });
+        var transactionId = imported.Transactions.Single().Id;
+        var propertyManager = _ctx.Db.SeedPropertyManagerScope(
+            1, allowedPropertyId, "bank-routing-property-manager");
+
+        var routed = await _sut.RouteTransactionAsync(
+            propertyManager,
+            transactionId,
+            new RouteBankTransactionRequest
+            {
+                OperationKey = "property-manager-route-applied",
+                PropertyId = allowedPropertyId,
+                ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
+            });
+        routed.Should().NotBeNull();
+        routed!.PropertyId.Should().Be(allowedPropertyId);
+
+        var crossScope = async () => await _sut.RouteTransactionAsync(
+            propertyManager,
+            transactionId,
+            new RouteBankTransactionRequest
+            {
+                OperationKey = "property-manager-cross-scope-route",
+                PropertyId = deniedPropertyId,
+                ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
+            });
+        await crossScope.Should().ThrowAsync<UnauthorizedAccessException>();
+
+        _ctx.Db.ChangeTracker.Clear();
+        (await _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(transaction => transaction.Id == transactionId)
+            .Select(transaction => transaction.PropertyId)
+            .SingleAsync()).Should().Be(allowedPropertyId);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.transaction.route" &&
+            receipt.IdempotencyKey.EndsWith(":property-manager-cross-scope-route")))
+            .Should().Be(0);
+
+        var routedOutsideManagerScope = await _sut.RouteTransactionAsync(
+            _scope,
+            transactionId,
+            new RouteBankTransactionRequest
+            {
+                OperationKey = "administrator-route-outside-manager-scope",
+                PropertyId = deniedPropertyId,
+                ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
+            });
+        routedOutsideManagerScope.Should().NotBeNull();
+        routedOutsideManagerScope!.PropertyId.Should().Be(deniedPropertyId);
+
+        var sourceScopeEscape = async () => await _sut.RouteTransactionAsync(
+            propertyManager,
+            transactionId,
+            new RouteBankTransactionRequest
+            {
+                OperationKey = "property-manager-source-scope-escape",
+                PropertyId = allowedPropertyId,
+                ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
+            });
+        await sourceScopeEscape.Should().ThrowAsync<UnauthorizedAccessException>(
+            "a manager cannot pull a bank line out of another manager's property by routing it into their own scope");
+
+        _ctx.Db.ChangeTracker.Clear();
+        (await _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(transaction => transaction.Id == transactionId)
+            .Select(transaction => transaction.PropertyId)
+            .SingleAsync()).Should().Be(deniedPropertyId);
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.transaction.route" &&
+            receipt.IdempotencyKey.EndsWith(":property-manager-source-scope-escape")))
+            .Should().Be(0);
+
+        var cleared = await _sut.RouteTransactionAsync(
+            _scope,
+            transactionId,
+            new RouteBankTransactionRequest
+            {
+                OperationKey = "administrator-route-cleared",
+                PropertyId = null,
+                ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
+            });
+        cleared.Should().NotBeNull();
+        cleared!.PropertyId.Should().BeNull();
+
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.transaction.route" &&
+            receipt.IdempotencyKey.EndsWith(":administrator-route-cleared")))
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task RouteTransactionAsync_ReplayAuthorizationFailsClosedAfterScopeRevocation()
+    {
+        var payment = SeedRentPayment(new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc));
+        var propertyId = payment.TenantAccount!.LeaseManagement!.PropertyId;
+        var imported = await _sut.ImportAsync(1, BankImport(
+            "route-replay-revocation",
+            payment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            "Emily Chen",
+            payment.Amount));
+        var transactionId = imported.Transactions.Single().Id;
+        var propertyManager = _ctx.Db.SeedPropertyManagerScope(
+            1, propertyId, "bank-routing-replay-property-manager");
+        var request = new RouteBankTransactionRequest
+        {
+            OperationKey = "property-manager-route-replay",
+            PropertyId = propertyId,
+            ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
+        };
+
+        (await _sut.RouteTransactionAsync(propertyManager, transactionId, request))
+            .Should().NotBeNull();
+
+        var assignment = await _ctx.Db.MembershipRoleAssignments.SingleAsync(row =>
+            row.WorkspaceMembership!.AccessContextId == propertyManager.AccessContextId);
+        assignment.Status = MembershipRoleAssignmentStatus.Revoked;
+        assignment.RevokedAtUtc = DateTime.UtcNow;
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+
+        var replay = async () => await _sut.RouteTransactionAsync(
+            propertyManager, transactionId, request);
+        await replay.Should().ThrowAsync<UnauthorizedAccessException>();
+
+        (await _ctx.Db.AtomicCommandReceipts.CountAsync(receipt =>
+            receipt.CommandType == "banking.transaction.route" &&
+            receipt.IdempotencyKey.EndsWith(":property-manager-route-replay")))
+            .Should().Be(1, "the committed receipt remains but cannot bypass current authority");
+        (await _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(transaction => transaction.Id == transactionId)
+            .Select(transaction => transaction.PropertyId)
+            .SingleAsync()).Should().Be(propertyId);
     }
 
     [Fact]
@@ -144,18 +469,21 @@ public class BankingServiceTests : IDisposable
         var connection = _ctx.Db.BankConnections.Single();
         var transaction = _ctx.Db.BankTransactions.Single();
 
-        _ctx.Db.AuditLogs.Should().ContainSingle(a =>
+        var connectionAudit = _ctx.Db.AtomicAuditLogs.Should().ContainSingle(a =>
             a.EntityType == "BankConnection" &&
             a.EntityId == connection.Id &&
-            a.Operation == AuditLogOperation.Created &&
-            a.NewValues != null &&
-            a.NewValues.Contains("\"institutionName\":\"Test Bank\""));
-        _ctx.Db.AuditLogs.Should().ContainSingle(a =>
+            a.Operation == AuditLogOperation.Created).Subject;
+        using var connectionValues = JsonDocument.Parse(connectionAudit.NewValues!);
+        connectionValues.RootElement.GetProperty("institutionName").GetString()
+            .Should().Be("Test Bank");
+
+        var transactionAudit = _ctx.Db.AtomicAuditLogs.Should().ContainSingle(a =>
             a.EntityType == "BankTransaction" &&
             a.EntityId == transaction.Id &&
-            a.Operation == AuditLogOperation.Created &&
-            a.NewValues != null &&
-            a.NewValues.Contains("\"providerTransactionId\":\"audit-import-1\""));
+            a.Operation == AuditLogOperation.Created).Subject;
+        using var transactionValues = JsonDocument.Parse(transactionAudit.NewValues!);
+        transactionValues.RootElement.GetProperty("providerTransactionId").GetString()
+            .Should().Be("audit-import-1");
     }
 
     [Fact]
@@ -172,30 +500,38 @@ public class BankingServiceTests : IDisposable
                 new ImportBankTransactionItem
                 {
                     ProviderTransactionId = "audit-match-1",
-                    PostedAt = payment.PaidDate!.Value,
+                    PostedAt = payment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
                     Description = "Rent deposit",
                     Amount = payment.Amount,
                 },
             ],
         });
         var transactionId = imported.Transactions.Single().Id;
-        _ctx.Db.AuditLogs.RemoveRange(_ctx.Db.AuditLogs);
+        AssignRoute(_ctx, transactionId, payment.TenantAccount!.LeaseManagement!.PropertyId);
+        _ctx.Db.AtomicAuditLogs.RemoveRange(_ctx.Db.AtomicAuditLogs);
         await _ctx.Db.SaveChangesAsync();
 
-        await _sut.MatchAsync(1, transactionId, new MatchBankTransactionRequest
+        await _sut.MatchAsync(_scope, transactionId, new MatchBankTransactionRequest
         {
-            EntityType = "Payment",
-            EntityId = payment.Id,
+            OperationKey = "audit-match",
+            ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
+            TenantAccountId = payment.TenantAccountId,
+            TenantLedgerEntryId = payment.Id,
         });
 
-        var log = _ctx.Db.AuditLogs.Should().ContainSingle(a =>
+        var log = _ctx.Db.AtomicAuditLogs.Should().ContainSingle(a =>
             a.EntityType == "BankTransaction" &&
             a.EntityId == transactionId &&
             a.Operation == AuditLogOperation.Updated).Subject;
-        log.OldValues.Should().Contain("\"matchStatus\":\"Unmatched\"");
-        log.NewValues.Should().Contain("\"matchStatus\":\"Matched\"");
-        log.NewValues.Should().Contain($"\"matchedPaymentId\":{payment.Id}");
-        log.ChangeReason.Should().Contain("matched to Payment");
+        using var oldValues = JsonDocument.Parse(log.OldValues!);
+        using var newValues = JsonDocument.Parse(log.NewValues!);
+        oldValues.RootElement.GetProperty("matchStatus").GetString()
+            .Should().Be("Unmatched");
+        newValues.RootElement.GetProperty("matchStatus").GetString()
+            .Should().Be("Matched");
+        newValues.RootElement.GetProperty("matchedTenantLedgerEntryId").GetInt64()
+            .Should().Be(payment.Id);
+        log.ChangeReason.Should().Contain("receipt");
     }
 
     [Fact]
@@ -212,29 +548,37 @@ public class BankingServiceTests : IDisposable
                 new ImportBankTransactionItem
                 {
                     ProviderTransactionId = "queue-txn-1",
-                    PostedAt = payment.PaidDate!.Value,
+                    PostedAt = payment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
                     Description = "ACH CREDIT EMILY CHEN RENT",
                     Amount = payment.Amount,
                 },
             ],
         });
         var transactionId = imported.Transactions.Single().Id;
+        AssignRoute(_ctx, transactionId, payment.TenantAccount!.LeaseManagement!.PropertyId);
 
         // A suggested match shows up in the review queue.
-        var queue = await _sut.GetReviewQueueAsync(1);
+        var queue = await _sut.GetReviewQueueAsync(_scope);
         queue.Count.Should().Be(1);
         var item = queue.Items.Single();
         item.Transaction.Id.Should().Be(transactionId);
-        item.Suggestion.EntityType.Should().Be("Payment");
-        item.Suggestion.EntityId.Should().Be(payment.Id);
+        item.Suggestion.Label.Should().Contain(payment.TenantAccount!.AccountNumber);
 
         // Confirming links the payment and removes the line from the queue.
-        var confirmed = await _sut.ConfirmMatchAsync(1, transactionId, new ConfirmBankMatchRequest());
+        var confirmed = await _sut.ConfirmMatchAsync(_scope, transactionId, new ConfirmBankMatchRequest
+        {
+            OperationKey = "confirm-suggestion",
+            ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
+        });
         confirmed.Should().NotBeNull();
         confirmed!.MatchStatus.Should().Be("Matched");
-        confirmed.MatchedPaymentId.Should().Be(payment.Id);
-        confirmed.SuggestedMatch.Should().BeNull();
-        (await _sut.GetReviewQueueAsync(1)).Count.Should().Be(0);
+        var confirmedRow = await _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(row => row.Id == transactionId)
+            .Select(row => new { row.MatchedTenantAccountId, row.MatchedTenantLedgerEntryId })
+            .SingleAsync();
+        confirmedRow.MatchedTenantAccountId.Should().Be(payment.TenantAccountId);
+        confirmedRow.MatchedTenantLedgerEntryId.Should().Be(payment.Id);
+        (await _sut.GetReviewQueueAsync(_scope)).Count.Should().Be(0);
     }
 
     [Fact]
@@ -251,22 +595,23 @@ public class BankingServiceTests : IDisposable
                 new ImportBankTransactionItem
                 {
                     ProviderTransactionId = "queue-txn-2",
-                    PostedAt = payment.PaidDate!.Value,
+                    PostedAt = payment.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
                     Description = "ACH CREDIT EMILY CHEN RENT",
                     Amount = payment.Amount,
                 },
             ],
         });
         var transactionId = imported.Transactions.Single().Id;
-        (await _sut.GetReviewQueueAsync(1)).Count.Should().Be(1);
+        AssignRoute(_ctx, transactionId, payment.TenantAccount!.LeaseManagement!.PropertyId);
+        (await _sut.GetReviewQueueAsync(_scope)).Count.Should().Be(1);
 
-        var dismissed = await _sut.DismissMatchAsync(1, transactionId);
+        var dismissed = await _sut.DismissMatchAsync(_scope, transactionId, Mutation(transactionId, "dismiss-match"));
 
         dismissed.Should().NotBeNull();
         dismissed!.MatchStatus.Should().Be("Dismissed");
-        dismissed.MatchedPaymentId.Should().BeNull();
+        dismissed.MatchedTenantLedgerEntryId.Should().BeNull();
         dismissed.SuggestedMatch.Should().BeNull();
-        (await _sut.GetReviewQueueAsync(1)).Count.Should().Be(0);
+        (await _sut.GetReviewQueueAsync(_scope)).Count.Should().Be(0);
     }
 
     [Fact]
@@ -290,16 +635,23 @@ public class BankingServiceTests : IDisposable
             ],
         });
         var transactionId = imported.Transactions.Single().Id;
+        AssignRoute(_ctx, transactionId, expense.PropertyId!.Value);
 
-        var confirmed = await _sut.ConfirmMatchAsync(1, transactionId, new ConfirmBankMatchRequest
+        var confirmed = await _sut.ConfirmMatchAsync(_scope, transactionId, new ConfirmBankMatchRequest
         {
+            OperationKey = "confirm-expense",
+            ExpectedUpdatedAtUtc = TransactionUpdatedAt(_ctx, transactionId),
             ExpenseId = expense.Id,
         });
 
         confirmed.Should().NotBeNull();
         confirmed!.MatchStatus.Should().Be("Matched");
-        confirmed.MatchedExpenseId.Should().Be(expense.Id);
-        confirmed.MatchedPaymentId.Should().BeNull();
+        var confirmedRow = await _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(row => row.Id == transactionId)
+            .Select(row => new { row.MatchedExpenseId, row.MatchedTenantLedgerEntryId })
+            .SingleAsync();
+        confirmedRow.MatchedExpenseId.Should().Be(expense.Id);
+        confirmedRow.MatchedTenantLedgerEntryId.Should().BeNull();
     }
 
     [Fact]
@@ -309,8 +661,9 @@ public class BankingServiceTests : IDisposable
         // appears on the bank line's merchant text; the other (Emily Chen) does not. The named
         // candidate must win, even though both clear the amount + date gate.
         var date = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
-        var emily = SeedRentPaymentFor("Emily", "Chen", 1500m, date, "L-EMILY");
-        var carlos = SeedRentPaymentFor("Carlos", "Reyes", 1500m, date, "L-CARLOS");
+        var property = SeedRouteProperty(_ctx, "Name ranking");
+        var emily = SeedRentPaymentInto(_ctx, "Emily", "Chen", 1500m, date, "L-EMILY", property);
+        var carlos = SeedRentPaymentInto(_ctx, "Carlos", "Reyes", 1500m, date, "L-CARLOS", property);
 
         var imported = await _sut.ImportAsync(1, new ImportBankTransactionsRequest
         {
@@ -330,9 +683,13 @@ public class BankingServiceTests : IDisposable
             ],
         });
 
-        var suggestion = imported.Transactions.Single().SuggestedMatch;
+        var transactionId = imported.Transactions.Single().Id;
+        AssignRoute(_ctx, transactionId, property.Id);
+        var suggestion = (await _sut.ListTransactionsAsync(1, "Unmatched"))
+            .Items.Should().ContainSingle().Subject
+            .SuggestedMatch;
         suggestion.Should().NotBeNull();
-        suggestion!.EntityType.Should().Be("Payment");
+        suggestion!.EntityType.Should().Be("TenantLedgerEntry");
         suggestion.EntityId.Should().Be(carlos.Id);
         suggestion.EntityId.Should().NotBe(emily.Id);
     }
@@ -343,28 +700,28 @@ public class BankingServiceTests : IDisposable
         var date = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
 
         // Named match: merchant text contains the tenant name.
-        var namedCtx = new SqliteTestContext();
-        try
-        {
-            SeedRentPaymentInto(namedCtx, "Carlos", "Reyes", 1500m, date, "L-1");
-            var namedSvc = CreateServiceFor(namedCtx);
-            var namedResult = await namedSvc.ImportAsync(1, BankImport("named-1", date, "Carlos Reyes", 1500m));
-            var namedScore = namedResult.Transactions.Single().SuggestedMatch!.Confidence;
+        await using var namedCtx = await _fixture.CreateContextAsync();
+        var namedPayment = SeedRentPaymentInto(namedCtx, "Carlos", "Reyes", 1500m, date, "L-1");
+        var namedSvc = CreateServiceFor(namedCtx);
+        var namedResult = await namedSvc.ImportAsync(1, BankImport("named-1", date, "Carlos Reyes", 1500m));
+        var namedTransactionId = namedResult.Transactions.Single().Id;
+        AssignRoute(namedCtx, namedTransactionId, namedPayment.TenantAccount!.LeaseManagement!.PropertyId);
+        var namedScore = (await namedSvc.ListTransactionsAsync(1, "Unmatched"))
+            .Items.Should().ContainSingle().Subject
+            .SuggestedMatch!.Confidence;
 
-            // Date-only match: no merchant name overlap, same amount + date.
-            var anonCtx = new SqliteTestContext();
-            try
-            {
-                SeedRentPaymentInto(anonCtx, "Carlos", "Reyes", 1500m, date, "L-1");
-                var anonSvc = CreateServiceFor(anonCtx);
-                var anonResult = await anonSvc.ImportAsync(1, BankImport("anon-1", date, null, 1500m));
-                var anonScore = anonResult.Transactions.Single().SuggestedMatch!.Confidence;
+        // Date-only match: no merchant name overlap, same amount + date.
+        await using var anonCtx = await _fixture.CreateContextAsync();
+        var anonPayment = SeedRentPaymentInto(anonCtx, "Carlos", "Reyes", 1500m, date, "L-1");
+        var anonSvc = CreateServiceFor(anonCtx);
+        var anonResult = await anonSvc.ImportAsync(1, BankImport("anon-1", date, null, 1500m));
+        var anonTransactionId = anonResult.Transactions.Single().Id;
+        AssignRoute(anonCtx, anonTransactionId, anonPayment.TenantAccount!.LeaseManagement!.PropertyId);
+        var anonScore = (await anonSvc.ListTransactionsAsync(1, "Unmatched"))
+            .Items.Should().ContainSingle().Subject
+            .SuggestedMatch!.Confidence;
 
-                namedScore.Should().BeGreaterThan(anonScore);
-            }
-            finally { anonCtx.Dispose(); }
-        }
-        finally { namedCtx.Dispose(); }
+        namedScore.Should().BeGreaterThan(anonScore);
     }
 
     [Fact]
@@ -388,12 +745,13 @@ public class BankingServiceTests : IDisposable
             ],
         });
         var transactionId = imported.Transactions.Single().Id;
+        AssignRoute(_ctx, transactionId, SeedRouteProperty(_ctx, "Personal transactions").Id);
 
-        var ignored = await _sut.IgnoreTransactionAsync(1, transactionId);
+        var ignored = await _sut.IgnoreTransactionAsync(_scope, transactionId, Mutation(transactionId, "ignore-line"));
 
         ignored.Should().NotBeNull();
         ignored!.MatchStatus.Should().Be("Removed");
-        ignored.MatchedPaymentId.Should().BeNull();
+        ignored.MatchedTenantLedgerEntryId.Should().BeNull();
         ignored.MatchedExpenseId.Should().BeNull();
         ignored.SuggestedMatch.Should().BeNull();
         ignored.Notes.Should().Contain("personal");
@@ -401,7 +759,7 @@ public class BankingServiceTests : IDisposable
         // Gone from the unmatched feed and the review queue...
         var unmatched = await _sut.ListTransactionsAsync(1, "Unmatched");
         unmatched.Items.Should().NotContain(t => t.Id == transactionId);
-        (await _sut.GetReviewQueueAsync(1)).Items.Should().NotContain(i => i.Transaction.Id == transactionId);
+        (await _sut.GetReviewQueueAsync(_scope)).Items.Should().NotContain(i => i.Transaction.Id == transactionId);
 
         // ...but still listable under the Removed filter.
         var removed = await _sut.ListTransactionsAsync(1, "Removed");
@@ -430,7 +788,8 @@ public class BankingServiceTests : IDisposable
         var transactionId = imported.Transactions.Single().Id;
 
         // A different portfolio must not be able to ignore this line (IDOR guard).
-        var result = await _sut.IgnoreTransactionAsync(999, transactionId);
+        var otherScope = _scope with { PortfolioId = 999 };
+        var result = await _sut.IgnoreTransactionAsync(otherScope, transactionId, Mutation(transactionId, "other-portfolio"));
         result.Should().BeNull();
     }
 
@@ -478,7 +837,8 @@ public class BankingServiceTests : IDisposable
     public async Task GetSummaryAsync_ComputesLastSyncedAtInSql()
     {
         var executedSql = new List<string>();
-        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        await using var ctx = await _fixture.CreateContextAsync(
+            [new RecordingCommandInterceptor(executedSql)]);
         var sut = CreateServiceFor(ctx);
         var older = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
         var newer = new DateTime(2026, 06, 02, 0, 0, 0, DateTimeKind.Utc);
@@ -521,7 +881,8 @@ public class BankingServiceTests : IDisposable
     public async Task GetSummaryAsync_ComputesConnectionCountInSql()
     {
         var executedSql = new List<string>();
-        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        await using var ctx = await _fixture.CreateContextAsync(
+            [new RecordingCommandInterceptor(executedSql)]);
         var sut = CreateServiceFor(ctx);
         var now = new DateTime(2026, 06, 03, 0, 0, 0, DateTimeKind.Utc);
         ctx.Db.BankConnections.AddRange(
@@ -562,75 +923,82 @@ public class BankingServiceTests : IDisposable
     public async Task ReviewQueue_PrefiltersPaymentSuggestionCandidatesInSql()
     {
         var executedSql = new List<string>();
-        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        await using var ctx = await _fixture.CreateContextAsync(
+            [new RecordingCommandInterceptor(executedSql)]);
         var sut = CreateServiceFor(ctx);
         var postedAt = new DateTime(2026, 06, 10, 0, 0, 0, DateTimeKind.Utc);
         var payment = SeedRentPaymentInto(ctx, "Emily", "Chen", 1400m, postedAt, "L-target");
         SeedRentPaymentInto(ctx, "Old", "Candidate", 1400m, postedAt.AddMonths(-6), "L-old");
         SeedRentPaymentInto(ctx, "Wrong", "Amount", 1999m, postedAt, "L-wrong");
+        var scope = ctx.Db.SeedAdministratorScope(1, "bank-review-prefilter");
 
-        await sut.ImportAsync(1, BankImport("queue-prefilter", postedAt, "Emily Chen", 1400m));
+        var imported = await sut.ImportAsync(1, BankImport("queue-prefilter", postedAt, "Emily Chen", 1400m));
+        AssignRoute(ctx, imported.Transactions.Single().Id,
+            payment.TenantAccount!.LeaseManagement!.PropertyId);
         executedSql.Clear();
 
-        var queue = await sut.GetReviewQueueAsync(1);
+        var queue = await sut.GetReviewQueueAsync(scope);
 
         var item = queue.Items.Should().ContainSingle().Subject;
-        item.Transaction.SuggestedMatch.Should().NotBeNull();
-        item.Transaction.SuggestedMatch!.EntityType.Should().Be("Payment");
-        item.Transaction.SuggestedMatch.EntityId.Should().Be(payment.Id);
+        item.Suggestion.Label.Should().Contain(payment.TenantAccount!.AccountNumber);
 
         var reviewQueueSql = executedSql
             .Where(sql => sql.Contains("FROM \"BankTransactions\"", StringComparison.OrdinalIgnoreCase))
             .ToList();
         reviewQueueSql.Should().Contain(sql =>
             sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("EXISTS", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("FROM \"Payments\"", StringComparison.OrdinalIgnoreCase),
-            "the review queue count must use the DB-side suggestion predicate instead of counting mapped rows");
+            sql.Contains("FROM \"TenantLedgerEntries\"", StringComparison.OrdinalIgnoreCase),
+            "the review queue count must count the DB-ranked suggestion relation instead of mapped rows");
         reviewQueueSql.Should().Contain(sql =>
-            sql.Contains("EXISTS", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("FROM \"Payments\"", StringComparison.OrdinalIgnoreCase),
-            "the review queue row query must prefilter suggestible transactions in SQL before scoring");
+            sql.Contains("FROM \"TenantLedgerEntries\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase),
+            "bank lines and their top suggestions must be joined, ranked, and paged in one row query");
 
-        var paymentCandidateSql = executedSql
-            .Where(sql => sql.Contains("FROM \"Payments\"", StringComparison.OrdinalIgnoreCase))
+        var receiptCandidateSql = executedSql
+            .Where(sql => sql.Contains("FROM \"TenantLedgerEntries\"", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        paymentCandidateSql.Should().Contain(sql =>
+        receiptCandidateSql.Should().Contain(sql =>
             sql.Contains("FROM \"BankTransactions\"", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("COALESCE", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("CASE", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("ROW_NUMBER", StringComparison.OrdinalIgnoreCase) &&
+            (sql.Contains("LATERAL", StringComparison.OrdinalIgnoreCase) ||
+             sql.Contains("ROW_NUMBER", StringComparison.OrdinalIgnoreCase)) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains(">=", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("<", StringComparison.OrdinalIgnoreCase),
-            "bank suggestion candidates must be narrowed, scored, and ranked with the bank line in SQL before materialization");
+            "bank suggestion candidates must be narrowed, scored, and ranked by a correlated top-one SQL query before materialization");
     }
 
     [Fact]
     public async Task ReviewQueue_RanksPaymentSuggestionCandidatesInSql()
     {
         var executedSql = new List<string>();
-        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        await using var ctx = await _fixture.CreateContextAsync(
+            [new RecordingCommandInterceptor(executedSql)]);
         var sut = CreateServiceFor(ctx);
         var postedAt = new DateTime(2026, 06, 10, 0, 0, 0, DateTimeKind.Utc);
-        SeedRentPaymentInto(ctx, "Emily", "Chen", 1400m, postedAt, "L-emily");
-        var carlos = SeedRentPaymentInto(ctx, "Carlos", "Reyes", 1400m, postedAt, "L-carlos");
+        var property = SeedRouteProperty(ctx, "Review queue ranking");
+        SeedRentPaymentInto(ctx, "Emily", "Chen", 1400m, postedAt, "L-emily", property);
+        var carlos = SeedRentPaymentInto(ctx, "Carlos", "Reyes", 1400m, postedAt, "L-carlos", property);
+        var scope = ctx.Db.SeedAdministratorScope(1, "bank-review-ranking");
 
-        await sut.ImportAsync(1, BankImport("queue-rank", postedAt, "Carlos Reyes", 1400m));
+        var rankedImport = await sut.ImportAsync(1, BankImport("queue-rank", postedAt, "Carlos Reyes", 1400m));
+        AssignRoute(ctx, rankedImport.Transactions.Single().Id,
+            carlos.TenantAccount!.LeaseManagement!.PropertyId);
         executedSql.Clear();
 
-        var queue = await sut.GetReviewQueueAsync(1);
+        var queue = await sut.GetReviewQueueAsync(scope);
 
         var item = queue.Items.Should().ContainSingle().Subject;
-        item.Transaction.SuggestedMatch.Should().NotBeNull();
-        item.Transaction.SuggestedMatch!.EntityType.Should().Be("Payment");
-        item.Transaction.SuggestedMatch.EntityId.Should().Be(carlos.Id);
+        item.Suggestion.Label.Should().Contain(carlos.TenantAccount!.AccountNumber);
 
-        var paymentCandidateSql = executedSql
-            .Where(sql => sql.Contains("FROM \"Payments\"", StringComparison.OrdinalIgnoreCase))
+        var receiptCandidateSql = executedSql
+            .Where(sql => sql.Contains("FROM \"TenantLedgerEntries\"", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        paymentCandidateSql.Should().Contain(sql =>
+        receiptCandidateSql.Should().Contain(sql =>
             sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("CASE", StringComparison.OrdinalIgnoreCase),
             "bank suggestion candidate ranking must run in SQL, not after materializing every same-amount/date candidate");
@@ -640,19 +1008,24 @@ public class BankingServiceTests : IDisposable
     public async Task ReviewQueue_PagesSuggestibleTransactionsInSql()
     {
         var executedSql = new List<string>();
-        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        await using var ctx = await _fixture.CreateContextAsync(
+            [new RecordingCommandInterceptor(executedSql)]);
         var sut = CreateServiceFor(ctx);
         var postedAt = new DateTime(2026, 06, 10, 0, 0, 0, DateTimeKind.Utc);
-        SeedRentPaymentInto(ctx, "Emily", "Chen", 1400m, postedAt, "L-emily");
-        SeedRentPaymentInto(ctx, "Carlos", "Reyes", 1450m, postedAt.AddDays(1), "L-carlos");
-        SeedRentPaymentInto(ctx, "Maya", "Patel", 1500m, postedAt.AddDays(2), "L-maya");
+        var emily = SeedRentPaymentInto(ctx, "Emily", "Chen", 1400m, postedAt, "L-emily");
+        var carlos = SeedRentPaymentInto(ctx, "Carlos", "Reyes", 1450m, postedAt.AddDays(1), "L-carlos");
+        var maya = SeedRentPaymentInto(ctx, "Maya", "Patel", 1500m, postedAt.AddDays(2), "L-maya");
+        var scope = ctx.Db.SeedAdministratorScope(1, "bank-review-paging");
 
-        await sut.ImportAsync(1, BankImport("queue-page-1", postedAt, "Emily Chen", 1400m));
-        await sut.ImportAsync(1, BankImport("queue-page-2", postedAt.AddDays(1), "Carlos Reyes", 1450m));
-        await sut.ImportAsync(1, BankImport("queue-page-3", postedAt.AddDays(2), "Maya Patel", 1500m));
+        var first = await sut.ImportAsync(1, BankImport("queue-page-1", postedAt, "Emily Chen", 1400m));
+        var second = await sut.ImportAsync(1, BankImport("queue-page-2", postedAt.AddDays(1), "Carlos Reyes", 1450m));
+        var third = await sut.ImportAsync(1, BankImport("queue-page-3", postedAt.AddDays(2), "Maya Patel", 1500m));
+        AssignRoute(ctx, first.Transactions.Single().Id, emily.TenantAccount!.LeaseManagement!.PropertyId);
+        AssignRoute(ctx, second.Transactions.Single().Id, carlos.TenantAccount!.LeaseManagement!.PropertyId);
+        AssignRoute(ctx, third.Transactions.Single().Id, maya.TenantAccount!.LeaseManagement!.PropertyId);
         executedSql.Clear();
 
-        var queue = await sut.GetReviewQueueAsync(1, skip: 1, take: 1);
+        var queue = await sut.GetReviewQueueAsync(scope, skip: 1, take: 1);
 
         queue.Count.Should().Be(3);
         queue.Skip.Should().Be(1);
@@ -662,7 +1035,7 @@ public class BankingServiceTests : IDisposable
 
         executedSql.Should().Contain(sql =>
             sql.Contains("FROM \"BankTransactions\"", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("EXISTS", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("FROM \"TenantLedgerEntries\"", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase),
@@ -670,10 +1043,67 @@ public class BankingServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task PropertyManagerReviewQueue_FiltersAndPagesAuthorizedPropertyInSql()
+    {
+        var executedSql = new List<string>();
+        await using var ctx = await _fixture.CreateContextAsync(
+            [new RecordingCommandInterceptor(executedSql)]);
+        var sut = CreateServiceFor(ctx);
+        var postedAt = new DateTime(2026, 06, 10, 0, 0, 0, DateTimeKind.Utc);
+        var allowed = SeedRentPaymentInto(ctx, "Allowed", "Tenant", 1400m, postedAt, "L-allowed");
+        var denied = SeedRentPaymentInto(ctx, "Denied", "Tenant", 1550m, postedAt, "L-denied");
+        var scope = ctx.Db.SeedPropertyManagerScope(
+            1,
+            allowed.TenantAccount!.LeaseManagement!.PropertyId,
+            "bank-review-selected-property");
+
+        var allowedImport = await sut.ImportAsync(1, BankImport("scope-allowed", postedAt, "Allowed Tenant", 1400m));
+        var deniedImport = await sut.ImportAsync(1, BankImport("scope-denied", postedAt, "Denied Tenant", 1550m));
+        AssignRoute(ctx, allowedImport.Transactions.Single().Id,
+            allowed.TenantAccount!.LeaseManagement!.PropertyId);
+        AssignRoute(ctx, deniedImport.Transactions.Single().Id,
+            denied.TenantAccount!.LeaseManagement!.PropertyId);
+        executedSql.Clear();
+
+        var queue = await sut.GetReviewQueueAsync(scope, skip: 0, take: 20);
+
+        queue.Count.Should().Be(1);
+        queue.Items.Should().ContainSingle(item =>
+            item.Transaction.Id == allowedImport.Transactions.Single().Id);
+        queue.Items.Should().NotContain(item =>
+            item.Transaction.Id == deniedImport.Transactions.Single().Id);
+        (await sut.MatchAsync(
+            scope,
+            allowedImport.Transactions.Single().Id,
+            new MatchBankTransactionRequest
+            {
+                OperationKey = "cross-property-match",
+                ExpectedUpdatedAtUtc = TransactionUpdatedAt(ctx, allowedImport.Transactions.Single().Id),
+                TenantAccountId = denied.TenantAccountId,
+                TenantLedgerEntryId = denied.Id,
+            })).Should().BeNull();
+        (await sut.ConfirmMatchAsync(
+            scope,
+            deniedImport.Transactions.Single().Id,
+            new ConfirmBankMatchRequest
+            {
+                OperationKey = "unauthorized-confirm",
+                ExpectedUpdatedAtUtc = TransactionUpdatedAt(ctx, deniedImport.Transactions.Single().Id),
+            })).Should().BeNull();
+
+        executedSql.Should().Contain(sql =>
+            sql.Contains("FROM \"BankTransactions\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("MembershipRoleAssignmentProperties", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase),
+            "property capability and selected-property scope must be part of the paged bank-line SQL");
+    }
+
+    [Fact]
     public async Task ListTransactionsAsync_PagesFilteredTransactionsInSql()
     {
         var executedSql = new List<string>();
-        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        await using var ctx = await _fixture.CreateContextAsync(
+            [new RecordingCommandInterceptor(executedSql)]);
         var sut = CreateServiceFor(ctx);
         var connection = SeedBankConnectionInto(ctx);
         SeedBankTransactionInto(ctx, connection.Id, "txn-1", new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc), "Unmatched");
@@ -701,6 +1131,32 @@ public class BankingServiceTests : IDisposable
             sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase),
             "transaction rows must be filtered and paged in SQL before mapping suggestions");
+        executedSql.Count(sql => sql.Contains("FROM \"BankTransactions\"", StringComparison.OrdinalIgnoreCase))
+            .Should().Be(2,
+                "the list must execute only its SQL count and one joined row query, never a follow-up suggestion query");
+        executedSql.Should().Contain(sql =>
+            sql.Contains("FROM \"BankTransactions\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("TenantLedgerEntries", StringComparison.OrdinalIgnoreCase),
+            "the current top suggestion must be joined/ranked inside the paged bank-line query");
+    }
+
+    [Fact]
+    public async Task Reconciliation_InvalidOperationShape_IsAValidationFailure()
+    {
+        var imported = await _sut.ImportAsync(1, BankImport(
+            "invalid-reconciliation-shape",
+            new DateTime(2026, 06, 15, 0, 0, 0, DateTimeKind.Utc),
+            "Invalid request",
+            -25m));
+        var transactionId = imported.Transactions.Single().Id;
+
+        var action = async () => await _sut.IgnoreTransactionAsync(
+            _scope,
+            transactionId,
+            new BankTransactionMutationRequest());
+
+        await action.Should().ThrowAsync<DomainValidationException>()
+            .WithMessage("*operationKey*");
     }
 
     [Fact]
@@ -724,6 +1180,7 @@ public class BankingServiceTests : IDisposable
 
         var result = await _sut.ExchangePlaidPublicTokenAsync(1, new ExchangePlaidPublicTokenRequest
         {
+            ClientOperationId = "exchange-store-encrypted",
             PublicToken = "public-sandbox-token",
             InstitutionName = "Plaid Test Bank",
             AccountId = "account-id-1",
@@ -749,27 +1206,27 @@ public class BankingServiceTests : IDisposable
     [Fact]
     public async Task ExchangePlaidPublicTokenAsync_ReusesExistingConnectionByLookupHash()
     {
-        var executedSql = new List<string>();
-        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        await using var ctx = await _fixture.CreateContextAsync();
         var sut = CreateServiceFor(ctx);
         _plaid
             .Setup(p => p.ExchangePublicTokenAsync(
                 It.IsAny<PlaidRuntimeSettings>(),
                 It.IsAny<string>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new PlaidExchangeResult("access-sandbox-token", "item-id-1", "request-id-1"));
+            .ReturnsAsync((PlaidRuntimeSettings _, string publicToken, CancellationToken _) =>
+                new PlaidExchangeResult("access-sandbox-token", "item-id-1", $"request-{publicToken}"));
 
         await sut.ExchangePlaidPublicTokenAsync(1, new ExchangePlaidPublicTokenRequest
         {
+            ClientOperationId = "exchange-relink-1",
             PublicToken = "public-sandbox-token-1",
             InstitutionName = "Plaid Test Bank",
             AccountId = "account-id-1",
             AccountName = "Operating Checking",
         });
-        executedSql.Clear();
-
         await sut.ExchangePlaidPublicTokenAsync(1, new ExchangePlaidPublicTokenRequest
         {
+            ClientOperationId = "exchange-relink-2",
             PublicToken = "public-sandbox-token-2",
             InstitutionName = "Plaid Test Bank",
             AccountId = "account-id-1",
@@ -777,11 +1234,77 @@ public class BankingServiceTests : IDisposable
         });
 
         ctx.Db.BankConnections.Should().ContainSingle();
-        executedSql.Should().Contain(sql =>
-            sql.Contains("FROM \"BankConnections\"", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("ExternalItemIdHash", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("ExternalAccountIdHash", StringComparison.OrdinalIgnoreCase),
-            "Plaid reconnect must use queryable lookup hashes instead of materializing rows and decrypting each one");
+    }
+
+    [Fact]
+    public async Task ExchangePlaidPublicTokenAsync_SameOperationReplaysWithoutReexchangingSingleUseToken()
+    {
+        _plaid.Setup(p => p.ExchangePublicTokenAsync(
+                It.IsAny<PlaidRuntimeSettings>(), "single-use-token", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PlaidExchangeResult("access", "item", "provider-request"));
+        var request = new ExchangePlaidPublicTokenRequest
+        {
+            ClientOperationId = "stable-exchange-operation",
+            PublicToken = "single-use-token",
+            InstitutionName = "Replay bank",
+            AccountId = "account",
+            AccountName = "Operating",
+        };
+
+        var first = await _sut.ExchangePlaidPublicTokenAsync(1, request);
+        var replay = await _sut.ExchangePlaidPublicTokenAsync(1, request);
+
+        replay.Id.Should().Be(first.Id);
+        _plaid.Verify(p => p.ExchangePublicTokenAsync(
+            It.IsAny<PlaidRuntimeSettings>(), "single-use-token", It.IsAny<CancellationToken>()), Times.Once);
+        _ctx.Db.PlaidTokenExchangeAttempts.Single().Status.Should().Be("Completed");
+    }
+
+    [Fact]
+    public async Task ExchangePlaidPublicTokenAsync_UnknownRemoteOutcomeNeverBlindlyReexchanges()
+    {
+        _plaid.Setup(p => p.ExchangePublicTokenAsync(
+                It.IsAny<PlaidRuntimeSettings>(), "unknown-outcome-token", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("connection dropped"));
+        var request = new ExchangePlaidPublicTokenRequest
+        {
+            ClientOperationId = "unknown-outcome-operation",
+            PublicToken = "unknown-outcome-token",
+            InstitutionName = "Recovery bank",
+            AccountId = "account",
+            AccountName = "Operating",
+        };
+
+        await FluentActions.Invoking(() => _sut.ExchangePlaidPublicTokenAsync(1, request))
+            .Should().ThrowAsync<HttpRequestException>();
+        await FluentActions.Invoking(() => _sut.ExchangePlaidPublicTokenAsync(1, request))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*will not be exchanged again*");
+        _plaid.Verify(p => p.ExchangePublicTokenAsync(
+            It.IsAny<PlaidRuntimeSettings>(), "unknown-outcome-token", It.IsAny<CancellationToken>()), Times.Once);
+        _ctx.Db.PlaidTokenExchangeAttempts.Single().Status.Should().Be("RemoteAdmitted");
+    }
+
+    [Fact]
+    public async Task ImportAsync_TreatsCaseDistinctOpaqueProviderIdsAsDifferentTransactions()
+    {
+        var request = new ImportBankTransactionsRequest
+        {
+            Provider = "Manual",
+            InstitutionName = "Ordinal bank",
+            AccountName = "Operating",
+            Transactions =
+            [
+                new() { ProviderTransactionId = "Txn-AbC", PostedAt = DateTime.UtcNow, Description = "Upper", Amount = 1m },
+                new() { ProviderTransactionId = "txn-aBc", PostedAt = DateTime.UtcNow, Description = "Lower", Amount = 2m },
+            ],
+        };
+
+        var result = await _sut.ImportAsync(1, request);
+
+        result.ImportedCount.Should().Be(2);
+        result.Transactions.Select(row => row.ProviderTransactionId)
+            .Should().BeEquivalentTo(["Txn-AbC", "txn-aBc"]);
     }
 
     [Fact]
@@ -792,6 +1315,7 @@ public class BankingServiceTests : IDisposable
             .ReturnsAsync(new PlaidExchangeResult("access-token", "item-id", "request-id"));
         var connection = await _sut.ExchangePlaidPublicTokenAsync(1, new ExchangePlaidPublicTokenRequest
         {
+            ClientOperationId = "exchange-sync-import",
             PublicToken = "public-token",
             InstitutionName = "Plaid Test Bank",
             AccountId = "account-id",
@@ -850,8 +1374,13 @@ public class BankingServiceTests : IDisposable
         var syncResult = result!;
         syncResult.ImportedCount.Should().Be(1);
         syncResult.SkippedCount.Should().Be(1);
-        syncResult.Transactions.Should().ContainSingle(t => t.ProviderTransactionId == "txn-1")
-            .Which.Amount.Should().Be(1400m);
+        var imported = syncResult.Transactions.Should()
+            .ContainSingle(t => t.ProviderTransactionId == "txn-1")
+            .Which;
+        imported.Amount.Should().Be(1400m,
+            "Plaid reports credits as negative, while Rental Command stores deposits as positive");
+        imported.Description.Should().Be("ACH CREDIT RENT",
+            "a later duplicate provider id must not replace the first authoritative occurrence");
 
         var row = _ctx.Db.BankConnections.Single();
         row.LastSyncedAt.Should().NotBeNull();
@@ -867,6 +1396,7 @@ public class BankingServiceTests : IDisposable
             .ReturnsAsync(new PlaidExchangeResult("access-token", "item-id", "request-id"));
         var connection = await _sut.ExchangePlaidPublicTokenAsync(1, new ExchangePlaidPublicTokenRequest
         {
+            ClientOperationId = "exchange-sync-modify",
             PublicToken = "public-token",
             InstitutionName = "Plaid Test Bank",
             AccountId = "account-id",
@@ -883,7 +1413,7 @@ public class BankingServiceTests : IDisposable
             Amount = 1000m,
             IsoCurrencyCode = "USD",
             MatchStatus = "Matched",
-            MatchedPaymentId = null,
+            MatchedTenantLedgerEntryId = null,
             MatchConfidence = 1m,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
@@ -927,6 +1457,8 @@ public class BankingServiceTests : IDisposable
 
         await _sut.SyncPlaidConnectionAsync(1, connection.Id);
 
+        await _ctx.Db.Entry(existing).ReloadAsync();
+        await _ctx.Db.Entry(removed).ReloadAsync();
         existing.Amount.Should().Be(1400m);
         existing.Description.Should().Be("Posted rent");
         existing.MatchStatus.Should().Be("Unmatched");
@@ -955,7 +1487,7 @@ public class BankingServiceTests : IDisposable
             ],
         };
 
-    private static BankConnection SeedBankConnectionInto(SqliteTestContext ctx)
+    private static BankConnection SeedBankConnectionInto(MigratedPostgreSqlTestContext ctx)
     {
         var now = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
         var connection = new BankConnection
@@ -974,7 +1506,7 @@ public class BankingServiceTests : IDisposable
     }
 
     private static void SeedBankTransactionInto(
-        SqliteTestContext ctx,
+        MigratedPostgreSqlTestContext ctx,
         int connectionId,
         string providerTransactionId,
         DateTime postedAt,
@@ -995,13 +1527,52 @@ public class BankingServiceTests : IDisposable
         });
     }
 
-    private Payment SeedRentPaymentFor(string firstName, string lastName, decimal amount, DateTime paidAt, string leaseNumber) =>
+    private static void AssignRoute(MigratedPostgreSqlTestContext ctx, int transactionId, int propertyId)
+    {
+        var transaction = ctx.Db.BankTransactions.Single(row => row.Id == transactionId);
+        transaction.PropertyId = propertyId;
+        transaction.UpdatedAt = transaction.UpdatedAt.AddTicks(1);
+        ctx.Db.SaveChanges();
+    }
+
+    private static DateTime TransactionUpdatedAt(MigratedPostgreSqlTestContext ctx, int transactionId) =>
+        ctx.Db.BankTransactions.AsNoTracking()
+            .Where(row => row.Id == transactionId)
+            .Select(row => row.UpdatedAt)
+            .Single();
+
+    private static Property SeedRouteProperty(MigratedPostgreSqlTestContext ctx, string name)
+    {
+        var now = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
+        var property = new Property
+        {
+            PortfolioId = 1,
+            Name = name,
+            AddressLine1 = "1 Route Street",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        ctx.Db.Properties.Add(property);
+        ctx.Db.SaveChanges();
+        return property;
+    }
+
+    private TenantLedgerEntry SeedRentPaymentFor(string firstName, string lastName, decimal amount, DateTime paidAt, string leaseNumber) =>
         SeedRentPaymentInto(_ctx, firstName, lastName, amount, paidAt, leaseNumber);
 
-    private static Payment SeedRentPaymentInto(
-        SqliteTestContext ctx, string firstName, string lastName, decimal amount, DateTime paidAt, string leaseNumber)
+    private static TenantLedgerEntry SeedRentPaymentInto(
+        MigratedPostgreSqlTestContext ctx,
+        string firstName,
+        string lastName,
+        decimal amount,
+        DateTime paidAt,
+        string leaseNumber,
+        Property? property = null)
     {
-        var property = new Property
+        property ??= new Property
         {
             PortfolioId = 1,
             Name = "Short North Condo",
@@ -1015,7 +1586,7 @@ public class BankingServiceTests : IDisposable
         var unit = new Unit
         {
             Property = property,
-            UnitNumber = "4B",
+            UnitNumber = leaseNumber,
             MarketRent = amount,
             CreatedAt = paidAt,
             UpdatedAt = paidAt,
@@ -1028,113 +1599,111 @@ public class BankingServiceTests : IDisposable
             CreatedAt = paidAt,
             UpdatedAt = paidAt,
         };
-        var lease = new Lease
+        var relationship = new LeaseManagement
         {
             PortfolioId = 1,
             Property = property,
             Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = leaseNumber,
-            Status = LeaseStatus.Active,
-            StartDate = paidAt.AddMonths(-12),
-            EndDate = paidAt.AddMonths(12),
-            MonthlyRent = amount,
-            SecurityDeposit = amount,
-            LateFeeAmount = 70m,
-            CreatedAt = paidAt,
-            UpdatedAt = paidAt,
+            RelationshipNumber = leaseNumber,
+            PossessionGivenAtUtc = paidAt.AddMonths(-12),
+            CreatedAtUtc = paidAt,
+            CreatedByUserId = 1,
+            UpdatedAtUtc = paidAt,
+            RowVersion = Guid.NewGuid(),
         };
-        var payment = new Payment
+        relationship.Parties.Add(new LeaseManagementParty
         {
             PortfolioId = 1,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Paid,
-            Amount = amount,
-            DueDate = paidAt,
-            PaidDate = paidAt,
-            CreatedAt = paidAt,
-            UpdatedAt = paidAt,
+            Tenant = tenant,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = DateOnly.FromDateTime(paidAt.AddMonths(-12)),
+            ChangeReason = "Test setup",
+            CreatedAtUtc = paidAt,
+            CreatedByUserId = 1,
+        });
+        var account = new TenantAccount
+        {
+            PortfolioId = 1,
+            LeaseManagement = relationship,
+            AccountNumber = $"TA-{leaseNumber}",
+            Currency = "USD",
+            OpenedAtUtc = paidAt.AddMonths(-12),
+            CreatedAtUtc = paidAt,
+            CreatedByUserId = 1,
         };
-        ctx.Db.Payments.Add(payment);
+        var receipt = new TenantLedgerEntry
+        {
+            PortfolioId = 1,
+            TenantAccount = account,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(paidAt),
+            PostedAtUtc = paidAt,
+            Description = "Rent payment",
+            BusinessKey = $"test-receipt:{leaseNumber}",
+            CreatedByUserId = 1,
+        };
+        ctx.Db.TenantLedgerEntries.Add(receipt);
         ctx.Db.SaveChanges();
-        return payment;
+        return receipt;
     }
 
-    private BankingService CreateServiceFor(SqliteTestContext ctx) =>
-        new(
-            ctx.Db,
+    private BankingService CreateServiceFor(MigratedPostgreSqlTestContext ctx, PlaidOptions? options = null)
+        => CreateServiceFor(ctx.Db, ctx.ConnectionString, options);
+
+    private BankingService CreateServiceFor(
+        RentalCommand.Data.RentalCommandDbContext db,
+        string connectionString,
+        PlaidOptions? options = null)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(TimeProvider.System);
+        services.AddScoped<ICurrentActor, TestActor>();
+        services.AddAtomicPersistenceKernel(allowUnconvertedWrites: true);
+        services.AddAtomicCommandHandler<PreparePlaidTokenExchangeCommand, PreparePlaidTokenExchangeResult, PreparePlaidTokenExchangeHandler>();
+        services.AddAtomicCommandHandler<AdmitPlaidTokenExchangeCommand, AdmitPlaidTokenExchangeResult, AdmitPlaidTokenExchangeHandler>();
+        services.AddAtomicCommandHandler<RecordPlaidTokenExchangeReceiptCommand, RecordPlaidTokenExchangeReceiptResult, RecordPlaidTokenExchangeReceiptHandler>();
+        services.AddAtomicCommandHandler<ApplyPlaidConnectionCommand, ApplyPlaidConnectionResult, ApplyPlaidConnectionHandler>();
+        services.AddAtomicCommandHandler<ApplyPlaidSyncCommand, ApplyPlaidSyncResult, ApplyPlaidSyncHandler>();
+        services.AddAtomicCommandHandler<ImportBankTransactionsCommand, ImportBankTransactionsResult, ImportBankTransactionsHandler>();
+        services.AddAtomicCommandHandler<ReconcileBankTransactionCommand, ReconcileBankTransactionResult, ReconcileBankTransactionHandler>();
+        services.AddAtomicCommandHandler<RouteBankTransactionCommand, RouteBankTransactionResult, RouteBankTransactionHandler>();
+        services.AddDbContext<RentalCommand.Data.RentalCommandDbContext>((provider, builder) =>
+            builder.UseNpgsql(connectionString).UseAtomicPersistenceKernel(provider));
+        var provider = services.BuildServiceProvider();
+        var scope = provider.CreateScope();
+        _atomicHosts.Add(scope);
+        _atomicHosts.Add(provider);
+        return new BankingService(
+            db,
             new EphemeralDataProtectionProvider(),
             _plaid.Object,
-            new RentalCommand.Api.Services.AuditTrailService(ctx.Db, new RentalCommand.Data.Auditing.AuditScope(), TimeProvider.System),
-            Options.Create(new PlaidOptions
+            scope.ServiceProvider.GetRequiredService<IAtomicUnitOfWork>(),
+            Options.Create(options ?? new PlaidOptions
             {
                 Environment = "sandbox",
                 ClientId = "client-id",
                 Secret = "secret",
             }),
             TimeProvider.System);
+    }
 
-    private Payment SeedRentPayment(DateTime paidAt)
+    private TenantLedgerEntry SeedRentPayment(DateTime paidAt) =>
+        SeedRentPaymentInto(_ctx, "Emily", "Chen", 1400m, paidAt, "L2024-008");
+
+    private BankTransactionMutationRequest Mutation(int transactionId, string key)
     {
-        var property = new Property
+        var updatedAt = _ctx.Db.BankTransactions.AsNoTracking()
+            .Where(row => row.Id == transactionId)
+            .Select(row => row.UpdatedAt)
+            .Single();
+        return new BankTransactionMutationRequest
         {
-            PortfolioId = 1,
-            Name = "Short North Condo",
-            AddressLine1 = "1 Main",
-            City = "Columbus",
-            State = "OH",
-            PostalCode = "43215",
-            CreatedAt = paidAt,
-            UpdatedAt = paidAt,
+            OperationKey = key,
+            ExpectedUpdatedAtUtc = updatedAt,
         };
-        var unit = new Unit
-        {
-            Property = property,
-            UnitNumber = "4B",
-            MarketRent = 1400m,
-            CreatedAt = paidAt,
-            UpdatedAt = paidAt,
-        };
-        var tenant = new Tenant
-        {
-            PortfolioId = 1,
-            FirstName = "Emily",
-            LastName = "Chen",
-            CreatedAt = paidAt,
-            UpdatedAt = paidAt,
-        };
-        var lease = new Lease
-        {
-            PortfolioId = 1,
-            Property = property,
-            Unit = unit,
-            Tenant = tenant,
-            LeaseNumber = "L2024-008",
-            Status = LeaseStatus.Active,
-            StartDate = paidAt.AddMonths(-12),
-            EndDate = paidAt.AddMonths(12),
-            MonthlyRent = 1400m,
-            SecurityDeposit = 1400m,
-            LateFeeAmount = 70m,
-            CreatedAt = paidAt,
-            UpdatedAt = paidAt,
-        };
-        var payment = new Payment
-        {
-            PortfolioId = 1,
-            Lease = lease,
-            PaymentType = PaymentType.Rent,
-            Status = PaymentStatus.Paid,
-            Amount = 1400m,
-            DueDate = paidAt,
-            PaidDate = paidAt,
-            CreatedAt = paidAt,
-            UpdatedAt = paidAt,
-        };
-        _ctx.Db.Payments.Add(payment);
-        _ctx.Db.SaveChanges();
-        return payment;
     }
 
     private Expense SeedExpense(DateTime paidAt, decimal amount)
@@ -1176,19 +1745,14 @@ public class BankingServiceTests : IDisposable
         return expense;
     }
 
-    private BankingService CreateService(PlaidOptions? options = null) =>
-        new(
-            _ctx.Db,
-            new EphemeralDataProtectionProvider(),
-            _plaid.Object,
-            new RentalCommand.Api.Services.AuditTrailService(_ctx.Db, new RentalCommand.Data.Auditing.AuditScope(), TimeProvider.System),
-            Options.Create(options ?? new PlaidOptions
-            {
-                Environment = "sandbox",
-                ClientId = "client-id",
-                Secret = "secret",
-            }),
-            TimeProvider.System);
+    private BankingService CreateService(PlaidOptions? options = null) => CreateServiceFor(_ctx, options);
+
+    private sealed class TestActor : ICurrentActor
+    {
+        public int? UserId => null;
+        public string? ActorLabel => "banking-service-test";
+        public string? IpAddress => "127.0.0.1";
+    }
 
     private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
     {

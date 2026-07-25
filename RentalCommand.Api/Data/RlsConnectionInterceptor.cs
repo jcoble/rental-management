@@ -1,94 +1,145 @@
 using System.Data.Common;
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using RentalCommand.Api.Auth;
+using RentalCommand.Core.Authorization;
+using RentalCommand.Data.Security;
 
 namespace RentalCommand.Api.Data;
 
+internal readonly record struct RlsSessionState(
+    int PortfolioId,
+    Guid? AuthSessionId = null,
+    int? UserId = null,
+    int? AccessContextId = null,
+    long? AccessRevision = null,
+    string? PublicApplicationToken = null,
+    string? PublicSigningTokenHash = null);
+
 /// <summary>
-/// Sets the per-connection PostgreSQL session variables that the Row-Level Security (RLS) policies
-/// read, on every connection the API opens. This is the defense-in-depth backstop behind the
-/// application-layer <c>.Where(x =&gt; x.PortfolioId == portfolioId)</c> filters (audit M-1): even a
-/// controller/report/join that forgets the predicate cannot read or write another portfolio's rows,
-/// because the policies filter at the database layer.
-///
-/// <para>The session variables are:
-/// <list type="bullet">
-///   <item><c>app.current_portfolio_id</c> — the authenticated caller's <c>portfolioId</c> claim
-///   (an int; parsed defensively so a non-numeric value can never be interpolated into SQL).</item>
-///   <item><c>app.is_admin</c> — <c>true</c> for platform-admin sessions, for background/migration
-///   paths with no HTTP context, and for unauthenticated requests (register/login/health) that have
-///   no portfolio scope. An admin context bypasses the policies' portfolio predicate.</item>
-/// </list>
-/// </para>
-///
-/// <para>RLS is <c>FORCE</c>d on every portfolio-scoped table, so the policies fire even for the
-/// table owner — but PostgreSQL still exempts <c>SUPERUSER</c>/<c>BYPASSRLS</c> roles. For the
-/// backstop to actually bite at runtime the API must connect as the dedicated, non-superuser
-/// <c>rentalcommand_api</c> login role created by the RLS migration (see the connection-string note
-/// in the deploy compose files). When it connects as a superuser the policies are silently bypassed
-/// and only the app-layer filters remain.</para>
+/// Sets PostgreSQL RLS coordinates from the middleware-validated canonical access context and
+/// verifies that the configured credential is the restricted direct-login API role. The database
+/// revalidates these coordinates against active session/access rows; changing GUC text alone cannot
+/// widen visibility.
 /// </summary>
 public sealed class RlsConnectionInterceptor : DbConnectionInterceptor
 {
+    internal const string RuntimeRole = DatabaseRuntimeIdentity.ApiRole;
+
     private readonly IHttpContextAccessor _httpContextAccessor;
-
-    public RlsConnectionInterceptor(IHttpContextAccessor httpContextAccessor)
-    {
+    public RlsConnectionInterceptor(IHttpContextAccessor httpContextAccessor) =>
         _httpContextAccessor = httpContextAccessor;
-    }
 
-    public override void ConnectionOpened(DbConnection connection, ConnectionEndEventData eventData)
-        => SetSessionVariables(connection);
+    public override void ConnectionOpened(DbConnection connection, ConnectionEndEventData eventData) =>
+        SetSessionVariables(connection);
 
     public override async Task ConnectionOpenedAsync(
-        DbConnection connection, ConnectionEndEventData eventData, CancellationToken cancellationToken = default)
-        => await SetSessionVariablesAsync(connection, cancellationToken);
+        DbConnection connection,
+        ConnectionEndEventData eventData,
+        CancellationToken cancellationToken = default) =>
+        await SetSessionVariablesAsync(connection, cancellationToken);
 
     private void SetSessionVariables(DbConnection connection)
     {
-        var (portfolioId, isAdmin) = GetContextValues();
+        DatabaseRuntimeIdentity.ValidateOpenedConnection(connection, RuntimeRole);
+        var state = ResolveSessionState(_httpContextAccessor.HttpContext);
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = BuildSql(portfolioId, isAdmin);
+        cmd.CommandText = BuildSql(state);
         cmd.ExecuteNonQuery();
     }
 
-    private async Task SetSessionVariablesAsync(DbConnection connection, CancellationToken cancellationToken)
+    private async Task SetSessionVariablesAsync(
+        DbConnection connection,
+        CancellationToken cancellationToken)
     {
-        var (portfolioId, isAdmin) = GetContextValues();
+        await DatabaseRuntimeIdentity.ValidateOpenedConnectionAsync(connection, RuntimeRole, cancellationToken);
+        var state = ResolveSessionState(_httpContextAccessor.HttpContext);
         await using var cmd = connection.CreateCommand();
-        cmd.CommandText = BuildSql(portfolioId, isAdmin);
+        cmd.CommandText = BuildSql(state);
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    // portfolioId is an int (validated) and isAdmin is a bool — no SQL-injection surface.
-    private static string BuildSql(int portfolioId, bool isAdmin) =>
-        $"SET app.current_portfolio_id = '{portfolioId}'; SET app.is_admin = '{(isAdmin ? "true" : "false")}';";
-
-    private (int portfolioId, bool isAdmin) GetContextValues()
+    internal static RlsSessionState ResolveSessionState(HttpContext? httpContext)
     {
-        var httpContext = _httpContextAccessor.HttpContext;
-
-        // No HTTP context = background service / startup migration → admin bypass.
-        if (httpContext is null)
+        if (httpContext is not null &&
+            httpContext.Items.TryGetValue(CanonicalAccessContextHttpItem.Key, out var value) &&
+            value is ActiveAccessContext active &&
+            active.PortfolioId > 0)
         {
-            return (0, true);
+            return new RlsSessionState(
+                active.PortfolioId,
+                active.SessionId,
+                active.UserId,
+                active.AccessContextId,
+                active.AccessRevision);
         }
 
-        var portfolioClaim = httpContext.User.FindFirst("portfolioId");
-        var isAdminRole = httpContext.User.IsInRole("Admin");
-
-        // Parse as int so a non-numeric claim can never reach the SQL string.
-        var portfolioId = 0;
-        if (portfolioClaim is not null)
+        // Authentication validates the JWT signature before this interceptor runs. Supplying the
+        // compact coordinates here breaks the resolver/RLS bootstrap cycle; PostgreSQL still joins
+        // them to live canonical rows, so stale or forged coordinates see no portfolio data.
+        if (httpContext?.User.Identity?.IsAuthenticated == true &&
+            Guid.TryParse(httpContext.User.FindFirstValue("sid"), out var sessionId) &&
+            int.TryParse(httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier), out var userId) &&
+            int.TryParse(httpContext.User.FindFirstValue("ctx"), out var accessContextId) &&
+            long.TryParse(httpContext.User.FindFirstValue("ar"), out var accessRevision))
         {
-            int.TryParse(portfolioClaim.Value, out portfolioId);
+            return new RlsSessionState(
+                PortfolioId: 0,
+                sessionId,
+                userId,
+                accessContextId,
+                accessRevision);
         }
 
-        // No portfolio claim = an unauthenticated request (register/login/health) or a non-portfolio
-        // principal (platform admin, owner/tenant-only token) → bypass RLS at the DB layer. The app
-        // layer still controls access; RLS is the defense-in-depth backstop for portfolio sessions.
-        var isAdmin = isAdminRole || portfolioId == 0;
+        // Anonymous application pages are deliberately limited to an opaque, generated token.
+        // PostgreSQL uses this coordinate only in the dedicated public-application policies; it
+        // never satisfies the ordinary workspace predicate. Validate the generated base64url
+        // alphabet here before placing it in the connection GUC.
+        if (httpContext is not null
+            && httpContext.Request.Path.StartsWithSegments("/api/v1/public/applications")
+            && httpContext.Request.RouteValues.TryGetValue("token", out var routeToken)
+            && routeToken is string token
+            && IsPublicApplicationToken(token))
+        {
+            return new RlsSessionState(0, PublicApplicationToken: token);
+        }
 
-        return (portfolioId, isAdmin);
+        // Native e-sign links are anonymous by design. Only their SHA-256 digest reaches the
+        // PostgreSQL session; dedicated policies use it to expose this signer, this packet, and
+        // the packet's legal artifact. It never satisfies ordinary workspace authorization.
+        if (httpContext is not null
+            && httpContext.Request.Path.StartsWithSegments("/api/v1/sign")
+            && httpContext.Request.RouteValues.TryGetValue("token", out var signingRouteToken)
+            && signingRouteToken is string signingToken
+            && IsOpaquePublicToken(signingToken))
+        {
+            return new RlsSessionState(0, PublicSigningTokenHash: TokenHash(signingToken));
+        }
+
+        // This also permits the canonical resolver to read the non-portfolio authority tables before
+        // it has validated the context, while every portfolio-scoped table remains invisible.
+        return new RlsSessionState(0);
     }
+
+    internal static string BuildSql(RlsSessionState state) =>
+        $"SELECT set_config('app.current_portfolio_id', '{state.PortfolioId}', false), " +
+        $"set_config('app.auth_session_id', '{state.AuthSessionId?.ToString() ?? string.Empty}', false), " +
+        $"set_config('app.current_user_id', '{state.UserId?.ToString() ?? string.Empty}', false), " +
+        $"set_config('app.current_access_context_id', '{state.AccessContextId?.ToString() ?? string.Empty}', false), " +
+        $"set_config('app.access_revision', '{state.AccessRevision?.ToString() ?? string.Empty}', false), " +
+        $"set_config('app.public_application_token', '{state.PublicApplicationToken ?? string.Empty}', false), " +
+        $"set_config('app.public_signing_token_hash', '{state.PublicSigningTokenHash ?? string.Empty}', false);";
+
+    private static bool IsPublicApplicationToken(string token) =>
+        IsOpaquePublicToken(token);
+
+    private static bool IsOpaquePublicToken(string token) =>
+        token.Length is >= 20 and <= 64
+        && token.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
+
+    private static string TokenHash(string token) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
 }

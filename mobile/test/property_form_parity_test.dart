@@ -7,6 +7,7 @@ import 'package:rental_command/features/owners/owners_models.dart';
 import 'package:rental_command/features/owners/owners_repository.dart';
 import 'package:rental_command/features/properties/properties_list_screen.dart';
 import 'package:rental_command/features/properties/properties_repository.dart';
+import 'package:rental_command/features/properties/property_form_sheet.dart';
 
 void main() {
   testWidgets(
@@ -56,10 +57,29 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Under maintenance').last);
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('property-owner-field')));
+      final ownerField = find.byKey(const Key('property-owner-field'));
+      await tester.ensureVisible(ownerField);
+      await tester.pumpAndSettle();
+      await tester.tap(ownerField);
       await tester.pumpAndSettle();
       await tester.tap(find.text('North Coast Holdings').last);
       await tester.pumpAndSettle();
+      await tester.tap(find.text('Next'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Rental details'), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const Key('property-rental-bedrooms-field')),
+        '3',
+      );
+      await tester.enterText(
+        find.byKey(const Key('property-rental-bathrooms-field')),
+        '2.5',
+      );
+      await tester.enterText(
+        find.byKey(const Key('property-rental-market-rent-field')),
+        '1875',
+      );
       await tester.tap(find.text('Next'));
       await tester.pumpAndSettle();
 
@@ -131,8 +151,17 @@ void main() {
 
       expect(repo.createdPayload, containsPair('name', 'Vineyard Flats'));
       expect(repo.createdPayload, containsPair('type', 'SingleFamily'));
+      expect(
+        repo.createdPayload,
+        containsPair('rentalStructure', 'SingleRental'),
+      );
       expect(repo.createdPayload, containsPair('status', 'UnderMaintenance'));
-      expect(repo.createdPayload, containsPair('ownerEntityId', 42));
+      final ownerships = repo.createdPayload!['ownerships'] as List<dynamic>;
+      expect(ownerships, hasLength(1));
+      final ownership = ownerships.single as Map<String, dynamic>;
+      expect(ownership, containsPair('ownerEntityId', 42));
+      expect(ownership, containsPair('ownershipSharePercent', 100));
+      expect(repo.createdPayload, containsPair('clearOwnership', false));
       expect(repo.createdPayload, containsPair('addressLine2', 'Suite 12'));
       expect(repo.createdPayload, containsPair('yearBuilt', 1998));
       expect(repo.createdPayload, containsPair('managementFeePercent', 8.5));
@@ -147,14 +176,84 @@ void main() {
         repo.createdPayload,
         containsPair('manualAnnualDepreciation', 10909.0),
       );
-      expect(repo.createdUnits, hasLength(1));
+      expect(repo.setupUnits, hasLength(1));
       expect(
-        repo.createdUnits.single,
+        repo.setupUnits.single,
         containsPair('unitNumber', 'Vineyard Flats'),
       );
-      expect(repo.createdUnits.single, containsPair('status', 'Vacant'));
+      expect(repo.setupUnits.single, containsPair('bedrooms', 3));
+      expect(repo.setupUnits.single, containsPair('bathrooms', 2.5));
+      expect(repo.setupUnits.single, containsPair('marketRent', 1875.0));
     },
   );
+
+  testWidgets('multi-rental setup accepts one initial unit atomically', (
+    tester,
+  ) async {
+    final repo = _FakePropertiesRepository();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [propertiesRepositoryProvider.overrideWithValue(repo)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => FilledButton(
+                onPressed: () => showAddPropertySheet(context),
+                child: const Text('Add property'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Add property'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('property-name-field')),
+      'Maple Court',
+    );
+    await tester.tap(find.byKey(const Key('property-type-field')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Multi-family').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Building with units'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Initial units'), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const Key('property-unit-numbers-field')),
+      '1A',
+    );
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('property-address-field')),
+      '1200 Maple Avenue',
+    );
+    await tester.enterText(
+      find.byKey(const Key('property-city-field')),
+      'Columbus',
+    );
+    await tester.enterText(find.byKey(const Key('property-state-field')), 'OH');
+    await tester.enterText(
+      find.byKey(const Key('property-zip-field')),
+      '43215',
+    );
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Save Property'));
+    await tester.pumpAndSettle();
+
+    expect(repo.createdPayload, containsPair('rentalStructure', 'MultiRental'));
+    expect(repo.createdPayload, containsPair('type', 'MultiFamily'));
+    expect(repo.setupUnits.map((unit) => unit['unitNumber']), ['1A']);
+  });
 
   testWidgets('property owner picker can add and edit owners in place', (
     tester,
@@ -184,7 +283,10 @@ void main() {
     await tester.tap(find.text('Add property'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('property-owner-add-button')));
+    final addOwnerButton = find.byKey(const Key('property-owner-add-button'));
+    await tester.ensureVisible(addOwnerButton);
+    await tester.pumpAndSettle();
+    await tester.tap(addOwnerButton);
     await tester.pumpAndSettle();
 
     expect(find.text('New Owner'), findsOneWidget);
@@ -202,7 +304,10 @@ void main() {
     expect(ownersRepo.createdPayload, containsPair('name', 'Blue Door LLC'));
     expect(find.text('Blue Door LLC'), findsOneWidget);
 
-    await tester.tap(find.byKey(const Key('property-owner-edit-button')));
+    final editOwnerButton = find.byKey(const Key('property-owner-edit-button'));
+    await tester.ensureVisible(editOwnerButton);
+    await tester.pumpAndSettle();
+    await tester.tap(editOwnerButton);
     await tester.pumpAndSettle();
 
     expect(find.text('Edit Owner'), findsOneWidget);
@@ -225,13 +330,52 @@ void main() {
     );
     expect(find.text('Blue Door Holdings'), findsOneWidget);
   });
+
+  testWidgets('property edit omits creation-only rental structure', (
+    tester,
+  ) async {
+    final repo = _FakePropertiesRepository();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [propertiesRepositoryProvider.overrideWithValue(repo)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => FilledButton(
+                onPressed: () => showPropertyFormSheet(
+                  context,
+                  property: _property(type: 'SingleFamily'),
+                ),
+                child: const Text('Edit property'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Edit property'));
+    await tester.pumpAndSettle();
+
+    while (find.text('Next').evaluate().isNotEmpty) {
+      await tester.tap(find.text('Next').first);
+      await tester.pumpAndSettle();
+    }
+    await tester.tap(find.text('Save Property'));
+    await tester.pumpAndSettle();
+
+    expect(repo.updatedPayload, isNotNull);
+    expect(repo.updatedPayload, isNot(contains('rentalStructure')));
+  });
 }
 
 class _FakePropertiesRepository extends PropertiesRepository {
   _FakePropertiesRepository() : super(Dio());
 
   Map<String, dynamic>? createdPayload;
-  final createdUnits = <Map<String, dynamic>>[];
+  Map<String, dynamic>? updatedPayload;
+  final setupUnits = <Map<String, dynamic>>[];
   final ownerOptions = <PropertyOwnerOption>[
     const PropertyOwnerOption(id: 42, name: 'North Coast Holdings'),
   ];
@@ -240,31 +384,48 @@ class _FakePropertiesRepository extends PropertiesRepository {
   Future<List<PropertyOwnerOption>> listOwnerOptions() async => ownerOptions;
 
   @override
-  Future<Property> createProperty(Map<String, dynamic> data) async {
+  Future<PropertySetupResult> setupProperty({
+    int? propertyId,
+    required Map<String, dynamic> property,
+    required List<Map<String, dynamic>> units,
+  }) async {
+    expect(propertyId, isNull);
+    final data = property;
     createdPayload = Map<String, dynamic>.from(data);
-    return _property(type: data['type'] as String? ?? 'MultiFamily');
+    setupUnits
+      ..clear()
+      ..addAll(units.map(Map<String, dynamic>.from));
+    final structure = RentalStructure.fromJson(data['rentalStructure']);
+    final saved = _property(
+      type: data['type'] as String? ?? 'MultiFamily',
+      rentalStructure: structure,
+    );
+    return PropertySetupResult(
+      property: saved,
+      units: [
+        for (var index = 0; index < setupUnits.length; index++)
+          Unit(
+            id: index + 1,
+            propertyId: saved.id,
+            unitNumber: setupUnits[index]['unitNumber'] as String? ?? '',
+            bedrooms: (setupUnits[index]['bedrooms'] as num?)?.toInt() ?? 0,
+            bathrooms:
+                (setupUnits[index]['bathrooms'] as num?)?.toDouble() ?? 0,
+            marketRent:
+                (setupUnits[index]['marketRent'] as num?)?.toDouble() ?? 0,
+            status: setupUnits[index]['status'] as String? ?? 'Vacant',
+            createdAt: DateTime(2026),
+            updatedAt: DateTime(2026),
+          ),
+      ],
+      updated: false,
+    );
   }
 
   @override
-  Future<List<Unit>> listUnits(
-    int propertyId, {
-    bool availableForLease = false,
-  }) async => const [];
-
-  @override
-  Future<Unit> createUnit(int propertyId, Map<String, dynamic> data) async {
-    createdUnits.add(Map<String, dynamic>.from(data));
-    return Unit(
-      id: createdUnits.length,
-      propertyId: propertyId,
-      unitNumber: data['unitNumber'] as String? ?? '',
-      bedrooms: (data['bedrooms'] as num?)?.toInt() ?? 0,
-      bathrooms: (data['bathrooms'] as num?)?.toDouble() ?? 0,
-      marketRent: (data['marketRent'] as num?)?.toDouble() ?? 0,
-      status: data['status'] as String? ?? 'Vacant',
-      createdAt: DateTime(2026),
-      updatedAt: DateTime(2026),
-    );
+  Future<Property> updateProperty(int id, Map<String, dynamic> data) async {
+    updatedPayload = Map<String, dynamic>.from(data);
+    return _property(type: data['type'] as String? ?? 'SingleFamily');
   }
 }
 
@@ -310,13 +471,27 @@ class _FakeOwnersRepository extends OwnersRepository {
   }
 }
 
-Property _property({required String type}) {
+Property _property({
+  required String type,
+  RentalStructure rentalStructure = RentalStructure.singleRental,
+}) {
   return Property(
     id: 1,
     portfolioId: 1,
-    ownerEntityId: 42,
+    ownerships: [
+      PropertyOwnership(
+        id: 17,
+        ownerEntityId: 42,
+        ownerName: 'North Coast Holdings',
+        ownershipSharePercent: 100,
+        effectiveFromUtc: DateTime(2026),
+        statementRecipientName: 'North Coast Holdings',
+        payeeName: 'North Coast Holdings',
+      ),
+    ],
     name: 'Vineyard Flats',
     type: type,
+    rentalStructure: rentalStructure,
     status: 'UnderMaintenance',
     addressLine1: '401 Market St',
     addressLine2: 'Suite 12',
@@ -326,7 +501,6 @@ Property _property({required String type}) {
     yearBuilt: 1998,
     managementFeePercent: 8.5,
     notes: 'North building has separate utility meters.',
-    ownerName: 'North Coast Holdings',
     unitCount: 0,
     createdAt: DateTime(2026),
     updatedAt: DateTime(2026),

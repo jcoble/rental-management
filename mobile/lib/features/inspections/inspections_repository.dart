@@ -2,9 +2,11 @@ import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/api/idempotent_mutation.dart';
 import '../../core/models/models.dart';
 import 'inspections_models.dart';
 
@@ -13,6 +15,7 @@ class InspectionListQuery {
     this.skip = 0,
     this.take = 20,
     this.propertyId,
+    this.unitId,
     this.search,
     this.sort = '-scheduledFor',
   });
@@ -20,6 +23,7 @@ class InspectionListQuery {
   final int skip;
   final int take;
   final int? propertyId;
+  final int? unitId;
   final String? search;
   final String sort;
 
@@ -29,12 +33,13 @@ class InspectionListQuery {
         other.skip == skip &&
         other.take == take &&
         other.propertyId == propertyId &&
+        other.unitId == unitId &&
         other.search == search &&
         other.sort == sort;
   }
 
   @override
-  int get hashCode => Object.hash(skip, take, propertyId, search, sort);
+  int get hashCode => Object.hash(skip, take, propertyId, unitId, search, sort);
 }
 
 class InspectionListPage {
@@ -98,6 +103,7 @@ class InspectionsRepository {
   ]) async {
     final parameters = <String, dynamic>{
       'propertyId': query.propertyId,
+      'unitId': query.unitId,
       'skip': query.skip,
       'take': query.take,
       'search': query.search,
@@ -154,9 +160,13 @@ class InspectionsRepository {
   /// inspector? }. With a templateId the response items are Pending.
   Future<InspectionDetail> create(Map<String, dynamic> data) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/inspections',
-        data: data,
+      final response = await IdempotentMutation.run(
+        'inspections:create:$data',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/inspections',
+          data: data,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final responseData = response.data;
       if (responseData == null) {
@@ -179,9 +189,14 @@ class InspectionsRepository {
     String? note,
   }) async {
     try {
-      final response = await _dio.patch<Map<String, dynamic>>(
-        '/inspections/$inspectionId/items/$itemId',
-        data: {'result': ?result, 'note': ?note},
+      final payload = {'result': ?result, 'note': ?note};
+      final response = await IdempotentMutation.run(
+        'inspections:$inspectionId:items:$itemId:update:$payload',
+        (key) => _dio.patch<Map<String, dynamic>>(
+          '/inspections/$inspectionId/items/$itemId',
+          data: payload,
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final data = response.data;
       if (data == null) {
@@ -203,6 +218,7 @@ class InspectionsRepository {
     required Uint8List bytes,
     required String fileName,
     required String contentType,
+    String? clientOperationId,
   }) async {
     try {
       final formData = FormData.fromMap({
@@ -214,6 +230,7 @@ class InspectionsRepository {
         'entityType': 'Inspection',
         'entityId': inspectionId,
         'category': 'Inspection photo',
+        'clientOperationId': clientOperationId ?? const Uuid().v4(),
       });
       final response = await _dio.post<Map<String, dynamic>>(
         '/documents',
@@ -239,9 +256,13 @@ class InspectionsRepository {
     int storedFileId,
   ) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/inspections/$inspectionId/items/$itemId/photo',
-        data: {'storedFileId': storedFileId},
+      final response = await IdempotentMutation.run(
+        'inspections:$inspectionId:items:$itemId:photo:$storedFileId',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/inspections/$inspectionId/items/$itemId/photo',
+          data: {'storedFileId': storedFileId},
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final data = response.data;
       if (data == null) {
@@ -259,9 +280,13 @@ class InspectionsRepository {
   /// Completes the inspection (409 if already done).
   Future<CompleteInspectionResult> complete(int inspectionId) async {
     try {
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/inspections/$inspectionId/complete',
-        data: {},
+      final response = await IdempotentMutation.run(
+        'inspections:$inspectionId:complete',
+        (key) => _dio.post<Map<String, dynamic>>(
+          '/inspections/$inspectionId/complete',
+          data: {},
+          options: Options(headers: {'Idempotency-Key': key}),
+        ),
       );
       final data = response.data;
       if (data == null) {

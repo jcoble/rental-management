@@ -2,7 +2,7 @@
  * Reports Hub API client. The backend (RentalCommand.Api ReportsController) is a thin,
  * read-only reporting layer over existing portfolio data: every report is a pure GET that
  * projects to one of the DTOs in `RentalCommand.Api/DTOs/ReportsDtos.cs`. Portfolio scope is
- * implicit (the JWT `portfolioId` claim), so it never travels as a request parameter.
+ * implicit in the server-validated workspace context, so it never travels as a request parameter.
  *
  * The catalog (`GET /reports/catalog`) drives the UI: it lists every report grouped by category,
  * with the endpoint to call, which params it accepts, and whether it's `external` (served by an
@@ -26,7 +26,10 @@ export type ReportParamKey =
 	| 'propertyIds'
 	| 'year'
 	| 'ownerId'
-	| 'days';
+	| 'days'
+	| 'skip'
+	| 'take'
+	| 'sort';
 
 export interface ReportCatalogEntry {
 	/** Stable report key, e.g. "rent-roll" — also the URL segment in /reports/[report]. */
@@ -65,6 +68,11 @@ export interface ReportRequestParams {
 	year?: number;
 	/** Forward-looking window in days (lease-expirations). */
 	days?: number;
+	/** Server-side row window for paged reports. */
+	skip?: number;
+	take?: number;
+	/** Server-side sort, with a leading "-" for descending. */
+	sort?: string;
 }
 
 // ── Report response DTOs (match ReportsDtos.cs exactly) ─────────────────────────────────────────────
@@ -72,8 +80,11 @@ export interface ReportRequestParams {
 export type LeaseStatusName = string;
 
 export interface RentRollRow {
-	leaseId: number;
-	leaseNumber: string;
+	leaseManagementId: number;
+	tenantAccountId: number;
+	agreementId: number;
+	relationshipNumber: string;
+	agreementNumber: string;
 	propertyId: number;
 	propertyName: string;
 	unitId: number;
@@ -82,9 +93,8 @@ export interface RentRollRow {
 	tenantName: string;
 	monthlyRent: number;
 	securityDeposit: number;
-	startDate: string;
-	endDate: string;
-	status: LeaseStatusName;
+	startOn: string;
+	endOn: string | null;
 	statusName: string;
 }
 
@@ -98,23 +108,23 @@ export interface RentRollResponse {
 
 export interface RentLedgerEntry {
 	date: string;
-	type: string; // "Charge" | "Payment"
+	type: string; // "Charge" | "Receipt" | "Credit"
 	description: string;
 	charge: number;
-	payment: number;
+	credit: number;
 	balance: number;
 }
 
 export interface RentLedgerLease {
-	leaseId: number;
-	leaseNumber: string;
+	leaseManagementId: number;
+	relationshipNumber: string;
 	propertyId: number;
 	propertyName: string;
 	unitNumber: string;
 	tenantName: string;
 	entries: RentLedgerEntry[];
 	totalCharged: number;
-	totalPaid: number;
+	totalCredits: number;
 	balance: number;
 }
 
@@ -123,7 +133,7 @@ export interface RentLedgerResponse {
 	to: string;
 	leases: RentLedgerLease[];
 	totalCharged: number;
-	totalPaid: number;
+	totalCredits: number;
 	totalBalance: number;
 }
 
@@ -135,8 +145,8 @@ export interface DelinquencyBuckets {
 }
 
 export interface DelinquencyRow {
-	leaseId: number;
-	leaseNumber: string;
+	leaseManagementId: number;
+	relationshipNumber: string;
 	propertyId: number;
 	propertyName: string;
 	unitNumber: string;
@@ -168,6 +178,10 @@ export interface CashFlowResponse {
 	from: string;
 	to: string;
 	months: CashFlowMonth[];
+	totalCount: number;
+	skip: number;
+	take: number;
+	sort: string;
 	totalIncome: number;
 	totalExpense: number;
 	totalNet: number;
@@ -232,17 +246,18 @@ export interface OccupancyResponse {
 }
 
 export interface LeaseExpirationRow {
-	leaseId: number;
-	leaseNumber: string;
+	leaseManagementId: number;
+	agreementId: number;
+	relationshipNumber: string;
+	agreementNumber: string;
 	propertyId: number;
 	propertyName: string;
 	unitNumber: string;
-	tenantId: number;
+	tenantId: number | null;
 	tenantName: string;
 	monthlyRent: number;
-	endDate: string;
+	endOn: string;
 	daysUntilExpiry: number;
-	status: LeaseStatusName;
 	statusName: string;
 }
 
@@ -256,8 +271,8 @@ export interface LeaseExpirationsResponse {
 
 export interface SecurityDepositRegisterRow {
 	depositId: number;
-	leaseId: number;
-	leaseNumber: string;
+	leaseManagementId: number;
+	relationshipNumber: string;
 	propertyId: number;
 	propertyName: string;
 	unitNumber: string;
@@ -275,6 +290,10 @@ export interface SecurityDepositRegisterRow {
 export interface SecurityDepositRegisterResponse {
 	generatedAt: string;
 	rows: SecurityDepositRegisterRow[];
+	totalCount: number;
+	skip: number;
+	take: number;
+	sort: string;
 	totalHeld: number;
 	totalDeductions: number;
 	totalReturned: number;
@@ -296,6 +315,7 @@ export interface Vendor1099Response {
 	year: number;
 	rows: Vendor1099Row[];
 	totalPaid: number;
+	needsW9Count: number;
 	threshold: number;
 }
 
@@ -384,6 +404,9 @@ export function buildReportQuery(params: ReportRequestParams, accepts: ReportPar
 	}
 	if (set.has('year') && params.year != null) qs.set('year', String(params.year));
 	if (set.has('days') && params.days != null) qs.set('days', String(params.days));
+	if (set.has('skip') && params.skip != null) qs.set('skip', String(params.skip));
+	if (set.has('take') && params.take != null) qs.set('take', String(params.take));
+	if (set.has('sort') && params.sort) qs.set('sort', params.sort);
 
 	const s = qs.toString();
 	return s ? `?${s}` : '';
@@ -426,7 +449,7 @@ export const reports = {
 	leaseExpirations: (params: ReportRequestParams = {}) =>
 		fetchApi<LeaseExpirationsResponse>(`/reports/lease-expirations${buildReportQuery(params, ['days', 'propertyIds'])}`),
 	securityDeposits: (params: ReportRequestParams = {}) =>
-		fetchApi<SecurityDepositRegisterResponse>(`/reports/security-deposits${buildReportQuery(params, ['propertyIds'])}`),
+		fetchApi<SecurityDepositRegisterResponse>(`/reports/security-deposits${buildReportQuery(params, ['propertyIds', 'skip', 'take', 'sort'])}`),
 	vendor1099: (params: ReportRequestParams = {}) =>
 		fetchApi<Vendor1099Response>(`/reports/vendor-1099${buildReportQuery(params, ['year'])}`),
 	ownerDistributions: (params: ReportRequestParams = {}) =>

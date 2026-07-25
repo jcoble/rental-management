@@ -383,6 +383,11 @@
 
   .m3-page-frame {
     @apply box-border h-full overflow-y-auto px-4 pb-20 pt-4 sm:px-6;
+    scrollbar-gutter: stable;
+  }
+
+  .m3-route-transition {
+    scrollbar-gutter: stable;
   }
 
   .m3-surface-panel {

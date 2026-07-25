@@ -40,7 +40,8 @@ class WorkOrderUnitAwareLoaderScreen extends ConsumerWidget {
         if (unitId != null) {
           return UnitCommandCenterLoaderScreen(
             unitId: unitId,
-            initialTab: UnitCommandCenterTab.work,
+            initialTab: UnitCommandCenterTab.maintenance,
+            initialView: UnitCommandCenterView.workOrders,
             initialWorkOrder: workOrder,
           );
         }
@@ -104,7 +105,8 @@ class _WorkOrderShellTargetLoaderScreenState
             openUnitCommandCenter(
               context,
               unitId: unitId,
-              initialTab: UnitCommandCenterTab.work,
+              initialTab: UnitCommandCenterTab.maintenance,
+              initialView: UnitCommandCenterView.workOrders,
               workOrder: workOrder,
             );
           });

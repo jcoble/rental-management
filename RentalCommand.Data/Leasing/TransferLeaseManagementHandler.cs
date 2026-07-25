@@ -1,0 +1,309 @@
+using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+using RentalCommand.Core.Atomic;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
+using RentalCommand.Core.Leasing;
+
+namespace RentalCommand.Data.Leasing;
+
+public sealed class TransferLeaseManagementHandler
+    : IAtomicCommandHandler<TransferLeaseManagementCommand, TransferLeaseManagementResult>,
+      IAtomicReplayAuthorizer<TransferLeaseManagementCommand>
+{
+    public async Task<TransferLeaseManagementResult> HandleAsync(
+        TransferLeaseManagementCommand command,
+        IAtomicWriteAttempt attempt,
+        CancellationToken ct)
+    {
+        Validate(command);
+
+        // Every transfer takes Unit locks in numeric order, then the source relationship lock.
+        // Opposing transfers therefore cannot deadlock by taking their Unit locks in reverse order.
+        foreach (var unitId in new[] { command.SourceUnitId, command.DestinationUnitId }.OrderBy(id => id))
+        {
+            await attempt.Locking.AcquireAsync(AtomicLockResource.Unit, unitId, ct);
+        }
+        await attempt.Locking.AcquireAsync(
+            AtomicLockResource.LeaseManagement, command.SourceLeaseManagementId, ct);
+
+        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+        if (!await AuthorizedTransfer(command, attempt.Persistence, times.WallClockUtc).AnyAsync(ct))
+        {
+            throw Unauthorized();
+        }
+
+        var destinationPropertyId = await attempt.Persistence.Query<Unit>()
+            .Where(unit => unit.Id == command.DestinationUnitId
+                && unit.PortfolioId == command.PortfolioId && unit.DeletedAt == null)
+            .Select(unit => unit.PropertyId)
+            .SingleAsync(ct);
+        var sourceVersion = await attempt.Leasing.ResolveAuthoredDocumentSourceVersionAsync(
+            command.PortfolioId, destinationPropertyId, 0, command.DestinationDocumentTemplateId,
+            command.CreatedByUserId, times.WallClockUtc, ct);
+        if (!sourceVersion.Resolved)
+        {
+            return Error(command, new AtomicTransferLeaseManagementMutationResult(
+                TransferLeaseManagementOutcome.InvalidTemplate, command.TransferPublicId,
+                0, null, 0, 0, 0, null, 0, null, null, 0, 0,
+                [], [], [], [], [], [], []));
+        }
+
+        var mutation = await attempt.Leasing.TransferLeaseManagementAsync(
+            command, sourceVersion.DocumentSourceVersionId, times.WallClockUtc, ct);
+        if (mutation.Outcome != TransferLeaseManagementOutcome.Transferred)
+        {
+            return Error(command, mutation);
+        }
+
+        StageAudits(command, mutation, attempt, times.WallClockUtc);
+        attempt.StageOutbox(new OutboxMessage
+        {
+            PortfolioId = command.PortfolioId,
+            MessageType = "data-update",
+            Payload = JsonSerializer.Serialize(new
+            {
+                entityType = nameof(LeaseManagement),
+                entityId = mutation.DestinationLeaseManagementId,
+                data = new
+                {
+                    eventName = "lease-management-transferred",
+                    transferPublicId = mutation.TransferPublicId,
+                    sourceLeaseManagementId = command.SourceLeaseManagementId,
+                    sourceUnitId = command.SourceUnitId,
+                    destinationLeaseManagementId = mutation.DestinationLeaseManagementId,
+                    destinationUnitId = command.DestinationUnitId,
+                },
+            }),
+            IdempotencyKey = command.DeliveryIdempotencyKey,
+            CreatedAtUtc = times.WallClockUtc,
+            NextAttemptAtUtc = times.WallClockUtc,
+        });
+
+        return Success(command, mutation);
+    }
+
+    public async Task AuthorizeReplayAsync(
+        TransferLeaseManagementCommand command,
+        IAtomicPersistenceSession persistence,
+        CancellationToken ct)
+    {
+        Validate(command);
+        var nowUtc = await persistence.ReadDatabaseClockUtcAsync(ct);
+        if (!await AuthorizedTransfer(command, persistence, nowUtc).AnyAsync(ct))
+        {
+            throw Unauthorized();
+        }
+    }
+
+    private static IQueryable<LeaseManagement> AuthorizedTransfer(
+        TransferLeaseManagementCommand command,
+        IAtomicPersistenceSession persistence,
+        DateTime nowUtc)
+    {
+        var source = PossessionCommandAuthorization.AuthorizedRelationships(
+            persistence,
+            command.PortfolioId,
+            command.SourceLeaseManagementId,
+            command.SourceUnitId,
+            command.CreatedByUserId,
+            command.AuthSessionId,
+            command.AccessContextId,
+            command.ExpectedAccessRevision,
+            nowUtc);
+        var destination = PossessionCommandAuthorization.AuthorizedUnits(
+            persistence,
+            command.PortfolioId,
+            command.DestinationUnitId,
+            command.CreatedByUserId,
+            command.AuthSessionId,
+            command.AccessContextId,
+            command.ExpectedAccessRevision,
+            nowUtc);
+        return source.Where(_ => destination.Any());
+    }
+
+    private static void Validate(TransferLeaseManagementCommand command)
+    {
+        PossessionCommandAuthorization.ValidateShape(
+            command.PortfolioId,
+            command.SourceLeaseManagementId,
+            command.SourceUnitId,
+            command.CreatedByUserId,
+            command.AuthSessionId,
+            command.AccessContextId,
+            command.ExpectedAccessRevision,
+            command.DeliveryIdempotencyKey);
+        if (command.DestinationUnitId <= 0
+            || command.DestinationUnitId == command.SourceUnitId
+            || command.TransferPublicId == Guid.Empty
+            || command.EffectiveOn == default
+            || command.DestinationDocumentTemplateId <= 0
+            || string.IsNullOrWhiteSpace(command.TransferReason)
+            || command.TransferReason.Trim().Length > 500
+            || (command.GiveDestinationPossessionNow
+                && (string.IsNullOrWhiteSpace(command.PossessionAgreementExceptionReason)
+                    || command.PossessionAgreementExceptionReason.Trim().Length > 1000))
+            || (!command.GiveDestinationPossessionNow
+                && !string.IsNullOrWhiteSpace(command.PossessionAgreementExceptionReason)))
+        {
+            throw new ArgumentException(
+                "Destination Unit, transfer date, template, reason, and possession policy are invalid.");
+        }
+    }
+
+    private static void StageAudits(
+        TransferLeaseManagementCommand command,
+        AtomicTransferLeaseManagementMutationResult mutation,
+        IAtomicWriteAttempt attempt,
+        DateTime nowUtc)
+    {
+        attempt.StageSemanticEvent(Audit(command, nameof(LeaseManagement),
+            command.SourceLeaseManagementId, AuditLogOperation.Updated,
+            "Source possession closed by Unit transfer."), nowUtc);
+        attempt.StageSemanticEvent(Audit(command, nameof(LeaseManagement),
+            mutation.DestinationLeaseManagementId, AuditLogOperation.Created,
+            "Destination relationship created by Unit transfer."), nowUtc);
+        attempt.StageSemanticEvent(Audit(command, nameof(TenantAccount),
+            mutation.DestinationTenantAccountId, AuditLogOperation.Created,
+            "Destination tenant account opened by Unit transfer."), nowUtc);
+        attempt.StageSemanticEvent(Audit(command, nameof(LeaseAgreement),
+            mutation.DestinationAgreementId, AuditLogOperation.Created,
+            "Destination Agreement draft copied with cross-relationship transfer provenance."), nowUtc);
+        attempt.StageSemanticEvent(Audit(command, nameof(UnitOperationalPeriod),
+            mutation.TurnoverPeriodId, AuditLogOperation.Created,
+            "Source Unit turnover started by Unit transfer."), nowUtc);
+
+        foreach (var id in mutation.EndedSourcePartyIds)
+        {
+            attempt.StageSemanticEvent(Audit(command, nameof(LeaseManagementParty), id,
+                AuditLogOperation.Updated, "Source party membership ended by Unit transfer."), nowUtc);
+        }
+        foreach (var id in mutation.DestinationPartyIds)
+        {
+            attempt.StageSemanticEvent(Audit(command, nameof(LeaseManagementParty), id,
+                AuditLogOperation.Created, "Effective party membership continued on destination relationship."), nowUtc);
+        }
+        foreach (var id in mutation.DestinationSignerIds)
+        {
+            attempt.StageSemanticEvent(Audit(command, nameof(LeaseAgreementSigner), id,
+                AuditLogOperation.Created, "Destination Agreement signer draft copied from governing Agreement."), nowUtc);
+        }
+        foreach (var id in mutation.RevokedSourceAccessIds)
+        {
+            attempt.StageSemanticEvent(Audit(command, nameof(TenantUserAccess), id,
+                AuditLogOperation.Updated, "Source relationship access revoked by Unit transfer."), nowUtc);
+        }
+        foreach (var id in mutation.DestinationAccessIds)
+        {
+            attempt.StageSemanticEvent(Audit(command, nameof(TenantUserAccess), id,
+                AuditLogOperation.Created, "Tenant access continued on destination relationship."), nowUtc);
+        }
+        if (mutation.DestinationSecurityDepositAccountId is int depositAccountId)
+        {
+            attempt.StageSemanticEvent(Audit(command, nameof(SecurityDepositAccount), depositAccountId,
+                AuditLogOperation.Created, "Destination security-deposit account opened by Unit transfer."), nowUtc);
+        }
+        if (mutation.TenantLedgerEntryIds.Count > 0)
+        {
+            attempt.StageSemanticEvent(Audit(command, nameof(TenantAccount), mutation.SourceTenantAccountId,
+                AuditLogOperation.Updated,
+                $"Balance transferred out under {mutation.TransferPublicId}."), nowUtc);
+            attempt.StageSemanticEvent(Audit(command, nameof(TenantAccount),
+                mutation.DestinationTenantAccountId, AuditLogOperation.Updated,
+                $"Balance transferred in under {mutation.TransferPublicId}."), nowUtc);
+        }
+        if (mutation.SecurityDepositEntryIds.Count > 0
+            && mutation.SourceSecurityDepositAccountId is int sourceDepositId
+            && mutation.DestinationSecurityDepositAccountId is int destinationDepositId)
+        {
+            attempt.StageSemanticEvent(Audit(command, nameof(SecurityDepositAccount), sourceDepositId,
+                AuditLogOperation.Updated,
+                $"Security deposit transferred out under {mutation.TransferPublicId}."), nowUtc);
+            attempt.StageSemanticEvent(Audit(command, nameof(SecurityDepositAccount), destinationDepositId,
+                AuditLogOperation.Updated,
+                $"Security deposit transferred in under {mutation.TransferPublicId}."), nowUtc);
+        }
+    }
+
+    private static AtomicSemanticAudit Audit(
+        TransferLeaseManagementCommand command,
+        string entityType,
+        int entityId,
+        AuditLogOperation operation,
+        string reason) => new(
+        command.PortfolioId,
+        entityType,
+        entityId,
+        operation,
+        UserId: command.CreatedByUserId,
+        ChangeReason: reason);
+
+    private static TransferLeaseManagementResult Success(
+        TransferLeaseManagementCommand command,
+        AtomicTransferLeaseManagementMutationResult mutation) => new(
+        mutation.Outcome,
+        mutation.TransferPublicId,
+        command.SourceLeaseManagementId,
+        command.SourceUnitId,
+        mutation.DestinationLeaseManagementId,
+        command.DestinationUnitId,
+        mutation.DestinationTenantAccountId,
+        mutation.DestinationAgreementId,
+        mutation.DestinationSecurityDepositAccountId,
+        mutation.TurnoverPeriodId,
+        mutation.SourcePossessionReturnedAtUtc,
+        mutation.DestinationPossessionGivenAtUtc,
+        mutation.CarriedTenantBalance,
+        mutation.CarriedSecurityDeposit,
+        mutation.EndedSourcePartyIds,
+        mutation.DestinationPartyIds,
+        mutation.DestinationSignerIds,
+        mutation.RevokedSourceAccessIds,
+        mutation.DestinationAccessIds,
+        mutation.TenantLedgerEntryIds,
+        mutation.SecurityDepositEntryIds,
+        null);
+
+    private static TransferLeaseManagementResult Error(
+        TransferLeaseManagementCommand command,
+        AtomicTransferLeaseManagementMutationResult mutation) => new(
+        mutation.Outcome,
+        mutation.TransferPublicId,
+        command.SourceLeaseManagementId,
+        command.SourceUnitId,
+        mutation.DestinationLeaseManagementId,
+        command.DestinationUnitId,
+        mutation.DestinationTenantAccountId,
+        mutation.DestinationAgreementId,
+        mutation.DestinationSecurityDepositAccountId,
+        mutation.TurnoverPeriodId,
+        mutation.SourcePossessionReturnedAtUtc,
+        mutation.DestinationPossessionGivenAtUtc,
+        0,
+        0,
+        [], [], [], [], [], [], [],
+        mutation.Outcome switch
+        {
+            TransferLeaseManagementOutcome.AlreadyTransferred =>
+                "This source relationship has already been transferred.",
+            TransferLeaseManagementOutcome.SourcePossessionNotOpen =>
+                "Source possession must be open before a Unit transfer.",
+            TransferLeaseManagementOutcome.DestinationUnavailable =>
+                "The destination Unit is unavailable or has an open operational period.",
+            TransferLeaseManagementOutcome.GoverningAgreementRequired =>
+                "An executed governing Agreement is required to prepare the destination Agreement draft.",
+            TransferLeaseManagementOutcome.TenantAccountNotOpen =>
+                "The source Tenant Account must be open.",
+            TransferLeaseManagementOutcome.InvalidTemplate =>
+                "The destination lease template is not active for the destination property.",
+            TransferLeaseManagementOutcome.InvalidHousehold =>
+                "The effective household, signer set, or business date is invalid for transfer.",
+            TransferLeaseManagementOutcome.InvalidFinancialState =>
+                "Pending payment/autopay work or an invalid deposit balance must be resolved before transfer.",
+            _ => "The Unit transfer could not be completed.",
+        });
+
+    private static UnauthorizedAccessException Unauthorized() => new(
+        "The source relationship or destination Unit is not authorized in the current property scope.");
+}

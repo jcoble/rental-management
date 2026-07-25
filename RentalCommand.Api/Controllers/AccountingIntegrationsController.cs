@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using RentalCommand.Api.Auth;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Models.Accounting;
 
@@ -23,7 +25,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/integrations/accounting")]
 [Produces("application/json")]
-[Authorize(Roles = "Admin,Manager")]
+[Authorize(Policy = CapabilityPolicy.Prefix + CapabilityKeys.IntegrationsManage)]
 public class AccountingIntegrationsController : ManagementControllerBase
 {
     private readonly AccountingConnectionService _service;
@@ -57,16 +59,27 @@ public class AccountingIntegrationsController : ManagementControllerBase
     [ProducesResponseType(typeof(StartAccountingConnectResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
-    public async Task<ActionResult<StartAccountingConnectResponse>> Connect(string provider, CancellationToken ct)
+    public async Task<ActionResult<StartAccountingConnectResponse>> Connect(
+        string provider,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
         if (!TryParseProvider(provider, out var parsed))
         {
             return BadRequest(new { error = $"Unknown accounting provider '{provider}'." });
         }
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+        {
+            return BadRequest(new
+            {
+                error = "Idempotency-Key is required and must be at most 128 characters.",
+            });
+        }
 
         try
         {
-            var authorizeUrl = await _service.StartConnectAsync(GetPortfolioId(), parsed, BuildCallbackUrl(), ct);
+            var authorizeUrl = await _service.StartConnectAsync(
+                GetWorkspaceReadScope(), parsed, BuildCallbackUrl(), operationKey, ct);
             return Ok(new StartAccountingConnectResponse { AuthorizeUrl = authorizeUrl });
         }
         catch (AccountingNotConfiguredException ex)
@@ -120,14 +133,24 @@ public class AccountingIntegrationsController : ManagementControllerBase
     [HttpPost("{provider}/disconnect")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<IActionResult> Disconnect(string provider, CancellationToken ct)
+    public async Task<IActionResult> Disconnect(
+        string provider,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancellationToken ct)
     {
         if (!TryParseProvider(provider, out var parsed))
         {
             return BadRequest(new { error = $"Unknown accounting provider '{provider}'." });
         }
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+        {
+            return BadRequest(new
+            {
+                error = "Idempotency-Key is required and must be at most 128 characters.",
+            });
+        }
 
-        await _service.DisconnectAsync(GetPortfolioId(), parsed, ct);
+        await _service.DisconnectAsync(GetWorkspaceReadScope(), parsed, operationKey, ct);
         return NoContent();
     }
 
@@ -138,14 +161,23 @@ public class AccountingIntegrationsController : ManagementControllerBase
     public async Task<IActionResult> Direction(
         string provider,
         [FromBody] SetAccountingDirectionRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
         CancellationToken ct)
     {
         if (!TryParseProvider(provider, out var parsed))
         {
             return BadRequest(new { error = $"Unknown accounting provider '{provider}'." });
         }
+        if (!TryValidateIdempotencyKey(idempotencyKey, out var operationKey))
+        {
+            return BadRequest(new
+            {
+                error = "Idempotency-Key is required and must be at most 128 characters.",
+            });
+        }
 
-        await _service.SetDirectionAsync(GetPortfolioId(), parsed, request.PullEnabled, request.PushEnabled, ct);
+        await _service.SetDirectionAsync(
+            GetWorkspaceReadScope(), parsed, request.PullEnabled, request.PushEnabled, operationKey, ct);
         return NoContent();
     }
 
@@ -219,8 +251,29 @@ public class AccountingIntegrationsController : ManagementControllerBase
 
         try
         {
-            var promoted = await _service.ConfirmMappingAsync(GetPortfolioId(), parsed, GetUserId(), request, ct);
-            return Ok(new { promoted });
+            return Ok(await _service.ConfirmMappingAsync(GetPortfolioId(), parsed, GetUserId(), request, ct));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    [HttpPost("{provider}/mappings/promotions/{continuationId:guid}/continue")]
+    [ProducesResponseType(typeof(ContinueAccountingMappingPromotionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> ContinueMappingPromotion(
+        string provider,
+        Guid continuationId,
+        [FromBody] ContinueAccountingMappingPromotionRequest request,
+        CancellationToken ct)
+    {
+        if (!TryParseProvider(provider, out var parsed))
+            return BadRequest(new { error = $"Unknown accounting provider '{provider}'." });
+        try
+        {
+            return Ok(await _service.ContinueMappingPromotionAsync(
+                GetPortfolioId(), parsed, GetUserId(), continuationId, request, ct));
         }
         catch (InvalidOperationException ex)
         {

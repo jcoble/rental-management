@@ -2,15 +2,23 @@ using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Data;
+using RentalCommand.Data.Atomic;
+using RentalCommand.Data.Auditing;
+using RentalCommand.Data.Documents;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
+[Collection(MigratedPostgreSqlCollection.Name)]
 public sealed class DocumentTemplateServiceTests : IDisposable
 {
     private const int PortfolioId = 1;
@@ -20,14 +28,29 @@ public sealed class DocumentTemplateServiceTests : IDisposable
     private readonly DocumentTemplateFieldCatalog _catalog = new();
     private readonly InMemoryFileStorage _files = new();
     private readonly DocumentTemplateService _sut;
+    private readonly WorkspaceReadScope _scope;
+    private readonly ServiceProvider _services;
+    private readonly MigratedPostgreSqlFixture _postgres;
 
-    public DocumentTemplateServiceTests()
+    public DocumentTemplateServiceTests(MigratedPostgreSqlFixture postgres)
     {
+        _postgres = postgres;
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
-        _sut = new DocumentTemplateService(_ctx.Db, _catalog, _files, TimeProvider.System);
+        _scope = _ctx.Db.SeedAdministratorScope(PortfolioId, nameof(DocumentTemplateServiceTests));
+        _services = CreateAtomicServices(builder =>
+            builder.UseSqlite(_ctx.ConnectionString)
+                .AddInterceptors(SqliteDatabaseClockInterceptor.Instance));
+        _sut = new DocumentTemplateService(
+            _ctx.Db, _catalog, _files,
+            _services.GetRequiredService<IPendingFileUploadStore>(), TimeProvider.System,
+            _services.GetRequiredService<IAtomicUnitOfWork>());
     }
 
-    public void Dispose() => _ctx.Dispose();
+    public void Dispose()
+    {
+        _services.Dispose();
+        _ctx.Dispose();
+    }
 
     [Fact]
     public void LeaseCatalog_IncludesRentAndRequiredTenantSigningFields()
@@ -56,9 +79,10 @@ public sealed class DocumentTemplateServiceTests : IDisposable
 
         _commands.Clear();
         var result = await _sut.ListPageAsync(
-            PortfolioId,
+            _scope,
             DocumentTemplateKind.Lease,
             status: null,
+            propertyId: null,
             new ListQuery { Sort = "name", Skip = 1, Take = 1 });
 
         result.TotalCount.Should().Be(3);
@@ -76,16 +100,56 @@ public sealed class DocumentTemplateServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ListPageAsync_FiltersPropertyCompatibilityAndCountsFieldsInPagedSql()
+    {
+        var selectedProperty = SeedProperty("Selected");
+        var otherProperty = SeedProperty("Other");
+        var global = SeedTemplate("Global lease", DocumentTemplateKind.Lease);
+        var selected = SeedTemplate("Selected lease", DocumentTemplateKind.Lease, selectedProperty.Id);
+        SeedTemplate("Other lease", DocumentTemplateKind.Lease, otherProperty.Id);
+        _ctx.Db.DocumentTemplateFields.Add(new DocumentTemplateField
+        {
+            PortfolioId = PortfolioId,
+            DocumentTemplateId = selected.Id,
+            FieldKey = "lease.monthlyRent",
+            Label = "Monthly rent",
+            Kind = DocumentTemplateFieldKind.Currency,
+            SignerRole = DocumentTemplateSignerRole.None,
+            PageNumber = 1,
+            WidthPct = 10,
+            HeightPct = 10,
+        });
+        _ctx.Db.SaveChanges();
+
+        _commands.Clear();
+        var result = await _sut.ListPageAsync(
+            _scope,
+            DocumentTemplateKind.Lease,
+            status: null,
+            propertyId: selectedProperty.Id,
+            new ListQuery { Sort = "name", Take = 20 });
+
+        result.Items.Select(t => t.Id).Should().BeEquivalentTo([global.Id, selected.Id]);
+        result.Items.Single(t => t.Id == selected.Id).FieldCount.Should().Be(1);
+        result.Items.Should().NotContain(t => t.PropertyId == otherProperty.Id);
+        _commands.Should().HaveCount(2);
+        _commands.Should().Contain(sql =>
+            sql.Contains("PropertyId", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("DocumentTemplateFields", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task AddFieldAsync_UsesCatalogLabelAndRequiredFlag_AndBumpsTemplateVersion()
     {
-        var template = (await _sut.CreateAsync(PortfolioId, new CreateDocumentTemplateRequest
+        var template = (await _sut.CreateAsync(_scope, new CreateDocumentTemplateRequest
         {
             Kind = DocumentTemplateKind.Lease,
             RenderMode = DocumentTemplateRenderMode.Overlay,
             Name = "Dad's lease",
-        })).Value!;
+        }, "create-dads-lease")).Value!;
 
-        var result = await _sut.AddFieldAsync(PortfolioId, template.Id, new CreateDocumentTemplateFieldRequest
+        var result = await _sut.AddFieldAsync(_scope, template.Id, new CreateDocumentTemplateFieldRequest
         {
             FieldKey = "lease.signature.tenant",
             Kind = DocumentTemplateFieldKind.Signature,
@@ -95,7 +159,7 @@ public sealed class DocumentTemplateServiceTests : IDisposable
             YPct = 0.72,
             WidthPct = 0.2,
             HeightPct = 0.04,
-        });
+        }, "add-dads-signature");
 
         result.Outcome.Should().Be(DocumentTemplateOperationOutcome.Success);
         result.Value!.Label.Should().Be("Tenant signature");
@@ -103,19 +167,27 @@ public sealed class DocumentTemplateServiceTests : IDisposable
 
         var storedTemplate = await _ctx.Db.DocumentTemplates.FirstAsync(t => t.Id == template.Id);
         storedTemplate.Version.Should().Be(2);
+        var storedField = await _ctx.Db.DocumentTemplateFields.SingleAsync(
+            field => field.DocumentTemplateId == template.Id);
+        storedField.PortfolioId.Should().Be(PortfolioId);
+        var fieldAudit = await _ctx.Db.AtomicAuditLogs.SingleAsync(audit =>
+            audit.EntityType == nameof(DocumentTemplateField) && audit.EntityId == storedField.Id);
+        fieldAudit.PortfolioId.Should().Be(PortfolioId);
+        fieldAudit.NewValues.Should().Contain($"\"PortfolioId\":{PortfolioId}")
+            .And.Contain($"\"DocumentTemplateId\":{template.Id}");
     }
 
     [Fact]
     public async Task AddFieldAsync_RejectsCoordinateExtentPastRightEdge()
     {
-        var template = (await _sut.CreateAsync(PortfolioId, new CreateDocumentTemplateRequest
+        var template = (await _sut.CreateAsync(_scope, new CreateDocumentTemplateRequest
         {
             Kind = DocumentTemplateKind.Lease,
             RenderMode = DocumentTemplateRenderMode.Overlay,
             Name = "Overlay lease",
-        })).Value!;
+        }, "create-overlay-lease")).Value!;
 
-        var result = await _sut.AddFieldAsync(PortfolioId, template.Id, new CreateDocumentTemplateFieldRequest
+        var result = await _sut.AddFieldAsync(_scope, template.Id, new CreateDocumentTemplateFieldRequest
         {
             FieldKey = "tenant.fullName",
             Label = "Tenant",
@@ -125,7 +197,7 @@ public sealed class DocumentTemplateServiceTests : IDisposable
             YPct = 0.1,
             WidthPct = 0.1,
             HeightPct = 0.03,
-        });
+        }, "add-invalid-overlay-field");
 
         result.Outcome.Should().Be(DocumentTemplateOperationOutcome.Invalid);
         result.Error.Should().Contain("right edge");
@@ -135,10 +207,20 @@ public sealed class DocumentTemplateServiceTests : IDisposable
     [Fact]
     public async Task UploadPdfAsync_StoresSourceFileAndCreatesDraftOverlayLeaseTemplate()
     {
+        await using var postgres = await _postgres.CreateContextAsync();
+        var scope = postgres.Db.SeedAdministratorScope(
+            PortfolioId, nameof(UploadPdfAsync_StoresSourceFileAndCreatesDraftOverlayLeaseTemplate));
+        await using var services = CreateAtomicServices(builder =>
+            builder.UseNpgsql(postgres.ConnectionString));
+        var files = new InMemoryFileStorage();
+        var sut = new DocumentTemplateService(
+            postgres.Db, _catalog, files,
+            services.GetRequiredService<IPendingFileUploadStore>(), TimeProvider.System,
+            services.GetRequiredService<IAtomicUnitOfWork>());
         await using var content = new MemoryStream("%PDF-1.7 sample"u8.ToArray());
 
-        var result = await _sut.UploadPdfAsync(
-            PortfolioId,
+        var result = await sut.UploadPdfAsync(
+            scope,
             content,
             "dad-lease.pdf",
             "application/pdf",
@@ -146,7 +228,8 @@ public sealed class DocumentTemplateServiceTests : IDisposable
             "Dad's lease",
             "Use this for the main portfolio.",
             defaultForPortfolio: true,
-            propertyId: null);
+            propertyId: null,
+            idempotencyKey: "upload-dads-lease");
 
         result.Outcome.Should().Be(DocumentTemplateOperationOutcome.Success);
         result.Value!.Name.Should().Be("Dad's lease");
@@ -156,29 +239,82 @@ public sealed class DocumentTemplateServiceTests : IDisposable
         result.Value.OriginalStoredFileId.Should().NotBeNull();
         result.Value.DefaultForPortfolio.Should().BeTrue();
 
-        var stored = await _ctx.Db.StoredFiles.SingleAsync(f => f.Id == result.Value.OriginalStoredFileId);
+        var stored = await postgres.Db.StoredFiles.SingleAsync(
+            f => f.Id == result.Value.OriginalStoredFileId);
         stored.PortfolioId.Should().Be(PortfolioId);
         stored.EntityType.Should().Be("DocumentTemplate");
         stored.EntityId.Should().Be(result.Value.Id);
         stored.FileName.Should().Be("dad-lease.pdf");
         stored.ContentType.Should().Be("application/pdf");
         stored.FileSize.Should().Be(content.Length);
-        _files.Contains(stored.FilePath).Should().BeTrue();
+        files.Contains(stored.FilePath).Should().BeTrue();
     }
 
-    private void SeedTemplate(string name, DocumentTemplateKind kind)
+    private static ServiceProvider CreateAtomicServices(
+        Action<DbContextOptionsBuilder> configureDatabase)
     {
-        _ctx.Db.DocumentTemplates.Add(new DocumentTemplate
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddScoped<ICurrentActor, SystemCurrentActor>();
+        services.AddAtomicPersistenceKernel();
+        services.AddAtomicCommandHandler<
+            RentalCommand.Core.Documents.CreateDocumentTemplateCommand,
+            RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+            CreateDocumentTemplateHandler>();
+        services.AddAtomicCommandHandler<
+            RentalCommand.Core.Documents.FinalizeDocumentTemplateUploadCommand,
+            RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+            FinalizeDocumentTemplateUploadHandler>();
+        services.AddAtomicCommandHandler<
+            RentalCommand.Core.Documents.AddDocumentTemplateFieldCommand,
+            RentalCommand.Core.Documents.DocumentTemplateMutationResult,
+            AddDocumentTemplateFieldHandler>();
+        services.AddDbContext<RentalCommandDbContext>((provider, builder) =>
+        {
+            configureDatabase(builder);
+            builder.UseAtomicPersistenceKernel(provider);
+        });
+        services.AddScoped<IPendingFileUploadStore, PendingFileUploadStore>();
+        return services.BuildServiceProvider();
+    }
+
+    private Property SeedProperty(string name)
+    {
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = name,
+            AddressLine1 = "1 Test St",
+            City = "Akron",
+            State = "OH",
+            PostalCode = "44301",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _ctx.Db.Properties.Add(property);
+        _ctx.Db.SaveChanges();
+        return property;
+    }
+
+    private DocumentTemplate SeedTemplate(
+        string name,
+        DocumentTemplateKind kind,
+        int? propertyId = null)
+    {
+        var template = new DocumentTemplate
         {
             PortfolioId = PortfolioId,
             Kind = kind,
             Status = DocumentTemplateStatus.Draft,
             RenderMode = DocumentTemplateRenderMode.Overlay,
             Name = name,
+            PropertyId = propertyId,
             CreatedAtUtc = DateTime.UtcNow,
             UpdatedAtUtc = DateTime.UtcNow,
-        });
+        };
+        _ctx.Db.DocumentTemplates.Add(template);
         _ctx.Db.SaveChanges();
+        return template;
     }
 
     private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
@@ -214,6 +350,15 @@ public sealed class DocumentTemplateServiceTests : IDisposable
             await content.CopyToAsync(ms, ct);
             _files[key] = ms.ToArray();
             return key;
+        }
+
+        public async Task UploadAtAsync(
+            Stream content, string storagePath, string fileName, string contentType,
+            CancellationToken ct = default)
+        {
+            using var ms = new MemoryStream();
+            await content.CopyToAsync(ms, ct);
+            _files[storagePath] = ms.ToArray();
         }
 
         public Task<Stream> DownloadAsync(string path, CancellationToken ct = default)

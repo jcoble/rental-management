@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/auth/auth_controller.dart';
 import '../../core/models/models.dart';
 import '../../core/widgets/mobile_grid_controls.dart';
 import '../../core/widgets/mobile_m3_list.dart';
@@ -174,7 +175,8 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
       openUnitCommandCenter(
         context,
         unitId: unitId,
-        initialTab: UnitCommandCenterTab.work,
+        initialTab: UnitCommandCenterTab.maintenance,
+        initialView: UnitCommandCenterView.workOrders,
         workOrder: wo,
       );
       return;
@@ -204,6 +206,10 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
     final currentFilter = _filter;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final auth = ref.watch(authControllerProvider);
+    final canManageWork =
+        auth is AuthStateAuthenticated &&
+        auth.capabilities.contains('work.manage');
 
     return Scaffold(
       appBar: mobileDomainRootAppBar(
@@ -214,14 +220,16 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
       ),
       floatingActionButton: MobileQuickActionFab(
         heroTag: 'work-orders-fab',
-        primaryAction: MobileQuickAction(
-          label: 'New work order',
-          icon: Icons.add,
-          onPressed: () => _showCreateSheet(context),
-        ),
+        primaryAction: canManageWork
+            ? MobileQuickAction(
+                label: 'New work order',
+                icon: Icons.add,
+                onPressed: () => _showCreateSheet(context),
+              )
+            : null,
         onChat: () => openMobileAssistant(context),
         onRecord: () => openMobileRecord(context),
-        onScan: () => openMobileScan(context),
+        onScan: () => openAuthorizedMobileScan(context, ref),
       ),
       body: Column(
         children: [

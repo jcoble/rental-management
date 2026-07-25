@@ -4,6 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/auth/auth_controller.dart';
+import '../../core/auth/auth_models.dart';
+import '../../core/auth/auth_repository.dart';
 import '../../core/auth/google_sign_in_service.dart';
 import '../../core/api/api_exception.dart';
 
@@ -25,6 +27,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   bool _isResendingVerification = false;
   bool _resendSucceeded = false;
   String? _errorMessage;
+  List<EffectiveAccessContextOption> _accessContexts = const [];
+  int? _selectedAccessContextId;
 
   /// True when the last login failed specifically because the email is unverified
   /// (the API marks it with an `EMAIL_NOT_VERIFIED:` prefix). Drives the resend UI.
@@ -53,8 +57,22 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     try {
       await ref
           .read(authControllerProvider.notifier)
-          .login(_emailController.text.trim(), _passwordController.text);
+          .login(
+            _emailController.text.trim(),
+            _passwordController.text,
+            accessContextId: _selectedAccessContextId,
+          );
       // Router redirect handles navigation on success.
+    } on AccessContextSelectionRequiredException catch (e) {
+      if (mounted) {
+        setState(() {
+          _accessContexts = e.contexts;
+          _selectedAccessContextId = e.contexts.length == 1
+              ? e.contexts.single.accessContextId
+              : null;
+          _errorMessage = 'Choose the workspace you want to open.';
+        });
+      }
     } on ApiException catch (e) {
       if (mounted) {
         final unverified = e.message.contains('EMAIL_NOT_VERIFIED');
@@ -191,6 +209,35 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                           textAlign: TextAlign.center,
                         ),
                         const SizedBox(height: 32),
+
+                        if (_accessContexts.length > 1) ...[
+                          DropdownButtonFormField<int>(
+                            initialValue: _selectedAccessContextId,
+                            decoration: const InputDecoration(
+                              labelText: 'Workspace',
+                              prefixIcon: Icon(Icons.business_outlined),
+                            ),
+                            items: _accessContexts
+                                .map(
+                                  (context) => DropdownMenuItem<int>(
+                                    value: context.accessContextId,
+                                    child: Text(context.workspaceName),
+                                  ),
+                                )
+                                .toList(growable: false),
+                            onChanged: _busy
+                                ? null
+                                : (value) => setState(
+                                    () => _selectedAccessContextId = value,
+                                  ),
+                            validator: (_) =>
+                                _accessContexts.length > 1 &&
+                                    _selectedAccessContextId == null
+                                ? 'Choose a workspace'
+                                : null,
+                          ),
+                          const SizedBox(height: 16),
+                        ],
 
                         TextFormField(
                           controller: _emailController,
