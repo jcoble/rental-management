@@ -11,6 +11,12 @@ import 'package:rental_command/features/vendors/vendors_models.dart';
 import 'package:rental_command/features/vendors/vendors_repository.dart';
 
 void main() {
+  test('vendor completed-job counts use explicit singular and plural copy', () {
+    expect(vendorCompletedJobsLabel(0), '0 completed jobs');
+    expect(vendorCompletedJobsLabel(1), '1 completed job');
+    expect(vendorCompletedJobsLabel(3), '3 completed jobs');
+  });
+
   testWidgets('vendors screen drills into detail for edit and delete actions', (
     tester,
   ) async {

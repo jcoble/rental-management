@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/presentation/date_labels.dart';
 import '../home/mobile_domain_chrome.dart';
 import 'analytics_repository.dart';
 
@@ -394,10 +395,7 @@ class _BarChartPainter extends CustomPainter {
       );
       canvas.drawRRect(expRect, expensePaint);
 
-      // Month label (last 3 chars, e.g. "Jan")
-      final label = point.month.length > 3
-          ? point.month.substring(point.month.length - 3)
-          : point.month;
+      final label = shortMonthLabel(point.month);
       final tp = TextPainter(
         text: TextSpan(text: label, style: labelStyle),
         textDirection: TextDirection.ltr,
