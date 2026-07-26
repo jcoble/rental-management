@@ -1,0 +1,46 @@
+lease_id,unit_id,tenant_id,tenant_name,tenant_email,start_date,end_date,monthly_rent_cents,deposit_cents,origin,lifecycle_scenario
+L001,U001,T001,Dana Garcia,tenant.001@example.local,2026-02-01,2027-12-31,157500,157500,Opening lease scan,continuing resident through year-end
+L002,U002,T002,Gray Lewis,tenant.002@example.local,2026-03-01,2027-12-31,120000,120000,Opening lease scan,continuing resident through year-end
+L003,U003,T003,Jordan Reed,tenant.003@example.local,2026-04-01,2027-10-31,172500,172500,Opening lease scan,owner sale; clean move-out; no replacement
+L004,U004,T004,Morgan Adams,tenant.004@example.local,2026-05-01,2027-12-31,135000,135000,Opening lease scan,continuing resident through year-end
+L005,U005,T005,Parker Flores,tenant.005@example.local,2026-06-01,2027-02-28,187500,187500,Opening lease scan,ordinary non-renewal; clean move-out
+L006,U006,T006,Sage King,tenant.006@example.local,2026-01-01,2027-12-31,150000,150000,Opening lease scan,continuing resident through year-end
+L007,U007,T007,Val Price,tenant.007@example.local,2026-02-01,2027-12-31,112500,112500,Opening lease scan,continuing resident through year-end
+L008,U008,T008,Yara Brooks,tenant.008@example.local,2026-03-01,2027-08-31,165000,165000,Opening lease scan,tenant-requested unit transfer to U040
+L009,U009,T009,Bennett Garcia,tenant.009@example.local,2026-04-01,2027-12-31,127500,127500,Opening lease scan,continuing resident through year-end
+L010,U010,T010,Elena Lewis,tenant.010@example.local,2026-05-01,2027-12-31,180000,180000,Opening lease scan,continuing resident through year-end
+L011,U011,T011,Hector Reed,tenant.011@example.local,2026-06-01,2027-12-31,142500,142500,Opening lease scan,continuing resident through year-end
+L012,U012,T012,Keira Adams,tenant.012@example.local,2026-01-01,2027-12-31,105000,105000,Opening lease scan,continuing resident through year-end
+L013,U013,T013,Nolan Flores,tenant.013@example.local,2026-02-01,2027-12-31,157500,157500,Opening lease scan,continuing resident through year-end
+L014,U014,T014,Rina King,tenant.014@example.local,2026-03-01,2027-05-31,120000,120000,Opening lease scan,non-renewal; turnover damage withholding
+L015,U015,T015,Uri Price,tenant.015@example.local,2026-04-01,2027-12-31,172500,172500,Opening lease scan,continuing resident through year-end
+L016,U016,T016,Avery Brooks,tenant.016@example.local,2026-05-01,2027-12-31,135000,135000,Opening lease scan,continuing resident through year-end
+L017,U017,T017,Dana Garcia,tenant.017@example.local,2026-06-01,2027-06-20,187500,187500,Opening lease scan,"delinquency, notice, eviction, collections"
+L018,U018,T018,Gray Lewis,tenant.018@example.local,2026-01-01,2027-12-31,150000,150000,Opening lease scan,continuing resident through year-end
+L019,U019,T019,Jordan Reed,tenant.019@example.local,2026-02-01,2027-12-31,112500,112500,Opening lease scan,continuing resident through year-end
+L020,U020,T020,Morgan Adams,tenant.020@example.local,2026-03-01,2027-12-31,165000,165000,Opening lease scan,continuing resident through year-end
+L021,U021,T021,Parker Flores,tenant.021@example.local,2026-04-01,2027-12-31,137500,137500,Opening lease scan,continuing resident through year-end
+L022,U022,T022,Sage King,tenant.022@example.local,2026-05-01,2027-08-31,190000,190000,Opening lease scan,renewal declined; month-long vacancy
+L023,U023,T023,Val Price,tenant.023@example.local,2026-06-01,2027-12-31,152500,152500,Opening lease scan,continuing resident through year-end
+L024,U024,T024,Yara Brooks,tenant.024@example.local,2026-01-01,2027-12-31,115000,115000,Opening lease scan,continuing resident through year-end
+L025,U025,T025,Bennett Garcia,tenant.025@example.local,2026-02-01,2027-12-31,167500,167500,Opening lease scan,continuing resident through year-end
+L026,U026,T026,Elena Lewis,tenant.026@example.local,2026-03-01,2027-12-31,130000,130000,Opening lease scan,continuing resident through year-end
+L027,U027,T027,Hector Reed,tenant.027@example.local,2026-04-01,2027-12-31,182500,182500,Opening lease scan,continuing resident through year-end
+L028,U028,T028,Keira Adams,tenant.028@example.local,2026-05-01,2027-12-31,145000,145000,Opening lease scan,continuing resident through year-end
+L029,U029,T029,Nolan Flores,tenant.029@example.local,2026-06-01,2027-12-31,197500,197500,Opening lease scan,continuing resident through year-end
+L030,U030,T030,Rina King,tenant.030@example.local,2026-01-01,2027-12-31,160000,160000,Opening lease scan,continuing resident through year-end
+L031,U031,T031,Uri Price,tenant.031@example.local,2026-02-01,2027-12-31,122500,122500,Opening lease scan,continuing resident through year-end
+L032,U032,T032,Avery Brooks,tenant.032@example.local,2026-03-01,2027-12-31,175000,175000,Opening lease scan,continuing resident through year-end
+L033,U033,T033,Dana Garcia,tenant.033@example.local,2026-04-01,2027-12-31,137500,137500,Opening lease scan,continuing resident through year-end
+L034,U034,T034,Gray Lewis,tenant.034@example.local,2026-05-01,2027-11-30,190000,190000,Opening lease scan,winter move-out; mid-month replacement
+L035,U035,T035,Jordan Reed,tenant.035@example.local,2026-06-01,2027-12-31,152500,152500,Opening lease scan,continuing resident through year-end
+L036,U036,T036,Morgan Adams,tenant.036@example.local,2026-01-01,2027-12-31,115000,115000,Opening lease scan,continuing resident through year-end
+L037,U005,T037,Parker Flores,tenant.037@example.local,2027-04-01,2028-03-31,187500,187500,Application + lease scan,post-turnover replacement
+L038,U014,T038,Sage King,tenant.038@example.local,2027-07-01,2028-06-30,120000,120000,Application + lease scan,post-turnover replacement
+L039,U017,T039,Val Price,tenant.039@example.local,2027-08-01,2028-07-31,187500,187500,Application + lease scan,post-eviction replacement
+L040,U022,T040,Yara Brooks,tenant.040@example.local,2027-10-01,2028-09-30,190000,190000,Application + lease scan,post-vacancy replacement
+L041,U040,T008,Yara Brooks,tenant.008@example.local,2027-09-01,2028-08-31,145000,145000,Application + lease scan,unit transfer destination
+L042,U034,T042,Elena Lewis,tenant.042@example.local,2027-12-15,2028-12-14,190000,190000,Application + lease scan,mid-month winter replacement
+L043,U037,T043,Hector Reed,tenant.043@example.local,2027-02-01,2028-01-31,167500,167500,Application + lease scan,opening vacancy leased
+L044,U038,T044,Keira Adams,tenant.044@example.local,2027-03-15,2028-03-14,130000,130000,Application + lease scan,opening vacancy leased mid-month
+L045,U039,T045,Nolan Flores,tenant.045@example.local,2027-06-01,2028-05-31,182500,182500,Application + lease scan,opening vacancy leased
