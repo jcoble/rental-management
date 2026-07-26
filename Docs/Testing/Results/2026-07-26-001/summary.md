@@ -717,14 +717,24 @@
   Direct PostgreSQL reads matched all reviewed values and proved Properties, Units, Tenants,
   LeaseManagements, LeaseAgreements, and TenantAccounts advanced atomically from 16 to 17.
 - Evidence: `mobile/azure/scn-0017-opening-lease-confirmed.png`.
+- `SCN-0018` exercised another 13,210-pixel camera JPEG through the fixed native gallery path.
+  Draft 23 preserved the exact planned SHA-256
+  `45b09f4242bc5897408616c1588025d9473a2830ac9128f2bacda35af4f76156`.
+  The canonical review manually completed all 13 low-confidence fields, including tenant contacts,
+  Unit Main's two bedrooms, one bathroom, 1,080 square feet, possession, $1,500 rent and deposit,
+  $75 late fee, and due day 1.
+- Confirmation created River House / Unit Main / Gray Lewis / `SCN-0018`. The executed artifact
+  retained the same source SHA, direct PostgreSQL reads matched every reviewed value, and all six
+  aggregate counts advanced atomically from 17 to 18.
+- Evidence: `mobile/azure/scn-0018-opening-lease-confirmed.png`.
 
 ## Checkpoint 2026-07-26
 
 - Status: isolated run initialized; January 3 opening-lease batch in progress
 - Completed run rows: 1 / 1,996
-- Uploaded and confirmed scan assets: 17 / 953
+- Uploaded and confirmed scan assets: 18 / 953
 - Pilot scan confirmations: 1
-- Official scan confirmations: 17
+- Official scan confirmations: 18
 - Findings and safety blockers: 18
 - Current blockers: none for the January 3 opening-lease batch.
-- Next action: execute `SCN-0018` through `SCN-0024`, then execute the January 3 rent receipts.
+- Next action: execute `SCN-0019` through `SCN-0024`, then execute the January 3 rent receipts.
