@@ -6,8 +6,8 @@
 - Notion task: `TSK-754`
 - Environment: `https://redacted-host.example.invalid`
 - Initial source SHA: `ccac9ee24331bf42695772d745fb3a5a6992d10c`
-- Current verified API source SHA: `c56902e973f045b1e4f7f8e4c7ef28bcd2725972`
-- Current verified mobile source SHA: `f9e914dfacbe6e36d9fbd7103377e526c1cf8197`
+- Current verified API source SHA: `5c50ad1308e09252f8cbbc5ee9314b4c8f3f00a4`
+- Current verified mobile source SHA: `5c50ad1308e09252f8cbbc5ee9314b4c8f3f00a4`
 - Planner: `Docs/Testing/YearSimulation2027/index.html`
 - Schedule: `Docs/Testing/YearSimulation2027/schedule.csv`
 - Corpus: `/Users/blackcolours/dev/work/rental-management/output/pdf/tsk-749-year-simulation-scan-corpus`
@@ -643,6 +643,47 @@
   - `mobile/azure/d019-d020-existing-property-unit-fixed.png`
   - `mobile/azure/scn-0022-opening-lease-confirmed.png`
 
+### TSK-754-D021 — New-property lease scan reused the Unit command center relationship
+
+- Status: Fixed and verified end to end in the live Azure stack
+- Severity: Blocking scan-targeting defect
+- Reproduction:
+  - Open the scan workflow from an occupied Unit command center.
+  - Upload and review `SCN-0023`, then choose Create new, Multiple rentals, and create Val Price.
+  - Complete every exposed property, tenant, Unit, and lease field and import the signed lease.
+- Expected:
+  - Create Valley Duplex, Unit A, Val Price, and a new rental relationship from the reviewed scan.
+- Actual:
+  - The first confirmation attempt was rejected because the draft retained Union Duplex / Unit B
+    capture context.
+  - After property and Unit sentinels were added, the API still rejected the import with
+    `The selected rental relationship does not match this property and Unit.`
+- Safety evidence:
+  - Both rejected attempts left all six aggregate counts unchanged at 21 Properties and 22 Units,
+    Tenants, LeaseManagements, LeaseAgreements, and TenantAccounts.
+  - Draft 28 remained Reviewing and no partial Valley Duplex aggregate existed.
+- Root cause:
+  - The mobile override map sent the reviewed create-new premises but also forwarded extracted
+    tenant, relationship, account, and agreement ids from the Unit command center.
+  - The earlier API build also fell back to captured relationship ids even when the reviewer sent
+    an explicit new premises target.
+- Fix:
+  - Create-new lease reviews now send zero sentinels for property, Unit, tenant, rental
+    relationship, tenant account, and agreement ids.
+  - The API no longer falls back to captured relationship/account/agreement ids after an explicit
+    premises override.
+- Verification:
+  - Passed all 14 focused Flutter scan-lease contract tests.
+  - Passed both focused API capture-context tests.
+  - Exact commit `5c50ad1308e09252f8cbbc5ee9314b4c8f3f00a4` was installed in the x86_64
+    Android emulator and deployed to the healthy API container.
+  - Retrying the still-populated draft created Valley Duplex / Unit A / Val Price / `SCN-0023`.
+  - PostgreSQL matched the reviewed address, tenant contacts, four bedrooms, one bathroom,
+    1,655 square feet, possession and term dates, $1,525 rent and deposit, $75 late fee, and due
+    day 1. Counts advanced atomically to 22 Properties and 23 of every dependent aggregate.
+- Evidence:
+  - `mobile/azure/scn-0023-opening-lease-confirmed.png`
+
 ## Tooling and maintenance observations
 
 - The Azure Flutter build reports that Kotlin's current built-in version will be unsupported by a
@@ -819,14 +860,22 @@
 - Properties correctly remained 21 while Units, Tenants, LeaseManagements, LeaseAgreements, and
   TenantAccounts advanced atomically from 21 to 22.
 - Evidence: `mobile/azure/scn-0022-opening-lease-confirmed.png`.
+- `SCN-0023` exercised the second MultiRental bootstrap through the native Android PDF picker.
+  Draft 28 retained the planned SHA-256
+  `f231275d5369667dedd3bdee0750c0cbeb35285953666587700692f3fce7a929`.
+- After D021 was fixed on both mobile and API, confirmation created Valley Duplex / Unit A /
+  Val Price / `SCN-0023`. Direct PostgreSQL reads matched every reviewed property, tenant, Unit,
+  possession, and financial field. Properties advanced from 21 to 22, while Units, Tenants,
+  LeaseManagements, LeaseAgreements, and TenantAccounts advanced atomically from 22 to 23.
+- Evidence: `mobile/azure/scn-0023-opening-lease-confirmed.png`.
 
 ## Checkpoint 2026-07-26
 
 - Status: isolated run initialized; January 3 opening-lease batch in progress
 - Completed run rows: 1 / 1,996
-- Uploaded and confirmed scan assets: 22 / 953
+- Uploaded and confirmed scan assets: 23 / 953
 - Pilot scan confirmations: 1
-- Official scan confirmations: 22
-- Findings and safety blockers: 20
+- Official scan confirmations: 23
+- Findings and safety blockers: 21
 - Current blockers: none for the January 3 opening-lease batch.
-- Next action: complete `SCN-0023` and `SCN-0024`, then execute the January 3 rent receipts.
+- Next action: complete `SCN-0024`, then execute the January 3 rent receipts.
