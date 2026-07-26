@@ -143,9 +143,17 @@ void main() {
       expect(overrides['documentTemplateId'], 91);
     });
 
-    test('create mode sends propertyId:0 + address, never a real id', () {
+    test('create mode clears the captured rental chain', () {
       final overrides = buildOverridesMap(
-        editedFields: {'monthly_rent': '1500'},
+        editedFields: {
+          'monthly_rent': '1500',
+          // A Unit-command-center scan carries these extracted relationship
+          // ids. The explicit create target must win over all of them.
+          'tenant_id': '51',
+          'lease_management_id': '52',
+          'tenant_account_id': '53',
+          'lease_agreement_id': '54',
+        },
         isPayment: false,
         isWorkOrder: false,
         isLease: true,
@@ -169,6 +177,10 @@ void main() {
 
       expect(overrides['propertyId'], 0);
       expect(overrides['unitId'], 0);
+      expect(overrides['tenantId'], 0);
+      expect(overrides['leaseManagementId'], 0);
+      expect(overrides['tenantAccountId'], 0);
+      expect(overrides['leaseAgreementId'], 0);
       expect(overrides['rentalStructure'], 'SingleRental');
       expect(overrides['propertyName'], 'Maple Court');
       expect(overrides['propertyAddress'], '123 Maple St');
