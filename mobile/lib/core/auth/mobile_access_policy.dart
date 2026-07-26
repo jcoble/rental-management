@@ -238,7 +238,9 @@ bool canOpenMobilePath({
     if (path == '/notifications' || path.startsWith('/messages/')) {
       return canOpenInboxHub(capabilities);
     }
-    if (path.startsWith('/scan/')) return canUseGlobalScan(capabilities);
+    if (path == '/scans' || path.startsWith('/scan/')) {
+      return canUseGlobalScan(capabilities);
+    }
     return false;
   }
 
@@ -285,7 +287,7 @@ bool canOpenMobilePath({
       path.startsWith('/messages/')) {
     return canOpenInboxHub(capabilities);
   }
-  if (path.startsWith('/scan/')) {
+  if (path == '/scans' || path.startsWith('/scan/')) {
     return canUseGlobalScan(capabilities);
   }
   return false;

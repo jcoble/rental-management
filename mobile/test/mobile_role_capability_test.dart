@@ -179,6 +179,33 @@ void main() {
     expect(canUseAssistant({'reports.read'}), isTrue);
   });
 
+  test('scan-capable staff can open history without widening owner access', () {
+    expect(
+      canOpenMobilePath(
+        experience: WorkspaceExperience.management,
+        capabilities: const {'rentals.manage'},
+        path: '/scans',
+      ),
+      isTrue,
+    );
+    expect(
+      canOpenMobilePath(
+        experience: WorkspaceExperience.leasing,
+        capabilities: const {'leasing.agreements.prepare'},
+        path: '/scans',
+      ),
+      isTrue,
+    );
+    expect(
+      canOpenMobilePath(
+        experience: WorkspaceExperience.owner,
+        capabilities: const {'rentals.manage'},
+        path: '/scans',
+      ),
+      isFalse,
+    );
+  });
+
   test('mutation actions require both capability and matching experience', () {
     expect(
       canUseMobileCapabilityAction(
