@@ -150,6 +150,26 @@
     visible values were checked against the planner.
   - Evidence: `browser/d005-scn-0002-fixed-confirmed.png`.
 
+### TSK-754-D006 — One camera-image extraction failed transiently
+
+- Status: Observed once; identical-file retry succeeded
+- Severity: Non-blocking after controlled retry
+- Reproduction:
+  - Upload `SCN-0012` after the preceding nine opening-lease scans completed.
+  - The draft moved to Failed and the UI displayed `We could not read that document. Try a clearer
+    photo or the PDF.`
+- Safety evidence:
+  - The failed draft created no Property, Unit, Tenant, LeaseManagement, LeaseAgreement, or
+    TenantAccount.
+  - All six aggregate counts remained exactly 11.
+- Retry:
+  - Re-uploading the byte-identical source image immediately afterward extracted Lakeview Home,
+    304 Lakeview Street, Columbus, OH 43212.
+  - The corrected review was completed and confirmed; all six aggregate counts advanced to 12.
+- Follow-up:
+  - Preserve the failed and confirmed drafts for provider-failure-rate analysis during the
+    remaining camera-image corpus.
+
 ## Pilot scan proof
 
 - `SCN-0001` was uploaded twice: the first attempt intentionally established the missing-credential
@@ -194,15 +214,26 @@
 - The failed D005 reproduction remains as draft 2 in Reviewing while corrected draft 3 is
   Confirmed. It did not create any business aggregate.
 - Evidence: `browser/d005-scn-0002-fixed-confirmed.png`.
+- `SCN-0003` through `SCN-0012` were then executed through the real browser upload, review, and
+  confirmation screens. Every review field was populated, including rental structure, unit
+  details, tenant contacts, emergency contact, lease dates, rent, deposit, late fee, due day,
+  notes, and executed-agreement choice.
+- The resulting property sequence exactly matches the planner: Arbor House, Briar Cottage, Cedar
+  Bend, Dover House, Elm Haven, Franklin Place, Grove House, Hawthorne Home, Ivy House, Juniper
+  Place, Kingston House, and Lakeview Home.
+- After the final confirmation, portfolio 2 contained exactly 12 Properties, 12 Units, 12 Tenants,
+  12 LeaseManagements, 12 LeaseAgreements, and 12 TenantAccounts.
+- Evidence: `browser/run-20270102-01-opening-leases-complete.png`.
 
 ## Checkpoint 2026-07-26
 
-- Status: isolated run initialized; first two official scans confirmed
-- Completed run rows: 0 / 1,996
-- Uploaded and confirmed scan assets: 2 / 953
+- Status: isolated run initialized; January 2 opening-lease batch complete
+- Completed run rows: 1 / 1,996
+- Uploaded and confirmed scan assets: 12 / 953
 - Pilot scan confirmations: 1
-- Official scan confirmations: 2
-- Findings and safety blockers: 5
-- Current blocker: none; D005 is fixed and verified with the original source image.
-- Next action: complete the remaining 10 opening-lease confirmations in run row
-  `RUN-20270102-01`, then advance the row counter and reconcile the created rental graph.
+- Official scan confirmations: 12
+- Findings and safety blockers: 6
+- Current blocker: none; D006 was transient and its identical-file retry succeeded without a
+  partial mutation.
+- Next action: advance the simulation clock to 2027-01-03 and execute the next dated schedule rows,
+  including the planned rent receipts and opening-lease scans.
