@@ -768,6 +768,51 @@ public sealed class FoundationBaselinePostgreSqlTests
     }
 
     [Fact]
+    public void SafeSuppliedLegalNoticeTemplateV3_IsTwoDeterministicInsertsAndOneSetBasedUpgrade()
+    {
+        var migration = new AddSafeSuppliedLegalNoticeTemplateV3();
+        var builder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(AddSafeSuppliedLegalNoticeTemplateV3).GetMethod(
+                "Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(migration, [builder]);
+
+        var insert = builder.Operations.OfType<InsertDataOperation>().Should().ContainSingle().Subject;
+        insert.Table.Should().Be("SystemNoticeTemplateVersions");
+        insert.Values.GetLength(0).Should().Be(2);
+        insert.Values.GetLength(1).Should().Be(9);
+        insert.Values.Cast<object?>().Should().Contain(8).And.Contain(9);
+
+        var sql = builder.Operations.OfType<SqlOperation>().Should().ContainSingle().Subject.Sql;
+        var normalizedSql = Regex.Replace(sql, @"\s+", " ");
+        normalizedSql.Should().Contain("WITH qualifying AS MATERIALIZED")
+            .And.Contain("policy.\"Mode\" = 'Draft'")
+            .And.Contain("policy.\"Classification\" = 'Legal'")
+            .And.Contain("current_template.\"IsCustomized\" = FALSE")
+            .And.Contain("current_template.\"Subject\" = supplied_v2.\"Subject\"")
+            .And.Contain("current_template.\"Body\" = supplied_v2.\"Body\"")
+            .And.Contain("current_template.\"BasedOnSystemTemplateVersionId\" IN (6, 7)")
+            .And.Contain("current_template.\"JurisdictionReviewedAtUtc\" IS NULL")
+            .And.Contain("policy.\"JurisdictionReviewedAtUtc\" IS NULL")
+            .And.Contain("INSERT INTO \"WorkspaceNoticeTemplateVersions\"")
+            .And.Contain("UPDATE \"TenantNoticePolicies\" AS policy")
+            .And.Contain(
+                "policy.\"WorkspaceNoticeTemplateVersionId\" = qualifying.\"CurrentTemplateId\"");
+        normalizedSql.Should().NotContain("DELETE FROM")
+            .And.NotContain("DO $$")
+            .And.NotContain("LOOP");
+        builder.Operations.Should().HaveCount(2);
+
+        var down = typeof(AddSafeSuppliedLegalNoticeTemplateV3).GetMethod(
+            "Down", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        var act = () => down.Invoke(
+            migration,
+            [new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL")]);
+        act.Should().Throw<System.Reflection.TargetInvocationException>()
+            .WithInnerException<NotSupportedException>()
+            .WithMessage("*append-only*immutable workspace history*");
+    }
+
+    [Fact]
     public void EffectiveCapabilityScopeAuthority_IsApiOnlyCurrentAndFailClosed()
     {
         var delta = FoundationBaselinePostgreSql.EffectiveCapabilityScopeAuthoritySqlV20260725;

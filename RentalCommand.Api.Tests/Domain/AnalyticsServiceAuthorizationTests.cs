@@ -33,12 +33,12 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
     public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
-    public async Task GetOverviewAsync_UsesOneSqlStatementAndRestrictsMetricsToSelectedProperty()
+    public async Task GetOverviewAsync_PreservesDivergentRentValuesInOnePropertyScopedSqlStatement()
     {
         var selected = SeedProperty(
-            "Selected Property", "101", WorkOrderPriority.High, 125m, 1_200m, 400m);
+            "Selected Property", "101", WorkOrderPriority.High, 125m, 1_200m, 1_050m, 400m);
         SeedProperty(
-            "Forbidden Property", "202", WorkOrderPriority.Emergency, 875m, 2_400m, 600m);
+            "Forbidden Property", "202", WorkOrderPriority.Emergency, 875m, 2_400m, 2_100m, 600m);
         var scope = SeedSelectedPropertyScope(selected.Id, RoleProfileKeys.WorkspaceAdministrator);
         await _ctx.Db.SaveChangesAsync();
 
@@ -53,7 +53,7 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
         result.MonthRentCollected.Should().Be(400m);
         result.Overdue.Should().BeEquivalentTo(new { Count = 1, Amount = 800m });
         result.LeasesExpiring30.Should().Be(1);
-        result.MonthlyRecurringRent.Should().Be(1_200m);
+        result.MonthlyRecurringRent.Should().Be(1_050m);
         result.OpenWorkOrders.Should().ContainSingle();
         result.OpenWorkOrders.Single().Priority.Should().Be(WorkOrderPriority.High.ToString());
         result.OpenWorkOrders.Single().Count.Should().Be(1);
@@ -67,6 +67,8 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
         _commands[0].Should().Contain("vw_unit_occupancy");
         _commands[0].Should().Contain("TenantLedgerEntries");
         _commands[0].Should().Contain("vw_lease_agreement_status");
+        _commands[0].Should().Contain("JOIN");
+        _commands[0].Should().Contain("sum(");
         _commands[0].Should().Contain("WorkOrders");
         _commands[0].Should().Contain("Expenses");
     }
@@ -75,7 +77,7 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
     public async Task GetOverviewAsync_WithoutReportsReadCapabilityReturnsNoPropertyMetrics()
     {
         var property = SeedProperty(
-            "Leasing Property", "303", WorkOrderPriority.Normal, 500m, 1_000m, 0m);
+            "Leasing Property", "303", WorkOrderPriority.Normal, 500m, 1_000m, 1_000m, 0m);
         var scope = SeedSelectedPropertyScope(property.Id, RoleProfileKeys.LeasingAgent);
         await _ctx.Db.SaveChangesAsync();
 
@@ -97,7 +99,8 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
         string unitNumber,
         WorkOrderPriority priority,
         decimal expenseAmount,
-        decimal rentAmount,
+        decimal ledgerRentAmount,
+        decimal governingRentAmount,
         decimal collectedAmount)
     {
         var now = Now.UtcDateTime;
@@ -117,7 +120,7 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
             PortfolioId = PortfolioId,
             Property = property,
             UnitNumber = unitNumber,
-            MarketRent = rentAmount,
+            MarketRent = ledgerRentAmount,
             CreatedAt = now,
             UpdatedAt = now,
         };
@@ -136,6 +139,7 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
         var expense = new Expense
         {
             PortfolioId = PortfolioId,
+            OperationalScope = ExpenseOperationalScope.Unit,
             Property = property,
             Unit = unit,
             Description = $"{name} expense",
@@ -212,9 +216,9 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
             TermStartOn = termStart,
             TermEndOn = DateOnly.FromDateTime(now.AddDays(20)),
             GoverningFromOn = termStart,
-            BaseRentAmount = rentAmount,
+            BaseRentAmount = governingRentAmount,
             RentDueDay = 1,
-            SecurityDepositObligation = rentAmount,
+            SecurityDepositObligation = governingRentAmount,
             LateFeeAmount = 50m,
             GracePeriodDays = 5,
             Currency = "USD",
@@ -257,7 +261,7 @@ public sealed class AnalyticsServiceAuthorizationTests : IAsyncLifetime
             TenantAccountId = account.Id,
             EntryType = TenantLedgerEntryType.RentCharge,
             Direction = TenantLedgerDirection.Debit,
-            Amount = rentAmount,
+            Amount = ledgerRentAmount,
             Currency = "USD",
             EffectiveOn = new DateOnly(2026, 7, 1),
             DueOn = new DateOnly(2026, 7, 1),
