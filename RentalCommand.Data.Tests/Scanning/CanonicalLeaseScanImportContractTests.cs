@@ -27,6 +27,14 @@ public sealed class CanonicalLeaseScanImportContractTests
     }
 
     [Fact]
+    public void Signed_import_can_carry_the_reviewed_possession_fact()
+    {
+        typeof(ScanLeaseTargetData).GetProperty("PossessionGivenAtUtc")
+            .Should().NotBeNull(
+                "a signed historical lease must not become governing without an explicit possession fact");
+    }
+
+    [Fact]
     public void Unsigned_scan_uses_the_supplied_source_when_no_custom_template_is_selected()
     {
         var target = LeaseTarget(
