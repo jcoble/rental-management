@@ -648,4 +648,14 @@ void main() {
       contains('builder: (context, state) => const ScanListScreen()'),
     );
   });
+
+  test('scan history reopens leases in the complete canonical review', () {
+    final listSource = File(
+      'lib/features/scan/scan_list_screen.dart',
+    ).readAsStringSync();
+
+    expect(listSource, contains('ScanReviewScreen(draftId: draft.id)'));
+    expect(listSource, isNot(contains('GuidedRentalFlow.open')));
+    expect(listSource, isNot(contains("import 'guided_rental_flow.dart';")));
+  });
 }
