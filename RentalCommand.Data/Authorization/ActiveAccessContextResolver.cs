@@ -51,7 +51,11 @@ public sealed class ActiveAccessContextResolver : IActiveAccessContextResolver
                     accessContext.Id,
                     accessContext.PortfolioId,
                     accessContext.AccessRevision,
-                    accessContext.LastAuthorizedExperience,
+                    // A newly bootstrapped management context has no saved display preference
+                    // yet. The access envelope already exposes the membership default as the
+                    // active experience in that case, so runtime authorization must resolve the
+                    // same effective value instead of leaving management controllers with null.
+                    accessContext.LastAuthorizedExperience ?? membership.DefaultExperience,
                     membership == null ? null : membership.Id,
                     membership == null ? null : membership.DefaultExperience))
             .SingleOrDefaultAsync(cancellationToken);

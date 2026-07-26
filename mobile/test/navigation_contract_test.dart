@@ -3,6 +3,19 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('authenticated onboarding offers an account-switch escape', () {
+    final source = File(
+      'lib/features/onboarding/onboarding_choice_screen.dart',
+    ).readAsStringSync();
+
+    expect(source, contains("const Key('onboarding-sign-out')"));
+    expect(source, contains('Sign in with a different account'));
+    expect(
+      source,
+      contains('ref.read(authControllerProvider.notifier).logout()'),
+    );
+  });
+
   test('Today work orders use readable two-line status copy', () {
     final source = File('lib/features/home/home_shell.dart').readAsStringSync();
     final cardStart = source.indexOf('class _FieldQueueCard');

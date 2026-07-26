@@ -684,6 +684,47 @@
 - Evidence:
   - `mobile/azure/scn-0023-opening-lease-confirmed.png`
 
+### TSK-754-D022 — Authenticated onboarding had no account-switch escape
+
+- Status: Fixed and verified on the local physical Android phone
+- Severity: Blocking account-access defect
+- Reproduction:
+  - Sign in with an account whose workspace still requires the initial live-versus-example choice.
+  - Attempt to switch to the prepared year-simulation administrator account.
+- Expected:
+  - The authenticated onboarding screen offers a safe way to sign out and use a different account.
+- Actual:
+  - The screen exposed only the two onboarding choices, trapping the current authenticated identity.
+- Fix:
+  - Added `Sign in with a different account`, backed by the canonical auth-controller logout path.
+  - The action is disabled while another onboarding mutation is in progress.
+- Verification:
+  - The action was rendered on the physical Android phone and returned to authentication without
+    mutating either portfolio.
+
+### TSK-754-D023 — New management context returned null effective experience and 403s
+
+- Status: Fixed and verified through integration test and the live local API
+- Severity: Blocking authorization defect
+- Reproduction:
+  - Sign in as the newly prepared Workspace Administrator whose
+    `WorkspaceAccessContext.LastAuthorizedExperience` is null.
+  - Open the management Unit list or the existing-Property target picker during lease review.
+- Expected:
+  - Runtime authorization uses the membership's Management default, matching the access envelope
+    already displayed by both clients.
+- Actual:
+  - The access envelope displayed Management, but the active-context resolver returned null.
+    Management controllers then rejected otherwise-authorized requests with HTTP 403.
+- Fix:
+  - The resolver now coalesces the saved experience to the membership default inside the same
+    SQL-translated projection.
+- Verification:
+  - The focused PostgreSQL integration test passed all 18 cases and now asserts the resolved
+    Management experience.
+  - A fresh authenticated `/units/list-with-health/page` request returned HTTP 200 and the
+    Valley Duplex target picker returned the expected existing Property.
+
 ## Tooling and maintenance observations
 
 - The Azure Flutter build reports that Kotlin's current built-in version will be unsupported by a
@@ -868,14 +909,29 @@
   possession, and financial field. Properties advanced from 21 to 22, while Units, Tenants,
   LeaseManagements, LeaseAgreements, and TenantAccounts advanced atomically from 22 to 23.
 - Evidence: `mobile/azure/scn-0023-opening-lease-confirmed.png`.
+- `SCN-0024` exercised a second Unit lease under the existing Valley Duplex MultiRental Property
+  using the physical Android phone and a planned JPEG source.
+- Draft 30 and executed artifact 24 retained the exact planned SHA-256
+  `1267f26784d363cfff88e8d5bc126dd9ff196b11f80865d6626b3bf6e40bb58b`,
+  `image/jpeg` content type, and 839,354-byte length.
+- Confirmation created Valley Duplex / Unit B / Yara Brooks / `SCN-0024`. PostgreSQL matched the
+  reviewed 2-bedroom, 2-bathroom, 850-square-foot Unit, tenant and emergency contacts, possession
+  and term dates, $1,150 market rent/rent/deposit, $75 late fee, and due day 1. Properties remained
+  22 while Units, Tenants, LeaseManagements, LeaseAgreements, and TenantAccounts advanced
+  atomically from 23 to 24.
+- Evidence:
+  - `mobile/local-phone/scn-0024-before-import.png`
+  - `mobile/local-phone/scn-0024-opening-lease-confirmed.png`
 
 ## Checkpoint 2026-07-26
 
-- Status: isolated run initialized; January 3 opening-lease batch in progress
-- Completed run rows: 1 / 1,996
-- Uploaded and confirmed scan assets: 23 / 953
+- Status: isolated run initialized; January 3 opening-lease batch complete
+- Completed run rows: 2 / 1,996
+- Uploaded and confirmed scan assets: 24 / 953
 - Pilot scan confirmations: 1
-- Official scan confirmations: 23
-- Findings and safety blockers: 21
-- Current blockers: none for the January 3 opening-lease batch.
-- Next action: complete `SCN-0024`, then execute the January 3 rent receipts.
+- Official scan confirmations: 24
+- Findings and safety blockers: 23
+- Current blockers: rent-charge automation is disabled and the web Automations tab exposes no
+  control for the underlying setting.
+- Next action: restore atomic automation settings controls, generate January rent charges, prove
+  duplicate suppression, then execute the January 3 rent receipts.
