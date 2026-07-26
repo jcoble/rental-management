@@ -7,7 +7,7 @@
 - Environment: `https://redacted-host.example.invalid`
 - Initial source SHA: `ccac9ee24331bf42695772d745fb3a5a6992d10c`
 - Current verified API source SHA: `c56902e973f045b1e4f7f8e4c7ef28bcd2725972`
-- Current verified mobile source SHA: `364ee3c11e63a23ac2b480c610e3d0f417fd8387`
+- Current verified mobile source SHA: `f9e914dfacbe6e36d9fbd7103377e526c1cf8197`
 - Planner: `Docs/Testing/YearSimulation2027/index.html`
 - Schedule: `Docs/Testing/YearSimulation2027/schedule.csv`
 - Corpus: `/Users/blackcolours/dev/work/rental-management/output/pdf/tsk-749-year-simulation-scan-corpus`
@@ -542,6 +542,49 @@
     agreement 14, and all six aggregate counts remained exactly 15.
   - Evidence: `mobile/azure/d017-mobile-scan-history-fixed.png`.
 
+### TSK-754-D018 — Native gallery selection downscaled tall scans before upload
+
+- Status: Fixed and verified in the live Azure Android emulator
+- Severity: Blocking scan-accuracy defect
+- Reproduction:
+  - Choose the planned `SCN-0016` tall camera JPEG from the native gallery.
+  - Compare the selected source, stored upload, and extracted lease fields.
+- Expected:
+  - The native gallery path uploads the selected scan without discarding source pixels needed
+    for extraction.
+- Actual:
+  - The planned source was a 1360×13210 JPEG with SHA-256
+    `ecaf162120c302999fae6dbbfc6d27193450879ced7d27f14c84dd5f3ac90fb7`.
+  - Native `image_picker` constrained gallery selections to 1600 pixels and JPEG quality 80.
+  - Draft 20 stored a 165×1600 JPEG with SHA-256
+    `ffd9f496ddecb83becfc83ead2d457584004d4b152e26e18b7d3f874eec8c211`.
+  - Extraction returned unrelated existing Arbor House / Henry Cole details with high confidence.
+  - Draft 20 was rejected with reason
+    `Native gallery downscaled tall scan extraction unreliable`; no business aggregate was
+    created.
+- Fix:
+  - Preserve the original selected file for gallery and multi-image imports without resizing or
+    recompression.
+  - Keep camera JPEG quality at 90 while removing the camera dimension cap.
+  - Add a navigation/source contract test that rejects the former `maxHeight: 1600` path.
+- Verification:
+  - Passed: 43 focused Flutter scan tests.
+  - Passed: focused analysis of the two changed Flutter files with no issues.
+  - Exact source SHA `f9e914dfacbe6e36d9fbd7103377e526c1cf8197` was built under the Azure
+    heavy-work lock and installed as Android version code `75405` without clearing application
+    data or authentication.
+  - Draft 21 preserved the exact original SHA-256 and 1360×13210 dimensions.
+  - Extraction correctly identified Parkside Home, Avery Brooks, 372 Park Street, Columbus,
+    `SCN-0016`, and both agreement dates; unreadable values remained blank for manual review
+    instead of being hallucinated.
+  - The live native review populated every property, unit, tenant, possession, and lease field.
+  - Confirmation created Parkside Home / Unit Main / Avery Brooks / `SCN-0016`; direct
+    PostgreSQL reads matched the 3-bedroom, 2-bath, 850-square-foot unit, $1,350 rent and deposit,
+    $75 late fee, due day 1, and possession date `2026-05-01`.
+  - Properties, Units, Tenants, LeaseManagements, LeaseAgreements, and TenantAccounts advanced
+    atomically from 15 to 16, and draft 21 resolved to agreement 16.
+  - Evidence: `mobile/azure/d018-native-gallery-resolution-fixed.png`.
+
 ## Tooling and maintenance observations
 
 - The Azure Flutter build reports that Kotlin's current built-in version will be unsupported by a
@@ -657,14 +700,21 @@
   LeaseAgreements, and TenantAccounts remained exactly 15, proving confirmation did not create
   a duplicate or a partial aggregate.
 - Evidence: `mobile/azure/d017-mobile-scan-history-fixed.png`.
+- The corrected native gallery path then uploaded the original 1360×13210 `SCN-0016` JPEG
+  byte-for-byte. Its extracted identity and address fields matched the oracle, every omitted
+  property, unit, tenant, possession, and lease value was entered in the native review, and the
+  final Parkside Home unit screen showed Avery Brooks on active agreement `SCN-0016`.
+- Direct PostgreSQL reads matched every reviewed value and proved all six aggregate counts
+  advanced atomically from 15 to 16.
+- Evidence: `mobile/azure/d018-native-gallery-resolution-fixed.png`.
 
 ## Checkpoint 2026-07-26
 
 - Status: isolated run initialized; January 3 opening-lease batch in progress
 - Completed run rows: 1 / 1,996
-- Uploaded and confirmed scan assets: 15 / 953
+- Uploaded and confirmed scan assets: 16 / 953
 - Pilot scan confirmations: 1
-- Official scan confirmations: 15
-- Findings and safety blockers: 17
+- Official scan confirmations: 16
+- Findings and safety blockers: 18
 - Current blockers: none for the January 3 opening-lease batch.
-- Next action: resume `SCN-0016` through `SCN-0024`, then execute the January 3 rent receipts.
+- Next action: execute `SCN-0017` through `SCN-0024`, then execute the January 3 rent receipts.
