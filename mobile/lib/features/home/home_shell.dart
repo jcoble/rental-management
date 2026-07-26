@@ -14,6 +14,7 @@ import '../../core/theme/app_tokens.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
 import '../../core/models/models.dart';
+import '../../core/presentation/plain_english_labels.dart';
 import '../../core/push/push_service.dart';
 import '../../core/push/mobile_navigation_intent.dart';
 import '../../core/realtime/realtime_providers.dart';
@@ -2558,6 +2559,12 @@ class _MessageCard extends StatelessWidget {
   }
 }
 
+void _pushTodayDetail(BuildContext context, WidgetBuilder detailBuilder) {
+  Navigator.of(
+    context,
+  ).push<void>(MaterialPageRoute<void>(builder: detailBuilder));
+}
+
 class _FieldQueueCard extends StatelessWidget {
   const _FieldQueueCard({required this.workOrder});
 
@@ -2567,6 +2574,9 @@ class _FieldQueueCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
+    final propertyName = workOrder.propertyName?.trim() ?? '';
+    final status = plainEnglishLabel(workOrder.status);
+    final priority = plainEnglishLabel(workOrder.priority);
 
     return Card(
       child: ListTile(
@@ -2574,20 +2584,7 @@ class _FieldQueueCard extends StatelessWidget {
         onTap: () {
           Widget detailBuilder(BuildContext _) =>
               WorkOrderUnitAwareLoaderScreen(workOrderId: workOrder.id);
-          final shellNavigator = mobileShellNavigatorOf(context);
-          if (shellNavigator != null) {
-            shellNavigator.openTab(
-              MobileShellTabId.work,
-              destination: MobileDestinationId.workOrders,
-              detailBuilder: detailBuilder,
-            );
-            revealMobileShellIfDetached(context);
-            return;
-          }
-
-          Navigator.of(
-            context,
-          ).push<void>(MaterialPageRoute<void>(builder: detailBuilder));
+          _pushTodayDetail(context, detailBuilder);
         },
         leading: CircleAvatar(
           backgroundColor: _priorityBg(workOrder.priority, cs),
@@ -2607,11 +2604,10 @@ class _FieldQueueCard extends StatelessWidget {
         ),
         subtitle: Text(
           [
-            if (workOrder.propertyName != null) workOrder.propertyName!,
-            workOrder.status,
-            workOrder.priority,
-          ].join(' / '),
-          maxLines: 1,
+            if (propertyName.isNotEmpty) propertyName,
+            '$status · $priority priority',
+          ].join('\n'),
+          maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
         trailing: const Icon(Icons.chevron_right),
@@ -3150,6 +3146,11 @@ class _BulletRow extends StatelessWidget {
   }
 
   void _openTarget(BuildContext context, _BriefingTarget target) {
+    if (target.preserveTodayOrigin && target.detailBuilder != null) {
+      _pushTodayDetail(context, target.detailBuilder!);
+      return;
+    }
+
     final shellNavigator = mobileShellNavigatorOf(context);
     if (shellNavigator != null) {
       shellNavigator.openTab(
@@ -3197,6 +3198,7 @@ class _BulletRow extends StatelessWidget {
           tab: MobileShellTabId.work,
           destination: MobileDestinationId.workOrders,
           detailBuilder: (_) => WorkOrderUnitAwareLoaderScreen(workOrderId: id),
+          preserveTodayOrigin: true,
         );
       case 'Payment':
         return _BriefingTarget(
@@ -3275,12 +3277,14 @@ class _BriefingTarget {
     required this.destination,
     this.detailBuilder,
     this.fallbackBuilder,
+    this.preserveTodayOrigin = false,
   });
 
   final MobileShellTabId tab;
   final MobileDestinationId destination;
   final MobileDetailBuilder? detailBuilder;
   final WidgetBuilder? fallbackBuilder;
+  final bool preserveTodayOrigin;
 }
 
 // ---------------------------------------------------------------------------

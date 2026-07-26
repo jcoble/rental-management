@@ -654,6 +654,8 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
                 CreatedAt = now,
                 UpdatedAt = now,
             };
+            draft.Body =
+                "Hello {Taylor Recipient}. Workspace administrator: review this before sending.";
             var workItem = new TenantNoticeWorkItem
             {
                 PortfolioId = portfolio.Id,
@@ -676,6 +678,51 @@ public sealed class SuppliedNoticeTemplateBaselineTests : IAsyncLifetime
             workItemId = workItem.Id;
             baselineOutboxCount = await setup.OutboxMessages.CountAsync(row =>
                 row.PortfolioId == portfolio.Id);
+        }
+
+        await using (var unsafeContent = NewContext())
+        {
+            var foundation = new NotificationFoundationService(
+                unsafeContent, TimeProvider.System, Atomic);
+            var act = () => foundation.ApproveAndQueueAsync(
+                NoticeApprovalExecutionContext.ForAutomation(portfolioId),
+                draftId,
+                new RentalCommand.Api.DTOs.ApproveAndQueueNoticeRequest([
+                    NoticeDeliveryChannel.TenantPortal,
+                    NoticeDeliveryChannel.Email,
+                    NoticeDeliveryChannel.Sms,
+                ]),
+                new RentalCommand.Api.DTOs.TenantNoticeWorkFence(workItemId, claimToken),
+                $"integration:tenant-notice-work:{workItemId}:unsafe-content",
+                CancellationToken.None);
+
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage(NoticeDeliveryContentSafety.CorrectionMessage);
+        }
+
+        await using (var rejected = NewContext())
+        {
+            (await rejected.RenderedNotices.CountAsync(row => row.PortfolioId == portfolioId))
+                .Should().Be(0);
+            (await rejected.OutboxMessages.CountAsync(row => row.PortfolioId == portfolioId))
+                .Should().Be(baselineOutboxCount);
+            (await rejected.NoticeDeliveryEvidence.CountAsync(row => row.PortfolioId == portfolioId))
+                .Should().Be(0);
+            (await rejected.Conversations.CountAsync(row => row.PortfolioId == portfolioId))
+                .Should().Be(0);
+            (await rejected.ConversationMessages.CountAsync(row =>
+                row.Conversation!.PortfolioId == portfolioId)).Should().Be(0);
+            (await rejected.Notifications.CountAsync(row =>
+                row.PortfolioId == portfolioId && row.Type == "TenantNotice")).Should().Be(0);
+            var rejectedDraft = await rejected.NoticeDrafts.SingleAsync(row => row.Id == draftId);
+            rejectedDraft.Status.Should().Be("Draft");
+            rejectedDraft.ConversationId.Should().BeNull();
+            (await rejected.TenantNoticeWorkItems.SingleAsync(row => row.Id == workItemId)).Status
+                .Should().Be(TenantNoticeWorkStatus.Claimed);
+
+            rejectedDraft.Body = "Your rent is due soon.";
+            rejectedDraft.UpdatedAt = DateTime.UtcNow;
+            await rejected.SaveChangesAsync();
         }
 
         await using (var stale = NewContext())

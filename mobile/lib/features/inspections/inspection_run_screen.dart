@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/files/document_opener.dart';
+import '../home/mobile_quick_action_fab.dart';
 import 'inspections_list_screen.dart'
     show InspectionStatusChip, fmtInspectionDate;
 import 'inspections_models.dart';
@@ -75,8 +76,7 @@ class _InspectionRunScreenState extends ConsumerState<InspectionRunScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(item.label,
-                  style: Theme.of(sheetCtx).textTheme.titleMedium),
+              Text(item.label, style: Theme.of(sheetCtx).textTheme.titleMedium),
               const SizedBox(height: 12),
               TextField(
                 controller: controller,
@@ -135,8 +135,11 @@ class _InspectionRunScreenState extends ConsumerState<InspectionRunScreen> {
         fileName: picked.name,
         contentType: _mimeFromExtension(picked.name),
       );
-      final updated =
-          await repo.attachPhoto(widget.inspectionId, item.id, storedFileId);
+      final updated = await repo.attachPhoto(
+        widget.inspectionId,
+        item.id,
+        storedFileId,
+      );
       _notifier.replaceItem(updated);
       _showSnack('Photo added.');
     } on ApiException catch (e) {
@@ -185,10 +188,10 @@ class _InspectionRunScreenState extends ConsumerState<InspectionRunScreen> {
         content: Text(
           pending > 0
               ? '$pending item${pending == 1 ? '' : 's'} are still pending. '
-                  'Completing now generates the report and creates a work order '
-                  'for each failed item. You can\'t edit afterward.'
+                    'Completing now generates the report and creates a work order '
+                    'for each failed item. You can\'t edit afterward.'
               : 'This generates the PDF report and creates a work order for each '
-                  'failed item. You can\'t edit afterward.',
+                    'failed item. You can\'t edit afterward.',
         ),
         actions: [
           TextButton(
@@ -227,20 +230,22 @@ class _InspectionRunScreenState extends ConsumerState<InspectionRunScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final detailAsync = ref.watch(inspectionDetailProvider(widget.inspectionId));
+    final detailAsync = ref.watch(
+      inspectionDetailProvider(widget.inspectionId),
+    );
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Inspection'),
         actions: [
           detailAsync.whenOrNull(
-                data: (detail) => detail.isCompleted &&
-                        detail.reportStoredFileId != null
+                data: (detail) =>
+                    detail.isCompleted && detail.reportStoredFileId != null
                     ? IconButton(
                         tooltip: 'View report',
                         icon: const Icon(Icons.picture_as_pdf_outlined),
-                        onPressed: () => _openReport(context, ref,
-                            widget.inspectionId),
+                        onPressed: () =>
+                            _openReport(context, ref, widget.inspectionId),
                       )
                     : const SizedBox.shrink(),
               ) ??
@@ -255,14 +260,16 @@ class _InspectionRunScreenState extends ConsumerState<InspectionRunScreen> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.error_outline,
-                    size: 40, color: Theme.of(context).colorScheme.error),
+                Icon(
+                  Icons.error_outline,
+                  size: 40,
+                  color: Theme.of(context).colorScheme.error,
+                ),
                 const SizedBox(height: 12),
                 Text(
                   e is ApiException ? e.message : e.toString(),
                   textAlign: TextAlign.center,
-                  style:
-                      TextStyle(color: Theme.of(context).colorScheme.error),
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
                 const SizedBox(height: 16),
                 FilledButton.tonal(
@@ -273,17 +280,21 @@ class _InspectionRunScreenState extends ConsumerState<InspectionRunScreen> {
             ),
           ),
         ),
-        data: (detail) => _RunBody(
-          detail: detail,
-          busyItemId: _busyItemId,
-          completing: _completing,
-          onSetResult: _setResult,
-          onEditNote: _editNote,
-          onAddPhoto: _showPhotoSheet,
-          onComplete: () => _complete(detail),
-          onViewReport: () =>
-              _openReport(context, ref, widget.inspectionId),
-        ),
+        data: (detail) {
+          final body = _RunBody(
+            detail: detail,
+            busyItemId: _busyItemId,
+            completing: _completing,
+            onSetResult: _setResult,
+            onEditNote: _editNote,
+            onAddPhoto: _showPhotoSheet,
+            onComplete: () => _complete(detail),
+            onViewReport: () => _openReport(context, ref, widget.inspectionId),
+          );
+          return detail.isCompleted
+              ? body
+              : MobileQuickActionHider(child: body);
+        },
       ),
     );
   }
@@ -301,8 +312,9 @@ Future<void> _openReport(
     ..hideCurrentSnackBar()
     ..showSnackBar(const SnackBar(content: Text('Opening report…')));
   try {
-    final bytes =
-        await ref.read(inspectionsRepositoryProvider).reportBytes(inspectionId);
+    final bytes = await ref
+        .read(inspectionsRepositoryProvider)
+        .reportBytes(inspectionId);
     await DocumentOpener.openBytes(
       bytes: bytes,
       fileName: 'inspection-$inspectionId-report.pdf',
@@ -348,10 +360,12 @@ class _RunBody extends StatelessWidget {
       groups.putIfAbsent(area, () => []).add(item);
     }
 
-    final passed =
-        detail.items.where((i) => i.result == InspectionItemResults.pass).length;
-    final failed =
-        detail.items.where((i) => i.result == InspectionItemResults.fail).length;
+    final passed = detail.items
+        .where((i) => i.result == InspectionItemResults.pass)
+        .length;
+    final failed = detail.items
+        .where((i) => i.result == InspectionItemResults.fail)
+        .length;
     final pending = detail.items
         .where((i) => i.result == InspectionItemResults.pending)
         .length;
@@ -371,8 +385,9 @@ class _RunBody extends StatelessWidget {
                   Expanded(
                     child: Text(
                       friendlyInspectionType(detail.type),
-                      style: theme.textTheme.titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w700),
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                   InspectionStatusChip(status: detail.status),
@@ -381,8 +396,9 @@ class _RunBody extends StatelessWidget {
               const SizedBox(height: 4),
               Text(
                 'Scheduled ${fmtInspectionDate(detail.scheduledFor.toLocal())}',
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: cs.onSurfaceVariant),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: cs.onSurfaceVariant,
+                ),
               ),
               if (detail.items.isNotEmpty) ...[
                 const SizedBox(height: 8),
@@ -392,9 +408,10 @@ class _RunBody extends StatelessWidget {
                     _CountPill(label: 'Pass', count: passed, color: cs.primary),
                     _CountPill(label: 'Fail', count: failed, color: cs.error),
                     _CountPill(
-                        label: 'Pending',
-                        count: pending,
-                        color: cs.onSurfaceVariant),
+                      label: 'Pending',
+                      count: pending,
+                      color: cs.onSurfaceVariant,
+                    ),
                   ],
                 ),
               ],
@@ -506,7 +523,10 @@ class _CountPill extends StatelessWidget {
       child: Text(
         '$count $label',
         style: TextStyle(
-            color: color, fontSize: 12, fontWeight: FontWeight.w600),
+          color: color,
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
@@ -546,8 +566,9 @@ class _ItemCard extends StatelessWidget {
                 Expanded(
                   child: Text(
                     item.label,
-                    style: theme.textTheme.titleSmall
-                        ?.copyWith(fontWeight: FontWeight.w600),
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
                 if (busy)
@@ -698,7 +719,10 @@ class _ResultButton extends StatelessWidget {
               Text(
                 label,
                 style: TextStyle(
-                    color: fg, fontWeight: FontWeight.w700, fontSize: 13),
+                  color: fg,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13,
+                ),
               ),
             ],
           ),
@@ -800,19 +824,27 @@ class _CompleteSummaryDialog extends ConsumerWidget {
             runSpacing: 8,
             children: [
               _CountPill(
-                  label: 'Pass', count: result.passCount, color: cs.primary),
+                label: 'Pass',
+                count: result.passCount,
+                color: cs.primary,
+              ),
               _CountPill(
-                  label: 'Fail', count: result.failCount, color: cs.error),
+                label: 'Fail',
+                count: result.failCount,
+                color: cs.error,
+              ),
               if (result.notApplicableCount > 0)
                 _CountPill(
-                    label: 'N/A',
-                    count: result.notApplicableCount,
-                    color: cs.onSurfaceVariant),
+                  label: 'N/A',
+                  count: result.notApplicableCount,
+                  color: cs.onSurfaceVariant,
+                ),
               if (result.pendingCount > 0)
                 _CountPill(
-                    label: 'Pending',
-                    count: result.pendingCount,
-                    color: cs.onSurfaceVariant),
+                  label: 'Pending',
+                  count: result.pendingCount,
+                  color: cs.onSurfaceVariant,
+                ),
             ],
           ),
           if (created.isNotEmpty) ...[
@@ -820,21 +852,24 @@ class _CompleteSummaryDialog extends ConsumerWidget {
             Text(
               'Created ${created.length} work order'
               '${created.length == 1 ? '' : 's'}:',
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(fontWeight: FontWeight.w600),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
             ),
             const SizedBox(height: 4),
             Text(
               created.map((id) => '#$id').join(', '),
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: cs.onSurfaceVariant),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: cs.onSurfaceVariant,
+              ),
             ),
           ] else ...[
             const SizedBox(height: 16),
             Text(
               'No failed items — no work orders created.',
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: cs.onSurfaceVariant),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: cs.onSurfaceVariant,
+              ),
             ),
           ],
         ],

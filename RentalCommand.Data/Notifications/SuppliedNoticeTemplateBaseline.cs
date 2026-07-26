@@ -89,6 +89,44 @@ public static class SuppliedNoticeTemplateBaseline
                 """),
         ]);
 
+    public const int SafeLegalVersion = 3;
+    public const string SafeLegalV3Provenance =
+        "Rental Command safe legal starting copy v3; local timing and content review required";
+
+    public static readonly DateTime SafeLegalV3PublishedAtUtc =
+        new(2026, 7, 25, 9, 0, 0, DateTimeKind.Utc);
+
+    public static IReadOnlyList<SuppliedNoticeTemplateDefinition> V3Legal { get; } =
+        Array.AsReadOnly<SuppliedNoticeTemplateDefinition>(
+        [
+            new(
+                8,
+                "lease-non-renewal",
+                NoticeClassification.Legal,
+                "Lease expiration and non-renewal notice",
+                """
+                Hello {{tenant_name}},
+
+                This notice concerns the rental agreement for {{property_address}}. The current agreement expires on {{lease_end_date}}, and management does not intend to renew it. Unless management and the tenant sign a later written agreement, please return possession of the rental by the lease-end date.
+
+                Contact management promptly if any name, address, or lease-end information in this notice is incorrect or if you have questions about move-out coordination. Security-deposit and final-account handling will follow the rental agreement and applicable requirements.
+                """),
+            new(
+                9,
+                "late-rent-late-fee",
+                NoticeClassification.Legal,
+                "Past-due rent and late-fee notice",
+                """
+                Hello {{tenant_name}},
+
+                Our records show {{overdue_amount}} remains unpaid for {{property_address}} as of {{today}}. The rent was due on {{rent_due_date}}. A late fee of {{late_fee_amount}} is included only if that fee is authorized by the rental agreement.
+
+                Please use your established payment method or contact management to arrange payment. If you have already paid, believe the amount is incorrect, or dispute any charge, contact management promptly so the account can be reviewed and corrected when appropriate.
+
+                Any future action will be taken only under the rental agreement and applicable requirements.
+                """),
+        ]);
+
     /// <summary>
     /// Creates the workspace's immutable v1 copies in one conflict-safe PostgreSQL command. The
     /// caller supplies the timestamp so registration and any later explicit seed request share the

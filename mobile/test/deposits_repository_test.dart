@@ -1,9 +1,13 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:rental_command/features/deposits/deposits_screen.dart';
 import 'package:rental_command/features/deposits/deposits_repository.dart';
 
 void main() {
@@ -85,6 +89,63 @@ void main() {
       expect(account.netAdjustments, -25);
       expect(account.heldBalance, 875);
       expect(account.status, 'Held');
+    },
+  );
+
+  testWidgets(
+    'deposit load more disables with compact progress and restores count label',
+    (tester) async {
+      final repository = _ControlledDepositsRepository();
+      repository.queue(
+        Future.value(_depositPage(items: [_depositAccount(1)], totalCount: 3)),
+      );
+      final nextPage = Completer<TenantAccountDepositPage>();
+      repository.queue(nextPage.future);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [depositsRepositoryProvider.overrideWithValue(repository)],
+          child: const MaterialApp(home: DepositsScreen()),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Load more (1 of 3)'), findsOneWidget);
+      await tester.tap(find.text('Load more (1 of 3)'));
+      await tester.pump();
+
+      final pendingButton = tester.widget<OutlinedButton>(
+        find.widgetWithText(OutlinedButton, 'Load more (1 of 3)'),
+      );
+      expect(pendingButton.onPressed, isNull);
+      final progress = tester.widget<SizedBox>(
+        find.byKey(const Key('deposits-load-more-progress')),
+      );
+      expect(progress.width, 18);
+      expect(progress.height, 18);
+      expect(repository.queries.last.skip, 1);
+      expect(repository.queries.last.take, 20);
+
+      nextPage.complete(
+        _depositPage(items: [_depositAccount(2)], totalCount: 3, skip: 1),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        find.byKey(const Key('deposits-load-more-progress')),
+        findsNothing,
+      );
+      expect(find.text('Load more (2 of 3)'), findsOneWidget);
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.widgetWithText(OutlinedButton, 'Load more (2 of 3)'),
+            )
+            .onPressed,
+        isNotNull,
+      );
     },
   );
 
@@ -222,6 +283,69 @@ final _account = TenantAccountDeposit(
   primaryTenantName: 'Jordan Lee',
   propertyName: 'Mallard Point',
   unitNumber: '2B',
+  currency: 'USD',
+  totalReceived: 1500,
+  totalDeductions: 125,
+  totalRefunded: 500,
+  totalTransferredIn: 50,
+  totalTransferredOut: 25,
+  netAdjustments: -25,
+  heldBalance: 875,
+  status: 'Held',
+  createdAtUtc: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+  effectiveNowUtc: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
+  businessDate: '2026-07-13',
+);
+
+class _ControlledDepositsRepository extends DepositsRepository {
+  _ControlledDepositsRepository() : super(Dio());
+
+  final queries = <TenantAccountDepositQuery>[];
+  final _responses = <Future<TenantAccountDepositPage>>[];
+
+  void queue(Future<TenantAccountDepositPage> response) {
+    _responses.add(response);
+  }
+
+  @override
+  Future<TenantAccountDepositPage> listDepositsPage([
+    TenantAccountDepositQuery query = const TenantAccountDepositQuery(),
+  ]) {
+    queries.add(query);
+    if (_responses.isEmpty) {
+      throw StateError('No queued deposit page.');
+    }
+    return _responses.removeAt(0);
+  }
+}
+
+TenantAccountDepositPage _depositPage({
+  required List<TenantAccountDeposit> items,
+  required int totalCount,
+  int skip = 0,
+}) {
+  final query = TenantAccountDepositQuery(skip: skip);
+  return TenantAccountDepositPage(
+    items: items,
+    totalCount: totalCount,
+    skip: skip,
+    take: 20,
+    query: query,
+  );
+}
+
+TenantAccountDeposit _depositAccount(int id) => TenantAccountDeposit(
+  securityDepositAccountId: id,
+  tenantAccountId: id,
+  leaseManagementId: id,
+  originatingAgreementId: id,
+  propertyId: id,
+  unitId: id,
+  accountNumber: 'TA-$id',
+  relationshipNumber: 'LM-$id',
+  primaryTenantName: 'Tenant $id',
+  propertyName: 'Mallard Point',
+  unitNumber: '$id',
   currency: 'USD',
   totalReceived: 1500,
   totalDeductions: 125,

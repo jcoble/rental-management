@@ -68,6 +68,20 @@ String _tenantDisplayName(Tenant t) {
   return '${t.firstName} ${t.lastName}'.trim();
 }
 
+@visibleForTesting
+String messagesEmptyInstruction({
+  required bool hasCriteria,
+  required bool canStartConversation,
+  required bool tenantMode,
+}) {
+  if (hasCriteria) return 'Try changing your search or filters.';
+  if (canStartConversation) {
+    return 'Open the action button and choose New conversation.';
+  }
+  if (tenantMode) return 'Messages from your rental team will appear here.';
+  return 'You can read conversations here. Ask a workspace admin for access to start one.';
+}
+
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 /// Landlord inbox — a list of conversation threads (Google Messages style).
@@ -298,6 +312,8 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
                   if (page.items.isEmpty) {
                     return _EmptyBody(
                       hasCriteria: (_search ?? '').isNotEmpty || _unreadOnly,
+                      canStartConversation: canStartConversation,
+                      tenantMode: tenantMode,
                     );
                   }
                   return ListView.separated(
@@ -482,9 +498,15 @@ class _UnreadBadge extends StatelessWidget {
 // ── Empty / Error ─────────────────────────────────────────────────────────────
 
 class _EmptyBody extends StatelessWidget {
-  const _EmptyBody({required this.hasCriteria});
+  const _EmptyBody({
+    required this.hasCriteria,
+    required this.canStartConversation,
+    required this.tenantMode,
+  });
 
   final bool hasCriteria;
+  final bool canStartConversation;
+  final bool tenantMode;
 
   @override
   Widget build(BuildContext context) {
@@ -514,9 +536,12 @@ class _EmptyBody extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  hasCriteria
-                      ? 'Try changing your search or filters.'
-                      : 'Tap the pencil to message a tenant.',
+                  messagesEmptyInstruction(
+                    hasCriteria: hasCriteria,
+                    canStartConversation: canStartConversation,
+                    tenantMode: tenantMode,
+                  ),
+                  textAlign: TextAlign.center,
                   style: TextStyle(color: colorScheme.onSurfaceVariant),
                 ),
               ],

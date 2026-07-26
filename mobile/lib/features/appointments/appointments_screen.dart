@@ -592,7 +592,7 @@ class _AppointmentFormSheetState extends ConsumerState<AppointmentFormSheet> {
     final isEdit = widget.existing != null;
     const gap = SizedBox(height: 12);
 
-    return Form(
+    final form = Form(
       key: _formKey,
       child: TabbedFormSheet(
         title: isEdit ? 'Edit Appointment' : 'New Appointment',
@@ -779,6 +779,7 @@ class _AppointmentFormSheetState extends ConsumerState<AppointmentFormSheet> {
         ],
       ),
     );
+    return isEdit ? MobileQuickActionHider(child: form) : form;
   }
 }
 
