@@ -585,6 +585,47 @@
     atomically from 15 to 16, and draft 21 resolved to agreement 16.
   - Evidence: `mobile/azure/d018-native-gallery-resolution-fixed.png`.
 
+### TSK-754-D019 — Existing-property scan search did not refresh while typing
+
+- Status: Fix implemented; Azure emulator verification pending
+- Severity: Blocking mobile scan-review defect
+- Reproduction:
+  - Resume `SCN-0022`, choose Link existing, and type `Union` into
+    `Search property or Unit`.
+  - Wait for the expected search refresh without submitting the keyboard form.
+- Expected:
+  - The visible targets narrow to Union Duplex while the user types.
+- Actual:
+  - Arbor House and other unrelated targets remained visible after five seconds.
+- Root cause:
+  - The provider key read the search controller text, but the widget rebuilt only from
+    `onSubmitted`; ordinary typing never changed provider state.
+- Fix:
+  - Debounce `onChanged` by 300 milliseconds, store the submitted query in widget state, reset
+    paging, and retain immediate keyboard-submit behavior.
+- Evidence: `mobile/azure/d019-link-existing-search-unfiltered.png`.
+
+### TSK-754-D020 — Mobile lease scan could not create a Unit under an existing Property
+
+- Status: Fix implemented; Azure emulator verification pending
+- Severity: Blocking multi-rental scan-import defect
+- Reproduction:
+  - Review `SCN-0022`, whose proposal correctly links Union Duplex and creates Unit B.
+  - Inspect the mobile Property and Unit choices.
+- Expected:
+  - Select Union Duplex as the existing Property and create Unit B from the reviewed lease.
+- Actual:
+  - Create new would duplicate the Property; Link existing offered only existing Property-and-Unit
+    pairs, which would incorrectly attach the lease to Unit A.
+- Root cause:
+  - The mobile readiness gate required both an existing Property and existing Unit even though
+    the atomic server confirmation contract already supports `propertyId` without `unitId` and
+    creates the reviewed Unit under that authorized Property.
+- Fix:
+  - Expose a `Create the Unit from this lease scan` choice for each matching Property.
+  - Permit confirmation with an existing Property, no existing Unit, and a reviewed Unit number.
+  - Continue sending no `unitId`, which invokes the server's existing atomic Unit-creation path.
+
 ## Tooling and maintenance observations
 
 - The Azure Flutter build reports that Kotlin's current built-in version will be unsupported by a
@@ -743,14 +784,23 @@
   feet, possession, $1,650 rent and deposit, $75 late fee, and due day 1. All six aggregates
   advanced atomically from 19 to 20.
 - Evidence: `mobile/azure/scn-0020-opening-lease-confirmed.png`.
+- `SCN-0021` exercised the first MultiRental bootstrap through the native Android PDF picker.
+  Draft 26 and the executed artifact retained the planned SHA-256
+  `87c4df8dede8e2ae06f123f19b6e8d80b6ddee5092178bcc702ab505482c1ac9`.
+- Confirmation created Union Duplex / Unit A / Parker Flores / `SCN-0021`. Direct PostgreSQL
+  reads matched the reviewed 2-bedroom, 1-bath, 1,425-square-foot unit, $1,375 market rent,
+  rent and deposit, possession date, due day, late fee, and all tenant contacts. All six
+  aggregates advanced atomically from 20 to 21.
 
 ## Checkpoint 2026-07-26
 
 - Status: isolated run initialized; January 3 opening-lease batch in progress
 - Completed run rows: 1 / 1,996
-- Uploaded and confirmed scan assets: 20 / 953
+- Uploaded and confirmed scan assets: 21 / 953
 - Pilot scan confirmations: 1
-- Official scan confirmations: 20
-- Findings and safety blockers: 18
-- Current blockers: none for the January 3 opening-lease batch.
-- Next action: execute `SCN-0021` through `SCN-0024`, then execute the January 3 rent receipts.
+- Official scan confirmations: 21
+- Findings and safety blockers: 20
+- Current blockers: D019 and D020 require Azure deployment and emulator verification before
+  `SCN-0022` can be confirmed safely.
+- Next action: deploy and verify D019/D020, complete `SCN-0022` through `SCN-0024`, then execute
+  the January 3 rent receipts.

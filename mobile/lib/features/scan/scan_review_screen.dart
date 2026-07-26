@@ -1016,15 +1016,19 @@ class _ReviewBody extends ConsumerWidget {
     // manual values can still be entered) and nothing is in flight. For a lease:
     //  - CREATE mode (C3): a usable property name/address is needed (the server
     //    creates the property + unit from the document).
-    //  - LINK mode: an existing property + unit must be chosen.
+    //  - LINK mode: choose an existing unit, or choose an existing property
+    //    and provide a unit number so the server can create that unit.
     final hasUsablePropertyText =
         (editedFields['property_address']?.trim().isNotEmpty ?? false) ||
         (editedFields['property_name']?.trim().isNotEmpty ?? false);
+    final hasUsableUnitText =
+        editedFields['unit_number']?.trim().isNotEmpty ?? false;
     final leaseReady =
         !draft.isLease ||
         ((createNewProperty
                 ? hasUsablePropertyText && newPropertyRentalStructure != null
-                : (selectedPropertyId != null && selectedUnitId != null)) &&
+                : selectedPropertyId != null &&
+                      (selectedUnitId != null || hasUsableUnitText)) &&
             leaseReviewDisposition != null);
     // An Application needs a first + last name (both [Required] on the create),
     // mirroring the web review page's applicationInvalid guard.
@@ -1052,7 +1056,9 @@ class _ReviewBody extends ConsumerWidget {
         ? 'Choose whether this address is one rental or multiple rentals.'
         : createNewProperty
         ? 'Enter a property name or address above to create this lease.'
-        : 'Choose a property and unit above to create this lease.';
+        : selectedPropertyId != null && selectedUnitId == null
+        ? 'Enter the new Unit number from the lease.'
+        : 'Choose an existing Unit, or create a new Unit in an existing Property.';
     // Reject stays available on Failed so a bad scan can always be cleared, but
     // never while processing, mid-action, or already terminal.
     final rejectEnabled = (!actionsLocked || isFailed) && !busy && !isTerminal;
@@ -2192,8 +2198,9 @@ class _LeasePickers extends ConsumerWidget {
                 ? 'No matching property — a new one will be created from the '
                       'document. Check the address, or link an existing property '
                       'instead.'
-                : 'Link the property and unit. The tenant is matched from the '
-                      'lease — or you can choose one.',
+                : 'Choose an existing Unit, or create a new Unit under an '
+                      'existing Property. The tenant is matched from the lease '
+                      '— or you can choose one.',
             style: theme.textTheme.bodySmall?.copyWith(
               color: colorScheme.onSurfaceVariant,
             ),
@@ -2313,16 +2320,34 @@ class _LinkPropertyFields extends ConsumerStatefulWidget {
 
 class _LinkPropertyFieldsState extends ConsumerState<_LinkPropertyFields> {
   final _searchController = TextEditingController();
+  Timer? _searchDebounce;
+  String _search = '';
   int _skip = 0;
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _searchController.dispose();
     super.dispose();
   }
 
-  void _search() {
-    setState(() => _skip = 0);
+  void _searchChanged(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 300), () {
+      if (!mounted) return;
+      setState(() {
+        _search = value.trim();
+        _skip = 0;
+      });
+    });
+  }
+
+  void _submitSearch(String value) {
+    _searchDebounce?.cancel();
+    setState(() {
+      _search = value.trim();
+      _skip = 0;
+    });
   }
 
   void _select(ScanUnitTargetOption target) {
@@ -2330,15 +2355,17 @@ class _LinkPropertyFieldsState extends ConsumerState<_LinkPropertyFields> {
     widget.onUnitSelected(target.unitId);
   }
 
+  void _selectNewUnit(ScanUnitTargetOption target) {
+    widget.onPropertySelected(target.propertyId);
+    widget.onUnitSelected(null);
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final targetsAsync = ref.watch(
-      _scanTargetOptionsProvider((
-        search: _searchController.text.trim(),
-        skip: _skip,
-      )),
+      _scanTargetOptionsProvider((search: _search, skip: _skip)),
     );
 
     return Column(
@@ -2349,7 +2376,8 @@ class _LinkPropertyFieldsState extends ConsumerState<_LinkPropertyFields> {
           controller: _searchController,
           hintText: 'Search property or Unit',
           leading: const Icon(Icons.search),
-          onSubmitted: (_) => _search(),
+          onChanged: _searchChanged,
+          onSubmitted: _submitSearch,
         ),
         const SizedBox(height: 8),
         targetsAsync.when(
@@ -2367,8 +2395,39 @@ class _LinkPropertyFieldsState extends ConsumerState<_LinkPropertyFields> {
                 ),
               );
             }
+            final propertyTargets = <int, ScanUnitTargetOption>{
+              for (final target in page.items) target.propertyId: target,
+            }.values;
             return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                Text(
+                  'Create a new Unit in:',
+                  style: theme.textTheme.labelMedium,
+                ),
+                const SizedBox(height: 4),
+                for (final target in propertyTargets)
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading:
+                        widget.selectedPropertyId == target.propertyId &&
+                            widget.selectedUnitId == null
+                        ? Icon(Icons.check_circle, color: colorScheme.primary)
+                        : const Icon(Icons.add_home_work_outlined),
+                    title: Text(
+                      target.propertyName,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: const Text(
+                      'Create the Unit from this lease scan',
+                    ),
+                    onTap: () => _selectNewUnit(target),
+                  ),
+                const Divider(),
+                Text(
+                  'Or choose an existing Unit:',
+                  style: theme.textTheme.labelMedium,
+                ),
                 RadioGroup<int>(
                   groupValue: widget.selectedUnitId,
                   onChanged: (unitId) {
