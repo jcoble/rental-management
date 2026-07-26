@@ -234,7 +234,7 @@ internal sealed class AtomicScanConfirmationPersistence : IAtomicScanConfirmatio
                 scope.PortfolioId,
                 nameof(ScanDraft),
                 draftId,
-                AuditLogOperation.Rejected,
+                AuditLogOperation.Updated,
                 scope.UserId,
                 NewValues: "{\"Status\":\"Rejected\"}",
                 ChangeReason: rejectionReason ?? "Scan draft rejected."));

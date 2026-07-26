@@ -10,6 +10,23 @@ namespace RentalCommand.Data.Tests.Atomic;
 public sealed class AtomicScanConfirmationPersistenceTests
 {
     [Fact]
+    public void RejectAuthorizedAsync_BindsTheExactTrackedUpdateOperation()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "RentalCommand.Data",
+            "Atomic",
+            "AtomicScanConfirmationPersistence.cs"));
+        var rejectionMethod = source[
+            source.IndexOf("public async Task<bool> RejectAuthorizedAsync", StringComparison.Ordinal)..];
+        rejectionMethod = rejectionMethod[
+            ..rejectionMethod.IndexOf("private static string? Truncate", StringComparison.Ordinal)];
+
+        rejectionMethod.Should().Contain("AuditLogOperation.Updated");
+        rejectionMethod.Should().NotContain("AuditLogOperation.Rejected");
+    }
+
+    [Fact]
     public void Fingerprint_IsStableAcrossPostgresJsonbNormalization()
     {
         var original = "{\"z\":1,\"nested\":{\"b\":2,\"a\":[3,{\"y\":true,\"x\":null}]}}";
@@ -125,6 +142,18 @@ public sealed class AtomicScanConfirmationPersistenceTests
             TimeProvider.System);
         var locking = new AtomicLockingPersistence(db);
         return (new AtomicScanConfirmationPersistence(db, auditScope, locking), auditScope);
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "RentalCommand.sln")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName
+            ?? throw new DirectoryNotFoundException("Could not locate the repository root.");
     }
 
     private sealed class TestDbContext(DbContextOptions<RentalCommandDbContext> options)
