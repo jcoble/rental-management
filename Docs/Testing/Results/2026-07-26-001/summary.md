@@ -727,14 +727,22 @@
   retained the same source SHA, direct PostgreSQL reads matched every reviewed value, and all six
   aggregate counts advanced atomically from 17 to 18.
 - Evidence: `mobile/azure/scn-0018-opening-lease-confirmed.png`.
+- `SCN-0019` exercised the native Android PDF picker with a nine-page, slightly skewed phone-camera
+  lease. Draft 24 and its executed artifact preserved the planned SHA-256
+  `ddff9cc3fdc970e4d704ca5d323c989dbb6ee66c322e57486889a5da0d7e1aa2`.
+  The mobile review completed every uncertain contact, unit, possession, and late-fee field.
+- Confirmation created Summit Home / Unit Main / Jordan Reed / `SCN-0019`. PostgreSQL matched the
+  three-bedroom, one-bath, 1,195-square-foot unit, $1,125 rent and deposit, due day 1, and all
+  tenant contacts; all six aggregates advanced atomically from 18 to 19.
+- Evidence: `mobile/azure/scn-0019-opening-lease-confirmed.png`.
 
 ## Checkpoint 2026-07-26
 
 - Status: isolated run initialized; January 3 opening-lease batch in progress
 - Completed run rows: 1 / 1,996
-- Uploaded and confirmed scan assets: 18 / 953
+- Uploaded and confirmed scan assets: 19 / 953
 - Pilot scan confirmations: 1
-- Official scan confirmations: 18
+- Official scan confirmations: 19
 - Findings and safety blockers: 18
 - Current blockers: none for the January 3 opening-lease batch.
-- Next action: execute `SCN-0019` through `SCN-0024`, then execute the January 3 rent receipts.
+- Next action: execute `SCN-0020` through `SCN-0024`, then execute the January 3 rent receipts.
