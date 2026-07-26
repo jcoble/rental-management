@@ -1,66 +1,54 @@
 using System.Data.Common;
 using FluentAssertions;
-using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
 /// <summary>
 /// Pins OwnerStatementService's DB-side aggregation (L-10): the per-property rental-income and expense
 /// totals are summed in SQL, not by materializing payment/expense rows and grouping in memory. Runs
-/// against the real (SQLite) query engine so a query that fails to translate — or that drifts from the
+/// against the migrated PostgreSQL schema so a query that fails to translate — or that drifts from the
 /// expected values — is caught. The per-owner report totals are the sum of the rounded per-line values
 /// (so the statement foots to the cent); the heavy payment/expense aggregation still runs in SQL.
 /// </summary>
-public class OwnerStatementServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class OwnerStatementServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
     private const int Year = 2026;
 
-    private readonly SqliteConnection _conn;
+    private readonly MigratedPostgreSqlFixture _fixture;
     private readonly List<string> _commands = [];
-    private readonly RentalCommandDbContext _db;
-    private readonly OwnerStatementService _sut;
-    private readonly WorkspaceReadScope _scope;
+    private MigratedPostgreSqlTestContext _context = null!;
+    private RentalCommandDbContext _db = null!;
+    private OwnerStatementService _sut = null!;
+    private WorkspaceReadScope _scope;
 
-    public OwnerStatementServiceTests()
+    public OwnerStatementServiceTests(MigratedPostgreSqlFixture fixture)
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
-        _conn.Open();
+        _fixture = fixture;
+    }
 
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .AddInterceptors(new OwnerStatementRecordingCommandInterceptor(_commands))
-            .Options;
-
-        _db = new OwnerStatementTestDbContext(options);
-        _db.Database.EnsureCreated();
-
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = PortfolioId,
-            Name = "Test Portfolio",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.SaveChanges();
+    public async Task InitializeAsync()
+    {
+        _context = await _fixture.CreateContextAsync(
+            [new OwnerStatementRecordingCommandInterceptor(_commands)]);
+        _db = _context.Db;
         _scope = _db.SeedAdministratorScope(PortfolioId, nameof(OwnerStatementServiceTests));
+        await _context.ActivateApiScopeAsync(_scope);
 
         _sut = new OwnerStatementService(_db, TimeProvider.System);
     }
 
-    public void Dispose()
+    public async Task DisposeAsync()
     {
-        _db.Dispose();
-        _conn.Dispose();
+        await _context.DisposeAsync();
     }
 
     [Fact]
@@ -176,6 +164,7 @@ public class OwnerStatementServiceTests : IDisposable
         SeedOwnerDistribution(owner.Id, 700m);
 
         var selectedScope = SeedSelectedPropertyScope(allowed.Id);
+        await _context.ActivateApiScopeAsync(selectedScope);
         _commands.Clear();
 
         var report = await _sut.GetForOwnerAsync(selectedScope, owner.Id, Year, CancellationToken.None);
@@ -443,7 +432,7 @@ public class OwnerStatementServiceTests : IDisposable
             PropertyId = property.Id,
             OwnerEntityId = ownerId,
             OwnershipSharePercent = 100m,
-            EffectiveFromUtc = property.CreatedAt,
+            EffectiveFromUtc = new DateTime(Year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
             StatementRecipientName = "Owner",
             PayeeName = "Owner",
         });
@@ -473,27 +462,71 @@ public class OwnerStatementServiceTests : IDisposable
         _db.SaveChanges();
         var management = new LeaseManagement
         {
-            PortfolioId = PortfolioId, PropertyId = property.Id, UnitId = unit.Id,
-            RelationshipNumber = leaseNumber, PlannedPossessionAtUtc = new DateTime(Year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            RelationshipNumber = leaseNumber,
+            PlannedPossessionAtUtc = new DateTime(Year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
             PossessionGivenAtUtc = new DateTime(Year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            CreatedAtUtc = DateTime.UtcNow, UpdatedAtUtc = DateTime.UtcNow,
-            CreatedByUserId = 1, RowVersion = Guid.NewGuid(),
+            CreatedAtUtc = DateTime.UtcNow,
+            UpdatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = 1,
+            RowVersion = Guid.NewGuid(),
         };
         _db.LeaseManagements.Add(management);
         _db.SaveChanges();
         var account = new TenantAccount
         {
-            PortfolioId = PortfolioId, LeaseManagementId = management.Id,
-            AccountNumber = $"TA-{management.Id}", Currency = "USD",
-            OpenedAtUtc = management.PossessionGivenAtUtc!.Value, CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = 1,
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            AccountNumber = $"TA-{management.Id}",
+            Currency = "USD",
+            OpenedAtUtc = management.PossessionGivenAtUtc!.Value,
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = 1,
         };
-        _db.AddRange(account, new LeaseManagementParty
+        var party = new LeaseManagementParty
         {
-            PortfolioId = PortfolioId, LeaseManagementId = management.Id, TenantId = tenant.Id,
-            Role = LeaseManagementPartyRole.PrimaryTenant, EffectiveFrom = new DateOnly(Year, 1, 1),
-            ChangeReason = "Owner statement test", CreatedAtUtc = DateTime.UtcNow, CreatedByUserId = 1,
-        });
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            TenantId = tenant.Id,
+            Role = LeaseManagementPartyRole.PrimaryTenant,
+            EffectiveFrom = new DateOnly(Year, 1, 1),
+            ChangeReason = "Owner statement test",
+            CreatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = 1,
+        };
+        var agreement = new LeaseAgreement
+        {
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            VersionNumber = 1,
+            AgreementNumber = leaseNumber,
+            ChangeType = LeaseAgreementChangeType.Initial,
+            TermType = LeaseAgreementTermType.FixedTerm,
+            TermStartOn = new DateOnly(Year, 1, 1),
+            TermEndOn = new DateOnly(Year, 12, 31),
+            GoverningFromOn = new DateOnly(Year, 1, 1),
+            BaseRentAmount = 1_000m,
+            RentDueDay = 1,
+            SecurityDepositObligation = 1_000m,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
+            DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
+                PortfolioId, 1, DateTime.UtcNow),
+            CreatedAtUtc = DateTime.UtcNow,
+            UpdatedAtUtc = DateTime.UtcNow,
+            CreatedByUserId = 1,
+        };
+        _db.AddRange(account, party, agreement);
         _db.SaveChanges();
+        _db.MarkFullyExecuted(
+            agreement,
+            party,
+            tenant,
+            actorUserId: 1,
+            executedAtUtc: management.PossessionGivenAtUtc.Value);
         return account;
     }
 
@@ -501,32 +534,55 @@ public class OwnerStatementServiceTests : IDisposable
     {
         var y = year ?? Year;
         var paidDate = new DateTime(y, 6, 15, 0, 0, 0, DateTimeKind.Utc);
+        var agreementId = _db.LeaseAgreements
+            .Where(agreement => agreement.LeaseManagementId == account.LeaseManagementId)
+            .Select(agreement => agreement.Id)
+            .Single();
         var charge = new TenantLedgerEntry
         {
-            PortfolioId = PortfolioId, TenantAccountId = account.Id,
-            EntryType = TenantLedgerEntryType.RentCharge, Direction = TenantLedgerDirection.Debit,
-            Amount = amount, Currency = "USD", EffectiveOn = DateOnly.FromDateTime(paidDate),
-            DueOn = DateOnly.FromDateTime(paidDate), PostedAtUtc = paidDate,
-            Description = "Rent", BusinessKey = $"rent:{Guid.NewGuid():N}", CreatedByUserId = 1,
+            PortfolioId = PortfolioId,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.RentCharge,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(paidDate),
+            DueOn = DateOnly.FromDateTime(paidDate),
+            PostedAtUtc = paidDate,
+            Description = "Rent",
+            BusinessKey = $"rent:{Guid.NewGuid():N}",
+            LeaseAgreementId = agreementId,
+            CreatedByUserId = 1,
         };
         _db.TenantLedgerEntries.Add(charge);
         _db.SaveChanges();
         if (!paidInYear) return;
         var receipt = new TenantLedgerEntry
         {
-            PortfolioId = PortfolioId, TenantAccountId = account.Id,
-            EntryType = TenantLedgerEntryType.PaymentReceipt, Direction = TenantLedgerDirection.Credit,
-            Amount = amount, Currency = "USD", EffectiveOn = DateOnly.FromDateTime(paidDate),
-            PostedAtUtc = paidDate, Description = "Payment received",
-            BusinessKey = $"receipt:{Guid.NewGuid():N}", CreatedByUserId = 1,
+            PortfolioId = PortfolioId,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(paidDate),
+            PostedAtUtc = paidDate,
+            Description = "Payment received",
+            BusinessKey = $"receipt:{Guid.NewGuid():N}",
+            CreatedByUserId = 1,
         };
         _db.TenantLedgerEntries.Add(receipt);
         _db.SaveChanges();
         _db.TenantLedgerAllocations.Add(new TenantLedgerAllocation
         {
-            PortfolioId = PortfolioId, TenantAccountId = account.Id, DebitEntryId = charge.Id,
-            CreditEntryId = receipt.Id, Amount = amount, AllocatedAtUtc = paidDate,
-            BusinessKey = $"allocation:{Guid.NewGuid():N}", CreatedByUserId = 1,
+            PortfolioId = PortfolioId,
+            TenantAccountId = account.Id,
+            DebitEntryId = charge.Id,
+            CreditEntryId = receipt.Id,
+            Amount = amount,
+            AllocatedAtUtc = paidDate,
+            BusinessKey = $"allocation:{Guid.NewGuid():N}",
+            CreatedByUserId = 1,
         });
         _db.SaveChanges();
     }
@@ -536,6 +592,7 @@ public class OwnerStatementServiceTests : IDisposable
         _db.Expenses.Add(new Expense
         {
             PortfolioId = PortfolioId,
+            OperationalScope = ExpenseOperationalScope.Property,
             PropertyId = propertyId,
             Description = "Repair",
             Category = ScheduleECategory.Repairs,
@@ -564,11 +621,6 @@ public class OwnerStatementServiceTests : IDisposable
         });
         _db.SaveChanges();
     }
-}
-
-internal sealed class OwnerStatementTestDbContext : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext
-{
-    public OwnerStatementTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
 }
 
 internal sealed class OwnerStatementRecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor

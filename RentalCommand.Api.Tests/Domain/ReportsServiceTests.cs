@@ -1,6 +1,5 @@
 using System.Data.Common;
 using FluentAssertions;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Api.DTOs;
@@ -16,46 +15,33 @@ namespace RentalCommand.Api.Tests.Domain;
 /// <summary>
 /// Focused tests for the non-trivial Reports Hub calculations: aging buckets, the general-ledger and
 /// rent-ledger running balances, occupancy %, cash-flow-by-month, deposit current-balance, and the
-/// in-portfolio property filter (IDOR guard). SQLite does not enforce UTC-Kind, so these tests avoid
-/// relying on any timezone quirk — they compare on whole amounts/days computed from Utc-kind dates.
+/// in-portfolio property filter (IDOR guard). Database scenarios run against the migrated PostgreSQL
+/// schema and production API role so views, functions, RLS policies, and provider translation are covered.
 /// </summary>
-public class ReportsServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class ReportsServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
 
-    private readonly SqliteConnection _conn;
+    private readonly MigratedPostgreSqlFixture _fixture;
     private readonly List<string> _executedSql = [];
-    private readonly RentalCommandDbContext _db;
-    private readonly ReportsService _sut;
-    private readonly WorkspaceReadScope _scope;
+    private MigratedPostgreSqlTestContext _context = null!;
+    private RentalCommandDbContext _db = null!;
+    private ReportsService _sut = null!;
+    private WorkspaceReadScope _scope;
 
-    public ReportsServiceTests()
+    public ReportsServiceTests(MigratedPostgreSqlFixture fixture)
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
-        _conn.Open();
-        _conn.RegisterScheduleEDepreciationFunctionForSqlite();
+        _fixture = fixture;
+    }
 
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .AddInterceptors(new RecordingCommandInterceptor(_executedSql))
-            .Options;
-
-        _db = new ReportsServiceTestDbContext(options);
-        _db.Database.EnsureCreated();
-        _db.Database.InstallCanonicalLeaseProjectionViewsForSqlite();
-
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = PortfolioId,
-            Name = "Test Portfolio",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.SaveChanges();
-
+    public async Task InitializeAsync()
+    {
+        _context = await _fixture.CreateContextAsync(
+            [new RecordingCommandInterceptor(_executedSql)]);
+        _db = _context.Db;
         _scope = SeedAdministratorScope();
+        await _context.ActivateApiScopeAsync(_scope);
 
         _sut = new ReportsService(
             _db,
@@ -127,10 +113,9 @@ public class ReportsServiceTests : IDisposable
             PortfolioId, user.Id, session.Id, accessContext.Id, accessContext.AccessRevision);
     }
 
-    public void Dispose()
+    public async Task DisposeAsync()
     {
-        _db.Dispose();
-        _conn.Dispose();
+        await _context.DisposeAsync();
     }
 
     // ── Pure-function unit tests (no DB) ───────────────────────────────────────────────────────────
@@ -979,7 +964,7 @@ public class ReportsServiceTests : IDisposable
         report.OccupancyPercent.Should().Be(60m);
 
         var sql = string.Join("\n---\n", _executedSql);
-        sql.Should().Contain("COUNT", "occupancy row counts must be computed in SQL");
+        sql.Should().ContainEquivalentOf("COUNT", "occupancy row counts must be computed in SQL");
         (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
             .Should().BeTrue("portfolio occupancy totals must be summed in SQL");
     }
@@ -1007,27 +992,48 @@ public class ReportsServiceTests : IDisposable
         _db.SecurityDepositEntries.AddRange(
             new SecurityDepositEntry
             {
-                PortfolioId = PortfolioId, SecurityDepositAccountId = depositAccount.Id,
-                EntryType = SecurityDepositEntryType.Receipt, Direction = SecurityDepositDirection.Increase,
-                Amount = 1500m, Currency = "USD", EffectiveOn = DateOnly.FromDateTime(D(2025, 1, 1)),
-                PostedAtUtc = D(2025, 1, 1), BusinessKey = "deposit:receipt", Description = "Deposit received",
-                LeaseAgreementId = lease.Id, CreatedByUserId = 1,
+                PortfolioId = PortfolioId,
+                SecurityDepositAccountId = depositAccount.Id,
+                EntryType = SecurityDepositEntryType.Receipt,
+                Direction = SecurityDepositDirection.Increase,
+                Amount = 1500m,
+                Currency = "USD",
+                EffectiveOn = DateOnly.FromDateTime(D(2025, 1, 1)),
+                PostedAtUtc = D(2025, 1, 1),
+                BusinessKey = "deposit:receipt",
+                Description = "Deposit received",
+                LeaseAgreementId = lease.Id,
+                CreatedByUserId = 1,
             },
             new SecurityDepositEntry
             {
-                PortfolioId = PortfolioId, SecurityDepositAccountId = depositAccount.Id,
-                EntryType = SecurityDepositEntryType.Deduction, Direction = SecurityDepositDirection.Decrease,
-                Amount = 200m, Currency = "USD", EffectiveOn = DateOnly.FromDateTime(D(2026, 1, 1)),
-                PostedAtUtc = D(2026, 1, 1), BusinessKey = "deposit:deduction", Description = "Cleaning",
-                LeaseAgreementId = lease.Id, CreatedByUserId = 1,
+                PortfolioId = PortfolioId,
+                SecurityDepositAccountId = depositAccount.Id,
+                EntryType = SecurityDepositEntryType.Deduction,
+                Direction = SecurityDepositDirection.Decrease,
+                Amount = 200m,
+                Currency = "USD",
+                EffectiveOn = DateOnly.FromDateTime(D(2026, 1, 1)),
+                PostedAtUtc = D(2026, 1, 1),
+                BusinessKey = "deposit:deduction",
+                Description = "Cleaning",
+                LeaseAgreementId = lease.Id,
+                CreatedByUserId = 1,
             },
             new SecurityDepositEntry
             {
-                PortfolioId = PortfolioId, SecurityDepositAccountId = depositAccount.Id,
-                EntryType = SecurityDepositEntryType.Refund, Direction = SecurityDepositDirection.Decrease,
-                Amount = 300m, Currency = "USD", EffectiveOn = DateOnly.FromDateTime(D(2026, 1, 1)),
-                PostedAtUtc = D(2026, 1, 1), BusinessKey = "deposit:refund", Description = "Deposit returned",
-                LeaseAgreementId = lease.Id, CreatedByUserId = 1,
+                PortfolioId = PortfolioId,
+                SecurityDepositAccountId = depositAccount.Id,
+                EntryType = SecurityDepositEntryType.Refund,
+                Direction = SecurityDepositDirection.Decrease,
+                Amount = 300m,
+                Currency = "USD",
+                EffectiveOn = DateOnly.FromDateTime(D(2026, 1, 1)),
+                PostedAtUtc = D(2026, 1, 1),
+                BusinessKey = "deposit:refund",
+                Description = "Deposit returned",
+                LeaseAgreementId = lease.Id,
+                CreatedByUserId = 1,
             });
         _db.SaveChanges();
 
@@ -1194,7 +1200,7 @@ public class ReportsServiceTests : IDisposable
         report.TotalSecurityDeposit.Should().Be(3000m);
 
         var sql = string.Join("\n---\n", _executedSql);
-        sql.Should().Contain("COUNT", "rent-roll lease count must be aggregated in SQL, not from materialized rows");
+        sql.Should().ContainEquivalentOf("COUNT", "rent-roll lease count must be aggregated in SQL, not from materialized rows");
         (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
             .Should().BeTrue("rent-roll money totals must be summed in SQL");
     }
@@ -1228,8 +1234,8 @@ public class ReportsServiceTests : IDisposable
         report.NeedsW9Count.Should().Be(1);
 
         var sql = string.Join("\n---\n", _executedSql);
-        sql.Should().Contain("EXISTS", "vendors with paid expenses should be filtered in SQL");
-        sql.Should().Contain("COUNT", "the missing W-9 count must be aggregated in SQL");
+        sql.Should().ContainEquivalentOf("EXISTS", "vendors with paid expenses should be filtered in SQL");
+        sql.Should().ContainEquivalentOf("COUNT", "the missing W-9 count must be aggregated in SQL");
         (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
             .Should().BeTrue("1099 totals must be summed in SQL");
         sql.Should().NotContain("strftime", "the tax-year filter should be a date range, not a client/year extraction filter");
@@ -1259,7 +1265,7 @@ public class ReportsServiceTests : IDisposable
         report.TotalMonthlyRent.Should().Be(1000m);
 
         var sql = string.Join("\n---\n", _executedSql);
-        sql.Should().Contain("COUNT", "lease-expiration totals must be counted in SQL, not from materialized rows");
+        sql.Should().ContainEquivalentOf("COUNT", "lease-expiration totals must be counted in SQL, not from materialized rows");
         (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
             .Should().BeTrue("lease-expiration monthly rent total must be summed in SQL");
     }
@@ -1291,8 +1297,8 @@ public class ReportsServiceTests : IDisposable
         report.TotalActualCost.Should().Be(425.50m);
 
         var sql = string.Join("\n---\n", _executedSql);
-        sql.Should().Contain("ORDER BY", "work-order row sorting must run in SQL");
-        sql.Should().Contain("COUNT", "summary counts must be computed in SQL");
+        sql.Should().ContainEquivalentOf("ORDER BY", "work-order row sorting must run in SQL");
+        sql.Should().ContainEquivalentOf("COUNT", "summary counts must be computed in SQL");
         (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
             .Should().BeTrue("actual-cost rollup must be summed in SQL");
     }
@@ -1410,44 +1416,69 @@ public class ReportsServiceTests : IDisposable
             PlannedPossessionAtUtc = start ?? now.AddMonths(-1),
             PossessionGivenAtUtc = start ?? now.AddMonths(-1),
             NoticeGivenAtUtc = noticeGiven ? now : null,
-            CreatedAtUtc = now, UpdatedAtUtc = now, CreatedByUserId = 1, RowVersion = Guid.NewGuid(),
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = 1,
+            RowVersion = Guid.NewGuid(),
         };
         _db.LeaseManagements.Add(management);
         _db.SaveChanges();
         var account = new TenantAccount
         {
-            PortfolioId = PortfolioId, LeaseManagementId = management.Id,
-            AccountNumber = $"TA-{management.Id}", Currency = "USD", OpenedAtUtc = now,
-            CreatedAtUtc = now, CreatedByUserId = 1,
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            AccountNumber = $"TA-{management.Id}",
+            Currency = "USD",
+            OpenedAtUtc = now,
+            CreatedAtUtc = now,
+            CreatedByUserId = 1,
         };
         var party = new LeaseManagementParty
         {
-            PortfolioId = PortfolioId, LeaseManagementId = management.Id, TenantId = tenant.Id,
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            TenantId = tenant.Id,
             Role = LeaseManagementPartyRole.PrimaryTenant,
             EffectiveFrom = DateOnly.FromDateTime(start ?? now.AddMonths(-1)),
-            ChangeReason = "Report test", CreatedAtUtc = now, CreatedByUserId = 1,
+            ChangeReason = "Report test",
+            CreatedAtUtc = now,
+            CreatedByUserId = 1,
         };
         var agreement = new LeaseAgreement
         {
-            PortfolioId = PortfolioId, LeaseManagementId = management.Id, VersionNumber = 1,
-            AgreementNumber = $"A-{management.Id}", ChangeType = LeaseAgreementChangeType.Initial,
+            PortfolioId = PortfolioId,
+            LeaseManagementId = management.Id,
+            VersionNumber = 1,
+            AgreementNumber = $"A-{management.Id}",
+            ChangeType = LeaseAgreementChangeType.Initial,
             TermType = LeaseAgreementTermType.FixedTerm,
             TermStartOn = DateOnly.FromDateTime(start ?? now.AddMonths(-1)),
             TermEndOn = DateOnly.FromDateTime(end ?? now.AddYears(1)),
             GoverningFromOn = DateOnly.FromDateTime(start ?? now.AddMonths(-1)),
-            BaseRentAmount = rent, RentDueDay = 1, SecurityDepositObligation = rent,
-            LateFeeAmount = 50m, GracePeriodDays = 5, Currency = "USD",
-            TermsSchemaVersion = 1, TermsPayload = "{}",
+            BaseRentAmount = rent,
+            RentDueDay = 1,
+            SecurityDepositObligation = rent,
+            LateFeeAmount = 50m,
+            GracePeriodDays = 5,
+            Currency = "USD",
+            TermsSchemaVersion = 1,
+            TermsPayload = "{}",
             DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
                 PortfolioId, 1, now),
-            IssuedAtUtc = start ?? now.AddMonths(-1),
-            FullyExecutedAtUtc = start ?? now.AddMonths(-1),
-            CreatedAtUtc = now, UpdatedAtUtc = now, CreatedByUserId = 1,
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now,
+            CreatedByUserId = 1,
             LeaseManagement = management,
         };
         management.TenantAccount = account;
         _db.AddRange(account, party, agreement);
         _db.SaveChanges();
+        _db.MarkFullyExecuted(
+            agreement,
+            party,
+            tenant,
+            actorUserId: 1,
+            executedAtUtc: start ?? now.AddMonths(-1));
         return agreement;
     }
 
@@ -1461,12 +1492,19 @@ public class ReportsServiceTests : IDisposable
         var account = lease.LeaseManagement!.TenantAccount!;
         var charge = new TenantLedgerEntry
         {
-            PortfolioId = PortfolioId, TenantAccountId = account.Id,
+            PortfolioId = PortfolioId,
+            TenantAccountId = account.Id,
             EntryType = entryType,
-            Direction = TenantLedgerDirection.Debit, Amount = amount, Currency = "USD",
-            EffectiveOn = DateOnly.FromDateTime(dueDate), DueOn = DateOnly.FromDateTime(dueDate),
-            PostedAtUtc = now, Description = entryType.ToString(), BusinessKey = $"charge:{Guid.NewGuid():N}",
-            LeaseAgreementId = lease.Id, CreatedByUserId = 1,
+            Direction = TenantLedgerDirection.Debit,
+            Amount = amount,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(dueDate),
+            DueOn = DateOnly.FromDateTime(dueDate),
+            PostedAtUtc = now,
+            Description = entryType.ToString(),
+            BusinessKey = $"charge:{Guid.NewGuid():N}",
+            LeaseAgreementId = lease.Id,
+            CreatedByUserId = 1,
         };
         _db.TenantLedgerEntries.Add(charge);
         _db.SaveChanges();
@@ -1474,19 +1512,30 @@ public class ReportsServiceTests : IDisposable
         if (paid <= 0m) return charge;
         var receipt = new TenantLedgerEntry
         {
-            PortfolioId = PortfolioId, TenantAccountId = account.Id,
-            EntryType = TenantLedgerEntryType.PaymentReceipt, Direction = TenantLedgerDirection.Credit,
-            Amount = paid, Currency = "USD", EffectiveOn = DateOnly.FromDateTime(paidDate ?? dueDate),
-            PostedAtUtc = paidDate ?? now, Description = "Payment received",
-            BusinessKey = $"receipt:{Guid.NewGuid():N}", CreatedByUserId = 1,
+            PortfolioId = PortfolioId,
+            TenantAccountId = account.Id,
+            EntryType = TenantLedgerEntryType.PaymentReceipt,
+            Direction = TenantLedgerDirection.Credit,
+            Amount = paid,
+            Currency = "USD",
+            EffectiveOn = DateOnly.FromDateTime(paidDate ?? dueDate),
+            PostedAtUtc = paidDate ?? now,
+            Description = "Payment received",
+            BusinessKey = $"receipt:{Guid.NewGuid():N}",
+            CreatedByUserId = 1,
         };
         _db.TenantLedgerEntries.Add(receipt);
         _db.SaveChanges();
         _db.TenantLedgerAllocations.Add(new TenantLedgerAllocation
         {
-            PortfolioId = PortfolioId, TenantAccountId = account.Id,
-            DebitEntryId = charge.Id, CreditEntryId = receipt.Id, Amount = paid,
-            AllocatedAtUtc = paidDate ?? now, BusinessKey = $"allocation:{Guid.NewGuid():N}", CreatedByUserId = 1,
+            PortfolioId = PortfolioId,
+            TenantAccountId = account.Id,
+            DebitEntryId = charge.Id,
+            CreditEntryId = receipt.Id,
+            Amount = paid,
+            AllocatedAtUtc = paidDate ?? now,
+            BusinessKey = $"allocation:{Guid.NewGuid():N}",
+            CreatedByUserId = 1,
         });
         _db.SaveChanges();
         return receipt;
@@ -1498,6 +1547,9 @@ public class ReportsServiceTests : IDisposable
         var expense = new Expense
         {
             PortfolioId = PortfolioId,
+            OperationalScope = propertyId.HasValue
+                ? ExpenseOperationalScope.Property
+                : ExpenseOperationalScope.Portfolio,
             PropertyId = propertyId,
             Category = category,
             Description = category.ToString(),
@@ -1566,6 +1618,7 @@ public class ReportsServiceTests : IDisposable
         var expense = new Expense
         {
             PortfolioId = PortfolioId,
+            OperationalScope = ExpenseOperationalScope.Property,
             PropertyId = propertyId,
             Vendor = vendor,
             Category = ScheduleECategory.Repairs,
@@ -1697,12 +1750,4 @@ public class ReportsServiceTests : IDisposable
             return base.ScalarExecutingAsync(command, eventData, result, cancellationToken);
         }
     }
-}
-
-/// <summary>
-/// SQLite reports context using the shared test-only compatibility model.
-/// </summary>
-internal sealed class ReportsServiceTestDbContext : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext
-{
-    public ReportsServiceTestDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
 }
