@@ -6,6 +6,7 @@
 - Notion task: `TSK-754`
 - Environment: `https://redacted-host.example.invalid`
 - Initial source SHA: `ccac9ee24331bf42695772d745fb3a5a6992d10c`
+- Current verified source SHA: `b688c1729ea38895c200bdc2b75aaadb731afb6b`
 - Planner: `Docs/Testing/YearSimulation2027/index.html`
 - Schedule: `Docs/Testing/YearSimulation2027/schedule.csv`
 - Corpus: `/Users/blackcolours/dev/work/rental-management/output/pdf/tsk-749-year-simulation-scan-corpus`
@@ -50,7 +51,7 @@
 
 ### TSK-754-D002 — Guided Setup detection can remain pending forever
 
-- Status: Fix pending preview verification
+- Status: Fixed and independently verified in the real preview
 - Severity: Blocking
 - Reproduction:
   - Register and verify a new user.
@@ -68,14 +69,67 @@
   - Read every success and error flag into an array before reducing with `every` or `some`.
   - Add a regression assertion that rejects the short-circuiting readiness pattern.
 - Verification required:
-  - A fresh browser load advances to the lease-first setup screen without a manual refetch.
-  - Focused onboarding tests and both web type-check lanes pass.
+  - Passed: a fresh browser load advanced to the lease-first setup screen without a manual refetch.
+  - Passed: focused onboarding tests and both web type-check lanes.
+  - Evidence: `browser/d002-after-guided-setup-lease-first.png`.
+
+### TSK-754-D003 — Scan extraction requires a workspace AI credential
+
+- Status: Configuration prerequisite resolved for the pilot portfolio
+- Severity: Blocking until configured
+- Reproduction:
+  - Upload `SCN-0001` through Guided Setup before configuring a workspace AI connection.
+  - Draft 2 transitions from `Pending` to `Failed`.
+- Evidence:
+  - Upload returned HTTP 201 and created only the scan draft.
+  - Failure reason was `AI extraction unavailable: configure a workspace OpenAI or Anthropic credential in Settings`.
+  - Property, Unit, Tenant, LeaseManagement, LeaseAgreement, and TenantAccount counts for portfolio 3
+    remained zero.
+- Resolution:
+  - Exercised Settings > AI connection through the real form.
+  - Verified and saved the preview OpenAI integration as `gpt-4o`.
+  - Re-uploaded the same PDF; extraction completed and opened the five-step review.
+- Security note:
+  - The credential remains encrypted in the application database and the saved form clears it.
+
+### TSK-754-D004 — Shared preview clock changes every portfolio's worker time
+
+- Status: Shared-preview execution stopped before bulk worker execution; isolated runtime/database required
+- Severity: Blocking safety boundary
+- Evidence:
+  - The simulation clock is a single global `SimulationClocks` row with no portfolio scope.
+  - Both API and Engine register a clock-state refresher against that shared row.
+  - Scheduled worker commands operate in the Engine's system/admin context across due portfolio data.
+  - Therefore a year-long worker replay cannot be restricted to portfolio 3 merely by selecting that
+    portfolio in the browser.
+  - The shared clock was reset to `Real` immediately after discovery.
+- Resolution required:
+  - Stop only the shared `rental` application runtime while preserving its data.
+  - Run the year under a distinct preview stack ID with a fresh persistent database and its own
+    uploads/data-protection volumes.
+  - Do not resume the schedule against the shared `rental` database.
+
+## Pilot scan proof
+
+- `SCN-0001` was uploaded twice: the first attempt intentionally established the missing-credential
+  failure boundary; the second extracted successfully after configuration.
+- Before confirmation, portfolio 3 contained 0 Properties, 0 Units, 0 Tenants, 0 LeaseManagements,
+  0 LeaseAgreements, and 0 TenantAccounts.
+- The review populated Arbor House, 117 Arbor Street, Columbus, OH 43201; Unit Main; Dana Garcia;
+  the 2026-02-01 through 2027-12-31 term; $1,575 monthly rent; $1,575 deposit; and rent due day 1.
+- Manual completion also exercised bedrooms, bathrooms, tenant email, tenant phone, emergency
+  contact, late fee, and lease notes.
+- After `Confirm & create`, each of the six aggregate counts was exactly 1.
+- This is pilot evidence only. The official schedule counter remains zero until the isolated run is
+  initialized and `SCN-0001` is repeated there.
 
 ## Checkpoint 2026-07-26
 
-- Status: environment initialization
+- Status: shared-preview pilot complete; isolated run initialization required
 - Completed run rows: 0 / 1,996
 - Uploaded scan assets: 0 / 953
-- Confirmed defects: 2
-- Current blocker: Guided Setup detection requires a preview rebuild with the eager query-status tracking fix.
-- Next action: rebuild the canonical `rental` stack, verify a fresh onboarding load, then upload the first opening lease.
+- Pilot scan confirmations: 1
+- Findings and safety blockers: 4
+- Current blocker: the shared master clock affects all preview portfolios.
+- Next action: preserve and stop the shared `rental` runtime, start an isolated `yearsim754` runtime/database,
+  configure its synthetic admin and AI connection, and repeat the first opening lease as official run evidence.
