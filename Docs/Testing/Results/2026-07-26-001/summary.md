@@ -6,7 +6,7 @@
 - Notion task: `TSK-754`
 - Environment: `https://redacted-host.example.invalid`
 - Initial source SHA: `ccac9ee24331bf42695772d745fb3a5a6992d10c`
-- Current verified source SHA: `1aacb6d778f99a4e0b8be26611566533949114ea`
+- Current verified source SHA: `1a34244a2cfb7133d60557d9c130d5914d32c699`
 - Planner: `Docs/Testing/YearSimulation2027/index.html`
 - Schedule: `Docs/Testing/YearSimulation2027/schedule.csv`
 - Corpus: `/Users/blackcolours/dev/work/rental-management/output/pdf/tsk-749-year-simulation-scan-corpus`
@@ -419,8 +419,7 @@
 
 ### TSK-754-D016 — Date-only simulation clock anchors at UTC midnight
 
-- Status: Root cause fixed in the working tree; focused regression passes; live Azure deployment
-  pending
+- Status: Fixed and verified against the live Azure API and PostgreSQL database
 - Severity: Blocking time-travel correctness defect
 - Reproduction:
   - Select January 3, 2027 in the simulation date picker.
@@ -442,6 +441,13 @@
   - The focused integration test failed before the fix: expected `2027-01-03T05:00:00Z`, received
     `2027-01-03T00:00:00Z`.
   - Both `DevClockControllerTests` pass after the fix.
+  - Exact source SHA `1a34244a2cfb7133d60557d9c130d5914d32c699` was built under the Azure
+    heavy-work lock, labeled into `rc-preview-api:yearsim754`, and deployed to the isolated stack.
+  - The recreated API container reported healthy and its image revision label matched the exact
+    source SHA.
+  - Posting date-only `2027-01-03` with timezone `America/New_York` and frozen mode returned
+    `2027-01-03T05:00:00Z`; a separate anonymous clock read returned the same instant.
+  - PostgreSQL independently returned `2027-01-03` from `rc_business_date(1)`.
 
 ## Tooling and maintenance observations
 
@@ -543,7 +549,7 @@
 - Official scan confirmations: 13
 - Findings and safety blockers: 16
 - Current blockers:
-  - D016 must be deployed and verified so the selected schedule date matches the database business
-    date.
-- Next action: deploy and verify the D016 runtime correction, complete the missing SCN-0014
-  tenant/unit fields manually, and resume the remaining January 3 scans and rent receipts.
+  - None at this checkpoint; D014 and D015 remain confirmed defects with safe manual correction
+    paths for this run.
+- Next action: complete the missing SCN-0014 tenant/unit fields through the native app, then resume
+  the remaining January 3 scans and rent receipts.
