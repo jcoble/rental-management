@@ -10,17 +10,18 @@ const unitPageSource = readFileSync(
 );
 
 describe('Unit Tenant & lease surface', () => {
-	it('keeps the six approved top-level Unit destinations without a nested tenant tab list', () => {
+	it('keeps the six approved top-level Unit destinations with a focused tenant sub-tab list', () => {
 		assert.equal(UNIT_TABS.length, 6);
-		assert.doesNotMatch(unitPageSource, /unit-tenant-lease-tabs/);
+		assert.match(unitPageSource, /unit-tenant-lease-tabs/);
 		assert.match(unitPageSource, /data-testid="unit-tenant-lease-surface"/);
 	});
 
-	it('renders Agreement and Residents together and preserves canonical entry views', () => {
+	it('renders only the selected Agreement or Residents view and preserves canonical entry views', () => {
 		assert.match(unitPageSource, /data-testid="unit-agreement-section"/);
 		assert.match(unitPageSource, /data-testid="unit-residents-section"/);
 		assert.match(unitPageSource, /<LeaseTab/);
 		assert.match(unitPageSource, /<ResidentsTab/);
+		assert.match(unitPageSource, /\{#if activeView === 'residents'\}/);
 		assert.deepEqual(resolveUnitDestination('tenant-lease', 'agreements'), {
 			tab: 'tenant-lease',
 			view: 'agreements',

@@ -94,7 +94,7 @@
 				>
 					<div>
 						<label for="register-displayname" class="mb-1.5 block text-sm font-medium text-foreground">
-							Display name
+							Your name
 						</label>
 						<Input
 							id="register-displayname"

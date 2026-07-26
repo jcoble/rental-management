@@ -12,6 +12,7 @@
 	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
@@ -448,35 +449,6 @@
 	{:else if !wo}
 		<p class="py-8 text-center text-sm text-muted-foreground" data-testid="work-order-detail-not-found">Work order not found.</p>
 	{:else}
-		<Card.Root class="mb-6" data-testid="work-order-responsibility-card">
-			<Card.Header>
-				<Card.Title>Technician responsibility</Card.Title>
-				<Card.Description>
-					{currentPrimary ? `${currentPrimary.memberDisplayName} is responsible for this work order.` : 'No technician is currently assigned.'}
-				</Card.Description>
-			</Card.Header>
-			{#if canAssignWork}
-				<Card.Content class="flex flex-wrap items-end gap-3">
-					<label class="grid min-w-64 gap-1 text-sm">Technician
-						<select class="h-10 rounded-md border bg-background px-3" bind:value={selectedCandidateId}>
-							<option value="">Choose a technician</option>
-							{#each candidatesQuery.data ?? [] as candidate}
-								<option value={String(candidate.membershipRoleAssignmentId)}>{candidate.memberDisplayName}</option>
-							{/each}
-						</select>
-					</label>
-					<label class="grid min-w-64 flex-1 gap-1 text-sm">Reason
-						<input class="h-10 rounded-md border bg-background px-3" bind:value={assignmentReason} maxlength="1000" />
-					</label>
-					<Button onclick={() => assignResponsibilityMutation.mutate()} disabled={!selectedCandidateId || !assignmentReason.trim() || assignResponsibilityMutation.isPending}>
-						{currentPrimary ? 'Reassign' : 'Assign'}
-					</Button>
-					{#if currentPrimary}
-						<Button variant="outline" onclick={() => closeResponsibilityMutation.mutate()} disabled={closeResponsibilityMutation.isPending}>Unassign</Button>
-					{/if}
-				</Card.Content>
-			{/if}
-		</Card.Root>
 		<!-- Header -->
 		<div class="mb-6 flex flex-wrap items-start justify-between gap-4">
 			<div class="space-y-2">
@@ -577,6 +549,54 @@
 				{/if}
 			</div>
 		</div>
+
+		<Card.Root class="mb-6" data-testid="work-order-responsibility-card">
+			<Card.Header>
+				<Card.Title>Who is handling this?</Card.Title>
+				<Card.Description>
+					{currentPrimary ? `${currentPrimary.memberDisplayName} is assigned to this work order.` : 'No technician is assigned yet.'}
+				</Card.Description>
+			</Card.Header>
+			{#if canAssignWork}
+				<Card.Content class="flex flex-wrap items-end gap-3">
+					<label class="grid min-w-64 gap-1 text-sm">
+						<span>Technician</span>
+						<Select.Root type="single" bind:value={selectedCandidateId}>
+							<Select.Trigger class="w-full" data-testid="work-order-technician-select">
+								{(candidatesQuery.data ?? []).find(
+									(candidate) => String(candidate.membershipRoleAssignmentId) === selectedCandidateId
+								)?.memberDisplayName ?? 'Choose a technician'}
+							</Select.Trigger>
+							<Select.Content>
+								{#each candidatesQuery.data ?? [] as candidate}
+									<Select.Item
+										value={String(candidate.membershipRoleAssignmentId)}
+										label={candidate.memberDisplayName}
+									>
+										{candidate.memberDisplayName}
+									</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
+					</label>
+					<label class="grid min-w-64 flex-1 gap-1 text-sm">
+						<span>Assignment note</span>
+						<input
+							class="h-10 rounded-md border bg-background px-3"
+							bind:value={assignmentReason}
+							maxlength="1000"
+							placeholder="Why this person is being assigned"
+						/>
+					</label>
+					<Button onclick={() => assignResponsibilityMutation.mutate()} disabled={!selectedCandidateId || !assignmentReason.trim() || assignResponsibilityMutation.isPending}>
+						{currentPrimary ? 'Reassign' : 'Assign'}
+					</Button>
+					{#if currentPrimary}
+						<Button variant="outline" onclick={() => closeResponsibilityMutation.mutate()} disabled={closeResponsibilityMutation.isPending}>Unassign</Button>
+					{/if}
+				</Card.Content>
+			{/if}
+		</Card.Root>
 
 		<!-- Dispatched hint: the vendor was texted and will reply DONE to close it. Gated on a REAL open
 		     dispatch (server-computed hasActiveDispatch) or one just sent this session — never on a mere

@@ -12,11 +12,11 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { RefreshCw, ShieldAlert } from '@lucide/svelte';
-	import { hasCapability } from '$lib/stores/auth.svelte';
+	import { currentUserIsPlatformAdmin } from '$lib/stores/auth.svelte';
 
-	// Forensic ("Advanced") view — IP + raw before/after — is an Admin-only deep-link from this
-	// page rather than its own nav item (F6). The /admin/audit route still exists and is guarded.
-	const showAdvanced = $derived(hasCapability('security.manage'));
+	// The forensic view includes IP addresses and raw before/after JSON. Its API is intentionally
+	// platform-operator-only, so workspace security administrators must not receive a dead link.
+	const showAdvanced = $derived(currentUserIsPlatformAdmin());
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());

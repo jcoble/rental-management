@@ -8,7 +8,7 @@
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { Input } from '$lib/components/ui/input';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import { FilePenLine, Loader2 } from '@lucide/svelte';
 
 	let {
@@ -63,12 +63,12 @@
 	<Dialog.Content class="max-w-lg" data-testid="addendum-correction-dialog">
 		<Dialog.Header>
 			<Dialog.Title>Correct {source.addendumNumber}</Dialog.Title>
-			<Dialog.Description>Creates a new editable version in series {source.seriesPublicId}. The executed source remains immutable and governs until the correction is fully signed.</Dialog.Description>
+			<Dialog.Description>Create a corrected version of this signed addendum. The current version stays in effect until the correction is fully signed.</Dialog.Description>
 		</Dialog.Header>
 		<div class="space-y-4">
-			<div class="rounded-xl border p-4 text-sm"><p class="font-medium">Source version {source.versionNumber}</p><p class="text-muted-foreground">Effective {source.effectiveFromOn}{source.effectiveThroughOn ? ` through ${source.effectiveThroughOn}` : ' onward'}</p></div>
-			<label class="space-y-1"><span class="text-sm font-medium">Correction begins</span><Input type="date" bind:value={supersessionEffectiveOn} data-testid="addendum-correction-effective-on" /></label>
-			<p class="text-xs text-muted-foreground">The server copies the exact terms, signer snapshots, financial effects, and document source into the new draft.</p>
+			<div class="rounded-xl bg-muted/40 p-4 text-sm"><p class="font-medium">Current version {source.versionNumber}</p><p class="text-muted-foreground">Effective {source.effectiveFromOn}{source.effectiveThroughOn ? ` through ${source.effectiveThroughOn}` : ' onward'}</p></div>
+			<label class="space-y-1"><span class="text-sm font-medium">Correction begins</span><DatePicker bind:value={supersessionEffectiveOn} testid="addendum-correction-effective-on" /></label>
+			<p class="text-xs text-muted-foreground">The new draft starts with the same terms, signers, money changes, and document so you only need to edit the correction.</p>
 			{#if validationError}<p class="text-sm text-destructive">{validationError}</p>{/if}
 		</div>
 		<Dialog.Footer>

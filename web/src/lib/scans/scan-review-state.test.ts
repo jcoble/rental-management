@@ -53,7 +53,7 @@ describe('scan review terminal state', () => {
 			createdRecordHref('RentalApplication', 123, { unitId: 9 }),
 			'/units/9?tab=leasing&view=applications&app=123',
 		);
-		assert.equal(createdRecordHref('Payment', 45, { unitId: 9 }), '/units/9?tab=money&ledger=rent&payment=45');
+		assert.equal(createdRecordHref('Payment', 45, { unitId: 9 }), '/units/9?tab=money&view=tenant-account&payment=45');
 		assert.equal(createdRecordHref('WorkOrder', 46, { unitId: 9 }), '/units/9?tab=maintenance&view=work-orders&wo=46');
 		assert.equal(
 			createdRecordHref('LeaseAgreement', 47, {
@@ -63,6 +63,6 @@ describe('scan review terminal state', () => {
 			'/units/9?tab=tenant-lease&view=agreements&leaseManagement=71',
 		);
 		assert.equal(createdRecordHref('LeaseAgreement', 47, { unitId: 9 }), '/units/9?tab=tenant-lease&view=agreements');
-		assert.equal(createdRecordHref('Expense', 48, { unitId: 9 }), '/units/9?tab=money&ledger=expenses&expense=48');
+		assert.equal(createdRecordHref('Expense', 48, { unitId: 9 }), '/units/9?tab=money&view=operating-costs&expense=48');
 	});
 });

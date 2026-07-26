@@ -88,8 +88,8 @@
 	const columns: ColumnDef<UnitHealth>[] = [
 		{ key: 'unitNumber', title: 'Unit', sortable: true, mobileRole: 'title', accessor: (u) => `Unit ${u.unitNumber}` },
 		{ key: 'propertyName', title: 'Property', sortable: true, mobileRole: 'subtitle' },
-		{ key: 'status', title: 'Status', mobileRole: 'badge', cell: statusCell },
-		{ key: 'simpleStage', title: 'Stage', mobileRole: 'meta', cell: stageCell },
+		{ key: 'status', title: 'Rental status', mobileRole: 'badge', cell: statusCell },
+		{ key: 'simpleStage', title: 'Next step', mobileRole: 'meta', cell: stageCell },
 		{ key: 'openWorkOrderCount', title: 'Open repairs', format: 'number', sortable: true, mobileRole: 'metric', align: 'right' },
 		{ key: 'leaseEndsInDays', title: 'Lease ends', mobileRole: 'meta', accessor: (u) => leaseEndsLabel(u.leaseEndsInDays) },
 		{ key: 'docsNeedingReviewCount', title: 'Docs', format: 'number', mobileRole: 'meta', align: 'right' },
@@ -99,7 +99,8 @@
 	function leaseEndsLabel(days?: number): string {
 		if (days == null) return '—';
 		if (days === 0) return 'Today';
-		return `${days}d`;
+		if (days < 0) return `${Math.abs(days)} day${Math.abs(days) === 1 ? '' : 's'} ago`;
+		return `In ${days} day${days === 1 ? '' : 's'}`;
 	}
 </script>
 
@@ -112,7 +113,7 @@
 {/snippet}
 
 <svelte:head>
-	<title>Units - Rental Command</title>
+	<title>Command Center - Rental Command</title>
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="units-page">
@@ -122,8 +123,8 @@
 		art={6}
 		tone="sky"
 		eyebrow="Rentals"
-		title="Units"
-		description="Every unit at a glance. Open a unit for its full story."
+		title="Command Center"
+		description="Choose a rental to manage its lease, residents, money, maintenance, documents, and history in one place."
 		data-testid="units-header"
 	/>
 

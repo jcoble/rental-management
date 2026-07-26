@@ -1,18 +1,18 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { notifications } from '$lib/api/endpoints/notifications';
-	import { getAuthState } from '$lib/stores/auth.svelte';
+	import { getAuthState, hasCapability } from '$lib/stores/auth.svelte';
 	import { canAccessPathForEnvelope, safeLandingForAccess } from '$lib/auth/experience-policy';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Card from '$lib/components/ui/card';
-	import NotificationHelpAction from '$lib/components/notifications/NotificationHelpAction.svelte';
+	import NotificationSetupJourney from '$lib/components/notifications/NotificationSetupJourney.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
-	import { ArrowLeft } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const authState = getAuthState();
+	const canManageTeamNotifications = $derived(hasCapability('notifications.manage'));
 	const returnHref = $derived.by(() => {
 		const access = authState.accessEnvelope;
 		if (!access) return '/';
@@ -44,39 +44,55 @@
 		mutationFn: () => notifications.myAlerts.update(form),
 		onSuccess: (saved) => {
 			queryClient.setQueryData(['notification-settings', 'my-alerts'], saved);
-			showSuccess('Your alert preferences were saved.');
+			showSuccess('Your alert choices were saved.');
 		},
 		onError: (error) => showError(apiErrorMessage(error))
 	}));
 
 	const channels = [
-		{ key: 'enableInApp', label: 'In-app', detail: 'Shows in your Rental Command bell and inbox.' },
-		{ key: 'enableMobilePush', label: 'Mobile push', detail: 'Goes to mobile devices registered to your account. This is not browser web push.' },
-		{ key: 'enableEmail', label: 'Email', detail: 'Goes to the signed-in account email shown below.' },
-		{ key: 'enableSms', label: 'SMS', detail: 'Goes to the signed-in account phone number shown below when one is available.' }
+		{ key: 'enableInApp', label: 'In Rental Command', detail: 'See alerts in the bell and notification list.' },
+		{ key: 'enableMobilePush', label: 'Phone app', detail: 'Receive alerts on phones signed in to your account.' },
+		{ key: 'enableEmail', label: 'Email', detail: 'Send alerts to the account email shown below.' },
+		{ key: 'enableSms', label: 'Text message', detail: 'Send alerts to the mobile number shown below.' }
 	] as const;
+
+	const hasUnsavedChanges = $derived.by(() => {
+		const saved = alertsQuery.data;
+		if (!saved) return false;
+		return form.enableInApp !== saved.enableInApp ||
+			form.enableMobilePush !== saved.enableMobilePush ||
+			form.enableEmail !== saved.enableEmail ||
+			form.enableSms !== saved.enableSms;
+	});
+
+	const savedSummary = $derived.by(() => {
+		const saved = alertsQuery.data;
+		if (!saved) return 'Your saved alert destinations will appear after this step loads.';
+		const enabled: string[] = [];
+		if (saved.enableInApp) enabled.push('Rental Command');
+		if (saved.enableMobilePush) enabled.push('phone app');
+		if (saved.enableEmail) enabled.push('email');
+		if (saved.enableSms) enabled.push('text message');
+		return enabled.length > 0
+			? `${saved.displayName} receives personal alerts in ${enabled.join(', ')}.`
+			: `${saved.displayName} has paused every personal alert destination.`;
+	});
 </script>
 
-<svelte:head><title>My alerts · Rental Command</title></svelte:head>
+<svelte:head><title>Your alerts · Rental Command</title></svelte:head>
 
-<div class="mx-auto max-w-4xl space-y-6" data-testid="my-alerts-page">
-	<div>
-		<a href={returnHref} class="mb-3 inline-flex min-h-11 items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
-			<ArrowLeft class="size-4" /> Back
-		</a>
-		<div class="flex flex-wrap items-start justify-between gap-4">
-			<div>
-				<h1 class="text-2xl font-semibold tracking-tight">My alerts</h1>
-				<p class="mt-1 text-sm text-muted-foreground">These choices apply only to your signed-in account, not your team or tenants.</p>
-			</div>
-				<NotificationHelpAction
-					title="How My alerts works"
-					description="These destinations belong only to the signed-in account."
-					guidance="Choose where you personally receive Rental Command alerts. Team responsibilities and tenant notice delivery use their own settings and are never changed here."
-				/>
-		</div>
-	</div>
-
+<NotificationSetupJourney
+	currentStep={1}
+	description="Choose where you personally receive alerts. This does not change what your team or tenants receive."
+	{savedSummary}
+	{returnHref}
+	canManage={canManageTeamNotifications}
+	{hasUnsavedChanges}
+	helpTitle="How personal alerts work"
+	helpDescription="These destinations belong only to your signed-in account."
+	helpGuidance="Choose where you personally receive Rental Command alerts. Team responsibilities and tenant messages have their own steps and are never changed here."
+>
+<div data-testid="my-alerts-page">
 	{#if alertsQuery.isLoading}
 		<LoadingState label="Loading your alert destinations" testid="my-alerts-loading" />
 	{:else if alertsQuery.isError || !alertsQuery.data}
@@ -85,9 +101,14 @@
 		<Card.Root class="gap-0 py-0">
 			<Card.Content class="space-y-5 p-6">
 				<div class="rounded-lg border border-border bg-muted/30 p-4">
-					<p class="font-medium">Configuring alerts for {alertsQuery.data.displayName}</p>
+					<p class="font-medium">Alert destinations for {alertsQuery.data.displayName}</p>
 					<p class="mt-1 text-sm text-muted-foreground">Email: {alertsQuery.data.email || 'No email on this account'}</p>
-					<p class="text-sm text-muted-foreground">SMS: {alertsQuery.data.phoneNumber || 'No phone number on this account'}</p>
+					<p class="text-sm text-muted-foreground">Mobile number: {alertsQuery.data.phoneNumber || 'No mobile number on this account'}</p>
+					{#if !alertsQuery.data.phoneNumber}
+						<a href="/profile" class="mt-2 inline-flex min-h-11 items-center text-sm font-medium text-primary hover:underline">
+							Add a mobile number in Profile
+						</a>
+					{/if}
 				</div>
 
 				<div class="grid gap-3 sm:grid-cols-2">
@@ -104,11 +125,12 @@
 
 				<div class="flex items-center gap-3">
 					<Button onclick={() => saveMutation.mutate()} disabled={saveMutation.isPending} data-testid="my-alerts-save">
-						{saveMutation.isPending ? 'Saving…' : 'Save my alerts'}
+						{saveMutation.isPending ? 'Saving…' : 'Save my alert choices'}
 					</Button>
-					<p class="text-xs text-muted-foreground" aria-live="polite">Team routing and tenant delivery are configured separately.</p>
+					<p class="text-xs text-muted-foreground" aria-live="polite">Next, choose who handles each kind of work.</p>
 				</div>
 			</Card.Content>
 		</Card.Root>
 	{/if}
 </div>
+</NotificationSetupJourney>

@@ -45,6 +45,9 @@
 		enabled: !!currentUser,
 		queryFn: () => portal.tenantAccountsPage({ take: 200, sort: 'propertyName' })
 	}));
+	const selectedAccount = $derived(
+		accountsQuery.data?.items.find((account) => account.tenantAccountId === selectedAccountId)
+	);
 
 	$effect(() => {
 		const accounts = accountsQuery.data;
@@ -231,19 +234,25 @@
 		</header>
 
 		{#if accountsQuery.data && accountsQuery.data.totalCount > 1}
-			<label class="mb-5 block max-w-lg text-sm font-medium" data-testid="portal-dashboard-account-selector">
-				Account
-				<select
-					class="mt-1 block w-full rounded-md border border-border bg-background px-3 py-2"
-					value={selectedAccountId ?? ''}
-					onchange={(event) => (selectedAccountId = event.currentTarget.value ? Number(event.currentTarget.value) : null)}
+			<div class="mb-5 max-w-lg" data-testid="portal-dashboard-account-selector">
+				<label class="mb-1.5 block text-sm font-medium" for="portal-dashboard-rental">Rental</label>
+				<Select.Root
+					type="single"
+					value={selectedAccountId == null ? '' : String(selectedAccountId)}
+					onValueChange={(value) => (selectedAccountId = value ? Number(value) : null)}
 				>
-					<option value="">Choose an account</option>
+					<Select.Trigger id="portal-dashboard-rental" class="w-full">
+						{selectedAccount ? `${selectedAccount.propertyName} · Unit ${selectedAccount.unitNumber}` : 'Choose a rental'}
+					</Select.Trigger>
+					<Select.Content>
 					{#each accountsQuery.data.items as tenantAccount (tenantAccount.tenantAccountId)}
-						<option value={tenantAccount.tenantAccountId}>{tenantAccount.propertyName} · Unit {tenantAccount.unitNumber} · {tenantAccount.accountNumber}</option>
+						<Select.Item value={String(tenantAccount.tenantAccountId)} label={`${tenantAccount.propertyName} · Unit ${tenantAccount.unitNumber}`}>
+							{tenantAccount.propertyName} · Unit {tenantAccount.unitNumber}
+						</Select.Item>
 					{/each}
-				</select>
-			</label>
+					</Select.Content>
+				</Select.Root>
+			</div>
 		{/if}
 
 		<section id="notifications" class="mb-5 rounded-lg border border-border bg-card p-4">

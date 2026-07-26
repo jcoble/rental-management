@@ -10,7 +10,9 @@
 	import { getAuthState } from '$lib/stores/auth.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import * as Select from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import { Loader2 } from '@lucide/svelte';
 
@@ -61,6 +63,10 @@
 		}),
 		enabled: mode === 'add' && portfolioId > 0
 	}));
+	const selectedCandidateLabel = $derived.by(() => {
+		const candidate = candidateQuery.data?.items.find((item) => item.id === tenantId);
+		return candidate ? `${candidate.firstName} ${candidate.lastName}` : 'Choose a person';
+	});
 
 	function keyFor(request: unknown) {
 		const fingerprint = JSON.stringify({ mode, party: party?.leaseManagementPartyId, request });
@@ -132,26 +138,30 @@
 	<Dialog.Content class="max-h-[90vh] max-w-2xl overflow-y-auto">
 		<Dialog.Header>
 			<Dialog.Title>{title}</Dialog.Title>
-			<Dialog.Description>
-				Household membership is an effective-dated relationship and can change. Signed agreement PDFs stay immutable; financially responsible changes require a signed correction or restatement.
-			</Dialog.Description>
+			<Dialog.Description>Update who lives here and who is responsible for the lease. Signed lease files stay unchanged; responsibility changes require a signed correction or replacement.</Dialog.Description>
 		</Dialog.Header>
 		<div class="space-y-4 py-2">
 			{#if mode === 'add'}
 				<label class="space-y-1 text-sm"><span class="font-medium">Find an existing person</span><Input bind:value={search} placeholder="Search name, email, or phone" /></label>
-				<label class="space-y-1 text-sm"><span class="font-medium">Person</span><select bind:value={tenantId} class="h-10 w-full rounded-md border bg-background px-3"><option value={0}>Choose a person</option>{#each candidateQuery.data?.items ?? [] as candidate}<option value={candidate.id}>{candidate.firstName} {candidate.lastName}{candidate.email ? ` · ${candidate.email}` : ''}</option>{/each}</select></label>
+				<label class="space-y-1 text-sm">
+					<span class="font-medium">Person</span>
+					<Select.Root type="single" value={String(tenantId)} onValueChange={(value) => (tenantId = Number(value ?? 0))}>
+						<Select.Trigger class="w-full">{selectedCandidateLabel}</Select.Trigger>
+						<Select.Content>{#each candidateQuery.data?.items ?? [] as candidate}<Select.Item value={String(candidate.id)} label={`${candidate.firstName} ${candidate.lastName}`}>{candidate.firstName} {candidate.lastName}{candidate.email ? ` · ${candidate.email}` : ''}</Select.Item>{/each}</Select.Content>
+					</Select.Root>
+				</label>
 			{/if}
 			{#if mode === 'add' || mode === 'change'}
-				<label class="space-y-1 text-sm"><span class="font-medium">Household role</span><select bind:value={role} class="h-10 w-full rounded-md border bg-background px-3"><option value="PrimaryTenant">Primary signer</option><option value="CoTenant">Co-tenant</option><option value="Guarantor">Guarantor</option><option value="Occupant">Occupant</option></select></label>
+				<label class="space-y-1 text-sm"><span class="font-medium">Role in this home</span><Select.Root type="single" bind:value={role}><Select.Trigger class="w-full">{{ PrimaryTenant: 'Primary leaseholder', CoTenant: 'Co-leaseholder', Guarantor: 'Guarantor', Occupant: 'Other occupant' }[role]}</Select.Trigger><Select.Content><Select.Item value="PrimaryTenant" label="Primary leaseholder">Primary leaseholder</Select.Item><Select.Item value="CoTenant" label="Co-leaseholder">Co-leaseholder</Select.Item><Select.Item value="Guarantor" label="Guarantor">Guarantor</Select.Item><Select.Item value="Occupant" label="Other occupant">Other occupant</Select.Item></Select.Content></Select.Root></label>
 			{/if}
 			{#if mode !== 'grant' && mode !== 'revoke'}
-				<label class="space-y-1 text-sm"><span class="font-medium">{mode === 'end' ? 'Effective through' : 'Effective on'}</span><Input type="date" bind:value={effectiveDate} /></label>
+				<label class="space-y-1 text-sm"><span class="font-medium">{mode === 'end' ? 'Last day in this role' : 'Change begins'}</span><DatePicker bind:value={effectiveDate} /></label>
 			{/if}
 			{#if (mode === 'change' && (role === 'PrimaryTenant' || party?.role === 'PrimaryTenant')) || (mode === 'end' && party?.role === 'PrimaryTenant')}
-				<label class="space-y-1 text-sm"><span class="font-medium">Primary handoff</span><select bind:value={successorPartyId} class="h-10 w-full rounded-md border bg-background px-3"><option value={null}>Choose a household member</option>{#each currentParties as candidate}{#if candidate.leaseManagementPartyId !== party?.leaseManagementPartyId}<option value={candidate.leaseManagementPartyId}>{candidate.tenantName} · {candidate.role}</option>{/if}{/each}</select></label>
+				<label class="space-y-1 text-sm"><span class="font-medium">New primary leaseholder</span><Select.Root type="single" value={successorPartyId ? String(successorPartyId) : ''} onValueChange={(value) => (successorPartyId = value ? Number(value) : null)}><Select.Trigger class="w-full">{currentParties.find((candidate) => candidate.leaseManagementPartyId === successorPartyId)?.tenantName ?? 'Choose a household member'}</Select.Trigger><Select.Content>{#each currentParties as candidate}{#if candidate.leaseManagementPartyId !== party?.leaseManagementPartyId}<Select.Item value={String(candidate.leaseManagementPartyId)} label={candidate.tenantName}>{candidate.tenantName}</Select.Item>{/if}{/each}</Select.Content></Select.Root></label>
 			{/if}
 			{#if requiresAgreement}
-				<label class="space-y-1 text-sm"><span class="font-medium">Signed legal basis</span><select bind:value={agreementId} class="h-10 w-full rounded-md border bg-background px-3"><option value={null}>Choose a correction or restatement</option>{#each agreements as agreement}{#if (agreement.changeType === 'Correction' || agreement.changeType === 'Restatement') && agreement.executedArtifact}<option value={agreement.leaseAgreementId}>{agreement.agreementNumber} · version {agreement.versionNumber}</option>{/if}{/each}</select></label>
+				<label class="space-y-1 text-sm"><span class="font-medium">Signed document authorizing this change</span><Select.Root type="single" value={agreementId ? String(agreementId) : ''} onValueChange={(value) => (agreementId = value ? Number(value) : null)}><Select.Trigger class="w-full">{agreements.find((agreement) => agreement.leaseAgreementId === agreementId)?.agreementNumber ?? 'Choose a signed correction or replacement'}</Select.Trigger><Select.Content>{#each agreements as agreement}{#if (agreement.changeType === 'Correction' || agreement.changeType === 'Restatement') && agreement.executedArtifact}<Select.Item value={String(agreement.leaseAgreementId)} label={`${agreement.agreementNumber}, version ${agreement.versionNumber}`}>{agreement.agreementNumber} · version {agreement.versionNumber}</Select.Item>{/if}{/each}</Select.Content></Select.Root></label>
 			{/if}
 			<label class="space-y-1 text-sm"><span class="font-medium">Reason</span><textarea bind:value={reason} rows="3" maxlength="500" class="w-full rounded-md border bg-background px-3 py-2" placeholder={mode === 'grant' ? 'Why this person needs resident access' : 'What changed and why'}></textarea></label>
 			{#if mode === 'grant'}<p class="rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">A login is created from this member’s email if needed. Access is limited to this relationship, and the invitation is queued atomically with the grant.</p>{/if}

@@ -11,10 +11,10 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import * as Card from '$lib/components/ui/card';
-	import NotificationHelpAction from '$lib/components/notifications/NotificationHelpAction.svelte';
+	import NotificationPolicyAccordion from '$lib/components/notifications/NotificationPolicyAccordion.svelte';
+	import NotificationSetupJourney from '$lib/components/notifications/NotificationSetupJourney.svelte';
 	import NoticePreview from '$lib/components/notifications/NoticePreview.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
-	import { ArrowLeft } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const authState = getAuthState();
@@ -27,13 +27,17 @@
 	});
 	const canManage = $derived(hasCapability('notifications.manage'));
 	const automationDetails: Record<string, { label: string; detail: string }> = {
-		'rent-reminder': { label: 'Rent reminder', detail: 'A courtesy reminder before rent is due.' },
-		'lease-renewal-offer': { label: 'Lease renewal offer', detail: 'An operational offer after the lease-ending decision is Offer renewal.' },
-		'month-to-month-offer': { label: 'Month-to-month offer', detail: 'An operational offer after the lease-ending decision is Offer month-to-month.' },
-		'lease-non-renewal': { label: 'Lease expiration / non-renewal', detail: 'A legal notice after the lease-ending decision is Non-renewal / move-out.' },
-		'late-rent-late-fee': { label: 'Past-due rent / late fee', detail: 'A legal notice when rent remains past due and applicable late-fee facts are known.' }
+		'rent-reminder': { label: 'Rent is due soon', detail: 'Remind tenants before rent is due.' },
+		'lease-renewal-offer': { label: 'Offer a lease renewal', detail: 'Prepare an offer after you choose to renew the lease.' },
+		'month-to-month-offer': { label: 'Offer month-to-month', detail: 'Prepare an offer after you choose month-to-month.' },
+		'lease-non-renewal': { label: 'Lease will end', detail: 'Prepare the required notice after you choose move-out.' },
+		'late-rent-late-fee': { label: 'Rent is late', detail: 'Prepare a notice when rent remains unpaid and late-fee details are known.' }
 	};
 	const suppliedAutomationCount = Object.keys(automationDetails).length;
+	const hourOptions = Array.from({ length: 24 }, (_, hour) => ({
+		value: String(hour),
+		label: new Date(2026, 0, 1, hour).toLocaleTimeString([], { hour: 'numeric' })
+	}));
 
 	const policiesQuery = createQuery(() => ({
 		queryKey: ['notification-settings', 'tenant-notices', 'policies'],
@@ -55,15 +59,33 @@
 	}
 
 	function deliveryStatusLabel(status: NoticeDeliveryStatus): string {
-		return status === 'PermanentlyFailed' ? 'Permanently failed' : status;
+		if (status === 'Queued') return 'Waiting';
+		if (status === 'Accepted') return 'Accepted for delivery';
+		if (status === 'Retrying') return 'Trying again';
+		if (status === 'Sent') return 'Sent';
+		return 'Needs attention';
 	}
 
 	function deliveryStatusExplanation(status: NoticeDeliveryStatus): string {
-		if (status === 'Queued') return 'Waiting for the delivery worker to make the first attempt.';
-		if (status === 'Accepted') return 'The provider accepted the message; final delivery is not confirmed yet.';
-		if (status === 'Retrying') return 'A temporary provider error occurred. Rental Command will try again automatically.';
-		if (status === 'Sent') return 'Delivery completed successfully.';
-		return 'No more retries will run. Review the error and recipient contact details, correct the issue, then resend the notice.';
+		if (status === 'Queued') return 'Waiting to send.';
+		if (status === 'Accepted') return 'The delivery service accepted the message.';
+		if (status === 'Retrying') return 'A temporary delivery problem occurred. Rental Command will try again.';
+		if (status === 'Sent') return 'The message was sent.';
+		return 'Check the error and the tenant’s contact details before trying again.';
+	}
+
+	function deliveryRoleLabel(role: string): string {
+		if (role === 'PrimaryTenant') return 'Primary tenant';
+		if (role === 'CoTenant') return 'Other tenant on the lease';
+		if (role === 'Guarantor') return 'Guarantor';
+		return 'Other occupant';
+	}
+
+	function deliveryChannelLabel(channel: string): string {
+		if (channel === 'TenantPortal') return 'Tenant portal';
+		if (channel === 'MobilePush') return 'Phone app';
+		if (channel === 'Sms') return 'Text message';
+		return 'Email';
 	}
 
 	let policyDrafts = $state<Record<string, UpsertTenantNoticePolicyRequest>>({});
@@ -71,6 +93,9 @@
 	let appliedDataKey = $state('');
 	let expandedAutomation = $state<string | null>(null);
 	let expandedTemplateSystemKey = $state<string | null>(null);
+	let templateOpen = $state(false);
+	let policyDirty = $state<Record<string, boolean>>({});
+	let templateDirty = $state<Record<string, boolean>>({});
 
 	const mergeFieldsQuery = createQuery(() => ({
 		queryKey: ['notification-settings', 'tenant-notices', 'merge-fields', expandedTemplateSystemKey],
@@ -86,7 +111,7 @@
 		const nextPolicies: Record<string, UpsertTenantNoticePolicyRequest> = {};
 		const nextTemplates: Record<string, { subject: string; body: string; jurisdictionCode: string; confirmJurisdictionReviewed: boolean }> = {};
 		for (const policy of policies) {
-			nextPolicies[policy.automationKey] = {
+			const savedPolicyDraft: UpsertTenantNoticePolicyRequest = {
 				automationKey: policy.automationKey,
 				mode: policy.mode,
 				classification: policy.classification,
@@ -105,12 +130,20 @@
 				reviewedJurisdictionCode: policy.templateJurisdictionCode ?? policy.reviewedJurisdictionCode,
 				confirmJurisdictionReviewed: policy.templateJurisdictionReviewedAtUtc != null
 			};
-			nextTemplates[policy.automationKey] = {
+			const savedTemplateDraft = {
 				subject: policy.templateSubject,
 				body: policy.templateBody,
 				jurisdictionCode: policy.templateJurisdictionCode ?? '',
 				confirmJurisdictionReviewed: policy.templateJurisdictionReviewedAtUtc != null
 			};
+			nextPolicies[policy.automationKey] =
+				policyDirty[policy.automationKey] && policyDrafts[policy.automationKey]
+					? policyDrafts[policy.automationKey]
+					: savedPolicyDraft;
+			nextTemplates[policy.automationKey] =
+				templateDirty[policy.automationKey] && templateDrafts[policy.automationKey]
+					? templateDrafts[policy.automationKey]
+					: savedTemplateDraft;
 		}
 		policyDrafts = nextPolicies;
 		templateDrafts = nextTemplates;
@@ -124,10 +157,51 @@
 		return policy.canAutoSend;
 	}
 
+	function modeLabel(mode: TenantNoticeMode): string {
+		if (mode === 'Off') return 'Off';
+		if (mode === 'Draft') return 'Prepare for review';
+		return 'Send after safeguards pass';
+	}
+
+	function sendTimeLabel(hour: number): string {
+		return hourOptions[hour]?.label ?? `${hour}:00`;
+	}
+
+	function channelSummary(draft: UpsertTenantNoticePolicyRequest): string {
+		const channels: string[] = [];
+		if (draft.sendTenantPortal) channels.push('tenant portal');
+		if (draft.sendMobilePush) channels.push('phone app');
+		if (draft.sendEmail) channels.push('email');
+		if (draft.sendSms) channels.push('text message');
+		return channels.length > 0 ? channels.join(', ') : 'no destinations';
+	}
+
+	function recipientSummary(draft: UpsertTenantNoticePolicyRequest): string {
+		const recipients: string[] = [];
+		if (draft.includePrimaryTenant) recipients.push('primary tenant');
+		if (draft.includeCoTenant) recipients.push('other tenants');
+		if (draft.includeEligibleGuarantor) recipients.push('eligible guarantors');
+		if (draft.includeOccupant) recipients.push('other occupants');
+		return recipients.length > 0 ? recipients.join(', ') : 'no recipients';
+	}
+
+	function policySummary(draft: UpsertTenantNoticePolicyRequest): string {
+		return `${modeLabel(draft.mode)} · ${draft.leadDays} days ahead · ${sendTimeLabel(draft.sendHourLocal)} · ${channelSummary(draft)} · ${recipientSummary(draft)}`;
+	}
+
+	function markPolicyDirty(key: string) {
+		policyDirty = { ...policyDirty, [key]: true };
+	}
+
+	function markTemplateDirty(key: string) {
+		templateDirty = { ...templateDirty, [key]: true };
+	}
+
 	const savePolicyMutation = createMutation(() => ({
 		mutationFn: (key: string) => notifications.tenantNotices.updatePolicy(key, policyDrafts[key]),
 		onSuccess: (saved) => {
 			queryClient.invalidateQueries({ queryKey: ['notification-settings', 'tenant-notices', 'policies'] });
+			policyDirty = { ...policyDirty, [saved.automationKey]: false };
 			showSuccess(`${copyFor(saved.automationKey).label} was saved.`);
 		},
 		onError: (error) => showError(apiErrorMessage(error))
@@ -145,7 +219,8 @@
 		},
 		onSuccess: (saved) => {
 			queryClient.invalidateQueries({ queryKey: ['notification-settings', 'tenant-notices', 'policies'] });
-			showSuccess(`${copyFor(saved.automationKey).label} now uses the new immutable template version.`);
+			templateDirty = { ...templateDirty, [saved.automationKey]: false };
+			showSuccess(`${copyFor(saved.automationKey).label} now uses the updated message.`);
 		},
 		onError: (error) => showError(apiErrorMessage(error))
 	}));
@@ -154,7 +229,8 @@
 		mutationFn: (key: string) => notifications.tenantNotices.restoreDefault(key),
 		onSuccess: (saved) => {
 			queryClient.invalidateQueries({ queryKey: ['notification-settings', 'tenant-notices', 'policies'] });
-			showSuccess(`${copyFor(saved.automationKey).label} now uses a new version of the current supplied default.`);
+			templateDirty = { ...templateDirty, [saved.automationKey]: false };
+			showSuccess(`${copyFor(saved.automationKey).label} now uses the supplied message.`);
 		},
 		onError: (error) => showError(apiErrorMessage(error))
 	}));
@@ -162,108 +238,390 @@
 	function selectMode(policy: TenantNoticePolicyResponse, mode: TenantNoticeMode) {
 		if (mode === 'Auto' && !autoAllowed(policy)) return;
 		policyDrafts[policy.automationKey].mode = mode;
+		markPolicyDirty(policy.automationKey);
 	}
 
-	function toggleTemplate(policy: TenantNoticePolicyResponse) {
+	function togglePolicy(policy: TenantNoticePolicyResponse) {
 		if (expandedAutomation === policy.automationKey) {
 			expandedAutomation = null;
+			templateOpen = false;
 			expandedTemplateSystemKey = null;
 			return;
 		}
 		expandedAutomation = policy.automationKey;
-		expandedTemplateSystemKey = policy.templateSystemKey;
+		templateOpen = false;
+		expandedTemplateSystemKey = null;
 	}
+
+	function toggleTemplate(policy: TenantNoticePolicyResponse) {
+		templateOpen = !templateOpen;
+		expandedTemplateSystemKey = templateOpen ? policy.templateSystemKey : null;
+	}
+
+	const hasUnsavedChanges = $derived(
+		Object.values(policyDirty).some(Boolean) || Object.values(templateDirty).some(Boolean)
+	);
+	const savedSummary = $derived(
+		canManage
+			? 'Each saved tenant message is summarized below. Open one only when you need to change it.'
+			: 'An administrator manages tenant-message timing, recipients, and delivery.'
+	);
 </script>
 
-<svelte:head><title>Tenant notices · Rental Command</title></svelte:head>
+<svelte:head><title>Tenant messages · Rental Command</title></svelte:head>
 
-<div class="mx-auto max-w-5xl space-y-6" data-testid="tenant-notices-page">
-	<div>
-		<a href={returnHref} class="mb-3 inline-flex min-h-11 items-center gap-2 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft class="size-4" /> Back</a>
-		<div class="flex flex-wrap items-start justify-between gap-4">
-			<div><h1 class="text-2xl font-semibold tracking-tight">Tenant notices</h1><p class="mt-1 text-sm text-muted-foreground">Each automation has its own mode, timing, tenant channels, recipient roles, and editable supplied template.</p></div>
-				<NotificationHelpAction
-					title="How Tenant notices works"
-					description="Each tenant automation has its own policy and immutable template history."
-					guidance="Keep legal notices in Draft until local review is recorded. Preview and isolated test send use the current unsaved editor text without changing the policy, creating a tenant draft, or marking legal review complete."
-				/>
-		</div>
-	</div>
-
-	<Card.Root class="gap-0 py-0"><Card.Content class="grid gap-3 p-5 text-sm md:grid-cols-3"><div><p class="font-medium">Off</p><p class="text-muted-foreground">No draft or delivery is created.</p></div><div><p class="font-medium">Draft for review</p><p class="text-muted-foreground">Creates a draft for an authorized team member to check.</p></div><div><p class="font-medium">Send automatically</p><p class="text-muted-foreground">Uses the saved policy only when the notice and legal review permit it.</p></div></Card.Content></Card.Root>
-
-	{#if !canManage}
-		<Card.Root><Card.Content class="p-6"><h2 class="font-semibold">Tenant notice access required</h2><p class="mt-2 text-sm text-muted-foreground">Your team assignment does not include permission to manage tenant delivery policies and legal templates.</p></Card.Content></Card.Root>
-	{:else if policiesQuery.isLoading}
-		<LoadingState label="Loading tenant notice policies and supplied templates" testid="tenant-notices-loading" />
-	{:else if policiesQuery.isError}
-		<Card.Root><Card.Content class="space-y-4 p-6"><p class="text-sm text-destructive">We couldn't load tenant notice settings.</p><Button variant="outline" onclick={() => policiesQuery.refetch()}>Retry</Button></Card.Content></Card.Root>
-	{:else if (policiesQuery.data?.length ?? 0) < suppliedAutomationCount}
-		<Card.Root><Card.Content class="space-y-4 p-6"><div><h2 class="font-semibold">Supplied notices are unavailable</h2><p class="mt-2 text-sm text-muted-foreground">Every new workspace receives five complete editable templates and safe Draft-for-review policies. Reload this page; if they are still missing, workspace setup needs attention.</p></div><Button variant="outline" onclick={() => policiesQuery.refetch()}>Reload notices</Button></Card.Content></Card.Root>
-	{:else}
-		<div class="space-y-4">
-			{#each policiesQuery.data ?? [] as policy (policy.id)}
-				{@const automation = copyFor(policy.automationKey)}
-				{@const draft = policyDrafts[policy.automationKey]}
-				{@const templateDraft = templateDrafts[policy.automationKey]}
-				{#if draft && templateDraft}
-					<Card.Root class="gap-0 py-0" data-testid={`tenant-notice-${policy.automationKey}`}>
-						<Card.Content class="space-y-5 p-6">
-							<div class="flex flex-wrap items-start justify-between gap-4"><div><div class="flex flex-wrap items-center gap-2"><h2 class="text-lg font-semibold">{automation.label}</h2><span class="rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground">{policy.classification}</span></div><p class="mt-1 text-sm text-muted-foreground">{automation.detail}</p></div><div class="max-w-sm text-right text-xs text-muted-foreground"><p>Workspace template v{policy.templateVersion}{policy.templateIsCustomized ? ' · customized' : ' · supplied'}</p><p class="mt-1">{policy.templateProvenance}</p></div></div>
-
-							<div><p class="mb-2 text-sm font-medium">Automation mode</p><div class="inline-flex flex-wrap overflow-hidden rounded-lg border border-border">{#each [{ value: 'Off', label: 'Off' }, { value: 'Draft', label: 'Draft for review' }, { value: 'Auto', label: 'Send automatically' }] as mode (mode.value)}<button type="button" class={`min-h-11 px-4 text-sm font-medium ${draft.mode === mode.value ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground'}`} disabled={mode.value === 'Auto' && !autoAllowed(policy)} onclick={() => selectMode(policy, mode.value as TenantNoticeMode)}>{mode.label}</button>{/each}</div>{#if policy.classification === 'Legal' && !autoAllowed(policy)}<p class="mt-2 text-xs text-amber-700 dark:text-amber-400">Automatic delivery stays unavailable until an administrator saves a jurisdiction-reviewed template version.</p>{/if}</div>
-
-							<div class="grid gap-4 sm:grid-cols-2"><div><label for={`notice-lead-${policy.automationKey}`} class="mb-1 block text-sm font-medium">Lead days</label><Input id={`notice-lead-${policy.automationKey}`} type="number" min="0" max="365" bind:value={draft.leadDays} /></div><div><label for={`notice-hour-${policy.automationKey}`} class="mb-1 block text-sm font-medium">Local send hour</label><Input id={`notice-hour-${policy.automationKey}`} type="number" min="0" max="23" bind:value={draft.sendHourLocal} /></div></div>
-
-							<div><p class="mb-2 text-sm font-medium">Tenant delivery channels</p><div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-4"><label class="flex min-h-14 items-center gap-3 rounded-lg border border-border p-3"><Checkbox checked={draft.sendTenantPortal} onCheckedChange={(value) => (draft.sendTenantPortal = value === true)} /><span class="text-sm">Portal / in-app</span></label><label class="flex min-h-14 items-center gap-3 rounded-lg border border-border p-3"><Checkbox checked={draft.sendMobilePush} onCheckedChange={(value) => (draft.sendMobilePush = value === true)} /><span class="text-sm">Mobile push</span></label><label class="flex min-h-14 items-center gap-3 rounded-lg border border-border p-3"><Checkbox checked={draft.sendEmail} onCheckedChange={(value) => (draft.sendEmail = value === true)} /><span class="text-sm">Email</span></label><label class="flex min-h-14 items-center gap-3 rounded-lg border border-border p-3"><Checkbox checked={draft.sendSms} onCheckedChange={(value) => (draft.sendSms = value === true)} /><span class="text-sm">SMS</span></label></div><p class="mt-2 text-xs text-muted-foreground">These tenant channels are independent of My alerts and Team routing.</p></div>
-
-							<div><p class="mb-2 text-sm font-medium">Eligible relationship roles</p><div class="grid gap-2 sm:grid-cols-2"><label class="flex min-h-14 items-center gap-3 rounded-lg border border-border p-3"><Checkbox checked={draft.includePrimaryTenant} onCheckedChange={(value) => (draft.includePrimaryTenant = value === true)} /><span class="text-sm">Effective primary tenant</span></label><label class="flex min-h-14 items-center gap-3 rounded-lg border border-border p-3"><Checkbox checked={draft.includeCoTenant} onCheckedChange={(value) => (draft.includeCoTenant = value === true)} /><span class="text-sm">Effective co-tenant</span></label><label class="flex min-h-14 items-center gap-3 rounded-lg border border-border p-3"><Checkbox checked={draft.includeEligibleGuarantor} onCheckedChange={(value) => (draft.includeEligibleGuarantor = value === true)} /><span class="text-sm">Explicitly eligible guarantor</span></label><label class="flex min-h-14 items-center gap-3 rounded-lg border border-border p-3 opacity-70"><Checkbox checked={draft.includeOccupant} disabled={policy.classification === 'Legal'} onCheckedChange={(value) => (draft.includeOccupant = value === true)} /><span class="text-sm">Occupant {policy.classification === 'Legal' ? '(not eligible for legal notices)' : ''}</span></label></div><p class="mt-2 text-xs text-muted-foreground">At delivery time the server uses effective Lease Management parties and only channels with a real destination. Guarantors require explicit legal eligibility; occupants are never included in legal notices merely because they live there.</p></div>
-
-							<div><label for={`notice-failure-${policy.automationKey}`} class="mb-1 block text-sm font-medium">If delivery cannot complete</label><Select.Root type="single" value={draft.failureBehavior} onValueChange={(value) => value && (draft.failureBehavior = value as typeof draft.failureBehavior)}><Select.Trigger id={`notice-failure-${policy.automationKey}`} class="w-full sm:w-72">{draft.failureBehavior === 'StopAndRequireReview' ? 'Stop and require review' : draft.failureBehavior === 'RetryThenDraft' ? 'Retry, then keep a draft' : 'Retry, then mark failed'}</Select.Trigger><Select.Content><Select.Item value="StopAndRequireReview" label="Stop and require review">Stop and require review</Select.Item><Select.Item value="RetryThenDraft" label="Retry, then keep a draft">Retry, then keep a draft</Select.Item><Select.Item value="RetryThenFail" label="Retry, then mark failed">Retry, then mark failed</Select.Item></Select.Content></Select.Root></div>
-
-							<div class="flex flex-wrap items-center gap-3"><Button onclick={() => savePolicyMutation.mutate(policy.automationKey)} disabled={savePolicyMutation.isPending}>{savePolicyMutation.isPending ? 'Saving…' : 'Save automation'}</Button><Button variant="outline" onclick={() => toggleTemplate(policy)}>{expandedAutomation === policy.automationKey ? 'Close template' : 'Review and edit template'}</Button><p class="text-xs text-muted-foreground">Currently bound to workspace template v{policy.templateVersion}.</p></div>
-
-							{#if expandedAutomation === policy.automationKey}
-									<div class="space-y-4 border-t border-border pt-5"><div><h3 class="font-semibold">Editable workspace template</h3><p class="mt-1 text-sm text-muted-foreground">{policy.templateProvenance}. Saving appends and binds a new immutable workspace version; it never overwrites the prior version. Restoring the supplied default also creates a new workspace version, so history is preserved.</p>{#if policy.templateUpdateAvailable}<p class="mt-2 text-sm text-amber-700 dark:text-amber-400">A newer Rental Command supplied version is available. Restore it below to create and bind a new workspace version.</p>{/if}</div><div><label for={`template-subject-${policy.automationKey}`} class="mb-1 block text-sm font-medium">Subject</label><Input id={`template-subject-${policy.automationKey}`} bind:value={templateDraft.subject} /></div><div><label for={`template-body-${policy.automationKey}`} class="mb-1 block text-sm font-medium">Message</label><textarea id={`template-body-${policy.automationKey}`} class="min-h-32 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" bind:value={templateDraft.body}></textarea></div><div class="rounded-lg border border-border bg-muted/30 p-4"><p class="text-sm font-medium">Available merge fields</p>{#if mergeFieldsQuery.isLoading}<LoadingState label="Loading merge fields" variant="spinner" testid="tenant-notice-merge-fields-loading" />{:else if mergeFieldsQuery.isError}<div class="mt-2 flex flex-wrap items-center gap-2"><p class="text-xs text-destructive">We couldn't load merge-field help.</p><Button size="sm" variant="outline" onclick={() => mergeFieldsQuery.refetch()}>Retry</Button></div>{:else}<div class="mt-3 grid gap-2 sm:grid-cols-2">{#each mergeFieldsQuery.data ?? [] as field (field.key)}<div class="rounded-md bg-background p-3"><p class="text-sm font-medium">{field.label} <code class="ml-1 text-xs">{field.token}</code></p><p class="mt-1 text-xs text-muted-foreground">{field.description}</p><p class="mt-1 text-xs">Example: {field.example}</p></div>{/each}</div>{/if}</div>{#if !mergeFieldsQuery.isLoading && !mergeFieldsQuery.isError}<NoticePreview systemKey={policy.templateSystemKey} subject={templateDraft.subject} body={templateDraft.body} mergeFields={mergeFieldsQuery.data ?? []} />{/if}{#if policy.classification === 'Legal'}<div class="grid gap-3 sm:grid-cols-2"><div><label for={`template-jurisdiction-${policy.automationKey}`} class="mb-1 block text-sm font-medium">Reviewed jurisdiction</label><Input id={`template-jurisdiction-${policy.automationKey}`} bind:value={templateDraft.jurisdictionCode} placeholder="State or local code" /></div><label class="flex min-h-14 items-center gap-3 self-end rounded-lg border border-border p-3"><Checkbox checked={templateDraft.confirmJurisdictionReviewed} onCheckedChange={(value) => (templateDraft.confirmJurisdictionReviewed = value === true)} /><span class="text-sm">I reviewed this template for that jurisdiction</span></label></div>{/if}<div class="flex flex-wrap gap-3"><Button onclick={() => saveTemplateMutation.mutate(policy.automationKey)} disabled={saveTemplateMutation.isPending || !templateDraft.subject.trim() || !templateDraft.body.trim() || (policy.classification === 'Legal' && (!templateDraft.jurisdictionCode.trim() || !templateDraft.confirmJurisdictionReviewed))}>{saveTemplateMutation.isPending ? 'Saving…' : 'Save and use new template version'}</Button><Button variant="outline" onclick={() => restoreTemplateMutation.mutate(policy.automationKey)} disabled={restoreTemplateMutation.isPending}>Restore and use current supplied default</Button></div></div>
-							{/if}
-						</Card.Content>
-					</Card.Root>
-				{/if}
-			{/each}
-		</div>
-
-		<Card.Root class="gap-0 py-0" data-testid="tenant-notice-delivery-status">
-			<Card.Content class="space-y-4 p-6">
-				<div>
-					<h2 class="text-lg font-semibold">Recent delivery status</h2>
-					<p class="mt-1 text-sm text-muted-foreground">These statuses come from the durable delivery queue, including provider acceptance, retries, and terminal failures.</p>
-				</div>
-				{#if deliveriesQuery.isLoading}
-					<LoadingState label="Loading recent delivery status" variant="spinner" testid="tenant-notice-deliveries-loading" />
-				{:else if deliveriesQuery.isError}
-					<div class="flex flex-wrap items-center gap-3"><p class="text-sm text-destructive">We couldn't load delivery status.</p><Button variant="outline" size="sm" onclick={() => deliveriesQuery.refetch()}>Retry</Button></div>
-				{:else if (deliveriesQuery.data?.length ?? 0) === 0}
-					<p class="rounded-md bg-muted/40 p-4 text-sm text-muted-foreground">No tenant notice has been queued yet.</p>
-				{:else}
-					<div class="space-y-3">
-						{#each deliveriesQuery.data ?? [] as delivery (delivery.evidenceId)}
-							<div class="grid gap-3 rounded-lg border border-border p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-start">
-								<div>
-									<div class="flex flex-wrap items-center gap-2"><p class="font-medium">{delivery.subject}</p><span class={`rounded-full border px-2 py-0.5 text-xs font-medium ${deliveryStatusClass(delivery.status)}`}>{deliveryStatusLabel(delivery.status)}</span></div>
-									<p class="mt-1 text-xs text-muted-foreground">{deliveryStatusExplanation(delivery.status)}</p>
-									<p class="mt-1 text-sm text-muted-foreground">{delivery.recipientRole} · {delivery.channel} · {delivery.destination}</p>
-									{#if delivery.lastError}<p class="mt-2 text-sm text-destructive">{delivery.lastError}</p>{/if}
-								</div>
-								<div class="text-xs text-muted-foreground md:text-right">
-									<p>Attempts: {delivery.attemptCount}</p>
-									{#if delivery.provider}<p>{delivery.provider}{delivery.providerMessageId ? ` · ${delivery.providerMessageId}` : ''}</p>{/if}
-									{#if delivery.nextAttemptAtUtc}<p>Next try: {new Date(delivery.nextAttemptAtUtc).toLocaleString()}</p>{/if}
-								</div>
-							</div>
-						{/each}
-					</div>
-				{/if}
+<NotificationSetupJourney
+	currentStep={3}
+	description="Choose which reminders Rental Command prepares, when they are due, and who reviews them before delivery."
+	{savedSummary}
+	{returnHref}
+	{canManage}
+	{hasUnsavedChanges}
+	helpTitle="How tenant messages work"
+	helpDescription="Each reminder keeps its own timing, recipients, destinations, and message."
+	helpGuidance="Keep legal notices set to Prepare for review until the message has been checked for the correct state or local rules. Rental Command keeps prior message versions for the audit history."
+	helpHref="/docs/notices"
+	helpLinkLabel="Open the tenant notices guide"
+>
+	<div class="space-y-5" data-testid="tenant-notices-page">
+		<Card.Root class="gap-0 py-0">
+			<Card.Content class="grid gap-3 p-5 text-sm md:grid-cols-3">
+				<div><p class="font-medium">Off</p><p class="text-muted-foreground">Do not prepare this message.</p></div>
+				<div><p class="font-medium">Prepare for review</p><p class="text-muted-foreground">Create a draft for an authorized team member to check.</p></div>
+				<div><p class="font-medium">Send after safeguards pass</p><p class="text-muted-foreground">Send only when the saved rules and required legal review allow it.</p></div>
 			</Card.Content>
 		</Card.Root>
-	{/if}
-</div>
+
+		{#if !canManage}
+			<Card.Root>
+				<Card.Content class="p-6">
+					<h2 class="font-semibold">An administrator manages tenant messages</h2>
+					<p class="mt-2 text-sm text-muted-foreground">
+						Your team assignment does not allow changes to tenant-message timing, recipients, or legal review.
+					</p>
+				</Card.Content>
+			</Card.Root>
+		{:else if policiesQuery.isLoading}
+			<LoadingState label="Loading tenant messages" testid="tenant-notices-loading" />
+		{:else if policiesQuery.isError}
+			<Card.Root>
+				<Card.Content class="space-y-4 p-6">
+					<p class="text-sm text-destructive">We couldn't load tenant-message settings.</p>
+					<Button variant="outline" onclick={() => policiesQuery.refetch()}>Retry</Button>
+				</Card.Content>
+			</Card.Root>
+		{:else if (policiesQuery.data?.length ?? 0) < suppliedAutomationCount}
+			<Card.Root>
+				<Card.Content class="space-y-4 p-6">
+					<div>
+						<h2 class="font-semibold">Some supplied messages are unavailable</h2>
+						<p class="mt-2 text-sm text-muted-foreground">
+							Reload this page. If messages are still missing, workspace setup needs attention.
+						</p>
+					</div>
+					<Button variant="outline" onclick={() => policiesQuery.refetch()}>Reload messages</Button>
+				</Card.Content>
+			</Card.Root>
+		{:else}
+			<div class="space-y-3">
+				{#each policiesQuery.data ?? [] as policy (policy.id)}
+					{@const automation = copyFor(policy.automationKey)}
+					{@const draft = policyDrafts[policy.automationKey]}
+					{@const templateDraft = templateDrafts[policy.automationKey]}
+					{#if draft && templateDraft}
+						<NotificationPolicyAccordion
+							id={`tenant-notice-${policy.automationKey}`}
+							title={automation.label}
+							description={automation.detail}
+							summary={`${policyDirty[policy.automationKey] ? 'Unsaved changes · ' : ''}${policySummary(draft)}`}
+							badge={policy.classification === 'Legal' ? 'Legal notice' : policy.classification === 'Courtesy' ? 'Courtesy reminder' : 'Lease message'}
+							open={expandedAutomation === policy.automationKey}
+							ontoggle={() => togglePolicy(policy)}
+						>
+							<div class="space-y-6">
+								<section>
+									<h3 class="text-sm font-semibold">1. What should Rental Command do?</h3>
+									<div class="mt-3 grid gap-2 sm:grid-cols-3">
+										{#each [
+											{ value: 'Off', label: 'Off', detail: 'Do not prepare this message.' },
+											{ value: 'Draft', label: 'Prepare for review', detail: 'Create a draft for your team to check.' },
+											{ value: 'Auto', label: 'Send after safeguards pass', detail: 'Send only when every saved safeguard allows it.' }
+										] as mode (mode.value)}
+											<button
+												type="button"
+												class={`min-h-24 rounded-lg border p-3 text-left ${
+													draft.mode === mode.value
+														? 'border-primary bg-primary/5'
+														: 'border-border hover:bg-muted/40'
+												}`}
+												disabled={mode.value === 'Auto' && !autoAllowed(policy)}
+												onclick={() => selectMode(policy, mode.value as TenantNoticeMode)}
+											>
+												<span class="block text-sm font-medium">{mode.label}</span>
+												<span class="mt-1 block text-xs text-muted-foreground">{mode.detail}</span>
+											</button>
+										{/each}
+									</div>
+									{#if policy.classification === 'Legal' && !autoAllowed(policy)}
+										<p class="mt-2 text-xs text-amber-700 dark:text-amber-400">
+											Sending stays unavailable until an administrator saves a message reviewed for the correct state or local rules.
+										</p>
+									{/if}
+								</section>
+
+								<section>
+									<h3 class="text-sm font-semibold">2. When should it prepare the message?</h3>
+									<div class="mt-3 grid gap-4 sm:grid-cols-2">
+										<div>
+											<label for={`notice-lead-${policy.automationKey}`} class="mb-1 block text-sm font-medium">Days before the event</label>
+											<Input
+												id={`notice-lead-${policy.automationKey}`}
+												type="number"
+												min="0"
+												max="365"
+												bind:value={draft.leadDays}
+												oninput={() => markPolicyDirty(policy.automationKey)}
+											/>
+											<p class="mt-1 text-xs text-muted-foreground">Use 0 for the same day.</p>
+										</div>
+										<div>
+											<label for={`notice-hour-${policy.automationKey}`} class="mb-1 block text-sm font-medium">Prepare at</label>
+											<Select.Root
+												type="single"
+												value={String(draft.sendHourLocal)}
+												onValueChange={(value) => {
+													if (!value) return;
+													draft.sendHourLocal = Number(value);
+													markPolicyDirty(policy.automationKey);
+												}}
+											>
+												<Select.Trigger id={`notice-hour-${policy.automationKey}`} class="w-full">
+													{sendTimeLabel(draft.sendHourLocal)}
+												</Select.Trigger>
+												<Select.Content>
+													{#each hourOptions as option (option.value)}
+														<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
+													{/each}
+												</Select.Content>
+											</Select.Root>
+											<p class="mt-1 text-xs text-muted-foreground">Uses the rental's local time.</p>
+										</div>
+									</div>
+								</section>
+
+								<section>
+									<h3 class="text-sm font-semibold">3. Where should it be sent?</h3>
+									<div class="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+										<label class="flex min-h-14 items-center gap-3 rounded-lg border border-border p-3">
+											<Checkbox checked={draft.sendTenantPortal} onCheckedChange={(value) => { draft.sendTenantPortal = value === true; markPolicyDirty(policy.automationKey); }} />
+											<span class="text-sm">Tenant portal</span>
+										</label>
+										<label class="flex min-h-14 items-center gap-3 rounded-lg border border-border p-3">
+											<Checkbox checked={draft.sendMobilePush} onCheckedChange={(value) => { draft.sendMobilePush = value === true; markPolicyDirty(policy.automationKey); }} />
+											<span class="text-sm">Phone app</span>
+										</label>
+										<label class="flex min-h-14 items-center gap-3 rounded-lg border border-border p-3">
+											<Checkbox checked={draft.sendEmail} onCheckedChange={(value) => { draft.sendEmail = value === true; markPolicyDirty(policy.automationKey); }} />
+											<span class="text-sm">Email</span>
+										</label>
+										<label class="flex min-h-14 items-center gap-3 rounded-lg border border-border p-3">
+											<Checkbox checked={draft.sendSms} onCheckedChange={(value) => { draft.sendSms = value === true; markPolicyDirty(policy.automationKey); }} />
+											<span class="text-sm">Text message</span>
+										</label>
+									</div>
+								</section>
+
+								<section>
+									<h3 class="text-sm font-semibold">4. Who should receive it?</h3>
+									<div class="mt-3 grid gap-2 sm:grid-cols-2">
+										<label class="flex min-h-14 items-center gap-3 rounded-lg border border-border p-3">
+											<Checkbox checked={draft.includePrimaryTenant} onCheckedChange={(value) => { draft.includePrimaryTenant = value === true; markPolicyDirty(policy.automationKey); }} />
+											<span class="text-sm">Primary tenant</span>
+										</label>
+										<label class="flex min-h-14 items-center gap-3 rounded-lg border border-border p-3">
+											<Checkbox checked={draft.includeCoTenant} onCheckedChange={(value) => { draft.includeCoTenant = value === true; markPolicyDirty(policy.automationKey); }} />
+											<span class="text-sm">Other tenants on the lease</span>
+										</label>
+										<label class="flex min-h-14 items-center gap-3 rounded-lg border border-border p-3">
+											<Checkbox checked={draft.includeEligibleGuarantor} onCheckedChange={(value) => { draft.includeEligibleGuarantor = value === true; markPolicyDirty(policy.automationKey); }} />
+											<span class="text-sm">Guarantors marked eligible for this notice</span>
+										</label>
+										<label class="flex min-h-14 items-center gap-3 rounded-lg border border-border p-3 opacity-70">
+											<Checkbox checked={draft.includeOccupant} disabled={policy.classification === 'Legal'} onCheckedChange={(value) => { draft.includeOccupant = value === true; markPolicyDirty(policy.automationKey); }} />
+											<span class="text-sm">Other occupants {policy.classification === 'Legal' ? '(not allowed for legal notices)' : ''}</span>
+										</label>
+									</div>
+									<p class="mt-2 text-xs text-muted-foreground">
+										Rental Command sends only to people currently connected to the lease and only when a real destination is available.
+									</p>
+								</section>
+
+								<details class="rounded-lg border border-border p-4">
+									<summary class="cursor-pointer text-sm font-medium">Advanced delivery settings</summary>
+									<div class="mt-4">
+										<label for={`notice-failure-${policy.automationKey}`} class="mb-1 block text-sm font-medium">If delivery cannot finish</label>
+										<Select.Root
+											type="single"
+											value={draft.failureBehavior}
+											onValueChange={(value) => {
+												if (!value) return;
+												draft.failureBehavior = value as typeof draft.failureBehavior;
+												markPolicyDirty(policy.automationKey);
+											}}
+										>
+											<Select.Trigger id={`notice-failure-${policy.automationKey}`} class="w-full sm:w-80">
+												{draft.failureBehavior === 'StopAndRequireReview'
+													? 'Pause and ask me'
+													: draft.failureBehavior === 'RetryThenDraft'
+														? 'Try again, then keep a draft'
+														: 'Try again, then mark it failed'}
+											</Select.Trigger>
+											<Select.Content>
+												<Select.Item value="StopAndRequireReview" label="Pause and ask me">Pause and ask me</Select.Item>
+												<Select.Item value="RetryThenDraft" label="Try again, then keep a draft">Try again, then keep a draft</Select.Item>
+												<Select.Item value="RetryThenFail" label="Try again, then mark it failed">Try again, then mark it failed</Select.Item>
+											</Select.Content>
+										</Select.Root>
+									</div>
+								</details>
+
+								<div class="flex flex-wrap items-center gap-3">
+									<Button onclick={() => savePolicyMutation.mutate(policy.automationKey)} disabled={savePolicyMutation.isPending}>
+										{savePolicyMutation.isPending ? 'Saving…' : 'Save timing and recipients'}
+									</Button>
+									<Button variant="outline" onclick={() => toggleTemplate(policy)}>
+										{templateOpen ? 'Close message editor' : 'Review and edit the message'}
+									</Button>
+								</div>
+
+								{#if templateOpen}
+									<section class="space-y-4 border-t border-border pt-5">
+										<div>
+											<h3 class="font-semibold">5. Review the message</h3>
+											<p class="mt-1 text-sm text-muted-foreground">
+												Edit the supplied starting message. Saving creates a new version so prior wording remains in the audit history.
+											</p>
+											{#if policy.templateUpdateAvailable}
+												<p class="mt-2 text-sm text-amber-700 dark:text-amber-400">
+													A newer Rental Command starting message is available.
+												</p>
+											{/if}
+										</div>
+										<div>
+											<label for={`template-subject-${policy.automationKey}`} class="mb-1 block text-sm font-medium">Subject</label>
+											<Input id={`template-subject-${policy.automationKey}`} bind:value={templateDraft.subject} oninput={() => markTemplateDirty(policy.automationKey)} />
+										</div>
+										<div>
+											<label for={`template-body-${policy.automationKey}`} class="mb-1 block text-sm font-medium">Message</label>
+											<textarea
+												id={`template-body-${policy.automationKey}`}
+												class="min-h-32 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+												bind:value={templateDraft.body}
+												oninput={() => markTemplateDirty(policy.automationKey)}
+											></textarea>
+										</div>
+										<details class="rounded-lg border border-border bg-muted/30 p-4">
+											<summary class="cursor-pointer text-sm font-medium">Personalize with rental details</summary>
+											{#if mergeFieldsQuery.isLoading}
+												<LoadingState label="Loading available rental details" variant="spinner" testid="tenant-notice-merge-fields-loading" />
+											{:else if mergeFieldsQuery.isError}
+												<div class="mt-2 flex flex-wrap items-center gap-2">
+													<p class="text-xs text-destructive">We couldn't load the available details.</p>
+													<Button size="sm" variant="outline" onclick={() => mergeFieldsQuery.refetch()}>Retry</Button>
+												</div>
+											{:else}
+												<div class="mt-3 grid gap-2 sm:grid-cols-2">
+													{#each mergeFieldsQuery.data ?? [] as field (field.key)}
+														<div class="rounded-md bg-background p-3">
+															<p class="text-sm font-medium">{field.label} <code class="ml-1 text-xs">{field.token}</code></p>
+															<p class="mt-1 text-xs text-muted-foreground">{field.description}</p>
+															<p class="mt-1 text-xs">Example: {field.example}</p>
+														</div>
+													{/each}
+												</div>
+											{/if}
+										</details>
+										{#if !mergeFieldsQuery.isLoading && !mergeFieldsQuery.isError}
+											<NoticePreview systemKey={policy.templateSystemKey} subject={templateDraft.subject} body={templateDraft.body} mergeFields={mergeFieldsQuery.data ?? []} />
+										{/if}
+										{#if policy.classification === 'Legal'}
+											<div class="grid gap-3 sm:grid-cols-2">
+												<div>
+													<label for={`template-jurisdiction-${policy.automationKey}`} class="mb-1 block text-sm font-medium">State or local rules reviewed</label>
+													<Input id={`template-jurisdiction-${policy.automationKey}`} bind:value={templateDraft.jurisdictionCode} placeholder="For example, Ohio" oninput={() => markTemplateDirty(policy.automationKey)} />
+												</div>
+												<label class="flex min-h-14 items-center gap-3 self-end rounded-lg border border-border p-3">
+													<Checkbox checked={templateDraft.confirmJurisdictionReviewed} onCheckedChange={(value) => { templateDraft.confirmJurisdictionReviewed = value === true; markTemplateDirty(policy.automationKey); }} />
+													<span class="text-sm">I reviewed this message for those rules</span>
+												</label>
+											</div>
+										{/if}
+										<div class="flex flex-wrap gap-3">
+											<Button
+												onclick={() => saveTemplateMutation.mutate(policy.automationKey)}
+												disabled={saveTemplateMutation.isPending || !templateDraft.subject.trim() || !templateDraft.body.trim() || (policy.classification === 'Legal' && (!templateDraft.jurisdictionCode.trim() || !templateDraft.confirmJurisdictionReviewed))}
+											>
+												{saveTemplateMutation.isPending ? 'Saving…' : 'Save and use this message'}
+											</Button>
+											<Button variant="outline" onclick={() => restoreTemplateMutation.mutate(policy.automationKey)} disabled={restoreTemplateMutation.isPending}>
+												Use the current Rental Command starting message
+											</Button>
+										</div>
+										<details class="text-xs text-muted-foreground">
+											<summary class="cursor-pointer font-medium">Technical details</summary>
+											<p class="mt-2">Message version {policy.templateVersion} · {policy.templateIsCustomized ? 'customized' : 'supplied'}</p>
+											<p class="mt-1">{policy.templateProvenance}</p>
+										</details>
+									</section>
+								{/if}
+							</div>
+						</NotificationPolicyAccordion>
+					{/if}
+				{/each}
+			</div>
+
+			<Card.Root class="gap-0 py-0" data-testid="tenant-notice-delivery-status">
+				<Card.Content class="space-y-4 p-6">
+					<div>
+						<h2 class="text-lg font-semibold">Recent tenant messages</h2>
+						<p class="mt-1 text-sm text-muted-foreground">See whether recent messages were sent or need attention.</p>
+					</div>
+					{#if deliveriesQuery.isLoading}
+						<LoadingState label="Loading recent tenant messages" variant="spinner" testid="tenant-notice-deliveries-loading" />
+					{:else if deliveriesQuery.isError}
+						<div class="flex flex-wrap items-center gap-3">
+							<p class="text-sm text-destructive">We couldn't load recent tenant messages.</p>
+							<Button variant="outline" size="sm" onclick={() => deliveriesQuery.refetch()}>Retry</Button>
+						</div>
+					{:else if (deliveriesQuery.data?.length ?? 0) === 0}
+						<p class="rounded-md bg-muted/40 p-4 text-sm text-muted-foreground">No tenant message has been prepared yet.</p>
+					{:else}
+						<div class="space-y-3">
+							{#each deliveriesQuery.data ?? [] as delivery (delivery.evidenceId)}
+								<div class="rounded-lg border border-border p-4">
+									<div class="flex flex-wrap items-center gap-2">
+										<p class="font-medium">{delivery.subject}</p>
+										<span class={`rounded-full border px-2 py-0.5 text-xs font-medium ${deliveryStatusClass(delivery.status)}`}>
+											{deliveryStatusLabel(delivery.status)}
+										</span>
+									</div>
+									<p class="mt-1 text-xs text-muted-foreground">{deliveryStatusExplanation(delivery.status)}</p>
+									<p class="mt-1 text-sm text-muted-foreground">
+										{deliveryRoleLabel(delivery.recipientRole)} · {deliveryChannelLabel(delivery.channel)} · {delivery.destination}
+									</p>
+									{#if delivery.lastError}<p class="mt-2 text-sm text-destructive">{delivery.lastError}</p>{/if}
+									<details class="mt-3 text-xs text-muted-foreground">
+										<summary class="cursor-pointer font-medium">Technical details</summary>
+										<p class="mt-2">Attempts: {delivery.attemptCount}</p>
+										{#if delivery.provider}<p>{delivery.provider}{delivery.providerMessageId ? ` · ${delivery.providerMessageId}` : ''}</p>{/if}
+										{#if delivery.nextAttemptAtUtc}<p>Next try: {new Date(delivery.nextAttemptAtUtc).toLocaleString()}</p>{/if}
+									</details>
+								</div>
+							{/each}
+						</div>
+					{/if}
+				</Card.Content>
+			</Card.Root>
+		{/if}
+	</div>
+</NotificationSetupJourney>

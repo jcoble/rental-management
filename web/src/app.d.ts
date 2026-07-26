@@ -13,7 +13,12 @@ declare global {
 			access: AccessEnvelope | null;
 		}
 		// interface PageData {}
-		// interface PageState {}
+		interface PageState {
+			unitTab?: string;
+			unitView?: string | null;
+			unitPaymentId?: number | null;
+			unitExpenseId?: number | null;
+		}
 		// interface Platform {}
 	}
 }

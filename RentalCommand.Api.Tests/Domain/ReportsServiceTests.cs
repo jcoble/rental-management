@@ -411,6 +411,23 @@ public class ReportsServiceTests : IDisposable
             "the ordered ledger row query must compute running balance in SQL before materialization");
     }
 
+    [Fact]
+    public void General_ledger_postgresql_path_authorizes_once_and_uses_window_totals()
+    {
+        var sql = ReportsService.GeneralLedgerPostgreSql;
+
+        sql.Should().Contain("rc_api_effective_capability_scopes");
+        sql.Should().Contain("effective_scopes AS MATERIALIZED");
+        sql.Should().Contain("authorized_properties AS MATERIALIZED");
+        sql.Should().Contain("ledger_entries AS MATERIALIZED");
+        sql.Should().Contain("UNION ALL");
+        sql.Should().Contain("ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW");
+        sql.Should().Contain("FILTER (WHERE entry.\"Amount\" > 0) OVER ()");
+        sql.Should().Contain("property.\"Id\" = ANY(@propertyIds)");
+        sql.Should().NotContain("FROM ledger_entries AS x",
+            "running totals must use a window over the materialized ledger, not a per-row correlated rescan");
+    }
+
     // ── Rent Ledger running balance (DB) ───────────────────────────────────────────────────────────
 
     [Fact]
@@ -422,10 +439,10 @@ public class ReportsServiceTests : IDisposable
         sql.Should().Contain("TenantAccounts");
         sql.Should().Contain("LeaseManagements");
         sql.Should().Contain("vw_lease_management_lifecycle");
-        sql.Should().Contain("AuthSessions");
-        sql.Should().Contain("WorkspaceAccessContexts");
-        sql.Should().Contain("MembershipRoleAssignments");
-        sql.Should().Contain("MembershipRoleAssignmentProperties");
+        sql.Should().Contain("rc_api_effective_capability_scopes");
+        sql.Should().Contain("report_scopes AS MATERIALIZED");
+        sql.Should().Contain("balance_scopes AS MATERIALIZED");
+        sql.Should().Contain("authorized_properties AS MATERIALIZED");
         sql.Should().Contain("reports.read");
         sql.Should().Contain("money.balances.read");
         sql.Should().Contain("PARTITION BY management.\"Id\"");

@@ -184,7 +184,7 @@
 		</div>
 	{:else if data.providers.length === 0}
 		<p class="max-w-2xl text-sm text-muted-foreground" data-testid="accounting-no-providers">
-			No accounting providers are available yet.
+			No accounting connections are available yet. You can keep recording payments and expenses in Rental Command.
 		</p>
 	{:else}
 		<div class="max-w-2xl space-y-4" data-testid="accounting-provider-list">
@@ -233,8 +233,8 @@
 							<div class="flex items-start gap-2.5 rounded-md border border-border bg-muted/40 p-3">
 								<Lock class="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
 								<p class="text-sm text-muted-foreground">
-									{s.providerName} isn't set up on this server yet. Ask your administrator to add the
-									{s.providerName} keys, then come back to connect it.
+									{s.providerName} isn't available yet. Ask your workspace administrator to enable this
+									connection. Your Rental Command records continue to work without it.
 								</p>
 							</div>
 						{:else if !isConnected(view)}

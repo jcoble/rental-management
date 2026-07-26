@@ -3,7 +3,9 @@
 	import { money } from './money';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { Pencil, ScanLine, CircleAlert } from '@lucide/svelte';
+	import { formatDateOnly } from '$lib/utils/date';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
+	import { Pencil, ScanLine } from '@lucide/svelte';
 
 	let {
 		dashboard,
@@ -19,33 +21,22 @@
 	const header = $derived(dashboard.header);
 	const unit = $derived(dashboard.unit);
 
-	// Rent chip tone by state. NoLease reads neutral (nothing owed yet).
-	const rentTone = $derived(
-		header.rentState === 'Overdue'
-			? 'm3-tone-chip border m3-tone--error'
-			: header.rentState === 'Due'
-				? 'm3-tone-chip border m3-tone--warning'
-				: header.rentState === 'Current'
-					? 'm3-tone-chip border m3-tone--success'
-					: 'bg-muted text-muted-foreground border-border'
-	);
-
 	const rentLabel = $derived(
 		header.rentState === 'NoLease'
-			? 'No lease'
+			? 'No current lease'
 			: header.outstandingRentBalance > 0
-				? `${header.rentState} · ${money(header.outstandingRentBalance)}`
-				: 'Rent current'
+				? `${money(header.outstandingRentBalance)} still owed`
+				: 'Paid up to date'
 	);
 </script>
 
-<header class="rc-hero m3-surface-art m3-surface-art--band rounded-xl border p-4 sm:p-5" data-testid="unit-header">
+<header class="rounded-2xl bg-card p-4 sm:p-5" data-testid="unit-header">
 	<div class="flex flex-wrap items-start justify-between gap-3">
 		<div class="min-w-0">
 			<nav class="text-xs text-muted-foreground" aria-label="Breadcrumb">
 				<a href="/properties/{unit.propertyId}" class="hover:underline">{dashboard.propertyName}</a>
 				<span class="px-1">/</span>
-				<a href="/units" class="hover:underline">Units</a>
+				<a href="/units" class="hover:underline">Command Center</a>
 			</nav>
 			<h1 class="mt-0.5 flex items-center gap-2 text-2xl font-bold" data-testid="unit-title">
 				Unit {unit.unitNumber}
@@ -69,33 +60,26 @@
 		</div>
 	</div>
 
-	<!-- Health chips. -->
-	<div class="mt-4 flex flex-wrap gap-2" data-testid="unit-health-chips">
-		<span class="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium {rentTone}" data-testid="chip-rent">
-			{#if header.rentState === 'Overdue'}<CircleAlert class="h-3 w-3" />{/if}
-			{rentLabel}
-		</span>
-		<span class="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-xs font-medium text-muted-foreground" data-testid="chip-repairs">
-			{header.openWorkOrderCount} open repair{header.openWorkOrderCount === 1 ? '' : 's'}
-		</span>
-		{#if header.leaseEndsInDays != null}
-			<span class="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-xs font-medium text-muted-foreground" data-testid="chip-lease-ends">
-				Lease ends in {header.leaseEndsInDays}d
-			</span>
-		{/if}
-		<span class="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-xs font-medium text-muted-foreground" data-testid="chip-docs">
-			{header.docsNeedingReviewCount} doc{header.docsNeedingReviewCount === 1 ? '' : 's'}
-		</span>
-		{#if header.currentTenantName}
-			<span class="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-xs font-medium text-muted-foreground" data-testid="chip-tenant">
-				{header.currentTenantName}
-			</span>
-		{/if}
-		<span class="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-xs font-medium text-muted-foreground" data-testid="chip-possession">
-			{dashboard.occupancyPossession.status}
-		</span>
-		<span class="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-xs font-medium text-muted-foreground" data-testid="chip-maintenance-condition">
-			{dashboard.maintenanceTurnover.status}
-		</span>
+	<div class="mt-4 grid gap-3 border-t pt-4 sm:grid-cols-2 lg:grid-cols-4" data-testid="unit-health-chips">
+		<div data-testid="chip-tenant">
+			<p class="text-xs text-muted-foreground">Resident</p>
+			<p class="mt-0.5 text-sm font-medium">{header.currentTenantName ?? 'No current resident'}</p>
+		</div>
+		<div data-testid="chip-rent">
+			<p class="text-xs text-muted-foreground">Rent</p>
+			<p class="mt-0.5 text-sm font-medium">{rentLabel}</p>
+		</div>
+		<div data-testid="chip-lease-ends">
+			<p class="text-xs text-muted-foreground">Lease ends</p>
+			<p class="mt-0.5 text-sm font-medium">{dashboard.currentLease?.endDate ? formatDateOnly(dashboard.currentLease.endDate) : 'No end date'}</p>
+		</div>
+		<div data-testid="chip-repairs">
+			<p class="text-xs text-muted-foreground">Repairs</p>
+			<p class="mt-0.5 text-sm font-medium">{header.openWorkOrderCount === 0 ? 'No open repairs' : `${header.openWorkOrderCount} open repair${header.openWorkOrderCount === 1 ? '' : 's'}`}</p>
+		</div>
+		<div data-testid="chip-possession" class="sm:col-span-2 lg:col-span-4">
+			<p class="text-xs text-muted-foreground">Current stage</p>
+			<p class="mt-0.5 text-sm font-medium">{formatStatusLabel(dashboard.occupancyPossession.status)} · {formatStatusLabel(dashboard.maintenanceTurnover.status)}</p>
+		</div>
 	</div>
 </header>

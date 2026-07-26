@@ -12,6 +12,12 @@ const leaseTermFieldsSource = readFileSync(
 	new URL('../forms/LeaseTermFields.svelte', import.meta.url),
 	'utf8'
 );
+const calendarSelectSources = [
+	'../ui/calendar/calendar-month-select.svelte',
+	'../ui/calendar/calendar-year-select.svelte',
+	'../ui/range-calendar/range-calendar-month-select.svelte',
+	'../ui/range-calendar/range-calendar-year-select.svelte'
+].map((path) => readFileSync(new URL(path, import.meta.url), 'utf8'));
 
 describe('date picker wiring', () => {
 	it('uses the shared mask helper and exposes a compact Today shortcut', () => {
@@ -32,6 +38,13 @@ describe('date picker wiring', () => {
 		assert.doesNotMatch(maintenanceSource, /type="datetime-local"/);
 		assert.match(maintenanceSource, /<DateTimePicker[^>]+testid="work-order-scheduled-input"/);
 		assert.match(maintenanceSource, /<DateTimePicker[^>]+testid="inspection-scheduled-input"/);
+	});
+
+	it('uses the app select menu for calendar month and year choices', () => {
+		for (const source of calendarSelectSources) {
+			assert.match(source, /SimpleSelect/);
+			assert.doesNotMatch(source, /<select\b/);
+		}
 	});
 
 	it('defaults an empty lease end date to one calendar year after the start date', () => {

@@ -195,7 +195,7 @@
 	}
 
 	function openTenantAccount(lease: PastDueLease) {
-		goto(`/units/${lease.unitId}?tab=money&ledger=rent&tenantAccount=${lease.tenantAccountId}`);
+		goto(`/units/${lease.unitId}?tab=money&view=tenant-account&tenantAccount=${lease.tenantAccountId}`);
 	}
 </script>
 

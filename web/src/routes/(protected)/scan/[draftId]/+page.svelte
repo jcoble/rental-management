@@ -1095,7 +1095,7 @@
 </script>
 
 <svelte:head>
-	<title>Review Scan - Rental Command</title>
+	<title>Review Document - Rental Command</title>
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="scan-review">
@@ -1135,21 +1135,28 @@
 			/>
 		</div>
 		<div class="mb-4 flex items-center gap-3">
-			<h1 class="text-xl font-bold">Review Scan #{data.id}</h1>
+			<h1 class="text-xl font-bold">Review scanned document</h1>
 			<Badge variant="outline" class={statusBadgeClass(data.status)} data-testid="scan-status-badge" data-status={data.status}>
 				{statusLabel(data.status)}
 			</Badge>
 		</div>
 		{#if inheritedContextItems.length > 0 || scanContext.sourceLabel}
 			<div class="mb-4 rounded-lg border bg-muted/35 px-4 py-3" data-testid="scan-inherited-context">
-				<p class="text-sm font-medium">This scan will stay connected to:</p>
-				<div class="mt-2 flex flex-wrap gap-2">
-					{#each inheritedContextItems as item}
-						<Badge variant="secondary">{item}</Badge>
-					{/each}
-					{#if scanContext.sourceLabel}<Badge variant="outline">Source: {scanContext.sourceLabel}</Badge>{/if}
-				</div>
-				<p class="mt-2 text-xs text-muted-foreground">Review any editable destination below before confirming. The server rechecks every relationship and access scope when it saves.</p>
+				<p class="text-sm font-medium">This document came from an existing rental record.</p>
+				{#if scanContext.sourceLabel}
+					<p class="mt-1 text-sm text-muted-foreground">{scanContext.sourceLabel}</p>
+				{/if}
+				<p class="mt-1 text-xs text-muted-foreground">Check where it will be saved below before you confirm.</p>
+				{#if inheritedContextItems.length > 0}
+					<details class="mt-2 text-xs text-muted-foreground">
+						<summary class="cursor-pointer font-medium">Linked record references</summary>
+						<div class="mt-2 flex flex-wrap gap-2">
+							{#each inheritedContextItems as item}
+								<Badge variant="secondary">{item}</Badge>
+							{/each}
+						</div>
+					</details>
+				{/if}
 			</div>
 		{/if}
 
@@ -1251,32 +1258,43 @@
 
 		{#if data.modelId === 'noop'}
 			<div class="mb-4 rounded-lg px-4 py-3 text-sm m3-warning-surface" data-testid="scan-noop-banner">
-				<strong>AI extraction is off.</strong> No OpenAI API key is configured, so this document's fields
-				weren't filled in automatically. Enter them manually below, or set
-				<code class="rounded bg-[var(--m3c-warning-container)] px-1">Assistant:ApiKey</code> and re-scan.
+				<strong>Automatic document reading is off.</strong> Enter the details manually below, or
+				<a class="font-medium underline underline-offset-2" href="/settings/integrations/ai">connect an AI service in Settings</a>
+				and scan the document again.
 			</div>
 		{/if}
 
 		<div class="mb-4 grid gap-px overflow-hidden rounded-xl border bg-border md:grid-cols-[1.15fr_1fr_1fr]" data-testid="scan-proposed-command">
 			<div class="bg-card px-4 py-3">
-				<p class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Exact proposed command</p>
+				<p class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">What will happen</p>
 				<p class="mt-1 text-sm font-semibold text-foreground">{proposedCommand}</p>
 			</div>
 			<div class="bg-card px-4 py-3">
-				<p class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Destination</p>
+				<p class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Where it will be saved</p>
 				<p class="mt-1 text-sm text-foreground">{proposedDestination}</p>
-				<p class="mt-1 text-xs text-muted-foreground">You can change authorized destinations in the review.</p>
+				<p class="mt-1 text-xs text-muted-foreground">You can change this choice before confirming.</p>
 			</div>
 			<div class="bg-card px-4 py-3">
-				<p class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Review checks</p>
+				<p class="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Needs your review</p>
 				<p class="mt-1 text-sm font-medium {extractionWarningCount > 0 ? 'text-[var(--warning)]' : 'text-[var(--success)]'}">
-					{extractionWarningCount > 0 ? `${extractionWarningCount} item${extractionWarningCount === 1 ? '' : 's'} need attention` : 'No extraction warnings'}
+					{extractionWarningCount > 0 ? `${extractionWarningCount} item${extractionWarningCount === 1 ? '' : 's'} may need correction` : 'No unclear fields found'}
 				</p>
 				<p class="mt-1 text-xs text-muted-foreground">
-					{lowConfidenceFields.length} low confidence · {mediumConfidenceFields.length} medium · duplicate and access checks run again when saved
+					{lowConfidenceFields.length + mediumConfidenceFields.length} field{lowConfidenceFields.length + mediumConfidenceFields.length === 1 ? '' : 's'} may be hard to read. Rental Command checks for duplicates again when you save.
 				</p>
 			</div>
 		</div>
+
+		<details class="mb-4 rounded-lg border border-border bg-card text-xs text-muted-foreground" data-testid="scan-technical-details">
+			<summary class="cursor-pointer px-4 py-3 font-medium text-foreground">Technical details</summary>
+			<dl class="grid gap-3 border-t border-border px-4 py-3 sm:grid-cols-2 lg:grid-cols-4">
+				<div><dt>Scan record</dt><dd class="mt-1 font-mono">#{data.id}</dd></div>
+				{#if data.modelId}<div><dt>Reader</dt><dd class="mt-1 font-mono">{data.modelId}</dd></div>{/if}
+				{#if data.tokensUsed != null}<div><dt>Reader usage</dt><dd class="mt-1 font-mono">{data.tokensUsed.toLocaleString()} tokens</dd></div>{/if}
+				{#if data.costUsd != null}<div><dt>Estimated reader cost</dt><dd class="mt-1 font-mono">${data.costUsd.toFixed(4)}</dd></div>{/if}
+				{#if data.sourceContentSha256}<div class="sm:col-span-2 lg:col-span-4"><dt>Source fingerprint</dt><dd class="mt-1 break-all font-mono">{data.sourceContentSha256}</dd></div>{/if}
+			</dl>
+		</details>
 
 		<div class="grid items-start gap-4 xl:grid-cols-[minmax(20rem,0.82fr)_minmax(34rem,1.18fr)]" data-testid="scan-review-workspace">
 				<!-- Left: document preview -->
@@ -1284,9 +1302,6 @@
 					<Card.Header class="border-b border-border px-4 py-3 [.border-b]:pb-3">
 						<div class="flex items-center justify-between gap-3">
 							<Card.Title class="text-sm">Source document</Card.Title>
-							{#if data.sourceContentSha256}
-								<span class="font-mono text-[10px] text-muted-foreground" title={data.sourceContentSha256}>SHA-256 {data.sourceContentSha256.slice(0, 10)}…</span>
-							{/if}
 						</div>
 						{#if scanContext.sourceLabel}<p class="text-xs text-muted-foreground">{scanContext.sourceLabel}</p>{/if}
 					</Card.Header>
@@ -1330,18 +1345,7 @@
 			<!-- Right: extracted fields form -->
 			<Card.Root class="flex flex-col gap-0 py-0">
 				<Card.Header class="border-b border-border px-4 py-3 [.border-b]:pb-3">
-					<div class="flex items-baseline gap-1 flex-wrap">
-						<Card.Title class="text-sm">Extracted Fields</Card.Title>
-						{#if data.modelId}
-							<span class="text-xs text-muted-foreground">via {data.modelId}</span>
-						{/if}
-						{#if data.tokensUsed != null}
-							<span class="text-xs text-muted-foreground">· {data.tokensUsed.toLocaleString()} tokens</span>
-						{/if}
-						{#if data.costUsd != null}
-							<span class="text-xs text-muted-foreground">· ~${data.costUsd.toFixed(4)}</span>
-						{/if}
-					</div>
+					<Card.Title class="text-sm">Review the details</Card.Title>
 				</Card.Header>
 				<Card.Content class="flex-1 overflow-y-auto p-4">
 					{#if isProcessing}

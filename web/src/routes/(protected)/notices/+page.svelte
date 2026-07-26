@@ -12,9 +12,10 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import FairHousingReviewDialog from '$lib/components/shared/FairHousingReviewDialog.svelte';
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
-	import { AlertTriangle, CheckCircle2, FileText, Mail, MessageSquare, MonitorSmartphone, RefreshCw, Send, ShieldCheck, Trash2 } from '@lucide/svelte';
+	import { AlertTriangle, CheckCircle2, ChevronDown, FileText, Mail, MessageSquare, MonitorSmartphone, RefreshCw, Send, ShieldCheck, Trash2 } from '@lucide/svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 
 	const queryClient = useQueryClient();
@@ -31,6 +32,7 @@
 		statusFilterOptions.find((o) => o.value === statusFilter)?.label ?? 'All'
 	);
 	let editingId = $state<number | null>(null);
+	let expandedDraftId = $state<number | null>(null);
 	let editSubject = $state('');
 	let editBody = $state('');
 	let approveChannels = $state<Record<string, { portal: boolean; email: boolean; sms: boolean }>>({});
@@ -71,6 +73,7 @@
 	}
 
 	function startEdit(draft: NoticeDraft) {
+		expandedDraftId = draft.id;
 		editingId = draft.id;
 		editSubject = draft.subject;
 		editBody = draft.body;
@@ -80,6 +83,11 @@
 	function cancelEdit() {
 		editingId = null;
 		resetFairHousing();
+	}
+
+	function toggleDraft(id: number) {
+		if (editingId === id) return;
+		expandedDraftId = expandedDraftId === id ? null : id;
 	}
 
 	async function checkFairHousing() {
@@ -251,7 +259,7 @@
 	/>
 
 	{#if draftsQuery.isLoading}
-		<p class="py-12 text-center text-sm text-muted-foreground">Loading notice drafts...</p>
+		<LoadingState label="Loading tenant notices" variant="page" testid="notice-list-loading" />
 	{:else if draftsQuery.isError}
 		<p class="py-12 text-center text-sm text-destructive">Could not load notice drafts.</p>
 	{:else if drafts.length === 0}
@@ -261,6 +269,9 @@
 			</Card.Content>
 		</Card.Root>
 	{:else}
+		<p class="mb-3 text-sm text-muted-foreground" data-testid="notice-list-range">
+			Showing 1–{drafts.length} of {drafts.length} notice{drafts.length === 1 ? '' : 's'}
+		</p>
 		<div class="grid gap-4" data-testid="notice-draft-list">
 			{#each drafts as draft (draft.id)}
 				{@const accent = noticeAccent(draft.noticeType)}
@@ -279,10 +290,23 @@
 									{draft.propertyName ?? 'Property'}{draft.unitNumber ? ` · Unit ${draft.unitNumber}` : ''} · {draft.reason}
 								</p>
 							</div>
-							<StatusBadge status={draft.status} />
+							<div class="flex items-center gap-2">
+								<StatusBadge status={draft.status} />
+								<Button
+									size="sm"
+									variant="outline"
+									onclick={() => toggleDraft(draft.id)}
+									aria-expanded={expandedDraftId === draft.id}
+									aria-controls={`notice-draft-content-${draft.id}`}
+								>
+									{expandedDraftId === draft.id ? 'Hide draft' : 'Review draft'}
+									<ChevronDown class="h-4 w-4 transition-transform {expandedDraftId === draft.id ? 'rotate-180' : ''}" />
+								</Button>
+							</div>
 						</div>
 					</Card.Header>
-					<Card.Content class="space-y-4 p-5">
+					{#if expandedDraftId === draft.id || editingId === draft.id}
+					<Card.Content id={`notice-draft-content-${draft.id}`} class="space-y-4 p-5">
 						{#if editingId === draft.id}
 							<div class="space-y-3">
 								<input class="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" bind:value={editSubject} data-testid="notice-edit-subject" />
@@ -392,6 +416,7 @@
 							</div>
 						{/if}
 					</Card.Content>
+					{/if}
 				</Card.Root>
 			{/each}
 		</div>

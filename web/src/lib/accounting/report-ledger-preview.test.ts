@@ -13,6 +13,8 @@ describe('accounting report ledger preview', () => {
 		assert.match(types, /recentLedger: LedgerTransaction\[\];/);
 		assert.match(page, /const recentLedger = \$derived\(reports\?\.recentLedger \?\? reports\?\.ledger \?\? \[\]\);/);
 		assert.match(page, /const ledgerTotalCount = \$derived\(reports\?\.ledgerTotalCount \?\? reports\?\.ledger\.length \?\? 0\);/);
+		assert.match(page, /formatMoneyEntryLabel\(row\.type\)/);
+		assert.match(page, /\/docs\/accounting-overview/);
 		assert.doesNotMatch(page, /\.ledger\s*\?\?\s*\[\]\)\.slice\(/);
 		assert.doesNotMatch(page, /<p[^>]*>\{reports\?\.ledger\.length/);
 	});

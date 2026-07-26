@@ -11,7 +11,8 @@
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { Input } from '$lib/components/ui/input';
+	import * as Select from '$lib/components/ui/select';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import { FilePlus2, Loader2 } from '@lucide/svelte';
 
 	type SuccessorType = 'Correction' | 'Restatement' | 'Renewal' | 'MonthToMonth';
@@ -65,11 +66,10 @@
 		enabled: isRenewal
 	}));
 
-	function setAddendumDecision(seriesPublicId: string, event: Event) {
-		const value = (event.currentTarget as HTMLSelectElement).value as LeaseRenewalAddendumDecisionType | '';
+	function setAddendumDecision(seriesPublicId: string, value: string | undefined) {
 		selectedAddendumDecisions = {
 			...selectedAddendumDecisions,
-			[seriesPublicId]: value || undefined
+			[seriesPublicId]: value as LeaseRenewalAddendumDecisionType | undefined
 		};
 		validationError = '';
 	}
@@ -209,30 +209,28 @@
 	<Dialog.Content class="max-h-[90vh] max-w-2xl overflow-y-auto" data-testid="agreement-successor-dialog">
 		<Dialog.Header>
 			<Dialog.Title>{title}</Dialog.Title>
-			<Dialog.Description>
-				Creates a new editable Agreement version. The old agreement keeps governing until the replacement is fully signed and executed.
-			</Dialog.Description>
+			<Dialog.Description>Create the next editable lease version. The current signed lease stays in effect until the replacement is fully signed.</Dialog.Description>
 		</Dialog.Header>
 
 		<div class="space-y-4">
-			<div class="rounded-xl border bg-muted/20 p-4 text-sm">
+			<div class="rounded-xl bg-muted/40 p-4 text-sm">
 				<p class="font-medium">From {source.agreementNumber} · version {source.versionNumber}</p>
 				<p class="text-muted-foreground">{source.termStartOn} to {source.termEndOn ?? 'month-to-month'}</p>
 			</div>
 
 			{#if isReplacement}
-				<div class="rounded-xl border p-4 text-sm text-muted-foreground">
-					The source term dates are copied exactly. After creation, open the new draft to edit the corrected terms and signer snapshots.
+				<div class="rounded-xl bg-muted/40 p-4 text-sm text-muted-foreground">
+					The current start and end dates will be copied. After creating the draft, review the corrected terms and signers.
 				</div>
 			{:else}
 				<label class="space-y-1">
 					<span class="text-sm font-medium">New term starts</span>
-					<Input type="date" bind:value={termStartOn} data-testid="agreement-successor-term-start" />
+					<DatePicker bind:value={termStartOn} testid="agreement-successor-term-start" />
 				</label>
 				{#if changeType === 'Renewal'}
 					<label class="space-y-1">
 						<span class="text-sm font-medium">New term ends</span>
-						<Input type="date" bind:value={termEndOn} data-testid="agreement-successor-term-end" />
+						<DatePicker bind:value={termEndOn} testid="agreement-successor-term-end" />
 					</label>
 				{/if}
 			{/if}
@@ -253,16 +251,16 @@
 
 			<label class="space-y-1">
 				<span class="text-sm font-medium">New version governs from</span>
-				<Input type="date" bind:value={governingFromOn} data-testid="agreement-successor-governing-from" />
+				<DatePicker bind:value={governingFromOn} testid="agreement-successor-governing-from" />
 				{#if isRenewal}<span class="block text-xs text-muted-foreground">For renewals, this must match the new term start.</span>{/if}
 			</label>
 
 			{#if isRenewal}
 				<section class="space-y-3" aria-labelledby="addendum-decisions-heading">
 					<div>
-						<h3 id="addendum-decisions-heading" class="text-sm font-semibold">Effective addendum decisions</h3>
+						<h3 id="addendum-decisions-heading" class="text-sm font-semibold">What should happen to existing lease changes?</h3>
 						<p class="mt-1 text-sm text-muted-foreground">
-							Choose what happens to every addendum that is effective for this relationship. These choices are saved with the new draft; the source agreement is not changed.
+							Choose whether each current addendum ends, becomes part of the new lease, or is copied into a new addendum draft.
 						</p>
 					</div>
 
@@ -311,17 +309,26 @@
 
 								<label class="block space-y-1.5">
 									<span class="text-sm font-medium">What should happen in the new agreement?</span>
-									<select
-										class="m3-field-surface h-10 w-full px-3 text-sm"
+									<Select.Root
+										type="single"
 										value={selectedAddendumDecisions[series.seriesPublicId] ?? ''}
-										onchange={(event) => setAddendumDecision(series.seriesPublicId, event)}
-										data-testid={`agreement-successor-addendum-decision-${series.seriesPublicId}`}
+										onValueChange={(value) => setAddendumDecision(series.seriesPublicId, value)}
 									>
-										<option value="">Select a decision…</option>
-										<option value="End">End when the new agreement begins</option>
-										<option value="IncorporateIntoBase">Incorporate into the new base agreement</option>
-										<option value="ReissueAsAddendum">Reissue as a new addendum draft</option>
-									</select>
+										<Select.Trigger class="w-full" data-testid={`agreement-successor-addendum-decision-${series.seriesPublicId}`}>
+											{selectedAddendumDecisions[series.seriesPublicId] === 'End'
+												? 'End when the new lease begins'
+												: selectedAddendumDecisions[series.seriesPublicId] === 'IncorporateIntoBase'
+													? 'Include in the new lease'
+													: selectedAddendumDecisions[series.seriesPublicId] === 'ReissueAsAddendum'
+														? 'Copy into a new addendum'
+														: 'Choose what happens'}
+										</Select.Trigger>
+										<Select.Content>
+											<Select.Item value="End" label="End when the new lease begins">End when the new lease begins</Select.Item>
+											<Select.Item value="IncorporateIntoBase" label="Include in the new lease">Include in the new lease</Select.Item>
+											<Select.Item value="ReissueAsAddendum" label="Copy into a new addendum">Copy into a new addendum</Select.Item>
+										</Select.Content>
+									</Select.Root>
 									<span class="block text-xs text-muted-foreground">
 										{decisionConsequence(selectedAddendumDecisions[series.seriesPublicId])}
 									</span>

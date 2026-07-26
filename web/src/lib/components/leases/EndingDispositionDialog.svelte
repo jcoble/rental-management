@@ -7,7 +7,8 @@
 	import type { LeaseManagementSummary, LeaseManagementEndingDisposition } from '$lib/types';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { Input } from '$lib/components/ui/input';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import SimpleSelect from '$lib/components/shared/SimpleSelect.svelte';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import { Loader2 } from '@lucide/svelte';
 
@@ -96,20 +97,18 @@
 	<Dialog.Content class="max-w-lg">
 		<Dialog.Header>
 			<Dialog.Title>Plan what happens when this lease ends</Dialog.Title>
-			<Dialog.Description>
-				This records the relationship decision used for notice automation. It does not edit or replace the governing agreement.
-			</Dialog.Description>
+			<Dialog.Description>Choose whether the tenants will renew, continue month to month, or move out. This plan does not change the signed lease.</Dialog.Description>
 		</Dialog.Header>
 
 		<div class="space-y-4 py-2">
 			<label class="space-y-1 text-sm">
 				<span class="font-medium">Decision</span>
-				<select bind:value={disposition} class="h-10 w-full rounded-md border bg-background px-3">
-					<option value="Undecided">Not decided yet</option>
-					<option value="OfferRenewal">Renew / continue with a new fixed term</option>
-					<option value="OfferMonthToMonth">Continue month-to-month</option>
-					<option value="NonRenewalMoveOut">Move out / end the relationship</option>
-				</select>
+				<SimpleSelect bind:value={disposition} options={[
+					{ value: 'Undecided', label: 'Not decided yet' },
+					{ value: 'OfferRenewal', label: 'Offer a new fixed-term lease' },
+					{ value: 'OfferMonthToMonth', label: 'Continue month to month' },
+					{ value: 'NonRenewalMoveOut', label: 'Plan a move-out' }
+				]} />
 			</label>
 
 			{#if isMoveOut}
@@ -119,11 +118,11 @@
 				<div class="grid gap-3 sm:grid-cols-2">
 					<label class="space-y-1 text-sm">
 						<span class="font-medium">Notice date</span>
-						<Input type="date" bind:value={noticeDate} />
+						<DatePicker bind:value={noticeDate} />
 					</label>
 					<label class="space-y-1 text-sm">
 						<span class="font-medium">Effective move-out date</span>
-						<Input type="date" bind:value={moveOutDate} />
+						<DatePicker bind:value={moveOutDate} />
 					</label>
 				</div>
 			{/if}

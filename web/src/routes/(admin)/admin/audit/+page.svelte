@@ -6,6 +6,7 @@
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import Pagination from '$lib/components/shared/Pagination.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { overfetchPage } from '$lib/audit/pagination';
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
@@ -128,7 +129,7 @@
 </script>
 
 <svelte:head>
-	<title>Audit (forensic) - Rental Command</title>
+	<title>Detailed activity log - Rental Command</title>
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="admin-audit-page">
@@ -136,11 +137,11 @@
 		<div>
 			<h1 class="flex items-center gap-2 text-2xl font-bold">
 				<ShieldAlert class="h-5 w-5 text-[var(--warning)]" />
-				Audit — forensic
+				Detailed activity log
 			</h1>
 			<p class="text-sm text-muted-foreground">
-				Admin-only deep view: every change with the actor's IP address and the raw before → after
-				values.
+				Review every recorded change, including who made it, where it came from, and the values
+				before and after the change.
 			</p>
 		</div>
 		<div class="flex items-center gap-2">
@@ -200,9 +201,7 @@
 
 		<Card.Content class="p-0" data-testid="admin-audit-list">
 			{#if auditQuery.isLoading}
-				<p class="py-10 text-center text-sm text-muted-foreground" data-testid="admin-audit-loading">
-					Loading…
-				</p>
+				<LoadingState label="Loading activity history" variant="page" testid="admin-audit-loading" />
 			{:else if auditQuery.isError}
 				<p class="py-10 text-center text-sm text-destructive" data-testid="admin-audit-error">
 					Failed to load audit trail. Try refreshing.

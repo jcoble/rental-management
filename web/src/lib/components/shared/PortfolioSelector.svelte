@@ -11,6 +11,7 @@
 	import type { WorkspaceExperience } from '$lib/types/user';
 	import { beginAccessTransition, endAccessTransition } from '$lib/auth/access-transition-state';
 	import { ChevronDown, Building2 } from '@lucide/svelte';
+	import SimpleSelect from '$lib/components/shared/SimpleSelect.svelte';
 
 	let { collapsed = false }: { collapsed?: boolean } = $props();
 
@@ -145,20 +146,25 @@
 </div>
 {#if !collapsed && (access?.availableExperiences.length ?? 0) > 1}
 	<div class="px-2 pb-2">
-		<label for="active-experience" class="sr-only">Current work area</label>
-		<select
-			id="active-experience"
+		<SimpleSelect
 			value={authState.activeExperience ?? ''}
+			options={(access?.availableExperiences ?? []).map((experience) => ({
+				value: experience,
+				label: ({
+					Management: 'Manage rentals',
+					Owner: 'Owner portal',
+					Tenant: 'Resident portal',
+					Vendor: 'Vendor work',
+					Technician: 'Assigned work'
+				} as Partial<Record<WorkspaceExperience, string>>)[experience] ?? experience,
+				disabled: !experienceHasLanding(experience)
+			}))}
 			disabled={switching}
-			aria-describedby={switchError ? 'active-experience-error' : undefined}
-			onchange={(event) => void handleExperienceChange(event.currentTarget.value as WorkspaceExperience)}
-			class="m3-field-surface h-9 w-full px-3 text-sm text-foreground"
-			data-testid="active-experience-select"
-		>
-			{#each access?.availableExperiences ?? [] as experience}
-				<option value={experience} disabled={!experienceHasLanding(experience)}>{experience}</option>
-			{/each}
-		</select>
+			onchange={(value) => void handleExperienceChange(value as WorkspaceExperience)}
+			triggerClass="h-9 w-full"
+			ariaLabel="Current work area"
+			testid="active-experience-select"
+		/>
 		{#if switchError}
 			<p id="active-experience-error" class="mt-1 text-xs text-destructive" role="alert">
 				{switchError}

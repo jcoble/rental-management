@@ -376,12 +376,18 @@
 							New conversation
 						</Button>
 					</div>
+					<p class="border-t border-border px-3 py-2 text-xs text-muted-foreground" data-testid="conversation-list-range">
+						Showing 0 of 0 conversations
+					</p>
 				{:else}
 					<ul>
 						{#each conversations as c (c.id)}
 							{@render conversationRow(c)}
 						{/each}
 					</ul>
+					<p class="border-t border-border px-3 py-2 text-xs text-muted-foreground" data-testid="conversation-list-range">
+						Showing {conversations.length} of {conversationTotalCount} conversation{conversationTotalCount === 1 ? '' : 's'}
+					</p>
 					{#if hasMoreConversations}
 						<div class="border-t border-border/60 p-3">
 							<Button
