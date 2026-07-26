@@ -435,21 +435,22 @@
 	<div class="mb-5 flex flex-wrap items-start justify-between gap-3">
 		<div class="min-w-0">
 			<h1 class="truncate text-2xl font-bold">{expense?.description ?? 'Expense'}</h1>
-			<p class="text-sm text-muted-foreground">{expense ? `${formatExpenseCategory(expense.category)} · $${expense.amount} · ${expense.status}` : ''}</p>
+			<p class="text-sm text-muted-foreground">{expense ? `${formatExpenseCategory(expense.category)} · ${formatExpenseMoney(expense.amount)} · ${expense.status}` : ''}</p>
 		</div>
 		{#if expense}
-			<div class="flex gap-2">
+			<div class="flex flex-wrap justify-end gap-2">
+				<Button variant="ghost" href="/docs/recording-expenses" data-testid="expense-detail-help-link">How this works</Button>
 				{#if editing}
 					<Button variant="outline" onclick={cancelEditing} disabled={saveMutation.isPending}><X class="h-4 w-4" />Cancel</Button>
 					<Button onclick={saveExpense} disabled={saveMutation.isPending}><Save class="h-4 w-4" />{saveMutation.isPending ? 'Saving...' : 'Save'}</Button>
 				{:else}
 					{#if expense.capitalizedAssetId}
 						<span class="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-muted px-3 text-sm font-medium text-muted-foreground" data-testid="expense-detail-capitalized-badge">
-							<Landmark class="h-4 w-4" />Capitalized
+							<Landmark class="h-4 w-4" />Tracked as an improvement
 						</span>
 					{:else if expense.propertyId}
 						<Button variant="outline" onclick={openCapitalize} disabled={capitalizeMutation.isPending} data-testid="expense-detail-capitalize-button">
-							<Landmark class="h-4 w-4" />Capitalize
+							<Landmark class="h-4 w-4" />Track as property improvement
 						</Button>
 					{/if}
 					<Button variant="outline" onclick={startEditing}><Pencil class="h-4 w-4" />Edit</Button>
@@ -498,7 +499,7 @@
 				{@render dateField({ label: 'Paid date', value: form.paidAt, setValue: (v) => (form.paidAt = v), display: expense.paidAt ? formatDateOnly(expense.paidAt) : '', testid: 'expense-detail-paid-date' })}
 			</DetailCard>
 
-			<DetailCard title="Categorization & references" icon={Tags} accent="muted" testid="expense-card-references" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+			<DetailCard title="Category and rental" icon={Tags} accent="muted" testid="expense-card-references" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Category" bind:value={form.category} display={formatExpenseCategory(expense.category)} {editing} type="select" options={categoryOptions} testid="expense-detail-category" />
 				{#if editing}
 					<RemoteRecordSelect
@@ -521,7 +522,7 @@
 					<p class="mb-1 text-xs font-medium text-muted-foreground">Unit</p>
 					{#if expense.unitId}
 						<a
-							href="/units/{expense.unitId}?tab=money&ledger=expenses"
+							href="/units/{expense.unitId}?tab=money&view=operating-costs"
 							class="block min-h-10 rounded-md py-2 text-sm font-medium text-primary underline-offset-4 hover:underline"
 							data-testid="expense-detail-unit-link"
 						>
@@ -809,11 +810,11 @@
 						class="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-medium text-foreground"
 						data-testid="expense-detail-receipt-data-toggle"
 					>
-						<span>Receipt details (raw)</span>
+						<span>Technical receipt data</span>
 						<ChevronDown class="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
 					</summary>
 					<div class="border-t border-border px-3 py-3">
-						<InlineField label="Receipt details JSON" bind:value={form.receiptData} display={expense.receiptData} {editing} type="textarea" testid="expense-detail-receipt-data" />
+						<InlineField label="Stored receipt data" bind:value={form.receiptData} display={expense.receiptData} {editing} type="textarea" testid="expense-detail-receipt-data" />
 					</div>
 				</details>
 			</DetailCard>
@@ -831,7 +832,8 @@
 <Dialog.Root open={showCapitalize} onOpenChange={(v) => { if (!v) closeCapitalize(); }}>
 	<Dialog.Content class="max-w-md">
 		<Dialog.Header>
-			<Dialog.Title>Capitalize Expense</Dialog.Title>
+			<Dialog.Title>Track as a property improvement</Dialog.Title>
+			<Dialog.Description>Use this when the cost improves the property over several years. Ask your accountant if you are unsure.</Dialog.Description>
 		</Dialog.Header>
 		<div class="grid gap-3" data-testid="expense-capitalize-form">
 			<InlineField label="Description" bind:value={capitalizeForm.description} editing type="text" error={capitalizeErrors.description} testid="expense-capitalize-description" />
@@ -845,7 +847,7 @@
 		<div class="mt-4 flex justify-end gap-2">
 			<Button variant="outline" onclick={closeCapitalize}>Cancel</Button>
 			<Button onclick={submitCapitalize} disabled={capitalizeMutation.isPending} data-testid="expense-capitalize-save-button">
-				{capitalizeMutation.isPending ? 'Saving...' : 'Capitalize'}
+				{capitalizeMutation.isPending ? 'Saving...' : 'Save improvement details'}
 			</Button>
 		</div>
 	</Dialog.Content>

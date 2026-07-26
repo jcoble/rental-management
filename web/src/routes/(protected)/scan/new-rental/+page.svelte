@@ -21,6 +21,10 @@
 	}
 </script>
 
+<svelte:head>
+	<title>New Rental from a Lease - Rental Command</title>
+</svelte:head>
+
 <div class="mx-auto max-w-2xl space-y-4 p-4">
 	<PageBreadcrumb crumbs={[{ label: 'Scan', href: '/scan' }, { label: 'New rental from your lease' }]} />
 	<LeaseFirstImport {portfolioId} {initialDraftId} syncDraftToUrl oncomplete={onComplete} />

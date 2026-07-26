@@ -128,6 +128,15 @@ public class SandboxGuardAndSeederTests : IDisposable
             },
         };
         _ctx.Db.Portfolios.Add(portfolio);
+        _ctx.Db.OwnerEntities.Add(new OwnerEntity
+        {
+            Portfolio = portfolio,
+            OwnerEntityType = OwnerEntityType.Person,
+            Name = "New Signup",
+            IsPrimary = true,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
         _ctx.Db.WorkspaceAccessContexts.Add(accessContext);
         _ctx.Db.SaveChanges();
 
@@ -152,6 +161,30 @@ public class SandboxGuardAndSeederTests : IDisposable
         (await _ctx.Db.LeaseManagements.CountAsync(l => l.PortfolioId == 2)).Should().BeGreaterThan(0);
         (await _ctx.Db.TenantLedgerEntries.CountAsync(p => p.PortfolioId == 2)).Should().BeGreaterThan(0);
         (await _ctx.Db.Tenants.IgnoreQueryFilters().CountAsync(t => t.PortfolioId == 2)).Should().BeGreaterThan(0);
+        var seededOwners = await _ctx.Db.OwnerEntities.IgnoreQueryFilters()
+            .Where(owner => owner.PortfolioId == 2)
+            .OrderBy(owner => owner.Id)
+            .ToListAsync();
+        seededOwners.Should().HaveCount(2);
+        seededOwners.Should().ContainSingle(owner =>
+            owner.IsPrimary
+            && owner.Name == "Maple Ridge Properties LLC"
+            && owner.OwnerEntityType == OwnerEntityType.LLC);
+        var earliestSeededFinancialActivity = new[]
+        {
+            await _ctx.Db.TenantLedgerEntries
+                .Where(entry => entry.PortfolioId == 2)
+                .MinAsync(entry => entry.PostedAtUtc),
+            await _ctx.Db.Expenses
+                .Where(expense => expense.PortfolioId == 2)
+                .MinAsync(expense => expense.PaidAt ?? expense.IncurredAt),
+        }.Min();
+        var seededOwnerships = await _ctx.Db.PropertyOwnerships
+            .Where(ownership => ownership.PortfolioId == 2)
+            .ToListAsync();
+        seededOwnerships.Should().NotBeEmpty();
+        seededOwnerships.Should().OnlyContain(ownership =>
+            ownership.EffectiveFromUtc <= earliestSeededFinancialActivity);
 
         // Scan-persistence demo data: a subset of expenses carry the typed scan columns + child line
         // items. Canonical lease demo data carries explicit relationship/agreement/ledger facts and
@@ -165,6 +198,13 @@ public class SandboxGuardAndSeederTests : IDisposable
         scannedExpenses.Should().Contain(e => e.LineItems.Count > 0);
         scannedExpenses.Should().Contain(e => e.CardLast4 != null && e.PaymentMethod != null); // a card receipt
         scannedExpenses.Should().Contain(e => e.DocumentKind == "Invoice");                     // a vendor invoice
+        var unitAExpense = await _ctx.Db.Expenses.IgnoreQueryFilters()
+            .Include(expense => expense.Unit)
+            .SingleAsync(expense => expense.PortfolioId == 2
+                && expense.Description == "Fix leaking pipe under kitchen sink – Unit A");
+        unitAExpense.OperationalScope.Should().Be(ExpenseOperationalScope.Unit);
+        unitAExpense.Unit.Should().NotBeNull();
+        unitAExpense.Unit!.UnitNumber.Should().Be("A");
 
         (await _ctx.Db.LeaseAgreements.CountAsync(agreement =>
             agreement.PortfolioId == 2)).Should().BeGreaterThan(0);

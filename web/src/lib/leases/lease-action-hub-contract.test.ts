@@ -68,7 +68,7 @@ describe('canonical lease lifecycle action hub', () => {
 		assert.match(successorDialogSource, /agreement-successor-correction-reason/);
 		assert.match(
 			successorDialogSource,
-			/old agreement keeps governing until the replacement is fully signed and executed/i,
+			/current signed lease stays in effect until the replacement is fully signed/i,
 		);
 		assert.match(draftDialogSource, /agreement-correction-comparison/);
 		assert.match(draftDialogSource, /agreement-correction-changed-field/);
@@ -115,12 +115,12 @@ describe('canonical lease lifecycle action hub', () => {
 		assert.match(endpointSource, /recordEndingDisposition:/);
 		assert.match(endpointSource, /\/ending-disposition`/);
 		for (const disposition of ['Undecided', 'OfferRenewal', 'OfferMonthToMonth', 'NonRenewalMoveOut']) {
-			assert.match(endingDispositionSource, new RegExp(`value="${disposition}"`));
+			assert.match(endingDispositionSource, new RegExp(`value: '${disposition}'`));
 		}
 		assert.match(endingDispositionSource, /noticeGivenAtUtc/);
 		assert.match(endingDispositionSource, /plannedMoveOutAtUtc/);
 		assert.match(endingDispositionSource, /decisionReason/);
-		assert.match(endingDispositionSource, /does not edit or replace the governing agreement/i);
+		assert.match(endingDispositionSource, /does not change the signed lease/i);
 		assert.match(detailPageSource, /<EndingDispositionDialog/);
 	});
 });

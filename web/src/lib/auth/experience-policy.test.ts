@@ -204,6 +204,6 @@ describe('experience route policy', () => {
 		assert.match(bankingPage, /enabled: !!portfolioId && canManageConnections/g);
 		assert.match(bankingPage, /enabled: !!portfolioId && canOperateReconciliation/);
 		assert.match(bankingPage, /\{#if canDestructivelyReconcile\}/);
-		assert.match(bankingPage, /\{#if canManageConnections\}[\s\S]*Connect Plaid/);
+		assert.match(bankingPage, /\{#if canManageConnections\}[\s\S]*Connect bank/);
 	});
 });

@@ -2,20 +2,19 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import { portfolios } from '$lib/api/endpoints/portfolios';
 	import { accounting } from '$lib/api/endpoints/accounting';
-	import { ai, type BriefingBullet } from '$lib/api/endpoints/ai';
 	import { messages } from '$lib/api/endpoints/messages';
 	import { workOrders } from '$lib/api/endpoints/workOrders';
 	import type { Dashboard, DashboardActivity } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { recordHref, type RecordType } from '$lib/navigation/record-href';
-	import { Home, AlertTriangle, CalendarClock, Wallet, Wrench, Building, Sparkles, MessageSquare, HandCoins, Receipt, PiggyBank, ArrowRight, ChevronRight, CircleCheckBig, ListChecks } from '@lucide/svelte';
+	import { Home, AlertTriangle, CalendarClock, Wallet, Wrench, Building, MessageSquare, HandCoins, Receipt, PiggyBank, ArrowRight, ChevronRight } from '@lucide/svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
-	import AIBadge from '$lib/components/shared/AIBadge.svelte';
 	import GettingStartedCard from '$lib/components/onboarding/GettingStartedCard.svelte';
 	import { formatDateOnly } from '$lib/utils/date';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { labelForType } from './appointments/calendar-utils';
+	import DashboardBriefing from './DashboardBriefing.svelte';
 
 	const dashboardQuery = createQuery(() => ({
 		queryKey: ['dashboard', getCurrentPortfolioId()],
@@ -24,10 +23,6 @@
 	const snapshotQuery = createQuery(() => ({
 		queryKey: ['accounting-snapshot', getCurrentPortfolioId()],
 		queryFn: () => accounting.snapshot(),
-	}));
-	const briefingQuery = createQuery(() => ({
-		queryKey: ['ai-briefing', getCurrentPortfolioId()],
-		queryFn: () => ai.briefing(),
 	}));
 	const messagesQuery = createQuery(() => ({
 		queryKey: ['dashboard-messages', getCurrentPortfolioId()],
@@ -67,32 +62,6 @@
 		return null;
 	}
 
-	// Resolve a briefing action item to the record it's about. Unit-tied records deep-link into the
-	// unit Command Center tab; records without a unit keep their generic detail page.
-	function bulletHref(bullet: BriefingBullet): string | null {
-		if (!bullet.entityType || bullet.entityId == null) return null;
-		if (bullet.entityType === 'TenantAccount') {
-			return bullet.unitId
-				? `/units/${bullet.unitId}?tab=money&tenantAccount=${bullet.entityId}`
-				: `/tenant-accounts/${bullet.entityId}`;
-		}
-		if (bullet.entityType === 'LeaseAgreement') {
-			return bullet.unitId
-				? `/units/${bullet.unitId}?tab=tenant-lease&view=agreements&agreement=${bullet.entityId}`
-				: `/lease-agreements/${bullet.entityId}`;
-		}
-		const unitHref = recordEntityHref(bullet.entityType, bullet.entityId, bullet.unitId);
-		if (unitHref) return unitHref;
-		switch (bullet.entityType) {
-			case 'Appointment':
-				return `/appointments/${bullet.entityId}`;
-			case 'Inspection':
-				return `/maintenance/inspections/${bullet.entityId}`;
-			default:
-				return null;
-		}
-	}
-
 	// Resolve a Recent Activity row to the record it touched, so each row deep-links to that entity's
 	// detail page (or its closest parent). Keep in sync with the server's audit EntityType strings
 	// (DashboardService.ResolveActivityLabelsAsync / AuditDescriber). Types without a page → no link.
@@ -122,18 +91,6 @@
 		}
 	}
 
-	// Severity → tints for the action item's left rail and pill. Critical reads as
-	// "drop everything", warning as "soon", info as "heads up".
-	const severityStyles = {
-		critical: { rail: 'bg-destructive', pill: 'border-destructive/40 bg-destructive/10 text-destructive' },
-		warning: { rail: 'bg-warning', pill: 'border-warning/40 bg-warning/10 text-warning' },
-		info: { rail: 'bg-primary/60', pill: 'border-border bg-muted text-muted-foreground' },
-	} as const;
-	function severityStyle(severity: string) {
-		return severityStyles[severity as keyof typeof severityStyles] ?? severityStyles.info;
-	}
-
-	const ACTION_ITEM_LIMIT = 6;
 </script>
 
 <svelte:head>
@@ -146,20 +103,6 @@
 		<div class="mb-6">
 			<div class="h-7 w-48 animate-pulse rounded bg-muted"></div>
 			<div class="mt-2 h-4 w-64 animate-pulse rounded bg-muted"></div>
-		</div>
-		<!-- Briefing hero skeleton (mirrors the real hero so the AI moat never looks broken) -->
-		<div class="mb-6 rounded-xl border border-border bg-card p-5">
-			<div class="h-5 w-44 animate-pulse rounded bg-muted"></div>
-			<div class="mt-4 grid gap-5 lg:grid-cols-5">
-				<div class="space-y-2 lg:col-span-3">
-					<div class="h-24 w-full animate-pulse rounded-lg bg-muted"></div>
-				</div>
-				<div class="space-y-2 lg:col-span-2">
-					{#each [0, 1, 2] as _}
-						<div class="h-12 w-full animate-pulse rounded-lg bg-muted"></div>
-					{/each}
-				</div>
-			</div>
 		</div>
 		<div class="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
 			{#each [0, 1, 2, 3] as _}
@@ -286,155 +229,14 @@
 			</Card.Content>
 		</Card.Root>
 
+		<!-- The selected portfolio is the dashboard's primary context and stays first. The briefing
+		     keeps its own request and loading state, but follows the portfolio card in the visual order. -->
+		<DashboardBriefing />
+
 		<!-- Persistent "Getting started" checklist nudge. Self-managing: shows progress + the next steps
 		     (each deep-links and spotlights the exact control) and hides once everything is done. Works
 		     in both Sandbox and Live; supersedes the old empty-only "finish setup" banner. -->
 		<GettingStartedCard />
-
-		<!-- Today's Briefing — the AI moat, promoted to the top, full width. Two distinct halves:
-		     the AI voice (what the computer is saying) and the action list (what to do today). -->
-		<Card.Root
-			class="m3-dashboard-art m3-dashboard-art--briefing m3-surface-art m3-surface-art--hero m3-art-04 m3-motion-enter relative mb-6 gap-0 overflow-hidden py-0"
-			style="--m3-motion-index: 1"
-			data-testid="dashboard-todays-briefing"
-		>
-			<Card.Header class="relative px-5 pt-5 pb-3">
-				<Card.Title class="flex items-center gap-2 text-lg font-semibold">
-					<span class="flex h-7 w-7 items-center justify-center rounded-[var(--m3-shape-large)] bg-primary/15 ring-1 ring-primary/25">
-						<Sparkles class="h-4 w-4 text-primary" />
-					</span>
-					Today's Briefing
-					<AIBadge />
-				</Card.Title>
-			</Card.Header>
-			<Card.Content class="relative px-5 pb-5 pt-0">
-				{#if briefingQuery.isLoading}
-					<div class="grid gap-5 lg:grid-cols-5">
-						<div class="lg:col-span-3">
-							<div class="h-28 w-full animate-pulse rounded-xl bg-muted"></div>
-						</div>
-						<div class="space-y-2 lg:col-span-2">
-							{#each [0, 1, 2] as _}
-								<div class="h-12 w-full animate-pulse rounded-lg bg-muted"></div>
-							{/each}
-						</div>
-					</div>
-				{:else}
-					{@const briefing = briefingQuery.isError ? undefined : briefingQuery.data}
-					{@const bullets = briefing?.bullets ?? []}
-					{@const shown = bullets.slice(0, ACTION_ITEM_LIMIT)}
-					{@const overflow = bullets.length - shown.length}
-					<div class="grid gap-5 lg:grid-cols-5">
-						<!-- LEFT: the AI voice. Gradient-tinted, ringed, clear type — obviously the computer talking. -->
-						<div class="lg:col-span-3">
-							{#if briefing?.summary}
-								<div
-									class="flex flex-col gap-3 rounded-[var(--m3-shape-large)] bg-[color-mix(in_srgb,var(--primary)_12%,transparent)] p-4 ring-1 ring-primary/25"
-									data-testid="dashboard-briefing-narrative"
-								>
-									<div class="flex items-center gap-2">
-										<span class="flex h-6 w-6 items-center justify-center rounded-full bg-primary/20 ring-1 ring-primary/25">
-											<Sparkles class="h-3.5 w-3.5 text-primary" />
-										</span>
-										<span class="m3-type-label-medium text-primary">The assistant says</span>
-									</div>
-									<p class="text-[15px] leading-relaxed text-foreground">{briefing.summary}</p>
-								</div>
-							{:else if briefingQuery.isError}
-								<div class="flex items-center rounded-xl bg-muted/40 p-4 text-sm text-muted-foreground" data-testid="dashboard-briefing-narrative">
-									Your daily briefing is unavailable right now.
-								</div>
-							{:else}
-								<div
-									class="flex flex-col gap-2 rounded-[var(--m3-shape-large)] bg-[color-mix(in_srgb,var(--primary)_12%,transparent)] p-4 ring-1 ring-primary/25"
-									data-testid="dashboard-briefing-narrative"
-								>
-									<div class="flex items-center gap-2">
-										<span class="flex h-6 w-6 items-center justify-center rounded-full bg-primary/20 ring-1 ring-primary/25">
-											<Sparkles class="h-3.5 w-3.5 text-primary" />
-										</span>
-										<span class="m3-type-label-medium text-primary">The assistant says</span>
-									</div>
-									<p class="text-[15px] leading-relaxed text-foreground">
-										{#if bullets.length > 0}
-											You've got {bullets.length} thing{bullets.length === 1 ? '' : 's'} to look at today — they're listed to the right, most urgent first.
-										{:else}
-											Nothing urgent on your plate today. Everything's running smoothly across your portfolio.
-										{/if}
-									</p>
-								</div>
-							{/if}
-						</div>
-
-						<!-- RIGHT: the action list. Severity-ranked, color-coded, deep-linking. -->
-						<div class="lg:col-span-2" data-testid="dashboard-briefing-actions">
-							<div class="mb-2 flex items-center gap-2">
-								{#if bullets.length > 0}
-									<ListChecks class="h-4 w-4 text-muted-foreground" />
-									<h2 class="text-sm font-semibold text-foreground">
-										{bullets.length} thing{bullets.length === 1 ? '' : 's'} need{bullets.length === 1 ? 's' : ''} attention
-									</h2>
-								{:else if briefingQuery.isError}
-									<AlertTriangle class="h-4 w-4 text-muted-foreground" />
-									<h2 class="text-sm font-semibold text-foreground">Action items unavailable</h2>
-								{:else}
-									<CircleCheckBig class="h-4 w-4 text-success" />
-									<h2 class="text-sm font-semibold text-foreground">You're all caught up</h2>
-								{/if}
-							</div>
-							{#if bullets.length === 0}
-								<p class="text-sm text-muted-foreground">
-									{briefingQuery.isError ? "We couldn't load today's action items." : 'No priority items for today.'}
-								</p>
-							{:else}
-								<div class="space-y-2">
-									{#each shown as bullet}
-										{@const sev = severityStyle(bullet.severity)}
-										{@const href = bulletHref(bullet)}
-										{#if href}
-											<a
-												{href}
-												class="group relative flex items-start gap-3 overflow-hidden rounded-lg border border-border bg-background py-2 pl-4 pr-3 transition-colors hover:border-border/80 hover:bg-muted/40"
-												data-testid="dashboard-briefing-action-item"
-											>
-												<span class="absolute inset-y-0 left-0 w-1 {sev.rail}"></span>
-												<div class="min-w-0 flex-1">
-													<div class="flex items-center justify-between gap-2">
-														<p class="truncate text-sm font-medium text-foreground">{bullet.title}</p>
-														<span class="shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium capitalize {sev.pill}">{bullet.severity}</span>
-													</div>
-													<p class="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{bullet.detail}</p>
-												</div>
-												<ChevronRight class="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/60 transition-transform group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
-											</a>
-										{:else}
-											<div
-												class="relative flex items-start gap-3 overflow-hidden rounded-lg border border-border bg-background py-2 pl-4 pr-3"
-												data-testid="dashboard-briefing-action-item"
-											>
-												<span class="absolute inset-y-0 left-0 w-1 {sev.rail}"></span>
-												<div class="min-w-0 flex-1">
-													<div class="flex items-center justify-between gap-2">
-														<p class="truncate text-sm font-medium text-foreground">{bullet.title}</p>
-														<span class="shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium capitalize {sev.pill}">{bullet.severity}</span>
-													</div>
-													<p class="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{bullet.detail}</p>
-												</div>
-											</div>
-										{/if}
-									{/each}
-									{#if overflow > 0}
-										<p class="pt-0.5 text-xs text-muted-foreground" data-testid="dashboard-briefing-overflow">
-											+{overflow} more item{overflow === 1 ? '' : 's'}
-										</p>
-									{/if}
-								</div>
-							{/if}
-						</div>
-					</div>
-				{/if}
-			</Card.Content>
-		</Card.Root>
 
 		<!-- Plain-English money snapshot: collected / spent / kept, each with a sentence -->
 		<Card.Root class="m3-expressive-card m3-expressive-card--success m3-expressive-card--bars m3-motion-enter mb-6 gap-0 py-0" style="--m3-motion-index: 2" data-testid="dashboard-money-snapshot">

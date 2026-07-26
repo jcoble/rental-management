@@ -29,7 +29,8 @@ describe('unit rent canonical receipt and charge commands', () => {
 	});
 
 	it('renders immutable receipt detail without edit or delete actions', () => {
-		assert.match(paymentDetailSource, /A posted receipt is permanent/);
+		assert.match(paymentDetailSource, /This receipt stays in your records/);
+		assert.match(paymentDetailSource, /records a matching correction instead of rewriting it/);
 		assert.doesNotMatch(paymentDetailSource, /payments\.(update|delete|markPaid)/);
 	});
 });

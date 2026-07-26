@@ -28,28 +28,36 @@ test('notification settings is a three-area route-backed landing with no legacy 
 });
 
 test('My alerts is personal and exposes every canonical channel', () => {
-	assert.match(alertsSource, /Configuring alerts for/);
-	for (const channel of ['In-app', 'Mobile push', 'Email', 'SMS'])
+	assert.match(alertsSource, /Alert destinations for/);
+	for (const channel of ['In Rental Command', 'Phone app', 'Email', 'Text message'])
 		assert.match(alertsSource, new RegExp(channel));
 	assert.match(alertsSource, /notifications\.myAlerts\.update/);
+	assert.match(alertsSource, /NotificationSetupJourney/);
 });
 
 test('Team routing and Tenant notices use separate canonical persistence', () => {
 	assert.match(routingSource, /notifications\.teamRouting\.replace/);
-	assert.match(routingSource, /Fall back to Workspace Administrators/);
+	assert.match(routingSource, /Let administrators handle unassigned alerts/);
 	assert.match(routingSource, /namedRecipientSummary/);
-	assert.match(routingSource, /routingExplanation/);
 	assert.doesNotMatch(routingSource, /\.filter\(/);
-	assert.match(routingSource, /Morning Briefing schedule/);
+	assert.match(routingSource, /Daily summary/);
+	assert.match(routingSource, /NotificationPolicyAccordion/);
+	assert.match(routingSource, /editingTopic === item\.topic/);
 	assert.match(routingSource, /notifications\.morningBriefing\.update/);
 	assert.match(routingSource, /topic: 'MorningBriefing'/);
 	assert.match(tenantSource, /\{ value: 'Off'/);
 	assert.match(tenantSource, /\{ value: 'Draft'/);
 	assert.match(tenantSource, /\{ value: 'Auto'/);
 	assert.match(tenantSource, /notifications\.tenantNotices\.updatePolicy/);
-	assert.match(tenantSource, /Save and use new template version/);
+	assert.match(tenantSource, /Save and use this message/);
 	assert.match(tenantSource, /templateProvenance/);
-	assert.match(tenantSource, /Restore and use current supplied default/);
+	assert.match(tenantSource, /Use the current Rental Command starting message/);
+	assert.match(tenantSource, /let expandedAutomation = \$state<string \| null>\(null\)/);
+	assert.match(tenantSource, /open=\{expandedAutomation === policy\.automationKey\}/);
+	assert.match(tenantSource, /Advanced delivery settings/);
+	assert.doesNotMatch(tenantSource, /Lead days/);
+	assert.doesNotMatch(tenantSource, /Local send hour/);
+	assert.doesNotMatch(tenantSource, />SMS</);
 	assert.doesNotMatch(tenantSource, /seedTemplates/);
 	for (const status of ['Queued', 'Accepted', 'Retrying', 'Sent', 'PermanentlyFailed'])
 		assert.match(tenantSource, new RegExp(status));

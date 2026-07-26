@@ -406,14 +406,21 @@
 			</h1>
 			<p class="mt-1 text-sm text-muted-foreground">
 				{canManageConnections
-					? 'Connect bank accounts, import or sync bank lines, and review reconciliation.'
+					? 'Connect a bank and confirm which bank lines match payments or expenses you already recorded.'
 					: 'Review suggested matches for the properties assigned to you.'}
 			</p>
+			<a
+				href="/docs/banking-and-reconciliation"
+				class="mt-2 inline-flex min-h-11 items-center text-sm font-medium text-primary underline-offset-4 hover:underline"
+				data-testid="banking-help-link"
+			>
+				How bank matching works
+			</a>
 		</div>
 		{#if canManageConnections}
 			<Button variant="outline" onclick={connectPlaid} disabled={linkTokenMutation.isPending || exchangeMutation.isPending || !plaidSettings?.configured}>
 				<Link2 class="mr-1.5 h-4 w-4" />
-				{linkTokenMutation.isPending || exchangeMutation.isPending ? 'Connecting...' : 'Connect Plaid'}
+				{linkTokenMutation.isPending || exchangeMutation.isPending ? 'Connecting...' : 'Connect bank'}
 			</Button>
 		{/if}
 	</div>
@@ -605,7 +612,7 @@
 									<th class="px-4 py-3 text-left font-medium text-muted-foreground">Date</th>
 									<th class="px-4 py-3 text-left font-medium text-muted-foreground">Description</th>
 									<th class="px-4 py-3 text-right font-medium text-muted-foreground">Amount</th>
-									<th class="px-4 py-3 text-left font-medium text-muted-foreground">Property route</th>
+									<th class="px-4 py-3 text-left font-medium text-muted-foreground">Property access</th>
 									<th class="px-4 py-3 text-left font-medium text-muted-foreground">Match</th>
 								</tr>
 							</thead>
@@ -633,10 +640,10 @@
 												disabled={routeMutation.isPending}
 											>
 												<Select.Trigger class="h-9 w-full" data-testid="bank-transaction-route-{transaction.id}">
-													{transaction.propertyName ?? 'Unassigned · admin only'}
+													{transaction.propertyName ?? 'No property · administrators only'}
 												</Select.Trigger>
 												<Select.Content>
-													<Select.Item value="unassigned" label="Unassigned · admin only">Unassigned · admin only</Select.Item>
+													<Select.Item value="unassigned" label="No property · administrators only">No property · administrators only</Select.Item>
 													{#each routingProperties as property (property.id)}
 														<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
 													{/each}
@@ -748,28 +755,29 @@
 					<Card.Header class="border-b border-border px-4 py-3">
 						<Card.Title class="flex items-center gap-2 text-base">
 							<Link2 class="h-4 w-4" />
-							Plaid
+							Bank connection
 						</Card.Title>
-						<Card.Description>Read-only bank connection through Plaid Link.</Card.Description>
+						<Card.Description>Rental Command can read bank activity to suggest matches, but it cannot move money.</Card.Description>
 					</Card.Header>
 					<Card.Content class="space-y-3 p-4">
 						<div class="rounded-md border border-border p-3">
 							<p class="text-sm font-medium">
-								{plaidSettings?.configured ? 'Plaid is configured' : 'Plaid is not configured'}
-							</p>
-							<p class="mt-1 text-xs text-muted-foreground">
-								Environment: {plaidSettings?.plaidEnvironment ?? 'sandbox'}
+								{plaidSettings?.configured ? 'Bank connections are ready' : 'Bank connections are not available yet'}
 							</p>
 							{#if !plaidSettings?.configured}
 								<p class="mt-2 text-xs text-muted-foreground">
-									Set <code>Plaid:ClientId</code> and <code>Plaid:Secret</code> in server secrets to enable bank connections.
+									Ask your workspace administrator to enable this feature. You can still record payments and expenses without a bank connection.
+								</p>
+							{:else}
+								<p class="mt-2 text-xs text-muted-foreground">
+									Connect an account to import bank activity and review suggested matches.
 								</p>
 							{/if}
 						</div>
 						<div class="flex flex-wrap gap-2">
 							<Button variant="outline" onclick={connectPlaid} disabled={!plaidSettings?.configured || linkTokenMutation.isPending || exchangeMutation.isPending}>
 								<Link2 class="mr-1.5 h-4 w-4" />
-							Connect account
+							Connect bank
 						</Button>
 					</div>
 				</Card.Content>
@@ -778,7 +786,7 @@
 			<Card.Root class="gap-0 py-0">
 				<Card.Header class="border-b border-border px-4 py-3">
 					<Card.Title class="text-base">Connections</Card.Title>
-					<Card.Description>Sync pulls new bank lines from Plaid and keeps existing matches.</Card.Description>
+					<Card.Description>Refresh imports new bank activity and keeps the matches you already confirmed.</Card.Description>
 				</Card.Header>
 				<Card.Content class="space-y-3 p-4">
 					{#if (summary?.connections.length ?? 0) === 0}
@@ -794,7 +802,7 @@
 									</div>
 									<Button size="sm" variant="outline" onclick={() => syncMutation.mutate(connection.id)} disabled={syncMutation.isPending || connection.provider !== 'Plaid'}>
 										<RefreshCw class="mr-1.5 h-4 w-4" />
-										Sync
+										Refresh
 									</Button>
 								</div>
 							</div>
@@ -803,44 +811,53 @@
 				</Card.Content>
 			</Card.Root>
 
-			{#if isDev}
-				<Card.Root class="gap-0 py-0">
-					<Card.Header class="border-b border-border px-4 py-3">
-						<Card.Title class="text-base">Sandbox token exchange</Card.Title>
-						<Card.Description>Development-only Plaid sandbox/debug path when Link is not available.</Card.Description>
-					</Card.Header>
-					<Card.Content class="space-y-3 p-4">
-						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="public-sandbox-token" bind:value={exchangePublicToken} oninput={() => (manualExchangeOperationId = '')} />
-						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Plaid account id" bind:value={exchangeAccountId} oninput={() => (manualExchangeOperationId = '')} />
-						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Institution name" bind:value={exchangeInstitutionName} oninput={() => (manualExchangeOperationId = '')} />
-						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Account name" bind:value={exchangeAccountName} oninput={() => (manualExchangeOperationId = '')} />
-						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Mask" bind:value={exchangeAccountMask} oninput={() => (manualExchangeOperationId = '')} />
-						<Button class="w-full" variant="outline" onclick={exchangeManualPublicToken} disabled={exchangeMutation.isPending}>
-							Exchange public token
-						</Button>
-					</Card.Content>
-				</Card.Root>
-			{/if}
+			<details class="rounded-xl border border-border bg-card" data-testid="banking-advanced-tools">
+				<summary class="cursor-pointer px-4 py-3 text-sm font-semibold">Advanced bank tools</summary>
+				<div class="space-y-4 border-t border-border p-4">
+					<p class="text-sm text-muted-foreground">
+						Use these tools only when a normal bank connection is unavailable or support asks you to paste an export.
+					</p>
+					{#if isDev}
+						<Card.Root class="gap-0 py-0">
+							<Card.Header class="border-b border-border px-4 py-3">
+								<Card.Title class="text-base">Developer bank connection</Card.Title>
+								<Card.Description>Connect a Plaid sandbox account without opening the normal bank window.</Card.Description>
+							</Card.Header>
+							<Card.Content class="space-y-3 p-4">
+								<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Public sandbox token" aria-label="Public sandbox token" bind:value={exchangePublicToken} oninput={() => (manualExchangeOperationId = '')} />
+								<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Plaid account ID" aria-label="Plaid account ID" bind:value={exchangeAccountId} oninput={() => (manualExchangeOperationId = '')} />
+								<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Institution name" aria-label="Institution name" bind:value={exchangeInstitutionName} oninput={() => (manualExchangeOperationId = '')} />
+								<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Account name" aria-label="Account name" bind:value={exchangeAccountName} oninput={() => (manualExchangeOperationId = '')} />
+								<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Last four digits" aria-label="Last four account digits" bind:value={exchangeAccountMask} oninput={() => (manualExchangeOperationId = '')} />
+								<Button class="w-full" variant="outline" onclick={exchangeManualPublicToken} disabled={exchangeMutation.isPending}>
+									Connect sandbox account
+								</Button>
+							</Card.Content>
+						</Card.Root>
+					{/if}
 
-			<Card.Root class="gap-0 py-0">
-				<Card.Header class="border-b border-border px-4 py-3">
-					<Card.Title class="flex items-center gap-2 text-base">
-						<Upload class="h-4 w-4" />
-						Import bank lines
-					</Card.Title>
-					<Card.Description>Manual import stays available for CSV/JSON exports and scanner cleanup.</Card.Description>
-				</Card.Header>
-				<Card.Content class="space-y-3 p-4">
-					<textarea
-						class="min-h-80 w-full rounded-md border border-input bg-background p-3 font-mono text-xs"
-						bind:value={importJson}
-						data-testid="banking-import-json"
-					></textarea>
-					<Button class="w-full" onclick={importTransactions} disabled={importMutation.isPending}>
-						{importMutation.isPending ? 'Importing...' : 'Import transactions'}
-					</Button>
-				</Card.Content>
-			</Card.Root>
+					<Card.Root class="gap-0 py-0">
+						<Card.Header class="border-b border-border px-4 py-3">
+							<Card.Title class="flex items-center gap-2 text-base">
+								<Upload class="h-4 w-4" />
+								Paste a bank export
+							</Card.Title>
+							<Card.Description>Paste a CSV or JSON export when your bank cannot connect directly.</Card.Description>
+						</Card.Header>
+						<Card.Content class="space-y-3 p-4">
+							<textarea
+								class="min-h-80 w-full rounded-md border border-input bg-background p-3 font-mono text-xs"
+								aria-label="Bank export"
+								bind:value={importJson}
+								data-testid="banking-import-json"
+							></textarea>
+							<Button class="w-full" onclick={importTransactions} disabled={importMutation.isPending}>
+								{importMutation.isPending ? 'Importing...' : 'Import bank activity'}
+							</Button>
+						</Card.Content>
+					</Card.Root>
+				</div>
+			</details>
 		</div>
 		</div>
 	{/if}

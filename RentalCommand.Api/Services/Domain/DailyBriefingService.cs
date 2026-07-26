@@ -17,16 +17,28 @@ namespace RentalCommand.Api.Services.Domain;
 public class DailyBriefingService : IDailyBriefingService
 {
     private const int MaxBriefingBullets = 25;
+    private static readonly TimeSpan DefaultLlmPolishTimeout = TimeSpan.FromSeconds(5);
 
     private readonly RentalCommandDbContext _db;
     private readonly ILlmProvider _llm;
     private readonly TimeProvider _timeProvider;
+    private readonly TimeSpan _llmPolishTimeout;
 
     public DailyBriefingService(RentalCommandDbContext db, ILlmProvider llm, TimeProvider timeProvider)
+        : this(db, llm, timeProvider, DefaultLlmPolishTimeout)
+    {
+    }
+
+    internal DailyBriefingService(
+        RentalCommandDbContext db,
+        ILlmProvider llm,
+        TimeProvider timeProvider,
+        TimeSpan llmPolishTimeout)
     {
         _db = db;
         _llm = llm;
         _timeProvider = timeProvider;
+        _llmPolishTimeout = llmPolishTimeout;
     }
 
     public Task<BriefingResponse> ComposeAsync(WorkspaceReadScope scope, CancellationToken ct = default)
@@ -124,29 +136,7 @@ public class DailyBriefingService : IDailyBriefingService
             .Select(c => ToBullet(c, today))
             .ToList();
 
-        // LLM polish — skip when there is nothing to summarize.
-        string? summary = null;
-        var llmEnhanced = false;
-
-        if (sortedBullets.Count > 0)
-        {
-            try
-            {
-                var bulletList = string.Join("\n", sortedBullets.Select(b => $"- [{b.Severity.ToUpper()}] {b.Title}: {b.Detail}"));
-                var prompt = $"You are a friendly assistant for a busy landlord. In 2–4 short sentences, summarize today's priorities from these items. Plain English, no jargon. Items:\n{bulletList}";
-                var llmResult = await _llm.ChatAsync(prompt, ct);
-
-                if (!string.IsNullOrWhiteSpace(llmResult))
-                {
-                    summary = llmResult.Trim();
-                    llmEnhanced = true;
-                }
-            }
-            catch
-            {
-                // LLM unavailable — fall back to rules-only output, no error thrown.
-            }
-        }
+        var (summary, llmEnhanced) = await TryPolishSummaryAsync(sortedBullets, ct);
 
         return new BriefingResponse
         {
@@ -156,6 +146,40 @@ public class DailyBriefingService : IDailyBriefingService
             LlmEnhanced = llmEnhanced,
             Bullets = sortedBullets,
         };
+    }
+
+    internal async Task<(string? Summary, bool Enhanced)> TryPolishSummaryAsync(
+        IReadOnlyList<BriefingBullet> bullets,
+        CancellationToken ct)
+    {
+        if (bullets.Count == 0) return (null, false);
+
+        try
+        {
+            var bulletList = string.Join(
+                "\n",
+                bullets.Select(b => $"- [{b.Severity.ToUpper()}] {b.Title}: {b.Detail}"));
+            var prompt = $"You are a friendly assistant for a busy landlord. In 2–4 short sentences, summarize today's priorities from these items. Plain English, no jargon. Items:\n{bulletList}";
+            using var polishCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            polishCts.CancelAfter(_llmPolishTimeout);
+            var llmResult = await _llm
+                .ChatAsync(prompt, polishCts.Token)
+                .WaitAsync(_llmPolishTimeout, ct);
+
+            return string.IsNullOrWhiteSpace(llmResult)
+                ? (null, false)
+                : (llmResult.Trim(), true);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            // Optional AI wording timed out or failed. Return the factual rules-only briefing
+            // immediately instead of holding the Dashboard open on a remote dependency.
+            return (null, false);
+        }
     }
 
     private IQueryable<Property> AuthorizedProperties(

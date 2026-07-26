@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
-	import { goto } from '$app/navigation';
+	import { pushState, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import type { UnitDashboard } from '$lib/types';
 	import { tenantAccounts } from '$lib/api/endpoints/tenant-accounts';
@@ -16,6 +16,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import { PAYMENT_METHODS } from '$lib/constants/payments';
 	import { clearFieldError } from '$lib/forms/form-errors';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { X, ScanLine, ArrowLeft, Receipt, FilePlus2 } from '@lucide/svelte';
 
 	let { dashboard, onScan, tabQuery = 'rent', ledgerQuery }: {
@@ -31,23 +32,36 @@
 		leaseManagementId: dashboard.leaseManagementId
 	}));
 	const tenantAccountId = $derived(moneyIdentity.tenantAccountId);
-	const selectedReceipt = $derived(Number(page.url.searchParams.get('payment')) || null);
+	const selectedReceipt = $derived(
+		page.state.unitPaymentId ?? (Number(page.url.searchParams.get('payment')) || null)
+	);
 	const PAGE_SIZE = 20;
 	const today = () => new Date().toISOString().slice(0, 10);
 
 	function unitUrl(payment?: number) {
 		const url = new URL(`/units/${dashboard.unit.id}`, page.url.origin);
 		url.searchParams.set('tab', tabQuery);
-		if (ledgerQuery) url.searchParams.set('ledger', ledgerQuery);
+		if (ledgerQuery) url.searchParams.set('view', ledgerQuery === 'expenses' ? 'operating-costs' : 'tenant-account');
 		if (payment) url.searchParams.set('payment', String(payment));
 		return `${url.pathname}${url.search}`;
 	}
 
 	function openReceipt(id: number) {
-		goto(unitUrl(id), { keepFocus: true, noScroll: true });
+		pushState(unitUrl(id), {
+			...page.state,
+			unitTab: 'money',
+			unitView: 'tenant-account',
+			unitPaymentId: id,
+			unitExpenseId: null,
+		});
 	}
 	function clearSelection() {
-		goto(unitUrl(), { replaceState: true, keepFocus: true, noScroll: true });
+		replaceState(unitUrl(), {
+			...page.state,
+			unitTab: 'money',
+			unitView: 'tenant-account',
+			unitPaymentId: null,
+		});
 	}
 
 	let receiptPage = $state(1);
@@ -216,14 +230,14 @@
 
 <div class="space-y-4" data-testid="unit-rent-tab">
 {#if selectedReceipt && tenantAccountId}
-	<Button variant="outline" size="sm" class="gap-1" onclick={clearSelection} data-testid="payment-back-to-list"><ArrowLeft class="h-4 w-4" /> Back to receipts</Button>
+	<Button variant="outline" size="sm" class="gap-1" onclick={clearSelection} data-testid="payment-back-to-list"><ArrowLeft class="h-4 w-4" /> Back to payments</Button>
 	<PaymentDetail tenantAccountId={tenantAccountId} tenantLedgerEntryId={selectedReceipt} expectedUnitId={dashboard.unit.id} onUnitMismatch={clearSelection} />
 {:else}
-	<div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4">
+	<div class="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-card p-4">
 		<div><p class="text-sm text-muted-foreground">Outstanding balance</p><p class="text-2xl font-bold">{money(dashboard.header.outstandingRentBalance)}</p></div>
 		<div class="flex flex-wrap gap-2">
 			{#if tenantAccountId}
-				<Button class="gap-2" onclick={() => formKind === 'receipt' ? closeForm() : openForm('receipt')} data-testid="rent-post-payment"><Receipt class="h-4 w-4" /> Record receipt</Button>
+				<Button class="gap-2" onclick={() => formKind === 'receipt' ? closeForm() : openForm('receipt')} data-testid="rent-post-payment"><Receipt class="h-4 w-4" /> Record payment</Button>
 				<Button variant="outline" class="gap-2" onclick={() => formKind === 'charge' ? closeForm() : openForm('charge')} data-testid="rent-post-charge"><FilePlus2 class="h-4 w-4" /> Add charge</Button>
 			{/if}
 			<Button variant="outline" class="gap-2" onclick={onScan} data-testid="rent-scan"><ScanLine class="h-4 w-4" /> Scan payment</Button>
@@ -231,8 +245,8 @@
 	</div>
 
 	{#if formKind && tenantAccountId}
-		<div class="rounded-xl border border-border bg-muted/20 p-4" data-testid="rent-create-form">
-			<div class="mb-3 flex items-center justify-between"><h3 class="text-sm font-semibold">{formKind === 'receipt' ? 'Record payment receipt' : 'Add a manual charge'}</h3><Button variant="ghost" size="icon" onclick={closeForm}><X class="h-4 w-4" /></Button></div>
+		<div class="rounded-xl bg-card p-4" data-testid="rent-create-form">
+			<div class="mb-3 flex items-center justify-between"><h3 class="text-sm font-semibold">{formKind === 'receipt' ? 'Record a payment' : 'Add a manual charge'}</h3><Button variant="ghost" size="icon" onclick={closeForm}><X class="h-4 w-4" /></Button></div>
 			{#if formKind === 'receipt'}
 				<div class="grid gap-3 sm:grid-cols-2">
 					<label class="text-xs font-medium text-muted-foreground">Amount<Input type="text" inputmode="decimal" mask="currency" bind:value={receiptForm.amount} />{#if errors.amount}<span class="text-destructive">{errors.amount}</span>{/if}</label>
@@ -242,7 +256,7 @@
 					<label class="text-xs font-medium text-muted-foreground">Payer<Input bind:value={receiptForm.payerName} placeholder="Optional" /></label>
 					<label class="text-xs font-medium text-muted-foreground sm:col-span-2">Description<Input bind:value={receiptForm.description} />{#if errors.description}<span class="text-destructive">{errors.description}</span>{/if}</label>
 				</div>
-				<div class="mt-3 flex justify-end"><Button onclick={submitReceipt} disabled={receiptMutation.isPending}>{receiptMutation.isPending ? 'Recording…' : 'Record receipt'}</Button></div>
+				<div class="mt-3 flex justify-end"><Button onclick={submitReceipt} disabled={receiptMutation.isPending}>{receiptMutation.isPending ? 'Recording…' : 'Record payment'}</Button></div>
 			{:else}
 				<div class="grid gap-3 sm:grid-cols-2">
 					<label class="text-xs font-medium text-muted-foreground">Amount<Input type="text" inputmode="decimal" mask="currency" bind:value={chargeForm.amount} />{#if errors.amount}<span class="text-destructive">{errors.amount}</span>{/if}</label>
@@ -257,7 +271,7 @@
 	{/if}
 
 	{#if !tenantAccountId}
-		<p class="rounded-xl border bg-card p-6 text-center text-sm text-muted-foreground">No tenant account exists for this rental yet. Receipts and charges begin when the tenancy is created.</p>
+		<p class="rounded-xl bg-card p-6 text-center text-sm text-muted-foreground">No tenant account exists for this rental yet. Payments and charges begin when the tenancy is created.</p>
 	{:else}
 		<section class="space-y-2" data-testid="account-activity-section">
 			<h3 class="text-sm font-semibold">Account activity</h3>
@@ -269,22 +283,34 @@
 					<Button class="mt-3" variant="outline" size="sm" onclick={() => activityQuery.refetch()}>Try again</Button>
 				</div>
 			{:else if (activityQuery.data?.items.length ?? 0) === 0}
-				<p class="rounded-xl border bg-card p-4 text-sm text-muted-foreground">No account activity.</p>
+				<p class="rounded-xl bg-card p-4 text-sm text-muted-foreground">No account activity yet.</p>
 			{:else}
-				<ul class="space-y-2">
+				<ul class="divide-y overflow-hidden rounded-xl bg-card">
 					{#each activityQuery.data?.items ?? [] as entry (entry.tenantLedgerEntryId)}
-						<li class="flex items-center justify-between gap-3 rounded-xl border bg-card p-3 text-sm">
-							<span><span class="font-medium">{entry.entryType}</span><span class="ml-2 text-muted-foreground">{entry.description}</span></span>
-							<span class="font-semibold">{money(entry.amount)}</span>
+						<li class="text-sm">
+							{#if entry.entryType === 'PaymentReceipt'}
+								<button type="button" class="flex w-full items-center justify-between gap-3 p-3 text-left hover:bg-muted/40" onclick={() => openReceipt(entry.tenantLedgerEntryId)}>
+									<span><span class="font-medium">{formatStatusLabel(entry.entryType)}</span><span class="ml-2 text-muted-foreground">{entry.description}</span></span>
+									<span class="font-semibold">{money(entry.amount)}</span>
+								</button>
+							{:else}
+								<div class="flex items-center justify-between gap-3 p-3">
+									<span><span class="font-medium">{formatStatusLabel(entry.entryType)}</span><span class="ml-2 text-muted-foreground">{entry.description}</span></span>
+									<span class="font-semibold">{money(entry.amount)}</span>
+								</div>
+							{/if}
 						</li>
 					{/each}
 				</ul>
-				{#if activityQuery.data && activityQuery.data.totalCount > PAGE_SIZE}<div class="flex items-center justify-between"><Button variant="outline" size="sm" onclick={() => (activityPage -= 1)} disabled={activityPage === 1 || activityQuery.isFetching}>Previous</Button><span class="text-sm text-muted-foreground">{activityQuery.data.totalCount} entries</span><Button variant="outline" size="sm" onclick={() => (activityPage += 1)} disabled={activityPage * PAGE_SIZE >= activityQuery.data.totalCount || activityQuery.isFetching}>Next</Button></div>{/if}
+				{#if activityQuery.data && activityQuery.data.totalCount > 0}<div class="flex items-center justify-between"><Button variant="outline" size="sm" onclick={() => (activityPage -= 1)} disabled={activityPage === 1 || activityQuery.isFetching}>Previous</Button><span class="text-sm text-muted-foreground">Page {activityPage} of {Math.ceil(activityQuery.data.totalCount / PAGE_SIZE)} · {activityQuery.data.totalCount} entries</span><Button variant="outline" size="sm" onclick={() => (activityPage += 1)} disabled={activityPage * PAGE_SIZE >= activityQuery.data.totalCount || activityQuery.isFetching}>Next</Button></div>{/if}
 			{/if}
 		</section>
 
 		<section class="space-y-2 border-t pt-4" data-testid="charge-allocation-section">
-			<h3 class="text-sm font-semibold">Charge allocation and open amount</h3>
+			<div>
+				<h3 class="text-sm font-semibold">Rent and charges</h3>
+				<p class="text-xs text-muted-foreground">See what has been paid and what is still owed.</p>
+			</div>
 			{#if chargesQuery.isLoading}
 				<LoadingState label="Loading charges" testid="charges-loading" />
 			{:else if chargesQuery.isError}
@@ -293,17 +319,20 @@
 					<Button class="mt-3" variant="outline" size="sm" onclick={() => chargesQuery.refetch()}>Try again</Button>
 				</div>
 			{:else if (chargesQuery.data?.items.length ?? 0) === 0}
-				<p class="rounded-xl border bg-card p-4 text-sm text-muted-foreground">No charges.</p>
+				<p class="rounded-xl bg-card p-4 text-sm text-muted-foreground">No rent or other charges yet.</p>
 			{:else}
-				<ul class="space-y-2">
+				<ul class="divide-y overflow-hidden rounded-xl bg-card">
 					{#each chargesQuery.data?.items ?? [] as charge (charge.tenantLedgerEntryId)}
-						<li class="rounded-xl border bg-card p-3 text-sm">
-							<div class="flex items-center justify-between gap-3"><span class="font-medium">{charge.description}</span><span class="font-semibold">{money(charge.openAmount)} open</span></div>
-							<p class="text-xs text-muted-foreground">{money(charge.netAllocations)} allocated of {money(charge.originalAmount)}</p>
+						<li class="p-3 text-sm">
+							<div class="flex items-center justify-between gap-3">
+								<span class="font-medium">{charge.description}</span>
+								<span class="font-semibold">{charge.openAmount <= 0 ? 'Paid in full' : `${money(charge.openAmount)} still owed`}</span>
+							</div>
+							<p class="text-xs text-muted-foreground">{charge.netAllocations >= charge.originalAmount ? `${money(charge.originalAmount)} paid` : `${money(charge.netAllocations)} paid of ${money(charge.originalAmount)}`}</p>
 						</li>
 					{/each}
 				</ul>
-				{#if chargesQuery.data && chargesQuery.data.totalCount > PAGE_SIZE}<div class="flex items-center justify-between"><Button variant="outline" size="sm" onclick={() => (chargePage -= 1)} disabled={chargePage === 1 || chargesQuery.isFetching}>Previous</Button><span class="text-sm text-muted-foreground">{chargesQuery.data.totalCount} charges</span><Button variant="outline" size="sm" onclick={() => (chargePage += 1)} disabled={chargePage * PAGE_SIZE >= chargesQuery.data.totalCount || chargesQuery.isFetching}>Next</Button></div>{/if}
+				{#if chargesQuery.data && chargesQuery.data.totalCount > 0}<div class="flex items-center justify-between"><Button variant="outline" size="sm" onclick={() => (chargePage -= 1)} disabled={chargePage === 1 || chargesQuery.isFetching}>Previous</Button><span class="text-sm text-muted-foreground">Page {chargePage} of {Math.ceil(chargesQuery.data.totalCount / PAGE_SIZE)} · {chargesQuery.data.totalCount} charges</span><Button variant="outline" size="sm" onclick={() => (chargePage += 1)} disabled={chargePage * PAGE_SIZE >= chargesQuery.data.totalCount || chargesQuery.isFetching}>Next</Button></div>{/if}
 			{/if}
 		</section>
 
@@ -317,22 +346,22 @@
 					<Button class="mt-3" variant="outline" size="sm" onclick={() => depositsQuery.refetch()}>Try again</Button>
 				</div>
 			{:else if (depositsQuery.data?.items.length ?? 0) === 0}
-				<p class="rounded-xl border bg-card p-4 text-sm text-muted-foreground">No deposits.</p>
+				<p class="rounded-xl bg-card p-4 text-sm text-muted-foreground">No security deposit is recorded for this rental.</p>
 			{:else}
-				<ul class="space-y-2">
+				<ul class="divide-y overflow-hidden rounded-xl bg-card">
 					{#each depositsQuery.data?.items ?? [] as deposit (deposit.securityDepositAccountId)}
-						<li class="flex items-center justify-between gap-3 rounded-xl border bg-card p-3 text-sm">
-							<span><span class="font-medium">{deposit.status}</span><span class="ml-2 text-muted-foreground">{deposit.accountNumber}</span></span>
+						<li class="flex items-center justify-between gap-3 p-3 text-sm">
+							<span><span class="font-medium">{deposit.status}</span><span class="ml-2 text-muted-foreground">Security deposit</span></span>
 							<span class="font-semibold">{money(deposit.heldBalance)} held</span>
 						</li>
 					{/each}
 				</ul>
-				{#if depositsQuery.data && depositsQuery.data.totalCount > PAGE_SIZE}<div class="flex items-center justify-between"><Button variant="outline" size="sm" onclick={() => (depositPage -= 1)} disabled={depositPage === 1 || depositsQuery.isFetching}>Previous</Button><span class="text-sm text-muted-foreground">{depositsQuery.data.totalCount} deposits</span><Button variant="outline" size="sm" onclick={() => (depositPage += 1)} disabled={depositPage * PAGE_SIZE >= depositsQuery.data.totalCount || depositsQuery.isFetching}>Next</Button></div>{/if}
+				{#if depositsQuery.data && depositsQuery.data.totalCount > 0}<div class="flex items-center justify-between"><Button variant="outline" size="sm" onclick={() => (depositPage -= 1)} disabled={depositPage === 1 || depositsQuery.isFetching}>Previous</Button><span class="text-sm text-muted-foreground">Page {depositPage} of {Math.ceil(depositsQuery.data.totalCount / PAGE_SIZE)} · {depositsQuery.data.totalCount} deposit records</span><Button variant="outline" size="sm" onclick={() => (depositPage += 1)} disabled={depositPage * PAGE_SIZE >= depositsQuery.data.totalCount || depositsQuery.isFetching}>Next</Button></div>{/if}
 			{/if}
 		</section>
 
 		<section class="space-y-2 border-t pt-4" data-testid="rent-payments">
-			<h3 class="text-sm font-semibold">Payment receipts</h3>
+			<h3 class="text-sm font-semibold">Payments received</h3>
 			{#if receiptsQuery.isLoading}
 				<LoadingState label="Loading payment receipts" testid="rent-receipts-loading" />
 			{:else if receiptsQuery.isError}
@@ -341,14 +370,14 @@
 					<Button class="mt-3" variant="outline" size="sm" onclick={() => receiptsQuery.refetch()}>Try again</Button>
 				</div>
 			{:else if receiptItems.length === 0}
-				<p class="rounded-xl border bg-card p-4 text-sm text-muted-foreground">No receipts yet. Record one manually or scan a payment.</p>
+				<p class="rounded-xl bg-card p-4 text-sm text-muted-foreground">No payments received yet. Record one manually or scan a payment.</p>
 			{:else}
-				<ul class="space-y-2">
+				<ul class="divide-y overflow-hidden rounded-xl bg-card">
 					{#each receiptItems as receipt (receipt.tenantLedgerEntryId)}
-						<li class="rounded-xl border bg-card"><button type="button" class="flex w-full items-center justify-between gap-2 p-3 text-left" onclick={() => openReceipt(receipt.tenantLedgerEntryId)}><span><span class="font-medium">{formatDateOnly(receipt.effectiveOn)}</span><span class="ml-2 text-muted-foreground">{receipt.description}</span></span><span class="font-semibold">{money(receipt.amount)}</span></button></li>
+						<li><button type="button" class="flex w-full items-center justify-between gap-2 p-3 text-left hover:bg-muted/40" onclick={() => openReceipt(receipt.tenantLedgerEntryId)}><span><span class="font-medium">{formatDateOnly(receipt.effectiveOn)}</span><span class="ml-2 text-muted-foreground">{receipt.description}</span></span><span class="font-semibold">{money(receipt.amount)}</span></button></li>
 					{/each}
 				</ul>
-				{#if receiptsQuery.data && receiptsQuery.data.totalCount > PAGE_SIZE}<div class="flex items-center justify-between"><Button variant="outline" size="sm" onclick={() => (receiptPage -= 1)} disabled={receiptPage === 1 || receiptsQuery.isFetching}>Previous</Button><span class="text-sm text-muted-foreground">{receiptsQuery.data.totalCount} receipts</span><Button variant="outline" size="sm" onclick={() => (receiptPage += 1)} disabled={receiptPage * PAGE_SIZE >= receiptsQuery.data.totalCount || receiptsQuery.isFetching}>Next</Button></div>{/if}
+				{#if receiptsQuery.data && receiptsQuery.data.totalCount > 0}<div class="flex items-center justify-between"><Button variant="outline" size="sm" onclick={() => (receiptPage -= 1)} disabled={receiptPage === 1 || receiptsQuery.isFetching}>Previous</Button><span class="text-sm text-muted-foreground">Page {receiptPage} of {Math.ceil(receiptsQuery.data.totalCount / PAGE_SIZE)} · {receiptsQuery.data.totalCount} payments</span><Button variant="outline" size="sm" onclick={() => (receiptPage += 1)} disabled={receiptPage * PAGE_SIZE >= receiptsQuery.data.totalCount || receiptsQuery.isFetching}>Next</Button></div>{/if}
 			{/if}
 		</section>
 	{/if}

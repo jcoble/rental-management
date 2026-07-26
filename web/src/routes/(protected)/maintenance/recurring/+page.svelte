@@ -108,6 +108,8 @@
 
 	const tasks = $derived(tasksQuery.data?.items ?? []);
 	const tasksTotalCount = $derived(tasksQuery.data?.totalCount ?? 0);
+	const taskRangeStart = $derived(tasksTotalCount === 0 ? 0 : (gridPage - 1) * PAGE_SIZE + 1);
+	const taskRangeEnd = $derived(Math.min(gridPage * PAGE_SIZE, tasksTotalCount));
 
 	// ── Form / dialog ──────────────────────────────────────────────────────────
 	const emptyForm = {
@@ -439,10 +441,16 @@
 		tone="coral"
 		eyebrow="Work"
 		title="Recurring Maintenance"
-		description='Set up chores that repeat on a schedule, like "HVAC filter every Quarter." We create the work order each time it comes due.'
+		description='Set up work that repeats on a schedule, like "Change the HVAC filter every quarter." Rental Command creates each work order when it is due.'
 		actions={headerActions}
 		data-testid="recurring-maintenance-header"
 	/>
+
+	<p class="mb-3 text-sm text-muted-foreground" data-testid="recurring-task-list-range">
+		{tasksTotalCount === 0
+			? 'Showing 0 of 0 recurring tasks'
+			: `Showing ${taskRangeStart}–${taskRangeEnd} of ${tasksTotalCount} recurring task${tasksTotalCount === 1 ? '' : 's'}`}
+	</p>
 
 	<DataGrid
 		data={tasks}

@@ -7,6 +7,7 @@
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import * as Select from '$lib/components/ui/select';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import { ArrowDown, ArrowUp, Camera, Check, Clipboard, Eye, ExternalLink, FileDown, Link2, Pencil, RefreshCw, Save, Trash2, Upload, WifiOff } from '@lucide/svelte';
 
@@ -198,10 +199,10 @@
 					</div>
 				</DetailCard>
 
-				<DetailCard title="Ordered photo package" icon={Camera} accent="muted">
-					<div class="space-y-2">
+				<DetailCard title="Listing photos" icon={Camera} accent="muted">
+					<div class="divide-y overflow-hidden rounded-2xl bg-muted/30">
 						{#each workspace.photoManifest as photo, index (photo.id)}
-							<div class="flex flex-wrap items-center gap-3 rounded-md border p-3">
+							<div class="flex flex-wrap items-center gap-3 p-3">
 								<span class="flex h-7 w-7 items-center justify-center rounded-full bg-muted text-xs font-semibold">{photo.position}</span>
 								<div class="min-w-40 flex-1"><p class="text-sm font-medium">{photo.category}</p><p class="text-xs text-muted-foreground">{photo.fileName ?? photo.caption ?? 'Photo needed'}</p></div>
 								<div class="flex flex-wrap gap-1">
@@ -223,8 +224,20 @@
 					<div class="space-y-4">
 						<p class="text-sm text-muted-foreground">Rental Command prepares and tracks the work. You remain signed into Zillow and publish there.</p>
 						<Button class="w-full gap-2" onclick={openZillow}><ExternalLink class="h-4 w-4" /> Open Zillow Rental Manager</Button>
-						<label class="space-y-1 text-sm"><span class="font-medium">Publication state</span><select class="h-10 w-full rounded-md border bg-background px-3" bind:value={form.publicationStatus}><option value="Draft">Draft</option><option value="Ready">Ready</option><option value="Published">Published</option><option value="Paused">Paused</option><option value="Removed">Removed</option></select></label>
-						<div class="space-y-2 rounded-md border p-3 text-sm">
+						<label class="space-y-1 text-sm">
+							<span class="font-medium">Where is this listing in the publishing process?</span>
+							<Select.Root type="single" bind:value={form.publicationStatus}>
+								<Select.Trigger class="w-full">{form.publicationStatus}</Select.Trigger>
+								<Select.Content>
+									<Select.Item value="Draft" label="Draft">Draft</Select.Item>
+									<Select.Item value="Ready" label="Ready to publish">Ready to publish</Select.Item>
+									<Select.Item value="Published" label="Published">Published</Select.Item>
+									<Select.Item value="Paused" label="Paused">Paused</Select.Item>
+									<Select.Item value="Removed" label="Removed">Removed</Select.Item>
+								</Select.Content>
+							</Select.Root>
+						</label>
+						<div class="space-y-2 rounded-xl bg-muted/40 p-3 text-sm">
 							<label class="flex gap-2"><input type="checkbox" bind:checked={form.copyConfirmed} /> Copy entered in Zillow</label>
 							<label class="flex gap-2"><input type="checkbox" bind:checked={form.termsConfirmed} /> Terms reviewed in Zillow</label>
 							<label class="flex gap-2"><input type="checkbox" bind:checked={form.photosConfirmed} /> Photos uploaded in order</label>

@@ -32,6 +32,11 @@
 		Lightbulb
 	} from '@lucide/svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
+	import {
+		reportCategoryTitle,
+		reportDescription,
+		reportTitle
+	} from '$lib/reports/report-display';
 
 	const catalogQuery = createQuery(() => ({
 		queryKey: ['reports-catalog'],
@@ -130,7 +135,15 @@
 		title="Reports"
 		description="Pick a report, set the dates and properties, then export or print."
 		data-testid="reports-header"
-	/>
+	>
+		<a
+			href="/docs/reports"
+			class="mt-3 inline-flex min-h-11 items-center text-sm font-medium text-primary underline-offset-4 hover:underline"
+			data-testid="reports-help-link"
+		>
+			How reports work
+		</a>
+	</PageHeader>
 
 	{#if catalogQuery.isLoading}
 		<div class="space-y-6">
@@ -162,7 +175,9 @@
 				<section>
 					<div class="mb-3 flex items-center gap-2">
 						<CategoryIcon class="h-4 w-4 text-muted-foreground" />
-						<h2 class="text-sm font-semibold uppercase tracking-wide text-muted-foreground">{category.title}</h2>
+						<h2 class="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+							{reportCategoryTitle(category.key, category.title)}
+						</h2>
 					</div>
 					<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
 						{#each category.reports as entry (entry.key)}
@@ -179,14 +194,16 @@
 									</span>
 									{#if entry.external}
 										<span class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-											<ExternalLink class="h-3 w-3" /> Opens existing
+											<ExternalLink class="h-3 w-3" /> Opens another report page
 										</span>
 									{:else}
 										<ChevronRight class="h-4 w-4 text-muted-foreground/50 transition-transform group-hover:translate-x-0.5 group-hover:text-primary" />
 									{/if}
 								</div>
-								<h3 class="font-semibold leading-tight">{entry.title}</h3>
-								<p class="mt-1 text-sm text-muted-foreground">{entry.description}</p>
+								<h3 class="font-semibold leading-tight">{reportTitle(entry.key, entry.title)}</h3>
+								<p class="mt-1 text-sm text-muted-foreground">
+									{reportDescription(entry.key, entry.description)}
+								</p>
 							</button>
 						{/each}
 					</div>

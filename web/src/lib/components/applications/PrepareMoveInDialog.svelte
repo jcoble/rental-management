@@ -17,6 +17,7 @@
 	} from '$lib/leases/prepare-move-in-form';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import SimpleSelect from '$lib/components/shared/SimpleSelect.svelte';
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -323,33 +324,24 @@
 							</div>
 						{:else}
 							<div class="space-y-2">
-								<label class="block text-sm font-medium" for="prepare-application-search"
-									>Find approved application</label
-								>
+								<label class="block text-sm font-medium" for="prepare-application-search">Find approved application</label>
 								<Input
 									id="prepare-application-search"
 									bind:value={applicationSearch}
 									placeholder="Search applicant name, email, or rental"
 									data-testid="prepare-move-in-application-search"
 								/>
-								<select
-									id="prepare-application"
-									aria-label="Approved application"
+								<SimpleSelect
 									bind:value={form.applicationId}
+									options={(approvedApplicationsQuery.data?.items ?? []).map((option) => ({
+										value: String(option.id),
+										label: `${option.firstName} ${option.lastName}${option.unitNumber ? ` · Unit ${option.unitNumber}` : ''}`
+									}))}
+									placeholder="Choose an approved application"
+									ariaLabel="Approved application"
 									onchange={() => clearError('applicationId')}
-									class="m3-field-surface h-10 w-full px-3 text-sm"
-									data-testid="prepare-move-in-application-input"
-								>
-									<option value="">Choose an approved application</option>
-									{#each approvedApplicationsQuery.data?.items ?? [] as option (option.id)}
-										<option value={String(option.id)}
-											>{option.firstName}
-											{option.lastName}{option.unitNumber
-												? ` · Unit ${option.unitNumber}`
-												: ''}</option
-										>
-									{/each}
-								</select>
+									testid="prepare-move-in-application-input"
+								/>
 								{#if approvedApplicationsQuery.isLoading}<p class="text-xs text-muted-foreground">
 										Loading approved applications…
 									</p>{/if}
@@ -366,7 +358,7 @@
 							</p>{/if}
 
 						<div class="space-y-2">
-							<label class="block text-sm font-medium" for="prepare-unit">Exact rental</label>
+							<p class="block text-sm font-medium">Exact rental</p>
 							{#if application?.unitId}
 								<div
 									class="rounded-xl border bg-muted/20 p-4"
@@ -385,20 +377,17 @@
 									placeholder="Search units in the requested property"
 									data-testid="prepare-move-in-unit-search"
 								/>
-								<select
-									id="prepare-unit"
+								<SimpleSelect
 									bind:value={form.unitId}
 									onchange={() => clearError('unitId')}
-									class="m3-field-surface h-10 w-full px-3 text-sm"
-									data-testid="prepare-move-in-unit-input"
-								>
-									<option value="">Choose the exact unit</option>
-									{#each unitOptionsQuery.data?.items ?? [] as unit (unit.id)}
-										<option value={String(unit.id)}
-											>{unit.propertyName} · Unit {unit.unitNumber} · {unit.status}</option
-										>
-									{/each}
-								</select>
+									options={(unitOptionsQuery.data?.items ?? []).map((unit) => ({
+										value: String(unit.id),
+										label: `${unit.propertyName} · Unit ${unit.unitNumber} · ${unit.status}`
+									}))}
+									placeholder="Choose the exact rental"
+									ariaLabel="Exact rental"
+									testid="prepare-move-in-unit-input"
+								/>
 								{#if unitOptionsQuery.isLoading}<p class="text-xs text-muted-foreground">
 										Loading units…
 									</p>{/if}
@@ -467,9 +456,7 @@
 			{:else if currentStep === 1}
 				<div class="grid gap-4 md:grid-cols-2" data-testid="prepare-move-in-agreement-step">
 					<div class="space-y-2 md:col-span-2">
-						<label class="block text-sm font-medium" for="prepare-template"
-							>Lease document</label
-						>
+						<p class="block text-sm font-medium">Lease document</p>
 						<Input
 							id="prepare-template-search"
 							aria-label="Search active lease templates"
@@ -477,23 +464,19 @@
 							placeholder="Search active lease templates"
 							data-testid="prepare-move-in-template-search"
 						/>
-						<select
-							id="prepare-template"
+						<SimpleSelect
 							bind:value={form.documentTemplateId}
 							onchange={() => clearError('documentTemplateId')}
-							class="m3-field-surface h-10 w-full px-3 text-sm"
-							data-testid="prepare-move-in-template-input"
-						>
-							<option value="">Rental Command supplied lease · Recommended</option>
-							{#each templatesQuery.data?.items ?? [] as template (template.id)}
-								<option
-									value={String(template.id)}
-										>{template.name}{template.defaultForPortfolio
-											? ' · Portfolio default'
-											: ''}</option
-								>
-							{/each}
-						</select>
+							options={[
+								{ value: '', label: 'Rental Command lease (recommended)' },
+								...(templatesQuery.data?.items ?? []).map((template) => ({
+									value: String(template.id),
+									label: `${template.name}${template.defaultForPortfolio ? ' · portfolio default' : ''}`
+								}))
+							]}
+							ariaLabel="Lease document"
+							testid="prepare-move-in-template-input"
+						/>
 						<p class="text-xs text-muted-foreground">
 							Use the supplied lease now, or choose an active landlord PDF prepared in Lease Templates.
 						</p>
@@ -508,20 +491,17 @@
 							</p>{/if}
 					</div>
 					<div>
-						<label class="mb-1 block text-sm font-medium" for="prepare-term-type">Term type</label>
-						<select
-							id="prepare-term-type"
+						<p class="mb-1 block text-sm font-medium">Term type</p>
+						<SimpleSelect
 							bind:value={form.termType}
 							onchange={() => {
 								form.termEndOn = '';
 								clearError('termEndOn');
 							}}
-							class="m3-field-surface h-10 w-full px-3 text-sm"
-							data-testid="prepare-move-in-term-type-input"
-						>
-							<option value="FixedTerm">Fixed term</option>
-							<option value="MonthToMonth">Month to month</option>
-						</select>
+							options={[{ value: 'FixedTerm', label: 'Fixed term' }, { value: 'MonthToMonth', label: 'Month to month' }]}
+							ariaLabel="Term type"
+							testid="prepare-move-in-term-type-input"
+						/>
 					</div>
 					<div>
 						<label class="mb-1 block text-sm font-medium" for="prepare-term-start"

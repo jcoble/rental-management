@@ -38,8 +38,8 @@ describe('management loading-state contract', () => {
 			assert.match(source, /<LoadingState label="Loading [^"]+"/);
 		}
 
-		assert.match(teamRouting, /Retry recipients/);
-		assert.match(teamRouting, /Retry search/);
+		assert.match(teamRouting, /recipientsQuery\.refetch\(\)/);
+		assert.match(teamRouting, /memberSearchQuery\.refetch\(\)/);
 		assert.match(teamRouting, /team-routing-preview-loading/);
 		assert.match(tenantNotices, /tenant-notice-deliveries-loading/);
 		assert.doesNotMatch(aiProvider, />Loading provider status…<\/p>/);
@@ -63,6 +63,7 @@ describe('management loading-state contract', () => {
 		assert.doesNotMatch(deposits, /loading=\{depositsQuery\.isLoading \|\| depositsQuery\.isFetching\}/);
 		assert.match(ownerReports, /Retry owner reports/);
 		assert.match(ownerReports, /Retry statement/);
-		assert.match(ownerReports, /Retry distributions/);
+		assert.match(ownerReports, /data-testid="owner-distributions-error"/);
+		assert.match(ownerReports, /distributionQuery\.refetch\(\)/);
 	});
 });

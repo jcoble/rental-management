@@ -13,6 +13,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { ArrowDown, ArrowUp, Camera, Check, ClipboardCheck, Download, Edit2, Minus, Plus, Save, Trash2, X } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
@@ -25,6 +26,15 @@
 	}));
 
 	const inspection = $derived(inspectionQuery.data);
+	const inspectionTypeLabels: Record<string, string> = {
+		MoveIn: 'Move-in',
+		MoveOut: 'Move-out',
+		AnnualSafety: 'Annual safety',
+		Routine: 'Routine'
+	};
+	const inspectionTypeLabel = $derived(
+		inspection ? (inspectionTypeLabels[inspection.type] ?? inspection.type) : 'Inspection'
+	);
 	const isCompleted = $derived(inspection?.status === 'Completed');
 	const readOnly = $derived(isCompleted);
 	const orderedItems = $derived.by(() =>
@@ -362,7 +372,9 @@
 	function formatDate(val: string | undefined | null): string {
 		if (!val) return '—';
 		const d = new Date(val);
-		return isNaN(d.getTime()) ? val : d.toLocaleString();
+		return isNaN(d.getTime())
+			? val
+			: d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 	}
 
 	const RESULT_BADGE: Record<string, { class: string }> = {
@@ -374,7 +386,7 @@
 </script>
 
 <svelte:head>
-	<title>{inspection ? `${inspection.type} inspection` : 'Inspection'} - Rental Command</title>
+	<title>{inspection ? `${inspectionTypeLabel} inspection` : 'Inspection'} - Rental Command</title>
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-24" data-testid="inspection-detail-page">
@@ -382,13 +394,13 @@
 		<PageBreadcrumb
 			crumbs={[
 				{ label: 'Work Orders', href: '/maintenance' },
-				{ label: inspection ? `${inspection.type} inspection` : 'Inspection' },
+				{ label: inspection ? `${inspectionTypeLabel} inspection` : 'Inspection' },
 			]}
 		/>
 	</div>
 
 	{#if inspectionQuery.isLoading}
-		<p class="py-8 text-center text-sm text-muted-foreground" data-testid="inspection-detail-loading">Loading…</p>
+		<LoadingState label="Loading inspection details" variant="page" testid="inspection-detail-loading" />
 	{:else if inspectionQuery.isError}
 		<p class="py-8 text-center text-sm text-destructive" data-testid="inspection-detail-error">Failed to load inspection.</p>
 	{:else if !inspection}
@@ -398,7 +410,7 @@
 		<div class="mb-6 flex flex-wrap items-start justify-between gap-4">
 			<div class="space-y-2">
 				<div class="flex flex-wrap items-center gap-2">
-					<h1 class="text-2xl font-bold" data-testid="inspection-detail-title">{inspection.type} inspection</h1>
+					<h1 class="text-2xl font-bold" data-testid="inspection-detail-title">{inspectionTypeLabel} inspection</h1>
 					<StatusBadge status={inspection.status} />
 				</div>
 				<div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">

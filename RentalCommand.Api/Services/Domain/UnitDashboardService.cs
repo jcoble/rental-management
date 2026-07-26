@@ -113,7 +113,7 @@ public class UnitDashboardService : IUnitDashboardService
             .ToListAsync(ct);
 
         // Posted payment receipts use the same immutable ledger-entry ids as the global Tenant Account.
-        List<RecentPaymentReadRow> recentPaymentRows = unitRow.TenantAccountId is not int tenantAccountId
+        List<UnitPaymentSummary> recentPayments = unitRow.TenantAccountId is not int tenantAccountId
             ? []
             : await _db.TenantLedgerEntries
             .AsNoTracking()
@@ -123,30 +123,20 @@ public class UnitDashboardService : IUnitDashboardService
             .OrderByDescending(entry => entry.PostedAtUtc)
             .ThenByDescending(entry => entry.Id)
             .Take(OverviewTake)
-            .Select(entry => new RecentPaymentReadRow
+            .Select(entry => new UnitPaymentSummary
             {
                 Id = entry.Id,
                 TenantAccountId = entry.TenantAccountId,
+                LeaseManagementId = unitRow.LeaseManagementId!.Value,
                 LeaseAgreementId = entry.LeaseAgreementId,
                 Type = entry.EntryType.ToString(),
+                Status = "Posted",
+                Description = entry.Description,
                 Amount = entry.Amount,
-                EffectiveOn = entry.EffectiveOn,
-                PostedAtUtc = entry.PostedAtUtc,
+                DueDate = entry.PostedAtUtc,
+                PaidDate = entry.PostedAtUtc,
             })
             .ToListAsync(ct);
-
-        var recentPayments = recentPaymentRows.Select(entry => new UnitPaymentSummary
-        {
-            Id = entry.Id,
-            TenantAccountId = entry.TenantAccountId,
-            LeaseManagementId = unitRow.LeaseManagementId!.Value,
-            LeaseAgreementId = entry.LeaseAgreementId,
-            Type = entry.Type,
-            Status = "Posted",
-            Amount = entry.Amount,
-            DueDate = entry.EffectiveOn.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
-            PaidDate = entry.PostedAtUtc,
-        }).ToList();
 
         var openWorkOrders = await _db.WorkOrders
             .AsNoTracking()
@@ -812,17 +802,6 @@ public class UnitDashboardService : IUnitDashboardService
         public DateOnly? NextDueOn { get; init; }
         public decimal HeldDepositBalance { get; init; }
         public int OpenNoticeCount { get; init; }
-    }
-
-    private sealed class RecentPaymentReadRow
-    {
-        public long Id { get; init; }
-        public int TenantAccountId { get; init; }
-        public int? LeaseAgreementId { get; init; }
-        public string Type { get; init; } = string.Empty;
-        public decimal Amount { get; init; }
-        public DateOnly EffectiveOn { get; init; }
-        public DateTime PostedAtUtc { get; init; }
     }
 
     private sealed class TimelineReadRow

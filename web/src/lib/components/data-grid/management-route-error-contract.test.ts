@@ -54,7 +54,7 @@ describe('management route error contract', () => {
 		assert.match(sources.owners, /emptyMessage=\{ownerEmptyMessage\}/);
 		assert.match(sources.leases, /emptyMessage=\{relationshipEmptyMessage\}/);
 		assert.match(sources.applications, /\{emptyMessage\}/);
-		assert.match(rentTab, /No receipts yet\./);
+		assert.match(rentTab, /No payments received yet\./);
 		assert.match(paymentDetail, /data-testid="payment-detail-not-found"/);
 	});
 

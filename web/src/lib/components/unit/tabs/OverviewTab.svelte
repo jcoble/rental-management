@@ -2,6 +2,7 @@
 	import type { UnitDashboard } from '$lib/types';
 	import { money } from '../money';
 	import { formatDateOnly } from '$lib/utils/date';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { Home, DollarSign, Wrench, FileText, CalendarClock, User } from '@lucide/svelte';
@@ -20,6 +21,12 @@
 	const lease = $derived(dashboard.currentLease);
 	const tenant = $derived(dashboard.currentTenant);
 	const currentTenants = $derived(dashboard.currentTenants?.length ? dashboard.currentTenants : tenant ? [tenant] : []);
+
+	function documentLabel(fileName: string) {
+		if (/-executed\.pdf$/i.test(fileName)) return 'Signed lease';
+		if (/-issued\.pdf$/i.test(fileName)) return 'Original lease copy';
+		return fileName;
+	}
 </script>
 
 <div class="space-y-4" data-testid="unit-overview-tab">
@@ -34,13 +41,13 @@
 		</a>
 	{/if}
 	<section class="rounded-xl border bg-card p-4" data-testid="unit-condition-families">
-		<h2 class="mb-3 font-semibold">Unit conditions</h2>
+		<h2 class="mb-3 font-semibold">At a glance</h2>
 		<dl class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-5">
-			<div data-testid="condition-occupancy-possession"><dt class="text-muted-foreground">Occupancy / possession</dt><dd class="font-medium">{dashboard.occupancyPossession.status}</dd></div>
-			<div data-testid="condition-marketing-availability"><dt class="text-muted-foreground">Marketing availability</dt><dd class="font-medium">{dashboard.marketingAvailability.status}</dd></div>
-			<div data-testid="condition-tenant-account"><dt class="text-muted-foreground">TenantAccount</dt><dd class="font-medium">{dashboard.tenantAccountCondition.status}</dd></div>
-			<div data-testid="condition-legal-notice"><dt class="text-muted-foreground">Legal / notice</dt><dd class="font-medium">{dashboard.legalNoticeCondition.status}</dd></div>
-			<div data-testid="condition-maintenance-turnover"><dt class="text-muted-foreground">Maintenance / turnover</dt><dd class="font-medium">{dashboard.maintenanceTurnover.status}</dd></div>
+			<div data-testid="condition-occupancy-possession"><dt class="text-muted-foreground">Move-in status</dt><dd class="font-medium">{formatStatusLabel(dashboard.occupancyPossession.status)}</dd></div>
+			<div data-testid="condition-marketing-availability"><dt class="text-muted-foreground">Listing status</dt><dd class="font-medium">{formatStatusLabel(dashboard.marketingAvailability.status)}</dd></div>
+			<div data-testid="condition-tenant-account"><dt class="text-muted-foreground">Rent account</dt><dd class="font-medium">{formatStatusLabel(dashboard.tenantAccountCondition.status)}</dd></div>
+			<div data-testid="condition-legal-notice"><dt class="text-muted-foreground">Notices</dt><dd class="font-medium">{formatStatusLabel(dashboard.legalNoticeCondition.status)}</dd></div>
+			<div data-testid="condition-maintenance-turnover"><dt class="text-muted-foreground">Repairs &amp; turnover</dt><dd class="font-medium">{formatStatusLabel(dashboard.maintenanceTurnover.status)}</dd></div>
 		</dl>
 	</section>
 	<div class="grid gap-4 lg:grid-cols-2">
@@ -76,17 +83,17 @@
 				{/if}
 				{#if lease}
 					<dl class="grid grid-cols-2 gap-2 border-t pt-2">
-						<div><dt class="text-muted-foreground">Agreement</dt><dd class="font-medium">{lease.leaseNumber}</dd></div>
+						<div><dt class="text-muted-foreground">Lease</dt><dd class="font-medium">Signed lease on file</dd></div>
 						<div><dt class="text-muted-foreground">Rent</dt><dd class="font-medium">{money(lease.monthlyRent)}</dd></div>
 						<div><dt class="text-muted-foreground">Start</dt><dd>{formatDateOnly(lease.startDate)}</dd></div>
 						<div><dt class="text-muted-foreground">End</dt><dd>{formatDateOnly(lease.endDate)}</dd></div>
 					</dl>
 				{:else}
-					<p class="border-t pt-2 text-muted-foreground">Possession is active for this tenant relationship. No governing Agreement is on file.</p>
+					<p class="border-t pt-2 text-muted-foreground">This resident has moved in, but a signed lease has not been added yet.</p>
 				{/if}
 			</div>
 		{:else}
-			<p class="text-sm text-muted-foreground">No current tenant relationship for this unit.</p>
+			<p class="text-sm text-muted-foreground">No one is currently renting this unit.</p>
 		{/if}
 	</DetailCard>
 
@@ -102,7 +109,7 @@
 			<ul class="divide-y text-sm">
 				{#each o.recentPayments as p (p.id)}
 					<li class="flex items-center justify-between py-1.5">
-						<span>{formatDateOnly(p.dueDate)} · {p.type}</span>
+						<span>{formatDateOnly(p.paidDate ?? p.dueDate)} · {p.description || 'Payment received'}</span>
 						<span class="flex items-center gap-2"><StatusBadge status={p.status} />{money(p.amount)}</span>
 					</li>
 				{/each}
@@ -136,8 +143,8 @@
 			<ul class="divide-y text-sm">
 				{#each o.pendingDocs as d (d.id)}
 					<li class="flex items-center justify-between py-1.5">
-						<span class="truncate">{d.fileName}</span>
-						{#if d.entityType}<span class="shrink-0 text-xs text-muted-foreground">{d.entityType}</span>{/if}
+						<span class="truncate">{documentLabel(d.fileName)}</span>
+						{#if d.entityType}<span class="shrink-0 text-xs text-muted-foreground">{formatStatusLabel(d.entityType)}</span>{/if}
 					</li>
 				{/each}
 			</ul>
@@ -153,7 +160,7 @@
 			<ul class="divide-y text-sm">
 				{#each o.upcomingAppointments as a (a.id)}
 					<li class="flex items-center justify-between py-1.5">
-						<span class="truncate">{a.title} · {a.type}</span>
+						<span class="truncate">{a.title} · {formatStatusLabel(a.type)}</span>
 						<span class="shrink-0 text-muted-foreground">{formatDateOnly(a.scheduledStart)}</span>
 					</li>
 				{/each}

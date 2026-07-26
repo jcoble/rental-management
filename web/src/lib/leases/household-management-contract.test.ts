@@ -17,13 +17,13 @@ describe('relationship-scoped household management', () => {
 	});
 
 	it('explains mutable membership, immutable agreements, dates, reasons, and legal basis', () => {
-		assert.match(dialog, /Household membership is an effective-dated relationship/);
-		assert.match(dialog, /Signed agreement PDFs stay immutable/);
+		assert.match(dialog, /Update who lives here and who is responsible for the lease/);
+		assert.match(dialog, /Signed lease files stay unchanged/);
 		assert.match(dialog, /effectiveFrom/);
 		assert.match(dialog, /effectiveThrough/);
 		assert.match(dialog, /changeReason/);
 		assert.match(dialog, /legalBasis/);
-		assert.match(dialog, /Primary handoff/);
+		assert.match(dialog, /same handoff/);
 	});
 
 	it('derives mutation visibility from active-experience capabilities', () => {

@@ -9,6 +9,7 @@
 		Signature,
 		CheckCircle2,
 		AlertCircle,
+		ChevronDown,
 	} from '@lucide/svelte';
 	import {
 		documentTemplates,
@@ -50,7 +51,6 @@
 	let selectedFile = $state<File | null>(null);
 	let templateName = $state('');
 	let templateDescription = $state('');
-	let defaultForPortfolio = $state(false);
 	let fileInput = $state<HTMLInputElement | null>(null);
 	let designerTemplateId = $state<number | null>(null);
 	let activatingTemplateId = $state<number | null>(null);
@@ -75,14 +75,14 @@
 				throw new Error('Template name is required.');
 			}
 			return idempotentMutation(
-				`document-template:upload:${selectedFile.name}:${selectedFile.size}:${selectedFile.lastModified}:${name}:${templateDescription}:${defaultForPortfolio}`,
+				`document-template:upload:${selectedFile.name}:${selectedFile.size}:${selectedFile.lastModified}:${name}:${templateDescription}`,
 				(operationKey) =>
 					documentTemplates.uploadLeasePdf(
 						selectedFile!,
 						{
 							name,
 							description: templateDescription.trim() || undefined,
-							defaultForPortfolio
+							defaultForPortfolio: false
 						},
 						operationKey
 					)
@@ -94,7 +94,6 @@
 			selectedFile = null;
 			templateName = '';
 			templateDescription = '';
-			defaultForPortfolio = false;
 			if (fileInput) fileInput.value = '';
 			queryClient.invalidateQueries({ queryKey: ['document-templates'] });
 		},
@@ -227,30 +226,43 @@
 
 	<div class="grid gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
 		<Card.Root class="h-fit" data-testid="lease-template-upload-card">
-			<Card.Header class="border-b border-border">
+			<Card.Header>
 				<Card.Title class="text-base">Upload landlord PDF</Card.Title>
-				<Card.Description>Start from the exact lease the landlord already uses.</Card.Description>
+				<Card.Description>Add the lease form you want Rental Command to fill and send.</Card.Description>
 			</Card.Header>
-			<Card.Content class="space-y-4 pt-6">
+			<Card.Content class="space-y-5">
 				<div class="space-y-2">
-					<label for="lease-template-file" class="text-sm font-medium">PDF file</label>
+					<label for="lease-template-file" class="text-sm font-medium">1. Choose the lease PDF</label>
 					<Input
 						id="lease-template-file"
 						bind:ref={fileInput}
 						type="file"
 						accept="application/pdf,.pdf"
+						class="hidden"
 						onchange={handleFileSelected}
 						data-testid="lease-template-file-input"
 					/>
-					{#if selectedFile}
-						<p class="text-xs text-muted-foreground" data-testid="lease-template-selected-file">
-							{selectedFile.name} · {Math.ceil(selectedFile.size / 1024).toLocaleString()} KB
-						</p>
-					{/if}
+					<Button
+						variant="outline"
+						class="w-full justify-start gap-2"
+						onclick={() => fileInput?.click()}
+						data-testid="lease-template-file-button"
+					>
+						<Upload class="h-4 w-4" />
+						{selectedFile ? 'Choose a different PDF' : 'Choose PDF'}
+					</Button>
+					<p
+						class="rounded-md bg-muted/45 px-3 py-2 text-xs text-muted-foreground"
+						data-testid="lease-template-selected-file"
+					>
+						{selectedFile
+							? `${selectedFile.name} · ${Math.ceil(selectedFile.size / 1024).toLocaleString()} KB`
+							: 'No PDF selected'}
+					</p>
 				</div>
 
 				<div class="space-y-2">
-					<label for="lease-template-name" class="text-sm font-medium">Template name</label>
+					<label for="lease-template-name" class="text-sm font-medium">2. Give it a clear name</label>
 					<Input
 						id="lease-template-name"
 						bind:value={templateName}
@@ -261,7 +273,7 @@
 				</div>
 
 				<div class="space-y-2">
-					<label for="lease-template-description" class="text-sm font-medium">Notes</label>
+					<label for="lease-template-description" class="text-sm font-medium">Notes <span class="font-normal text-muted-foreground">(optional)</span></label>
 					<textarea
 						id="lease-template-description"
 						bind:value={templateDescription}
@@ -273,27 +285,14 @@
 					></textarea>
 				</div>
 
-				<label class="flex items-start gap-3 rounded-md border border-border bg-muted/30 px-3 py-3 text-sm">
-					<input
-						type="checkbox"
-						bind:checked={defaultForPortfolio}
-						class="mt-0.5 h-4 w-4 rounded border-border"
-						data-testid="lease-template-default-input"
-					/>
-					<span>
-						<span class="block font-medium">Use as portfolio default</span>
-						<span class="block text-xs text-muted-foreground">New lease workflows can prefer this template after its fields are placed.</span>
-					</span>
-				</label>
-
 				<Button
 					class="w-full gap-1.5"
 					onclick={submitUpload}
-					disabled={uploadMutation.isPending}
+					disabled={uploadMutation.isPending || !selectedFile}
 					data-testid="lease-template-upload-submit"
 				>
 					<Upload class="h-4 w-4" />
-					{uploadMutation.isPending ? 'Uploading…' : 'Upload lease PDF'}
+					{uploadMutation.isPending ? 'Uploading…' : '3. Upload and place fields'}
 				</Button>
 			</Card.Content>
 		</Card.Root>
@@ -322,7 +321,7 @@
 			{#if templatesQuery.isLoading}
 				<div class="grid gap-3" data-testid="lease-template-loading">
 					{#each Array.from({ length: 3 }) as _}
-						<div class="h-28 animate-pulse rounded-lg border border-border bg-muted/30"></div>
+						<div class="h-28 animate-pulse rounded-lg bg-muted/40"></div>
 					{/each}
 				</div>
 			{:else if templatesQuery.isError}
@@ -344,7 +343,7 @@
 			{:else}
 				<div class="grid gap-3" data-testid="lease-template-list">
 					{#each templates as template (template.id)}
-						<article class="rounded-lg border border-border bg-card p-4 shadow-sm" data-testid={template.testId}>
+						<article class="rounded-lg bg-card p-4" data-testid={template.testId}>
 							<div class="flex flex-wrap items-start justify-between gap-3">
 								<div class="min-w-0 flex-1">
 									<div class="flex flex-wrap items-center gap-2">
@@ -443,7 +442,7 @@
 		{#if catalogQuery.isLoading}
 			<div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
 				{#each Array.from({ length: 4 }) as _}
-					<div class="h-36 animate-pulse rounded-lg border border-border bg-muted/30"></div>
+					<div class="h-20 animate-pulse rounded-lg bg-muted/40"></div>
 				{/each}
 			</div>
 		{:else if catalogQuery.isError}
@@ -451,10 +450,10 @@
 				Field catalog is unavailable.
 			</div>
 		{:else}
-			<div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+			<div class="grid gap-3 md:grid-cols-2">
 				{#each catalogGroups as group}
-					<div class="rounded-lg border border-border bg-card p-4">
-						<div class="mb-3 flex items-center gap-2">
+					<details class="group rounded-lg bg-card px-4 py-3">
+						<summary class="flex cursor-pointer list-none items-center gap-2">
 							<span class="inline-grid h-8 w-8 place-items-center rounded-md bg-muted text-muted-foreground">
 								{#if group.role === 'None'}
 									<FileText class="h-4 w-4" />
@@ -462,9 +461,15 @@
 									<Signature class="h-4 w-4" />
 								{/if}
 							</span>
-							<h3 class="font-semibold">{formatSigner(group.role)}</h3>
-						</div>
-						<div class="space-y-2">
+							<span class="min-w-0 flex-1">
+								<span class="block font-semibold">{formatSigner(group.role)}</span>
+								<span class="block text-xs text-muted-foreground">
+									{group.items.length} available {group.items.length === 1 ? 'field' : 'fields'}
+								</span>
+							</span>
+							<ChevronDown class="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180" />
+						</summary>
+						<div class="mt-3 space-y-2 border-t border-border/50 pt-3">
 							{#each group.items as field (field.fieldKey)}
 								<div class="rounded-md bg-muted/25 px-3 py-2">
 									<div class="flex items-center justify-between gap-2">
@@ -477,7 +482,7 @@
 								</div>
 							{/each}
 						</div>
-					</div>
+					</details>
 				{/each}
 			</div>
 		{/if}

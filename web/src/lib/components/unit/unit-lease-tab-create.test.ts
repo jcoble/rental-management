@@ -25,7 +25,10 @@ describe('unit lease tab create action', () => {
 		assert.match(source, /leaseManagements\.listPage\(\{/);
 		assert.match(source, /unitId:\s*dashboard\.unit\.id/);
 		assert.match(source, /sort:\s*'-updatedAtUtc'/);
-		assert.match(source, /href=\{`\/leases\/\$\{relationship\.leaseManagementId\}`\}/);
+		assert.match(
+			source,
+			/href=\{`\/units\/\$\{dashboard\.unit\.id\}\?tab=tenant-lease&view=agreements&leaseManagement=\$\{relationship\.leaseManagementId\}`\}/
+		);
 		assert.match(source, /relationship\.agreementNumber/);
 		assert.match(source, /relationship\.agreementStatus/);
 	});
