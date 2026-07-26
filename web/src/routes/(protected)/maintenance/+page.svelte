@@ -41,6 +41,23 @@
 	const WO_STATUSES = ['New', 'Scheduled', 'InProgress', 'WaitingParts', 'Completed', 'Cancelled'];
 	const WO_PRIORITIES = ['Low', 'Normal', 'High', 'Emergency'];
 	const INSPECTION_TYPES: InspectionType[] = ['Routine', 'MoveIn', 'MoveOut', 'AnnualSafety'];
+	const INSPECTION_TYPE_LABELS: Record<InspectionType, string> = {
+		Routine: 'Routine',
+		MoveIn: 'Move-in',
+		MoveOut: 'Move-out',
+		AnnualSafety: 'Annual safety'
+	};
+
+	function inspectionTypeLabel(type: InspectionType) {
+		return INSPECTION_TYPE_LABELS[type] ?? type;
+	}
+
+	function inspectionDate(value: string) {
+		const date = new Date(value);
+		return Number.isNaN(date.getTime())
+			? value
+			: date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+	}
 
 	// Work-order search / status / priority / sort / page persisted in the URL so they survive navigating
 	// away and back. The main work-order grid is server-side so these controls feed the SQL query instead
@@ -740,7 +757,7 @@
 		tone="coral"
 		eyebrow="Work"
 		title="Work Orders"
-		description="Track resident requests, vendor execution, and compliance checks."
+		description="Manage repair requests, assignments, inspections, and recurring work."
 		actions={headerActions}
 		data-testid="maintenance-header"
 	/>
@@ -802,7 +819,12 @@
 	<div class="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
 		<Card.Root id="inspections" class="scroll-mt-6 gap-0 py-0">
 			<Card.Header class="border-b border-border px-4 py-3">
-				<Card.Title class="text-base font-semibold">Inspections</Card.Title>
+				<div class="flex items-center justify-between gap-3">
+					<Card.Title class="text-base font-semibold">Inspections</Card.Title>
+					<span class="text-xs text-muted-foreground" data-testid="inspection-list-range">
+						{inspectionsQuery.isLoading ? 'Loading…' : `${(inspectionsQuery.data || []).length} shown`}
+					</span>
+				</div>
 			</Card.Header>
 			<Card.Content class="max-h-[55vh] space-y-2 overflow-y-auto p-3" data-testid="inspections-list">
 				{#if (inspectionsQuery.data || []).length === 0}
@@ -816,10 +838,10 @@
 						onclick={() => goto('/maintenance/inspections/' + inspection.id)}
 					>
 						<div class="flex items-center justify-between gap-2">
-							<p class="font-medium">{inspection.type} · {inspection.propertyName}</p>
+							<p class="font-medium">{inspectionTypeLabel(inspection.type)} · {inspection.propertyName}</p>
 							<StatusBadge status={inspection.status} />
 						</div>
-						<p class="font-mono tabular-nums text-xs text-muted-foreground">{new Date(inspection.scheduledFor).toLocaleString()}</p>
+						<p class="font-mono tabular-nums text-xs text-muted-foreground">{inspectionDate(inspection.scheduledFor)}</p>
 					</button>
 				{/each}
 			</Card.Content>
@@ -830,11 +852,16 @@
 				<div class="flex items-center justify-between gap-2">
 					<div>
 						<Card.Title class="text-base font-semibold">Checklist templates</Card.Title>
-						<p class="text-xs text-muted-foreground">Custom checklists are editable; built-ins are copyable</p>
+						<p class="text-xs text-muted-foreground">Edit your own templates or copy a built-in one to customize it.</p>
 					</div>
-					<Button data-testid="inspection-template-create-button" size="sm" variant="outline" onclick={openNewTemplate}>
-						<Plus class="h-4 w-4" /> New
-					</Button>
+					<div class="flex items-center gap-2">
+						<span class="text-xs text-muted-foreground" data-testid="inspection-template-list-range">
+							{templatesQuery.isLoading ? 'Loading…' : `${templateOptions.length} shown`}
+						</span>
+						<Button data-testid="inspection-template-create-button" size="sm" variant="outline" onclick={openNewTemplate}>
+							<Plus class="h-4 w-4" /> New
+						</Button>
+					</div>
 				</div>
 			</Card.Header>
 			<Card.Content class="max-h-[55vh] space-y-2 overflow-y-auto p-3" data-testid="inspection-template-list">
@@ -849,7 +876,7 @@
 								<div class="min-w-0">
 									<p class="truncate font-medium">{template.name}</p>
 									<p class="mt-1 text-xs text-muted-foreground">
-										{template.inspectionType} · {template.items.length} question{template.items.length === 1 ? '' : 's'}
+										{inspectionTypeLabel(template.inspectionType)} · {template.items.length} question{template.items.length === 1 ? '' : 's'}
 										{template.isBuiltIn ? ' · built-in' : ''}
 									</p>
 								</div>

@@ -301,7 +301,10 @@
 		return sortedData.slice(start, start + pageSize);
 	});
 
-	const showPagination = $derived(pageCount > 1);
+	// Keep the range and page controls visible even when the current data set fits on one page.
+	// This makes the grid's paging contract discoverable instead of making pagination appear and
+	// disappear as filters change or sample data grows.
+	const showPagination = $derived(effectiveTotalCount > 0);
 
 	const rangeStart = $derived((page - 1) * pageSize + 1);
 	const rangeEnd = $derived(Math.min(page * pageSize, effectiveTotalCount));
@@ -361,7 +364,7 @@
 	<!-- Toolbar -->
 	{#if toolbar}
 		<div
-			class="m3-tonal-card m3-tonal-card--violet m3-tonal-card--plain flex flex-wrap items-center gap-3 rounded-lg border p-3"
+			class="m3-tonal-card m3-tonal-card--violet m3-tonal-card--plain flex flex-wrap items-center gap-3 rounded-lg p-3"
 			data-testid="datagrid-toolbar"
 		>
 			{@render toolbar()}
@@ -392,7 +395,7 @@
 							{@const align = effectiveAlign(col)}
 							<Table.Head
 								class={cn(
-									'select-none whitespace-nowrap px-2.5 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground',
+									'select-none whitespace-nowrap px-2.5 py-2 text-xs font-semibold text-muted-foreground',
 									alignClass[align],
 									col.sortable && 'hover:text-foreground',
 									pinnedHeadClass(col),
@@ -433,15 +436,20 @@
 
 				<Table.Body class="m3-motion-reveal-list">
 					{#if loading && pagedData.length === 0}
-						<!-- Initial loading skeleton -->
-						<Table.Row>
-							<Table.Cell colspan={columns.length} class="py-12 text-center text-muted-foreground">
-								<div class="flex flex-col items-center gap-2" data-testid="datagrid-loading-initial">
-									<Loader2 class="h-6 w-6 animate-spin" />
-									<span class="text-sm">Loading…</span>
-								</div>
-							</Table.Cell>
-						</Table.Row>
+						<!-- Layout-matching initial skeleton. It preserves the table shape while the
+						     first server-side page is fetched instead of collapsing to a spinner. -->
+						{#each Array(6) as _, rowIndex}
+							<Table.Row data-testid={rowIndex === 0 ? 'datagrid-loading-initial' : undefined}>
+								<Table.Cell colspan={columns.length} class="px-3 py-3">
+									<div
+										class="h-4 animate-pulse rounded bg-muted"
+										style={`width:${Math.max(52, 92 - rowIndex * 6)}%`}
+										aria-hidden="true"
+									></div>
+									{#if rowIndex === 0}<span class="sr-only">Loading results</span>{/if}
+								</Table.Cell>
+							</Table.Row>
+						{/each}
 					{:else if !loading && pagedData.length === 0}
 						<Table.Row class="hover:[&,&>svelte-css-wrapper]:[&>th,td]:bg-transparent">
 							<Table.Cell colspan={columns.length} class="py-2">
@@ -558,14 +566,18 @@
 	</div>
 
 	<!-- ── Mobile/tablet card list (visible below lg) ──────────────────────────── -->
-	<div class="m3-motion-reveal-list space-y-3 lg:hidden" data-testid="datagrid-mobile">
+	<div class="m3-motion-reveal-list divide-y overflow-hidden rounded-xl bg-card lg:hidden" data-testid="datagrid-mobile">
 		{#if loading && pagedData.length === 0}
-			<div class="flex flex-col items-center gap-2 rounded-lg border border-border p-8 text-muted-foreground" data-testid="datagrid-mobile-loading">
-				<Loader2 class="h-6 w-6 animate-spin" />
-				<span class="text-sm">Loading…</span>
+			<div class="space-y-4 p-4" data-testid="datagrid-mobile-loading" role="status" aria-label="Loading results">
+				{#each Array(5) as _, rowIndex}
+					<div class="space-y-2 py-2" aria-hidden="true">
+						<div class="h-4 animate-pulse rounded bg-muted" style={`width:${82 - rowIndex * 5}%`}></div>
+						<div class="h-3 w-2/5 animate-pulse rounded bg-muted"></div>
+					</div>
+				{/each}
 			</div>
 		{:else if !loading && pagedData.length === 0}
-			<div class="rounded-lg border border-border" data-testid="datagrid-mobile-empty">
+			<div data-testid="datagrid-mobile-empty">
 				<EmptyState
 					title={emptyMessage}
 					description={emptyDescription}
@@ -580,8 +592,8 @@
 				<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 				<article
 					class={cn(
-						'm3-tonal-card m3-tonal-card--violet m3-tonal-card--plain rounded-lg border p-4 transition-colors',
-						onRowClick && 'cursor-pointer hover:border-primary/40 hover:bg-muted/30'
+						'p-4 transition-colors',
+						onRowClick && 'cursor-pointer hover:bg-muted/30'
 					)}
 					role={onRowClick ? 'button' : undefined}
 					tabindex={onRowClick ? 0 : undefined}
@@ -656,7 +668,7 @@
 						<div class="mt-3 grid grid-cols-2 gap-x-4 gap-y-2.5">
 							{#each mobileGroups.meta as col}
 								<div class="min-w-0">
-									<p class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+									<p class="text-xs font-medium text-muted-foreground">
 										{col.mobileLabel ?? col.title}
 									</p>
 									<p class={cn('mt-0.5 break-words text-sm text-foreground', isTabular(col.format) && 'font-mono tabular-nums')}>
@@ -677,7 +689,7 @@
 		<!-- Mobile pagination bar -->
 		{#if showPagination}
 			<div
-				class="m3-tonal-card m3-tonal-card--violet m3-tonal-card--plain flex items-center justify-between rounded-lg border px-3 py-2.5"
+				class="m3-tonal-card m3-tonal-card--violet m3-tonal-card--plain flex items-center justify-between px-3 py-2.5"
 				data-testid="datagrid-mobile-pagination"
 			>
 				<button

@@ -22,6 +22,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import * as Card from '$lib/components/ui/card';
 	import * as Tabs from '$lib/components/ui/tabs';
+	import SimpleSelect from '$lib/components/shared/SimpleSelect.svelte';
 	import PdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 	import {
 		adjustFieldRectSize,
@@ -1092,18 +1093,17 @@
 							</div>
 							<label class="mt-4 block space-y-1 text-xs font-medium">
 								<span class="text-muted-foreground">Fill fields from</span>
-								<select
-									bind:value={previewLeaseId}
-									class="h-10 w-full rounded-md border border-input bg-background px-2 text-sm"
+								<SimpleSelect
+									value={String(previewLeaseId)}
+									onchange={(value) => (previewLeaseId = Number(value))}
+									options={previewLeases.map((relationship) => ({
+										value: String(relationship.leaseAgreementId),
+										label: `${leasePreviewLabel(relationship)} · ${relationship.agreementNumber}`
+									}))}
+									placeholder="Choose a lease"
 									disabled={previewLeasesQuery.isLoading || previewLeases.length === 0}
-									data-testid="lease-template-preview-lease-select"
-								>
-									{#each previewLeases as relationship (relationship.leaseAgreementId)}
-										<option value={relationship.leaseAgreementId}>
-											{leasePreviewLabel(relationship)} · {relationship.agreementNumber}
-										</option>
-									{/each}
-								</select>
+									testid="lease-template-preview-lease-select"
+								/>
 							</label>
 
 							{#if previewLeasesQuery.isLoading}
@@ -1306,15 +1306,13 @@
 							>
 								<ArrowLeft class="h-4 w-4" />
 							</Button>
-							<select
-								bind:value={selectedPage}
-								class="h-9 flex-1 rounded-md border border-input bg-background px-2 text-sm"
-								data-testid="lease-template-page-select"
-							>
-								{#each pageNumbers() as page}
-									<option value={page}>Page {page}</option>
-								{/each}
-							</select>
+							<SimpleSelect
+								value={String(selectedPage)}
+								onchange={(value) => (selectedPage = Number(value))}
+								options={pageNumbers().map((page) => ({ value: String(page), label: `Page ${page}` }))}
+								triggerClass="h-9 flex-1"
+								testid="lease-template-page-select"
+							/>
 							<Button
 								variant="outline"
 								size="icon"

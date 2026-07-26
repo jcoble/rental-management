@@ -755,7 +755,7 @@
 				columns={leaseColumns}
 				loading={leasesQuery.isLoading}
 				emptyMessage="No leases for this property."
-				onRowClick={(relationship) => goto(`/leases/${relationship.leaseManagementId}`)}
+				onRowClick={(relationship) => goto(recordHref('leaseManagement', { id: relationship.leaseManagementId, unitId: relationship.unitId }))}
 				getRowKey={(relationship) => relationship.leaseManagementId}
 				pageSize={PAGE_SIZE}
 				page={leasePage}

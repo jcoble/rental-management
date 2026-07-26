@@ -4,8 +4,10 @@
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import * as Select from '$lib/components/ui/select';
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import { CalendarClock, ChevronRight, Inbox, MapPin, Wrench } from '@lucide/svelte';
 
@@ -53,6 +55,9 @@
 	});
 
 	const totalPages = $derived(Math.max(1, Math.ceil((query.data?.totalCount ?? 0) / PAGE_SIZE)));
+	const totalCount = $derived(query.data?.totalCount ?? 0);
+	const rangeStart = $derived(totalCount === 0 ? 0 : (page - 1) * PAGE_SIZE + 1);
+	const rangeEnd = $derived(Math.min(page * PAGE_SIZE, totalCount));
 	const EmptyIcon = $derived(mode === 'schedule' ? CalendarClock : mode === 'inbox' ? Inbox : Wrench);
 
 	function when(start?: string | null, end?: string | null): string {
@@ -71,17 +76,32 @@
 
 	<section class="grid gap-3 rounded-2xl border border-border bg-card p-4 md:grid-cols-[minmax(16rem,1fr)_12rem_auto_auto]">
 		<SearchInput bind:value={search} placeholder="Search assigned work" testid="technician-search" />
-		<select bind:value={status} class="h-9 rounded-md border border-border bg-background px-3 text-sm" aria-label="Filter by status">
-			<option value="">All statuses</option>
-			<option value="New">New</option>
-			<option value="Scheduled">Scheduled</option>
-			<option value="InProgress">In progress</option>
-			<option value="WaitingParts">Waiting for parts</option>
-			<option value="Completed">Completed</option>
-		</select>
+		<Select.Root type="single" bind:value={status}>
+			<Select.Trigger class="w-full" aria-label="Filter by status" data-testid="technician-status-filter">
+				{status === 'InProgress'
+					? 'In progress'
+					: status === 'WaitingParts'
+						? 'Waiting for parts'
+						: status || 'All statuses'}
+			</Select.Trigger>
+			<Select.Content>
+				<Select.Item value="" label="All statuses">All statuses</Select.Item>
+				<Select.Item value="New" label="New">New</Select.Item>
+				<Select.Item value="Scheduled" label="Scheduled">Scheduled</Select.Item>
+				<Select.Item value="InProgress" label="In progress">In progress</Select.Item>
+				<Select.Item value="WaitingParts" label="Waiting for parts">Waiting for parts</Select.Item>
+				<Select.Item value="Completed" label="Completed">Completed</Select.Item>
+			</Select.Content>
+		</Select.Root>
 		{#if mode === 'schedule'}
-			<input bind:value={scheduledFrom} type="date" class="h-9 rounded-md border border-border bg-background px-3 text-sm" aria-label="Schedule from" />
-			<input bind:value={scheduledTo} type="date" class="h-9 rounded-md border border-border bg-background px-3 text-sm" aria-label="Schedule through" />
+			<div>
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="technician-schedule-from">From</label>
+				<DatePicker id="technician-schedule-from" bind:value={scheduledFrom} testid="technician-schedule-from" />
+			</div>
+			<div>
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="technician-schedule-through">Through</label>
+				<DatePicker id="technician-schedule-through" bind:value={scheduledTo} testid="technician-schedule-through" />
+			</div>
 		{/if}
 	</section>
 
@@ -116,8 +136,11 @@
 			{/each}
 		</div>
 
-		<div class="flex items-center justify-between text-sm text-muted-foreground">
-			<span>{query.data?.totalCount ?? 0} assignment{query.data?.totalCount === 1 ? '' : 's'}</span>
+	{/if}
+
+	{#if !query.isPending && !query.isError}
+		<div class="flex items-center justify-between text-sm text-muted-foreground" data-testid="technician-assignment-pagination">
+			<span>{totalCount === 0 ? '0 of 0 assignments' : `${rangeStart}–${rangeEnd} of ${totalCount} assignments`}</span>
 			<div class="flex items-center gap-2">
 				<Button variant="outline" disabled={page <= 1} onclick={() => page -= 1}>Previous</Button>
 				<span>Page {page} of {totalPages}</span>

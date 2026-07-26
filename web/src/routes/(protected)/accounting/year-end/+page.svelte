@@ -4,6 +4,7 @@
 	import { showError, apiErrorMessage } from '$lib/utils/toast';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import * as Select from '$lib/components/ui/select';
 	import { Download, Wallet, Receipt, Home, AlertCircle, Info } from '@lucide/svelte';
 
 	// Default to the current operating year; completed prior-year packets stay one select away.
@@ -71,22 +72,53 @@
 	<div class="mb-6 flex flex-wrap items-end justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-bold">Year-end</h1>
-			<p class="mt-1 text-sm text-muted-foreground">Cash flow vs. taxable income, side by side — with depreciation and debt service finally in the picture.</p>
+			<p class="mt-1 text-sm text-muted-foreground">Compare the cash you kept with the rental income your accountant may report for taxes.</p>
+			<a
+				href="/docs/taxes-and-1099"
+				class="mt-2 inline-flex min-h-11 items-center text-sm font-medium text-primary underline-offset-4 hover:underline"
+				data-testid="year-end-help-link"
+			>
+				How year-end reporting works
+			</a>
 		</div>
 		<div class="flex flex-wrap items-end gap-2">
-			<label class="flex flex-col text-xs font-medium text-muted-foreground">
-				Tax year
-				<select bind:value={year} class="mt-1 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground" data-testid="year-end-year-select">
-					{#each yearOptions as y}<option value={y}>{y}</option>{/each}
-				</select>
-			</label>
-			<label class="flex flex-col text-xs font-medium text-muted-foreground">
-				Property
-				<select bind:value={selectedPropertyId} class="mt-1 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground" data-testid="year-end-property-select">
-					<option value="all">All properties</option>
-					{#each propertyOptions() as p}<option value={p.id}>{p.name}</option>{/each}
-				</select>
-			</label>
+			<div class="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+				<span>Tax year</span>
+				<Select.Root
+					type="single"
+					value={String(year)}
+					onValueChange={(value) => (year = Number(value))}
+				>
+					<Select.Trigger class="h-10 w-28 text-sm text-foreground" data-testid="year-end-year-select">
+						{year}
+					</Select.Trigger>
+					<Select.Content>
+						{#each yearOptions as y}
+							<Select.Item value={String(y)} label={String(y)}>{y}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
+			</div>
+			<div class="flex flex-col gap-1 text-xs font-medium text-muted-foreground">
+				<span>Property</span>
+				<Select.Root
+					type="single"
+					value={String(selectedPropertyId)}
+					onValueChange={(value) => (selectedPropertyId = value === 'all' ? 'all' : Number(value))}
+				>
+					<Select.Trigger class="h-10 min-w-48 text-sm text-foreground" data-testid="year-end-property-select">
+						{selectedPropertyId === 'all'
+							? 'All properties'
+							: propertyOptions().find((property) => property.id === selectedPropertyId)?.name ?? 'Select property'}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="all" label="All properties">All properties</Select.Item>
+						{#each propertyOptions() as property}
+							<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
+			</div>
 			<Button variant="outline" class="gap-2" onclick={exportPacket} disabled={downloading} data-testid="year-end-export">
 				<Download class="h-4 w-4" />
 				{downloading ? 'Preparing…' : 'Export packet'}

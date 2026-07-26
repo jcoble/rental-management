@@ -14,6 +14,7 @@
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Pencil, Save, Trash2, X, CalendarCheck, CheckCircle, XCircle, UserX, CalendarClock, Users } from '@lucide/svelte';
@@ -158,9 +159,7 @@
 	</div>
 
 	{#if appointmentQuery.isLoading}
-		<div class="flex items-center justify-center py-16 text-muted-foreground" data-testid="appointment-detail-loading">
-			Loading…
-		</div>
+		<LoadingState label="Loading appointment details" variant="page" testid="appointment-detail-loading" />
 	{:else if appointmentQuery.isError}
 		<div class="flex flex-col items-center gap-3 py-16" data-testid="appointment-detail-error">
 			<p class="text-muted-foreground">Failed to load appointment.</p>

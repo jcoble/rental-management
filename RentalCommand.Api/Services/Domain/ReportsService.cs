@@ -367,7 +367,6 @@ public class ReportsService : IReportsService
             new("sessionId", NpgsqlDbType.Uuid) { Value = access.SessionId },
             new("accessContextId", NpgsqlDbType.Integer) { Value = access.AccessContextId },
             new("accessRevision", NpgsqlDbType.Bigint) { Value = access.AccessRevision },
-            new("utcNow", NpgsqlDbType.TimestampTz) { Value = _timeProvider.UtcNow() },
             new("fromOn", NpgsqlDbType.Date) { Value = fromOn },
             new("toOn", NpgsqlDbType.Date) { Value = toOn },
             new("applyPropertyFilter", NpgsqlDbType.Boolean) { Value = requestedPropertyIds.Length > 0 },
@@ -400,73 +399,64 @@ public class ReportsService : IReportsService
     private static readonly JsonSerializerOptions RentLedgerJsonOptions = new(JsonSerializerDefaults.Web);
 
     internal const string RentLedgerSql = """
-        WITH authorized_managements AS MATERIALIZED (
+        WITH report_scopes AS MATERIALIZED (
+            SELECT scope."AssignmentId",
+                   scope."WorkspaceMembershipId",
+                   scope."ScopeKind",
+                   scope."PropertyId"
+            FROM public.rc_api_effective_capability_scopes(
+                @portfolioId,
+                @sessionId,
+                @userId,
+                @accessContextId,
+                @accessRevision,
+                ARRAY['reports.read']::text[],
+                'Property') AS scope
+        ),
+        balance_scopes AS MATERIALIZED (
+            SELECT scope."AssignmentId",
+                   scope."WorkspaceMembershipId",
+                   scope."ScopeKind",
+                   scope."PropertyId"
+            FROM public.rc_api_effective_capability_scopes(
+                @portfolioId,
+                @sessionId,
+                @userId,
+                @accessContextId,
+                @accessRevision,
+                ARRAY['money.balances.read']::text[],
+                'Property') AS scope
+        ),
+        authorized_properties AS MATERIALIZED (
+            SELECT property."Id"
+            FROM "Properties" AS property
+            WHERE property."PortfolioId" = @portfolioId
+              AND property."DeletedAt" IS NULL
+              AND (NOT @applyPropertyFilter OR property."Id" = ANY(@propertyIds))
+              AND EXISTS (
+                  SELECT 1
+                  FROM report_scopes AS report_scope
+                  JOIN balance_scopes AS balance_scope
+                    ON balance_scope."AssignmentId" = report_scope."AssignmentId"
+                   AND balance_scope."WorkspaceMembershipId" = report_scope."WorkspaceMembershipId"
+                   AND balance_scope."ScopeKind" = report_scope."ScopeKind"
+                   AND COALESCE(balance_scope."PropertyId", -1) =
+                       COALESCE(report_scope."PropertyId", -1)
+                  WHERE report_scope."ScopeKind" = 'AllProperties'
+                     OR (report_scope."ScopeKind" = 'SelectedProperties'
+                         AND report_scope."PropertyId" = property."Id")
+              )
+        ),
+        authorized_managements AS MATERIALIZED (
             SELECT management."Id",
                    management."PortfolioId",
                    management."RelationshipNumber",
                    management."PropertyId",
                    management."UnitId"
             FROM "LeaseManagements" AS management
+            JOIN authorized_properties AS property
+              ON property."Id" = management."PropertyId"
             WHERE management."PortfolioId" = @portfolioId
-              AND EXISTS (
-                  SELECT 1
-                  FROM "AuthSessions" AS session
-                  JOIN "WorkspaceAccessContexts" AS context
-                    ON context."Id" = session."ActiveAccessContextId"
-                   AND context."UserId" = session."UserId"
-                  JOIN "WorkspaceMemberships" AS membership
-                    ON membership."AccessContextId" = context."Id"
-                   AND membership."PortfolioId" = context."PortfolioId"
-                  JOIN "MembershipRoleAssignments" AS assignment
-                    ON assignment."WorkspaceMembershipId" = membership."Id"
-                   AND assignment."PortfolioId" = membership."PortfolioId"
-                  WHERE session."Id" = @sessionId
-                    AND session."UserId" = @userId
-                    AND session."ActiveAccessContextId" = @accessContextId
-                    AND session."Status" = 'Active'
-                    AND session."RevokedAtUtc" IS NULL
-                    AND session."ExpiresAtUtc" > @utcNow
-                    AND context."Id" = @accessContextId
-                    AND context."PortfolioId" = @portfolioId
-                    AND context."AccessRevision" = @accessRevision
-                    AND context."Status" = 'Active'
-                    AND context."SuspendedAtUtc" IS NULL
-                    AND context."RevokedAtUtc" IS NULL
-                    AND membership."Status" = 'Active'
-                    AND membership."SuspendedAtUtc" IS NULL
-                    AND membership."RevokedAtUtc" IS NULL
-                    AND membership."EffectiveFromUtc" <= @utcNow
-                    AND (membership."EffectiveToUtc" IS NULL OR membership."EffectiveToUtc" > @utcNow)
-                    AND assignment."Status" = 'Active'
-                    AND assignment."SuspendedAtUtc" IS NULL
-                    AND assignment."RevokedAtUtc" IS NULL
-                    AND assignment."EffectiveFromUtc" <= @utcNow
-                    AND (assignment."EffectiveToUtc" IS NULL OR assignment."EffectiveToUtc" > @utcNow)
-                    AND EXISTS (
-                        SELECT 1
-                        FROM "RoleProfileCapabilities" AS role_capability
-                        JOIN "CapabilityDefinitions" AS capability
-                          ON capability."Id" = role_capability."CapabilityDefinitionId"
-                        WHERE role_capability."RoleProfileId" = assignment."RoleProfileId"
-                          AND capability."Key" = 'reports.read'
-                          AND capability."AuthorizationTargetKind" = 'Property')
-                    AND EXISTS (
-                        SELECT 1
-                        FROM "RoleProfileCapabilities" AS role_capability
-                        JOIN "CapabilityDefinitions" AS capability
-                          ON capability."Id" = role_capability."CapabilityDefinitionId"
-                        WHERE role_capability."RoleProfileId" = assignment."RoleProfileId"
-                          AND capability."Key" = 'money.balances.read'
-                          AND capability."AuthorizationTargetKind" = 'Property')
-                    AND (assignment."ScopeKind" = 'AllProperties'
-                         OR (assignment."ScopeKind" = 'SelectedProperties'
-                             AND EXISTS (
-                                 SELECT 1
-                                 FROM "MembershipRoleAssignmentProperties" AS selected_property
-                                 WHERE selected_property."MembershipRoleAssignmentId" = assignment."Id"
-                                   AND selected_property."PortfolioId" = assignment."PortfolioId"
-                                   AND selected_property."PropertyId" = management."PropertyId")))
-              )
         ),
         activity AS MATERIALIZED (
             SELECT management."Id" AS "LeaseManagementId",
@@ -1170,6 +1160,11 @@ public class ReportsService : IReportsService
 
     public async Task<GeneralLedgerResponse> GetGeneralLedgerAsync(WorkspaceReadScope scope, ReportRangeQuery query, CancellationToken ct = default)
     {
+        if (_db.Database.IsNpgsql())
+        {
+            return await GetGeneralLedgerPostgreSqlAsync(scope, query, ct);
+        }
+
         var portfolioId = scope.PortfolioId;
         var (from, to) = ResolveRange(query, _timeProvider.UtcNow());
         var authorizedProperties = BuildAuthorizedPropertyQuery(scope, query, CapabilityKeys.ReportsRead);
@@ -1309,6 +1304,191 @@ public class ReportsService : IReportsService
             ClosingBalance = totalIncome - totalExpense,
         };
     }
+
+    private async Task<GeneralLedgerResponse> GetGeneralLedgerPostgreSqlAsync(
+        WorkspaceReadScope scope,
+        ReportRangeQuery query,
+        CancellationToken ct)
+    {
+        var (from, to) = ResolveRange(query, _timeProvider.UtcNow());
+        var requestedPropertyIds = (query.PropertyIds ?? [])
+            .Concat(query.PropertyId is int propertyId ? [propertyId] : [])
+            .Distinct()
+            .ToArray();
+        var parameters = new NpgsqlParameter[]
+        {
+            new("portfolioId", NpgsqlDbType.Integer) { Value = scope.PortfolioId },
+            new("sessionId", NpgsqlDbType.Uuid) { Value = scope.SessionId },
+            new("userId", NpgsqlDbType.Integer) { Value = scope.UserId },
+            new("accessContextId", NpgsqlDbType.Integer) { Value = scope.AccessContextId },
+            new("accessRevision", NpgsqlDbType.Bigint) { Value = scope.AccessRevision },
+            new("capabilityKeys", NpgsqlDbType.Array | NpgsqlDbType.Text)
+            {
+                Value = new[] { CapabilityKeys.ReportsRead },
+            },
+            new("targetKind", NpgsqlDbType.Text)
+            {
+                Value = CapabilityAuthorizationTargetKind.Property.ToString(),
+            },
+            new("fromOn", NpgsqlDbType.Date) { Value = DateOnly.FromDateTime(from) },
+            new("toOn", NpgsqlDbType.Date) { Value = DateOnly.FromDateTime(to) },
+            new("applyPropertyFilter", NpgsqlDbType.Boolean)
+            {
+                Value = requestedPropertyIds.Length > 0,
+            },
+            new("propertyIds", NpgsqlDbType.Array | NpgsqlDbType.Integer)
+            {
+                Value = requestedPropertyIds,
+            },
+        };
+
+        var rows = await _db.Database
+            .SqlQueryRaw<GeneralLedgerDatabaseRow>(GeneralLedgerPostgreSql, parameters)
+            .ToListAsync(ct);
+
+        var entries = rows.Select(row => new GeneralLedgerEntry
+        {
+            Date = row.Date.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            Type = row.Type,
+            Id = row.Id,
+            Description = row.Description,
+            Category = row.Category,
+            PropertyId = row.PropertyId,
+            PropertyName = row.PropertyName,
+            Counterparty = row.Counterparty,
+            Amount = row.Amount,
+            RunningBalance = row.RunningBalance,
+        }).ToList();
+        var totals = rows.FirstOrDefault();
+
+        return new GeneralLedgerResponse
+        {
+            From = from,
+            To = to,
+            Entries = entries,
+            TotalIncome = totals?.TotalIncome ?? 0m,
+            TotalExpense = totals?.TotalExpense ?? 0m,
+            ClosingBalance = totals?.ClosingBalance ?? 0m,
+        };
+    }
+
+    internal const string GeneralLedgerPostgreSql = """
+        WITH effective_scopes AS MATERIALIZED (
+            SELECT scope."ScopeKind", scope."PropertyId"
+            FROM public.rc_api_effective_capability_scopes(
+                @portfolioId,
+                @sessionId,
+                @userId,
+                @accessContextId,
+                @accessRevision,
+                @capabilityKeys,
+                @targetKind) AS scope
+        ),
+        authorized_properties AS MATERIALIZED (
+            SELECT property."Id", property."Name"
+            FROM "Properties" AS property
+            WHERE property."PortfolioId" = @portfolioId
+              AND property."DeletedAt" IS NULL
+              AND (
+                    EXISTS (
+                        SELECT 1
+                        FROM effective_scopes AS scope
+                        WHERE scope."ScopeKind" = 'AllProperties')
+                    OR EXISTS (
+                        SELECT 1
+                        FROM effective_scopes AS scope
+                        WHERE scope."ScopeKind" = 'SelectedProperties'
+                          AND scope."PropertyId" = property."Id")
+              )
+              AND (NOT @applyPropertyFilter OR property."Id" = ANY(@propertyIds))
+        ),
+        receipt_entries AS (
+            SELECT receipt."EffectiveOn" AS "Date",
+                   1 AS "EntryKind",
+                   'Receipt'::text AS "Type",
+                   receipt."Id" AS "Id",
+                   receipt."Description" AS "Description",
+                   'PaymentReceipt'::text AS "Category",
+                   management."PropertyId" AS "PropertyId",
+                   property."Name" AS "PropertyName",
+                   lifecycle."CurrentPrimaryTenantName" AS "Counterparty",
+                   SUM(allocation."Amount") AS "Amount"
+            FROM "TenantLedgerAllocations" AS allocation
+            JOIN "TenantLedgerEntries" AS receipt
+              ON receipt."PortfolioId" = allocation."PortfolioId"
+             AND receipt."TenantAccountId" = allocation."TenantAccountId"
+             AND receipt."Id" = allocation."CreditEntryId"
+            JOIN "TenantLedgerEntries" AS charge
+              ON charge."PortfolioId" = allocation."PortfolioId"
+             AND charge."TenantAccountId" = allocation."TenantAccountId"
+             AND charge."Id" = allocation."DebitEntryId"
+            JOIN "TenantAccounts" AS account
+              ON account."PortfolioId" = allocation."PortfolioId"
+             AND account."Id" = allocation."TenantAccountId"
+            JOIN "LeaseManagements" AS management
+              ON management."PortfolioId" = account."PortfolioId"
+             AND management."Id" = account."LeaseManagementId"
+            JOIN authorized_properties AS property
+              ON property."Id" = management."PropertyId"
+            LEFT JOIN "vw_lease_management_lifecycle" AS lifecycle
+              ON lifecycle."PortfolioId" = management."PortfolioId"
+             AND lifecycle."LeaseManagementId" = management."Id"
+            WHERE allocation."PortfolioId" = @portfolioId
+              AND receipt."EntryType" = 'PaymentReceipt'
+              AND charge."EntryType" <> 'DepositCharge'
+              AND receipt."EffectiveOn" >= @fromOn
+              AND receipt."EffectiveOn" <= @toOn
+            GROUP BY receipt."Id",
+                     receipt."EffectiveOn",
+                     receipt."Description",
+                     management."PropertyId",
+                     property."Name",
+                     lifecycle."CurrentPrimaryTenantName"
+        ),
+        expense_entries AS (
+            SELECT (COALESCE(expense."PaidAt", expense."IncurredAt"))::date AS "Date",
+                   0 AS "EntryKind",
+                   'Expense'::text AS "Type",
+                   expense."Id" AS "Id",
+                   expense."Description" AS "Description",
+                   expense."Category"::text AS "Category",
+                   expense."PropertyId" AS "PropertyId",
+                   property."Name" AS "PropertyName",
+                   vendor."Name" AS "Counterparty",
+                   -expense."Amount" AS "Amount"
+            FROM "Expenses" AS expense
+            JOIN authorized_properties AS property
+              ON property."Id" = expense."PropertyId"
+            LEFT JOIN "Vendors" AS vendor
+              ON vendor."PortfolioId" = expense."PortfolioId"
+             AND vendor."Id" = expense."VendorId"
+            WHERE expense."PortfolioId" = @portfolioId
+              AND COALESCE(expense."PaidAt", expense."IncurredAt")::date >= @fromOn
+              AND COALESCE(expense."PaidAt", expense."IncurredAt")::date <= @toOn
+        ),
+        ledger_entries AS MATERIALIZED (
+            SELECT * FROM receipt_entries
+            UNION ALL
+            SELECT * FROM expense_entries
+        )
+        SELECT entry."Date",
+               entry."Type",
+               entry."Id",
+               entry."Description",
+               entry."Category",
+               entry."PropertyId",
+               entry."PropertyName",
+               entry."Counterparty",
+               entry."Amount",
+               SUM(entry."Amount") OVER (
+                   ORDER BY entry."Date", entry."EntryKind", entry."Id"
+                   ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS "RunningBalance",
+               COALESCE(SUM(entry."Amount") FILTER (WHERE entry."Amount" > 0) OVER (), 0) AS "TotalIncome",
+               COALESCE(-SUM(entry."Amount") FILTER (WHERE entry."Amount" < 0) OVER (), 0) AS "TotalExpense",
+               COALESCE(SUM(entry."Amount") OVER (), 0) AS "ClosingBalance"
+        FROM ledger_entries AS entry
+        ORDER BY entry."Date", entry."EntryKind", entry."Id";
+        """;
 
     // ── Property P&L Summary ───────────────────────────────────────────────────────────────────────
 
@@ -1561,6 +1741,23 @@ public class ReportsService : IReportsService
         public string? Counterparty { get; set; }
         public decimal Amount { get; set; }
         public decimal RunningBalance { get; set; }
+    }
+
+    private sealed class GeneralLedgerDatabaseRow
+    {
+        public DateOnly Date { get; set; }
+        public string Type { get; set; } = string.Empty;
+        public long Id { get; set; }
+        public string Description { get; set; } = string.Empty;
+        public string Category { get; set; } = string.Empty;
+        public int? PropertyId { get; set; }
+        public string? PropertyName { get; set; }
+        public string? Counterparty { get; set; }
+        public decimal Amount { get; set; }
+        public decimal RunningBalance { get; set; }
+        public decimal TotalIncome { get; set; }
+        public decimal TotalExpense { get; set; }
+        public decimal ClosingBalance { get; set; }
     }
 
     // ── Security Deposit Register ──────────────────────────────────────────────────────────────────

@@ -118,7 +118,7 @@
 			title: 'Type',
 			sortable: true,
 			mobileRole: 'subtitle',
-			accessor: (d) => d.targetEntityType,
+			accessor: (d) => d.targetEntityType || 'Document',
 		},
 		{
 			key: 'createdAt',

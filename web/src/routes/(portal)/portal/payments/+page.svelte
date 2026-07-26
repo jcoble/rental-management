@@ -5,6 +5,7 @@
 	import { showSuccess, showInfo, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatDateOnly } from '$lib/utils/date';
 	import { Button } from '$lib/components/ui/button';
+	import * as Select from '$lib/components/ui/select';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { CreditCard, Repeat } from '@lucide/svelte';
 	import HelpTooltip from '$lib/components/ui/HelpTooltip.svelte';
@@ -25,6 +26,9 @@
 		queryKey: ['portal-tenant-accounts', 'payments'],
 		queryFn: () => portal.tenantAccountsPage({ take: 200, sort: 'propertyName' })
 	}));
+	const selectedAccount = $derived(
+		accountsQuery.data?.items.find((account) => account.tenantAccountId === selectedAccountId)
+	);
 
 	$effect(() => {
 		const accounts = accountsQuery.data;
@@ -158,19 +162,25 @@
 	<div class="mb-5 flex items-center gap-2"><CreditCard class="h-5 w-5 text-primary" /><h1 class="text-2xl font-semibold">Payments</h1></div>
 
 	{#if accountsQuery.data && accountsQuery.data.totalCount > 1}
-		<label class="mb-5 block max-w-lg text-sm font-medium" data-testid="portal-account-selector">
-			Account
-			<select
-				class="mt-1 block w-full rounded-md border border-border bg-background px-3 py-2"
-				value={selectedAccountId ?? ''}
-				onchange={(event) => selectAccount(event.currentTarget.value)}
+		<div class="mb-5 max-w-lg" data-testid="portal-account-selector">
+			<label class="mb-1.5 block text-sm font-medium" for="portal-payment-rental">Rental</label>
+			<Select.Root
+				type="single"
+				value={selectedAccountId == null ? '' : String(selectedAccountId)}
+				onValueChange={(value) => selectAccount(value ?? '')}
 			>
-				<option value="">Choose an account</option>
+				<Select.Trigger id="portal-payment-rental" class="w-full">
+					{selectedAccount ? `${selectedAccount.propertyName} · Unit ${selectedAccount.unitNumber}` : 'Choose a rental'}
+				</Select.Trigger>
+				<Select.Content>
 				{#each accountsQuery.data.items as account (account.tenantAccountId)}
-					<option value={account.tenantAccountId}>{account.propertyName} · Unit {account.unitNumber} · {account.accountNumber}</option>
+					<Select.Item value={String(account.tenantAccountId)} label={`${account.propertyName} · Unit ${account.unitNumber}`}>
+						{account.propertyName} · Unit {account.unitNumber}
+					</Select.Item>
 				{/each}
-			</select>
-		</label>
+				</Select.Content>
+			</Select.Root>
+		</div>
 	{/if}
 
 	{#if accountsQuery.isLoading}

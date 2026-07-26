@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { goto } from '$app/navigation';
-	import { tick, untrack } from 'svelte';
+	import { goto, pushState, replaceState } from '$app/navigation';
+	import { untrack } from 'svelte';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { units } from '$lib/api/endpoints/units';
 	import { inspections } from '$lib/api/endpoints/inspections';
@@ -10,10 +10,12 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import * as Select from '$lib/components/ui/select';
 	import UnitHeader from '$lib/components/unit/UnitHeader.svelte';
 	import ScanLauncher from '$lib/components/scan/ScanLauncher.svelte';
 	import UnitTimelineRail from '$lib/components/unit/UnitTimelineRail.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import OverviewTab from '$lib/components/unit/tabs/OverviewTab.svelte';
 	import ListingTab from '$lib/components/unit/tabs/ListingTab.svelte';
 	import LeaseTab from '$lib/components/unit/tabs/LeaseTab.svelte';
@@ -41,8 +43,8 @@
 	const emptyUnitForm: UnitEditForm = { unitNumber: '', bedrooms: '', bathrooms: '', marketRent: '' };
 
 	const activeDestination = $derived(resolveUnitDestination(
-		page.url.searchParams.get('tab'),
-		page.url.searchParams.get('view'),
+		page.state.unitTab ?? page.url.searchParams.get('tab'),
+		page.state.unitView ?? page.url.searchParams.get('view'),
 	));
 	const activeTab = $derived(activeDestination.tab);
 	const activeView = $derived(activeDestination.view);
@@ -56,7 +58,6 @@
 	let showScanLauncher = $state(false);
 	let scanLauncherContext = $state<ScanContext>({});
 	let handledMoveInActionKey = $state('');
-	let handledUnitLanding = '';
 	let unitForm = $state({ ...emptyUnitForm });
 	let unitFormErrors = $state<Record<string, string>>({});
 	let inspectionSearch = $state('');
@@ -66,37 +67,6 @@
 	let recurringSort = $state('nextDueDate');
 	let recurringSkip = $state(0);
 	const maintenancePageSize = 10;
-	const unitSectionTestIds: Partial<Record<UnitView, string>> = {
-		listing: 'unit-listing-section',
-		applications: 'unit-applications-section',
-		agreements: 'unit-agreement-section',
-		residents: 'unit-residents-section',
-		'work-orders': 'unit-work-orders-section',
-		inspections: 'unit-inspections-section',
-		recurring: 'unit-recurring-section',
-		turnover: 'unit-turnover-section',
-		documents: 'unit-documents-section',
-		history: 'unit-history-section',
-	};
-
-	$effect(() => {
-		if (!activeView) return;
-		const landingKey = `${id}:${activeTab}:${activeView}`;
-		if (handledUnitLanding === landingKey) return;
-		handledUnitLanding = landingKey;
-		void landOnUnitSection(activeView);
-	});
-
-	async function landOnUnitSection(view: UnitView) {
-		await tick();
-		const testId = unitSectionTestIds[view];
-		if (!testId) return;
-		const section = document.querySelector<HTMLElement>(`[data-testid="${testId}"]`);
-		if (!section) return;
-		section.scrollIntoView({ behavior: 'auto', block: 'start' });
-		section.focus({ preventScroll: true });
-	}
-
 	const contextualParams = [
 		'view',
 		'wo',
@@ -117,11 +87,21 @@
 		url.searchParams.set('tab', destination.tab);
 		if (destination.view) url.searchParams.set('view', destination.view);
 		if (`${url.pathname}${url.search}` === `${page.url.pathname}${page.url.search}`) return;
-		goto(url, { keepFocus: true, noScroll: true });
+		pushState(`${url.pathname}${url.search}`, {
+			...page.state,
+			unitTab: destination.tab,
+			unitView: destination.view ?? null,
+			unitPaymentId: null,
+			unitExpenseId: null,
+		});
 	}
 
 	function tabState(tab: string) {
 		return activeTab === tab ? 'active' : 'inactive';
+	}
+
+	function viewState(view: UnitView) {
+		return activeView === view ? 'active' : 'inactive';
 	}
 
 	function currentUnitReturnTo() {
@@ -176,7 +156,11 @@
 			url.searchParams.set('tab', 'tenant-lease');
 			url.searchParams.set('view', 'agreements');
 			url.searchParams.set('action', 'confirm-move-in');
-			goto(url, { replaceState: true, keepFocus: true, noScroll: true });
+			replaceState(`${url.pathname}${url.search}`, {
+				...page.state,
+				unitTab: 'tenant-lease',
+				unitView: 'agreements',
+			});
 			return;
 		}
 
@@ -200,7 +184,7 @@
 		if (page.url.searchParams.get('action') !== 'confirm-move-in') return;
 		const url = new URL(page.url);
 		url.searchParams.delete('action');
-		goto(url, { replaceState: true, keepFocus: true, noScroll: true });
+		replaceState(`${url.pathname}${url.search}`, page.state);
 	}
 
 	function closeMoveInDialog() {
@@ -377,18 +361,42 @@
 					</div>
 					{:else if activeTab === 'leasing'}
 					<div class="mt-4 flex-1 outline-none" role="tabpanel" aria-label="Leasing">
-						<div class="space-y-8" data-testid="unit-leasing-surface">
+						<div class="space-y-4" data-testid="unit-leasing-surface">
+							<div class="min-w-0 overflow-x-auto">
+								<div class="m3-tabs-list min-w-max" role="tablist" aria-label="Leasing views" data-testid="unit-leasing-tabs">
+									<button type="button" role="tab" aria-selected={activeView === 'listing'} data-state={viewState('listing')} class="m3-tabs-trigger" onclick={() => setTab('leasing', 'listing')}>Listing</button>
+									<button type="button" role="tab" aria-selected={activeView === 'applications'} data-state={viewState('applications')} class="m3-tabs-trigger" onclick={() => setTab('leasing', 'applications')}>Applications</button>
+								</div>
+							</div>
+							{#if activeView === 'applications'}
+							<section tabindex="-1" class="scroll-mt-4 outline-none" data-testid="unit-applications-section">
+								<ApplicationsTab {dashboard} />
+							</section>
+							{:else}
 							<section tabindex="-1" class="scroll-mt-4 outline-none" data-testid="unit-listing-section">
 								<ListingTab unitId={dashboard.unit.id} />
 							</section>
-							<section tabindex="-1" class="scroll-mt-4 border-t pt-8 outline-none" data-testid="unit-applications-section">
-								<ApplicationsTab {dashboard} />
-							</section>
+							{/if}
 						</div>
 					</div>
 					{:else if activeTab === 'tenant-lease'}
 					<div class="mt-4 flex-1 outline-none" role="tabpanel" aria-label="Tenant & lease">
-						<div class="space-y-8" data-testid="unit-tenant-lease-surface">
+						<div class="space-y-4" data-testid="unit-tenant-lease-surface">
+							<div class="min-w-0 overflow-x-auto">
+								<div class="m3-tabs-list min-w-max" role="tablist" aria-label="Tenant and lease views" data-testid="unit-tenant-lease-tabs">
+									<button type="button" role="tab" aria-selected={activeView === 'agreements'} data-state={viewState('agreements')} class="m3-tabs-trigger" onclick={() => setTab('tenant-lease', 'agreements')}>Lease &amp; move-in</button>
+									<button type="button" role="tab" aria-selected={activeView === 'residents'} data-state={viewState('residents')} class="m3-tabs-trigger" onclick={() => setTab('tenant-lease', 'residents')}>Residents</button>
+								</div>
+							</div>
+							{#if activeView === 'residents'}
+							<section
+								tabindex="-1"
+								class="scroll-mt-4 outline-none"
+								data-testid="unit-residents-section"
+							>
+								<ResidentsTab {dashboard} />
+							</section>
+							{:else}
 							<section
 								tabindex="-1"
 								class="scroll-mt-4 outline-none"
@@ -402,13 +410,7 @@
 									})}
 								/>
 							</section>
-							<section
-								tabindex="-1"
-								class="scroll-mt-4 border-t pt-8 outline-none"
-								data-testid="unit-residents-section"
-							>
-								<ResidentsTab {dashboard} />
-							</section>
+							{/if}
 						</div>
 					</div>
 					{:else if activeTab === 'money'}
@@ -417,26 +419,31 @@
 					</div>
 					{:else if activeTab === 'maintenance'}
 					<div class="mt-4 flex-1 outline-none" role="tabpanel" aria-label="Maintenance">
-						<div class="mb-3 flex flex-wrap items-center justify-between gap-3">
-							<div class="flex flex-wrap gap-2">
-								<Button variant="outline" size="sm" onclick={() => setTab('maintenance', 'work-orders')}>Work orders</Button>
-								<Button variant="outline" size="sm" onclick={() => setTab('maintenance', 'inspections')}>Inspections</Button>
-								<Button variant="outline" size="sm" onclick={() => setTab('maintenance', 'recurring')}>Recurring maintenance</Button>
-								<Button variant="outline" size="sm" onclick={() => setTab('maintenance', 'turnover')}>Turnover/make-ready</Button>
+						<div class="space-y-4" data-testid="unit-maintenance-surface">
+							<div class="min-w-0 overflow-x-auto">
+								<div class="m3-tabs-list min-w-max" role="tablist" aria-label="Maintenance views" data-testid="unit-maintenance-tabs">
+									<button type="button" role="tab" aria-selected={activeView === 'work-orders'} data-state={viewState('work-orders')} class="m3-tabs-trigger" onclick={() => setTab('maintenance', 'work-orders')}>Work orders</button>
+									<button type="button" role="tab" aria-selected={activeView === 'inspections'} data-state={viewState('inspections')} class="m3-tabs-trigger" onclick={() => setTab('maintenance', 'inspections')}>Inspections</button>
+									<button type="button" role="tab" aria-selected={activeView === 'recurring'} data-state={viewState('recurring')} class="m3-tabs-trigger" onclick={() => setTab('maintenance', 'recurring')}>Recurring work</button>
+									<button type="button" role="tab" aria-selected={activeView === 'turnover'} data-state={viewState('turnover')} class="m3-tabs-trigger" onclick={() => setTab('maintenance', 'turnover')}>Move-out &amp; turnover</button>
+								</div>
 							</div>
-						</div>
-						<div class="space-y-8" data-testid="unit-maintenance-surface">
-							<section tabindex="-1" class="scroll-mt-4 outline-none" data-testid="unit-work-orders-section"><MaintenanceTab {dashboard} onScan={goScan} /></section>
-							<section tabindex="-1" class="scroll-mt-4 border-t pt-8 outline-none" data-testid="unit-inspections-section">
+							{#if activeView === 'inspections'}
+							<section tabindex="-1" class="scroll-mt-4 outline-none" data-testid="unit-inspections-section">
 								<div class="space-y-3">
-									<div><h2 class="text-lg font-semibold">Inspections</h2><p class="text-sm text-muted-foreground">Inspection records for this Unit.</p></div>
+									<div><h2 class="text-lg font-semibold">Inspections</h2><p class="text-sm text-muted-foreground">Scheduled and completed inspections for this rental.</p></div>
 									<div class="flex flex-wrap gap-2">
 										<Input bind:value={inspectionSearch} oninput={() => inspectionSkip = 0} placeholder="Search inspections" aria-label="Search Unit inspections" class="max-w-xs" />
-										<select bind:value={inspectionSort} onchange={() => inspectionSkip = 0} class="rounded-md border bg-background px-3 text-sm" aria-label="Sort Unit inspections">
-											<option value="-scheduledFor">Newest scheduled</option>
-											<option value="scheduledFor">Oldest scheduled</option>
-											<option value="status">Status</option>
-										</select>
+										<Select.Root type="single" bind:value={inspectionSort} onValueChange={() => inspectionSkip = 0}>
+											<Select.Trigger class="w-full sm:w-52" aria-label="Sort Unit inspections">
+												<Select.Value placeholder="Newest scheduled" />
+											</Select.Trigger>
+											<Select.Content>
+												<Select.Item value="-scheduledFor" label="Newest scheduled">Newest scheduled</Select.Item>
+												<Select.Item value="scheduledFor" label="Oldest scheduled">Oldest scheduled</Select.Item>
+												<Select.Item value="status" label="Status">Status</Select.Item>
+											</Select.Content>
+										</Select.Root>
 									</div>
 									{#if unitInspectionsQuery.isLoading}
 										<LoadingState label="Loading inspections" testid="unit-inspections-loading" />
@@ -445,7 +452,7 @@
 											<p class="text-sm font-medium text-destructive">Inspections could not be loaded.</p>
 											<Button class="mt-3" variant="outline" size="sm" onclick={() => unitInspectionsQuery.refetch()}>Try again</Button>
 										</div>
-									{:else if !unitInspectionsQuery.data?.items.length}<p class="text-sm text-muted-foreground">No inspections for this Unit.</p>
+									{:else if !unitInspectionsQuery.data?.items.length}<p class="text-sm text-muted-foreground">No inspections for this rental.</p>
 									{:else}
 										<ul class="divide-y rounded-lg border">
 											{#each unitInspectionsQuery.data.items as inspection (inspection.id)}
@@ -460,25 +467,31 @@
 									</div>
 								</div>
 							</section>
-							<section tabindex="-1" class="scroll-mt-4 border-t pt-8 outline-none" data-testid="unit-recurring-section">
+							{:else if activeView === 'recurring'}
+							<section tabindex="-1" class="scroll-mt-4 outline-none" data-testid="unit-recurring-section">
 								<div class="space-y-3">
-									<div><h2 class="text-lg font-semibold">Recurring maintenance</h2><p class="text-sm text-muted-foreground">Standing maintenance schedules for this Unit.</p></div>
+									<div><h2 class="text-lg font-semibold">Recurring work</h2><p class="text-sm text-muted-foreground">Maintenance that repeats on a schedule for this rental.</p></div>
 									<div class="flex flex-wrap gap-2">
-										<Input bind:value={recurringSearch} oninput={() => recurringSkip = 0} placeholder="Search recurring maintenance" aria-label="Search Unit recurring maintenance" class="max-w-xs" />
-										<select bind:value={recurringSort} onchange={() => recurringSkip = 0} class="rounded-md border bg-background px-3 text-sm" aria-label="Sort Unit recurring maintenance">
-											<option value="nextDueDate">Next due</option>
-											<option value="-nextDueDate">Latest due</option>
-											<option value="title">Title</option>
-										</select>
+										<Input bind:value={recurringSearch} oninput={() => recurringSkip = 0} placeholder="Search recurring work" aria-label="Search Unit recurring work" class="max-w-xs" />
+										<Select.Root type="single" bind:value={recurringSort} onValueChange={() => recurringSkip = 0}>
+											<Select.Trigger class="w-full sm:w-52" aria-label="Sort Unit recurring work">
+												<Select.Value placeholder="Next due" />
+											</Select.Trigger>
+											<Select.Content>
+												<Select.Item value="nextDueDate" label="Next due">Next due</Select.Item>
+												<Select.Item value="-nextDueDate" label="Latest due">Latest due</Select.Item>
+												<Select.Item value="title" label="Title">Title</Select.Item>
+											</Select.Content>
+										</Select.Root>
 									</div>
 									{#if unitRecurringQuery.isLoading}
-										<LoadingState label="Loading recurring maintenance" testid="unit-recurring-loading" />
+										<LoadingState label="Loading recurring work" testid="unit-recurring-loading" />
 									{:else if unitRecurringQuery.isError}
 										<div class="rounded-xl border border-destructive/40 bg-destructive/5 p-4" role="alert" data-testid="unit-recurring-error">
-											<p class="text-sm font-medium text-destructive">Recurring maintenance could not be loaded.</p>
+											<p class="text-sm font-medium text-destructive">Recurring work could not be loaded.</p>
 											<Button class="mt-3" variant="outline" size="sm" onclick={() => unitRecurringQuery.refetch()}>Try again</Button>
 										</div>
-									{:else if !unitRecurringQuery.data?.items.length}<p class="text-sm text-muted-foreground">No recurring maintenance for this Unit.</p>
+									{:else if !unitRecurringQuery.data?.items.length}<p class="text-sm text-muted-foreground">No recurring work for this rental.</p>
 									{:else}
 										<ul class="divide-y rounded-lg border">
 											{#each unitRecurringQuery.data.items as task (task.id)}
@@ -493,12 +506,25 @@
 									</div>
 								</div>
 							</section>
-							<section tabindex="-1" class="scroll-mt-4 border-t pt-8 outline-none" data-testid="unit-turnover-section"><TurnoverTab {dashboard} onScan={goScan} /></section>
+							{:else if activeView === 'turnover'}
+							<section tabindex="-1" class="scroll-mt-4 outline-none" data-testid="unit-turnover-section"><TurnoverTab {dashboard} onScan={goScan} /></section>
+							{:else}
+							<section tabindex="-1" class="scroll-mt-4 outline-none" data-testid="unit-work-orders-section"><MaintenanceTab {dashboard} onScan={goScan} /></section>
+							{/if}
 						</div>
 					</div>
 					{:else}
 					<div class="mt-4 flex-1 outline-none" role="tabpanel" aria-label="Documents & history">
-						<div class="space-y-8" data-testid="unit-documents-history-surface">
+						<div class="space-y-4" data-testid="unit-documents-history-surface">
+							<div class="min-w-0 overflow-x-auto">
+								<div class="m3-tabs-list min-w-max" role="tablist" aria-label="Documents and history views" data-testid="unit-documents-history-tabs">
+									<button type="button" role="tab" aria-selected={activeView === 'documents'} data-state={viewState('documents')} class="m3-tabs-trigger" onclick={() => setTab('documents-history', 'documents')}>Documents</button>
+									<button type="button" role="tab" aria-selected={activeView === 'history'} data-state={viewState('history')} class="m3-tabs-trigger" onclick={() => setTab('documents-history', 'history')}>Activity</button>
+								</div>
+							</div>
+							{#if activeView === 'history'}
+							<section tabindex="-1" class="scroll-mt-4 outline-none" data-testid="unit-history-section"><TimelineTab unitId={id} /></section>
+							{:else}
 							<section tabindex="-1" class="scroll-mt-4 outline-none" data-testid="unit-documents-section">
 								<DocumentsTab
 									unitId={dashboard.unit.id}
@@ -507,7 +533,7 @@
 									onDocumentsChanged={refreshUnitDashboard}
 								/>
 							</section>
-							<section tabindex="-1" class="scroll-mt-4 border-t pt-8 outline-none" data-testid="unit-history-section"><TimelineTab unitId={id} /></section>
+							{/if}
 						</div>
 					</div>
 					{/if}
@@ -560,7 +586,7 @@
 				<div class="space-y-3 border-t pt-3">
 					<div>
 						<span class="mb-1 block text-xs text-muted-foreground">Deposit received date</span>
-						<Input bind:value={moveInDepositEffectiveOn} type="date" data-testid="unit-move-in-deposit-date" />
+						<DatePicker bind:value={moveInDepositEffectiveOn} testid="unit-move-in-deposit-date" />
 						{#if moveInDepositErrors.effectiveOn}<p class="mt-1 text-xs text-destructive">{moveInDepositErrors.effectiveOn}</p>{/if}
 					</div>
 					<div>

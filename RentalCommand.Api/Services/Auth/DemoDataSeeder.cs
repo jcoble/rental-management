@@ -144,38 +144,44 @@ public class DemoDataSeeder
         }
 
         // ── 1. OwnerEntities ──────────────────────────────────────────────────────────
-        var ownerEntities = new List<OwnerEntity>
+        // Account bootstrap already creates the landlord's editable primary owner record. Reuse it
+        // for the sample LLC instead of adding a third, unowned "Rental Command Admin" row that has
+        // no relationship to any demo property.
+        var primaryOwner = await _db.OwnerEntities
+            .SingleOrDefaultAsync(owner => owner.PortfolioId == portfolioId && owner.IsPrimary, ct);
+        primaryOwner ??= new OwnerEntity
         {
-            new()
-            {
-                PortfolioId = portfolioId,
-                OwnerEntityType = OwnerEntityType.LLC,
-                Name = "Maple Ridge Properties LLC",
-                TaxId = "82-3456789",
-                AddressLine1 = "1200 Commerce Dr",
-                City = "Columbus",
-                State = "OH",
-                PostalCode = "43215",
-                Phone = "614-555-0100",
-                CreatedAt = now,
-                UpdatedAt = now
-            },
-            new()
-            {
-                PortfolioId = portfolioId,
-                OwnerEntityType = OwnerEntityType.Person,
-                Name = "Robert J. Caldwell",
-                TaxId = "XXX-XX-7890",
-                AddressLine1 = "88 Westview Ct",
-                City = "Gahanna",
-                State = "OH",
-                PostalCode = "43230",
-                Phone = "614-555-0101",
-                CreatedAt = now,
-                UpdatedAt = now
-            }
+            PortfolioId = portfolioId,
+            IsPrimary = true,
+            CreatedAt = now,
         };
-        _db.OwnerEntities.AddRange(ownerEntities);
+        primaryOwner.OwnerEntityType = OwnerEntityType.LLC;
+        primaryOwner.Name = "Maple Ridge Properties LLC";
+        primaryOwner.TaxId = "82-3456789";
+        primaryOwner.AddressLine1 = "1200 Commerce Dr";
+        primaryOwner.City = "Columbus";
+        primaryOwner.State = "OH";
+        primaryOwner.PostalCode = "43215";
+        primaryOwner.Phone = "614-555-0100";
+        primaryOwner.UpdatedAt = now;
+
+        var ownerPerson = new OwnerEntity
+        {
+            PortfolioId = portfolioId,
+            OwnerEntityType = OwnerEntityType.Person,
+            Name = "Robert J. Caldwell",
+            TaxId = "XXX-XX-7890",
+            AddressLine1 = "88 Westview Ct",
+            City = "Gahanna",
+            State = "OH",
+            PostalCode = "43230",
+            Phone = "614-555-0101",
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        var ownerEntities = new List<OwnerEntity> { primaryOwner, ownerPerson };
+        if (primaryOwner.Id == 0) _db.OwnerEntities.Add(primaryOwner);
+        _db.OwnerEntities.Add(ownerPerson);
         await _db.SaveChangesAsync(ct);
 
         // ── 2. Vendors ────────────────────────────────────────────────────────────────
@@ -200,7 +206,6 @@ public class DemoDataSeeder
         var vRoofer      = vendors[5];
 
         var ownerLlc     = ownerEntities[0];
-        var ownerPerson  = ownerEntities[1];
 
         // ── 3. Properties + Units ─────────────────────────────────────────────────────
         // 8 properties; ~30 units total; 4 vacant units spread across.
@@ -345,7 +350,11 @@ public class DemoDataSeeder
                 PropertyId = property.Id,
                 OwnerEntityId = owner.Id,
                 OwnershipSharePercent = 100m,
-                EffectiveFromUtc = property.CreatedAt,
+                // The demo portfolio includes current and prior-period lease, payment, and
+                // expense history. Its ownership history must cover those records or owner
+                // statements correctly exclude the seeded financial activity.
+                EffectiveFromUtc = new DateTime(
+                    now.Year - 2, 1, 1, 0, 0, 0, DateTimeKind.Utc),
                 StatementRecipientName = owner.Name,
                 StatementRecipientEmail = owner.Email,
                 PayeeName = owner.Name,
@@ -528,16 +537,41 @@ public class DemoDataSeeder
                 }),
             };
 
+        // Keep unit-specific sample expenses attached to the unit named in their description. A
+        // property-only row that says “Unit A” teaches the wrong data model and renders a
+        // contradictory “No unit” detail screen.
+        var expenseUnitNumbers = new Dictionary<int, string>
+        {
+            [0] = "A",
+            [1] = "B",
+            [3] = "101",
+            [10] = "3",
+            [12] = "6",
+            [15] = "Right",
+            [23] = "Left",
+            [24] = "A",
+            [25] = "202",
+            [30] = "Right",
+            [32] = "202",
+        };
+
         var expenses = expenseDefs.Select((ed, i) =>
         {
             var prop    = properties[ed.propIdx];
             var vendor  = vendors[ed.vendorIdx];
             var incDate = now.AddDays(-ed.daysAgo);
+            var unit = expenseUnitNumbers.TryGetValue(i, out var unitNumber)
+                ? unitsList.Single(candidate =>
+                    candidate.PropertyId == prop.Id && candidate.UnitNumber == unitNumber)
+                : null;
             var expense = new Expense
             {
                 PortfolioId    = portfolioId,
-                OperationalScope = ExpenseOperationalScope.Property,
+                OperationalScope = unit is null
+                    ? ExpenseOperationalScope.Property
+                    : ExpenseOperationalScope.Unit,
                 PropertyId     = prop.Id,
+                UnitId         = unit?.Id,
                 VendorId       = vendor.Id,
                 Category       = ed.cat,
                 Description    = ed.desc,

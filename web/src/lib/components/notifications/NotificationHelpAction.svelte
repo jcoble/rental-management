@@ -4,11 +4,15 @@
 	let {
 		title,
 		description,
-		guidance
+		guidance,
+		href = '/docs/settings-and-notifications',
+		linkLabel = 'Open notification documentation'
 	}: {
 		title: string;
 		description: string;
 		guidance: string;
+		href?: string;
+		linkLabel?: string;
 	} = $props();
 
 	let dialog = $state<HTMLDialogElement>();
@@ -55,8 +59,8 @@
 			</button>
 		</div>
 		<p class="text-sm leading-6">{guidance}</p>
-		<a href="/docs/settings-and-notifications" class="inline-flex min-h-11 items-center gap-2 text-sm font-medium text-primary hover:underline">
-			Open notification documentation <ExternalLink class="size-4" />
+		<a {href} class="inline-flex min-h-11 items-center gap-2 text-sm font-medium text-primary hover:underline">
+			{linkLabel} <ExternalLink class="size-4" />
 		</a>
 	</div>
 </dialog>

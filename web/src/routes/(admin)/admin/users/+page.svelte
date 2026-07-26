@@ -14,7 +14,9 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import * as Select from '$lib/components/ui/select';
 	import Pagination from '$lib/components/shared/Pagination.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { Loader2, Plus, Search, UserRoundCheck } from '@lucide/svelte';
 
 	const PAGE_SIZE = 20;
@@ -326,9 +328,7 @@
 
 	<div class="overflow-hidden rounded-[var(--m3-shape-large)] border border-border bg-card">
 		{#if membersQuery.isPending}
-			<div class="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
-				<Loader2 class="h-4 w-4 animate-spin" /> Loading team…
-			</div>
+			<LoadingState label="Loading team members" variant="page" testid="team-loading" />
 		{:else if members.length === 0}
 			<div class="flex flex-col items-center gap-2 px-6 py-12 text-center">
 				<UserRoundCheck class="h-8 w-8 text-muted-foreground" />
@@ -411,19 +411,30 @@
 
 				<label class="block space-y-1 text-sm">
 					Job
-					<select class="m3-field-surface h-10 w-full px-3" value={roleProfileKey} onchange={(event) => chooseRole(event.currentTarget.value)}>
-						<option value="">Choose a job…</option>
-						{#each roleProfilesQuery.data ?? [] as role}<option value={role.key}>{role.displayName}</option>{/each}
-					</select>
+					<Select.Root type="single" value={roleProfileKey} onValueChange={(value) => chooseRole(value ?? '')}>
+						<Select.Trigger class="w-full" data-testid="invite-role-select">
+							{selectedRole?.displayName ?? 'Choose a job…'}
+						</Select.Trigger>
+						<Select.Content>
+							{#each roleProfilesQuery.data ?? [] as role}
+								<Select.Item value={role.key} label={role.displayName}>{role.displayName}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
 				</label>
 				{#if selectedRole}<p class="text-sm text-muted-foreground">{selectedRole.description}</p>{/if}
 
 				{#if roleProfileKey}
 					<label class="block space-y-1 text-sm">
 						Access scope
-						<select class="m3-field-surface h-10 w-full px-3" bind:value={scopeKind}>
-							{#each scopeChoices as scope}<option value={scope}>{scopeLabel(scope)}</option>{/each}
-						</select>
+						<Select.Root type="single" bind:value={scopeKind}>
+							<Select.Trigger class="w-full" data-testid="invite-scope-select">{scopeLabel(scopeKind)}</Select.Trigger>
+							<Select.Content>
+								{#each scopeChoices as scope}
+									<Select.Item value={scope} label={scopeLabel(scope)}>{scopeLabel(scope)}</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
 					</label>
 					<p class="text-xs text-muted-foreground">{scopeDescription(scopeKind)}</p>
 				{/if}
@@ -481,7 +492,7 @@
 				A person can hold several separately scoped assignments. Owners and tenants remain relationship-based experiences and never appear as Team jobs.
 			</div>
 			{#if assignmentsQuery.isPending}
-				<div class="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground"><Loader2 class="h-4 w-4 animate-spin" /> Loading assignments…</div>
+				<LoadingState label="Loading assignments" variant="page" testid="team-assignments-loading" />
 			{:else if assignmentsQuery.isError}
 				<p class="py-6 text-center text-sm text-destructive">{apiErrorMessage(assignmentsQuery.error)}</p>
 			{:else if (assignmentsQuery.data?.items.length ?? 0) === 0}
@@ -518,9 +529,7 @@
 						{/if}
 					</div>
 				{/each}
-				{#if (assignmentsQuery.data?.totalCount ?? 0) > 50}
-					<Pagination bind:skip={assignmentSkip} take={50} count={assignmentsQuery.data?.items.length ?? 0} hasNext={hasNextAssignmentPage} testid="assignment-pagination" />
-				{/if}
+				<Pagination bind:skip={assignmentSkip} take={50} count={assignmentsQuery.data?.items.length ?? 0} hasNext={hasNextAssignmentPage} testid="assignment-pagination" />
 			{/if}
 		</div>
 		<Dialog.Footer>
@@ -553,18 +562,29 @@
 				{#if !editingAssignment}
 					<label class="block space-y-1 text-sm">
 						Job
-						<select class="m3-field-surface h-10 w-full px-3" value={assignmentRoleProfileKey} onchange={(event) => chooseAssignmentRole(event.currentTarget.value)}>
-							<option value="">Choose a job…</option>
-							{#each roleProfilesQuery.data ?? [] as role}<option value={role.key}>{role.displayName}</option>{/each}
-						</select>
+						<Select.Root type="single" value={assignmentRoleProfileKey} onValueChange={(value) => chooseAssignmentRole(value ?? '')}>
+							<Select.Trigger class="w-full" data-testid="assignment-role-select">
+								{assignmentRole?.displayName ?? 'Choose a job…'}
+							</Select.Trigger>
+							<Select.Content>
+								{#each roleProfilesQuery.data ?? [] as role}
+									<Select.Item value={role.key} label={role.displayName}>{role.displayName}</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
 					</label>
 					{#if assignmentRole}<p class="text-sm text-muted-foreground">{assignmentRole.description}</p>{/if}
 					{#if assignmentRoleProfileKey}
 						<label class="block space-y-1 text-sm">
 							Access scope
-							<select class="m3-field-surface h-10 w-full px-3" bind:value={assignmentScopeKind}>
-								{#each assignmentScopeChoices as scope}<option value={scope}>{scopeLabel(scope)}</option>{/each}
-							</select>
+							<Select.Root type="single" bind:value={assignmentScopeKind}>
+								<Select.Trigger class="w-full" data-testid="assignment-scope-select">{scopeLabel(assignmentScopeKind)}</Select.Trigger>
+								<Select.Content>
+									{#each assignmentScopeChoices as scope}
+										<Select.Item value={scope} label={scopeLabel(scope)}>{scopeLabel(scope)}</Select.Item>
+									{/each}
+								</Select.Content>
+							</Select.Root>
 						</label>
 						<p class="text-xs text-muted-foreground">{scopeDescription(assignmentScopeKind)}</p>
 					{/if}

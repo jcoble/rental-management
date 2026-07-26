@@ -12,9 +12,11 @@
 	import { documents, fileObjectUrl } from '$lib/api/endpoints/documents';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatDateOnly } from '$lib/utils/date';
+	import { formatRentalLocation, formatResidentName } from '$lib/accounting/money-display';
 	import { depositDeductionSchema, parseForm } from '$lib/schemas';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
@@ -291,7 +293,7 @@
 </script>
 
 <svelte:head>
-	<title>{deposit ? `Deposit – ${deposit.relationshipNumber}` : 'Security Deposit'} - Rental Command</title>
+	<title>{deposit ? `Deposit – ${formatRentalLocation(deposit)}` : 'Security Deposit'} - Rental Command</title>
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="deposit-detail-page">
@@ -303,17 +305,18 @@
 			<Button variant="outline" size="sm" onclick={() => goto('/deposits')}>Back to Deposits</Button>
 		</div>
 	{:else}
-		<PageBreadcrumb crumbs={[{ label: 'Deposits', href: '/deposits' }, { label: deposit.relationshipNumber }]} />
+		<PageBreadcrumb crumbs={[{ label: 'Deposits', href: '/deposits' }, { label: formatRentalLocation(deposit) }]} />
 
 		<div class="my-6 flex flex-wrap items-start gap-3">
 			<div class="flex-1">
 				<div class="flex flex-wrap items-center gap-2">
-					<h1 class="text-2xl font-bold" data-testid="deposit-detail-title">{deposit.propertyName ?? `Property #${deposit.propertyId}`}{deposit.unitNumber ? ` · Unit ${deposit.unitNumber}` : ''}</h1>
+					<h1 class="text-2xl font-bold" data-testid="deposit-detail-title">{formatRentalLocation(deposit)}</h1>
 					<StatusBadge status={deposit.status} map={depositStatusMap} />
 				</div>
-				<p class="mt-1 text-sm text-muted-foreground">{deposit.primaryTenantName ?? 'Tenant account'} · {deposit.relationshipNumber}</p>
+				<p class="mt-1 text-sm text-muted-foreground">{formatResidentName(deposit.primaryTenantName)}</p>
 			</div>
 			<div class="flex flex-wrap items-center gap-2">
+				<Button size="sm" variant="ghost" href="/docs/security-deposits" data-testid="deposit-detail-help-link">How this works</Button>
 				<Button size="sm" onclick={openFund} disabled={deposit.status === 'Returned' || deposit.status === 'Withheld' || deposit.status === 'PartiallyReturned'}>Record funds</Button>
 				<Button size="sm" variant="outline" onclick={openDeduction} disabled={deposit.heldBalance <= 0}>Add deduction</Button>
 				<Button size="sm" variant="outline" onclick={openRefund} disabled={deposit.heldBalance <= 0}>Record refund</Button>
@@ -324,17 +327,23 @@
 		</div>
 
 		<Card.Root class="mb-6">
-			<Card.Header><Card.Title class="text-base">Deposit account summary</Card.Title></Card.Header>
+			<Card.Header><Card.Title class="text-base">Deposit summary</Card.Title></Card.Header>
 			<Card.Content>
 				<dl class="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 lg:grid-cols-4">
 					<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Held balance</dt><dd class="mt-0.5 font-mono text-sm font-semibold tabular-nums" data-testid="deposit-detail-held-balance">{money(deposit.heldBalance, deposit.currency)}</dd></div>
 					<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Total received</dt><dd class="mt-0.5 font-mono text-sm tabular-nums">{money(deposit.totalReceived, deposit.currency)}</dd></div>
 					<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Total deductions</dt><dd class="mt-0.5 font-mono text-sm tabular-nums">{money(deposit.totalDeductions, deposit.currency)}</dd></div>
 					<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Total refunded</dt><dd class="mt-0.5 font-mono text-sm tabular-nums">{money(deposit.totalRefunded, deposit.currency)}</dd></div>
-					<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Account</dt><dd class="mt-0.5 text-sm">{deposit.accountNumber}</dd></div>
-					<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Agreement</dt><dd class="mt-0.5 text-sm">#{deposit.originatingAgreementId}</dd></div>
 					<div><dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Opened</dt><dd class="mt-0.5 text-sm">{formatDateOnly(deposit.createdAtUtc) || deposit.createdAtUtc}</dd></div>
 				</dl>
+				<details class="mt-5 rounded-md border border-border bg-muted/20" data-testid="deposit-technical-details">
+					<summary class="cursor-pointer px-3 py-2 text-sm font-medium">Technical details</summary>
+					<dl class="grid gap-3 border-t border-border px-3 py-3 text-sm sm:grid-cols-2">
+						<div><dt class="text-xs text-muted-foreground">Rental account reference</dt><dd class="font-mono">{deposit.accountNumber}</dd></div>
+						<div><dt class="text-xs text-muted-foreground">Rental reference</dt><dd class="font-mono">{deposit.relationshipNumber}</dd></div>
+						<div><dt class="text-xs text-muted-foreground">Agreement record</dt><dd class="font-mono">#{deposit.originatingAgreementId}</dd></div>
+					</dl>
+				</details>
 			</Card.Content>
 		</Card.Root>
 
@@ -358,7 +367,11 @@
 		<Dialog.Header><Dialog.Title>Record deposit funds</Dialog.Title><Dialog.Description>Record money actually received into this existing deposit account.</Dialog.Description></Dialog.Header>
 		<div class="space-y-3">
 			<div><span class="mb-1 block text-xs text-muted-foreground">Amount</span><Input bind:value={fundAmount} inputmode="decimal" mask="currency" placeholder="0.00" />{#if fundErrors.amount}<p class="mt-1 text-xs text-destructive">{fundErrors.amount}</p>{/if}</div>
-			<div><span class="mb-1 block text-xs text-muted-foreground">Received date</span><Input bind:value={fundEffectiveOn} type="date" />{#if fundErrors.effectiveOn}<p class="mt-1 text-xs text-destructive">{fundErrors.effectiveOn}</p>{/if}</div>
+			<div>
+				<label for="deposit-fund-date" class="mb-1 block text-xs text-muted-foreground">Received date</label>
+				<DatePicker id="deposit-fund-date" bind:value={fundEffectiveOn} testid="deposit-fund-date" />
+				{#if fundErrors.effectiveOn}<p class="mt-1 text-xs text-destructive">{fundErrors.effectiveOn}</p>{/if}
+			</div>
 			<div><span class="mb-1 block text-xs text-muted-foreground">Payment method</span><Input bind:value={fundPaymentMethod} placeholder="Check, cash, ACH…" />{#if fundErrors.paymentMethodSummary}<p class="mt-1 text-xs text-destructive">{fundErrors.paymentMethodSummary}</p>{/if}</div>
 			<div><span class="mb-1 block text-xs text-muted-foreground">Description</span><Input bind:value={fundDescription} />{#if fundErrors.description}<p class="mt-1 text-xs text-destructive">{fundErrors.description}</p>{/if}</div>
 			<div><span class="mb-1 block text-xs text-muted-foreground">Reference (optional)</span><Input bind:value={fundReference} placeholder="Check or confirmation number" /></div>
@@ -373,7 +386,11 @@
 		<div class="space-y-3">
 			<div><span class="mb-1 block text-xs text-muted-foreground">Reason</span><Input bind:value={deductionReason} placeholder="Carpet cleaning, broken window…" />{#if deductionErrors.reason}<p class="mt-1 text-xs text-destructive">{deductionErrors.reason}</p>{/if}</div>
 			<div><span class="mb-1 block text-xs text-muted-foreground">Amount</span><Input bind:value={deductionAmount} inputmode="decimal" mask="currency" placeholder="0.00" />{#if deductionErrors.amount}<p class="mt-1 text-xs text-destructive">{deductionErrors.amount}</p>{/if}</div>
-			<div><span class="mb-1 block text-xs text-muted-foreground">Deduction date</span><Input bind:value={deductionEffectiveOn} type="date" />{#if deductionErrors.effectiveOn}<p class="mt-1 text-xs text-destructive">{deductionErrors.effectiveOn}</p>{/if}</div>
+			<div>
+				<label for="deposit-deduction-date" class="mb-1 block text-xs text-muted-foreground">Deduction date</label>
+				<DatePicker id="deposit-deduction-date" bind:value={deductionEffectiveOn} testid="deposit-deduction-date" />
+				{#if deductionErrors.effectiveOn}<p class="mt-1 text-xs text-destructive">{deductionErrors.effectiveOn}</p>{/if}
+			</div>
 			<div><span class="mb-1 block text-xs text-muted-foreground">Notes (optional)</span><textarea bind:value={deductionNotes} rows="2" class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"></textarea></div>
 		</div>
 		<Dialog.Footer><Button variant="outline" onclick={() => showDeductionForm = false}>Cancel</Button><Button onclick={submitDeduction} disabled={deductionMutation.isPending}>{deductionMutation.isPending ? 'Recording…' : 'Add deduction'}</Button></Dialog.Footer>
@@ -385,7 +402,11 @@
 		<Dialog.Header><Dialog.Title>Record deposit refund</Dialog.Title><Dialog.Description>Leave amount blank to refund the full held balance of {deposit ? money(deposit.heldBalance, deposit.currency) : ''}.</Dialog.Description></Dialog.Header>
 		<div class="space-y-3">
 			<div><span class="mb-1 block text-xs text-muted-foreground">Amount (optional)</span><Input bind:value={refundAmount} inputmode="decimal" mask="currency" placeholder="Full held balance" />{#if refundErrors.amount}<p class="mt-1 text-xs text-destructive">{refundErrors.amount}</p>{/if}</div>
-			<div><span class="mb-1 block text-xs text-muted-foreground">Refund date</span><Input bind:value={refundEffectiveOn} type="date" />{#if refundErrors.effectiveOn}<p class="mt-1 text-xs text-destructive">{refundErrors.effectiveOn}</p>{/if}</div>
+			<div>
+				<label for="deposit-refund-date" class="mb-1 block text-xs text-muted-foreground">Refund date</label>
+				<DatePicker id="deposit-refund-date" bind:value={refundEffectiveOn} testid="deposit-refund-date" />
+				{#if refundErrors.effectiveOn}<p class="mt-1 text-xs text-destructive">{refundErrors.effectiveOn}</p>{/if}
+			</div>
 			<div><span class="mb-1 block text-xs text-muted-foreground">Description</span><Input bind:value={refundDescription} />{#if refundErrors.description}<p class="mt-1 text-xs text-destructive">{refundErrors.description}</p>{/if}</div>
 			<div><span class="mb-1 block text-xs text-muted-foreground">Reference (optional)</span><Input bind:value={refundReference} placeholder="Check or confirmation number" /></div>
 		</div>

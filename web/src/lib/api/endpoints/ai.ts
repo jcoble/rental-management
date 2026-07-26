@@ -5,6 +5,7 @@ import type { DocCitation } from './docs';
 export type { DocCitation } from './docs';
 
 const AI_ASK_TIMEOUT_MS = 120_000;
+const AI_BRIEFING_TIMEOUT_MS = 8_000;
 
 export interface BriefingBullet {
 	title: string;
@@ -124,7 +125,8 @@ export interface FairHousingReviewResult {
 }
 
 export const ai = {
-	briefing: () => api.get<BriefingResponse>('/ai/briefing'),
+	briefing: () =>
+		fetchApi<BriefingResponse>('/ai/briefing', { timeoutMs: AI_BRIEFING_TIMEOUT_MS }),
 	ask: (question: string, history?: QaTurn[], delivery?: AskDelivery) =>
 		fetchApi<AskResponse>('/ai/ask', {
 			method: 'POST',

@@ -16,6 +16,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { FileBarChart, Mail, Plus, Trash2 } from '@lucide/svelte';
 
@@ -216,7 +217,7 @@
 </script>
 
 <svelte:head>
-	<title>Owner Reports - Rental Command</title>
+	<title>Owner Statements - Rental Command</title>
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="owners-report-page">
@@ -224,18 +225,19 @@
 		<div>
 			<h1 class="flex items-center gap-2 text-2xl font-bold">
 				<FileBarChart class="h-6 w-6 text-primary" />
-				Owner Reports
+				Owner statements
 			</h1>
 			<p class="mt-1 text-sm text-muted-foreground">
-				Owner statement — for reference, not a tax document. Share with property owners to
-				summarize income, expenses, and net distributions.
+				See what each owner earned, what was spent, and what still needs to be paid to them.
 			</p>
-			<p class="mt-1 max-w-xl text-xs text-muted-foreground" data-testid="owners-report-basis-note">
-				Cash basis: only <span class="font-medium">paid</span> expenses count, by the date paid.
-				The <a href="/tax" class="underline underline-offset-2">Tax (Schedule E)</a> page uses
-				accrual basis (all incurred expenses), so the same property can show a different expense
-				total there.
-			</p>
+			<details class="mt-2 max-w-xl text-xs text-muted-foreground" data-testid="owners-report-basis-note">
+				<summary class="cursor-pointer font-medium">Why totals may differ from the tax summary</summary>
+				<p class="mt-2">
+					Owner statements count an expense when it is paid. The
+					<a href="/tax" class="underline underline-offset-2">rental tax summary</a> counts it when it is incurred,
+					so the same property can show a different expense total.
+				</p>
+			</details>
 		</div>
 		<div class="flex items-center gap-2">
 			<Select.Root type="single" bind:value={selectedYear}>
@@ -278,10 +280,10 @@
 					>
 						<p class="font-medium text-foreground">{owner.ownerName}</p>
 						<p class="mt-0.5 font-mono text-sm {owner.netToOwner >= 0 ? 'text-[var(--success)]' : 'text-destructive'}">
-							Net: {money(owner.netToOwner)}
+							Net for owner: {money(owner.netToOwner)}
 						</p>
 						<p class="mt-0.5 font-mono text-xs {owner.undistributed >= 0 ? 'text-muted-foreground' : 'text-destructive'}">
-							Undistributed: {money(owner.undistributed)}
+							Still to pay: {money(owner.undistributed)}
 						</p>
 					</button>
 				{/each}
@@ -355,7 +357,7 @@
 						</Card.Root>
 						<Card.Root class="gap-0 py-0" data-testid="owners-report-undistributed">
 							<Card.Content class="p-4">
-								<p class="text-xs text-muted-foreground">Undistributed</p>
+								<p class="text-xs text-muted-foreground">Still to pay</p>
 								<p class="font-mono tabular-nums text-2xl font-bold {report.undistributed >= 0 ? 'text-[var(--success)]' : 'text-destructive'}">
 									{money(report.undistributed)}
 								</p>
@@ -368,17 +370,16 @@
 							{#if canCreateDistribution}
 								<Card.Root class="gap-0 py-0" data-testid="owner-distribution-form-card">
 									<Card.Header class="border-b border-border px-4 py-3">
-										<Card.Title class="text-base font-semibold">Record distribution</Card.Title>
+										<Card.Title class="text-base font-semibold">Record payment to owner</Card.Title>
 									</Card.Header>
 									<Card.Content class="p-4">
 										<form class="grid gap-3 sm:grid-cols-2" onsubmit={handleDistributionSubmit}>
 									<div>
 										<label for="owner-distribution-date" class="mb-1 block text-xs font-medium text-muted-foreground">Date</label>
-										<Input
+										<DatePicker
 											id="owner-distribution-date"
-											type="date"
 											bind:value={distributionForm.date}
-											data-testid="owner-distribution-date"
+											testid="owner-distribution-date"
 										/>
 									</div>
 									<div>
@@ -439,7 +440,7 @@
 											data-testid="owner-distribution-submit"
 										>
 											<Plus class="h-4 w-4" />
-											{createDistributionMutation.isPending ? 'Recording…' : 'Record distribution'}
+											{createDistributionMutation.isPending ? 'Recording…' : 'Record payment'}
 										</Button>
 									</div>
 										</form>
@@ -449,18 +450,18 @@
 
 						<Card.Root class="gap-0 py-0" data-testid="owner-distribution-list-card">
 							<Card.Header class="border-b border-border px-4 py-3">
-								<Card.Title class="text-base font-semibold">Distributions</Card.Title>
+								<Card.Title class="text-base font-semibold">Payments to owner</Card.Title>
 							</Card.Header>
 							<Card.Content class="p-0">
 								{#if distributionQuery.isLoading}
-									<LoadingState label="Loading owner distributions" variant="spinner" testid="owner-distributions-loading" />
+									<LoadingState label="Loading payments to owner" variant="spinner" testid="owner-distributions-loading" />
 								{:else if distributionQuery.isError}
 									<div class="flex flex-wrap items-center gap-3 p-4" role="alert" data-testid="owner-distributions-error">
-										<p class="text-sm text-destructive">Could not load distributions.</p>
-										<Button size="sm" variant="outline" onclick={() => distributionQuery.refetch()}>Retry distributions</Button>
+										<p class="text-sm text-destructive">Could not load payments to this owner.</p>
+										<Button size="sm" variant="outline" onclick={() => distributionQuery.refetch()}>Try again</Button>
 									</div>
 								{:else if distributions.length === 0}
-									<p class="p-4 text-sm text-muted-foreground" data-testid="owner-distributions-empty">No distributions recorded for {selectedYear}.</p>
+									<p class="p-4 text-sm text-muted-foreground" data-testid="owner-distributions-empty">No payments to this owner were recorded for {selectedYear}.</p>
 								{:else}
 									<div class="overflow-x-auto">
 										<table class="w-full text-sm">
@@ -520,7 +521,7 @@
 												<th class="px-4 py-3 text-left font-medium text-muted-foreground">Property</th>
 												<th class="px-4 py-3 text-right font-medium text-muted-foreground">Income</th>
 												<th class="px-4 py-3 text-right font-medium text-muted-foreground">Expenses</th>
-												<th class="px-4 py-3 text-right font-medium text-muted-foreground">Mgmt fee</th>
+												<th class="px-4 py-3 text-right font-medium text-muted-foreground">Management fee</th>
 												<th class="px-4 py-3 text-right font-medium text-muted-foreground">Net</th>
 											</tr>
 										</thead>

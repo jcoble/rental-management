@@ -11,6 +11,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
 	import { Input } from '$lib/components/ui/input';
+	import * as Select from '$lib/components/ui/select';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 
@@ -85,14 +86,21 @@
 	}));
 </script>
 
-<svelte:head><title>AI provider · Rental Command</title></svelte:head>
+<svelte:head><title>AI connection · Rental Command</title></svelte:head>
 
 <div class="mx-auto max-w-3xl space-y-6" data-testid="ai-provider-settings">
 	<div>
-		<h1 class="text-2xl font-semibold tracking-tight">AI provider</h1>
+		<h1 class="text-2xl font-semibold tracking-tight">AI connection</h1>
 		<p class="mt-1 text-sm text-muted-foreground">
-			Use your workspace's OpenAI or Anthropic account for Scan / Add. Rental Command never shows the key after you save it.
+			Connect your workspace's OpenAI or Anthropic account so Scan / Add can read documents.
 		</p>
+		<a
+			href="/docs/ai-provider"
+			class="mt-2 inline-flex min-h-11 items-center text-sm font-medium text-primary underline-offset-4 hover:underline"
+			data-testid="ai-provider-help-link"
+		>
+			How the AI connection works
+		</a>
 	</div>
 
 	<Card.Root>
@@ -106,33 +114,39 @@
 				</div>
 			{:else}
 				<div class="rounded-lg border bg-muted/30 p-4" aria-live="polite">
-					<p class="font-medium">{statusQuery.data?.configured ? 'Configured' : 'Not configured'}</p>
+					<p class="font-medium">{statusQuery.data?.configured ? 'Connected' : 'Not connected'}</p>
 					{#if statusQuery.data?.configured}
 						<p class="mt-1 text-sm text-muted-foreground">
 							{statusQuery.data.provider === 'openai' ? 'OpenAI' : 'Anthropic'} · {statusQuery.data.modelId}
 						</p>
 					{:else}
 						<p class="mt-1 text-sm text-muted-foreground">
-							Scan / Add will stop with a clear missing-key message; it will not use a shared Rental Command key.
+							Scan / Add needs a connection before it can read a document.
 						</p>
 					{/if}
 				</div>
 
-				<label class="grid gap-2 text-sm font-medium">
-					Provider
-					<select
-						class="h-11 rounded-md border border-input bg-background px-3"
+				<div class="grid gap-2 text-sm font-medium">
+					<span>AI service</span>
+					<Select.Root
+						type="single"
 						value={provider}
-						onchange={(event) => changedProvider(event.currentTarget.value as AiProvider)}
+						onValueChange={(value) => changedProvider(value as AiProvider)}
 					>
-						<option value="openai">OpenAI</option>
-						<option value="anthropic">Anthropic</option>
-					</select>
-				</label>
+						<Select.Trigger class="h-11 w-full" data-testid="ai-provider-select">
+							{provider === 'openai' ? 'OpenAI' : 'Anthropic'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="openai" label="OpenAI">OpenAI</Select.Item>
+							<Select.Item value="anthropic" label="Anthropic">Anthropic</Select.Item>
+						</Select.Content>
+					</Select.Root>
+				</div>
 
 				<label class="grid gap-2 text-sm font-medium">
-					Model
+					AI model
 					<Input bind:value={modelId} autocomplete="off" oninput={() => (testedSignature = null)} />
+					<span class="text-xs font-normal text-muted-foreground">Keep the suggested model unless your AI service requires another one.</span>
 				</label>
 
 				<label class="grid gap-2 text-sm font-medium">
@@ -144,7 +158,7 @@
 						placeholder={statusQuery.data?.configured ? 'Enter a replacement key' : 'Paste a key'}
 						oninput={() => (testedSignature = null)}
 					/>
-					<span class="text-xs font-normal text-muted-foreground">Encrypted at rest and write-only after save.</span>
+					<span class="text-xs font-normal text-muted-foreground">Rental Command encrypts this key and will not show it again after you save.</span>
 				</label>
 
 				<div class="flex flex-wrap gap-3">
@@ -153,10 +167,10 @@
 						disabled={!apiKey.trim() || !modelId.trim() || testMutation.isPending}
 						onclick={() => testMutation.mutate()}
 					>
-						{testMutation.isPending ? 'Testing…' : 'Test credential'}
+						{testMutation.isPending ? 'Checking…' : 'Check key'}
 					</Button>
 					<Button disabled={!canSave || saveMutation.isPending} onclick={() => saveMutation.mutate()}>
-						{saveMutation.isPending ? 'Saving…' : statusQuery.data?.configured ? 'Rotate credential' : 'Activate provider'}
+						{saveMutation.isPending ? 'Saving…' : statusQuery.data?.configured ? 'Replace connection' : 'Save connection'}
 					</Button>
 					{#if statusQuery.data?.configured}
 						<Button
@@ -164,7 +178,7 @@
 							disabled={removeMutation.isPending}
 							onclick={() => removeMutation.mutate()}
 						>
-							{removeMutation.isPending ? 'Removing…' : 'Remove provider'}
+							{removeMutation.isPending ? 'Removing…' : 'Remove connection'}
 						</Button>
 					{/if}
 				</div>

@@ -14,8 +14,8 @@ export const audit = {
 		return api.get<AuditEntry[]>(`/audit${buildListQuery(list, { operation, entityType, entityId })}`);
 	},
 
-	// Admin-only forensic variant: same filters, but each row also carries the IP address and raw
-	// old→new JSON. Route: GET /api/v1/admin/audit (gated by security.manage server-side).
+	// Platform-operator forensic variant: same filters, but each row also carries the IP address and
+	// raw old→new JSON. Route: GET /api/v1/admin/audit (gated by the platform allowlist server-side).
 	adminList: (_portfolioId: number, params?: AuditFilters) => {
 		const { operation, entityType, entityId, ...list } = params ?? {};
 		return api.get<AdminAuditEntry[]>(

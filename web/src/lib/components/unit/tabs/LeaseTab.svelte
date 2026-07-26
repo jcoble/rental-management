@@ -15,7 +15,10 @@
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import RemoteRecordSelect from '$lib/components/shared/RemoteRecordSelect.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import DateTimePicker from '$lib/components/shared/DateTimePicker.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { ArrowRight, FileText, ScanLine, Users } from '@lucide/svelte';
 
@@ -147,7 +150,7 @@
 
 <div class="space-y-4" data-testid="unit-lease-tab">
 	<div class="flex flex-wrap items-center justify-between gap-3">
-		<div><h2 class="text-lg font-semibold">Tenant & lease</h2><p class="text-sm text-muted-foreground">Household, possession, agreement versions, and account relationship for this rental.</p></div>
+		<div><h2 class="text-lg font-semibold">Tenant & lease</h2><p class="text-sm text-muted-foreground">See who lives here, review the lease, and manage move-in or move-out.</p></div>
 		<div class="flex gap-2"><Button variant="outline" class="gap-2" onclick={onScan}><ScanLine class="h-4 w-4" /> Import agreement</Button><Button href="/applications" class="gap-2"><Users class="h-4 w-4" /> Prepare move-in</Button></div>
 	</div>
 
@@ -162,19 +165,19 @@
 	{:else if (relationshipsQuery.data?.items.length ?? 0) === 0}
 		<DetailCard title="No tenant relationship yet" icon={FileText}><p class="text-sm text-muted-foreground">Prepare a move-in from an approved application, or scan an existing signed agreement.</p></DetailCard>
 	{:else}
-		<div class="grid gap-3">
+		<div class="divide-y overflow-hidden rounded-2xl bg-card">
 			{#each relationshipsQuery.data?.items ?? [] as relationship}
-				<div class="rounded-xl border bg-card p-4">
-					<a href={`/leases/${relationship.leaseManagementId}`} class="flex items-center justify-between gap-4 transition-colors hover:bg-muted/40">
+				<div class="p-4">
+					<a href={`/units/${dashboard.unit.id}?tab=tenant-lease&view=agreements&leaseManagement=${relationship.leaseManagementId}`} class="flex items-center justify-between gap-4 transition-colors hover:bg-muted/40">
 						<div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><p class="font-medium">{relationship.primaryTenantName ?? 'No primary tenant'}</p><StatusBadge status={relationship.lifecycle} /></div><p class="mt-1 text-sm text-muted-foreground">{relationship.agreementNumber ?? 'No governing agreement'}{relationship.agreementStatus ? ` · ${relationship.agreementStatus}` : ''}{relationship.termEndOn ? ` · ends ${relationship.termEndOn}` : ''}</p></div><ArrowRight class="h-4 w-4 shrink-0 text-muted-foreground" />
 					</a>
 					{#if canManageLifecycle}
 						<div class="mt-3 flex flex-wrap gap-2" data-testid="unit-lifecycle-actions-{relationship.leaseManagementId}">
 							{#if relationship.lifecycle === 'Planned' && !relationship.possessionGivenAtUtc}
-								<Button size="sm" variant="destructive" onclick={() => choose(relationship, 'cancel')}>Cancel planned relationship</Button>
+								<Button size="sm" variant="destructive" onclick={() => choose(relationship, 'cancel')}>Cancel planned move-in</Button>
 							{/if}
 							{#if relationship.possessionGivenAtUtc && !relationship.possessionReturnedAtUtc}
-								<Button size="sm" variant="outline" onclick={() => choose(relationship, 'transfer')}>Transfer to Unit</Button>
+								<Button size="sm" variant="outline" onclick={() => choose(relationship, 'transfer')}>Move to another rental</Button>
 							{/if}
 							{#if relationship.tenantAccountId && !relationship.accountClosedAtUtc}
 								<Button size="sm" variant="outline" onclick={() => choose(relationship, 'close')}>Close account</Button>
@@ -189,9 +192,9 @@
 
 <Dialog.Root open={cancelOpen} onOpenChange={(open) => (cancelOpen = open)}>
 	<Dialog.Content class="max-h-[90vh] max-w-xl overflow-y-auto" data-testid="cancel-planned-dialog">
-		<Dialog.Header><Dialog.Title>Cancel planned relationship</Dialog.Title><Dialog.Description>Record the cancellation and disposition every active tenant access. No occupancy will be opened.</Dialog.Description></Dialog.Header>
-		<label class="block space-y-1 text-sm"><span>Cancellation code</span><input bind:value={cancellationReasonCode} class="h-10 w-full rounded-md border px-3" /></label>
-		<label class="block space-y-1 text-sm"><span>Draft reason</span><textarea bind:value={draftCancellationReason} class="min-h-20 w-full rounded-md border p-3"></textarea></label>
+		<Dialog.Header><Dialog.Title>Cancel planned move-in</Dialog.Title><Dialog.Description>Explain why the move-in was canceled and choose whether each tenant can still sign in to view old records.</Dialog.Description></Dialog.Header>
+		<label class="block space-y-1 text-sm"><span>Reason category</span><input bind:value={cancellationReasonCode} class="m3-field-surface h-10 w-full px-3" placeholder="For example: applicant withdrew" /></label>
+		<label class="block space-y-1 text-sm"><span>What happened?</span><textarea bind:value={draftCancellationReason} class="m3-field-surface min-h-20 w-full p-3"></textarea></label>
 		<label class="block space-y-1 text-sm"><span>Optional note</span><textarea bind:value={cancellationNote} class="min-h-20 w-full rounded-md border p-3"></textarea></label>
 		{#if cancelContextQuery.isLoading}
 			<LoadingState label="Loading tenant access" variant="spinner" testid="cancel-relationship-context-loading" />
@@ -202,7 +205,30 @@
 			</div>
 		{:else}
 			{#each cancelContextQuery.data?.activeTenantUserAccesses ?? [] as access}
-				<label class="block space-y-1 text-sm"><span>{access.tenantName} · {access.userEmail}</span><select bind:value={accessDispositions[access.tenantUserAccessId]} class="h-10 w-full rounded-md border px-3"><option value="RevokeNow">Revoke now</option><option value="Retain">Retain historical access</option></select></label>
+				<label class="block space-y-1 text-sm">
+					<span>{access.tenantName} · {access.userEmail}</span>
+					<Select.Root
+						type="single"
+						value={accessDispositions[access.tenantUserAccessId]}
+						onValueChange={(value) => {
+							if (!value) return;
+							accessDispositions = {
+								...accessDispositions,
+								[access.tenantUserAccessId]: value as CancelPlannedAccessDisposition
+							};
+						}}
+					>
+						<Select.Trigger class="w-full">
+							{accessDispositions[access.tenantUserAccessId] === 'Retain'
+								? 'Keep access to past records'
+								: 'Remove access now'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="RevokeNow" label="Remove access now">Remove access now</Select.Item>
+							<Select.Item value="Retain" label="Keep access to past records">Keep access to past records</Select.Item>
+						</Select.Content>
+					</Select.Root>
+				</label>
 			{/each}
 		{/if}
 		<Dialog.Footer><Button variant="outline" onclick={() => (cancelOpen = false)}>Keep relationship</Button><Button variant="destructive" disabled={!cancellationReasonCode.trim() || !draftCancellationReason.trim() || cancelContextQuery.isLoading || cancelContextQuery.isError || cancelMutation.isPending} onclick={() => cancelMutation.mutate()}>Cancel relationship</Button></Dialog.Footer>
@@ -211,14 +237,14 @@
 
 <Dialog.Root open={transferOpen} onOpenChange={(open) => (transferOpen = open)}>
 	<Dialog.Content class="max-h-[90vh] max-w-xl overflow-y-auto" data-testid="transfer-unit-dialog">
-		<Dialog.Header><Dialog.Title>Transfer occupied relationship</Dialog.Title><Dialog.Description>The source closure and destination relationship commit as one command.</Dialog.Description></Dialog.Header>
+		<Dialog.Header><Dialog.Title>Move tenants to another rental</Dialog.Title><Dialog.Description>Choose the new rental and effective date. Rental Command will close this occupancy and create the new one together.</Dialog.Description></Dialog.Header>
 		<RemoteRecordSelect
 			queryKey={['units', 'lease-transfer', dashboard.unit.id]}
-			label="Destination Unit"
+			label="New rental"
 			bind:value={destinationUnitValue}
-			placeholder="Select a Unit"
-			searchPlaceholder="Search available Units…"
-			emptyLabel="No available Units"
+			placeholder="Choose a rental"
+			searchPlaceholder="Search available rentals…"
+			emptyLabel="No available rentals"
 			loadPage={loadDestinationUnits}
 			disabled={transferMutation.isPending}
 			required
@@ -232,14 +258,30 @@
 				<Button class="mt-3" variant="outline" size="sm" onclick={() => destinationTemplatesQuery.refetch()}>Try again</Button>
 			</div>
 		{:else}
-			<label class="block space-y-1 text-sm"><span>Active lease template</span><select bind:value={destinationTemplateId} class="h-10 w-full rounded-md border px-3"><option value={0}>Select a template</option>{#each destinationTemplatesQuery.data?.items ?? [] as template}<option value={template.id}>{template.name}</option>{/each}</select></label>
+			<label class="block space-y-1 text-sm">
+				<span>Lease template</span>
+				<Select.Root
+					type="single"
+					value={String(destinationTemplateId)}
+					onValueChange={(value) => (destinationTemplateId = Number(value ?? 0))}
+				>
+					<Select.Trigger class="w-full">
+						{destinationTemplatesQuery.data?.items.find((template) => template.id === destinationTemplateId)?.name ?? 'Choose a template'}
+					</Select.Trigger>
+					<Select.Content>
+						{#each destinationTemplatesQuery.data?.items ?? [] as template}
+							<Select.Item value={String(template.id)} label={template.name}>{template.name}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
+			</label>
 		{/if}
-		<label class="block space-y-1 text-sm"><span>Effective date</span><input type="date" bind:value={effectiveOn} class="h-10 w-full rounded-md border px-3" /></label>
-		<label class="block space-y-1 text-sm"><span>Planned destination possession</span><input type="datetime-local" bind:value={plannedDestinationPossessionAtUtc} class="h-10 w-full rounded-md border px-3" /></label>
-		<label class="flex items-center gap-2 text-sm"><input type="checkbox" bind:checked={giveDestinationPossessionNow} /> Give destination possession now</label>
-		{#if giveDestinationPossessionNow}<label class="block space-y-1 text-sm"><span>Possession agreement exception reason</span><textarea bind:value={possessionAgreementExceptionReason} class="min-h-20 w-full rounded-md border p-3"></textarea></label>{/if}
-		<label class="flex items-center gap-2 text-sm"><input type="checkbox" bind:checked={carryTenantBalance} /> Carry tenant balance</label>
-		<label class="flex items-center gap-2 text-sm"><input type="checkbox" bind:checked={carrySecurityDeposit} /> Carry security deposit</label>
+		<label class="block space-y-1 text-sm"><span>Move effective date</span><DatePicker bind:value={effectiveOn} /></label>
+		<label class="block space-y-1 text-sm"><span>Planned key handoff</span><DateTimePicker bind:value={plannedDestinationPossessionAtUtc} /></label>
+		<label class="flex items-center gap-2 text-sm"><input type="checkbox" bind:checked={giveDestinationPossessionNow} /> Give access to the new rental now</label>
+		{#if giveDestinationPossessionNow}<label class="block space-y-1 text-sm"><span>Why is access being given before the new lease is ready?</span><textarea bind:value={possessionAgreementExceptionReason} class="m3-field-surface min-h-20 w-full p-3"></textarea></label>{/if}
+		<label class="flex items-center gap-2 text-sm"><input type="checkbox" bind:checked={carryTenantBalance} /> Move the tenant’s balance to the new rental</label>
+		<label class="flex items-center gap-2 text-sm"><input type="checkbox" bind:checked={carrySecurityDeposit} /> Move the security deposit to the new rental</label>
 		<label class="block space-y-1 text-sm"><span>Transfer reason</span><textarea bind:value={transferReason} class="min-h-20 w-full rounded-md border p-3"></textarea></label>
 		<Dialog.Footer><Button variant="outline" onclick={() => (transferOpen = false)}>Cancel</Button><Button disabled={Number(destinationUnitValue) <= 0 || destinationTemplateId <= 0 || !effectiveOn || !transferReason.trim() || (giveDestinationPossessionNow && !possessionAgreementExceptionReason.trim()) || destinationTemplatesQuery.isLoading || destinationTemplatesQuery.isError || transferMutation.isPending} onclick={() => transferMutation.mutate()}>Transfer relationship</Button></Dialog.Footer>
 	</Dialog.Content>
@@ -247,8 +289,8 @@
 
 <Dialog.Root open={closeOpen} onOpenChange={(open) => (closeOpen = open)}>
 	<Dialog.Content class="max-w-lg" data-testid="close-account-dialog">
-		<Dialog.Header><Dialog.Title>Close tenant account</Dialog.Title><Dialog.Description>Possession must be returned; receivable, unapplied credit, and deposit must be zero; drafts, signatures, payments, and autopay must be resolved.</Dialog.Description></Dialog.Header>
-		<label class="block space-y-1 text-sm"><span>Close reason code</span><input bind:value={closeReasonCode} class="h-10 w-full rounded-md border px-3" /></label>
+		<Dialog.Header><Dialog.Title>Close tenant account</Dialog.Title><Dialog.Description>Before closing, confirm the keys were returned, nothing is owed, the deposit was settled, and no payments or signatures are still pending.</Dialog.Description></Dialog.Header>
+		<label class="block space-y-1 text-sm"><span>Reason for closing</span><input bind:value={closeReasonCode} class="m3-field-surface h-10 w-full px-3" /></label>
 		<label class="block space-y-1 text-sm"><span>Optional note</span><textarea bind:value={closeNote} class="min-h-20 w-full rounded-md border p-3"></textarea></label>
 		<Dialog.Footer><Button variant="outline" onclick={() => (closeOpen = false)}>Cancel</Button><Button disabled={!closeReasonCode.trim() || closeMutation.isPending} onclick={() => closeMutation.mutate()}>Close account</Button></Dialog.Footer>
 	</Dialog.Content>

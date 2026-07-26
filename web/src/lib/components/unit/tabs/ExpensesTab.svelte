@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
-	import { goto } from '$app/navigation';
+	import { pushState, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import type { UnitDashboard } from '$lib/types';
 	import type { ScanContext } from '$lib/scan/scan-context';
@@ -48,12 +48,14 @@
 	const today = () => new Date().toISOString().slice(0, 10);
 
 	// A selected expense folds its full detail inline (?expense=<id> on the unit URL); otherwise the list shows.
-	const selectedExpense = $derived(Number(page.url.searchParams.get('expense')) || null);
+	const selectedExpense = $derived(
+		page.state.unitExpenseId ?? (Number(page.url.searchParams.get('expense')) || null)
+	);
 
 	function unitUrl(params: Record<string, string | number | null | undefined> = {}) {
 		const url = new URL(`/units/${unitId}`, page.url.origin);
 		url.searchParams.set('tab', tabQuery);
-		if (ledgerQuery) url.searchParams.set('ledger', ledgerQuery);
+		if (ledgerQuery) url.searchParams.set('view', ledgerQuery === 'expenses' ? 'operating-costs' : 'tenant-account');
 		for (const [key, value] of Object.entries(params)) {
 			if (value !== null && value !== undefined && value !== '') {
 				url.searchParams.set(key, String(value));
@@ -64,12 +66,23 @@
 
 	// Selecting a row is a real navigation step (no replaceState) so Back returns to the list.
 	function openExpense(id: number) {
-		goto(unitUrl({ expense: id }), { keepFocus: true, noScroll: true });
+		pushState(unitUrl({ expense: id }), {
+			...page.state,
+			unitTab: 'money',
+			unitView: 'operating-costs',
+			unitExpenseId: id,
+			unitPaymentId: null,
+		});
 	}
 
 	// Clearing the selection drops ?expense= (replaceState — peer of the list, not a new history step).
 	function clearSelection() {
-		goto(unitUrl(), { replaceState: true, keepFocus: true, noScroll: true });
+		replaceState(unitUrl(), {
+			...page.state,
+			unitTab: 'money',
+			unitView: 'operating-costs',
+			unitExpenseId: null,
+		});
 	}
 
 	const propertyQuery = createQuery(() => ({
