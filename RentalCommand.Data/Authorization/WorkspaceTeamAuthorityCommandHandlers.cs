@@ -324,6 +324,7 @@ public sealed class CreateWorkspaceMembershipHandler
             User = user,
             PortfolioId = command.PortfolioId,
             Status = WorkspaceAccessContextStatus.Active,
+            LastAuthorizedExperience = role.DefaultExperience,
             CreatedAtUtc = changedAtUtc,
             UpdatedAtUtc = changedAtUtc,
         };
