@@ -501,6 +501,23 @@ public class ScanServiceTests : IDisposable
     public async Task PrepareConfirmationAsync_LeaseTarget_ExplicitCreateSentinelsClearCaptureContext()
     {
         var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "LeaseAgreement");
+        _db.Properties.Add(new Property
+        {
+            Id = 12,
+            PortfolioId = PortfolioId,
+            Name = "Captured Property",
+            AddressLine1 = "12 Capture Street",
+            City = "Akron",
+            State = "OH",
+            PostalCode = "44301",
+        });
+        _db.Units.Add(new Unit
+        {
+            Id = 34,
+            PortfolioId = PortfolioId,
+            PropertyId = 12,
+            UnitNumber = "Captured",
+        });
         draft.CapturePropertyId = 12;
         draft.CaptureUnitId = 34;
         await _db.SaveChangesAsync();
@@ -523,6 +540,23 @@ public class ScanServiceTests : IDisposable
     public async Task PrepareConfirmationAsync_LeaseTarget_ExplicitNewUnitClearsCapturedUnit()
     {
         var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "LeaseAgreement");
+        _db.Properties.Add(new Property
+        {
+            Id = 12,
+            PortfolioId = PortfolioId,
+            Name = "Captured Property",
+            AddressLine1 = "12 Capture Street",
+            City = "Akron",
+            State = "OH",
+            PostalCode = "44301",
+        });
+        _db.Units.Add(new Unit
+        {
+            Id = 34,
+            PortfolioId = PortfolioId,
+            PropertyId = 12,
+            UnitNumber = "Captured",
+        });
         draft.CapturePropertyId = 12;
         draft.CaptureUnitId = 34;
         await _db.SaveChangesAsync();
