@@ -13,6 +13,8 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Input } from '$lib/components/ui/input';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import SimpleSelect from '$lib/components/shared/SimpleSelect.svelte';
 	import { FileSignature, Loader2, Save, Trash2 } from '@lucide/svelte';
 
 	let {
@@ -64,6 +66,17 @@
 		'Owner',
 		'Other'
 	];
+	const signerRoleOptions = signerRoles.map((role) => ({
+		value: role,
+		label: ({
+			PrimaryTenant: 'Primary leaseholder',
+			CoTenant: 'Co-leaseholder',
+			Guarantor: 'Guarantor',
+			Manager: 'Property manager',
+			Owner: 'Property owner',
+			Other: 'Other signer'
+		} as const)[role]
+	}));
 	const queryClient = useQueryClient();
 	let form = $state<DraftForm | null>(null);
 	let seededRevision = $state(0);
@@ -362,13 +375,18 @@
 				</div>
 				<label class="block space-y-1">
 					<span class="text-sm font-medium">Lease document</span>
-					<select bind:value={form.documentTemplateId} class="m3-field-surface h-10 w-full px-3 text-sm" data-testid="agreement-draft-template">
-						<option value="">Rental Command supplied lease · Recommended</option>
-						{#each templatesQuery.data?.items ?? [] as template (template.id)}
-							<option value={String(template.id)}>{template.name} · v{template.version}</option>
-						{/each}
-					</select>
-					<p class="text-xs text-muted-foreground">Changing this before issuance freezes the newly selected source with this draft.</p>
+					<SimpleSelect
+						bind:value={form.documentTemplateId}
+						options={[
+							{ value: '', label: 'Rental Command lease (recommended)' },
+							...(templatesQuery.data?.items ?? []).map((template) => ({
+								value: String(template.id),
+								label: `${template.name} · version ${template.version}`
+							}))
+						]}
+						testid="agreement-draft-template"
+					/>
+					<p class="text-xs text-muted-foreground">The selected document is saved with this draft when you send it for signature.</p>
 				</label>
 
 				<div class="grid gap-4 md:grid-cols-3">
@@ -378,24 +396,21 @@
 					</label>
 					<label class="space-y-1">
 						<span class="text-sm font-medium">Term type</span>
-						<select bind:value={form.termType} class="m3-field-surface h-10 w-full px-3 text-sm" data-testid="agreement-draft-term-type">
-							<option value="FixedTerm">Fixed term</option>
-							<option value="MonthToMonth">Month to month</option>
-						</select>
+						<SimpleSelect bind:value={form.termType} options={[{ value: 'FixedTerm', label: 'Fixed term' }, { value: 'MonthToMonth', label: 'Month to month' }]} testid="agreement-draft-term-type" />
 					</label>
 					<label class="space-y-1">
 						<span class="text-sm font-medium">Term starts</span>
-						<Input type="date" bind:value={form.termStartOn} data-testid="agreement-draft-term-start" />
+						<DatePicker bind:value={form.termStartOn} testid="agreement-draft-term-start" />
 					</label>
 					{#if form.termType === 'FixedTerm'}
 						<label class="space-y-1">
 							<span class="text-sm font-medium">Term ends</span>
-							<Input type="date" bind:value={form.termEndOn} data-testid="agreement-draft-term-end" />
+							<DatePicker bind:value={form.termEndOn} testid="agreement-draft-term-end" />
 						</label>
 					{/if}
 					<label class="space-y-1">
 						<span class="text-sm font-medium">Governs from</span>
-						<Input type="date" bind:value={form.governingFromOn} data-testid="agreement-draft-governing-from" />
+						<DatePicker bind:value={form.governingFromOn} testid="agreement-draft-governing-from" />
 					</label>
 				</div>
 
@@ -408,13 +423,13 @@
 				</div>
 
 				<div class="space-y-3">
-					<div><h3 class="font-medium">Signer snapshots</h3><p class="text-xs text-muted-foreground">These names and email addresses are frozen when the agreement is issued.</p></div>
+					<div><h3 class="font-medium">People who must sign</h3><p class="text-xs text-muted-foreground">Review these names and email addresses before sending the lease. They cannot be changed after it is sent.</p></div>
 					{#each form.signers as signer, index}
-						<div class="grid gap-3 rounded-xl border p-3 md:grid-cols-[5rem_1fr_1fr_10rem_auto]">
+						<div class="grid gap-3 rounded-xl bg-muted/30 p-3 md:grid-cols-[5rem_1fr_1fr_10rem_auto]">
 							<label class="space-y-1"><span class="text-xs text-muted-foreground">Order</span><Input type="number" min="1" bind:value={signer.signingOrder} /></label>
 							<label class="space-y-1"><span class="text-xs text-muted-foreground">Name</span><Input bind:value={signer.nameSnapshot} data-testid="agreement-draft-signer-name-{index}" /></label>
 							<label class="space-y-1"><span class="text-xs text-muted-foreground">Email</span><Input type="email" bind:value={signer.emailSnapshot} data-testid="agreement-draft-signer-email-{index}" /></label>
-							<label class="space-y-1"><span class="text-xs text-muted-foreground">Role</span><select bind:value={signer.signerRole} class="m3-field-surface h-10 w-full px-2 text-sm">{#each signerRoles as role}<option value={role}>{role}</option>{/each}</select></label>
+							<label class="space-y-1"><span class="text-xs text-muted-foreground">Role</span><SimpleSelect bind:value={signer.signerRole} options={signerRoleOptions} /></label>
 							<p class="pt-6 text-sm text-muted-foreground">Required signer</p>
 						</div>
 					{/each}

@@ -24,6 +24,10 @@
 		EXPENSE_CATEGORY_OPTIONS,
 		formatExpenseCategory
 	} from '$lib/accounting/expense-categories';
+	import {
+		formatMoneyCategoryLabel,
+		formatMoneyEntryLabel
+	} from '$lib/accounting/money-display';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -51,9 +55,9 @@
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const accountingTabs = [
-		{ value: 'ledger', label: 'Ledger' },
+		{ value: 'ledger', label: 'History' },
 		{ value: 'reports', label: 'Reports' },
-		{ value: 'overview', label: 'Overview' },
+		{ value: 'overview', label: 'Summary' },
 	];
 	// Landing on the day-to-day Ledger view; Reports and Overview are secondary. Seeded from the URL so
 	// a deep-linked / Back-navigated tab is restored (the grid-state persistence below keeps it synced).
@@ -646,7 +650,7 @@
 		},
 		{
 			key: 'counterparty',
-			title: 'Counterparty',
+			title: 'Paid by / paid to',
 			mobileRole: 'subtitle',
 			accessor: (t) => t.counterparty ?? '—',
 		},
@@ -661,7 +665,9 @@
 			key: 'category',
 			title: 'Category',
 			mobileRole: 'meta',
-			accessor: (t) => t.kind === 'Expense' ? formatExpenseCategory(t.category) : t.category,
+			accessor: (t) => t.kind === 'Expense'
+				? formatExpenseCategory(t.category)
+				: formatMoneyCategoryLabel(t.category),
 		},
 		{
 			key: 'propertyName',
@@ -716,7 +722,7 @@
 
 {#snippet transactionKindCell(t: AccountingTransaction)}
 	<span class="m3-tone-chip inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {t.kind === 'Payment' ? 'm3-tone--success' : t.kind === 'Bank' ? 'm3-tone--info' : 'm3-tone--warning'}">
-		{t.kind}
+		{formatMoneyEntryLabel(t.kind)}
 	</span>
 {/snippet}
 
@@ -839,9 +845,17 @@
 		tone="mint"
 		eyebrow="Money"
 		title="Money"
-		description="Rent ledger, receivables, expenses, and owner-facing books."
+		description="See payments received, money still owed, property expenses, and reports."
 		data-testid="accounting-header"
-	/>
+	>
+		<a
+			href="/docs/accounting-overview"
+			class="mt-3 inline-flex min-h-11 items-center text-sm font-medium text-primary underline-offset-4 hover:underline"
+			data-testid="accounting-help-link"
+		>
+			How Money works
+		</a>
+	</PageHeader>
 
 	<!-- Compact KPI strip — always visible across tabs so the headline numbers are one glance away. -->
 	<!-- These KPIs come from /accounting/summary (no date range), so they're all-time, while the
@@ -861,7 +875,7 @@
 	<div class="mb-5 grid gap-3 sm:grid-cols-2 md:grid-cols-4">
 		<Card.Root class="m3-tonal-card m3-tonal-card--mint gap-0 py-0" data-testid="accounting-collected">
 			<Card.Content class="p-4">
-				<p class="text-xs font-medium text-muted-foreground" title="Rent and fees received (security deposits are tracked separately under Deposits).">Total Collected</p>
+				<p class="text-xs font-medium text-muted-foreground" title="Rent and fees received (security deposits are tracked separately under Deposits).">Received</p>
 				{#if accountingSummaryQuery.isLoading}
 					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
 				{:else if accountingSummaryQuery.isError}
@@ -873,7 +887,7 @@
 		</Card.Root>
 		<Card.Root class="m3-tonal-card m3-tonal-card--sky gap-0 py-0" data-testid="accounting-outstanding">
 			<Card.Content class="p-4">
-				<p class="text-xs font-medium text-muted-foreground">Outstanding</p>
+				<p class="text-xs font-medium text-muted-foreground">Still owed</p>
 				{#if accountingSummaryQuery.isLoading}
 					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
 				{:else if accountingSummaryQuery.isError}
@@ -922,7 +936,7 @@
 		<div class="mb-3 flex items-center justify-between">
 			<div>
 				<h2 class="text-lg font-semibold">Reports</h2>
-				<p class="text-sm text-muted-foreground">Ledger, property profit and loss, Schedule E totals, and 1099 review.</p>
+				<p class="text-sm text-muted-foreground">Money history, property income and expenses (P&amp;L), Schedule E totals, and 1099 review.</p>
 			</div>
 			<div class="flex flex-wrap items-center justify-end gap-2">
 				<Button variant="outline" size="sm" href="/accounting/year-end" data-testid="accounting-report-year-end-link">
@@ -1009,7 +1023,7 @@
 											<HelpTooltip text={row.explanation} label="Why this is here" />
 										{/if}
 									</span>
-									<span class="block text-xs text-muted-foreground">{row.type} · {row.counterparty ?? row.propertyName ?? 'General'}</span>
+									<span class="block text-xs text-muted-foreground">{formatMoneyEntryLabel(row.type)} · {row.counterparty ?? row.propertyName ?? 'General'}</span>
 								</span>
 								<span class="shrink-0 font-mono text-sm tabular-nums">{money(row.amount)}</span>
 							</a>
@@ -1097,20 +1111,20 @@
 		<div class="mb-3 flex flex-wrap items-center justify-between gap-3">
 			<div>
 				<div class="flex items-center gap-1.5">
-					<h2 class="text-lg font-semibold">Transactions</h2>
+					<h2 class="text-lg font-semibold">Money history</h2>
 					<HelpPopover
 						title="Bank reconciliation"
 						summary="The Bank column confirms whether each recorded payment or expense actually cleared your bank."
 						detail="A green “Cleared” badge means it matched a bank line; a blue “Match?” chip is a suggested match — tap it to confirm. We never count anything twice."
-						learnMoreUrl={undefined}
+						learnMoreUrl="/docs/banking-and-reconciliation"
 					/>
 				</div>
-				<p class="text-sm text-muted-foreground">Payments, expenses, deposits, and withdrawals in one paged ledger.</p>
+				<p class="text-sm text-muted-foreground">Payments received, property expenses, bank deposits, and withdrawals.</p>
 			</div>
 			<div class="flex flex-wrap gap-2">
 				<Button data-testid="expense-create-button" class="shrink-0 gap-2" onclick={openCreateExpense}>
 					<Plus class="h-4 w-4" />
-					New Expense
+					Add expense
 				</Button>
 			</div>
 		</div>
@@ -1118,7 +1132,7 @@
 			data={transactionRows}
 			columns={transactionColumns}
 			loading={transactionsQuery.isLoading || transactionsQuery.isFetching}
-			emptyMessage="No transactions found."
+			emptyMessage="No money records found."
 			getRowKey={(t) => `${t.kind}-${t.id}`}
 			getRowTestId={(t) => `transaction-row-${t.kind.toLowerCase()}-${t.id}`}
 			onRowClick={(t) => goto(ledgerHref(t))}
@@ -1160,11 +1174,11 @@
 					</Select.Root>
 					<Select.Root type="single" bind:value={transactionCategoryFilter}>
 						<Select.Trigger class="!h-11 w-full min-w-0" aria-label="Transaction category" data-testid="transaction-category-filter">
-							{transactionCategoryFilter ? formatExpenseCategory(transactionCategoryFilter) : 'All categories'}
+							{transactionCategoryFilter ? formatMoneyCategoryLabel(transactionCategoryFilter) : 'All categories'}
 						</Select.Trigger>
 						<Select.Content>
 							<Select.Item value="" label="All categories">All categories</Select.Item>
-							{#each (transactionKindFilter === 'Payment' ? PAYMENT_TYPES.map((value) => ({ value, label: value })) : transactionKindFilter === 'Expense' ? EXPENSE_CATEGORY_OPTIONS : transactionKindFilter === 'Bank' ? ['Deposit', 'Withdrawal'].map((value) => ({ value, label: value })) : [...PAYMENT_TYPES.map((value) => ({ value, label: value })), ...EXPENSE_CATEGORY_OPTIONS, ...['Deposit', 'Withdrawal'].map((value) => ({ value, label: value }))]) as option}
+							{#each (transactionKindFilter === 'Payment' ? PAYMENT_TYPES.map((value) => ({ value, label: formatMoneyCategoryLabel(value) })) : transactionKindFilter === 'Expense' ? EXPENSE_CATEGORY_OPTIONS : transactionKindFilter === 'Bank' ? ['Deposit', 'Withdrawal'].map((value) => ({ value, label: formatMoneyCategoryLabel(value) })) : [...PAYMENT_TYPES.map((value) => ({ value, label: formatMoneyCategoryLabel(value) })), ...EXPENSE_CATEGORY_OPTIONS, ...['Deposit', 'Withdrawal'].map((value) => ({ value, label: formatMoneyCategoryLabel(value) }))]) as option}
 								<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
 							{/each}
 						</Select.Content>
@@ -1205,7 +1219,7 @@
 							title="Money Snapshot"
 							summary="A plain-English summary of your money for this portfolio — what came in, what went out, and where you stand."
 							detail="No accounting jargon: it reads the same numbers as the ledger and explains them in everyday terms."
-							learnMoreUrl={undefined}
+							learnMoreUrl="/docs/accounting-overview"
 						/>
 					</div>
 					<Card.Description>Plain-English accounting summary for this portfolio.</Card.Description>

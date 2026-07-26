@@ -16,6 +16,7 @@
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ApplicationDetail from '$lib/components/records/ApplicationDetail.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { ArrowLeft, Check, ClipboardList, Copy, ExternalLink, Link2 } from '@lucide/svelte';
 
@@ -116,9 +117,10 @@
 		});
 	}
 
-	function changeSort(event: Event) {
+	function changeSort(sort: string | undefined) {
+		if (!sort) return;
 		goto(listUrl({
-			sort: (event.currentTarget as HTMLSelectElement).value,
+			sort,
 			page: 1,
 			app: null,
 		}), { replaceState: true, keepFocus: true, noScroll: true });
@@ -189,14 +191,19 @@
 			<span class="font-medium">Search applications</span>
 			<input bind:value={searchDraft} class="h-10 w-full rounded-md border bg-background px-3" placeholder="Name, email, or phone" data-testid="unit-applications-search" />
 		</label>
-		<label class="space-y-1 text-sm">
+		<label class="min-w-48 space-y-1 text-sm">
 			<span class="font-medium">Sort</span>
-			<select value={appSort} onchange={changeSort} class="h-10 rounded-md border bg-background px-3" data-testid="unit-applications-sort">
-				<option value="-submittedAt">Newest submitted</option>
-				<option value="submittedAt">Oldest submitted</option>
-				<option value="name">Applicant name</option>
-				<option value="status">Status</option>
-			</select>
+			<Select.Root type="single" value={appSort} onValueChange={changeSort}>
+				<Select.Trigger class="w-full" data-testid="unit-applications-sort">
+					{{ '-submittedAt': 'Newest first', submittedAt: 'Oldest first', name: 'Applicant name', status: 'Application status' }[appSort] ?? 'Newest first'}
+				</Select.Trigger>
+				<Select.Content>
+					<Select.Item value="-submittedAt" label="Newest first">Newest first</Select.Item>
+					<Select.Item value="submittedAt" label="Oldest first">Oldest first</Select.Item>
+					<Select.Item value="name" label="Applicant name">Applicant name</Select.Item>
+					<Select.Item value="status" label="Application status">Application status</Select.Item>
+				</Select.Content>
+			</Select.Root>
 		</label>
 		<Button type="submit" variant="outline">Search</Button>
 	</form>

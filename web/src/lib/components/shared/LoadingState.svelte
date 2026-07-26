@@ -32,10 +32,10 @@
 			</div>
 			<div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
 				{#each Array(4) as _}
-					<div class="h-32 rounded-xl border border-border/60 bg-card"></div>
+					<div class="h-28 rounded-xl bg-muted"></div>
 				{/each}
 			</div>
-			<div class="space-y-3 rounded-xl border border-border/60 bg-card p-5">
+			<div class="space-y-3 rounded-xl bg-card p-5">
 				<div class="h-5 w-40 rounded bg-muted"></div>
 				<div class="h-16 rounded-lg bg-muted"></div>
 				<div class="h-16 rounded-lg bg-muted"></div>
@@ -64,7 +64,6 @@
 
 	.loading-section {
 		min-height: 13rem;
-		border: 1px solid var(--border);
 		border-radius: 0.75rem;
 		background: var(--card);
 		padding: 1.25rem;

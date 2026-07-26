@@ -347,6 +347,7 @@ export interface UnitPaymentSummary {
 	leaseAgreementId: number | null;
 	type: string;
 	status: string;
+	description: string;
 	amount: number;
 	dueDate: string;
 	paidDate?: string;

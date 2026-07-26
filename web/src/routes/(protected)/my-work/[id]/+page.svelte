@@ -11,6 +11,7 @@
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import * as Select from '$lib/components/ui/select';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import { ArrowLeft, CalendarClock, Camera, CheckCircle2, Clock3, History, Mail, MapPin, MessageSquare, Package, Phone, Send, UserRound } from '@lucide/svelte';
@@ -194,10 +195,19 @@
 						<div class="mt-4 grid gap-3 sm:grid-cols-[minmax(12rem,.65fr)_minmax(0,1fr)_auto] sm:items-end">
 							<label class="grid gap-1.5 text-sm font-medium">
 								<span>New status</span>
-								<select bind:value={nextStatus} class="h-10 rounded-md border border-border bg-background px-3 text-sm" data-testid="assignment-progress-status">
-									<option value="">Keep {formatStatusLabel(work.status)}</option>
-									{#each progressTargets as status}<option value={status}>{formatStatusLabel(status)}</option>{/each}
-								</select>
+								<Select.Root type="single" bind:value={nextStatus}>
+									<Select.Trigger class="w-full" data-testid="assignment-progress-status">
+										{nextStatus ? formatStatusLabel(nextStatus) : `Keep ${formatStatusLabel(work.status)}`}
+									</Select.Trigger>
+									<Select.Content>
+										<Select.Item value="" label={`Keep ${formatStatusLabel(work.status)}`}>
+											Keep {formatStatusLabel(work.status)}
+										</Select.Item>
+										{#each progressTargets as status}
+											<Select.Item value={status} label={formatStatusLabel(status)}>{formatStatusLabel(status)}</Select.Item>
+										{/each}
+									</Select.Content>
+								</Select.Root>
 							</label>
 							<label class="grid gap-1.5 text-sm font-medium">
 								<span>Progress note <span class="font-normal text-muted-foreground">(optional with a status)</span></span>
@@ -236,13 +246,24 @@
 				<section class="rounded-2xl border border-border bg-card p-5">
 					<h2 class="font-semibold">Field log</h2>
 					{#if allowedEntryKinds.length > 0}<div class="mt-4 grid gap-3 sm:grid-cols-[10rem_1fr_auto]">
-						<select bind:value={entryKind} class="h-10 rounded-md border border-border bg-background px-3 text-sm" aria-label="Entry type">
-							{#each allowedEntryKinds as kind}<option value={kind}>{kind}</option>{/each}
-						</select>
+						<Select.Root type="single" bind:value={entryKind}>
+							<Select.Trigger class="w-full" aria-label="Entry type" data-testid="assignment-entry-type">
+								{entryKind}
+							</Select.Trigger>
+							<Select.Content>
+								{#each allowedEntryKinds as kind}
+									<Select.Item value={kind} label={kind}>{kind}</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
 						{#if entryKind === 'Time' || entryKind === 'Material'}
 							<div class="grid grid-cols-2 gap-2"><Input bind:value={quantity} type="number" min="0.001" step="0.25" placeholder="Quantity" /><Input bind:value={unit} placeholder={entryKind === 'Time' ? 'hours' : 'units'} /></div>
 						{:else if entryKind === 'Photo'}
-							<input type="file" accept="image/*" capture="environment" class="text-sm" onchange={(event) => photoFile = event.currentTarget.files?.[0] ?? null} />
+							<label class="m3-field-surface flex h-10 cursor-pointer items-center gap-2 px-3 text-sm font-medium">
+								<Camera class="h-4 w-4 text-muted-foreground" />
+								<span class="min-w-0 truncate">{photoFile?.name ?? 'Choose a photo'}</span>
+								<input type="file" accept="image/*" capture="environment" class="hidden" onchange={(event) => photoFile = event.currentTarget.files?.[0] ?? null} />
+							</label>
 						{:else}<Input bind:value={entryNote} placeholder="What did you find or do?" />{/if}
 						<Button disabled={entryMutation.isPending || (entryKind === 'Note' && !entryNote.trim()) || ((entryKind === 'Time' || entryKind === 'Material') && (!quantity || !unit.trim())) || (entryKind === 'Photo' && !photoFile)} onclick={() => entryMutation.mutate()}>Add</Button>
 					</div>{:else}<p class="mt-3 text-sm text-muted-foreground">You can review the field log, but this assignment does not allow you to add entries.</p>{/if}

@@ -18,6 +18,8 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Input } from '$lib/components/ui/input';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import SimpleSelect from '$lib/components/shared/SimpleSelect.svelte';
 	import { FilePlus2, Loader2, Plus, Trash2 } from '@lucide/svelte';
 
 	let {
@@ -49,6 +51,18 @@
 	const purposes: LeaseAddendumPurpose[] = ['Financial', 'Pet', 'Occupancy', 'Rules', 'Other'];
 	const signerRoles: LeaseLegalSignerRole[] = ['PrimaryTenant', 'CoTenant', 'Guarantor', 'Manager', 'Owner', 'Other'];
 	const effectTypes: LeaseAddendumFinancialEffectType[] = ['RecurringRentDelta', 'OneTimeCharge', 'DepositObligationDelta'];
+	const purposeOptions = purposes.map((item) => ({
+		value: item,
+		label: ({ Financial: 'Rent or money change', Pet: 'Pet agreement', Occupancy: 'Household change', Rules: 'Property rules', Other: 'Other change' } as const)[item]
+	}));
+	const signerRoleOptions = signerRoles.map((item) => ({
+		value: item,
+		label: ({ PrimaryTenant: 'Primary leaseholder', CoTenant: 'Co-leaseholder', Guarantor: 'Guarantor', Manager: 'Property manager', Owner: 'Property owner', Other: 'Other signer' } as const)[item]
+	}));
+	const effectTypeOptions = effectTypes.map((item) => ({
+		value: item,
+		label: ({ RecurringRentDelta: 'Ongoing rent change', OneTimeCharge: 'One-time charge', DepositObligationDelta: 'Security deposit change' } as const)[item]
+	}));
 	const queryClient = useQueryClient();
 	let addendumNumber = $state('');
 	let purpose = $state<LeaseAddendumPurpose>('Other');
@@ -230,28 +244,28 @@
 	<Dialog.Content class="max-h-[90vh] max-w-4xl overflow-y-auto" data-testid="addendum-create-dialog">
 		<Dialog.Header>
 			<Dialog.Title>Create addendum draft</Dialog.Title>
-			<Dialog.Description>Creates a new editable addendum against executed agreement {baseAgreement.agreementNumber}. Nothing changes legally until the draft is issued and fully signed.</Dialog.Description>
+			<Dialog.Description>Add a change to signed lease {baseAgreement.agreementNumber}. Nothing changes until the addendum is sent and fully signed.</Dialog.Description>
 		</Dialog.Header>
 
 		<div class="space-y-5">
 			<div class="grid gap-4 md:grid-cols-4">
 				<label class="space-y-1 md:col-span-2"><span class="text-sm font-medium">Addendum number</span><Input bind:value={addendumNumber} data-testid="addendum-create-number" /></label>
-				<label class="space-y-1"><span class="text-sm font-medium">Purpose</span><select bind:value={purpose} class="m3-field-surface h-10 w-full px-3 text-sm">{#each purposes as item}<option value={item}>{item}</option>{/each}</select></label>
-				<label class="space-y-1"><span class="text-sm font-medium">Active template</span><select bind:value={documentTemplateId} class="m3-field-surface h-10 w-full px-3 text-sm" disabled={templatesQuery.isLoading || templatesQuery.isError}><option value="">Select template…</option>{#each templatesQuery.data?.items ?? [] as template (template.id)}<option value={String(template.id)}>{template.name} · v{template.version}</option>{/each}</select></label>
-				<label class="space-y-1"><span class="text-sm font-medium">Effective from</span><Input type="date" bind:value={effectiveFromOn} /></label>
-				<label class="space-y-1"><span class="text-sm font-medium">Effective through</span><Input type="date" bind:value={effectiveThroughOn} /></label>
+				<label class="space-y-1"><span class="text-sm font-medium">What is changing?</span><SimpleSelect bind:value={purpose} options={purposeOptions} /></label>
+				<label class="space-y-1"><span class="text-sm font-medium">Document template</span><SimpleSelect bind:value={documentTemplateId} options={(templatesQuery.data?.items ?? []).map((template) => ({ value: String(template.id), label: `${template.name} · version ${template.version}` }))} placeholder="Choose a template" disabled={templatesQuery.isLoading || templatesQuery.isError} /></label>
+				<label class="space-y-1"><span class="text-sm font-medium">Change begins</span><DatePicker bind:value={effectiveFromOn} /></label>
+				<label class="space-y-1"><span class="text-sm font-medium">Change ends (optional)</span><DatePicker bind:value={effectiveThroughOn} /></label>
 			</div>
 			{#if templatesQuery.isError}<p class="text-sm text-destructive">Active templates could not be loaded. Retry this dialog before creating a draft.</p>{/if}
 			{#if currentPartiesQuery.isError}<p class="text-sm text-destructive">Current relationship parties could not be loaded. Retry this dialog before creating a draft.</p>{/if}
 
 			<div class="space-y-3">
-				<div class="flex items-center justify-between gap-3"><div><h3 class="font-medium">Signer snapshots</h3><p class="text-xs text-muted-foreground">Current primary and co-tenants are prefilled. Non-signer household members stay outside the legal packet.</p></div><Button variant="outline" size="sm" class="gap-2" onclick={addSigner}><Plus class="h-4 w-4" /> Add signer</Button></div>
+				<div class="flex items-center justify-between gap-3"><div><h3 class="font-medium">People who must sign</h3><p class="text-xs text-muted-foreground">Primary and co-leaseholders are added automatically. Add anyone else who must sign this change.</p></div><Button variant="outline" size="sm" class="gap-2" onclick={addSigner}><Plus class="h-4 w-4" /> Add signer</Button></div>
 				{#each signers as signer, index}
-					<div class="grid gap-3 rounded-xl border p-3 md:grid-cols-[5rem_1fr_1fr_10rem_auto_auto]">
+					<div class="grid gap-3 rounded-xl bg-muted/30 p-3 md:grid-cols-[5rem_1fr_1fr_10rem_auto_auto]">
 						<label class="space-y-1"><span class="text-xs text-muted-foreground">Order</span><Input type="number" min="1" bind:value={signer.signingOrder} /></label>
 						<label class="space-y-1"><span class="text-xs text-muted-foreground">Name</span><Input bind:value={signer.nameSnapshot} /></label>
 						<label class="space-y-1"><span class="text-xs text-muted-foreground">Email</span><Input type="email" bind:value={signer.emailSnapshot} /></label>
-						<label class="space-y-1"><span class="text-xs text-muted-foreground">Role</span><select bind:value={signer.signerRole} class="m3-field-surface h-10 w-full px-2 text-sm">{#each signerRoles as role}<option value={role}>{role}</option>{/each}</select></label>
+						<label class="space-y-1"><span class="text-xs text-muted-foreground">Role</span><SimpleSelect bind:value={signer.signerRole} options={signerRoleOptions} /></label>
 						<p class="pt-6 text-sm text-muted-foreground">Required signer</p>
 						<Button variant="ghost" size="icon" class="mt-5" aria-label="Remove signer" onclick={() => removeSigner(index)}><Trash2 class="h-4 w-4" /></Button>
 					</div>
@@ -259,15 +273,15 @@
 			</div>
 
 			<div class="space-y-3">
-				<div class="flex items-center justify-between gap-3"><div><h3 class="font-medium">Structured financial effects</h3><p class="text-xs text-muted-foreground">Optional. Currency must match the base agreement; billing reads these effects from the database.</p></div><Button variant="outline" size="sm" class="gap-2" onclick={addFinancialEffect}><Plus class="h-4 w-4" /> Add effect</Button></div>
-				{#if financialEffects.length === 0}<p class="rounded-xl border p-3 text-sm text-muted-foreground">No financial effects. This is valid for nonfinancial addendums.</p>{/if}
+				<div class="flex items-center justify-between gap-3"><div><h3 class="font-medium">Rent, charge, or deposit changes</h3><p class="text-xs text-muted-foreground">Optional. Add only the money changes created by this addendum.</p></div><Button variant="outline" size="sm" class="gap-2" onclick={addFinancialEffect}><Plus class="h-4 w-4" /> Add money change</Button></div>
+				{#if financialEffects.length === 0}<p class="rounded-xl bg-muted/30 p-3 text-sm text-muted-foreground">This addendum does not change rent, charges, or the security deposit.</p>{/if}
 				{#each financialEffects as effect, index}
-					<div class="grid gap-3 rounded-xl border p-3 md:grid-cols-3">
-						<label class="space-y-1"><span class="text-xs text-muted-foreground">Type</span><select bind:value={effect.effectType} class="m3-field-surface h-10 w-full px-2 text-sm">{#each effectTypes as item}<option value={item}>{item}</option>{/each}</select></label>
+					<div class="grid gap-3 rounded-xl bg-muted/30 p-3 md:grid-cols-3">
+						<label class="space-y-1"><span class="text-xs text-muted-foreground">Money change</span><SimpleSelect bind:value={effect.effectType} options={effectTypeOptions} /></label>
 						<label class="space-y-1"><span class="text-xs text-muted-foreground">Amount</span><Input type="number" step="0.01" bind:value={effect.amount} /></label>
 						<label class="space-y-1"><span class="text-xs text-muted-foreground">Currency</span><Input maxlength={3} placeholder="USD" bind:value={effect.currency} /></label>
 						<label class="space-y-1"><span class="text-xs text-muted-foreground">Charge code</span><Input bind:value={effect.chargeCode} /></label>
-						{#if effect.effectType === 'OneTimeCharge'}<label class="space-y-1"><span class="text-xs text-muted-foreground">Due on</span><Input type="date" bind:value={effect.dueOn} /></label>{:else}<label class="space-y-1"><span class="text-xs text-muted-foreground">Effective from</span><Input type="date" bind:value={effect.effectiveFromOn} /></label><label class="space-y-1"><span class="text-xs text-muted-foreground">Effective through</span><Input type="date" bind:value={effect.effectiveThroughOn} /></label>{/if}
+						{#if effect.effectType === 'OneTimeCharge'}<label class="space-y-1"><span class="text-xs text-muted-foreground">Due date</span><DatePicker bind:value={effect.dueOn} /></label>{:else}<label class="space-y-1"><span class="text-xs text-muted-foreground">Begins</span><DatePicker bind:value={effect.effectiveFromOn} /></label><label class="space-y-1"><span class="text-xs text-muted-foreground">Ends (optional)</span><DatePicker bind:value={effect.effectiveThroughOn} /></label>{/if}
 						<label class="space-y-1 md:col-span-2"><span class="text-xs text-muted-foreground">Description</span><Input bind:value={effect.description} /></label>
 						<Button variant="ghost" size="sm" class="mt-5 justify-self-end gap-2" onclick={() => removeFinancialEffect(index)}><Trash2 class="h-4 w-4" /> Remove</Button>
 					</div>

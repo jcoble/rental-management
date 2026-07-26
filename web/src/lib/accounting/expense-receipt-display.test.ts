@@ -28,5 +28,8 @@ describe('expense receipt display totals', () => {
 		assert.match(pageSource, /expense-detail-receipt-amount/);
 		assert.match(pageSource, /expense-detail-line-items-grand-total/);
 		assert.match(pageSource, /Grand total/);
+		assert.match(pageSource, /Technical receipt data/);
+		assert.match(pageSource, /\/docs\/recording-expenses/);
+		assert.doesNotMatch(pageSource, /Receipt details \(raw\)/);
 	});
 });

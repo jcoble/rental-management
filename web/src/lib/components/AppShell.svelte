@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { page } from '$app/state';
+	import { navigating, page } from '$app/state';
 	import { browser } from '$app/environment';
 	import { createQuery } from '@tanstack/svelte-query';
 	import {
@@ -61,12 +61,13 @@
 	import { messages as messagesApi } from '$lib/api/endpoints/messages';
 	import { appointments as appointmentsApi } from '$lib/api/endpoints/appointments';
 	import { leasingWorkspace } from '$lib/api/endpoints/leasing-workspace';
-	import NavigationLoader from '$lib/components/NavigationLoader.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import SandboxBanner from '$lib/components/SandboxBanner.svelte';
 	import M3TooltipLayer from '$lib/components/shared/M3TooltipLayer.svelte';
 	import ThemeModeToggle from '$lib/components/shared/ThemeModeToggle.svelte';
 	import ScanLauncher from '$lib/components/scan/ScanLauncher.svelte';
 	import BrandMark from '$lib/components/BrandMark.svelte';
+	import CommandCenterNav from '$lib/components/CommandCenterNav.svelte';
 	import { canAccessRoute, CAPABILITY, safeLandingForAccess } from '$lib/auth/experience-policy';
 	import { canUseUnstructuredVoiceCapture, scanDocumentTypesForCapabilities } from '$lib/scan/scan-access';
 
@@ -75,6 +76,9 @@
 	let sidebarCollapsed = $state(false);
 	let isMobile = $state(false);
 	let isSidebarOpen = $state(false);
+	const routeIsChanging = $derived(
+		Boolean(navigating.to && navigating.to.url.pathname !== page.url.pathname)
+	);
 
 	// Responsive: auto-collapse on narrow viewports
 	$effect(() => {
@@ -327,9 +331,7 @@
 		{ href: '/assignment-inbox', label: 'Inbox', icon: MessageSquare },
 		{ href: '/settings/notifications/my-alerts', label: 'My alerts', icon: BellRing }
 	];
-	// Unit list and detail routes belong to Rentals. Keeping the detail prefix in title resolution
-	// preserves safe direct links without promoting a second peer-level Unit picker.
-	const commandCenterTitleItem: NavItem = { href: '/units/', label: 'Rentals', icon: Home };
+	const commandCenterTitleItem: NavItem = { href: '/units/', label: 'Command Center', icon: Home };
 
 	function itemVisible(item: NavItem): boolean {
 		return canAccessRoute(item.href, activeExperience, activeCapabilities);
@@ -344,6 +346,10 @@
 
 	// Pinned single links (Dashboard, Scan / Edit) above the groups.
 	let visiblePinned = $derived.by(() => pinnedNavItems.filter(itemVisible));
+	let canSeeCommandCenter = $derived(
+		activeExperience === 'Management'
+		&& canAccessRoute('/units', activeExperience, activeCapabilities)
+	);
 
 	// Bottom-rail standalone links (Assistant, Help).
 	let visibleBottomRail = $derived.by(() => bottomRailItems.filter(itemVisible));
@@ -383,6 +389,11 @@
 		if (href === '/owner') return currentPath === '/owner';
 		if (href === '/leasing') return currentPath === '/leasing';
 		if (href === '/units') return currentPath === '/units' || currentPath.startsWith('/units/');
+		if (href === '/settings') {
+			return currentPath === '/settings'
+				|| (currentPath.startsWith('/settings/')
+					&& !currentPath.startsWith('/settings/notifications/'));
+		}
 		return currentPath.startsWith(href);
 	}
 
@@ -567,7 +578,6 @@
 	);
 </script>
 
-<NavigationLoader />
 <M3TooltipLayer data-testid="shell-m3-tooltip" />
 
 {#snippet countBadge(count: number)}
@@ -761,6 +771,9 @@
 				{#each visiblePinned as item}
 					{@render navLinkCollapsed(item)}
 				{/each}
+				{#if canSeeCommandCenter}
+					<CommandCenterNav collapsed onNavigate={handleNavClick} />
+				{/if}
 				{#each visibleGroups as group}
 					{@render navGroupCollapsed(group)}
 				{/each}
@@ -776,6 +789,9 @@
 				{#each visiblePinned as item}
 					{@render navLink(item)}
 				{/each}
+				{#if canSeeCommandCenter}
+					<CommandCenterNav onNavigate={handleNavClick} />
+				{/if}
 				<div class="my-2"></div>
 				{#each visibleGroups as group}
 					{@render navGroup(group)}
@@ -1059,7 +1075,15 @@
 
 		<!-- Page content frame. Routes own their internal 100% scroll area. -->
 		<main class="customer-shell-main flex min-h-0 flex-1 justify-center overflow-hidden">
-			<div class="h-full w-full max-w-[1600px]">
+			<div class="relative h-full w-full max-w-[1600px]">
+				{#if routeIsChanging}
+					<div
+						class="absolute inset-0 z-20 overflow-hidden bg-background p-4 sm:p-6"
+						data-testid="route-loading-surface"
+					>
+						<LoadingState label="Loading the next page" variant="page" testid="route-loading" />
+					</div>
+				{/if}
 				{#key page.url.pathname}
 					<div class="m3-route-transition h-full overflow-y-auto" data-testid="route-transition-frame">
 						{@render children()}

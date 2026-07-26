@@ -11,6 +11,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
+	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import StarRating from '$lib/components/shared/StarRating.svelte';
 	import { Star, Mail, Phone, MessageSquare, Pencil } from '@lucide/svelte';
@@ -158,7 +159,7 @@
 	</div>
 
 	{#if vendorQuery.isLoading}
-		<p class="py-8 text-center text-sm text-muted-foreground" data-testid="vendor-detail-loading">Loading…</p>
+		<LoadingState label="Loading vendor details" variant="page" testid="vendor-detail-loading" />
 	{:else if vendorQuery.isError}
 		<p class="py-8 text-center text-sm text-destructive" data-testid="vendor-detail-error">Failed to load vendor.</p>
 	{:else if !vendor}
@@ -238,9 +239,9 @@
 							<dd class="mt-1.5 font-mono text-2xl tabular-nums" data-testid="vendor-scorecard-jobs">{scorecard.jobsCompleted}</dd>
 						</div>
 						<div>
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Avg response time</dt>
+							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Average reply time</dt>
 							<dd class="mt-1.5 font-mono text-2xl tabular-nums" data-testid="vendor-scorecard-response">{fmtHours(scorecard.avgResponseHours)}</dd>
-							<p class="mt-1 text-xs text-muted-foreground">From the text-out to their DONE reply.</p>
+							<p class="mt-1 text-xs text-muted-foreground">Time from sending a job by text until the vendor confirms it is finished.</p>
 						</div>
 					</div>
 				{:else}

@@ -10,29 +10,35 @@ describe('Unit destination history contract', () => {
 	const ledgerSource = readFileSync(new URL('./tabs/LedgerTab.svelte', import.meta.url), 'utf8');
 	const listingSource = readFileSync(new URL('./tabs/ListingTab.svelte', import.meta.url), 'utf8');
 
-	test('renders each owned section vertically without subordinate tabs', () => {
+	test('uses subordinate tabs so each destination shows one focused workspace', () => {
 		for (const surface of ['unit-leasing-surface', 'unit-tenant-lease-surface', 'unit-maintenance-surface', 'unit-documents-history-surface']) {
 			assert.match(pageSource, new RegExp(`data-testid="${surface}"`));
 		}
 		assert.match(ledgerSource, /data-testid="unit-money-surface"/);
-		assert.doesNotMatch(pageSource, /unit-(?:leasing|maintenance|documents-history)-tabs/);
-		assert.doesNotMatch(ledgerSource, /unit-ledger-tabs|replaceState/);
+		assert.match(pageSource, /unit-(?:leasing|maintenance|documents-history)-tabs/);
+		assert.match(ledgerSource, /unit-money-tabs/);
+		assert.match(ledgerSource, /pushState/);
 	});
 
-	test('uses validated views only as focusable landing anchors', () => {
+	test('uses validated views as the visible panel authority without scroll-to-section navigation', () => {
 		for (const section of ['applications', 'residents', 'inspections', 'recurring', 'turnover', 'history']) {
 			assert.match(pageSource, new RegExp(`data-testid="unit-${section}-section"`));
 		}
 		assert.match(ledgerSource, /page\.url\.searchParams\.get\('view'\)/);
 		assert.match(ledgerSource, /operating-costs/);
-		assert.match(pageSource, /goto\(url, \{ keepFocus: true, noScroll: true \}\)/);
+		assert.match(pageSource, /pushState\(`\$\{url\.pathname\}\$\{url\.search\}`, \{/);
+		assert.match(pageSource, /unitTab: destination\.tab/);
+		assert.match(pageSource, /unitView: destination\.view \?\? null/);
+		assert.doesNotMatch(pageSource, /scrollIntoView/);
 	});
 
-	test('uses the current URL as the single Unit tab/view authority', () => {
-		assert.match(pageSource, /import \{ tick, untrack \} from 'svelte';/);
+	test('uses validated shallow state with the landing URL as its fallback authority', () => {
+		assert.match(pageSource, /import \{ untrack \} from 'svelte';/);
 		assert.match(pageSource, /const activeDestination = \$derived\(resolveUnitDestination\(/);
 		assert.match(pageSource, /const activeTab = \$derived\(activeDestination\.tab\);/);
 		assert.match(pageSource, /const activeView = \$derived\(activeDestination\.view\);/);
+		assert.match(pageSource, /page\.state\.unitTab \?\? page\.url\.searchParams\.get\('tab'\)/);
+		assert.match(pageSource, /page\.state\.unitView \?\? page\.url\.searchParams\.get\('view'\)/);
 		assert.doesNotMatch(pageSource, /import \* as Tabs/);
 		assert.doesNotMatch(pageSource, /<Tabs\.(?:Root|Content)/);
 		assert.doesNotMatch(pageSource, /let activeTab = \$state/);
@@ -42,16 +48,14 @@ describe('Unit destination history contract', () => {
 		assert.match(pageSource, /if \(`\$\{url\.pathname\}\$\{url\.search\}` === `\$\{page\.url\.pathname\}\$\{page\.url\.search\}`\) return;/);
 	});
 
-	test('keeps landing and move-in action guards outside their own reactive dependencies', () => {
-		assert.match(pageSource, /let handledUnitLanding = '';/);
-		assert.match(pageSource, /if \(handledUnitLanding === landingKey\) return;/);
-		assert.match(pageSource, /document\.querySelector<HTMLElement>/);
-		assert.doesNotMatch(pageSource, /let \w+Section = \$state<HTMLElement>/);
-		assert.doesNotMatch(pageSource, /bind:this=\{\w+Section\}/);
+	test('keeps the move-in action guard outside its own reactive dependency', () => {
+		assert.doesNotMatch(pageSource, /handledUnitLanding|document\.querySelector<HTMLElement>|scrollIntoView/);
 		assert.match(pageSource, /if \(untrack\(\(\) => handledMoveInActionKey\) !== actionKey\)/);
 		assert.match(pageSource, /url\.searchParams\.set\('tab', 'tenant-lease'\);/);
 		assert.match(pageSource, /url\.searchParams\.set\('view', 'agreements'\);/);
 		assert.match(pageSource, /url\.searchParams\.set\('action', 'confirm-move-in'\);/);
+		assert.match(pageSource, /unitTab: 'tenant-lease'/);
+		assert.match(pageSource, /unitView: 'agreements'/);
 	});
 
 	test('bounds listing loading and exposes a retryable error state before the empty state', () => {

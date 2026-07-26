@@ -230,6 +230,7 @@ public class UnitPaymentSummary
 
     /// <summary>Payment status as its string name (e.g. <c>Paid</c>).</summary>
     public string Status { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
     public decimal Amount { get; set; }
     public DateTime DueDate { get; set; }
     public DateTime? PaidDate { get; set; }

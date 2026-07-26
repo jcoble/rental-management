@@ -6,6 +6,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import AuthBrandPanel from '$lib/components/auth/AuthBrandPanel.svelte';
 	import BrandMark from '$lib/components/BrandMark.svelte';
+	import SimpleSelect from '$lib/components/shared/SimpleSelect.svelte';
 	import { auth } from '$lib/api/endpoints/auth';
 	import type { EffectiveAccessContextOption } from '$lib/types/user';
 	let { data, form }: { data: PageData; form: ActionData } = $props();
@@ -108,22 +109,20 @@
 					<input type="hidden" name="redirectTo" value={data.redirectTo} />
 				{/if}
 				{#if contextChoices.length > 1}
-					<div class="rounded-lg border border-border bg-card/60 p-3">
-						<label for="login-context" class="mb-1.5 block text-sm font-medium text-foreground">
-							Which workspace do you want to open?
-						</label>
-						<select
-							id="login-context"
-							name="accessContextId"
+					<div class="rounded-lg bg-card/60 p-3">
+						<p class="mb-1.5 block text-sm font-medium text-foreground">Which workspace do you want to open?</p>
+						<input type="hidden" name="accessContextId" value={accessContextId} />
+						<SimpleSelect
 							bind:value={accessContextId}
-							required
-							class="h-11 w-full rounded-md border border-input bg-background px-3 text-sm"
-						>
-							<option value="" disabled>Select a workspace</option>
-							{#each contextChoices as context}
-								<option value={context.accessContextId}>{context.workspaceName}</option>
-							{/each}
-						</select>
+							options={contextChoices.map((context) => ({
+								value: String(context.accessContextId),
+								label: context.workspaceName
+							}))}
+							placeholder="Choose a workspace"
+							ariaLabel="Workspace"
+							triggerClass="h-11 w-full"
+							testid="login-context"
+						/>
 						<p class="mt-1.5 text-xs text-muted-foreground">
 							You can switch workspaces later from the app menu.
 						</p>
@@ -216,7 +215,7 @@
 					{/if}
 				{/if}
 
-				<Button type="submit" data-testid="login-submit" disabled={submitting} class="h-11 w-full">
+				<Button type="submit" data-testid="login-submit" disabled={submitting || (contextChoices.length > 1 && !accessContextId)} class="h-11 w-full">
 					{#if submitting}
 						<Loader2 class="h-4 w-4 animate-spin" />
 						Signing in…

@@ -1,6 +1,8 @@
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Api.DTOs;
+using System.Diagnostics;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
@@ -200,6 +202,37 @@ public class DailyBriefingServiceTests : IDisposable
         briefing.Bullets.Should().ContainSingle(bullet => bullet.Category == "Maintenance");
         briefing.Bullets.Single(bullet => bullet.Category == "Maintenance").Title
             .Should().Contain("Allowed emergency");
+    }
+
+    [Fact]
+    public async Task TryPolishSummaryAsync_ReturnsRulesOnlyBriefingWhenOptionalLlmPolishStalls()
+    {
+        var sut = new DailyBriefingService(
+            _db,
+            new HangingLlmProvider(),
+            TimeProvider.System,
+            TimeSpan.FromMilliseconds(50));
+        var stopwatch = Stopwatch.StartNew();
+
+        var (summary, enhanced) = await sut.TryPolishSummaryAsync(
+            [
+                new BriefingBullet(
+                    "Rent overdue",
+                    "$1,050 was due 24 days ago",
+                    "RentLate",
+                    "critical",
+                    nameof(TenantAccount),
+                    1,
+                    1)
+            ],
+            CancellationToken.None);
+
+        stopwatch.Stop();
+        summary.Should().BeNull();
+        enhanced.Should().BeFalse();
+        stopwatch.Elapsed.Should().BeLessThan(
+            TimeSpan.FromSeconds(1),
+            "optional AI wording must never hold the factual Daily Briefing open");
     }
 
     private Property SeedBareProperty(string name, DateTime now)
@@ -542,6 +575,31 @@ public class DailyBriefingServiceTests : IDisposable
     private sealed class NoopLlmProvider : ILlmProvider
     {
         public Task<string> ChatAsync(string prompt, CancellationToken ct = default) => Task.FromResult("");
+
+        public Task<ExtractedFields> ExtractAsync(
+            byte[] documentBytes,
+            string contentType,
+            string instructions,
+            IReadOnlyList<ExtractionFieldSpec> fields,
+            string? groundingContext = null,
+            CancellationToken ct = default)
+            => Task.FromResult(new ExtractedFields());
+
+        public Task<LlmToolResult> ChatWithToolsAsync(
+            string systemPrompt,
+            IReadOnlyList<LlmChatMessage> messages,
+            IReadOnlyList<LlmToolSpec> tools,
+            CancellationToken ct = default)
+            => Task.FromResult(new LlmToolResult("end", "", [], 0, 0, "test"));
+    }
+
+    private sealed class HangingLlmProvider : ILlmProvider
+    {
+        public async Task<string> ChatAsync(string prompt, CancellationToken ct = default)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            return "";
+        }
 
         public Task<ExtractedFields> ExtractAsync(
             byte[] documentBytes,

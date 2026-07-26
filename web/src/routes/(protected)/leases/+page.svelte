@@ -13,6 +13,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
+	import { recordHref } from '$lib/navigation/record-href';
 	import { ScanLine, Users } from '@lucide/svelte';
 
 	const PAGE_SIZE = 20;
@@ -129,7 +130,7 @@
 		loading={relationshipsQuery.isLoading}
 		emptyMessage={relationshipEmptyMessage}
 		emptyDescription={relationshipEmptyDescription}
-		onRowClick={(item) => goto(`/leases/${item.leaseManagementId}`)}
+		onRowClick={(item) => goto(recordHref('leaseManagement', { id: item.leaseManagementId, unitId: item.unitId }))}
 		getRowKey={(item) => item.leaseManagementId}
 		serverSide
 		page={gridPage}

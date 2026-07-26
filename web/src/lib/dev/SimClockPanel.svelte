@@ -8,6 +8,7 @@
 	 */
 	import { api } from '$lib/api/client';
 	import { applySimClock } from '$lib/dev/sim-clock-client';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 
 	interface ClockState {
 		simNowUtc: string;
@@ -75,7 +76,10 @@
 			<div class="sim-now" title={now}>{now}</div>
 
 			<div class="sim-row">
-				<input type="date" bind:value={dateInput} aria-label="Set simulated date" />
+				<label class="sr-only" for="sim-clock-date">Set simulated date</label>
+				<div class="sim-date">
+					<DatePicker id="sim-clock-date" bind:value={dateInput} />
+				</div>
 				<button onclick={setDate} disabled={busy || !dateInput}>Set</button>
 			</div>
 
@@ -176,14 +180,8 @@
 		opacity: 0.5;
 		cursor: default;
 	}
-	.sim-panel input[type='date'] {
+	.sim-date {
 		flex: 2;
 		min-width: 0;
-		background: rgba(0, 0, 0, 0.3);
-		color: #e9e5f5;
-		border: 1px solid rgba(124, 111, 245, 0.35);
-		border-radius: 6px;
-		padding: 4px 6px;
-		font: inherit;
 	}
 </style>

@@ -27,6 +27,7 @@
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Input } from '$lib/components/ui/input';
@@ -1144,14 +1145,19 @@
 			</Dialog.Description>
 		</Dialog.Header>
 		<div class="space-y-4">
-			<label class="space-y-1 text-sm">
+			<div class="space-y-1 text-sm">
 				<span class="font-medium">Decision</span>
-				<select bind:value={screeningDecision} class="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">
-					<option value="Accept">Accept</option>
-					<option value="Conditional">Conditional</option>
-					<option value="Decline">Decline</option>
-				</select>
-			</label>
+				<Select.Root type="single" bind:value={screeningDecision}>
+					<Select.Trigger class="h-10 w-full" data-testid="application-screening-decision-select">
+						{screeningDecision}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="Accept" label="Accept">Accept</Select.Item>
+						<Select.Item value="Conditional" label="Conditional">Conditional</Select.Item>
+						<Select.Item value="Decline" label="Decline">Decline</Select.Item>
+					</Select.Content>
+				</Select.Root>
+			</div>
 			<label class="space-y-1 text-sm">
 				<span class="font-medium">Principal reason</span>
 				<textarea bind:value={screeningDecisionReason} rows="3" class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm" placeholder="Required when a consumer report influenced the decision"></textarea>

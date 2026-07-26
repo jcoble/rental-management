@@ -104,8 +104,8 @@ describe('scan context helpers', () => {
 	it('rejects unsafe return targets when parsing scan context', () => {
 		assert.deepEqual(parseScanContext(new URLSearchParams('returnTo=https://evil.test/units/20')), {});
 		assert.deepEqual(parseScanContext(new URLSearchParams('returnTo=//evil.test/units/20')), {});
-		assert.deepEqual(parseScanContext(new URLSearchParams('returnTo=%2Funits%2F20%3Ftab%3Dmoney%26ledger%3Drent')), {
-			returnTo: '/units/20?tab=money&ledger=rent'
+		assert.deepEqual(parseScanContext(new URLSearchParams('returnTo=%2Funits%2F20%3Ftab%3Dmoney%26view%3Dtenant-account')), {
+			returnTo: '/units/20?tab=money&view=tenant-account'
 		});
 	});
 });

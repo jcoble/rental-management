@@ -129,6 +129,8 @@ public class UnitDashboardServiceTests : IAsyncLifetime
                 "rent-check.png",
             ]);
         dashboard.Overview.PendingDocs.Should().NotContain(document => document.FileName == "foreign-unit-receipt.pdf");
+        dashboard.Overview.RecentPayments.Should().ContainSingle(payment =>
+            payment.Description == "Rent check" && payment.Amount == 1200m);
 
         var documentSql = _executedSql
             .Where(command => command.Contains("FROM \"StoredFiles\"", StringComparison.OrdinalIgnoreCase))

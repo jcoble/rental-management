@@ -10,6 +10,14 @@ const previewSource = readFileSync(
   new URL("./NoticePreview.svelte", import.meta.url),
   "utf8"
 );
+const journeySource = readFileSync(
+  new URL("./NotificationSetupJourney.svelte", import.meta.url),
+  "utf8"
+);
+const accordionSource = readFileSync(
+  new URL("./NotificationPolicyAccordion.svelte", import.meta.url),
+  "utf8"
+);
 const endpointSource = readFileSync(
   new URL("../../api/endpoints/notifications.ts", import.meta.url),
   "utf8"
@@ -24,6 +32,30 @@ describe("notification settings contract", () => {
     assert.match(helpSource, /aria-describedby/);
     assert.match(helpSource, /onclose=\{returnFocus\}/);
     assert.match(helpSource, /\/docs\/settings-and-notifications/);
+  });
+
+  it("provides one route-backed, navigation-safe three-step journey", () => {
+    for (const route of [
+      "/settings/notifications/my-alerts",
+      "/settings/notifications/team-routing",
+      "/settings/notifications/tenant-notices"
+    ]) {
+      assert.match(journeySource, new RegExp(route));
+    }
+    assert.match(journeySource, /How should Rental Command reach you/);
+    assert.match(journeySource, /Who should handle each kind of work/);
+    assert.match(journeySource, /Which tenant messages should Rental Command prepare/);
+    assert.match(journeySource, /beforeNavigate/);
+    assert.match(journeySource, /hasUnsavedChanges/);
+    assert.match(journeySource, /aria-current/);
+    assert.match(journeySource, /Saved summary/);
+  });
+
+  it("uses an accessible single-panel disclosure pattern", () => {
+    assert.match(accordionSource, /aria-expanded/);
+    assert.match(accordionSource, /aria-controls/);
+    assert.match(accordionSource, /role="region"/);
+    assert.match(accordionSource, /aria-labelledby/);
   });
 
   it("renders realistic preview", () => {

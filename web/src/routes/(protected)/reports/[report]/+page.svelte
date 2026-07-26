@@ -31,6 +31,12 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { apiErrorMessage } from '$lib/utils/toast';
 	import { formatDate, formatDateOnly } from '$lib/utils/date';
+	import {
+		formatMoneyCategoryLabel,
+		formatMoneyEntryLabel
+	} from '$lib/accounting/money-display';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
+	import { reportDescription, reportTitle } from '$lib/reports/report-display';
 	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as Popover from '$lib/components/ui/popover';
@@ -56,7 +62,7 @@
 	} from '@lucide/svelte';
 
 	const portfolioId = $derived(getCurrentPortfolioId());
-	const reportKey = $derived(page.params.report);
+	const reportKey = $derived(page.params.report ?? '');
 
 	// --- Catalog (to resolve this report's title, endpoint, accepted params) -------------------------
 	const catalogQuery = createQuery(() => ({
@@ -257,22 +263,22 @@
 		let rows: (string | number)[][] = [];
 
 		if (rentRoll) {
-			headers = ['Property', 'Unit', 'Lease', 'Tenant', 'Monthly Rent', 'Deposit', 'Start', 'End', 'Status'];
-			rows = rentRoll.rows.map((r) => [r.propertyName, r.unitNumber, r.agreementNumber, r.tenantName, r.monthlyRent, r.securityDeposit, formatDateOnly(r.startOn), r.endOn ? formatDateOnly(r.endOn) : '', r.statusName]);
+			headers = ['Property', 'Unit', 'Tenant', 'Monthly Rent', 'Deposit', 'Start', 'End', 'Status'];
+			rows = rentRoll.rows.map((r) => [r.propertyName, r.unitNumber, r.tenantName, r.monthlyRent, r.securityDeposit, formatDateOnly(r.startOn), r.endOn ? formatDateOnly(r.endOn) : '', formatStatusLabel(r.statusName)]);
 		} else if (rentLedger) {
-			headers = ['Property', 'Unit', 'Lease', 'Tenant', 'Date', 'Type', 'Description', 'Charge', 'Payment', 'Balance'];
+			headers = ['Property', 'Unit', 'Tenant', 'Date', 'Type', 'Description', 'Charge', 'Payment', 'Balance'];
 			rows = rentLedger.leases.flatMap((l) =>
-				l.entries.map((e) => [l.propertyName, l.unitNumber, l.relationshipNumber, l.tenantName, formatDateOnly(e.date), e.type, e.description, e.charge, e.credit, e.balance])
+				l.entries.map((e) => [l.propertyName, l.unitNumber, l.tenantName, formatDateOnly(e.date), formatMoneyEntryLabel(e.type), e.description, e.charge, e.credit, e.balance])
 			);
 		} else if (delinquency) {
-			headers = ['Property', 'Unit', 'Lease', 'Tenant', '0-30', '31-60', '61-90', '90+', 'Total', 'Oldest (days)'];
-			rows = delinquency.rows.map((r) => [r.propertyName, r.unitNumber, r.relationshipNumber, r.tenantName, r.buckets.current, r.buckets.days31To60, r.buckets.days61To90, r.buckets.over90, r.total, r.oldestOverdueDays]);
+			headers = ['Property', 'Unit', 'Tenant', '0-30', '31-60', '61-90', '90+', 'Total', 'Oldest (days)'];
+			rows = delinquency.rows.map((r) => [r.propertyName, r.unitNumber, r.tenantName, r.buckets.current, r.buckets.days31To60, r.buckets.days61To90, r.buckets.over90, r.total, r.oldestOverdueDays]);
 		} else if (cashFlow) {
 			headers = ['Month', 'Income', 'Expense', 'Net'];
 			rows = cashFlow.months.map((m) => [m.label, m.income, m.expense, m.net]);
 		} else if (generalLedger) {
 			headers = ['Date', 'Type', 'Description', 'Category', 'Property', 'Counterparty', 'Amount', 'Running Balance'];
-			rows = generalLedger.entries.map((e) => [formatDateOnly(e.date), e.type, e.description, e.category, e.propertyName ?? '', e.counterparty ?? '', e.amount, e.runningBalance]);
+			rows = generalLedger.entries.map((e) => [formatDateOnly(e.date), formatMoneyEntryLabel(e.type), e.description, formatMoneyCategoryLabel(e.category), e.propertyName ?? '', e.counterparty ?? '', e.amount, e.runningBalance]);
 		} else if (propertyPnl) {
 			headers = ['Property', 'Income', 'Expense', 'Net'];
 			rows = propertyPnl.rows.map((r) => [r.propertyName, r.income, r.expense, r.net]);
@@ -280,11 +286,11 @@
 			headers = ['Property', 'Total Units', 'Occupied', 'Vacant', 'Occupancy %'];
 			rows = occupancy.rows.map((r) => [r.propertyName, r.totalUnits, r.occupiedUnits, r.vacantUnits, r.occupancyPercent]);
 		} else if (leaseExp) {
-			headers = ['Property', 'Unit', 'Lease', 'Tenant', 'Monthly Rent', 'End Date', 'Days Until', 'Status'];
-			rows = leaseExp.rows.map((r) => [r.propertyName, r.unitNumber, r.agreementNumber, r.tenantName, r.monthlyRent, formatDateOnly(r.endOn), r.daysUntilExpiry, r.statusName]);
+			headers = ['Property', 'Unit', 'Tenant', 'Monthly Rent', 'End Date', 'Days Until', 'Status'];
+			rows = leaseExp.rows.map((r) => [r.propertyName, r.unitNumber, r.tenantName, r.monthlyRent, formatDateOnly(r.endOn), r.daysUntilExpiry, formatStatusLabel(r.statusName)]);
 		} else if (deposits) {
-			headers = ['Property', 'Unit', 'Lease', 'Tenant', 'Held', 'Deductions', 'Returned', 'Balance', 'Status', 'Held At'];
-			rows = deposits.rows.map((r) => [r.propertyName, r.unitNumber, r.relationshipNumber, r.tenantName, r.held, r.deductions, r.returned, r.currentBalance, r.statusName, formatDateOnly(r.heldAt)]);
+			headers = ['Property', 'Unit', 'Tenant', 'Held', 'Deductions', 'Returned', 'Balance', 'Status', 'Held At'];
+			rows = deposits.rows.map((r) => [r.propertyName, r.unitNumber, r.tenantName, r.held, r.deductions, r.returned, r.currentBalance, formatStatusLabel(r.statusName), formatDateOnly(r.heldAt)]);
 		} else if (vendor1099) {
 			headers = ['Vendor', 'Tax ID', 'Total Paid', '1099 Eligible', 'W-9 On File', 'Needs W-9', 'Needs 1099 Review'];
 			rows = vendor1099.rows.map((r) => [r.vendorName, r.taxId ?? '', r.totalPaid, r.is1099Eligible ? 'Yes' : 'No', r.w9OnFile ? 'Yes' : 'No', r.needsW9 ? 'Yes' : 'No', r.needs1099Review ? 'Yes' : 'No']);
@@ -293,7 +299,7 @@
 			rows = ownerDist.rows.map((r) => [r.ownerName, r.netToOwner, r.totalDistributed, r.undistributed]);
 		} else if (workOrders) {
 			headers = ['Property', 'Unit', 'Title', 'Category', 'Priority', 'Status', 'Vendor', 'Requested', 'Completed', 'Actual Cost'];
-			rows = workOrders.rows.map((r) => [r.propertyName, r.unitNumber ?? '', r.title, r.category, r.priorityName, r.statusName, r.vendorName ?? '', formatDate(r.requestedAt), r.completedAt ? formatDate(r.completedAt) : '', r.actualCost ?? '']);
+			rows = workOrders.rows.map((r) => [r.propertyName, r.unitNumber ?? '', r.title, formatMoneyCategoryLabel(r.category), formatStatusLabel(r.priorityName), formatStatusLabel(r.statusName), r.vendorName ?? '', formatDate(r.requestedAt), r.completedAt ? formatDate(r.completedAt) : '', r.actualCost ?? '']);
 		}
 		downloadCsv(`${reportKey}-${new Date().toISOString().slice(0, 10)}.csv`, toCsv(headers, rows));
 	}
@@ -304,7 +310,7 @@
 </script>
 
 <svelte:head>
-	<title>{entry?.title ?? 'Report'} - Rental Command</title>
+	<title>{reportTitle(reportKey, entry?.title ?? 'Report')} - Rental Command</title>
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20 print:overflow-visible print:p-0" data-testid="reports-viewer">
@@ -314,10 +320,17 @@
 			<a href="/reports" class="mb-1 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground print:hidden">
 				<ArrowLeft class="h-3.5 w-3.5" /> All reports
 			</a>
-			<h1 class="text-2xl font-bold">{entry?.title ?? reportKey}</h1>
+			<h1 class="text-2xl font-bold">{reportTitle(reportKey, entry?.title ?? reportKey)}</h1>
 			{#if periodLabel}
 				<p class="text-sm text-muted-foreground" data-testid="report-period">{periodLabel}</p>
 			{/if}
+			<a
+				href="/docs/reports"
+				class="mt-1 inline-flex min-h-11 items-center text-sm font-medium text-primary underline-offset-4 hover:underline print:hidden"
+				data-testid="report-help-link"
+			>
+				How reports work
+			</a>
 		</div>
 
 		{#if entry && !entry.external}
@@ -358,10 +371,10 @@
 		<Card.Root>
 			<Card.Content class="flex flex-col items-start gap-3 p-5">
 				<div class="flex items-center gap-2 text-sm text-muted-foreground">
-					<FileText class="h-4 w-4" /> {entry.description}
+					<FileText class="h-4 w-4" /> {reportDescription(reportKey, entry.description ?? '')}
 				</div>
 				<Button onclick={() => goto(externalLinks[entry.key] ?? '/reports')} data-testid="report-open-external">
-					<ExternalLink class="h-4 w-4" /> Open {entry.title}
+					<ExternalLink class="h-4 w-4" /> Open {reportTitle(reportKey, entry.title ?? reportKey)}
 				</Button>
 			</Card.Content>
 		</Card.Root>
@@ -473,7 +486,6 @@
 							<thead class="border-b bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
 								<tr>
 									<th class="px-3 py-2 font-medium">Property / Unit</th>
-									<th class="px-3 py-2 font-medium">Lease</th>
 									<th class="px-3 py-2 font-medium">Tenant</th>
 									<th class="px-3 py-2 text-right font-medium">Monthly Rent</th>
 									<th class="px-3 py-2 text-right font-medium">Deposit</th>
@@ -485,18 +497,17 @@
 								{#each rentRoll.rows as r (r.agreementId)}
 									<tr class="border-b last:border-0 hover:bg-muted/30">
 										<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div><div class="text-xs text-muted-foreground">Unit {r.unitNumber}</div></td>
-										<td class="px-3 py-2">{r.agreementNumber}</td>
 										<td class="px-3 py-2">{r.tenantName}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(r.monthlyRent)}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums">{money(r.securityDeposit)}</td>
 										<td class="px-3 py-2 text-xs text-muted-foreground">{formatDateOnly(r.startOn)} – {r.endOn ? formatDateOnly(r.endOn) : 'Month to month'}</td>
-										<td class="px-3 py-2">{r.statusName}</td>
+										<td class="px-3 py-2">{formatStatusLabel(r.statusName)}</td>
 									</tr>
 								{/each}
 							</tbody>
 							<tfoot class="border-t-2 bg-muted/40 font-semibold">
 								<tr>
-									<td class="px-3 py-2" colspan="3">{rentRoll.leaseCount} lease{rentRoll.leaseCount === 1 ? '' : 's'}</td>
+									<td class="px-3 py-2" colspan="2">{rentRoll.leaseCount} lease{rentRoll.leaseCount === 1 ? '' : 's'}</td>
 									<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(rentRoll.totalMonthlyRent)}</td>
 									<td class="px-3 py-2 text-right font-mono tabular-nums">{money(rentRoll.totalSecurityDeposit)}</td>
 									<td colspan="2"></td>
@@ -518,12 +529,12 @@
 							<tbody>
 								{#each rentLedger.leases as l (l.leaseManagementId)}
 									<tr class="border-b bg-muted/20">
-										<td class="px-3 py-2 font-semibold" colspan="6">{l.propertyName} · Unit {l.unitNumber} · {l.tenantName} ({l.relationshipNumber})</td>
+										<td class="px-3 py-2 font-semibold" colspan="6">{l.propertyName} · Unit {l.unitNumber} · {l.tenantName}</td>
 									</tr>
 									{#each l.entries as e, ei (ei)}
 										<tr class="border-b last:border-0 hover:bg-muted/30">
 											<td class="px-3 py-2">{formatDateOnly(e.date)}</td>
-											<td class="px-3 py-2">{e.type}</td>
+											<td class="px-3 py-2">{formatMoneyEntryLabel(e.type)}</td>
 											<td class="px-3 py-2 text-muted-foreground">{e.description}</td>
 											<td class="px-3 py-2 text-right font-mono tabular-nums">{e.charge ? money(e.charge) : '—'}</td>
 											<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{e.credit ? money(e.credit) : '—'}</td>
@@ -563,7 +574,7 @@
 							<tbody>
 								{#each delinquency.rows as r (r.leaseManagementId)}
 									<tr class="border-b last:border-0 hover:bg-muted/30">
-										<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div><div class="text-xs text-muted-foreground">Unit {r.unitNumber} · {r.relationshipNumber}</div></td>
+										<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div><div class="text-xs text-muted-foreground">Unit {r.unitNumber}</div></td>
 										<td class="px-3 py-2">{r.tenantName}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums">{r.buckets.current ? money(r.buckets.current) : '—'}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{r.buckets.days31To60 ? money(r.buckets.days31To60) : '—'}</td>
@@ -630,9 +641,9 @@
 								{#each generalLedger.entries as e (e.type + '-' + e.id)}
 									<tr class="border-b last:border-0 hover:bg-muted/30">
 										<td class="px-3 py-2">{formatDateOnly(e.date)}</td>
-										<td class="px-3 py-2">{e.type}</td>
+										<td class="px-3 py-2">{formatMoneyEntryLabel(e.type)}</td>
 										<td class="px-3 py-2">{e.description}{#if e.counterparty}<span class="text-muted-foreground"> · {e.counterparty}</span>{/if}</td>
-										<td class="px-3 py-2 text-muted-foreground">{e.category}</td>
+										<td class="px-3 py-2 text-muted-foreground">{formatMoneyCategoryLabel(e.category)}</td>
 										<td class="px-3 py-2 text-muted-foreground">{e.propertyName ?? '—'}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(e.amount)}">{money(e.amount)}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(e.runningBalance)}">{money(e.runningBalance)}</td>
@@ -723,12 +734,12 @@
 							<tbody>
 								{#each leaseExp.rows as r (r.agreementId)}
 									<tr class="border-b last:border-0 hover:bg-muted/30">
-										<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div><div class="text-xs text-muted-foreground">Unit {r.unitNumber} · {r.agreementNumber}</div></td>
+										<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div><div class="text-xs text-muted-foreground">Unit {r.unitNumber}</div></td>
 										<td class="px-3 py-2">{r.tenantName}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(r.monthlyRent)}</td>
 										<td class="px-3 py-2">{formatDateOnly(r.endOn)}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums {r.daysUntilExpiry < 0 ? 'text-destructive' : r.daysUntilExpiry <= 30 ? 'text-[var(--warning)]' : ''}">{r.daysUntilExpiry}</td>
-										<td class="px-3 py-2">{r.statusName}</td>
+										<td class="px-3 py-2">{formatStatusLabel(r.statusName)}</td>
 									</tr>
 								{/each}
 							</tbody>
@@ -756,13 +767,13 @@
 							<tbody>
 								{#each deposits.rows as r (r.depositId)}
 									<tr class="border-b last:border-0 hover:bg-muted/30">
-										<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div><div class="text-xs text-muted-foreground">Unit {r.unitNumber} · {r.relationshipNumber}</div></td>
+										<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div><div class="text-xs text-muted-foreground">Unit {r.unitNumber}</div></td>
 										<td class="px-3 py-2">{r.tenantName}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums">{money(r.held)}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums {r.deductions > 0 ? 'text-[var(--warning)]' : ''}">{r.deductions ? money(r.deductions) : '—'}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums">{r.returned ? money(r.returned) : '—'}</td>
 										<td class="px-3 py-2 text-right font-mono font-semibold tabular-nums text-success">{money(r.currentBalance)}</td>
-										<td class="px-3 py-2">{r.statusName}</td>
+										<td class="px-3 py-2">{formatStatusLabel(r.statusName)}</td>
 									</tr>
 								{/each}
 							</tbody>
@@ -869,9 +880,9 @@
 								{#each workOrders.rows as r (r.workOrderId)}
 									<tr class="border-b last:border-0 hover:bg-muted/30">
 										<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div>{#if r.unitNumber}<div class="text-xs text-muted-foreground">Unit {r.unitNumber}</div>{/if}</td>
-										<td class="px-3 py-2">{r.title}<div class="text-xs text-muted-foreground">{r.category}</div></td>
-										<td class="px-3 py-2">{r.priorityName}</td>
-										<td class="px-3 py-2">{r.statusName}</td>
+										<td class="px-3 py-2">{r.title}<div class="text-xs text-muted-foreground">{formatMoneyCategoryLabel(r.category)}</div></td>
+										<td class="px-3 py-2">{formatStatusLabel(r.priorityName)}</td>
+										<td class="px-3 py-2">{formatStatusLabel(r.statusName)}</td>
 										<td class="px-3 py-2 text-muted-foreground">{r.vendorName ?? '—'}</td>
 										<td class="px-3 py-2">{formatDate(r.requestedAt)}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums">{r.actualCost != null ? money(r.actualCost) : '—'}</td>

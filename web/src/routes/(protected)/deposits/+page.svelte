@@ -8,6 +8,7 @@
 		type TenantAccountDeposit,
 	} from '$lib/api/endpoints/securityDeposits';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import { formatRentalLocation, formatResidentName } from '$lib/accounting/money-display';
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { DataGrid } from '$lib/components/data-grid';
@@ -124,9 +125,9 @@
 
 {#snippet rentalCell(account: TenantAccountDeposit)}
 	<div class="flex flex-col" data-testid="deposit-rental">
-		<span>{account.propertyName ?? `Property #${account.propertyId}`}{account.unitNumber ? ` · Unit ${account.unitNumber}` : ''}</span>
+		<span>{formatRentalLocation(account)}</span>
 		<span class="text-xs text-muted-foreground">
-			{account.primaryTenantName ?? 'Tenant account'} · {account.relationshipNumber}
+			{formatResidentName(account.primaryTenantName)}
 		</span>
 	</div>
 {/snippet}
@@ -155,9 +156,17 @@
 		tone="mint"
 		eyebrow="Money"
 		title="Security Deposits"
-		description="Track each tenant account's deposit funds, deductions, refunds, and current held balance."
+		description="Track money held for each tenant, including deductions, refunds, and the amount still held."
 		data-testid="deposits-header"
-	/>
+	>
+		<a
+			href="/docs/security-deposits"
+			class="mt-3 inline-flex min-h-11 items-center text-sm font-medium text-primary underline-offset-4 hover:underline"
+			data-testid="deposits-help-link"
+		>
+			How security deposits work
+		</a>
+	</PageHeader>
 
 	<div class="mb-4 flex items-start gap-3 rounded-lg border border-[color-mix(in_srgb,var(--info)_38%,transparent)] bg-[color-mix(in_srgb,var(--info)_8%,var(--card))] p-3 text-sm" data-testid="deposits-explainer">
 		<Info class="mt-0.5 h-4 w-4 shrink-0 text-[var(--info)]" />
@@ -184,7 +193,7 @@
 		{columns}
 		loading={depositsQuery.isLoading}
 		emptyMessage={search.trim() ? 'No security deposit accounts match your search.' : 'No security deposit accounts yet.'}
-		emptyDescription={search.trim() ? 'Try a tenant, property, unit, or account number.' : 'An account is created when an approved application is prepared for move-in.'}
+		emptyDescription={search.trim() ? 'Try a tenant, property, or unit.' : 'A deposit account is prepared when an approved application is prepared for move-in.'}
 		getRowKey={(account) => account.securityDepositAccountId}
 		getRowTestId={(account) => `deposit-row-${account.securityDepositAccountId}`}
 		onRowClick={(account) => goto(`/deposits/${account.tenantAccountId}`)}

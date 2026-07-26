@@ -9,6 +9,7 @@
 	import { vendors } from '$lib/api/endpoints/vendors';
 	import type { ScheduleEReport } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import { formatExpenseCategory } from '$lib/accounting/expense-categories';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
@@ -96,7 +97,7 @@
 </script>
 
 <svelte:head>
-	<title>Tax Summary - Rental Command</title>
+	<title>Rental Tax Summary - Rental Command</title>
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="tax-page">
@@ -104,19 +105,27 @@
 		<div>
 			<h1 class="flex items-center gap-2 text-2xl font-bold">
 				<Receipt class="h-6 w-6 text-primary" />
-				Tax summary (Schedule E)
+				Rental tax summary
 			</h1>
 			<p class="mt-1 text-sm text-muted-foreground">
-				Estimated rental income and deductible expenses by property — for reference only,
-				not tax advice. Share with your accountant.
+				Estimate the rental income and expenses your accountant may use for Schedule E.
+				This is a reference, not tax advice.
 			</p>
-			<p class="mt-1 max-w-xl text-xs text-muted-foreground" data-testid="tax-basis-note">
-				Accrual basis: expenses count when <span class="font-medium">incurred</span> (any status),
-				by the date incurred. The
-				<a href="/owners-report" class="underline underline-offset-2">Owner Reports</a> statement
-				uses cash basis (paid expenses only), so the same property can show a different expense
-				total there.
-			</p>
+			<details class="mt-2 max-w-xl text-xs text-muted-foreground" data-testid="tax-basis-note">
+				<summary class="cursor-pointer font-medium">Why totals may differ from owner statements</summary>
+				<p class="mt-2">
+					This summary counts an expense when it is incurred. The
+					<a href="/owners-report" class="underline underline-offset-2">owner statements</a> count it when it is paid,
+					so the same property can show a different expense total.
+				</p>
+			</details>
+			<a
+				href="/docs/taxes-and-1099"
+				class="mt-2 inline-flex min-h-11 items-center text-sm font-medium text-primary underline-offset-4 hover:underline"
+				data-testid="tax-help-link"
+			>
+				How tax reporting works
+			</a>
 		</div>
 		<div class="flex items-center gap-2">
 			<Select.Root type="single" bind:value={selectedYear}>
@@ -375,7 +384,7 @@
 										<tbody>
 											{#each property.expensesByCategory as item (item.category)}
 												<tr class="border-b border-border/50 last:border-0">
-													<td class="py-1.5 text-foreground">{item.category}</td>
+													<td class="py-1.5 text-foreground">{formatExpenseCategory(item.category)}</td>
 													<td class="py-1.5 text-right tabular-nums">{money(item.amount)}</td>
 												</tr>
 											{/each}

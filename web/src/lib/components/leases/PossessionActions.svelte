@@ -12,6 +12,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import * as Select from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';
 	import { KeyRound, Loader2, Undo2 } from '@lucide/svelte';
 
@@ -177,7 +178,7 @@
 	<CardHeader>
 		<CardTitle class="flex items-center gap-2"><KeyRound class="h-5 w-5" /> Possession</CardTitle>
 		<p class="text-sm text-muted-foreground">
-			Record the physical handoff separately from deposits, appointments, and lease paperwork.
+			Track when keys and physical access are handed over or returned.
 		</p>
 	</CardHeader>
 	<CardContent class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -215,10 +216,7 @@
 	<Dialog.Content class="max-w-md" data-testid="lease-give-possession-dialog">
 		<Dialog.Header>
 			<Dialog.Title>Give possession</Dialog.Title>
-			<Dialog.Description>
-				Confirm keys and physical control of unit {summary.unitNumber} have been handed to the tenant.
-				The server records the authoritative time.
-			</Dialog.Description>
+			<Dialog.Description>Confirm that the tenant received the keys and physical access to unit {summary.unitNumber}. Rental Command will record the time.</Dialog.Description>
 		</Dialog.Header>
 		<Dialog.Footer>
 			<Button variant="outline" onclick={closeGive} disabled={giveMutation.isPending}>Cancel</Button>
@@ -234,9 +232,7 @@
 	<Dialog.Content class="max-h-[90vh] max-w-2xl overflow-y-auto" data-testid="lease-return-possession-dialog">
 		<Dialog.Header>
 			<Dialog.Title>Return possession</Dialog.Title>
-			<Dialog.Description>
-				Disposition the exact current household and active portal grants returned by the server. Returning possession opens turnover.
-			</Dialog.Description>
+			<Dialog.Description>Choose what happens to each household member and their login access after the keys are returned. This will also start turnover work.</Dialog.Description>
 		</Dialog.Header>
 
 		{#if returnContextLoading}
@@ -258,20 +254,26 @@
 					{#each returnContext.parties as party (party.leaseManagementPartyId)}
 						<label class="grid gap-1 sm:grid-cols-[1fr_15rem] sm:items-center">
 							<span class="text-sm"><span class="font-medium">{party.tenantName}</span> · {party.role}</span>
-							<select
-								class="m3-field-surface h-10 w-full px-3 text-sm"
+							<Select.Root
+								type="single"
 								value={partyDispositions[party.leaseManagementPartyId] ?? ''}
-								onchange={(event) => {
-									const value = (event.currentTarget as HTMLSelectElement).value as ReturnPossessionPartyDisposition | '';
-									partyDispositions = { ...partyDispositions, [party.leaseManagementPartyId]: value || undefined };
+								onValueChange={(value) => {
+									partyDispositions = { ...partyDispositions, [party.leaseManagementPartyId]: value as ReturnPossessionPartyDisposition | undefined };
 									returnValidationError = '';
 								}}
-								data-testid="return-party-{party.leaseManagementPartyId}"
 							>
-								<option value="">Choose outcome…</option>
-								<option value="EndMembership">End household membership</option>
-								{#if party.role === 'Guarantor'}<option value="RetainGuarantor">Retain as guarantor</option>{/if}
-							</select>
+								<Select.Trigger class="w-full" data-testid="return-party-{party.leaseManagementPartyId}">
+									{partyDispositions[party.leaseManagementPartyId] === 'EndMembership'
+										? 'Remove from this household'
+										: partyDispositions[party.leaseManagementPartyId] === 'RetainGuarantor'
+											? 'Keep as guarantor'
+											: 'Choose what happens'}
+								</Select.Trigger>
+								<Select.Content>
+									<Select.Item value="EndMembership" label="Remove from this household">Remove from this household</Select.Item>
+									{#if party.role === 'Guarantor'}<Select.Item value="RetainGuarantor" label="Keep as guarantor">Keep as guarantor</Select.Item>{/if}
+								</Select.Content>
+							</Select.Root>
 						</label>
 					{/each}
 				</section>
@@ -290,20 +292,26 @@
 								<span class="font-medium">{access.userDisplayName || access.userEmail}</span>
 								<span class="block text-xs text-muted-foreground">{access.tenantName} · {access.userEmail}</span>
 							</span>
-							<select
-								class="m3-field-surface h-10 w-full px-3 text-sm"
+							<Select.Root
+								type="single"
 								value={accessDispositions[access.tenantUserAccessId] ?? ''}
-								onchange={(event) => {
-									const value = (event.currentTarget as HTMLSelectElement).value as ReturnPossessionAccessDisposition | '';
-									accessDispositions = { ...accessDispositions, [access.tenantUserAccessId]: value || undefined };
+								onValueChange={(value) => {
+									accessDispositions = { ...accessDispositions, [access.tenantUserAccessId]: value as ReturnPossessionAccessDisposition | undefined };
 									returnValidationError = '';
 								}}
-								data-testid="return-access-{access.tenantUserAccessId}"
 							>
-								<option value="">Choose outcome…</option>
-								<option value="RevokeNow">Revoke access now</option>
-								<option value="RetainHistorical">Retain historical access</option>
-							</select>
+								<Select.Trigger class="w-full" data-testid="return-access-{access.tenantUserAccessId}">
+									{accessDispositions[access.tenantUserAccessId] === 'RevokeNow'
+										? 'Remove login access now'
+										: accessDispositions[access.tenantUserAccessId] === 'RetainHistorical'
+											? 'Keep access to past records'
+											: 'Choose what happens'}
+								</Select.Trigger>
+								<Select.Content>
+									<Select.Item value="RevokeNow" label="Remove login access now">Remove login access now</Select.Item>
+									<Select.Item value="RetainHistorical" label="Keep access to past records">Keep access to past records</Select.Item>
+								</Select.Content>
+							</Select.Root>
 						</label>
 					{/each}
 				</section>
