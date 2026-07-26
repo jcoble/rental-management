@@ -587,7 +587,7 @@
 
 ### TSK-754-D019 — Existing-property scan search did not refresh while typing
 
-- Status: Fix implemented; Azure emulator verification pending
+- Status: Fixed and verified in the live Azure Android emulator
 - Severity: Blocking mobile scan-review defect
 - Reproduction:
   - Resume `SCN-0022`, choose Link existing, and type `Union` into
@@ -603,11 +603,19 @@
 - Fix:
   - Debounce `onChanged` by 300 milliseconds, store the submitted query in widget state, reset
     paging, and retain immediate keyboard-submit behavior.
-- Evidence: `mobile/azure/d019-link-existing-search-unfiltered.png`.
+- Verification:
+  - All 14 focused lease-scan override tests passed and focused analysis reported no issues at
+    exact source SHA `83d3e1fb3dbd638b1fdd91bf1997d7d018bf9caf`.
+  - Android version code `75406` was built under the Azure heavy-work lock and installed without
+    clearing application data or authentication.
+  - Typing `Union` without submitting narrowed the live results to Union Duplex alone.
+- Evidence:
+  - `mobile/azure/d019-link-existing-search-unfiltered.png`
+  - `mobile/azure/d019-d020-existing-property-unit-fixed.png`
 
 ### TSK-754-D020 — Mobile lease scan could not create a Unit under an existing Property
 
-- Status: Fix implemented; Azure emulator verification pending
+- Status: Fixed and verified end to end in the live Azure stack
 - Severity: Blocking multi-rental scan-import defect
 - Reproduction:
   - Review `SCN-0022`, whose proposal correctly links Union Duplex and creates Unit B.
@@ -625,6 +633,15 @@
   - Expose a `Create the Unit from this lease scan` choice for each matching Property.
   - Permit confirmation with an existing Property, no existing Unit, and a reviewed Unit number.
   - Continue sending no `unitId`, which invokes the server's existing atomic Unit-creation path.
+- Verification:
+  - The live review separately displayed `Create the Unit from this lease scan` for Union Duplex
+    and the existing Unit A target.
+  - Confirming `SCN-0022` created Unit B under Property 21 and did not alter or reuse Unit A.
+  - PostgreSQL returned 21 Properties and 22 Units after confirmation, with all five dependent
+    tenant, management, agreement, and account aggregates exactly 22.
+- Evidence:
+  - `mobile/azure/d019-d020-existing-property-unit-fixed.png`
+  - `mobile/azure/scn-0022-opening-lease-confirmed.png`
 
 ## Tooling and maintenance observations
 
@@ -791,16 +808,25 @@
   reads matched the reviewed 2-bedroom, 1-bath, 1,425-square-foot unit, $1,375 market rent,
   rent and deposit, possession date, due day, late fee, and all tenant contacts. All six
   aggregates advanced atomically from 20 to 21.
+- Evidence: `mobile/azure/scn-0021-opening-lease-confirmed.png`.
+- `SCN-0022` exercised a second Unit lease under the existing Union Duplex MultiRental Property.
+  Draft 27 and the executed artifact retained the planned JPEG SHA-256
+  `2ec5d61984b5a7990560ce60d71744ebc1659147b7f91a7ea2ad59a97dd61bd9`.
+- The fixed live search selected Union Duplex while leaving Unit A untouched, and the fixed
+  existing-Property path created Unit B from the scan. Direct PostgreSQL reads matched Sage King,
+  every contact, three bedrooms, one bathroom, 1,540 square feet, possession date `2026-05-01`,
+  $1,900 market rent/rent/deposit, $75 late fee, and due day 1.
+- Properties correctly remained 21 while Units, Tenants, LeaseManagements, LeaseAgreements, and
+  TenantAccounts advanced atomically from 21 to 22.
+- Evidence: `mobile/azure/scn-0022-opening-lease-confirmed.png`.
 
 ## Checkpoint 2026-07-26
 
 - Status: isolated run initialized; January 3 opening-lease batch in progress
 - Completed run rows: 1 / 1,996
-- Uploaded and confirmed scan assets: 21 / 953
+- Uploaded and confirmed scan assets: 22 / 953
 - Pilot scan confirmations: 1
-- Official scan confirmations: 21
+- Official scan confirmations: 22
 - Findings and safety blockers: 20
-- Current blockers: D019 and D020 require Azure deployment and emulator verification before
-  `SCN-0022` can be confirmed safely.
-- Next action: deploy and verify D019/D020, complete `SCN-0022` through `SCN-0024`, then execute
-  the January 3 rent receipts.
+- Current blockers: none for the January 3 opening-lease batch.
+- Next action: complete `SCN-0023` and `SCN-0024`, then execute the January 3 rent receipts.
