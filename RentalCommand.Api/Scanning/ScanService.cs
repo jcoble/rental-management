@@ -271,6 +271,27 @@ public sealed class ScanService : IScanService
             fields.UnitId = hasUnitOverride
                 ? unitOverride is > 0 ? unitOverride : null
                 : fields.UnitId ?? draft.CaptureUnitId;
+            if (fields.UnitId is > 0
+                && !await _db.EnsureUnitInPortfolioAsync(
+                    portfolioId,
+                    fields.UnitId.Value,
+                    fields.PropertyId > 0 ? fields.PropertyId : null,
+                    ct))
+            {
+                if (hasUnitOverride && unitOverride is > 0)
+                {
+                    throw new ScanConfirmationValidationException(
+                        "The selected Unit does not belong to the selected Property.");
+                }
+
+                _logger.LogWarning(
+                    "Clearing stale extracted Unit {UnitId} from lease scan draft {DraftId} "
+                    + "after reviewer selected Property {PropertyId}.",
+                    fields.UnitId,
+                    draftId,
+                    fields.PropertyId);
+                fields.UnitId = null;
+            }
             var hasPremisesOverride = hasPropertyOverride || hasUnitOverride;
             var leaseManagementId = PositiveOverride(
                 overrideRoot, "leaseManagementId", "lease_management_id")
