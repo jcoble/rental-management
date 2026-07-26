@@ -6,8 +6,8 @@
 - Notion task: `TSK-754`
 - Environment: `https://redacted-host.example.invalid`
 - Initial source SHA: `ccac9ee24331bf42695772d745fb3a5a6992d10c`
-- Current verified API source SHA: `1a34244a2cfb7133d60557d9c130d5914d32c699`
-- Current verified mobile source SHA: `7fbd4455f192cf21eabefdd38ee74b39c0f0a824`
+- Current verified API source SHA: `c56902e973f045b1e4f7f8e4c7ef28bcd2725972`
+- Current verified mobile source SHA: `c56902e973f045b1e4f7f8e4c7ef28bcd2725972`
 - Planner: `Docs/Testing/YearSimulation2027/index.html`
 - Schedule: `Docs/Testing/YearSimulation2027/schedule.csv`
 - Corpus: `/Users/blackcolours/dev/work/rental-management/output/pdf/tsk-749-year-simulation-scan-corpus`
@@ -427,7 +427,7 @@
 
 ### TSK-754-D015 — Historical signed-lease import creates contradictory lifecycle state
 
-- Status: Confirmed; SCN-0014 corrected through the real lifecycle UI, source defect remains
+- Status: Fixed and verified through the live Azure API, PostgreSQL database, and Android emulator
 - Severity: Blocking lifecycle and money defect
 - Reproduction:
   - With the simulation in January 2027, import fully signed `SCN-0014` with a March 1, 2026 start.
@@ -447,6 +447,30 @@
   - Confirming the same action recorded possession, changed lifecycle to Occupied, and reduced
     reconciliation exceptions for LeaseManagement 13 from one to zero.
   - Evidence: `mobile/azure/scn-0014-possession-recorded.png`
+- Root cause:
+  - Signed-lease confirmation created the lease relationship and active agreement without accepting
+    or validating the historical possession fact.
+  - A historical agreement could therefore govern the business date while the lifecycle still
+    projected as pre-possession.
+- Fix:
+  - Add `possession_given_at` to the reviewed scan contract and native lease review.
+  - For a new historical, already-signed lease relationship, require a reviewed possession date no
+    later than confirmation and persist it inside the same atomic confirmation transaction.
+  - Preserve the existing behavior for future signed leases and imports linked to an existing
+    relationship.
+- Verification:
+  - Passed: eight data-contract tests, two focused API lease-preparation tests, two PostgreSQL
+    historical signed-lease integration tests, and all 12 focused native scan-override tests.
+  - Exact source SHA `c56902e973f045b1e4f7f8e4c7ef28bcd2725972` was built under the Azure
+    heavy-work lock and deployed to both the isolated API stack and Android emulator.
+  - `SCN-0015` was imported through the native review with possession date `2026-04-01`.
+    PostgreSQL independently returned that exact date, no possession exception, Active agreement
+    `SCN-0015`, and the native Unit screen immediately reported Occupied.
+  - The source SHA-256 matched the manifest:
+    `bf226e792857c2a4c3a87db9c2868e078f5ca721da13e1c6f21aa593f54beaf5`.
+  - All reviewed property, unit, tenant, and lease values matched the oracle, and all six aggregate
+    counts advanced atomically from 14 to 15.
+  - Evidence: `mobile/azure/d015-historical-lease-possession-fixed.png`.
 
 ### TSK-754-D016 — Date-only simulation clock anchors at UTC midnight
 
@@ -580,16 +604,24 @@
   PostgreSQL reads matched every reviewed value.
 - `SCN-0013` independently reproduced D015: its governing historical signed agreement was saved
   without possession and projected as Upcoming with a reconciliation exception.
+- After the D015 fix was deployed, `SCN-0015` was uploaded through Android DocumentsUI and
+  completed through the native review. Every property, unit, tenant, and lease field was populated;
+  the new possession field was set to `2026-04-01`.
+- Confirmation advanced Properties, Units, Tenants, LeaseManagements, LeaseAgreements, and
+  TenantAccounts atomically from 14 to 15. Direct PostgreSQL reads matched Oak House, Unit Main,
+  Uri Price and all reviewed contacts and lease terms, including the $1,725 rent and deposit,
+  $75 late fee, and possession date. The Unit screen immediately reported Occupied and no
+  possession reconciliation exception was stored.
+- Evidence: `mobile/azure/d015-historical-lease-possession-fixed.png`.
 
 ## Checkpoint 2026-07-26
 
 - Status: isolated run initialized; January 3 opening-lease batch in progress
 - Completed run rows: 1 / 1,996
-- Uploaded and confirmed scan assets: 14 / 953
+- Uploaded and confirmed scan assets: 15 / 953
 - Pilot scan confirmations: 1
-- Official scan confirmations: 14
+- Official scan confirmations: 15
 - Findings and safety blockers: 16
-- Current blockers:
-  - D015 remains a confirmed lifecycle defect; its source fix and Azure regression proof are in
-    progress.
-- Next action: deploy and prove D015, then resume the remaining January 3 scans and rent receipts.
+- Current blockers: none for the January 3 opening-lease batch.
+- Next action: execute the controlled duplicate confirmation, then resume `SCN-0016` through
+  `SCN-0024` and the January 3 rent receipts.
