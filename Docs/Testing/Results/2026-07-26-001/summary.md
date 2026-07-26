@@ -6,7 +6,8 @@
 - Notion task: `TSK-754`
 - Environment: `https://rental-command.chimp-map.ts.net`
 - Initial source SHA: `ccac9ee24331bf42695772d745fb3a5a6992d10c`
-- Current verified source SHA: `1a34244a2cfb7133d60557d9c130d5914d32c699`
+- Current verified API source SHA: `1a34244a2cfb7133d60557d9c130d5914d32c699`
+- Current verified mobile source SHA: `7fbd4455f192cf21eabefdd38ee74b39c0f0a824`
 - Planner: `Docs/Testing/YearSimulation2027/index.html`
 - Schedule: `Docs/Testing/YearSimulation2027/schedule.csv`
 - Corpus: `/Users/blackcolours/dev/work/rental-management/output/pdf/tsk-749-year-simulation-scan-corpus`
@@ -375,7 +376,7 @@
 
 ### TSK-754-D014 — Mobile lease review cannot complete tenant and unit details
 
-- Status: Confirmed; SCN-0014 corrected through the native manual-edit forms, source defect remains
+- Status: Fixed and verified through the live Azure Android emulator
 - Severity: High scan-first data-completeness defect
 - Reproduction:
   - Upload `SCN-0014` through Android DocumentsUI and choose Create new.
@@ -403,6 +404,26 @@
     `vw_lease_management_lifecycle` returned business date `2027-01-03`, lifecycle `Occupied`,
     primary tenant Rina King, and no reconciliation exception.
     Evidence: `mobile/azure/scn-0014-unit-corrected.png`.
+- Root cause:
+  - The native review's fixed lease-field order rendered only tenant name and seven lease terms.
+    The API contract and override builder already accepted the omitted tenant and unit facts, but
+    no native inputs exposed them.
+- Fix:
+  - Render tenant email, phone, emergency contact, unit number, bedrooms, bathrooms, and square
+    feet in every native lease review.
+  - Use email, phone, and numeric keyboards for the corresponding inputs.
+  - Add a regression contract requiring each supported field to remain recognized and rendered.
+- Verification:
+  - The regression failed against the old source, then all 12 focused mobile tests passed against
+    exact source SHA `7fbd4455f192cf21eabefdd38ee74b39c0f0a824`.
+  - The APK built from that exact SHA was installed over the existing app on Azure emulator
+    `emulator-5554`.
+  - The fixed review visibly rendered every added input. Evidence:
+    `mobile/azure/d014-mobile-lease-review-fixed.png`.
+  - `SCN-0013` was then confirmed through that review. PostgreSQL independently matched Nolan
+    Flores, `tenant.013@example.local`, `6145550113`, `Morgan Flores 614-555-0198`, Unit Main,
+    3 bedrooms, 1 bathroom, 1,425 square feet, lease `SCN-0013`, $1,575 rent, $1,575 deposit,
+    and a $50 late fee.
 
 ### TSK-754-D015 — Historical signed-lease import creates contradictory lifecycle state
 
@@ -554,16 +575,21 @@
   notes fields. The corrected values reloaded in the app and matched direct PostgreSQL reads.
 - The corrected unit now reports Occupied/Active on the native Summary and has no lease
   reconciliation exception.
+- The fixed native review then confirmed `SCN-0013` with every exposed tenant, unit, and lease
+  field completed. All six aggregate counts advanced atomically from 13 to 14, and direct
+  PostgreSQL reads matched every reviewed value.
+- `SCN-0013` independently reproduced D015: its governing historical signed agreement was saved
+  without possession and projected as Upcoming with a reconciliation exception.
 
 ## Checkpoint 2026-07-26
 
 - Status: isolated run initialized; January 3 opening-lease batch in progress
 - Completed run rows: 1 / 1,996
-- Uploaded and confirmed scan assets: 13 / 953
+- Uploaded and confirmed scan assets: 14 / 953
 - Pilot scan confirmations: 1
-- Official scan confirmations: 13
+- Official scan confirmations: 14
 - Findings and safety blockers: 16
 - Current blockers:
-  - None at this checkpoint; D014 and D015 remain confirmed defects with safe manual correction
-    paths for this run.
-- Next action: resume the remaining January 3 scans and rent receipts.
+  - D015 remains a confirmed lifecycle defect; its source fix and Azure regression proof are in
+    progress.
+- Next action: deploy and prove D015, then resume the remaining January 3 scans and rent receipts.
