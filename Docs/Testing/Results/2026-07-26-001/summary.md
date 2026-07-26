@@ -217,7 +217,7 @@
 
 ### TSK-754-D008 — Mobile scan preview traps the review screen's vertical swipe
 
-- Status: Confirmed; first fix failed emulator retest; revised fix pending retest
+- Status: Fixed and verified on the Azure Android emulator
 - Severity: High scan-review usability defect
 - Reproduction:
   - Upload `SCN-0013` through Android's system file picker as a signed agreement.
@@ -241,6 +241,10 @@
   - Revised fix: remove `InteractiveViewer` from the embedded preview entirely so the parent review
     owns the normal vertical gesture.
   - Add a focused contract regression test for the preview's gesture configuration.
+- Verification:
+  - Passed: after uploading `SCN-0014`, a vertical swipe beginning inside the rendered document
+    preview moved the review list to the signing and property controls.
+  - Evidence: `mobile/azure/d008-preview-origin-scroll-fixed.png`.
 - Evidence:
   - `mobile/scn-0013-mobile-after-picker.png`
   - `mobile/scn-0013-review-scroll-fast.png`
@@ -268,7 +272,7 @@
 
 ### TSK-754-D010 — Newly invited management users receive 403 on allowed screens
 
-- Status: Confirmed; root cause fixed in source; focused integration and Azure runtime retest pending
+- Status: Fixed and verified through the API and Azure Android emulator
 - Severity: Critical role-access defect
 - Reproduction:
   - Invite a new Workspace Administrator, activate the invitation, and sign in through the native
@@ -293,6 +297,74 @@
     role profile's default experience.
   - Add an integration assertion that a new Leasing Agent invitation persists Leasing while the
     existing relationship-context test continues to prove Owner is preserved.
+- Verification:
+  - Passed: the focused PostgreSQL invitation integration test.
+  - Passed: a newly invited Workspace Administrator received HTTP 200 from
+    `GET /api/v1/properties`.
+  - Passed: the same invited administrator opened the native Properties screen and loaded Arbor
+    House through Elm Haven on the Azure emulator.
+  - Evidence: `mobile/azure/d010-invited-admin-properties-fixed.png`.
+
+### TSK-754-D011 — Lease scan can confidently suggest an unrelated existing rental
+
+- Status: Confirmed; unsafe draft preserved without business mutation
+- Severity: Critical scan-safety defect
+- Reproduction:
+  - Upload the rendered `SCN-0014` North Street Home camera JPEG through the Azure Android app.
+  - Open its completed review.
+- Expected:
+  - The draft proposes North Street Home, 338 North Street, Columbus, OH 43214, Unit Main,
+    Rina King, and lease `SCN-0014`.
+- Actual:
+  - The draft initially proposed linking the document to the existing Kingston House / Unit Main.
+  - The create-new fields then contained unrelated Kingston House data, lease `SCN-0011`, and
+    unrelated city/state/postal values while reporting 22 fields ready.
+- Safety evidence:
+  - The Import action was never enabled while the required rental-structure choice was missing.
+  - Two attempted confirms returned HTTP 400; all six rental aggregate counts remained exactly 12.
+  - The unsafe draft remains Reviewing because D013 prevented its planned rejection.
+  - Evidence: `mobile/azure/d008-preview-origin-scroll-fixed.png`.
+- Follow-up:
+  - Trace the extraction and portfolio-grounding inputs for draft 17 before permitting a retry to
+    create or link any aggregate.
+
+### TSK-754-D012 — Server and test projects restore packages with known vulnerabilities
+
+- Status: Confirmed; remediation not yet applied
+- Severity: High security maintenance finding
+- Evidence:
+  - `System.Security.Cryptography.Xml` 9.0.0 reports five high-severity advisories:
+    `GHSA-23rf-6693-g89p`, `GHSA-8q5v-6pqq-x66h`, `GHSA-cvvh-rhrc-wg4q`,
+    `GHSA-g8r8-53c2-pm3f`, and `GHSA-mmjf-rqrv-855v`.
+  - `SQLitePCLRaw.lib.e_sqlite3` 2.1.11 reports high-severity advisory
+    `GHSA-2m69-gcr7-jv3q`.
+  - `MailKit` 4.15.1 reports moderate-severity advisory `GHSA-9j88-vvj5-vhgr`.
+- Follow-up:
+  - Upgrade or remove the vulnerable dependency versions, then rerun restore, focused tests, and
+    dependency auditing before security completion.
+
+### TSK-754-D013 — Rejecting a reviewing scan returns HTTP 500
+
+- Status: Root cause fixed; focused regression passed; live Azure API retest pending
+- Severity: High scan-workflow defect
+- Reproduction:
+  - From the native review for draft 17, enter a rejection reason and confirm Reject.
+  - `POST /api/v1/scans/17/reject` returns HTTP 500 and the draft remains Reviewing.
+- Root cause:
+  - `RejectAuthorizedAsync` changed a tracked `ScanDraft`, which is an `Updated` database
+    mutation, but bound its semantic audit as `Rejected`.
+  - The atomic audit boundary correctly rejected that mismatch with
+    `Semantic audit does not match the exact pending tracked mutation.`
+- Safety evidence:
+  - The atomic transaction rolled back; the draft remained Reviewing and no rental aggregate was
+    created.
+- Fix:
+  - Bind the rejection's exact tracked operation as `Updated` while retaining its rejected status,
+    reviewer, reason, and semantic change description.
+  - Add a focused regression contract guarding the exact operation.
+- Verification:
+  - Failed before the fix and passed after it on the Azure runner.
+  - All six focused `AtomicScanConfirmationPersistenceTests` pass.
 
 ## Tooling and maintenance observations
 
@@ -303,6 +375,13 @@
 - The current iOS plugin set is not fully compatible with Swift Package Manager.
 - Dev push registration remains unavailable because the dev Firebase configuration is absent;
   native push verification requires the separate configured-production lane.
+- The first API image rebuild used the repository root instead of the published API directory,
+  producing a container without `RentalCommand.Api.dll` and a temporary HTTP 502. The isolated
+  database, uploads, credentials, keys, and volumes were untouched. Rebuilding from `publish/api`
+  restored HTTP 200 health. This is a verification-harness incident, not a product defect.
+- The .NET build also reports nullable-reference warnings across Data, API, Portal, Money, and
+  Portfolio QA paths; `Program` symbol conflicts in Engine tests; and obsolete test APIs. These
+  remain maintenance findings to triage without weakening the executed behavioral results.
 
 ## Disproved observations
 
@@ -379,8 +458,8 @@
 - Uploaded and confirmed scan assets: 12 / 953
 - Pilot scan confirmations: 1
 - Official scan confirmations: 12
-- Findings and safety blockers: 6
-- Current blocker: none; D006 was transient and its identical-file retry succeeded without a
-  partial mutation.
-- Next action: advance the simulation clock to 2027-01-03 and execute the next dated schedule rows,
-  including the planned rent receipts and opening-lease scans.
+- Findings and safety blockers: 13
+- Current blocker: D013 is fixed in source and awaits live Azure runtime verification before the
+  unsafe draft can be rejected.
+- Next action: deploy the D013 fix to the isolated Azure runtime, reject draft 17, and resume the
+  January 3 rent-receipt and opening-lease schedule rows.
