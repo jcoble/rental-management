@@ -74,6 +74,7 @@ public sealed class DevClockControllerTests : IAsyncLifetime
             db,
             timeProvider,
             clockState,
+            new FixedTimeZoneProvider("America/New_York"),
             new TestAtomicInfrastructureUnitOfWork(db));
 
         var jan1 = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -101,6 +102,35 @@ public sealed class DevClockControllerTests : IAsyncLifetime
         reset.SimNowUtc.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(10));
     }
 
+    [SkippableFact]
+    public async Task Set_DateOnly_AnchorsAtStartOfSelectedBusinessDate()
+    {
+        Skip.IfNot(_dockerAvailable, "Docker is not available; DevClockController Postgres round-trip skipped.");
+
+        var services = new ServiceCollection();
+        services.AddDbContext<RentalCommandDbContext>(o => o.UseNpgsql(_conn));
+        await using var provider = services.BuildServiceProvider();
+
+        var clockState = new ClockStateProvider(provider.GetRequiredService<IServiceScopeFactory>());
+        var timeProvider = new SimulationTimeProvider(clockState);
+        await clockState.RefreshAsync();
+
+        using var scope = provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var controller = new DevClockController(
+            db,
+            timeProvider,
+            clockState,
+            new FixedTimeZoneProvider("America/New_York"),
+            new TestAtomicInfrastructureUnitOfWork(db));
+
+        var set = Body(await controller.Set(
+            new SetClockRequest(null, "2027-01-03", null, "frozen"),
+            default));
+
+        set.SimNowUtc.Should().Be(new DateTime(2027, 1, 3, 5, 0, 0, DateTimeKind.Utc));
+    }
+
     private static ClockStateResponse Body(ActionResult<ClockStateResponse> result)
     {
         var ok = result.Result as OkObjectResult;
@@ -110,4 +140,9 @@ public sealed class DevClockControllerTests : IAsyncLifetime
 
     private static RentalCommandDbContext NewContext(string connString) =>
         new(new DbContextOptionsBuilder<RentalCommandDbContext>().UseNpgsql(connString).Options);
+
+    private sealed class FixedTimeZoneProvider(string id) : IAppTimeZoneProvider
+    {
+        public TimeZoneInfo BusinessTimeZone { get; } = TimeZoneInfo.FindSystemTimeZoneById(id);
+    }
 }
