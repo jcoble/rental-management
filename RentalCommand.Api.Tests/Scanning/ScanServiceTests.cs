@@ -591,6 +591,103 @@ public class ScanServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task PrepareConfirmationAsync_LeaseTarget_PropertyOverrideClearsExtractedUnitFromAnotherProperty()
+    {
+        var draft = SeedDraft(
+            "Reviewing",
+            extractedFields:
+                """{"property_id":{"value":"12"},"unit_id":{"value":"34"}}""",
+            targetEntityType: "LeaseAgreement");
+        _db.Properties.AddRange(
+            new Property
+            {
+                Id = 12,
+                PortfolioId = PortfolioId,
+                Name = "Extracted Property",
+                AddressLine1 = "12 Extracted Street",
+                City = "Akron",
+                State = "OH",
+                PostalCode = "44301",
+            },
+            new Property
+            {
+                Id = 21,
+                PortfolioId = PortfolioId,
+                Name = "Selected Property",
+                AddressLine1 = "21 Selected Street",
+                City = "Akron",
+                State = "OH",
+                PostalCode = "44301",
+            });
+        _db.Units.Add(new Unit
+        {
+            Id = 34,
+            PortfolioId = PortfolioId,
+            PropertyId = 12,
+            UnitNumber = "Extracted",
+        });
+        await _db.SaveChangesAsync();
+
+        var result = await _sut.PrepareConfirmationAsync(
+            PortfolioId,
+            draft.Id,
+            userId: 7,
+            overridesJson:
+                """{"propertyId":21,"reviewDisposition":"AlreadyFullySigned"}""");
+
+        result.Outcome.Should().Be(ScanConfirmationPreparationOutcome.Ready);
+        result.Command.Should().NotBeNull();
+        result.Command!.Target.LeaseAgreement.Should().NotBeNull();
+        result.Command.Target.LeaseAgreement!.PropertyId.Should().Be(21);
+        result.Command.Target.LeaseAgreement.UnitId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PrepareConfirmationAsync_LeaseTarget_RejectsExplicitUnitFromAnotherProperty()
+    {
+        var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "LeaseAgreement");
+        _db.Properties.AddRange(
+            new Property
+            {
+                Id = 12,
+                PortfolioId = PortfolioId,
+                Name = "Unit Property",
+                AddressLine1 = "12 Unit Street",
+                City = "Akron",
+                State = "OH",
+                PostalCode = "44301",
+            },
+            new Property
+            {
+                Id = 21,
+                PortfolioId = PortfolioId,
+                Name = "Selected Property",
+                AddressLine1 = "21 Selected Street",
+                City = "Akron",
+                State = "OH",
+                PostalCode = "44301",
+            });
+        _db.Units.Add(new Unit
+        {
+            Id = 34,
+            PortfolioId = PortfolioId,
+            PropertyId = 12,
+            UnitNumber = "Wrong property",
+        });
+        await _db.SaveChangesAsync();
+
+        var action = () => _sut.PrepareConfirmationAsync(
+            PortfolioId,
+            draft.Id,
+            userId: 7,
+            overridesJson:
+                """{"propertyId":21,"unitId":34,"reviewDisposition":"AlreadyFullySigned"}""");
+
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>()
+            .WithMessage("*selected Unit*selected Property*");
+    }
+
+    [Fact]
     public async Task PrepareConfirmationAsync_InvalidOverrideJson_IsRejectedBeforeAtomicBoundary()
     {
         var draft = SeedDraft("Reviewing", extractedFields: null);
