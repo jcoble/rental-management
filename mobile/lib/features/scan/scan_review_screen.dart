@@ -443,9 +443,11 @@ Map<String, dynamic> buildOverridesMap({
   if (isLease) {
     if (createNewProperty) {
       // Empty-portfolio bootstrap (C3): propertyId=0 explicitly requests a new
-      // property; no unitId is sent, so the server creates its first unit from
-      // the reviewed document. Structure comes only from this user choice.
+      // property. unitId=0 explicitly clears any Unit command-center capture
+      // context so the server creates the first unit from the reviewed document.
+      // Structure comes only from this user choice.
       overrides['propertyId'] = 0;
+      overrides['unitId'] = 0;
       if (newPropertyRentalStructure == null) {
         throw ArgumentError.value(
           newPropertyRentalStructure,
@@ -466,7 +468,10 @@ Map<String, dynamic> buildOverridesMap({
       if (selectedPropertyId != null) {
         overrides['propertyId'] = selectedPropertyId;
       }
-      if (selectedUnitId != null) overrides['unitId'] = selectedUnitId;
+      // A null selection is an affirmative "create the Unit from this lease"
+      // choice. Send the zero sentinel so a stale capture-context Unit cannot
+      // silently win on the server.
+      overrides['unitId'] = selectedUnitId ?? 0;
     }
     // Tenant: a chosen id links; null lets the server match/create from
     // tenant_name (same in both property modes).

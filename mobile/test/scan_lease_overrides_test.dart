@@ -168,8 +168,8 @@ void main() {
       );
 
       expect(overrides['propertyId'], 0);
+      expect(overrides['unitId'], 0);
       expect(overrides['rentalStructure'], 'SingleRental');
-      expect(overrides.containsKey('unitId'), isFalse);
       expect(overrides['propertyName'], 'Maple Court');
       expect(overrides['propertyAddress'], '123 Maple St');
       expect(overrides['propertyCity'], 'Austin');
@@ -255,7 +255,7 @@ void main() {
       );
 
       expect(overrides['propertyId'], 21);
-      expect(overrides.containsKey('unitId'), isFalse);
+      expect(overrides['unitId'], 0);
       expect(overrides['unit_number'], 'B');
       expect(overrides['monthly_rent'], '1900');
     });
