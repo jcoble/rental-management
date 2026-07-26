@@ -2,8 +2,8 @@
 """Generate the TSK-749 year-long Rental Command operating simulation.
 
 This generator intentionally produces a readable HTML runbook and machine-readable
-control files. It does not generate the scan corpus itself; scan-assets.csv is the
-source contract for the later fixture-generation pass.
+control files. The companion render-year-simulation-scan-corpus.py command turns
+scan-assets.csv into the uploadable PDF/JPEG corpus and validation indexes.
 """
 
 from __future__ import annotations
@@ -604,7 +604,7 @@ def build_opening_setup() -> None:
             "Lease",
             "Direct scan draft; confirms property, unit, tenant, LeaseManagement, agreement, and account",
             "PDF" if int(lease.lease_id[1:]) % 2 else "Camera JPEG",
-            "9 pages" if int(lease.lease_id[1:]) % 2 else "9 images stitched to one PDF",
+            "9 pages" if int(lease.lease_id[1:]) % 2 else "9 page photos composited into one long JPEG",
             ["clean exported PDF", "phone camera slight skew", "low contrast photocopy"][int(lease.lease_id[1:]) % 3],
             "landlord; tenant; premises; property name; unit; start/end; monthly rent; deposit; due day; signatures",
             "one co-tenant on every sixth lease; due day 31 on L031; handwritten initials on every fifth lease",
@@ -2781,7 +2781,7 @@ ul.checks li{{margin:8px 0}} .danger{{color:var(--red);font-weight:700}} footer{
 
 <section id="scans">
 <h2>5. Scan corpus plan</h2>
-<p><code>scan-assets.csv</code> is the fixture-generation contract. Every row fixes the filename, date, target or contextual attachment, format, pages/images, capture difficulty, expected fields, edge case, linked records, and paired manual action. Generate assets only from that manifest; never use real leases, checks, IDs, signatures, statements, or account numbers.</p>
+<p><code>scan-assets.csv</code> is the fixture-generation contract. Every row fixes the filename, date, target or contextual attachment, format, pages/images, capture difficulty, expected fields, edge case, linked records, and paired manual action. Render it with <code>scripts/qa/render-year-simulation-scan-corpus.py</code>, then use the matching dated folder under <code>output/pdf/tsk-749-year-simulation-scan-corpus/documents/</code>. Never use real leases, checks, IDs, signatures, statements, or account numbers.</p>
 {row_table(["Document family","Planned assets"], family_rows)}
 <h3>Required quality distribution</h3>
 <p><span class="pill">clean exported PDF</span><span class="pill">multi-page lease</span><span class="pill">phone JPEG</span><span class="pill">stitched camera PDF</span><span class="pill">skew</span><span class="pill">shadow</span><span class="pill">low contrast</span><span class="pill">thermal receipt</span><span class="pill">handwriting</span><span class="pill">duplicate</span><span class="pill">wrong target</span><span class="pill">blank/unsupported/oversize</span></p>
@@ -2904,8 +2904,12 @@ The CSVs and `rental-command-2027-simulation-oracle.xlsx` are the independent
 controls. Do not change amounts or dates during execution without issuing a
 versioned planner correction and regenerating every dependent control.
 
-`scan-assets.csv` specifies the later synthetic fixture-generation pass. No real
-documents, identities, signatures, accounts, or production data are permitted.
+`scan-assets.csv` is the source manifest for the rendered synthetic fixture corpus.
+Generate it with `scripts/qa/render-year-simulation-scan-corpus.py`; the default
+destination is `output/pdf/tsk-749-year-simulation-scan-corpus/`. Use the dated
+folders under `documents/` with the matching simulated clock day. The generated
+`corpus-index.csv` records the checksum and validation result for every upload file.
+No real documents, identities, signatures, accounts, or production data are permitted.
 
 `screen-inventory.csv`, `field-inventory.csv`, `role-journeys.csv`,
 `crud-lifecycles.csv`, and `notification-scenarios.csv` are regenerated from the
