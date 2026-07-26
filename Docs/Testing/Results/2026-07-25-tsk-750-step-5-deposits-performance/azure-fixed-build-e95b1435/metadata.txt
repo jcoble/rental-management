@@ -1,0 +1,6 @@
+stack_id=rental
+commit=e95b1435944375a44a0ade3ad23db216e3de703b
+started_at=2026-07-25T22:27:36Z
+expires_at=2026-07-26T06:27:34Z
+private_url=http://100.126.201.65:15667
+public_url=https://redacted-host.example.invalid

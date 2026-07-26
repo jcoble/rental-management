@@ -1,0 +1,40 @@
+      Request finished HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/appointments/schedule-summary - 200 - application/json;+charset=utf-8 162.3844ms
+      Request finished HTTP/1.1 GET http://localhost:8080/health - 200 - application/json;+charset=utf-8 0.2937ms
+      Request starting HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/tenant-accounts/deposits/page?skip=0&take=20&sort=-createdAtUtc - application/json -
+      Request finished HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/tenant-accounts/deposits/page?skip=0&take=20&sort=-createdAtUtc - 200 - application/json;+charset=utf-8 1157.5027ms
+      Request finished HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/conversations/unread-count - 200 - application/json;+charset=utf-8 52.5870ms
+      Request finished HTTP/1.1 GET http://localhost:8080/health - 200 - application/json;+charset=utf-8 0.4594ms
+      Request finished HTTP/1.1 GET http://localhost:8080/health - 200 - application/json;+charset=utf-8 0.3082ms
+      Request finished HTTP/1.1 GET http://localhost:8080/health - 200 - application/json;+charset=utf-8 0.3044ms
+      Request finished HTTP/1.1 GET http://localhost:8080/health - 200 - application/json;+charset=utf-8 0.3223ms
+      Request finished HTTP/1.1 GET http://localhost:8080/health - 200 - application/json;+charset=utf-8 0.3197ms
+      Request starting HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/tenant-accounts/deposits/page?skip=0&take=20&sort=-createdAtUtc - application/json -
+      Request finished HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/tenant-accounts/deposits/page?skip=0&take=20&sort=-createdAtUtc - 200 - application/json;+charset=utf-8 1141.4660ms
+      Request finished HTTP/1.1 GET http://localhost:8080/health - 200 - application/json;+charset=utf-8 0.2994ms
+      Request starting HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/tenant-accounts/deposits/page?skip=0&take=20&sort=-createdAtUtc - application/json -
+      Request finished HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/tenant-accounts/deposits/page?skip=0&take=20&sort=-createdAtUtc - 200 - application/json;+charset=utf-8 1139.7671ms
+      Request starting HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/tenant-accounts/deposits/page?skip=0&take=20&sort=-createdAtUtc - application/json -
+      Request finished HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/conversations/unread-count - 200 - application/json;+charset=utf-8 69.6620ms
+      Request finished HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/tenant-accounts/deposits/page?skip=0&take=20&sort=-createdAtUtc - 200 - application/json;+charset=utf-8 1153.1857ms
+      Request starting HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/tenant-accounts/deposits/page?skip=0&take=20&sort=-createdAtUtc - application/json -
+      Request finished HTTP/1.1 GET http://localhost:8080/health - 200 - application/json;+charset=utf-8 0.5195ms
+      Request finished HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/tenant-accounts/deposits/page?skip=0&take=20&sort=-createdAtUtc - 200 - application/json;+charset=utf-8 1180.2943ms
+      Request starting HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/tenant-accounts/deposits/page?skip=0&take=20&sort=-createdAtUtc - application/json -
+      Request finished HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/tenant-accounts/deposits/page?skip=0&take=20&sort=-createdAtUtc - 200 - application/json;+charset=utf-8 1060.5332ms
+      Request starting HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/tenant-accounts/deposits/page?skip=0&take=20&sort=-createdAtUtc - application/json -
+      Request finished HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/tenant-accounts/deposits/page?skip=0&take=20&sort=-createdAtUtc - 200 - application/json;+charset=utf-8 1140.4078ms
+      Request finished HTTP/1.1 GET http://localhost:8080/health - 200 - application/json;+charset=utf-8 0.3047ms
+      Request starting HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/tenant-accounts/deposits/page?skip=0&take=20&sort=-createdAtUtc - application/json -
+      Request finished HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/tenant-accounts/deposits/page?skip=0&take=20&sort=-createdAtUtc - 200 - application/json;+charset=utf-8 1137.2125ms
+      Request starting HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/tenant-accounts/deposits/page?skip=0&take=20&sort=-createdAtUtc - application/json -
+      Request finished HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/tenant-accounts/deposits/page?skip=0&take=20&sort=-createdAtUtc - 200 - application/json;+charset=utf-8 1060.6283ms
+      Request finished HTTP/1.1 GET http://localhost:8080/health - 200 - application/json;+charset=utf-8 0.7120ms
+      Request starting HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/tenant-accounts/deposits/page?skip=0&take=20&sort=-createdAtUtc - application/json -
+      Request finished HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/tenant-accounts/deposits/page?skip=0&take=20&sort=-createdAtUtc - 200 - application/json;+charset=utf-8 1162.5512ms
+      Request starting HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/tenant-accounts/deposits/page?skip=0&take=20&sort=-createdAtUtc - application/json -
+      Request finished HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/tenant-accounts/deposits/page?skip=0&take=20&sort=-createdAtUtc - 200 - application/json;+charset=utf-8 1079.7278ms
+      Request finished HTTP/1.1 GET http://localhost:8080/health - 200 - application/json;+charset=utf-8 0.2763ms
+      Request finished HTTP/1.1 GET http://localhost:8080/health - 200 - application/json;+charset=utf-8 0.3351ms
+      Request finished HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/appointments/schedule-summary - 200 - application/json;+charset=utf-8 64.5686ms
+      Request finished HTTP/1.1 GET http://localhost:8080/health - 200 - application/json;+charset=utf-8 0.2588ms
+      Request finished HTTP/1.1 GET http://redacted-host.example.invalid/api/v1/conversations/unread-count - 200 - application/json;+charset=utf-8 51.7650ms

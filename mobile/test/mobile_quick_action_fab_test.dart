@@ -26,7 +26,7 @@ void main() {
       );
       expect(find.text('Assistant'), findsNothing);
       expect(find.text('Record'), findsNothing);
-      expect(find.text('Scan / Add'), findsOneWidget);
+      expect(find.text('Scan / Add'), findsNothing);
 
       await tester.tap(find.byTooltip('Scan / Add'));
       await tester.pumpAndSettle();
@@ -44,6 +44,53 @@ void main() {
       expect(find.text('Record'), findsNothing);
     },
   );
+
+  testWidgets('closed launcher is compact and keeps scan discoverable', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _authenticatedApp(
+        home: Scaffold(
+          floatingActionButton: MobileQuickActionFab(
+            onChat: () {},
+            onRecord: () {},
+            onScan: () {},
+          ),
+        ),
+      ),
+    );
+
+    final closedFab = tester.widget<FloatingActionButton>(
+      find.byType(FloatingActionButton),
+    );
+    final closedSize = tester.getSize(find.byType(FloatingActionButton));
+
+    expect(closedFab.isExtended, isFalse);
+    expect(closedSize.width, lessThanOrEqualTo(closedSize.height + 8));
+    expect(find.byTooltip('Scan / Add'), findsOneWidget);
+    expect(find.text('Scan / Add'), findsNothing);
+
+    await tester.tap(find.byTooltip('Scan / Add'));
+    await tester.pumpAndSettle();
+
+    final openFab = tester.widget<FloatingActionButton>(
+      find.byType(FloatingActionButton),
+    );
+    expect(openFab.isExtended, isTrue);
+    expect(find.byTooltip('Close quick actions'), findsOneWidget);
+    expect(find.text('Scan / Add'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Close quick actions'));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<FloatingActionButton>(find.byType(FloatingActionButton))
+          .isExtended,
+      isFalse,
+    );
+    expect(find.text('Scan / Add'), findsNothing);
+  });
 
   testWidgets('disabled animations preserve the exact Scan / Add action', (
     tester,
@@ -331,6 +378,48 @@ void main() {
     controller.clearHidden(secondOwner);
     expect(controller.hidden, isFalse);
   });
+
+  testWidgets(
+    'scope hider restores visibility without clearing another owner',
+    (tester) async {
+      final controller = MobileQuickActionController();
+      final otherOwner = Object();
+      var showHider = true;
+      late StateSetter setHostState;
+      addTearDown(controller.dispose);
+
+      await tester.pumpWidget(
+        _authenticatedApp(
+          home: MobileQuickActionScope(
+            controller: controller,
+            child: StatefulBuilder(
+              builder: (context, setState) {
+                setHostState = setState;
+                return showHider
+                    ? const MobileQuickActionHider(child: Text('Action form'))
+                    : const Text('Ordinary page');
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(controller.hidden, isTrue);
+
+      controller.setHidden(otherOwner, true);
+      setHostState(() => showHider = false);
+      await tester.pump();
+
+      expect(find.text('Ordinary page'), findsOneWidget);
+      expect(controller.hidden, isTrue);
+
+      controller.clearHidden(otherOwner);
+      await tester.pump();
+
+      expect(controller.hidden, isFalse);
+    },
+  );
 
   testWidgets('scoped primary action falls back when top action unmounts', (
     tester,

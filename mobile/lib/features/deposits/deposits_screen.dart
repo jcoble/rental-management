@@ -58,6 +58,7 @@ class _DepositsScreenState extends ConsumerState<DepositsScreen> {
   final _searchController = TextEditingController();
   Timer? _searchDebounce;
   String? _status;
+  bool _loadingMore = false;
 
   @override
   void initState() {
@@ -87,6 +88,18 @@ class _DepositsScreenState extends ConsumerState<DepositsScreen> {
   }
 
   Future<void> _refresh() => ref.read(depositsProvider.notifier).refresh();
+
+  Future<void> _loadMore() async {
+    if (_loadingMore) return;
+    setState(() => _loadingMore = true);
+    try {
+      await ref.read(depositsProvider.notifier).loadMore();
+    } finally {
+      if (mounted) {
+        setState(() => _loadingMore = false);
+      }
+    }
+  }
 
   void _showFundSheet({TenantAccountDeposit? account}) {
     final accounts =
@@ -242,12 +255,7 @@ class _DepositsScreenState extends ConsumerState<DepositsScreen> {
               ),
             ),
             ...state.when(
-              loading: () => const [
-                SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: Center(child: CircularProgressIndicator()),
-                ),
-              ],
+              loading: () => const [_DepositsLoadingSliver()],
               error: (error, _) => [
                 SliverFillRemaining(
                   hasScrollBody: false,
@@ -290,11 +298,24 @@ class _DepositsScreenState extends ConsumerState<DepositsScreen> {
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(16, 4, 16, 100),
                         child: OutlinedButton(
-                          onPressed: ref
-                              .read(depositsProvider.notifier)
-                              .loadMore,
-                          child: Text(
-                            'Load more (${page.items.length} of ${page.totalCount})',
+                          onPressed: _loadingMore ? null : _loadMore,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (_loadingMore) ...[
+                                const SizedBox.square(
+                                  key: Key('deposits-load-more-progress'),
+                                  dimension: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                              ],
+                              Text(
+                                'Load more (${page.items.length} of ${page.totalCount})',
+                              ),
+                            ],
                           ),
                         ),
                       ),
@@ -305,6 +326,49 @@ class _DepositsScreenState extends ConsumerState<DepositsScreen> {
               },
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DepositsLoadingSliver extends StatelessWidget {
+  const _DepositsLoadingSliver();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+
+    return SliverPadding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 100),
+      sliver: SliverToBoxAdapter(
+        child: MobileM3ListItem(
+          key: const Key('deposits-loading'),
+          position: MobileM3ListItemPosition.single,
+          leading: MobileM3LeadingIcon(
+            icon: Icons.shield_outlined,
+            backgroundColor: colors.primaryContainer,
+            foregroundColor: colors.onPrimaryContainer,
+          ),
+          title: Text(
+            'Loading security deposits',
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          supporting: [
+            Text(
+              'Tenant, property, status, and held balance',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colors.onSurfaceVariant,
+              ),
+            ),
+          ],
+          trailing: const SizedBox.square(
+            dimension: 22,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
         ),
       ),
     );

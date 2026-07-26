@@ -305,88 +305,90 @@ class _RecordTenantReceiptSheetState
       widget.rentalLabel,
       widget.tenantName,
     ].whereType<String>().where((value) => value.trim().isNotEmpty).join(' · ');
-    return SingleChildScrollView(
-      padding: EdgeInsets.fromLTRB(20, 4, 20, 24 + bottom),
-      child: Form(
-        key: _formKey,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              'Record receipt',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            if (contextLabel.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              Text(contextLabel),
-            ],
-            const SizedBox(height: 16),
-            TextFormField(
-              controller: _amount,
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-              decoration: const InputDecoration(
-                labelText: 'Amount',
-                prefixText: '\$',
-              ),
-              validator: (value) {
-                final amount = double.tryParse(value?.trim() ?? '');
-                return amount == null || amount <= 0
-                    ? 'Enter an amount greater than zero'
-                    : null;
-              },
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _method,
-              decoration: const InputDecoration(labelText: 'Payment method'),
-              validator: (value) => value == null || value.trim().isEmpty
-                  ? 'Payment method is required'
-                  : null,
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _description,
-              decoration: const InputDecoration(labelText: 'Description'),
-              validator: (value) => value == null || value.trim().isEmpty
-                  ? 'Description is required'
-                  : null,
-            ),
-            const SizedBox(height: 12),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Received on'),
-              subtitle: Text(dateFmt(_receivedOn)),
-              trailing: const Icon(Icons.calendar_today_outlined),
-              onTap: _pickDate,
-            ),
-            TextFormField(
-              controller: _reference,
-              decoration: const InputDecoration(
-                labelText: 'Reference (optional)',
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _payer,
-              decoration: const InputDecoration(
-                labelText: 'Payer name (optional)',
-              ),
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 12),
+    return MobileQuickActionHider(
+      child: SingleChildScrollView(
+        padding: EdgeInsets.fromLTRB(20, 4, 20, 24 + bottom),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
               Text(
-                _error!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
+                'Record receipt',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              if (contextLabel.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(contextLabel),
+              ],
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _amount,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: const InputDecoration(
+                  labelText: 'Amount',
+                  prefixText: '\$',
+                ),
+                validator: (value) {
+                  final amount = double.tryParse(value?.trim() ?? '');
+                  return amount == null || amount <= 0
+                      ? 'Enter an amount greater than zero'
+                      : null;
+                },
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _method,
+                decoration: const InputDecoration(labelText: 'Payment method'),
+                validator: (value) => value == null || value.trim().isEmpty
+                    ? 'Payment method is required'
+                    : null,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _description,
+                decoration: const InputDecoration(labelText: 'Description'),
+                validator: (value) => value == null || value.trim().isEmpty
+                    ? 'Description is required'
+                    : null,
+              ),
+              const SizedBox(height: 12),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Received on'),
+                subtitle: Text(dateFmt(_receivedOn)),
+                trailing: const Icon(Icons.calendar_today_outlined),
+                onTap: _pickDate,
+              ),
+              TextFormField(
+                controller: _reference,
+                decoration: const InputDecoration(
+                  labelText: 'Reference (optional)',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _payer,
+                decoration: const InputDecoration(
+                  labelText: 'Payer name (optional)',
+                ),
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  _error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ],
+              const SizedBox(height: 20),
+              FilledButton(
+                onPressed: _saving ? null : _submit,
+                child: Text(_saving ? 'Saving…' : 'Record receipt'),
               ),
             ],
-            const SizedBox(height: 20),
-            FilledButton(
-              onPressed: _saving ? null : _submit,
-              child: Text(_saving ? 'Saving…' : 'Record receipt'),
-            ),
-          ],
+          ),
         ),
       ),
     );

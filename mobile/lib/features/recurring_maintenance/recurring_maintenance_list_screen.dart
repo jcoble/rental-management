@@ -44,6 +44,11 @@ String _fmtApiTime(String? raw) {
   return '$displayHour:${minute.toString().padLeft(2, '0')} $suffix';
 }
 
+@visibleForTesting
+String recurringMaintenanceEmptyInstruction(bool activeOnly) => activeOnly
+    ? 'Nothing scheduled right now.'
+    : 'Open the action button and choose New recurring task.';
+
 Color _priorityColor(String priority, ColorScheme cs) {
   switch (priority.toLowerCase()) {
     case 'emergency':
@@ -428,9 +433,7 @@ class _EmptyBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final msg = activeOnly ? 'No active tasks' : 'No recurring tasks yet';
-    final sub = activeOnly
-        ? 'Nothing scheduled right now.'
-        : 'Tap + to schedule recurring maintenance.';
+    final sub = recurringMaintenanceEmptyInstruction(activeOnly);
     return ListView(
       children: [
         SizedBox(
