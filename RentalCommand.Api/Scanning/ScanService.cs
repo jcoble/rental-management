@@ -297,7 +297,8 @@ public sealed class ScanService : IScanService
                 disposition, leaseManagementId, tenantAccountId, leaseAgreementId, templateId,
                 TermsSchemaVersion: 1,
                 TermsPayload: string.IsNullOrWhiteSpace(draft.ExtractedFields) ? "{}" : draft.ExtractedFields,
-                GracePeriodDays: 0));
+                GracePeriodDays: 0,
+                PossessionGivenAtUtc: fields.PossessionGivenAtUtc));
         }
         else if (kind == ScanConfirmationTargetKind.Application)
         {
@@ -1317,6 +1318,9 @@ public sealed class ScanService : IScanService
             fields.LeaseNumber = ReadFieldValue(root, "lease_number") ?? ReadFieldValue(root, "leaseNumber");
             fields.StartDate = ParseDateField(root, "start_date") ?? ParseDateField(root, "startDate");
             fields.EndDate = ParseDateField(root, "end_date") ?? ParseDateField(root, "endDate");
+            fields.PossessionGivenAtUtc = ParseDateField(root, "possession_given_at")
+                ?? ParseDateField(root, "possessionGivenAtUtc")
+                ?? ParseDateField(root, "possession_given_at_utc");
             fields.MonthlyRent = ParseDecimalField(root, "monthly_rent") ?? ParseDecimalField(root, "monthlyRent");
             fields.SecurityDeposit = ParseDecimalField(root, "security_deposit") ?? ParseDecimalField(root, "securityDeposit");
             fields.LateFee = ParseDecimalField(root, "late_fee") ?? ParseDecimalField(root, "lateFee");
@@ -1430,6 +1434,21 @@ public sealed class ScanService : IScanService
                     System.Globalization.DateTimeStyles.AssumeUniversal, out var end))
             {
                 fields.EndDate = end;
+            }
+            if (TryGetOverrideString(
+                    root,
+                    out var possessionStr,
+                    "possessionGivenAtUtc",
+                    "possession_given_at",
+                    "possession_given_at_utc")
+                && DateTime.TryParse(
+                    possessionStr,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal |
+                    System.Globalization.DateTimeStyles.AssumeUniversal,
+                    out var possessionGivenAtUtc))
+            {
+                fields.PossessionGivenAtUtc = possessionGivenAtUtc;
             }
             if (TryGetOverrideDecimal(root, out var rent, "monthlyRent", "monthly_rent"))
                 fields.MonthlyRent = rent;
@@ -1857,6 +1876,7 @@ public sealed class ScanService : IScanService
         public string? LeaseNumber { get; set; }
         public DateTime? StartDate { get; set; }
         public DateTime? EndDate { get; set; }
+        public DateTime? PossessionGivenAtUtc { get; set; }
         public decimal? MonthlyRent { get; set; }
         public decimal? SecurityDeposit { get; set; }
         public decimal? LateFee { get; set; }

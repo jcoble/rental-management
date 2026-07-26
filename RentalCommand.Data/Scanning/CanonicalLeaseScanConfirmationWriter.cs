@@ -664,6 +664,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
             UnitId = home.UnitId,
             RelationshipNumber = $"LM-SCAN-{command.DraftId:D8}",
             PlannedPossessionAtUtc = target.StartDate,
+            PossessionGivenAtUtc = target.PossessionGivenAtUtc,
             CreatedAtUtc = now,
             CreatedByUserId = command.ConfirmedByUserId,
             UpdatedAtUtc = now,
@@ -728,6 +729,18 @@ internal static class CanonicalLeaseScanConfirmationWriter
                 "Lease review requires its disposition, term start, rent, and rent due day.");
         if (target.EndDate.HasValue && target.EndDate.Value.Date < target.StartDate.Value.Date)
             throw new ScanConfirmationValidationException("Lease end date cannot precede its start date.");
+        if (target.PossessionGivenAtUtc > command.ConfirmedAtUtc)
+            throw new ScanConfirmationValidationException(
+                "Possession date cannot be later than the confirmation date.");
+        if (target.ReviewDisposition == LeaseScanReviewDisposition.AlreadyFullySigned
+            && target.LeaseManagementId is not > 0
+            && target.StartDate.Value.Date <= command.ConfirmedAtUtc.Date
+            && (!target.EndDate.HasValue || target.EndDate.Value.Date >= command.ConfirmedAtUtc.Date)
+            && target.PossessionGivenAtUtc is null)
+        {
+            throw new ScanConfirmationValidationException(
+                "A fully signed lease whose term has started requires the reviewed possession date.");
+        }
         if (target.ReviewDisposition == LeaseScanReviewDisposition.AlreadyFullySigned
             && (command.SourceStoredFileId is not > 0
                 || string.IsNullOrWhiteSpace(command.SourceContentSha256)
