@@ -385,6 +385,84 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task HistoricalSignedLeaseImport_PersistsReviewedPossessionAndProjectsOccupied()
+    {
+        SkipIfDockerUnavailable();
+        var source = await SeedLeaseDraftAsync("Historical signed lease");
+        var possessionGivenAtUtc = CommandTime.AddMonths(-1);
+        var target = LeaseTarget(
+            propertyId: 0,
+            unitId: null,
+            tenantId: null,
+            propertyName: "Possession House",
+            propertyAddress: "71 Possession Avenue",
+            propertyCity: "Akron",
+            propertyState: "OH",
+            propertyPostalCode: "44308",
+            rentalStructure: RentalStructure.SingleRental,
+            unitNumber: null,
+            startDate: possessionGivenAtUtc,
+            endDate: CommandTime.AddMonths(11),
+            possessionGivenAtUtc: possessionGivenAtUtc);
+
+        var outcome = await UnitOfWork.ExecuteAsync(
+            ScanConfirmationCommandIdentity.Create(
+                _portfolioId, source.DraftId, "historical-possession"),
+            LeaseCommand(source, target),
+            Codec);
+
+        await using var verify = Scope();
+        var agreement = await verify.Db.LeaseAgreements.AsNoTracking()
+            .SingleAsync(row => row.Id == outcome.Value.TargetEntityId);
+        var relationship = await verify.Db.LeaseManagements.AsNoTracking()
+            .SingleAsync(row => row.Id == agreement.LeaseManagementId);
+        relationship.PossessionGivenAtUtc.Should().Be(possessionGivenAtUtc);
+        var lifecycle = await verify.Db.LeaseManagementLifecycleProjections.AsNoTracking()
+            .SingleAsync(row => row.LeaseManagementId == relationship.Id);
+        lifecycle.Lifecycle.Should().Be("Occupied");
+        lifecycle.HasGoverningAgreementWithoutPossession.Should().BeFalse();
+        lifecycle.HasReconciliationException.Should().BeFalse();
+    }
+
+    [SkippableFact]
+    public async Task HistoricalSignedLeaseImport_WithoutPossessionRejectsAndRollsBackWholeGraph()
+    {
+        SkipIfDockerUnavailable();
+        var source = await SeedLeaseDraftAsync("Contradictory historical signed lease");
+        var target = LeaseTarget(
+            propertyId: 0,
+            unitId: null,
+            tenantId: null,
+            propertyName: "Rollback House",
+            propertyAddress: "72 Rollback Avenue",
+            propertyCity: "Akron",
+            propertyState: "OH",
+            propertyPostalCode: "44308",
+            rentalStructure: RentalStructure.SingleRental,
+            unitNumber: null,
+            startDate: CommandTime.AddMonths(-1),
+            endDate: CommandTime.AddMonths(11));
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, source.DraftId, "historical-missing-possession");
+        var command = LeaseCommand(source, target);
+
+        var action = () => UnitOfWork.ExecuteAsync(identity, command, Codec);
+
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>()
+            .WithMessage("*requires the reviewed possession date*");
+        await using var verify = Scope();
+        (await verify.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == source.DraftId))
+            .Status.Should().Be("Reviewing");
+        (await verify.Db.Properties.CountAsync(row =>
+            row.PortfolioId == _portfolioId && row.AddressLine1 == "72 Rollback Avenue"))
+            .Should().Be(0);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(0);
+    }
+
+    [SkippableFact]
     public async Task ForeignPropertyReference_IsUnauthorizedAndRollsBackClaimTargetAndReceipt()
     {
         SkipIfDockerUnavailable();
@@ -512,7 +590,10 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         string? propertyState = null,
         string? propertyPostalCode = null,
         RentalStructure? rentalStructure = null,
-        string? unitNumber = "1") => new(
+        string? unitNumber = "1",
+        DateTime? startDate = null,
+        DateTime? endDate = null,
+        DateTime? possessionGivenAtUtc = null) => new(
         propertyId,
         unitId,
         tenantId,
@@ -532,8 +613,8 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         UnitBathrooms: 1m,
         UnitSquareFeet: 900,
         LeaseNumber: "EXT-LEASE-1",
-        StartDate: new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc),
-        EndDate: new DateTime(2027, 7, 31, 0, 0, 0, DateTimeKind.Utc),
+        StartDate: startDate ?? new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc),
+        EndDate: endDate ?? new DateTime(2027, 7, 31, 0, 0, 0, DateTimeKind.Utc),
         MonthlyRent: 1_250m,
         SecurityDeposit: 1_250m,
         LateFee: 50m,
@@ -542,7 +623,8 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
         LeaseManagementId: leaseManagementId,
         TenantAccountId: tenantAccountId,
         TermsSchemaVersion: 1,
-        TermsPayload: "{}");
+        TermsPayload: "{}",
+        PossessionGivenAtUtc: possessionGivenAtUtc);
 
     private static ScanLoanTargetData LoanTarget(int propertyId) => new(
         propertyId,

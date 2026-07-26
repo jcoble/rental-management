@@ -26,6 +26,7 @@ void main() {
       'unit_bedrooms',
       'unit_bathrooms',
       'unit_square_feet',
+      'possession_given_at',
     ]) {
       expect(
         RegExp("'$field'").allMatches(source).length,
@@ -37,6 +38,7 @@ void main() {
 
     expect(source, contains("'unit_square_feet',"));
     expect(source, contains("'tenant_email': 'Tenant email'"));
+    expect(source, contains("'possession_given_at': 'Possession date'"));
   });
 
   test('payment confirmation sends tenantAccountId and no legacy leaseId', () {

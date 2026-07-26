@@ -115,7 +115,8 @@ public sealed record ScanLeaseTargetData(
     int? DocumentTemplateId = null,
     int TermsSchemaVersion = 1,
     string? TermsPayload = null,
-    short GracePeriodDays = 0) : IAtomicCommandData;
+    short GracePeriodDays = 0,
+    DateTime? PossessionGivenAtUtc = null) : IAtomicCommandData;
 
 public sealed record ScanApplicationTargetData(
     string? FirstName,

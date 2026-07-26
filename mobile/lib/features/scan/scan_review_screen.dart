@@ -160,6 +160,7 @@ const _leaseFieldOrder = <String>[
   'lease_number',
   'start_date',
   'end_date',
+  'possession_given_at',
   'monthly_rent',
   'security_deposit',
   'late_fee',
@@ -270,6 +271,7 @@ const _dateFields = {
   // Lease terms
   'start_date',
   'end_date',
+  'possession_given_at',
   // Applicant fields
   'date_of_birth',
   'desired_move_in_date',
@@ -310,6 +312,7 @@ const _labelOverrides = <String, String>{
   'lease_number': 'Lease number',
   'start_date': 'Start date',
   'end_date': 'End date',
+  'possession_given_at': 'Possession date',
   'monthly_rent': 'Monthly rent',
   'security_deposit': 'Security deposit',
   'late_fee': 'Late fee',
@@ -2735,6 +2738,13 @@ class _LeaseTermsSection extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
+          Text(
+            'For a signed lease that has already started, enter the date the tenant received possession.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 12),
           ...ordered.map(
             (field) => Padding(
               padding: const EdgeInsets.only(bottom: 12),

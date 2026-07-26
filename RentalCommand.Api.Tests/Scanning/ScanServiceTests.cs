@@ -465,7 +465,7 @@ public class ScanServiceTests : IDisposable
             draft.Id,
             userId: 7,
             overridesJson:
-                """{"reviewDisposition":"AlreadyFullySigned","tenantName":"Jordan Tenant","startDate":"2026-08-01","endDate":"2027-07-31","monthlyRent":1250,"rentDueDay":1}""");
+                """{"reviewDisposition":"AlreadyFullySigned","tenantName":"Jordan Tenant","startDate":"2026-08-01","endDate":"2027-07-31","possessionGivenAtUtc":"2026-08-01","monthlyRent":1250,"rentDueDay":1}""");
 
         result.Outcome.Should().Be(ScanConfirmationPreparationOutcome.Ready);
         result.Command.Should().NotBeNull();
@@ -481,6 +481,8 @@ public class ScanServiceTests : IDisposable
         command.Target.LeaseAgreement.LeaseManagementId.Should().Be(56);
         command.Target.LeaseAgreement.TenantAccountId.Should().Be(78);
         command.Target.LeaseAgreement.DocumentTemplateId.Should().BeNull();
+        command.Target.LeaseAgreement.PossessionGivenAtUtc.Should()
+            .Be(new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc));
     }
 
     [Fact]
