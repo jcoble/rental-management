@@ -521,6 +521,12 @@ public class ScanServiceTests : IDisposable
         draft.CapturePropertyId = 12;
         draft.CaptureUnitId = 34;
         await _db.SaveChangesAsync();
+        // These tracked values model the remaining Unit command-center context.
+        // They need not be valid targets because an explicit premises choice
+        // must clear them before the sealed command is created.
+        draft.CaptureLeaseManagementId = 56;
+        draft.CaptureTenantAccountId = 78;
+        draft.CaptureLeaseAgreementId = 90;
 
         var result = await _sut.PrepareConfirmationAsync(
             PortfolioId,
@@ -534,6 +540,9 @@ public class ScanServiceTests : IDisposable
         result.Command!.Target.LeaseAgreement.Should().NotBeNull();
         result.Command.Target.LeaseAgreement!.PropertyId.Should().Be(0);
         result.Command.Target.LeaseAgreement.UnitId.Should().BeNull();
+        result.Command.Target.LeaseAgreement.LeaseManagementId.Should().BeNull();
+        result.Command.Target.LeaseAgreement.TenantAccountId.Should().BeNull();
+        result.Command.Target.LeaseAgreement.LeaseAgreementId.Should().BeNull();
     }
 
     [Fact]
@@ -560,6 +569,9 @@ public class ScanServiceTests : IDisposable
         draft.CapturePropertyId = 12;
         draft.CaptureUnitId = 34;
         await _db.SaveChangesAsync();
+        draft.CaptureLeaseManagementId = 56;
+        draft.CaptureTenantAccountId = 78;
+        draft.CaptureLeaseAgreementId = 90;
 
         var result = await _sut.PrepareConfirmationAsync(
             PortfolioId,
@@ -573,6 +585,9 @@ public class ScanServiceTests : IDisposable
         result.Command!.Target.LeaseAgreement.Should().NotBeNull();
         result.Command.Target.LeaseAgreement!.PropertyId.Should().Be(21);
         result.Command.Target.LeaseAgreement.UnitId.Should().BeNull();
+        result.Command.Target.LeaseAgreement.LeaseManagementId.Should().BeNull();
+        result.Command.Target.LeaseAgreement.TenantAccountId.Should().BeNull();
+        result.Command.Target.LeaseAgreement.LeaseAgreementId.Should().BeNull();
     }
 
     [Fact]
