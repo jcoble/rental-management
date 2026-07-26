@@ -658,4 +658,24 @@ void main() {
     expect(listSource, isNot(contains('GuidedRentalFlow.open')));
     expect(listSource, isNot(contains("import 'guided_rental_flow.dart';")));
   });
+
+  test('scan gallery capture preserves document resolution', () {
+    final captureSource = File(
+      'lib/features/scan/scan_capture.dart',
+    ).readAsStringSync();
+
+    expect(
+      captureSource,
+      contains(
+        'source == ImageSource.gallery\n'
+        '        ? await picker.pickImage(source: source)',
+      ),
+    );
+    expect(captureSource, contains('ImagePicker().pickMultiImage()'));
+    expect(
+      captureSource,
+      isNot(contains('maxHeight: 1600')),
+      reason: 'A height cap makes tall, multi-page document scans unreadable.',
+    );
+  });
 }
