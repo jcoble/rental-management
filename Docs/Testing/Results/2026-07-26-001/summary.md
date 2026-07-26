@@ -91,6 +91,9 @@
   - Re-uploaded the same PDF; extraction completed and opened the five-step review.
 - Security note:
   - The credential remains encrypted in the application database and the saved form clears it.
+  - The preview OpenAI key appeared once in diagnostic tool output during the shared-stack pilot.
+    It must be rotated before this run is treated as security-complete; the key value is not
+    reproduced in this evidence.
 
 ### TSK-754-D004 — Shared preview clock changes every portfolio's worker time
 
@@ -109,6 +112,36 @@
     uploads/data-protection volumes.
   - Do not resume the schedule against the shared `rental` database.
 
+### TSK-754-D005 — Tall camera JPEG can produce unrelated high-confidence lease data
+
+- Status: Code fix passes focused provider tests; real scan retry required
+- Severity: Blocking scan-safety defect
+- Reproduction:
+  - Upload `SCN-0002`, a 1,360 by 13,210 camera JPEG containing nine vertically composited
+    photographed lease pages.
+  - Extraction opens the lease review but suggests the existing Arbor House and returns unrelated
+    tenant, dates, rent, deposit, and fee values at 100% self-reported confidence.
+- Safety evidence:
+  - The source image was inspected and contains the planned `SCN-0002` Briar Cottage / Gray Lewis
+    values; its SHA differs from `SCN-0001`.
+  - The unconfirmed draft has a distinct stored-file hash and remains in Reviewing.
+  - No second Property, Unit, Tenant, LeaseManagement, LeaseAgreement, or TenantAccount was saved.
+- Root cause:
+  - Non-PDF images were sent as one `image_url` using the configured `low` detail default.
+  - A low-detail request reduces the entire 9.7:1 image to one small vision viewport, making each
+    photographed page unreadable.
+  - Local OCR is disabled in preview, so the model received no readable text fallback and guessed
+    from the portfolio grounding context.
+- Fix:
+  - Detect images taller than three image widths.
+  - Split them into overlapping page-sized JPEG tiles and send every tile at high detail.
+  - Preserve the existing single-image behavior and configured detail for ordinary images.
+  - Add a regression test proving a tall image produces multiple high-detail image parts.
+- Verification:
+  - Passed: all seven `OpenAiLlmProviderTests`.
+  - Required: deploy the exact source to `yearsim754`, reject or leave the bad draft unconfirmed,
+    re-upload `SCN-0002`, and verify the extracted fields against the planner before confirmation.
+
 ## Pilot scan proof
 
 - `SCN-0001` was uploaded twice: the first attempt intentionally established the missing-credential
@@ -123,13 +156,38 @@
 - This is pilot evidence only. The official schedule counter remains zero until the isolated run is
   initialized and `SCN-0001` is repeated there.
 
+## Isolated official run proof
+
+- The shared `rental` application runtime was stopped without deleting or resetting its PostgreSQL
+  data, uploads, credentials, data-protection keys, or volumes.
+- The official run uses stack ID `yearsim754`, with a distinct PostgreSQL bind mount and distinct
+  uploads and data-protection volumes.
+- A fresh synthetic administrator selected the real-portfolio path, creating portfolio 2 in the
+  isolated database.
+- Settings > AI connection was exercised through the real web form. The `gpt-4o` connection test
+  passed, Save connection became available, the connection saved as Connected, and the API-key
+  field cleared to zero characters.
+- The authenticated simulation clock moved to `2027-01-02`; the existing session was invalidated
+  as expected and the administrator signed in again at the simulated date.
+- Before official confirmation, portfolio 2 contained 0 Properties, 0 Units, 0 Tenants,
+  0 LeaseManagements, 0 LeaseAgreements, and 0 TenantAccounts.
+- `SCN-0001` was uploaded from its rendered PDF and extracted into the five-step review. Extracted
+  values were read back and every available field was completed, including bedrooms, bathrooms,
+  tenant contact data, emergency contact, late fee, and lease notes.
+- The executed-agreement choice was set to `Yes, everyone has signed`.
+- After `Confirm & create`, portfolio 2 contained exactly 1 of each of the six aggregate records.
+  No aggregate existed before confirmation, proving the official first scan did not partially
+  save the rental graph.
+- Evidence: `browser/isolated-official-scn-0001-confirmed.png`.
+
 ## Checkpoint 2026-07-26
 
-- Status: shared-preview pilot complete; isolated run initialization required
+- Status: isolated run initialized; first official scan confirmed
 - Completed run rows: 0 / 1,996
-- Uploaded scan assets: 0 / 953
+- Uploaded and confirmed scan assets: 1 / 953
 - Pilot scan confirmations: 1
-- Findings and safety blockers: 4
-- Current blocker: the shared master clock affects all preview portfolios.
-- Next action: preserve and stop the shared `rental` runtime, start an isolated `yearsim754` runtime/database,
-  configure its synthetic admin and AI connection, and repeat the first opening lease as official run evidence.
+- Official scan confirmations: 1
+- Findings and safety blockers: 5
+- Current blocker: D005 requires real-image retry proof before bulk scan execution resumes.
+- Next action: deploy and verify the tall-camera-JPEG fix against `SCN-0002`, then complete all 12
+  opening-lease confirmations in run row `RUN-20270102-01`.
