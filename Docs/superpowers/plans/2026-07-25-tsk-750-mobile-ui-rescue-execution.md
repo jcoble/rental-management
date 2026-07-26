@@ -1212,20 +1212,22 @@ inspection/activity/lease wrapping.
 The first Activity rerun exposed a real empty-state flash while `/audit` was
 pending. Commit `f5c8ae7c` fixes that first frame, passes the expanded 45-test
 suite, and was installed in place with preserved authentication. Two bounded
-reruns visually captured the corrected Activity loader during 562 ms and
-543 ms requests, but UIAutomator finished after each request, so strict
-PNG/XML pairing remains partial. Ledger initial loading has the same
-fast-request pairing limitation. The first Ledger append capture proved
+reruns visually captured the corrected Activity loader, and a final bounded
+capture produced a matched pending-state PNG/XML pair while the API request
+was held for 5.309 seconds. Ledger initial loading retains the fast-request
+pairing limitation. The first Ledger append capture proved
 server paging and retained rows but exposed that the footer spinner was built
 whenever `hasMore` was true, even while idle. Commit `ef3f7d23` restricts the
 footer to `loadingMore` and adds a failing-before/passing-after regression.
 Exact-APK emulator reproof returned `UI PROOF PASS`: settled rows have no
 progress, `skip=40` and `skip=80` fire naturally, active paging retains rows
 and shows compact progress, and appended rows remain scrollable. Deposits
-append is `FIXTURE BLOCKED` because the fixture exposes only 15 final rows and
-no `Load more`; no data was mutated to manufacture that state. Step 7 remains
-incomplete only for the unmatched fast initial-loader semantics and the
-fixture-blocked Deposits append branch. This roadmap currently ends at Step 7.
+append does not appear because both legitimate sample portfolios expose
+exactly 20 rows and the page size is 20. Its pending/disabled/restored behavior
+and server-owned paging pass focused tests; no fake rows or smaller page size
+were introduced for proof. Step 7 implementation is complete; only Ledger's
+fast initial-loader device pairing remains partial. This roadmap currently
+ends at Step 7.
 
 ## Global exclusions
 
