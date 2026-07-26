@@ -271,15 +271,16 @@ public sealed class ScanService : IScanService
             fields.UnitId = hasUnitOverride
                 ? unitOverride is > 0 ? unitOverride : null
                 : fields.UnitId ?? draft.CaptureUnitId;
+            var hasPremisesOverride = hasPropertyOverride || hasUnitOverride;
             var leaseManagementId = PositiveOverride(
                 overrideRoot, "leaseManagementId", "lease_management_id")
-                ?? draft.CaptureLeaseManagementId;
+                ?? (hasPremisesOverride ? null : draft.CaptureLeaseManagementId);
             var tenantAccountId = PositiveOverride(
                 overrideRoot, "tenantAccountId", "tenant_account_id")
-                ?? draft.CaptureTenantAccountId;
+                ?? (hasPremisesOverride ? null : draft.CaptureTenantAccountId);
             var leaseAgreementId = PositiveOverride(
                 overrideRoot, "leaseAgreementId", "lease_agreement_id")
-                ?? draft.CaptureLeaseAgreementId;
+                ?? (hasPremisesOverride ? null : draft.CaptureLeaseAgreementId);
             var templateId = PositiveOverride(
                 overrideRoot, "documentTemplateId", "document_template_id");
             var dispositionText = TryGetOverrideString(
