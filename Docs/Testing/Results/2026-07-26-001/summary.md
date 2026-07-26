@@ -7,7 +7,7 @@
 - Environment: `https://redacted-host.example.invalid`
 - Initial source SHA: `ccac9ee24331bf42695772d745fb3a5a6992d10c`
 - Current verified API source SHA: `c56902e973f045b1e4f7f8e4c7ef28bcd2725972`
-- Current verified mobile source SHA: `c56902e973f045b1e4f7f8e4c7ef28bcd2725972`
+- Current verified mobile source SHA: `364ee3c11e63a23ac2b480c610e3d0f417fd8387`
 - Planner: `Docs/Testing/YearSimulation2027/index.html`
 - Schedule: `Docs/Testing/YearSimulation2027/schedule.csv`
 - Corpus: `/Users/blackcolours/dev/work/rental-management/output/pdf/tsk-749-year-simulation-scan-corpus`
@@ -504,6 +504,44 @@
     `2027-01-03T05:00:00Z`; a separate anonymous clock read returned the same instant.
   - PostgreSQL independently returned `2027-01-03` from `rc_business_date(1)`.
 
+### TSK-754-D017 — Native scan drafts had no history path and reopened in an obsolete review
+
+- Status: Fixed and verified in the live Azure Android emulator
+- Severity: Blocking scan-recovery defect
+- Reproduction:
+  - Upload a document through the native `Scan / Add` flow and leave it in Review.
+  - Return to normal application navigation and attempt to resume that draft.
+- Actual:
+  - The native application implemented `ScanListScreen`, but no authorized management or leasing
+    screen exposed a normal navigation path to it.
+  - Opening a draft from the otherwise unreachable list used the obsolete guided rental flow,
+    which could only create new records and omitted the canonical signing, link-existing,
+    possession, and complete lease-review controls.
+- Fix:
+  - Add the authorized `/scans` route and a `View scan history` action to the global native
+    capture sheet.
+  - Allow scan-capable management and leasing experiences to enter the history while continuing
+    to deny the owner-only experience.
+  - Open every resumable draft in the canonical `ScanReviewScreen`; remove the obsolete guided
+    rental import from scan-history navigation.
+- Verification:
+  - Passed: all 44 focused Flutter scan-history, capture-sheet, route, review, and source-contract
+    tests.
+  - Passed: focused Flutter analysis of all six changed or directly exercised files with no
+    issues.
+  - Exact source SHA `364ee3c11e63a23ac2b480c610e3d0f417fd8387` was built under the Azure
+    heavy-work lock and installed as Android version code `75404` without clearing application
+    data or authentication.
+  - The live capture sheet exposed `View scan history`; the history showed Confirmed, Rejected,
+    Failed, and Reviewing records; and tapping draft 15 opened the canonical full review before
+    any save.
+  - The resumed duplicate review linked Maple House / Unit Main, selected the executed-agreement
+    disposition, required and accepted possession date `2026-02-01`, and confirmed successfully.
+  - PostgreSQL independently proved drafts 15 and 16 have the identical source SHA-256
+    `ad0ec3a383b95fcaa4e143ad021d525e8ff0e1382610df26e2856cd471f5d9d1`, both resolve to
+    agreement 14, and all six aggregate counts remained exactly 15.
+  - Evidence: `mobile/azure/d017-mobile-scan-history-fixed.png`.
+
 ## Tooling and maintenance observations
 
 - The Azure Flutter build reports that Kotlin's current built-in version will be unsupported by a
@@ -613,6 +651,12 @@
   $75 late fee, and possession date. The Unit screen immediately reported Occupied and no
   possession reconciliation exception was stored.
 - Evidence: `mobile/azure/d015-historical-lease-possession-fixed.png`.
+- The byte-identical `SCN-0013` re-upload was then resumed from the newly reachable native scan
+  history and reviewed through the canonical form. Drafts 15 and 16 share the same source
+  SHA-256 and both resolve to agreement 14. Properties, Units, Tenants, LeaseManagements,
+  LeaseAgreements, and TenantAccounts remained exactly 15, proving confirmation did not create
+  a duplicate or a partial aggregate.
+- Evidence: `mobile/azure/d017-mobile-scan-history-fixed.png`.
 
 ## Checkpoint 2026-07-26
 
@@ -621,7 +665,6 @@
 - Uploaded and confirmed scan assets: 15 / 953
 - Pilot scan confirmations: 1
 - Official scan confirmations: 15
-- Findings and safety blockers: 16
+- Findings and safety blockers: 17
 - Current blockers: none for the January 3 opening-lease batch.
-- Next action: execute the controlled duplicate confirmation, then resume `SCN-0016` through
-  `SCN-0024` and the January 3 rent receipts.
+- Next action: resume `SCN-0016` through `SCN-0024`, then execute the January 3 rent receipts.
