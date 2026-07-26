@@ -6,7 +6,7 @@
 - Notion task: `TSK-754`
 - Environment: `https://redacted-host.example.invalid`
 - Initial source SHA: `ccac9ee24331bf42695772d745fb3a5a6992d10c`
-- Current verified source SHA: `b688c1729ea38895c200bdc2b75aaadb731afb6b`
+- Current verified source SHA: `5c428f3bd163b29fcbf7940c098e3609453e4d67`
 - Planner: `Docs/Testing/YearSimulation2027/index.html`
 - Schedule: `Docs/Testing/YearSimulation2027/schedule.csv`
 - Corpus: `/Users/blackcolours/dev/work/rental-management/output/pdf/tsk-749-year-simulation-scan-corpus`
@@ -114,7 +114,7 @@
 
 ### TSK-754-D005 — Tall camera JPEG can produce unrelated high-confidence lease data
 
-- Status: Code fix passes focused provider tests; real scan retry required
+- Status: Fixed and verified with the original camera JPEG in the isolated runtime
 - Severity: Blocking scan-safety defect
 - Reproduction:
   - Upload `SCN-0002`, a 1,360 by 13,210 camera JPEG containing nine vertically composited
@@ -139,8 +139,16 @@
   - Add a regression test proving a tall image produces multiple high-detail image parts.
 - Verification:
   - Passed: all seven `OpenAiLlmProviderTests`.
-  - Required: deploy the exact source to `yearsim754`, reject or leave the bad draft unconfirmed,
-    re-upload `SCN-0002`, and verify the extracted fields against the planner before confirmation.
+  - Passed: deployed exact source SHA `5c428f3bd163b29fcbf7940c098e3609453e4d67`
+    to `yearsim754`.
+  - Passed: re-uploading the original `SCN-0002` JPEG extracted Briar Cottage, 134 Briar Street,
+    Columbus, OH 43202; Gray Lewis; lease `SCN-0002`; and the 2026-03-01 through 2027-12-31 term.
+  - The scan correctly left fields it could not read blank instead of fabricating values. Monthly
+    rent, deposit, unit details, tenant contacts, late fee, due day, and notes were completed
+    manually in the review.
+  - Passed: the bad draft remains unconfirmed; the corrected draft was confirmed only after its
+    visible values were checked against the planner.
+  - Evidence: `browser/d005-scn-0002-fixed-confirmed.png`.
 
 ## Pilot scan proof
 
@@ -179,15 +187,22 @@
   No aggregate existed before confirmation, proving the official first scan did not partially
   save the rental graph.
 - Evidence: `browser/isolated-official-scn-0001-confirmed.png`.
+- `SCN-0002` exercised the rendered camera-JPEG path after D005 was fixed. Before confirmation,
+  all six aggregate counts remained exactly 1. The review created Briar Cottage, Unit Main, Gray
+  Lewis, and the planned active lease; after confirmation, all six counts advanced atomically to
+  exactly 2.
+- The failed D005 reproduction remains as draft 2 in Reviewing while corrected draft 3 is
+  Confirmed. It did not create any business aggregate.
+- Evidence: `browser/d005-scn-0002-fixed-confirmed.png`.
 
 ## Checkpoint 2026-07-26
 
-- Status: isolated run initialized; first official scan confirmed
+- Status: isolated run initialized; first two official scans confirmed
 - Completed run rows: 0 / 1,996
-- Uploaded and confirmed scan assets: 1 / 953
+- Uploaded and confirmed scan assets: 2 / 953
 - Pilot scan confirmations: 1
-- Official scan confirmations: 1
+- Official scan confirmations: 2
 - Findings and safety blockers: 5
-- Current blocker: D005 requires real-image retry proof before bulk scan execution resumes.
-- Next action: deploy and verify the tall-camera-JPEG fix against `SCN-0002`, then complete all 12
-  opening-lease confirmations in run row `RUN-20270102-01`.
+- Current blocker: none; D005 is fixed and verified with the original source image.
+- Next action: complete the remaining 10 opening-lease confirmations in run row
+  `RUN-20270102-01`, then advance the row counter and reconcile the created rental graph.
