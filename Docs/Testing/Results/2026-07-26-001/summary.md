@@ -170,6 +170,112 @@
   - Preserve the failed and confirmed drafts for provider-failure-rate analysis during the
     remaining camera-image corpus.
 
+### TSK-754-D007 — Native mobile dashboard ignores the simulation clock
+
+- Status: Fixed and verified in the native Android app
+- Severity: High for time-travel testing
+- Reproduction:
+  - Set the isolated environment clock to January 2, 2027.
+  - Sign in to the native Android application as the simulation administrator.
+  - Observe the date heading on the owner dashboard.
+- Expected:
+  - Every business-date surface uses the same simulated date as the API and Engine.
+- Actual:
+  - `GET /api/v1/dev/clock` reports `Offset` mode and `simNowUtc` on January 2, 2027.
+  - The native dashboard renders `SUNDAY, JULY 26`, the emulator's wall-clock date.
+- Root-cause evidence:
+  - `mobile/lib/features/home/home_shell.dart` formats the dashboard heading from
+    `DateTime.now()` rather than a server-provided simulation/business clock.
+  - The same source sweep found additional mobile forms and report defaults using
+    `DateTime.now()`; each must be verified against its intended wall-clock versus
+    business-date semantics before the defect is treated as fixed.
+- Safety impact:
+  - A native user can create or filter records against the wrong date during a simulated run.
+  - The year replay cannot claim mobile date-sensitive coverage until this boundary is corrected
+    and retested.
+- Evidence:
+  - `mobile/android-admin-dashboard-wrong-simulation-date.png`
+  - `mobile/d007-api-clock-state.json`
+- Fix:
+  - Add a mobile application-clock provider that reads the simulation-only `/dev/clock` endpoint.
+  - Preserve the server's canonical UTC calendar date so a midnight simulation does not move to the
+    previous day in a western device timezone.
+  - Use device time only when production's simulation-only route returns 404; surface other clock
+    failures rather than silently displaying a potentially incorrect date.
+  - Refresh the application clock with the owner dashboard's pull-to-refresh action.
+- Verification:
+  - Passed: three focused provider tests covering simulated time, production 404 fallback, and
+    non-404 failure propagation.
+  - Passed: focused Flutter analysis for the provider, dashboard, and tests.
+  - Passed: the correctly flavored dev APK built and installed on the Android emulator.
+  - Passed: the native dashboard rendered `SATURDAY, JANUARY 2` while the API remained in `Offset`
+    mode on January 2, 2027.
+  - Evidence: `mobile/d007-fixed-dashboard-simulation-date.png`.
+
+### TSK-754-D008 — Mobile scan preview traps the review screen's vertical swipe
+
+- Status: Confirmed; first fix failed emulator retest; revised fix pending retest
+- Severity: High scan-review usability defect
+- Reproduction:
+  - Upload `SCN-0013` through Android's system file picker as a signed agreement.
+  - Wait for extraction; draft 15 reports nine fields needing attention.
+  - Start a vertical swipe on the 240-pixel document preview.
+- Expected:
+  - The review list scrolls to signing status, property/unit/tenant choices, and editable lease
+    terms regardless of where the user starts the normal one-finger vertical gesture.
+- Actual:
+  - Repeated vertical gestures on the preview do not move the review list.
+  - Starting the same gesture on the checkpoint card above the preview scrolls successfully.
+- Root cause:
+  - `_DocumentPreview` used a default `InteractiveViewer`; its pan recognizer wins the gesture
+    arena even at 1x and consumes the parent `ListView`'s vertical swipe.
+- Safety evidence:
+  - Draft 15 is Reviewing and no property, unit, tenant, lease, agreement, or account was created.
+- Fix:
+  - First attempt: disable panning and scaling in the embedded `InteractiveViewer`.
+  - Failed retest: the same preview-origin swipe still did not move draft 16, proving the wrapper
+    continued to participate in the gesture arena.
+  - Revised fix: remove `InteractiveViewer` from the embedded preview entirely so the parent review
+    owns the normal vertical gesture.
+  - Add a focused contract regression test for the preview's gesture configuration.
+- Evidence:
+  - `mobile/scn-0013-mobile-after-picker.png`
+  - `mobile/scn-0013-review-scroll-fast.png`
+
+### TSK-754-D009 — Scan review uses Flutter APIs scheduled for removal
+
+- Status: Fixed; focused analyzer clean
+- Severity: Low today, future-build compatibility risk
+- Evidence:
+  - Focused Flutter analysis reports four deprecated `Radio` properties (`groupValue` and
+    `onChanged`) in the lease signing-status section.
+  - The same analysis reports deprecated `DropdownButtonFormField.value` use in the template
+    selector.
+- Expected:
+  - A core scan-review screen analyzes cleanly against the supported Flutter SDK.
+- Actual:
+  - The focused analyzer exits nonzero with five deprecation findings.
+- Follow-up:
+  - Migrate signing status to a `RadioGroup` ancestor and the template selector to
+    `initialValue`, then rerun the scan-review tests and analyzer.
+- Fix and verification:
+  - Migrated the signing choices to a `RadioGroup` ancestor.
+  - Replaced the deprecated template selector `value` with `initialValue`.
+  - The clock and scan-review focused tests passed, and focused analysis reported no issues.
+
+## Disproved observations
+
+### Mobile login 401 after automated field entry
+
+- Status: Closed as test-input false positive; not a product defect
+- Evidence:
+  - The exact values read back from the native fields succeeded through a direct mobile-header API
+    request.
+  - Pressing `Sign In` again without changing either visible field returned HTTP 200 in the native
+    application and opened the owner dashboard.
+- Handling:
+  - Retain the failed-attempt screenshots as run evidence, but do not count this as a product bug.
+
 ## Pilot scan proof
 
 - `SCN-0001` was uploaded twice: the first attempt intentionally established the missing-credential
