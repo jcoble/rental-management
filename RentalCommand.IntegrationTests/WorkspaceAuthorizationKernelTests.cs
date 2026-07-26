@@ -1034,6 +1034,10 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
         await using var db = NewContext();
         (await db.WorkspaceMemberships.CountAsync(item =>
             item.AccessContextId == first.Value.AccessContextId)).Should().Be(1);
+        (await db.WorkspaceAccessContexts
+            .Where(item => item.Id == first.Value.AccessContextId)
+            .Select(item => item.LastAuthorizedExperience)
+            .SingleAsync()).Should().Be(WorkspaceExperience.Leasing);
         (await db.MembershipRoleAssignments.CountAsync(item =>
             item.WorkspaceMembershipId == first.Value.WorkspaceMembershipId)).Should().Be(1);
         var invitation = await db.WorkspaceInvitations.SingleAsync(item =>

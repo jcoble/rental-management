@@ -210,7 +210,10 @@
   - Passed: the correctly flavored dev APK built and installed on the Android emulator.
   - Passed: the native dashboard rendered `SATURDAY, JANUARY 2` while the API remained in `Offset`
     mode on January 2, 2027.
+  - Passed on the required Azure VPS emulator: the exact committed dev APK rendered
+    `SUNDAY, JANUARY 3` while connected to the isolated `yearsim754` stack.
   - Evidence: `mobile/d007-fixed-dashboard-simulation-date.png`.
+  - Azure evidence: `mobile/azure/d007-simulated-date-jan03.png`.
 
 ### TSK-754-D008 — Mobile scan preview traps the review screen's vertical swipe
 
@@ -262,6 +265,44 @@
   - Migrated the signing choices to a `RadioGroup` ancestor.
   - Replaced the deprecated template selector `value` with `initialValue`.
   - The clock and scan-review focused tests passed, and focused analysis reported no issues.
+
+### TSK-754-D010 — Newly invited management users receive 403 on allowed screens
+
+- Status: Confirmed; root cause fixed in source; focused integration and Azure runtime retest pending
+- Severity: Critical role-access defect
+- Reproduction:
+  - Invite a new Workspace Administrator, activate the invitation, and sign in through the native
+    Android app.
+  - The returned access envelope identifies `workspace-administrator`, reports Management as the
+    active experience, and includes `rentals.read`.
+  - Open Rentals / Properties, or send an authenticated `GET /api/v1/properties`.
+- Expected:
+  - The invited administrator can use the management screens allowed by its assignment.
+- Actual:
+  - The native screen reports `You do not have permission to perform this action.`
+  - The equivalent direct API request returns HTTP 403 with an empty body.
+- Root cause:
+  - Team membership creation gave a new `WorkspaceAccessContext` no
+    `LastAuthorizedExperience`.
+  - The login access envelope fell back to the membership's Management default, but management
+    controllers checked the persisted null value and denied the request.
+  - Existing relationship contexts must retain their Owner or Tenant experience, so the default
+    can only be initialized when the access context is newly created.
+- Fix:
+  - Initialize a brand-new Team access context's `LastAuthorizedExperience` from the selected
+    role profile's default experience.
+  - Add an integration assertion that a new Leasing Agent invitation persists Leasing while the
+    existing relationship-context test continues to prove Owner is preserved.
+
+## Tooling and maintenance observations
+
+- The Azure Flutter build reports that Kotlin's current built-in version will be unsupported by a
+  future Flutter release.
+- One Android dependency reports use of a deprecated API during compilation.
+- Dependency resolution reports 63 packages with newer versions outside the current constraints.
+- The current iOS plugin set is not fully compatible with Swift Package Manager.
+- Dev push registration remains unavailable because the dev Firebase configuration is absent;
+  native push verification requires the separate configured-production lane.
 
 ## Disproved observations
 
