@@ -735,14 +735,22 @@
   three-bedroom, one-bath, 1,195-square-foot unit, $1,125 rent and deposit, due day 1, and all
   tenant contacts; all six aggregates advanced atomically from 18 to 19.
 - Evidence: `mobile/azure/scn-0019-opening-lease-confirmed.png`.
+- `SCN-0020` exercised a low-contrast 13,210-pixel camera JPEG through the fixed Android gallery
+  path. Draft 25 and the executed artifact retained the planned SHA-256
+  `f7386ea55d8854434500e8565fbadec74607bfc339fa56312dbee1572b9133ef`.
+- Confirmation created Terrace House / Unit Main / Morgan Adams / `SCN-0020`. Direct database
+  reads matched the corrected phone, all contacts, four bedrooms, two bathrooms, 1,310 square
+  feet, possession, $1,650 rent and deposit, $75 late fee, and due day 1. All six aggregates
+  advanced atomically from 19 to 20.
+- Evidence: `mobile/azure/scn-0020-opening-lease-confirmed.png`.
 
 ## Checkpoint 2026-07-26
 
 - Status: isolated run initialized; January 3 opening-lease batch in progress
 - Completed run rows: 1 / 1,996
-- Uploaded and confirmed scan assets: 19 / 953
+- Uploaded and confirmed scan assets: 20 / 953
 - Pilot scan confirmations: 1
-- Official scan confirmations: 19
+- Official scan confirmations: 20
 - Findings and safety blockers: 18
 - Current blockers: none for the January 3 opening-lease batch.
-- Next action: execute `SCN-0020` through `SCN-0024`, then execute the January 3 rent receipts.
+- Next action: execute `SCN-0021` through `SCN-0024`, then execute the January 3 rent receipts.
