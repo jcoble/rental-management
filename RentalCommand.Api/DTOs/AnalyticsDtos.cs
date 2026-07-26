@@ -25,7 +25,7 @@ public class AnalyticsOverview
     public decimal OccupancyRate { get; set; }
 
     // ── This-month rent ────────────────────────────────────────────────────────────────────────────
-    /// <summary>Sum of Rent payments with DueDate in the current UTC calendar month.</summary>
+    /// <summary>Current-month ledger <c>RentCharge</c> obligations.</summary>
     public decimal MonthRentScheduled { get; set; }
     /// <summary>Sum of Rent payments with Status==Paid and PaidDate in the current UTC month.</summary>
     public decimal MonthRentCollected { get; set; }
@@ -57,6 +57,6 @@ public class AnalyticsOverview
     public IReadOnlyList<PriorityCount> OpenWorkOrders { get; set; } = [];
 
     // ── Monthly recurring rent ─────────────────────────────────────────────────────────────────────
-    /// <summary>Sum of <c>MonthlyRent</c> across all Active leases.</summary>
+    /// <summary>Currently governing agreement base rent plus active recurring-rent addenda.</summary>
     public decimal MonthlyRecurringRent { get; set; }
 }

@@ -13,6 +13,9 @@ import 'vendor_form_sheet.dart';
 import 'vendors_models.dart';
 import 'vendors_repository.dart';
 
+String vendorCompletedJobsLabel(int count) =>
+    '$count completed ${count == 1 ? 'job' : 'jobs'}';
+
 /// Landlord-facing list of vendors with their service type and rating summary.
 class VendorsListScreen extends ConsumerStatefulWidget {
   const VendorsListScreen({super.key});
@@ -285,8 +288,7 @@ class _VendorCard extends StatelessWidget {
           const SizedBox(width: 10),
           Flexible(
             child: Text(
-              '${vendor.jobsCompleted} '
-              'job${vendor.jobsCompleted == 1 ? '' : 's'}',
+              vendorCompletedJobsLabel(vendor.jobsCompleted),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: theme.textTheme.bodySmall?.copyWith(

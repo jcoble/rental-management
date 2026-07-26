@@ -38,10 +38,12 @@ public sealed class NotificationSettingsPostgreSqlTests : IAsyncLifetime
                 template.JurisdictionCode,
             })
             .ToListAsync();
-        supplied.Select(template => template.Id).Should().Contain([4, 5, 6, 7]);
+        supplied.Select(template => template.Id).Should().Contain([4, 5, 6, 7, 8, 9]);
         supplied.Single(template => template.Id == 6).Version.Should().Be(2);
         supplied.Single(template => template.Id == 7).Version.Should().Be(2);
-        supplied.Where(template => template.Id is 6 or 7)
+        supplied.Single(template => template.Id == 8).Version.Should().Be(3);
+        supplied.Single(template => template.Id == 9).Version.Should().Be(3);
+        supplied.Where(template => template.Id is 6 or 7 or 8 or 9)
             .Should().OnlyContain(template => template.JurisdictionCode == null);
 
         var latestPerKey =
@@ -82,6 +84,10 @@ public sealed class NotificationSettingsPostgreSqlTests : IAsyncLifetime
         var settingsSql = CaptureSql(settingsPage);
         latestSql.Should().Contain("NOT EXISTS")
             .And.Contain("ORDER BY");
+        var latest = await latestPerKey.ToListAsync();
+        latest.Where(template => template.SystemKey is "lease-non-renewal" or "late-rent-late-fee")
+            .Should().OnlyContain(template =>
+                template.Version == 3 && (template.Id == 8 || template.Id == 9));
         settingsSql.Should().Contain("JOIN")
             .And.Contain("LEFT JOIN")
             .And.Contain("ORDER BY")

@@ -166,7 +166,7 @@ class _InspectionsListScreenState extends ConsumerState<InspectionsListScreen> {
             child: RefreshIndicator(
               onRefresh: _refresh,
               child: inspectionsAsync.when(
-                loading: () => const Center(child: CircularProgressIndicator()),
+                loading: () => const _InspectionsLoadingBody(),
                 error: (e, _) => _ErrorBody(
                   message: e is ApiException ? e.message : e.toString(),
                   onRetry: _refresh,
@@ -240,6 +240,50 @@ class _InspectionsListScreenState extends ConsumerState<InspectionsListScreen> {
   }
 }
 
+class _InspectionsLoadingBody extends StatelessWidget {
+  const _InspectionsLoadingBody();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
+
+    return ListView(
+      key: const Key('inspections-loading'),
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
+      children: [
+        MobileM3ListItem(
+          position: MobileM3ListItemPosition.single,
+          leading: MobileM3LeadingIcon(
+            icon: Icons.fact_check_outlined,
+            backgroundColor: colors.secondaryContainer,
+            foregroundColor: colors.onSecondaryContainer,
+          ),
+          title: Text(
+            'Loading inspections',
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          supporting: [
+            Text(
+              'Property, unit, schedule, and status',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colors.onSurfaceVariant,
+              ),
+            ),
+          ],
+          trailing: const SizedBox.square(
+            dimension: 22,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _InspectionCard extends StatelessWidget {
   const _InspectionCard({
     required this.inspection,
@@ -277,33 +321,46 @@ class _InspectionCard extends StatelessWidget {
       ),
       title: Text(
         where.toString(),
-        maxLines: 1,
+        maxLines: 2,
         overflow: TextOverflow.ellipsis,
         style: theme.textTheme.titleSmall?.copyWith(
           fontWeight: FontWeight.w700,
         ),
       ),
       supporting: [
-        Row(
+        Wrap(
+          spacing: 10,
+          runSpacing: 2,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            Flexible(
-              child: Text(
-                friendlyInspectionType(i.type),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: cs.onSurfaceVariant,
-                ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Icon(Icons.schedule_outlined, size: 14, color: cs.onSurfaceVariant),
-            const SizedBox(width: 4),
             Text(
-              fmtInspectionDate(i.scheduledFor.toLocal()),
+              friendlyInspectionType(i.type),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: theme.textTheme.bodySmall?.copyWith(
                 color: cs.onSurfaceVariant,
               ),
+            ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.schedule_outlined,
+                  size: 14,
+                  color: cs.onSurfaceVariant,
+                ),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text(
+                    fmtInspectionDate(i.scheduledFor.toLocal()),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: cs.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ],
         ),

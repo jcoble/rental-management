@@ -3,6 +3,20 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('Today work orders use readable two-line status copy', () {
+    final source = File('lib/features/home/home_shell.dart').readAsStringSync();
+    final cardStart = source.indexOf('class _FieldQueueCard');
+    final cardEnd = source.indexOf('class _LoadingCard', cardStart);
+    final card = source.substring(cardStart, cardEnd);
+
+    expect(card, contains('plainEnglishLabel(workOrder.status)'));
+    expect(card, contains('plainEnglishLabel(workOrder.priority)'));
+    expect(card, contains(r"join('\n')"));
+    expect(card, contains('maxLines: 2'));
+    expect(card, contains('_pushTodayDetail(context, detailBuilder)'));
+    expect(card, isNot(contains("join(' / ')")));
+  });
+
   test('Unit Maintenance keeps four vertical subjects without nested tabs', () {
     final source = File(
       'lib/features/units/unit_command_center_screen.dart',
@@ -16,8 +30,9 @@ void main() {
       expect(source, contains(label));
     }
     expect(
-      RegExp(r'area: UnitCommandCenterTab\.maintenance[\s\S]*?children: \[')
-          .hasMatch(source),
+      RegExp(
+        r'area: UnitCommandCenterTab\.maintenance[\s\S]*?children: \[',
+      ).hasMatch(source),
       isTrue,
     );
   });
@@ -63,7 +78,9 @@ void main() {
   test(
     'cold session rehydration loads durable Unit state without clearing it',
     () {
-      final source = File('lib/features/home/home_shell.dart').readAsStringSync();
+      final source = File(
+        'lib/features/home/home_shell.dart',
+      ).readAsStringSync();
       final listenerStart = source.indexOf(
         'ref.listen<AuthState>(authControllerProvider',
       );
@@ -73,14 +90,10 @@ void main() {
       );
       final coldRestoreBranch = listenerBlock.substring(
         listenerBlock.indexOf('if (previous is! AuthStateAuthenticated)'),
-        listenerBlock.indexOf(
-          'if (!accessAuthorityChanged(previous, next))',
-        ),
+        listenerBlock.indexOf('if (!accessAuthorityChanged(previous, next))'),
       );
       final authorityChangeBranch = listenerBlock.substring(
-        listenerBlock.indexOf(
-          'if (!accessAuthorityChanged(previous, next))',
-        ),
+        listenerBlock.indexOf('if (!accessAuthorityChanged(previous, next))'),
       );
 
       expect(coldRestoreBranch, contains('_prepareRestorationForAuthority();'));
@@ -435,6 +448,55 @@ void main() {
     expect(shellSource, contains('if (!tenantMode && landlordTabs.isEmpty)'));
     expect(shellSource, contains("returnLabel: 'Refresh access'"));
     expect(shellSource, contains('MobileAccessDeniedScreen('));
+  });
+
+  test('Today work-order details preserve their Today navigation origin', () {
+    final shellSource = File(
+      'lib/features/home/home_shell.dart',
+    ).readAsStringSync();
+    final queueStart = shellSource.indexOf('class _FieldQueueCard');
+    final queueEnd = shellSource.indexOf('class _LoadingCard', queueStart);
+    final queueBlock = shellSource.substring(queueStart, queueEnd);
+    final workOrderTargetStart = shellSource.indexOf("case 'WorkOrder':");
+    final workOrderTargetEnd = shellSource.indexOf(
+      "case 'Payment':",
+      workOrderTargetStart,
+    );
+    final workOrderTarget = shellSource.substring(
+      workOrderTargetStart,
+      workOrderTargetEnd,
+    );
+    final targetOpeningStart = shellSource.indexOf(
+      'void _openTarget(BuildContext context, _BriefingTarget target)',
+    );
+    final targetOpeningEnd = shellSource.indexOf(
+      '/// Maps a briefing',
+      targetOpeningStart,
+    );
+    final targetOpening = shellSource.substring(
+      targetOpeningStart,
+      targetOpeningEnd,
+    );
+
+    expect(queueBlock, contains('_pushTodayDetail(context, detailBuilder)'));
+    expect(queueBlock, isNot(contains('MobileShellTabId.work')));
+    expect(workOrderTarget, contains('preserveTodayOrigin: true'));
+    expect(
+      targetOpening,
+      contains('target.preserveTodayOrigin && target.detailBuilder != null'),
+    );
+    expect(
+      targetOpening,
+      contains('_pushTodayDetail(context, target.detailBuilder!)'),
+    );
+    expect(
+      shellSource,
+      contains('onAction: () => onSwitchToTab(_workTabIndex)'),
+    );
+    expect(
+      RegExp(r'preserveTodayOrigin:\s*true').allMatches(shellSource),
+      hasLength(1),
+    );
   });
 
   test('owner experience uses a dedicated relationship-scoped shell', () {

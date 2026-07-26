@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
@@ -14,6 +15,8 @@ import '../../core/auth/mobile_access_policy.dart';
 import '../../core/models/work_order.dart';
 import '../../core/models/property.dart';
 import '../../core/navigation/mobile_restoration_state.dart';
+import '../../core/presentation/plain_english_labels.dart';
+import '../../core/widgets/mobile_section_selector.dart';
 import '../activity/activity_history_screen.dart';
 import '../applications/application_detail_screen.dart';
 import '../applications/applications_models.dart';
@@ -241,18 +244,6 @@ class _UnitCommandCenterScreenState extends State<UnitCommandCenterScreen> {
         ? 'Property'
         : widget.dashboard.propertyName.trim();
     final usesDomainHeader = MobileDomainHeaderScope.maybeOf(context) != null;
-    const unitTabs = TabBar(
-      isScrollable: true,
-      tabAlignment: TabAlignment.start,
-      tabs: [
-        Tab(text: 'Summary'),
-        Tab(text: 'Leasing'),
-        Tab(text: 'Tenant & lease'),
-        Tab(text: 'Money'),
-        Tab(text: 'Maintenance'),
-        Tab(text: 'Documents & history'),
-      ],
-    );
     final tabView = TabBarView(
       children: [
         _UnitOverviewTab(dashboard: widget.dashboard),
@@ -335,7 +326,56 @@ class _UnitCommandCenterScreenState extends State<UnitCommandCenterScreen> {
       initialIndex: widget.initialTab.index,
       child: Builder(
         builder: (tabContext) {
-          _bindTopController(DefaultTabController.of(tabContext));
+          final topController = DefaultTabController.of(tabContext);
+          _bindTopController(topController);
+          final unitSelector = AnimatedBuilder(
+            animation: topController.animation!,
+            builder: (context, _) => MobileSectionSelector<int>(
+              items: const [
+                MobileSectionItem(
+                  value: 0,
+                  id: 'summary',
+                  label: 'Summary',
+                  icon: Icons.dashboard_outlined,
+                ),
+                MobileSectionItem(
+                  value: 1,
+                  id: 'leasing',
+                  label: 'Leasing',
+                  icon: Icons.campaign_outlined,
+                ),
+                MobileSectionItem(
+                  value: 2,
+                  id: 'tenant-lease',
+                  label: 'Tenant & lease',
+                  icon: Icons.group_outlined,
+                ),
+                MobileSectionItem(
+                  value: 3,
+                  id: 'money',
+                  label: 'Money',
+                  icon: Icons.payments_outlined,
+                ),
+                MobileSectionItem(
+                  value: 4,
+                  id: 'maintenance',
+                  label: 'Maintenance',
+                  icon: Icons.build_outlined,
+                ),
+                MobileSectionItem(
+                  value: 5,
+                  id: 'documents-history',
+                  label: 'Documents & history',
+                  icon: Icons.folder_copy_outlined,
+                ),
+              ],
+              selectedValue: topController.index,
+              onSelected: topController.animateTo,
+              tooltip: 'Choose unit section',
+              selectorKey: const Key('unit-section-selector'),
+              itemKeyPrefix: 'unit-section',
+            ),
+          );
           return _UnitViewScope(
             activeView: _activeView,
             child: Scaffold(
@@ -360,22 +400,26 @@ class _UnitCommandCenterScreenState extends State<UnitCommandCenterScreen> {
                           ),
                         ],
                       ),
-                      bottom: unitTabs,
                     ),
               body: usesDomainHeader
                   ? Column(
                       children: [
                         Material(
                           color: Theme.of(context).colorScheme.surface,
-                          child: const Align(
-                            alignment: Alignment.centerLeft,
-                            child: unitTabs,
-                          ),
+                          child: unitSelector,
                         ),
                         Expanded(child: tabView),
                       ],
                     )
-                  : tabView,
+                  : Column(
+                      children: [
+                        Material(
+                          color: Theme.of(context).colorScheme.surface,
+                          child: unitSelector,
+                        ),
+                        Expanded(child: tabView),
+                      ],
+                    ),
               floatingActionButton: _UnitWorkOrderQuickActionFab(
                 dashboard: widget.dashboard,
                 selectedWorkOrder: widget.initialWorkOrder,
@@ -435,6 +479,7 @@ class _UnitAreaSurfaceState extends State<_UnitAreaSurface> {
   ScrollController? _scrollController;
   late final List<GlobalKey> _sectionKeys;
   TabController? _outerController;
+  bool _activeViewSyncScheduled = false;
 
   @override
   void initState() {
@@ -472,6 +517,18 @@ class _UnitAreaSurfaceState extends State<_UnitAreaSurface> {
   }
 
   void _syncActiveView() {
+    final phase = SchedulerBinding.instance.schedulerPhase;
+    if (phase != SchedulerPhase.idle &&
+        phase != SchedulerPhase.postFrameCallbacks) {
+      if (_activeViewSyncScheduled) return;
+      _activeViewSyncScheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _activeViewSyncScheduled = false;
+        if (mounted) _syncActiveView();
+      });
+      return;
+    }
+
     if (_outerController?.index != widget.area.index) return;
     final requested = widget.activeView.value;
     final next = requested != null && widget.views.contains(requested)
@@ -730,27 +787,27 @@ class _UnitOverviewTab extends ConsumerWidget {
             _MetricRow(
               icon: Symbols.home_work_rounded,
               label: 'Occupancy / possession',
-              value: dashboard.occupancyPossession.status,
+              value: plainEnglishLabel(dashboard.occupancyPossession.status),
             ),
             _MetricRow(
               icon: Symbols.campaign_rounded,
               label: 'Marketing availability',
-              value: dashboard.marketingAvailability.status,
+              value: plainEnglishLabel(dashboard.marketingAvailability.status),
             ),
             _MetricRow(
               icon: Symbols.account_balance_wallet_rounded,
-              label: 'TenantAccount',
-              value: dashboard.tenantAccountCondition.status,
+              label: 'Tenant account',
+              value: plainEnglishLabel(dashboard.tenantAccountCondition.status),
             ),
             _MetricRow(
               icon: Symbols.gavel_rounded,
               label: 'Legal / notice',
-              value: dashboard.legalNoticeCondition.status,
+              value: plainEnglishLabel(dashboard.legalNoticeCondition.status),
             ),
             _MetricRow(
               icon: Symbols.build_rounded,
               label: 'Maintenance / turnover',
-              value: dashboard.maintenanceTurnover.status,
+              value: plainEnglishLabel(dashboard.maintenanceTurnover.status),
             ),
           ],
         ),
@@ -760,16 +817,17 @@ class _UnitOverviewTab extends ConsumerWidget {
             _MetricRow(
               icon: Symbols.home_work_rounded,
               label: 'Status',
-              value: unit.status.isEmpty
-                  ? dashboard.lifecycleStage
-                  : unit.status,
+              value: plainEnglishLabel(
+                unit.status.isEmpty ? dashboard.lifecycleStage : unit.status,
+              ),
             ),
             _MetricRow(
               icon: Symbols.route_rounded,
               label: 'Stage',
-              value: dashboard.lifecycleStage.isEmpty
-                  ? 'Unit'
-                  : dashboard.lifecycleStage,
+              value: plainEnglishLabel(
+                dashboard.lifecycleStage,
+                fallback: 'Unit',
+              ),
             ),
             _MetricRow(
               icon: Symbols.payments_rounded,
@@ -1605,7 +1663,10 @@ class _ListingHeader extends StatelessWidget {
                     ),
                   ),
                 ),
-                _InfoChip(icon: Symbols.sell_rounded, label: status),
+                _InfoChip(
+                  icon: Symbols.sell_rounded,
+                  label: plainEnglishLabel(status),
+                ),
               ],
             ),
             const SizedBox(height: 8),
@@ -1733,7 +1794,10 @@ class _ListingStatusRow extends StatelessWidget {
         decoration: InputDecoration(labelText: label),
         items: [
           for (final option in options)
-            DropdownMenuItem<String>(value: option, child: Text(option)),
+            DropdownMenuItem<String>(
+              value: option,
+              child: Text(plainEnglishLabel(option)),
+            ),
         ],
         onChanged: (value) {
           if (value != null) onChanged(value);
@@ -1911,7 +1975,7 @@ class _ListingConnectedCard extends StatelessWidget {
           icon: publication?.channelAvailable == true
               ? Symbols.check_circle_rounded
               : Symbols.cloud_off_rounded,
-          title: publication?.channelState ?? 'Unavailable',
+          title: plainEnglishLabel(publication?.channelState ?? 'Unavailable'),
           subtitle:
               publication?.lastDeliveryError ??
               publication?.channelUnavailableReason ??
@@ -2564,7 +2628,7 @@ class _UnitLedgerTabState extends ConsumerState<_UnitLedgerTab> {
                 _MetricRow(
                   icon: Symbols.description_rounded,
                   label: 'Tenant account',
-                  value: '#${dashboard.tenantAccountId}',
+                  value: 'Available',
                 ),
             ],
           ),
@@ -2584,7 +2648,8 @@ class _UnitLedgerTabState extends ConsumerState<_UnitLedgerTab> {
             error: (e, _) => _RetrySection(
               title: 'Account activity',
               message: e is ApiException ? e.message : e.toString(),
-              onRetry: () => ref.invalidate(unitMoneyActivityPageProvider(key!)),
+              onRetry: () =>
+                  ref.invalidate(unitMoneyActivityPageProvider(key!)),
             ),
             data: (page) => _Section(
               title: 'Account activity',
@@ -2595,7 +2660,7 @@ class _UnitLedgerTabState extends ConsumerState<_UnitLedgerTab> {
                     icon: Symbols.receipt_long_rounded,
                     title: entry.description,
                     subtitle:
-                        '${entry.entryType} · ${_formatDate(entry.effectiveOn)} · ${_formatCurrency(entry.amount)}',
+                        '${tenantLedgerEntryLabel(entry.entryType)} · ${_formatDate(entry.effectiveOn)} · ${_formatCurrency(entry.amount)}',
                   ),
                 _MoneyPager(
                   page: _activityPage,
@@ -2610,16 +2675,14 @@ class _UnitLedgerTabState extends ConsumerState<_UnitLedgerTab> {
         const SizedBox(height: 14),
         if (chargesAsync != null)
           chargesAsync.when(
-            loading: () => const _LoadingSection(
-              title: 'Charge allocation and open amount',
-            ),
+            loading: () => const _LoadingSection(title: 'Rent charges'),
             error: (e, _) => _RetrySection(
-              title: 'Charge allocation and open amount',
+              title: 'Rent charges',
               message: e is ApiException ? e.message : e.toString(),
               onRetry: () => setState(() {}),
             ),
             data: (page) => _Section(
-              title: 'Charge allocation and open amount',
+              title: 'Rent charges',
               empty: 'No charges',
               children: [
                 for (final charge in page.items)
@@ -2627,9 +2690,8 @@ class _UnitLedgerTabState extends ConsumerState<_UnitLedgerTab> {
                     icon: Symbols.request_quote_rounded,
                     title: charge.description,
                     subtitle:
-                        '${_formatCurrency(charge.netAllocations)} allocated of '
-                        '${_formatCurrency(charge.originalAmount)} · '
-                        '${_formatCurrency(charge.openAmount)} open',
+                        'Charge amount: ${_formatCurrency(charge.originalAmount)} · '
+                        'Still due: ${_formatCurrency(charge.openAmount)}',
                   ),
                 _MoneyPager(
                   page: _chargePage,
@@ -2659,7 +2721,7 @@ class _UnitLedgerTabState extends ConsumerState<_UnitLedgerTab> {
                     icon: Symbols.savings_rounded,
                     title: deposit.accountNumber,
                     subtitle:
-                        '${deposit.status} · ${_formatCurrency(deposit.heldBalance)} held',
+                        '${plainEnglishLabel(deposit.status)} · ${_formatCurrency(deposit.heldBalance)} held',
                   ),
                 _MoneyPager(
                   page: _depositPage,
@@ -2816,7 +2878,9 @@ class _MoneyPager extends StatelessWidget {
             onPressed: hasPrevious ? onPrevious : null,
             child: const Text('Previous'),
           ),
-          Expanded(child: Text('Page ${page + 1}', textAlign: TextAlign.center)),
+          Expanded(
+            child: Text('Page ${page + 1}', textAlign: TextAlign.center),
+          ),
           OutlinedButton(
             onPressed: hasNext ? onNext : null,
             child: const Text('Next'),
@@ -2968,9 +3032,9 @@ class _UnitInspectionsTabState extends ConsumerState<_UnitInspectionsTab> {
                 for (final inspection in result.items)
                   ListTile(
                     key: ValueKey('unit-inspection-${inspection.id}'),
-                    title: Text(inspection.type),
+                    title: Text(plainEnglishLabel(inspection.type)),
                     subtitle: Text(
-                      '${inspection.status} · ${_formatDate(inspection.scheduledFor)}',
+                      '${plainEnglishLabel(inspection.status)} · ${_formatDate(inspection.scheduledFor)}',
                     ),
                   ),
               Row(
@@ -3048,10 +3112,7 @@ class _UnitRecurringMaintenanceTabState
           decoration: const InputDecoration(labelText: 'Sort'),
           items: const [
             DropdownMenuItem(value: 'nextDueDate', child: Text('Next due')),
-            DropdownMenuItem(
-              value: '-nextDueDate',
-              child: Text('Latest due'),
-            ),
+            DropdownMenuItem(value: '-nextDueDate', child: Text('Latest due')),
             DropdownMenuItem(value: 'title', child: Text('Title')),
           ],
           onChanged: (value) => setState(() {
@@ -3130,7 +3191,7 @@ class _UnitTurnoverTab extends StatelessWidget {
               _MetricRow(
                 icon: Symbols.construction_rounded,
                 label: 'Status',
-                value: _turnoverStatusLabel(turnover.status),
+                value: plainEnglishLabel(turnover.status),
               ),
               _MetricRow(
                 icon: Symbols.task_alt_rounded,
@@ -3276,8 +3337,10 @@ class _PaymentsSection extends StatelessWidget {
         for (final item in items)
           _CompactRow(
             icon: Symbols.receipt_long_rounded,
-            title: '${item.type} · ${_formatCurrency(item.amount)}',
-            subtitle: '${item.status} · Due ${_formatDate(item.dueDate)}',
+            title:
+                '${plainEnglishLabel(item.type)} · ${_formatCurrency(item.amount)}',
+            subtitle:
+                '${plainEnglishLabel(item.status)} · Due ${_formatDate(item.dueDate)}',
             onTap: () => Navigator.of(context).push<void>(
               MaterialPageRoute<void>(
                 builder: (_) => PaymentDetailScreen(
@@ -3309,7 +3372,8 @@ class _WorkOrdersSection extends StatelessWidget {
             icon: Symbols.build_rounded,
             title: item.title.isEmpty ? 'Work order #${item.id}' : item.title,
             subtitle:
-                '${item.priority.isEmpty ? 'Priority' : item.priority} · ${item.status.isEmpty ? 'Open' : item.status}',
+                '${plainEnglishLabel(item.priority, fallback: 'Priority')} · '
+                '${plainEnglishLabel(item.status, fallback: 'Open')}',
             onTap: openFullDetail
                 ? () => Navigator.of(context).push<void>(
                     MaterialPageRoute<void>(
@@ -3342,7 +3406,7 @@ class _DocumentsSection extends StatelessWidget {
                 ? 'Document #${item.id}'
                 : item.fileName,
             subtitle: item.entityType?.isNotEmpty == true
-                ? '${item.entityType} · ${_formatDate(item.uploadedAt)}'
+                ? '${plainEnglishLabel(item.entityType ?? '')} · ${_formatDate(item.uploadedAt)}'
                 : _formatDate(item.uploadedAt),
           ),
       ],
@@ -3366,7 +3430,8 @@ class _AppointmentsSection extends StatelessWidget {
             icon: Symbols.event_rounded,
             title: item.title.isEmpty ? 'Appointment #${item.id}' : item.title,
             subtitle:
-                '${item.status.isEmpty ? item.type : item.status} · ${_formatDate(item.scheduledStart)}',
+                '${plainEnglishLabel(item.status.isEmpty ? item.type : item.status)} · '
+                '${_formatDate(item.scheduledStart)}',
           ),
       ],
     );
@@ -3841,23 +3906,6 @@ String _leaseEndsLabel(int days) {
   if (days == 0) return 'Lease ends today';
   if (days == 1) return 'Lease ends tomorrow';
   return 'Lease ends in ${days}d';
-}
-
-String _turnoverStatusLabel(String status) {
-  switch (status) {
-    case 'AwaitingVacancy':
-      return 'Awaiting vacancy';
-    case 'MoveOut':
-      return 'Move-out';
-    case 'InProgress':
-      return 'In progress';
-    case 'RentReady':
-      return 'Rent-ready';
-    case 'NotStarted':
-      return 'Not started';
-    default:
-      return status;
-  }
 }
 
 String _formatDate(DateTime date) {

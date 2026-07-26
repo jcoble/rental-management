@@ -1,0 +1,1 @@
+4af9ef2d6f0d4b44312717c52dbf334cf57d787f228e0c229f6ad1e73253b3ed  /srv/agent-handoffs/tsk750-mobile-f5c8ae7c/artifacts/rental-command-dev-f5c8ae7c-installed-signer.apk

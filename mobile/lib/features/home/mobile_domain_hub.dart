@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
+import '../../core/widgets/mobile_section_selector.dart';
 import 'mobile_destination.dart';
 import 'mobile_domain_chrome.dart';
 import 'mobile_domain_navigation.dart';
@@ -384,11 +385,34 @@ class _MobileDomainHubScreenState extends ConsumerState<MobileDomainHubScreen> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         if (!showingDetailHeader)
-                          _HubSegmentBar(
-                            destinations: widget.destinations,
-                            selectedIndex: _selectedIndex,
-                            onSelected: _selectIndex,
-                          ),
+                          widget.destinations.length >= 4
+                              ? MobileSectionSelector<int>(
+                                  items: [
+                                    for (
+                                      var index = 0;
+                                      index < widget.destinations.length;
+                                      index++
+                                    )
+                                      MobileSectionItem(
+                                        value: index,
+                                        id: widget.destinations[index].id.name,
+                                        label: widget.destinations[index].label,
+                                        icon: widget.destinations[index].icon,
+                                      ),
+                                  ],
+                                  selectedValue: _selectedIndex,
+                                  onSelected: _selectIndex,
+                                  tooltip: 'Choose section',
+                                  selectorKey: const Key(
+                                    'hub-section-selector',
+                                  ),
+                                  itemKeyPrefix: 'hub-section',
+                                )
+                              : _HubSegmentBar(
+                                  destinations: widget.destinations,
+                                  selectedIndex: _selectedIndex,
+                                  onSelected: _selectIndex,
+                                ),
                         Expanded(
                           child: PopScope<void>(
                             canPop: false,
@@ -582,6 +606,7 @@ class _HubSegmentBarState extends State<_HubSegmentBar> {
           _lastViewportWidth = viewportWidth;
 
           return SingleChildScrollView(
+            key: const Key('hub-segment-scroll'),
             controller: _scrollController,
             scrollDirection: Axis.horizontal,
             physics: const BouncingScrollPhysics(),
