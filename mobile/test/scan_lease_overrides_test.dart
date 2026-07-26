@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rental_command/core/models/models.dart';
 import 'package:rental_command/features/scan/guided_rental_flow.dart';
@@ -10,6 +12,33 @@ import 'package:rental_command/features/scan/scan_review_screen.dart';
 /// the chosen ids. This is the invariant that makes "the computer creates the
 /// property for you" actually reachable, so it's worth pinning.
 void main() {
+  test('lease review exposes every tenant and unit confirmation override', () {
+    final source = File(
+      'lib/features/scan/scan_review_screen.dart',
+    ).readAsStringSync();
+
+    for (final field in const [
+      'tenant_name',
+      'tenant_email',
+      'tenant_phone',
+      'tenant_emergency_contact',
+      'unit_number',
+      'unit_bedrooms',
+      'unit_bathrooms',
+      'unit_square_feet',
+    ]) {
+      expect(
+        RegExp("'$field'").allMatches(source).length,
+        greaterThanOrEqualTo(2),
+        reason:
+            '$field must be both recognized and rendered in the lease review',
+      );
+    }
+
+    expect(source, contains("'unit_square_feet',"));
+    expect(source, contains("'tenant_email': 'Tenant email'"));
+  });
+
   test('payment confirmation sends tenantAccountId and no legacy leaseId', () {
     final overrides = buildOverridesMap(
       editedFields: const {'total': '1200'},
