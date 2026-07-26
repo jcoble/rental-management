@@ -258,10 +258,19 @@ public sealed class ScanService : IScanService
             await ValidateLeaseIdsInPortfolioAsync(portfolioId, fields, ct);
             ApplyLeaseOverrides(fields, normalizedOverrides);
 
-            fields.PropertyId = PositiveOverride(overrideRoot, "propertyId", "property_id")
-                ?? (fields.PropertyId > 0 ? fields.PropertyId : draft.CapturePropertyId ?? 0);
-            fields.UnitId = PositiveOverride(overrideRoot, "unitId", "unit_id")
-                ?? fields.UnitId ?? draft.CaptureUnitId;
+            var hasPropertyOverride = TryGetOverrideNullableInt(
+                overrideRoot, out var propertyOverride, "propertyId", "property_id");
+            fields.PropertyId = hasPropertyOverride
+                ? propertyOverride.GetValueOrDefault()
+                : fields.PropertyId > 0
+                    ? fields.PropertyId
+                    : draft.CapturePropertyId ?? 0;
+
+            var hasUnitOverride = TryGetOverrideNullableInt(
+                overrideRoot, out var unitOverride, "unitId", "unit_id");
+            fields.UnitId = hasUnitOverride
+                ? unitOverride is > 0 ? unitOverride : null
+                : fields.UnitId ?? draft.CaptureUnitId;
             var leaseManagementId = PositiveOverride(
                 overrideRoot, "leaseManagementId", "lease_management_id")
                 ?? draft.CaptureLeaseManagementId;

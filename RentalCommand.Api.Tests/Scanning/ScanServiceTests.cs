@@ -498,6 +498,50 @@ public class ScanServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task PrepareConfirmationAsync_LeaseTarget_ExplicitCreateSentinelsClearCaptureContext()
+    {
+        var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "LeaseAgreement");
+        draft.CapturePropertyId = 12;
+        draft.CaptureUnitId = 34;
+        await _db.SaveChangesAsync();
+
+        var result = await _sut.PrepareConfirmationAsync(
+            PortfolioId,
+            draft.Id,
+            userId: 7,
+            overridesJson:
+                """{"propertyId":0,"unitId":0,"rentalStructure":"MultiRental","reviewDisposition":"AlreadyFullySigned"}""");
+
+        result.Outcome.Should().Be(ScanConfirmationPreparationOutcome.Ready);
+        result.Command.Should().NotBeNull();
+        result.Command!.Target.LeaseAgreement.Should().NotBeNull();
+        result.Command.Target.LeaseAgreement!.PropertyId.Should().Be(0);
+        result.Command.Target.LeaseAgreement.UnitId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task PrepareConfirmationAsync_LeaseTarget_ExplicitNewUnitClearsCapturedUnit()
+    {
+        var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "LeaseAgreement");
+        draft.CapturePropertyId = 12;
+        draft.CaptureUnitId = 34;
+        await _db.SaveChangesAsync();
+
+        var result = await _sut.PrepareConfirmationAsync(
+            PortfolioId,
+            draft.Id,
+            userId: 7,
+            overridesJson:
+                """{"propertyId":21,"unitId":0,"reviewDisposition":"AlreadyFullySigned"}""");
+
+        result.Outcome.Should().Be(ScanConfirmationPreparationOutcome.Ready);
+        result.Command.Should().NotBeNull();
+        result.Command!.Target.LeaseAgreement.Should().NotBeNull();
+        result.Command.Target.LeaseAgreement!.PropertyId.Should().Be(21);
+        result.Command.Target.LeaseAgreement.UnitId.Should().BeNull();
+    }
+
+    [Fact]
     public async Task PrepareConfirmationAsync_InvalidOverrideJson_IsRejectedBeforeAtomicBoundary()
     {
         var draft = SeedDraft("Reviewing", extractedFields: null);
