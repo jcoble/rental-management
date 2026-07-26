@@ -1564,19 +1564,20 @@ class _DocumentPreview extends ConsumerWidget {
             ],
           ),
         ),
-        data: (bytes) => InteractiveViewer(
-          child: Image.memory(
-            bytes,
-            fit: BoxFit.contain,
-            // Decode at preview scale (not full sensor resolution) so a large
-            // stored image doesn't pin the CPU on lower-end / throttled devices.
-            cacheHeight: 1080,
-            errorBuilder: (ctx, e, _) => Center(
-              child: Icon(
-                Icons.picture_as_pdf_outlined,
-                size: 64,
-                color: Colors.grey.shade400,
-              ),
+        // Keep this a passive preview. InteractiveViewer still participates in
+        // the gesture arena when panning/scaling are disabled, which prevents
+        // the parent review ListView from scrolling when a swipe begins here.
+        data: (bytes) => Image.memory(
+          bytes,
+          fit: BoxFit.contain,
+          // Decode at preview scale (not full sensor resolution) so a large
+          // stored image doesn't pin the CPU on lower-end / throttled devices.
+          cacheHeight: 1080,
+          errorBuilder: (ctx, e, _) => Center(
+            child: Icon(
+              Icons.picture_as_pdf_outlined,
+              size: 64,
+              color: Colors.grey.shade400,
             ),
           ),
         ),
@@ -1987,22 +1988,26 @@ class _LeaseSignatureDispositionSectionState
                   'This determines whether Rental Command preserves the upload as the signed agreement or prepares it for signatures.',
                 ),
               ),
-              RadioListTile<LeaseScanReviewDisposition>(
-                value: LeaseScanReviewDisposition.alreadyFullySigned,
+              RadioGroup<LeaseScanReviewDisposition>(
                 groupValue: widget.selectedDisposition,
                 onChanged: widget.onDispositionChanged,
-                title: const Text('Already fully signed'),
-                subtitle: const Text(
-                  'Everyone has signed. Save this uploaded document as the executed agreement.',
-                ),
-              ),
-              RadioListTile<LeaseScanReviewDisposition>(
-                value: LeaseScanReviewDisposition.needsSignatures,
-                groupValue: widget.selectedDisposition,
-                onChanged: widget.onDispositionChanged,
-                title: const Text('Still needs signatures'),
-                subtitle: const Text(
-                  'Prepare an editable agreement draft and send it through Rental Command signing.',
+                child: const Column(
+                  children: [
+                    RadioListTile<LeaseScanReviewDisposition>(
+                      value: LeaseScanReviewDisposition.alreadyFullySigned,
+                      title: Text('Already fully signed'),
+                      subtitle: Text(
+                        'Everyone has signed. Save this uploaded document as the executed agreement.',
+                      ),
+                    ),
+                    RadioListTile<LeaseScanReviewDisposition>(
+                      value: LeaseScanReviewDisposition.needsSignatures,
+                      title: Text('Still needs signatures'),
+                      subtitle: Text(
+                        'Prepare an editable agreement draft and send it through Rental Command signing.',
+                      ),
+                    ),
+                  ],
                 ),
               ),
               if (needsSignatures) ...[
@@ -2074,7 +2079,7 @@ class _LeaseSignatureDispositionSectionState
                             (item) => item.id == widget.selectedTemplateId,
                           );
                           return DropdownButtonFormField<int>(
-                            value: selectedIsVisible
+                            initialValue: selectedIsVisible
                                 ? widget.selectedTemplateId
                                 : null,
                             decoration: const InputDecoration(
