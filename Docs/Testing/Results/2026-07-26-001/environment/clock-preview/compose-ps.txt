@@ -1,0 +1,6 @@
+NAME                           IMAGE                      COMMAND                  SERVICE    CREATED          STATUS                    PORTS
+rc-preview-rental-api-1        rc-preview-api:rental      "dotnet RentalComman…"   api        22 seconds ago   Up 10 seconds (healthy)   8080/tcp
+rc-preview-rental-engine-1     rc-preview-engine:rental   "dotnet RentalComman…"   engine     22 seconds ago   Up 10 seconds (healthy)   
+rc-preview-rental-gateway-1    nginx:1.27-alpine          "/docker-entrypoint.…"   gateway    22 seconds ago   Up 5 seconds              80/tcp, 100.126.201.65:15667->8080/tcp
+rc-preview-rental-postgres-1   postgres:16-alpine         "docker-entrypoint.s…"   postgres   32 seconds ago   Up 21 seconds (healthy)   5432/tcp
+rc-preview-rental-web-1        rc-preview-web:rental      "docker-entrypoint.s…"   web        22 seconds ago   Up 10 seconds             3000/tcp
