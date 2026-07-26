@@ -375,7 +375,7 @@
 
 ### TSK-754-D014 — Mobile lease review cannot complete tenant and unit details
 
-- Status: Confirmed
+- Status: Confirmed; SCN-0014 corrected through the native manual-edit forms, source defect remains
 - Severity: High scan-first data-completeness defect
 - Reproduction:
   - Upload `SCN-0014` through Android DocumentsUI and choose Create new.
@@ -393,6 +393,16 @@
 - Evidence:
   - `mobile/azure/scn-0014-review-property-signing.png`
   - `mobile/azure/scn-0014-review-terms.png`
+  - The native tenant form saved and reloaded `tenant.014@example.local`, `6145550114`, and
+    `Morgan King 614-555-0199`; PostgreSQL independently returned the same three values for Rina
+    King. Evidence: `mobile/azure/scn-0014-tenant-corrected.png`.
+  - The native unit form exercised unit number, floor plan, beds, baths, square feet, market rent,
+    and notes. It saved and reloaded Main, `4BR-1BA`, 4 beds, 1 bath, 1,540 square feet, $1,200,
+    and the turnover note; PostgreSQL independently returned the same values.
+  - After the save, the native Summary showed Occupied, Active, 4 beds, and 1 bath, while
+    `vw_lease_management_lifecycle` returned business date `2027-01-03`, lifecycle `Occupied`,
+    primary tenant Rina King, and no reconciliation exception.
+    Evidence: `mobile/azure/scn-0014-unit-corrected.png`.
 
 ### TSK-754-D015 — Historical signed-lease import creates contradictory lifecycle state
 
@@ -539,6 +549,11 @@
   TenantAccounts atomically from 12 to 13.
 - The save also established D014 and D015: omitted tenant/unit details persisted blank or zero,
   and the governing historical agreement lacks possession.
+- The native tenant and unit edit flows were then used to correct every omitted SCN-0014 value
+  represented in the planner plus the manual-only phone, emergency contact, floor-plan, and unit
+  notes fields. The corrected values reloaded in the app and matched direct PostgreSQL reads.
+- The corrected unit now reports Occupied/Active on the native Summary and has no lease
+  reconciliation exception.
 
 ## Checkpoint 2026-07-26
 
@@ -551,5 +566,4 @@
 - Current blockers:
   - None at this checkpoint; D014 and D015 remain confirmed defects with safe manual correction
     paths for this run.
-- Next action: complete the missing SCN-0014 tenant/unit fields through the native app, then resume
-  the remaining January 3 scans and rent receipts.
+- Next action: resume the remaining January 3 scans and rent receipts.
