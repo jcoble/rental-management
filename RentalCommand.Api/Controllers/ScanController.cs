@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Atomic;
@@ -38,6 +39,7 @@ public class ScanController : ManagementControllerBase
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
     private readonly TimeProvider _timeProvider;
+    private readonly ILogger<ScanController> _logger;
 
     // Content types we trust to render inline (non-active: no script execution). Anything else
     // is forced to download as octet-stream so an uploaded html/svg/etc. can't run on our origin.
@@ -62,7 +64,8 @@ public class ScanController : ManagementControllerBase
         IAtomicUnitOfWork atomic,
         RentalCommandDbContext db,
         IFileStorage files,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        ILogger<ScanController>? logger = null)
     {
         _scan = scan;
         _uploads = uploads;
@@ -70,6 +73,7 @@ public class ScanController : ManagementControllerBase
         _db = db;
         _files = files;
         _timeProvider = timeProvider;
+        _logger = logger ?? NullLogger<ScanController>.Instance;
     }
 
     // -------------------------------------------------------------------------
@@ -1059,8 +1063,21 @@ public class ScanController : ManagementControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
-        catch (UnauthorizedAccessException)
+        catch (UnauthorizedAccessException ex)
         {
+            var leaseTarget = command.Target.LeaseAgreement;
+            _logger.LogWarning(
+                ex,
+                "Scan confirmation authorization failed for draft {DraftId}, portfolio {PortfolioId}, "
+                + "user {UserId}, access context {AccessContextId}, target {TargetKind}, "
+                + "property {PropertyId}, unit {UnitId}.",
+                id,
+                portfolioId,
+                command.ConfirmedByUserId,
+                command.AccessContextId,
+                command.Target.Kind,
+                leaseTarget?.PropertyId,
+                leaseTarget?.UnitId);
             return Forbid();
         }
 

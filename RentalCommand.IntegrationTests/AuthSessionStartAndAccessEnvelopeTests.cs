@@ -943,6 +943,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         resolvedManagement.AccessContextId.Should().Be(managementContext.Id);
         resolvedManagement.PortfolioId.Should().Be(managementContext.PortfolioId);
         resolvedManagement.AccessRevision.Should().Be(managementContext.AccessRevision);
+        resolvedManagement.LastAuthorizedExperience.Should().Be(WorkspaceExperience.Management);
         resolvedManagement.WorkspaceMembershipId.Should().Be(_firstMembershipId);
         resolvedManagement.DefaultExperience.Should().Be(WorkspaceExperience.Management);
         _queryCapture.ReaderCommands.Should().ContainSingle()
