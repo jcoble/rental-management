@@ -1,7 +1,5 @@
 using System.Data.Common;
 using FluentAssertions;
-using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Authorization;
@@ -19,50 +17,38 @@ namespace RentalCommand.Api.Tests.Domain;
 /// excluded) and computed DEPRECIATION, and applies the deterministic legacy double-count exclusion
 /// (a loan present → drop manual MortgageInterest; computed depreciation → drop manual Depreciation).
 /// </summary>
-public class ScheduleEServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class ScheduleEServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
     private const int Year = 2025;
 
-    private readonly SqliteConnection _conn;
+    private readonly MigratedPostgreSqlFixture _fixture;
     private readonly List<string> _commands = [];
-    private readonly RentalCommandDbContext _db;
-    private readonly ScheduleEService _sut;
-    private readonly WorkspaceReadScope _scope;
+    private MigratedPostgreSqlTestContext _context = null!;
+    private RentalCommandDbContext _db = null!;
+    private ScheduleEService _sut = null!;
+    private WorkspaceReadScope _scope;
 
-    public ScheduleEServiceTests()
+    public ScheduleEServiceTests(MigratedPostgreSqlFixture fixture)
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
-        _conn.Open();
-        _conn.RegisterScheduleEDepreciationFunctionForSqlite();
+        _fixture = fixture;
+    }
 
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .AddInterceptors(new ScheduleERecordingCommandInterceptor(_commands))
-            .Options;
-
-        _db = new ReportsServiceTestDbContext(options); // reuses the SQLite-compatible context
-        _db.Database.EnsureCreated();
-
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = PortfolioId,
-            Name = "Frank's Rentals",
-            ManagementCompanyName = "Frank Co",
-            TimeZone = "UTC",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.SaveChanges();
+    public async Task InitializeAsync()
+    {
+        _context = await _fixture.CreateContextAsync(
+            [new ScheduleERecordingCommandInterceptor(_commands)]);
+        _db = _context.Db;
         _scope = _db.SeedAdministratorScope(PortfolioId, nameof(ScheduleEServiceTests));
+        await _context.ActivateApiScopeAsync(_scope);
 
         _sut = new ScheduleEService(_db);
     }
 
-    public void Dispose()
+    public async Task DisposeAsync()
     {
-        _db.Dispose();
-        _conn.Dispose();
+        await _context.DisposeAsync();
     }
 
     private static DateTime D(int y, int m, int d) => new(y, m, d, 0, 0, 0, DateTimeKind.Utc);
@@ -98,6 +84,7 @@ public class ScheduleEServiceTests : IDisposable
             new Expense
             {
                 PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
                 PropertyId = selected.Id,
                 Category = ScheduleECategory.Repairs,
                 Description = "Selected repair",
@@ -110,6 +97,7 @@ public class ScheduleEServiceTests : IDisposable
             new Expense
             {
                 PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
                 PropertyId = excluded.Id,
                 Category = ScheduleECategory.Repairs,
                 Description = "Excluded repair",
@@ -196,7 +184,9 @@ public class ScheduleEServiceTests : IDisposable
         sql.Should().Contain("ApplicationFinancialEntries");
         sql.Should().Contain("Units", "Unit attribution must be expressed in SQL");
         sql.Should().Contain("WorkOrders", "WorkOrder attribution must be expressed in SQL");
-        sql.Should().Contain("AuthSessions", "current administrator authorization must be evaluated in SQL");
+        sql.Should().Contain(
+            "rc_api_effective_capability_scopes",
+            "current administrator authorization must be evaluated by the canonical PostgreSQL capability function");
         sql.Should().Contain("GROUP BY", "category aggregation must be DB-side");
         sql.Should().Contain("ORDER BY", "flat report ordering must be DB-side");
         (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) ||
@@ -220,6 +210,7 @@ public class ScheduleEServiceTests : IDisposable
         SeedExpense(75m, ScheduleECategory.Other, "Unallocated expense");
         _db.SaveChanges();
         var selectedPropertyScope = SeedSelectedPropertyScope(allowed.Id);
+        await _context.ActivateApiScopeAsync(selectedPropertyScope);
         _commands.Clear();
 
         var report = await _sut.GetReportAsync(
@@ -249,10 +240,9 @@ public class ScheduleEServiceTests : IDisposable
         _commands.Should().ContainSingle(
             "limited authorization and all report aggregation must remain one bounded translated query");
         var sql = _commands.Single();
-        sql.Should().Contain("MembershipRoleAssignmentProperties",
-            "selected-property authorization must be applied inside the report SQL");
-        sql.Should().Contain("AuthSessions",
-            "the active access context must be verified inside the report SQL");
+        // The selected-property boundary is enforced by PostgreSQL RLS under rentalcommand_api,
+        // so its policy body is intentionally not repeated in the client command text. The
+        // allowed/decoy assertions above are the end-to-end authorization proof.
         sql.Should().Contain("GROUP BY");
         sql.Should().Contain("ORDER BY");
     }
@@ -293,9 +283,9 @@ public class ScheduleEServiceTests : IDisposable
 
         // Expenses: 1,000 repairs (counts) + a 5,000 manual MortgageInterest + 3,000 manual Depreciation
         // — both must be EXCLUDED because the property has a modeled loan + computed depreciation.
-        _db.Expenses.Add(new Expense { PortfolioId = PortfolioId, PropertyId = property.Id, Category = ScheduleECategory.Repairs, Description = "Repair", Status = ExpenseStatus.Paid, Amount = 1_000m, IncurredAt = D(Year, 6, 1), CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
-        _db.Expenses.Add(new Expense { PortfolioId = PortfolioId, PropertyId = property.Id, Category = ScheduleECategory.MortgageInterest, Description = "Manual interest", Status = ExpenseStatus.Paid, Amount = 5_000m, IncurredAt = D(Year, 6, 1), CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
-        _db.Expenses.Add(new Expense { PortfolioId = PortfolioId, PropertyId = property.Id, Category = ScheduleECategory.Depreciation, Description = "Manual depr", Status = ExpenseStatus.Paid, Amount = 3_000m, IncurredAt = D(Year, 6, 1), CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+        _db.Expenses.Add(new Expense { PortfolioId = PortfolioId, OperationalScope = ExpenseOperationalScope.Property, PropertyId = property.Id, Category = ScheduleECategory.Repairs, Description = "Repair", Status = ExpenseStatus.Paid, Amount = 1_000m, IncurredAt = D(Year, 6, 1), CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+        _db.Expenses.Add(new Expense { PortfolioId = PortfolioId, OperationalScope = ExpenseOperationalScope.Property, PropertyId = property.Id, Category = ScheduleECategory.MortgageInterest, Description = "Manual interest", Status = ExpenseStatus.Paid, Amount = 5_000m, IncurredAt = D(Year, 6, 1), CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
+        _db.Expenses.Add(new Expense { PortfolioId = PortfolioId, OperationalScope = ExpenseOperationalScope.Property, PropertyId = property.Id, Category = ScheduleECategory.Depreciation, Description = "Manual depr", Status = ExpenseStatus.Paid, Amount = 3_000m, IncurredAt = D(Year, 6, 1), CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
         _db.SaveChanges();
 
         // A loan with 2 payments this year: interest 600 + 590 = 1,190 deducted; principal NOT deducted.
@@ -413,6 +403,7 @@ public class ScheduleEServiceTests : IDisposable
             new Expense
             {
                 PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
                 PropertyId = property.Id,
                 CapitalizedAssetId = roof.Id,
                 Category = ScheduleECategory.Repairs,
@@ -426,6 +417,7 @@ public class ScheduleEServiceTests : IDisposable
             new Expense
             {
                 PortfolioId = PortfolioId,
+                OperationalScope = ExpenseOperationalScope.Property,
                 PropertyId = property.Id,
                 Category = ScheduleECategory.Repairs,
                 Description = "Small repair",
@@ -478,6 +470,7 @@ public class ScheduleEServiceTests : IDisposable
         _db.Expenses.Add(new Expense
         {
             PortfolioId = PortfolioId,
+            OperationalScope = ExpenseOperationalScope.Property,
             PropertyId = property.Id,
             Category = ScheduleECategory.Repairs,
             Description = "Repair",
@@ -704,9 +697,33 @@ public class ScheduleEServiceTests : IDisposable
         int? unitId = null,
         int? workOrderId = null)
     {
+        if (workOrderId.HasValue)
+        {
+            var context = _db.WorkOrders
+                .Where(workOrder => workOrder.Id == workOrderId.Value)
+                .Select(workOrder => new { workOrder.PropertyId, workOrder.UnitId })
+                .Single();
+            propertyId = context.PropertyId;
+            unitId = context.UnitId;
+        }
+        else if (unitId.HasValue)
+        {
+            propertyId = _db.Units
+                .Where(unit => unit.Id == unitId.Value)
+                .Select(unit => unit.PropertyId)
+                .Single();
+        }
+
         _db.Expenses.Add(new Expense
         {
             PortfolioId = PortfolioId,
+            OperationalScope = workOrderId.HasValue
+                ? ExpenseOperationalScope.WorkOrder
+                : unitId.HasValue
+                    ? ExpenseOperationalScope.Unit
+                    : propertyId.HasValue
+                        ? ExpenseOperationalScope.Property
+                        : ExpenseOperationalScope.Portfolio,
             PropertyId = propertyId,
             UnitId = unitId,
             WorkOrderId = workOrderId,
@@ -854,7 +871,6 @@ public class ScheduleEServiceTests : IDisposable
             TermsPayload = "{}",
             DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
                 PortfolioId, 1, now),
-            FullyExecutedAtUtc = start,
             CreatedAtUtc = now,
             UpdatedAtUtc = now,
             CreatedByUserId = 1,
@@ -863,6 +879,12 @@ public class ScheduleEServiceTests : IDisposable
         management.TenantAccount = account;
         _db.AddRange(account, party, agreement);
         _db.SaveChanges();
+        _db.MarkFullyExecuted(
+            agreement,
+            party,
+            tenant,
+            actorUserId: 1,
+            executedAtUtc: start);
         return agreement;
     }
 

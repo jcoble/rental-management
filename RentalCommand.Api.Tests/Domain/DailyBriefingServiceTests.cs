@@ -1,6 +1,4 @@
 using FluentAssertions;
-using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using System.Diagnostics;
 using RentalCommand.Api.Services.Domain;
@@ -13,59 +11,31 @@ using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
-public class DailyBriefingServiceTests : IDisposable
+[Collection(MigratedPostgreSqlCollection.Name)]
+public class DailyBriefingServiceTests : IAsyncLifetime
 {
     private const int PortfolioId = 1;
     private const int ActorUserId = 1;
 
-    private readonly SqliteConnection _conn;
     private readonly List<string> _executedSql = [];
-    private readonly RentalCommandDbContext _db;
-    private readonly DailyBriefingService _sut;
+    private readonly MigratedPostgreSqlFixture _fixture;
+    private MigratedPostgreSqlTestContext _ctx = null!;
+    private RentalCommandDbContext _db = null!;
+    private DailyBriefingService _sut = null!;
 
-    public DailyBriefingServiceTests()
+    public DailyBriefingServiceTests(MigratedPostgreSqlFixture fixture)
     {
-        _conn = new SqliteConnection("DataSource=:memory:");
-        _conn.Open();
+        _fixture = fixture;
+    }
 
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .AddInterceptors(new RecordingCommandInterceptor(_executedSql))
-            .Options;
-
-        _db = new DailyBriefingFixtureDbContext(options);
-        _db.Database.EnsureCreated();
-        _db.Database.InstallCanonicalLeaseProjectionViewsForSqlite();
-
-        _db.Portfolios.Add(new Portfolio
-        {
-            Id = PortfolioId,
-            Name = "Test Portfolio",
-            ManagementCompanyName = "Test Co",
-            TimeZone = "UTC",
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
-        });
-        _db.Users.Add(new ApplicationUser
-        {
-            Id = ActorUserId,
-            UserName = "briefing-test@rentalcommand.local",
-            NormalizedUserName = "BRIEFING-TEST@RENTALCOMMAND.LOCAL",
-            Email = "briefing-test@rentalcommand.local",
-            NormalizedEmail = "BRIEFING-TEST@RENTALCOMMAND.LOCAL",
-            DisplayName = "Briefing Test Actor",
-            CreatedAt = DateTime.UtcNow,
-        });
-        _db.SaveChanges();
-
+    public async Task InitializeAsync()
+    {
+        _ctx = await _fixture.CreateContextAsync([new RecordingCommandInterceptor(_executedSql)]);
+        _db = _ctx.Db;
         _sut = new DailyBriefingService(_db, new NoopLlmProvider(), TimeProvider.System);
     }
 
-    public void Dispose()
-    {
-        _db.Dispose();
-        _conn.Dispose();
-    }
+    public async Task DisposeAsync() => await _ctx.DisposeAsync();
 
     [Fact]
     public async Task ComposeAsync_RanksAndCapsBriefingCandidatesInSql()
@@ -74,7 +44,7 @@ public class DailyBriefingServiceTests : IDisposable
         _executedSql.Clear();
 
         var briefing = await _sut.ComposeAsync(
-            SeedAdministratorScope(null, DateTime.UtcNow), CancellationToken.None);
+            await SeedAdministratorScopeAsync(null, DateTime.UtcNow), CancellationToken.None);
 
         briefing.Bullets.Should().Contain(b => b.Category == "Maintenance" && b.Severity == "critical");
         briefing.Bullets.Should().Contain(b => b.Category == "RentLate");
@@ -111,7 +81,7 @@ public class DailyBriefingServiceTests : IDisposable
             tenantLastName: "Smith",
             startDate: today.AddMonths(-15),
             endDate: today.AddMonths(-3),
-            lifecycle: "Closed");
+            lifecycle: "Occupied");
         var currentRelationship = SeedRelationship(
             today,
             leaseNumber: "L-CURRENT",
@@ -127,7 +97,7 @@ public class DailyBriefingServiceTests : IDisposable
         SeedOpenRentCharge(currentRelationship, 975m, DateOnly.FromDateTime(today.AddDays(-7)));
 
         var briefing = await _sut.ComposeAsync(
-            SeedAdministratorScope(null, DateTime.UtcNow), CancellationToken.None);
+            await SeedAdministratorScopeAsync(null, DateTime.UtcNow), CancellationToken.None);
 
         briefing.Bullets.Should().ContainSingle(b =>
             b.Category == "RentLate" &&
@@ -156,7 +126,7 @@ public class DailyBriefingServiceTests : IDisposable
         SeedOpenRentCharge(relationship, 925m, DateOnly.FromDateTime(today.AddDays(-7)));
 
         var briefing = await _sut.ComposeAsync(
-            SeedAdministratorScope(null, DateTime.UtcNow), CancellationToken.None);
+            await SeedAdministratorScopeAsync(null, DateTime.UtcNow), CancellationToken.None);
 
         var rentBullet = briefing.Bullets.Should().ContainSingle(b => b.Category == "RentLate").Subject;
         rentBullet.Title.Should().Contain("Jordan Smith");
@@ -171,7 +141,6 @@ public class DailyBriefingServiceTests : IDisposable
         var now = DateTime.UtcNow;
         var allowed = SeedBareProperty("Allowed", now);
         var decoy = SeedBareProperty("Decoy", now);
-        var scope = SeedAdministratorScope(allowed.Id, now);
         _db.WorkOrders.AddRange(
             new WorkOrder
             {
@@ -196,6 +165,7 @@ public class DailyBriefingServiceTests : IDisposable
                 UpdatedAt = now,
             });
         await _db.SaveChangesAsync();
+        var scope = await SeedAdministratorScopeAsync(allowed.Id, now);
 
         var briefing = await _sut.ComposeAsync(scope, CancellationToken.None);
 
@@ -253,7 +223,7 @@ public class DailyBriefingServiceTests : IDisposable
         return property;
     }
 
-    private WorkspaceReadScope SeedAdministratorScope(int? propertyId, DateTime now)
+    private async Task<WorkspaceReadScope> SeedAdministratorScopeAsync(int? propertyId, DateTime now)
     {
         var user = _db.Users.Single(user => user.Id == ActorUserId);
         var context = new WorkspaceAccessContext
@@ -309,8 +279,10 @@ public class DailyBriefingServiceTests : IDisposable
         };
         _db.AddRange(assignment, session);
         _db.SaveChanges();
-        return new WorkspaceReadScope(
+        var scope = new WorkspaceReadScope(
             PortfolioId, user.Id, session.Id, context.Id, context.AccessRevision);
+        await _ctx.ActivateApiScopeAsync(scope);
+        return scope;
     }
 
     private void SeedBriefingData()
@@ -420,8 +392,6 @@ public class DailyBriefingServiceTests : IDisposable
             RelationshipNumber = $"REL-{Guid.NewGuid():N}"[..12],
             PlannedPossessionAtUtc = startDate,
             PossessionGivenAtUtc = startDate,
-            PossessionReturnedAtUtc = lifecycle == "Closed" ? endDate : null,
-            AccountClosedAtUtc = lifecycle == "Closed" ? endDate : null,
             CreatedAtUtc = now,
             CreatedByUserId = ActorUserId,
             UpdatedAtUtc = now,
@@ -454,8 +424,6 @@ public class DailyBriefingServiceTests : IDisposable
             TermsPayload = "{}",
             DocumentSourceVersion = LegalDocumentSourceVersionTestData.BuiltIn(
                 PortfolioId, ActorUserId, now),
-            IssuedAtUtc = now,
-            FullyExecutedAtUtc = now,
             CreatedAtUtc = now,
             CreatedByUserId = ActorUserId,
             UpdatedAtUtc = now,
@@ -480,45 +448,85 @@ public class DailyBriefingServiceTests : IDisposable
             AccountNumber = $"TA-{Guid.NewGuid():N}"[..12],
             Currency = "USD",
             OpenedAtUtc = startDate,
-            ClosedAtUtc = lifecycle == "Closed" ? endDate : null,
             CreatedAtUtc = now,
             CreatedByUserId = ActorUserId,
         };
         _db.AddRange(agreement, party, account);
         _db.SaveChanges();
-
-        _db.LeaseManagementLifecycleProjections.Add(new LeaseManagementLifecycleProjection
+        _db.LeaseAgreementSigners.Add(new LeaseAgreementSigner
         {
             PortfolioId = PortfolioId,
-            PropertyId = property.Id,
-            UnitId = unit.Id,
-            LeaseManagementId = management.Id,
-            EffectiveNowUtc = now,
-            BusinessDate = DateOnly.FromDateTime(today),
-            Lifecycle = lifecycle,
-            CurrentAgreementId = lifecycle == "Closed" ? null : agreement.Id,
-            CurrentPartyCount = lifecycle == "Closed" ? 0 : 1,
-            CurrentResidentCount = lifecycle == "Closed" ? 0 : 1,
-            CurrentFinanciallyResponsiblePartyCount = lifecycle == "Closed" ? 0 : 1,
-            CurrentPrimaryPartyId = lifecycle == "Closed" ? null : party.Id,
-            CurrentPrimaryTenantId = lifecycle == "Closed" ? null : tenant.Id,
-            CurrentPrimaryTenantName = lifecycle == "Closed" ? null : $"{tenantFirstName} {tenantLastName}",
-            TenantAccountId = account.Id,
-        });
-        _db.LeaseAgreementStatusProjections.Add(new LeaseAgreementStatusProjection
-        {
-            PortfolioId = PortfolioId,
-            LeaseManagementId = management.Id,
-            AgreementId = agreement.Id,
-            BusinessDate = DateOnly.FromDateTime(today),
-            GoverningFromOn = startOn,
-            GoverningThroughExclusiveOn = endOn.AddDays(1),
-            AgreementStatus = lifecycle == "Closed" ? "Expired" : "Active",
-            IsGoverning = lifecycle != "Closed",
+            LeaseAgreementId = agreement.Id,
+            LeaseManagementPartyId = party.Id,
+            TenantId = tenant.Id,
+            SignerRole = LeaseLegalSignerRole.PrimaryTenant,
+            NameSnapshot = $"{tenantFirstName} {tenantLastName}",
+            EmailSnapshot = $"{tenantFirstName}.{tenantLastName}@example.test".ToLowerInvariant(),
+            SigningOrder = 1,
+            IsRequired = true,
         });
         _db.SaveChanges();
+
+        var issuedFile = NewStoredFile($"briefing-agreement-{agreement.Id}-issued.pdf", now);
+        var executedFile = NewStoredFile($"briefing-agreement-{agreement.Id}-executed.pdf", now);
+        _db.StoredFiles.AddRange(issuedFile, executedFile);
+        _db.SaveChanges();
+        var issuedArtifact = NewAgreementArtifact(
+            issuedFile, LegalDocumentArtifactKind.IssuedAgreement, 'a', now);
+        var executedArtifact = NewAgreementArtifact(
+            executedFile, LegalDocumentArtifactKind.ExecutedAgreement, 'c', now);
+        _db.LegalDocumentArtifacts.AddRange(issuedArtifact, executedArtifact);
+        _db.SaveChanges();
+
+        agreement.IssuedArtifactId = issuedArtifact.Id;
+        agreement.IssuedAtUtc = now;
+        agreement.ExecutedArtifactId = executedArtifact.Id;
+        agreement.FullyExecutedAtUtc = now;
+        _db.SaveChanges();
+
+        if (lifecycle == "Closed")
+        {
+            management.PossessionReturnedAtUtc = endDate;
+            management.AccountClosedAtUtc = endDate;
+            account.ClosedAtUtc = endDate;
+            account.CloseReasonCode = "LeaseEnded";
+            _db.SaveChanges();
+        }
+
         return new CanonicalRelationship(property, unit, tenant, management, agreement, party, account);
     }
+
+    private static StoredFile NewStoredFile(string fileName, DateTime now) => new()
+    {
+        PortfolioId = PortfolioId,
+        FileName = fileName,
+        FilePath = $"test/{fileName}",
+        ContentType = "application/pdf",
+        FileSize = 1024,
+        UploadedAt = now,
+    };
+
+    private static LegalDocumentArtifact NewAgreementArtifact(
+        StoredFile file,
+        LegalDocumentArtifactKind kind,
+        char hashCharacter,
+        DateTime now) => new()
+        {
+            PublicId = Guid.NewGuid(),
+            PortfolioId = PortfolioId,
+            StoredFileId = file.Id,
+            ArtifactKind = kind,
+            StorageKey = file.FilePath,
+            FileName = file.FileName,
+            ContentType = file.ContentType,
+            ByteLength = file.FileSize,
+            ContentSha256 = new string(hashCharacter, 64),
+            LegalIssuanceFingerprint = kind == LegalDocumentArtifactKind.IssuedAgreement
+            ? new string('b', 64)
+            : null,
+            CreatedAtUtc = now,
+            CreatedByUserId = ActorUserId,
+        };
 
     private TenantLedgerEntry SeedOpenRentCharge(
         CanonicalRelationship relationship,
@@ -544,21 +552,6 @@ public class DailyBriefingServiceTests : IDisposable
             CreatedByUserId = ActorUserId,
         };
         _db.TenantLedgerEntries.Add(entry);
-        _db.SaveChanges();
-        _db.TenantChargeBalanceProjections.Add(new TenantChargeBalanceProjection
-        {
-            PortfolioId = PortfolioId,
-            TenantAccountId = relationship.Account.Id,
-            TenantLedgerEntryId = entry.Id,
-            BusinessDate = DateOnly.FromDateTime(now),
-            EntryType = nameof(TenantLedgerEntryType.RentCharge),
-            Currency = "USD",
-            EffectiveOn = dueOn,
-            DueOn = dueOn,
-            OriginalAmount = amount,
-            OpenAmount = amount,
-            IsPastDue = dueOn < DateOnly.FromDateTime(now),
-        });
         _db.SaveChanges();
         return entry;
     }
@@ -618,25 +611,4 @@ public class DailyBriefingServiceTests : IDisposable
             => Task.FromResult(new LlmToolResult("end", "", [], 0, 0, "test"));
     }
 
-    private sealed class DailyBriefingFixtureDbContext(DbContextOptions<RentalCommandDbContext> options)
-        : RentalCommand.TestCommon.SqliteCompatibleRentalCommandDbContext(options)
-    {
-        protected override void OnModelCreating(ModelBuilder modelBuilder)
-        {
-            base.OnModelCreating(modelBuilder);
-
-            modelBuilder.Entity<LeaseManagementLifecycleProjection>()
-                .HasKey(row => new { row.PortfolioId, row.LeaseManagementId });
-            modelBuilder.Entity<LeaseManagementLifecycleProjection>()
-                .ToTable("DailyBriefingTestLeaseLifecycle");
-            modelBuilder.Entity<LeaseAgreementStatusProjection>()
-                .HasKey(row => new { row.PortfolioId, row.AgreementId });
-            modelBuilder.Entity<LeaseAgreementStatusProjection>()
-                .ToTable("DailyBriefingTestAgreementStatus");
-            modelBuilder.Entity<TenantChargeBalanceProjection>()
-                .HasKey(row => new { row.PortfolioId, row.TenantAccountId, row.TenantLedgerEntryId });
-            modelBuilder.Entity<TenantChargeBalanceProjection>()
-                .ToTable("DailyBriefingTestChargeBalances");
-        }
-    }
 }
