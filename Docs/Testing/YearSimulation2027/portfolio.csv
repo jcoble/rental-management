@@ -1,0 +1,31 @@
+property_id,property_name,rental_structure,address,city,state,postal_code,owner_entity_id,owner_entity_name,ownership_pct,acquisition_date,original_cost_cents,land_value_cents,building_basis_cents,loan_id,opening_loan_balance_cents,monthly_principal_cents,monthly_interest_cents
+P001,Arbor House,SingleRental,117 Arbor Street,Columbus,OH,43201,O01,Blue Door Residential LLC,100.00,2017-02-15,17975000,3595000,14380000,LN001,12582500,43100,62300
+P002,Briar Cottage,SingleRental,134 Briar Street,Columbus,OH,43202,O02,Coble Family Rentals LLC,100.00,2018-03-15,18700000,3740000,14960000,LN002,13090000,44200,63600
+P003,Cedar Bend,SingleRental,151 Cedar Street,Columbus,OH,43203,O03,Northstar Property Partners LLC,100.00,2019-04-15,19425000,3885000,15540000,,0,0,0
+P004,Dover House,SingleRental,168 Dover Street,Columbus,OH,43204,O04,Riverbend Homes LLC,100.00,2020-05-15,20150000,4030000,16120000,LN004,14105000,46400,66200
+P005,Elm Haven,SingleRental,185 Elm Street,Columbus,OH,43205,O05,Juniper Street Holdings LLC,100.00,2021-06-15,20875000,4175000,16700000,LN005,14612500,47500,67500
+P006,Franklin Place,SingleRental,202 Franklin Street,Columbus,OH,43206,O01,Blue Door Residential LLC,100.00,2022-07-15,21600000,4320000,17280000,,0,0,0
+P007,Grove House,SingleRental,219 Grove Street,Columbus,OH,43207,O02,Coble Family Rentals LLC,100.00,2023-08-15,22325000,4465000,17860000,LN007,15627500,49700,70100
+P008,Hawthorne Home,SingleRental,236 Hawthorne Street,Columbus,OH,43208,O03,Northstar Property Partners LLC,100.00,2024-09-15,23050000,4610000,18440000,LN008,16135000,50800,71400
+P009,Ivy House,SingleRental,253 Ivy Street,Columbus,OH,43209,O04,Riverbend Homes LLC,100.00,2025-10-15,23775000,4755000,19020000,,0,0,0
+P010,Juniper Place,SingleRental,270 Juniper Street,Columbus,OH,43210,O05,Juniper Street Holdings LLC,100.00,2016-11-15,24500000,4900000,19600000,LN010,17150000,53000,74000
+P011,Kingston House,SingleRental,287 Kingston Street,Columbus,OH,43211,O01,Blue Door Residential LLC,100.00,2017-12-15,25225000,5045000,20180000,LN011,17657500,54100,75300
+P012,Lakeview Home,SingleRental,304 Lakeview Street,Columbus,OH,43212,O02,Coble Family Rentals LLC,100.00,2018-01-15,25950000,5190000,20760000,,0,0,0
+P013,Maple House,SingleRental,321 Maple Street,Columbus,OH,43213,O03,Northstar Property Partners LLC,100.00,2019-02-15,26675000,5335000,21340000,LN013,18672500,56300,77900
+P014,North Street Home,SingleRental,338 North Street,Columbus,OH,43214,O04,Riverbend Homes LLC,100.00,2020-03-15,27400000,5480000,21920000,LN014,19180000,57400,79200
+P015,Oak House,SingleRental,355 Oak Street,Columbus,OH,43215,O05,Juniper Street Holdings LLC,100.00,2021-04-15,28125000,5625000,22500000,,0,0,0
+P016,Parkside Home,SingleRental,372 Park Street,Columbus,OH,43216,O01,Blue Door Residential LLC,100.00,2022-05-15,28850000,5770000,23080000,LN016,20195000,59600,81800
+P017,Quarry House,SingleRental,389 Quarry Street,Columbus,OH,43217,O02,Coble Family Rentals LLC,100.00,2023-06-15,29575000,5915000,23660000,LN017,20702500,60700,83100
+P018,River House,SingleRental,406 River Street,Columbus,OH,43218,O03,Northstar Property Partners LLC,100.00,2024-07-15,30300000,6060000,24240000,,0,0,0
+P019,Summit Home,SingleRental,423 Summit Street,Columbus,OH,43219,O04,Riverbend Homes LLC,100.00,2025-08-15,31025000,6205000,24820000,LN019,21717500,62900,85700
+P020,Terrace House,SingleRental,440 Terrace Street,Columbus,OH,43220,O05,Juniper Street Holdings LLC,100.00,2016-09-15,31750000,6350000,25400000,LN020,22225000,64000,87000
+P021,Union Duplex,MultiRental,457 Union Street,Columbus,OH,43221,O01,Blue Door Residential LLC,100.00,2017-10-15,36975000,7395000,29580000,,0,0,0
+P022,Valley Duplex,MultiRental,474 Valley Street,Columbus,OH,43222,O02,Coble Family Rentals LLC,100.00,2018-11-15,37700000,7540000,30160000,LN022,26390000,66200,89600
+P023,Walnut Duplex,MultiRental,491 Walnut Street,Columbus,OH,43223,O03,Northstar Property Partners LLC,100.00,2019-12-15,38425000,7685000,30740000,LN023,26897500,67300,90900
+P024,York Duplex,MultiRental,508 York Street,Columbus,OH,43224,O04,Riverbend Homes LLC,100.00,2020-01-15,39150000,7830000,31320000,,0,0,0
+P025,Zenith Duplex,MultiRental,525 Zenith Street,Columbus,OH,43225,O05,Juniper Street Holdings LLC,100.00,2021-02-15,39875000,7975000,31900000,LN025,27912500,69500,93500
+P026,Ash Duplex,MultiRental,542 Ash Street,Columbus,OH,43226,O01,Blue Door Residential LLC,100.00,2022-03-15,40600000,8120000,32480000,LN026,28420000,70600,94800
+P027,Birch Duplex,MultiRental,559 Birch Street,Columbus,OH,43227,O02,Coble Family Rentals LLC,100.00,2023-04-15,41325000,8265000,33060000,,0,0,0
+P028,Chestnut Duplex,MultiRental,576 Chestnut Street,Columbus,OH,43228,O03,Northstar Property Partners LLC,100.00,2024-05-15,42050000,8410000,33640000,LN028,29435000,72800,97400
+P029,Dogwood Duplex,MultiRental,593 Dogwood Street,Columbus,OH,43229,O04,Riverbend Homes LLC,100.00,2025-06-15,42775000,8555000,34220000,LN029,29942500,73900,98700
+P030,Evergreen Duplex,MultiRental,610 Evergreen Street,Columbus,OH,43230,O05,Juniper Street Holdings LLC,100.00,2016-07-15,43500000,8700000,34800000,,0,0,0
