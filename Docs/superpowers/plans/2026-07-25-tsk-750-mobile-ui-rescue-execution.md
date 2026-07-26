@@ -1002,15 +1002,149 @@ under `Docs/Reviews/artifacts/tsk-750/post-notice-safety/` as:
 The proof report is
 `Docs/Reviews/2026-07-25-tsk-750-mobile-notice-safety-proof.md`.
 
-#### Discovery boundary: Step 4C — correct the supplied legal template version
+#### Proposed contract: Step 4C — correct the supplied legal template version
 
-Append a new immutable legal template version that removes tenant-facing
-administrator instructions, update fresh-workspace latest-version assertions,
-and migrate only uncustomized workspace bindings through a narrow,
-transactional, rollback-safe migration. Customized templates and existing draft
-history must remain untouched; unsafe existing drafts stay blocked by Step 4B.
-The exact migration/upgrade contract requires separate database evidence and
-plan review before implementation.
+##### Reproduced source boundary
+
+- `SuppliedNoticeTemplateBaseline.V2Legal` contains the internal phrase
+  `Workspace administrator:` in both bodies that are rendered for tenants.
+- Step 4B now prevents those unsafe persisted drafts from being delivered, but
+  it intentionally does not mutate immutable supplied templates, workspace
+  versions, policies, or existing drafts.
+- System and workspace template versions are append-only. Existing
+  `NoticeDraft.WorkspaceNoticeTemplateVersionId` and
+  `RenderedNotice.WorkspaceNoticeTemplateVersionId` references preserve the
+  content used at draft/render time.
+- Fresh account bootstrap initially creates v1 workspace copies in the
+  transaction-bound PostgreSQL bootstrap function and then replaces only the
+  two legal copies with the latest supplied legal system versions. Its count
+  assertions are currently named against `V2Legal`, even though its translated
+  latest-per-key query already selects the latest immutable version.
+
+##### Allowed source files
+
+- `RentalCommand.Data/Notifications/SuppliedNoticeTemplateBaseline.cs`
+- `RentalCommand.Data/Auth/AccountSecurityCommandHandlers.cs`
+- `RentalCommand.Data/Migrations/20260725090000_AddSafeSuppliedLegalNoticeTemplateV3.cs` (new)
+
+##### Allowed test files
+
+- `RentalCommand.Data.Tests/NotificationFoundationModelTests.cs`
+- `RentalCommand.Data.Tests/FoundationBaselinePostgreSqlTests.cs`
+- `RentalCommand.IntegrationTests/NotificationSettingsPostgreSqlTests.cs`
+- `RentalCommand.IntegrationTests/SuppliedNoticeTemplateBaselineTests.cs`
+- `RentalCommand.IntegrationTests/SuppliedLegalNoticeTemplateV3MigrationTests.cs` (new isolated migration harness)
+
+No mobile presentation, notice-delivery handler, draft-rendering SQL, policy
+editor, authorization/RLS policy, notification channel, recipient, outbox, or
+general seeding redesign is in this boundary.
+
+##### Required change
+
+- Append two fixed-id v3 legal system-template definitions for
+  `lease-non-renewal` and `late-rent-late-fee`. The subjects are byte-for-byte
+  equal to v2. The non-renewal body is byte-for-byte equal to v2 after removing
+  this entire final paragraph and its preceding blank line:
+  `Workspace administrator: before sending, review and adapt this starting copy
+  for every state and local timing, delivery, and content requirement. This
+  jurisdiction-neutral template is not a determination that the notice is
+  legally sufficient.` The late-rent body is byte-for-byte equal to v2 after
+  replacing its final paragraph with only its existing first sentence:
+  `Any future action will be taken only under the rental agreement and
+  applicable requirements.` No other legal-copy edit is authorized. Do not edit
+  v1 or v2 constants, IDs, timestamps, provenance, or bodies.
+- Add an irreversible migration that inserts the two fixed v3 system rows, then
+  performs one set-based PostgreSQL upgrade statement inside the migration
+  transaction:
+  - select only Draft legal policies currently bound to an uncustomized,
+    unreviewed v2 workspace copy whose subject/body/system key/version and
+    supplied-system reference still match the immutable v2 system row;
+  - append one uncustomized v3 workspace version per qualifying portfolio/key;
+  - rebind only those selected policies to the new v3 workspace rows and reset
+    no unrelated policy field;
+  - leave customized workspace versions, jurisdiction-reviewed copies/policies,
+    Auto/Off policies, unbound historical workspace versions, existing
+    `NoticeDraft` rows, rendered notices, evidence, conversations, messages, and
+    outbox rows untouched.
+- Keep fresh registration's one-query latest-per-key selection and
+  transaction-bound replacement/deletion behavior. Replace v2-named count
+  assertions/messages with a latest-legal definition so the code does not
+  silently depend on v2 after v3 is published. Do not introduce concurrent
+  `DbContext` access or client-side filtering/grouping.
+- Keep `BuildWorkspaceV1CopyCommand` and the transaction-bound database
+  bootstrap function on immutable v1; fresh account bootstrap remains the
+  explicit in-transaction bridge from v1 to the latest legal version.
+- Add `SuppliedLegalNoticeTemplateV3MigrationTests` as a dedicated PostgreSQL
+  Testcontainers fixture, independent of the fully migrated shared fixture. Its
+  setup creates a new database, calls EF `IMigrator.MigrateAsync` only through
+  `20260724150000_AddEffectiveCapabilityScopeAuthority`, seeds one user and
+  separate portfolios for each complete candidate/exclusion variant so the
+  unique `(PortfolioId, AutomationKey)` policy key is preserved, and then calls
+  `IMigrator.MigrateAsync("20260725090000_AddSafeSuppliedLegalNoticeTemplateV3")`.
+  The single test
+  `Migration_UpgradesOnlyExactUnreviewedDraftV2Bindings_AndPreservesHistory`
+  includes: one qualifying Draft binding for each legal key; customized,
+  jurisdiction-reviewed, Auto, and Off exclusions; one unbound historical v2
+  workspace version; a NoticeDraft and RenderedNotice referencing v2; and
+  baseline frozen content. It verifies all selected/excluded IDs and content
+  after migration. A second test,
+  `Migration_FailureRollsBackSystemWorkspaceAndPolicyChanges`, deliberately
+  makes one qualifying v3 workspace insert violate the existing unique
+  portfolio/key/version constraint, applies only the v3 migration, asserts the
+  migration throws, and verifies that neither v3 system row, no other v3
+  workspace row, and no policy rebind committed. This proves the migration
+  operations participate in one transaction rather than merely inspecting SQL.
+
+##### Acceptance criteria
+
+- **NOTICE-SEED-01:** v3 uses fixed unique IDs 8 and 9, version 3, the same two
+  legal system keys, fixed UTC publication metadata, required merge fields, and
+  full subject/body equality to the exact v2-minus-quoted-text transformation
+  above. It contains neither `Workspace administrator:` nor the removed
+  legal-sufficiency meta-comment.
+- **NOTICE-SEED-02:** v1 and v2 definitions remain byte-for-byte unchanged; the
+  migration Down path remains intentionally unsupported because historical
+  rows may reference every version.
+- **NOTICE-SEED-03:** Migration operation inspection proves two deterministic
+  system inserts plus one set-based upgrade statement; the SQL filters by
+  Draft, Legal, uncustomized, unreviewed, exact v2 supplied content/reference,
+  and updates policies by the selected portfolio/key/current-template identity.
+  It contains no per-row application loop and no broad delete/update.
+- **NOTICE-SEED-04:** The dedicated pre-v3 PostgreSQL harness contains v3 as
+  latest for both legal keys after applying only the v3 migration. Both
+  qualifying uncustomized Draft bindings point to new v3 workspace rows, while
+  customized, reviewed, Auto, Off, and unbound historical rows retain their
+  original workspace-template IDs. Existing drafts and rendered evidence retain
+  their original template IDs and frozen content. The deliberate unique-key
+  failure proves the system inserts, workspace inserts, and policy updates roll
+  back together.
+- **NOTICE-SEED-05:** Fresh account bootstrap creates exactly five workspace
+  templates and five Draft policies, uses v3 for the two legal bindings, has no
+  older legal workspace copy left behind, and retains its existing single
+  explicit transaction, latest-per-key DB query, RLS authority, and atomic audit
+  behavior.
+- **NOTICE-SEED-06:** Step 4B continues to block already-persisted unsafe v2
+  drafts; Step 4C does not rewrite them or infer that new supplied copy is
+  legally sufficient for a jurisdiction.
+
+##### Targeted commands
+
+Run serially with no parallel build/test:
+
+```bash
+dotnet test RentalCommand.Data.Tests/RentalCommand.Data.Tests.csproj \
+  --filter 'FullyQualifiedName~NotificationFoundationModelTests|FullyQualifiedName~FoundationBaselinePostgreSqlTests'
+dotnet test RentalCommand.IntegrationTests/RentalCommand.IntegrationTests.csproj \
+  --filter 'FullyQualifiedName~NotificationSettingsPostgreSqlTests|FullyQualifiedName~SuppliedNoticeTemplateBaselineTests|FullyQualifiedName~SuppliedLegalNoticeTemplateV3MigrationTests'
+git diff --check
+```
+
+##### Relevance gate
+
+A read-only relevance review checks only the eight allowed files,
+NOTICE-SEED-01 through NOTICE-SEED-06, the generated/inspected SQL shape, and
+the absence of historical rewrites, customized/reviewed/active policy changes,
+authorization changes, client shaping, or unrelated notification work.
 
 No general notification workflow redesign is authorized by this audit.
 
@@ -1039,6 +1173,59 @@ No general notification workflow redesign is authorized by this audit.
 - Allow decisive row context to wrap or occupy a second line where truncation
   makes records indistinguishable.
 - Evidence: 05, 13, 24, 29–34, 55.
+
+**Terminal checkpoint:** Tasks 7A, 7B, and 7C each received `RELEVANCE PASS`.
+Automated acceptance now passes 45/45, and targeted analyze returns exactly
+`No issues found!`. The earlier API outage remains historical evidence:
+`/health` returned `HTTP/2 502` at `2026-07-25 16:05:40 GMT`. The stack was
+subsequently restored; `/health` returned HTTP 200, and exact runtime metadata
+identified SHA `51c2f88b`.
+
+Step 5's pre-fix deployed baseline remains `FAIL`: cold load took 16.579
+seconds, first refresh took 15.557 seconds, the next valid sample exceeded 30
+seconds and failed closed, and no request returned 401. The exact slow page
+statement was then reproduced at 10.161 seconds. The implemented
+page-before-display-join shape passed its SQL and PostgreSQL regression tests,
+and replaying the fixed shape against the live Azure database completed in
+600.555 ms with about 87% fewer shared-buffer hits. Independent source review
+found no blocking issue. Commit `e95b1435` removed the former 15–30 second
+behavior but narrowly missed the strict app p95 and cold-content gates. Commit
+`5e437dc2` then constrained both display-view lookups to each paged deposit
+with correlated `JOIN LATERAL` queries. Exact emulator reproof returned
+`UI PROOF PASS`: cold content was populated by 2.776 seconds, app refresh
+p95/max was 1.514 seconds, API p95/max was 417.3813 ms, and no 401, replay, or
+timeout occurred. Step 5 is complete subject only to its recorded deployment
+provenance limitation. Step 6 returned `UI PROOF PASS`: `Collection Rate` was
+`74.3%` with
+`$15,000.00 of $20,175.00`, and `Signed lease rent` was `$1,050.00` with
+`currently governing`.
+
+Step 7 real-device proof found the TSK-752 work-order defect; the defect was
+fixed, work-order proof returned `UI PROOF PASS`, and TSK-752 is `Done and
+verified`. A later artifact-content audit rejected the original
+`inspections-loading`, `activity-loading`, and `ledger-loading` pairs because
+they showed final populated lists, not pending states. Fresh fixed-build proof
+now covers the work-order, inspections, and deposits contextual loaders;
+activity append with retained rows; and the audited
+inspection/activity/lease wrapping.
+
+The first Activity rerun exposed a real empty-state flash while `/audit` was
+pending. Commit `f5c8ae7c` fixes that first frame, passes the expanded 45-test
+suite, and was installed in place with preserved authentication. Two bounded
+reruns visually captured the corrected Activity loader during 562 ms and
+543 ms requests, but UIAutomator finished after each request, so strict
+PNG/XML pairing remains partial. Ledger initial loading has the same
+fast-request pairing limitation. The first Ledger append capture proved
+server paging and retained rows but exposed that the footer spinner was built
+whenever `hasMore` was true, even while idle. Commit `ef3f7d23` restricts the
+footer to `loadingMore` and adds a failing-before/passing-after regression.
+Exact-APK emulator reproof returned `UI PROOF PASS`: settled rows have no
+progress, `skip=40` and `skip=80` fire naturally, active paging retains rows
+and shows compact progress, and appended rows remain scrollable. Deposits
+append is `FIXTURE BLOCKED` because the fixture exposes only 15 final rows and
+no `Load more`; no data was mutated to manufacture that state. Step 7 remains
+incomplete only for the unmatched fast initial-loader semantics and the
+fixture-blocked Deposits append branch. This roadmap currently ends at Step 7.
 
 ## Global exclusions
 
