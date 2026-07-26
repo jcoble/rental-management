@@ -32,7 +32,7 @@
 
 ### TSK-754-D001 — Preview simulation clock disabled
 
-- Status: Fix pending rebuild and runtime verification
+- Status: Fixed; web and API verified, Engine date observation still required
 - Severity: Blocking
 - Evidence:
   - The real preview login screen did not render the `SIM CLOCK` panel.
@@ -48,11 +48,34 @@
   - The authenticated clock route returns a clock state.
   - Setting a date updates the web clock and the Engine observes the same date.
 
+### TSK-754-D002 — Guided Setup detection can remain pending forever
+
+- Status: Fix pending preview verification
+- Severity: Blocking
+- Reproduction:
+  - Register and verify a new user.
+  - Choose `Set up my real portfolio`.
+  - Observe `Checking your existing setup…` indefinitely.
+- Evidence:
+  - All five detection endpoints returned HTTP 200 with valid JSON.
+  - TanStack results for tenants and leases remained `pending/fetching`.
+  - Calling each result's existing `refetch()` resolved immediately and advanced the UI.
+- Root cause:
+  - `detectionReady` joined the five `isSuccess` flags with a short-circuiting `&&` chain.
+  - TanStack tracks only result properties that consumers read. Later queries could finish before
+    their `isSuccess` property was observed, so the component never received their completed state.
+- Fix:
+  - Read every success and error flag into an array before reducing with `every` or `some`.
+  - Add a regression assertion that rejects the short-circuiting readiness pattern.
+- Verification required:
+  - A fresh browser load advances to the lease-first setup screen without a manual refetch.
+  - Focused onboarding tests and both web type-check lanes pass.
+
 ## Checkpoint 2026-07-26
 
 - Status: environment initialization
 - Completed run rows: 0 / 1,996
 - Uploaded scan assets: 0 / 953
-- Confirmed defects: 1
-- Current blocker: the restored runtime has the simulation clock disabled at all three deployment gates.
-- Next action: rebuild the canonical `rental` stack with the preview-clock fix, preserving persistent data, then verify the web, API, and Engine clock behavior.
+- Confirmed defects: 2
+- Current blocker: Guided Setup detection requires a preview rebuild with the eager query-status tracking fix.
+- Next action: rebuild the canonical `rental` stack, verify a fresh onboarding load, then upload the first opening lease.

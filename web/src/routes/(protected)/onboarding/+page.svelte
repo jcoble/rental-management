@@ -285,19 +285,27 @@
 	// Runs once after detection settles so manual back/next work afterward.
 	// ---------------------------------------------------------------------------
 	let autoAdvanced = $state(false);
+	// Build the arrays before reducing them so every TanStack result property is read on the first
+	// derived pass. A short-circuiting &&/|| chain leaves later query properties untracked; if those
+	// requests settle before an earlier query, their proxy never notifies this component and setup
+	// can remain on the detection screen until a manual refetch.
 	const detectionReady = $derived(
-		portfolioQuery.isSuccess &&
-			ownersQuery.isSuccess &&
-			propertiesQuery.isSuccess &&
-			tenantsQuery.isSuccess &&
+		[
+			portfolioQuery.isSuccess,
+			ownersQuery.isSuccess,
+			propertiesQuery.isSuccess,
+			tenantsQuery.isSuccess,
 			leasesQuery.isSuccess
+		].every(Boolean)
 	);
 	const detectionFailed = $derived(
-		portfolioQuery.isError ||
-			ownersQuery.isError ||
-			propertiesQuery.isError ||
-			tenantsQuery.isError ||
+		[
+			portfolioQuery.isError,
+			ownersQuery.isError,
+			propertiesQuery.isError,
+			tenantsQuery.isError,
 			leasesQuery.isError
+		].some(Boolean)
 	);
 	function retryExistingDataDetection() {
 		void portfolioQuery.refetch();
