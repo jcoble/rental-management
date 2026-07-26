@@ -6,7 +6,7 @@
 - Notion task: `TSK-754`
 - Environment: `https://rental-command.chimp-map.ts.net`
 - Initial source SHA: `ccac9ee24331bf42695772d745fb3a5a6992d10c`
-- Current verified source SHA: `5c428f3bd163b29fcbf7940c098e3609453e4d67`
+- Current verified source SHA: `1aacb6d778f99a4e0b8be26611566533949114ea`
 - Planner: `Docs/Testing/YearSimulation2027/index.html`
 - Schedule: `Docs/Testing/YearSimulation2027/schedule.csv`
 - Corpus: `/Users/blackcolours/dev/work/rental-management/output/pdf/tsk-749-year-simulation-scan-corpus`
@@ -305,28 +305,30 @@
     House through Elm Haven on the Azure emulator.
   - Evidence: `mobile/azure/d010-invited-admin-properties-fixed.png`.
 
-### TSK-754-D011 — Lease scan can confidently suggest an unrelated existing rental
+### TSK-754-D011 — Mobile scan review omits the original source filename
 
-- Status: Confirmed; unsafe draft preserved without business mutation
-- Severity: Critical scan-safety defect
+- Status: Confirmed
+- Severity: High scan-safety usability defect
 - Reproduction:
-  - Upload the rendered `SCN-0014` North Street Home camera JPEG through the Azure Android app.
-  - Open its completed review.
+  - Select a lease PDF from Android DocumentsUI and open its completed review.
 - Expected:
-  - The draft proposes North Street Home, 338 North Street, Columbus, OH 43214, Unit Main,
-    Rina King, and lease `SCN-0014`.
+  - The review identifies the original filename clearly enough for the user to verify that the
+    intended source was selected before creating business records.
 - Actual:
-  - The draft initially proposed linking the document to the existing Kingston House / Unit Main.
-  - The create-new fields then contained unrelated Kingston House data, lease `SCN-0011`, and
-    unrelated city/state/postal values while reporting 22 fields ready.
+  - The review showed only `Uploaded document #17`.
+  - The PDF upload path persisted the generic filename `agreement-scan.pdf`.
+  - The user therefore could not tell from the review that a different PDF had been selected.
 - Safety evidence:
-  - The Import action was never enabled while the required rental-structure choice was missing.
-  - Two attempted confirms returned HTTP 400; all six rental aggregate counts remained exactly 12.
-  - The unsafe draft remains Reviewing because D013 prevented its planned rejection.
-  - Evidence: `mobile/azure/d008-preview-origin-scroll-fixed.png`.
+  - Draft 17's stored SHA-256 is
+    `37176f2e86f88457730f25611c7875f7bdf59dc58a080770b22a41938b5c0d22`.
+  - The planned `SCN-0014` camera JPEG's SHA-256 is
+    `c29dafffe828d24a3526d148fe121d37907ace94efb0e9d87ff9c3ca30fb0001`.
+  - The extracted Kingston House / `SCN-0011` values were consistent with the PDF actually
+    selected; this was not an AI hallucination.
+  - Draft 17 was rejected after D013 was fixed and created no rental aggregate.
 - Follow-up:
-  - Trace the extraction and portfolio-grounding inputs for draft 17 before permitting a retry to
-    create or link any aggregate.
+  - Preserve and display the original source filename in the picker, upload metadata, and review.
+  - Show source hash or another durable identifier in diagnostic details.
 
 ### TSK-754-D012 — Server and test projects restore packages with known vulnerabilities
 
@@ -345,7 +347,7 @@
 
 ### TSK-754-D013 — Rejecting a reviewing scan returns HTTP 500
 
-- Status: Root cause fixed; focused regression passed; live Azure API retest pending
+- Status: Fixed and verified through the live Azure API and Android emulator
 - Severity: High scan-workflow defect
 - Reproduction:
   - From the native review for draft 17, enter a rejection reason and confirm Reject.
@@ -365,6 +367,81 @@
 - Verification:
   - Failed before the fix and passed after it on the Azure runner.
   - All six focused `AtomicScanConfirmationPersistenceTests` pass.
+  - The deployed exact source returned HTTP 200 when rejecting draft 17.
+  - Database status counts became 12 Confirmed, 1 Failed, 1 Rejected, and 3 Reviewing before the
+    corrected `SCN-0014` confirmation.
+  - The Azure Android detail screen showed Rejected and `This scan has been rejected.`
+  - Evidence: `mobile/azure/d013-scan-rejection-fixed.png`.
+
+### TSK-754-D014 — Mobile lease review cannot complete tenant and unit details
+
+- Status: Confirmed
+- Severity: High scan-first data-completeness defect
+- Reproduction:
+  - Upload `SCN-0014` through Android DocumentsUI and choose Create new.
+  - Review every field available before importing the signed lease.
+- Expected:
+  - The scan-first bootstrap lets the user verify or manually fill all tenant contact and unit
+    physical fields accepted by the API before the aggregate is created.
+- Actual:
+  - The mobile review exposes only the tenant name and seven lease terms.
+  - It does not expose tenant email, phone, emergency contact, unit number, bedrooms, bathrooms,
+    or square footage even though the extraction schema and confirmation API accept those values.
+  - Confirmed `SCN-0014` created Rina King with null/blank contacts and Unit Main with 0 bedrooms,
+    0 bathrooms, and null square footage instead of the oracle's 4 bedrooms, 1 bathroom, and
+    1,540 square feet.
+- Evidence:
+  - `mobile/azure/scn-0014-review-property-signing.png`
+  - `mobile/azure/scn-0014-review-terms.png`
+
+### TSK-754-D015 — Historical signed-lease import creates contradictory lifecycle state
+
+- Status: Confirmed; SCN-0014 corrected through the real lifecycle UI, source defect remains
+- Severity: Blocking lifecycle and money defect
+- Reproduction:
+  - With the simulation in January 2027, import fully signed `SCN-0014` with a March 1, 2026 start.
+- Expected:
+  - An already-executed historical lease that governs the current business date creates or records
+    current possession, or blocks confirmation and asks the user for the missing possession fact.
+- Actual:
+  - The Agreement is Active and governing, but LeaseManagement has only planned possession and no
+    `PossessionGivenAtUtc`.
+  - The native Unit screen simultaneously shows `Active`, an `Upcoming` badge, and
+    `Needs review: the lifecycle facts do not agree.`
+  - `vw_lease_reconciliation_exceptions` reports
+    `GoverningAgreementWithoutPossession`.
+- Evidence:
+  - `mobile/azure/scn-0014-imported-lifecycle-conflict.png`
+  - The cancel path on Give possession left the relationship unchanged.
+  - Confirming the same action recorded possession, changed lifecycle to Occupied, and reduced
+    reconciliation exceptions for LeaseManagement 13 from one to zero.
+  - Evidence: `mobile/azure/scn-0014-possession-recorded.png`
+
+### TSK-754-D016 — Date-only simulation clock anchors at UTC midnight
+
+- Status: Root cause fixed in the working tree; focused regression passes; live Azure deployment
+  pending
+- Severity: Blocking time-travel correctness defect
+- Reproduction:
+  - Select January 3, 2027 in the simulation date picker.
+  - Compare the stored clock instant and the portfolio's database business date.
+- Expected:
+  - Selecting January 3 anchors the clock at the start of January 3 in the configured business
+    timezone.
+- Actual:
+  - The controller parsed the date as `2027-01-03T00:00:00Z`.
+  - Portfolio 2 uses `America/New_York`, so the database business date was January 2 while the
+    native dashboard displayed January 3.
+- Root cause:
+  - `DevClockController.Set` treated a semantic date-only value as a UTC instant.
+- Fix:
+  - Parse exact `yyyy-MM-dd` values as local midnight in the requested or configured business
+    timezone, then convert that instant to UTC.
+  - Preserve the existing `instantUtc` and date-time input behavior.
+- Verification:
+  - The focused integration test failed before the fix: expected `2027-01-03T05:00:00Z`, received
+    `2027-01-03T00:00:00Z`.
+  - Both `DevClockControllerTests` pass after the fix.
 
 ## Tooling and maintenance observations
 
@@ -450,16 +527,23 @@
 - After the final confirmation, portfolio 2 contained exactly 12 Properties, 12 Units, 12 Tenants,
   12 LeaseManagements, 12 LeaseAgreements, and 12 TenantAccounts.
 - Evidence: `browser/run-20270102-01-opening-leases-complete.png`.
+- The corrected `SCN-0014` camera JPEG was selected through Android DocumentsUI and its SHA-256
+  matched the manifest. Every available review value was checked against the oracle before import.
+- Confirmation advanced Properties, Units, Tenants, LeaseManagements, LeaseAgreements, and
+  TenantAccounts atomically from 12 to 13.
+- The save also established D014 and D015: omitted tenant/unit details persisted blank or zero,
+  and the governing historical agreement lacks possession.
 
 ## Checkpoint 2026-07-26
 
-- Status: isolated run initialized; January 2 opening-lease batch complete
+- Status: isolated run initialized; January 3 opening-lease batch in progress
 - Completed run rows: 1 / 1,996
-- Uploaded and confirmed scan assets: 12 / 953
+- Uploaded and confirmed scan assets: 13 / 953
 - Pilot scan confirmations: 1
-- Official scan confirmations: 12
-- Findings and safety blockers: 13
-- Current blocker: D013 is fixed in source and awaits live Azure runtime verification before the
-  unsafe draft can be rejected.
-- Next action: deploy the D013 fix to the isolated Azure runtime, reject draft 17, and resume the
-  January 3 rent-receipt and opening-lease schedule rows.
+- Official scan confirmations: 13
+- Findings and safety blockers: 16
+- Current blockers:
+  - D016 must be deployed and verified so the selected schedule date matches the database business
+    date.
+- Next action: deploy and verify the D016 runtime correction, complete the missing SCN-0014
+  tenant/unit fields manually, and resume the remaining January 3 scans and rent receipts.

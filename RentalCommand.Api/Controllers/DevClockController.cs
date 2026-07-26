@@ -32,17 +32,20 @@ public sealed class DevClockController : ControllerBase
     private readonly RentalCommandDbContext _db;
     private readonly TimeProvider _timeProvider;
     private readonly IClockStateProvider _clockState;
+    private readonly IAppTimeZoneProvider _timeZoneProvider;
     private readonly IAtomicInfrastructureUnitOfWork _infrastructure;
 
     public DevClockController(
         RentalCommandDbContext db,
         TimeProvider timeProvider,
         IClockStateProvider clockState,
+        IAppTimeZoneProvider timeZoneProvider,
         IAtomicInfrastructureUnitOfWork infrastructure)
     {
         _db = db;
         _timeProvider = timeProvider;
         _clockState = clockState;
+        _timeZoneProvider = timeZoneProvider;
         _infrastructure = infrastructure;
     }
 
@@ -61,6 +64,22 @@ public sealed class DevClockController : ControllerBase
         if (request.InstantUtc is { } instantUtc)
         {
             instant = DateTime.SpecifyKind(instantUtc, DateTimeKind.Utc);
+        }
+        else if (!string.IsNullOrWhiteSpace(request.Date)
+                 && DateOnly.TryParseExact(
+                     request.Date,
+                     "yyyy-MM-dd",
+                     CultureInfo.InvariantCulture,
+                     DateTimeStyles.None,
+                     out var businessDate))
+        {
+            var timeZone = string.IsNullOrWhiteSpace(request.TimeZoneId)
+                ? _timeZoneProvider.BusinessTimeZone
+                : TimeZoneInfo.FindSystemTimeZoneById(request.TimeZoneId);
+            var localMidnight = DateTime.SpecifyKind(
+                businessDate.ToDateTime(TimeOnly.MinValue),
+                DateTimeKind.Unspecified);
+            instant = TimeZoneInfo.ConvertTimeToUtc(localMidnight, timeZone);
         }
         else if (!string.IsNullOrWhiteSpace(request.Date)
                  && DateTime.TryParse(request.Date, CultureInfo.InvariantCulture,
