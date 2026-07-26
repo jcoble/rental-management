@@ -21,6 +21,7 @@ mcp/build/
 output/playwright/
 output/qa/
 output/remote-verification/
+output/pdf/tsk-749-year-simulation-scan-corpus*
 web/output/playwright/
 .playwright-cli/
 
