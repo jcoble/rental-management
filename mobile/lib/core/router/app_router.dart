@@ -22,6 +22,7 @@ import '../../features/money/expense_detail_screen.dart';
 import '../../features/notifications/notifications_inbox_screen.dart';
 import '../../features/owners/owners_list_screen.dart';
 import '../../features/payments/payment_detail_screen.dart';
+import '../../features/scan/scan_list_screen.dart';
 import '../../features/scan/scan_review_screen.dart';
 import '../../features/settings/my_alerts_screen.dart';
 import '../../features/settings/settings_screen.dart';
@@ -277,6 +278,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: '/expenses/:id',
         builder: (context, state) =>
             ExpenseDetailScreen(expenseId: _idParam(state)),
+      ),
+      GoRoute(
+        path: '/scans',
+        builder: (context, state) => const ScanListScreen(),
       ),
       GoRoute(
         path: '/scan/:draftId',

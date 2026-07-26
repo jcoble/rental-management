@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:record/record.dart';
 
@@ -365,6 +366,12 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
     setState(() => _captureContext = choice.context);
   }
 
+  void _openScanHistory() {
+    final router = GoRouter.of(context);
+    Navigator.of(context).pop();
+    unawaited(router.push<void>('/scans'));
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -449,6 +456,14 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
                 ),
                 textAlign: TextAlign.center,
               ),
+              if (!widget.lockTargetEntityType) ...[
+                const SizedBox(height: 8),
+                TextButton.icon(
+                  icon: const Icon(Icons.history_outlined),
+                  label: const Text('View scan history'),
+                  onPressed: _openScanHistory,
+                ),
+              ],
               if (_error != null) ...[
                 const SizedBox(height: 12),
                 Container(

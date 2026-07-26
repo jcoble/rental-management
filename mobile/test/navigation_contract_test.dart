@@ -631,4 +631,21 @@ void main() {
       expect(setupSource, contains('UnitCommandCenterTab.tenantLease'));
     },
   );
+
+  test('global scan capture exposes authorized scan history', () {
+    final captureSource = File(
+      'lib/features/scan/scan_capture.dart',
+    ).readAsStringSync();
+    final routerSource = File(
+      'lib/core/router/app_router.dart',
+    ).readAsStringSync();
+
+    expect(captureSource, contains("label: const Text('View scan history')"));
+    expect(captureSource, contains("router.push<void>('/scans')"));
+    expect(routerSource, contains("path: '/scans'"));
+    expect(
+      routerSource,
+      contains('builder: (context, state) => const ScanListScreen()'),
+    );
+  });
 }
