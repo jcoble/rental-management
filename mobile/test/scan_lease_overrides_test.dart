@@ -234,6 +234,48 @@ void main() {
       expect(overrides.containsKey('rentalStructure'), isFalse);
       expect(overrides.containsKey('rental_structure'), isFalse);
     });
+
+    test('link mode can create a new unit under an existing property', () {
+      final overrides = buildOverridesMap(
+        editedFields: const {'unit_number': 'B', 'monthly_rent': '1900'},
+        isPayment: false,
+        isWorkOrder: false,
+        isLease: true,
+        isApplication: false,
+        isLoan: false,
+        applicationPropertyId: null,
+        applicationUnitId: null,
+        isPaid: false,
+        selectedTenantAccountId: null,
+        createNewProperty: false,
+        selectedPropertyId: 21,
+        selectedUnitId: null,
+        selectedTenantId: null,
+        loanPropertyId: null,
+      );
+
+      expect(overrides['propertyId'], 21);
+      expect(overrides.containsKey('unitId'), isFalse);
+      expect(overrides['unit_number'], 'B');
+      expect(overrides['monthly_rent'], '1900');
+    });
+
+    test('existing-property picker searches as the user types', () {
+      final source = File(
+        'lib/features/scan/scan_review_screen.dart',
+      ).readAsStringSync();
+      final pickerStart = source.indexOf('class _LinkPropertyFieldsState');
+      final pickerEnd = source.indexOf(
+        'class _CreatePropertyFields',
+        pickerStart,
+      );
+      final pickerSource = source.substring(pickerStart, pickerEnd);
+
+      expect(pickerSource, contains('onChanged: _searchChanged'));
+      expect(pickerSource, contains("search: _search"));
+      expect(pickerSource, contains('Timer(const Duration(milliseconds: 300)'));
+      expect(pickerSource, contains('Create the Unit from this lease scan'));
+    });
   });
 
   group('guided rental bootstrap target', () {
