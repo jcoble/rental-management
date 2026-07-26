@@ -101,6 +101,16 @@ describe('onboarding flow state', () => {
 		assert.match(source, /\{:else if !detectionReady \|\| !autoAdvanced\}/);
 		assert.match(source, /data-testid="onboarding-detection-error"/);
 		assert.match(source, /retryExistingDataDetection/);
+		assert.match(
+			source,
+			/const detectionReady = \$derived\(\s*\[\s*portfolioQuery\.isSuccess,\s*ownersQuery\.isSuccess,\s*propertiesQuery\.isSuccess,\s*tenantsQuery\.isSuccess,\s*leasesQuery\.isSuccess\s*\]\.every\(Boolean\)\s*\)/s,
+			'all query status properties must be read eagerly so TanStack tracks every result before any query settles'
+		);
+		assert.doesNotMatch(
+			source,
+			/portfolioQuery\.isSuccess\s*&&/,
+			'short-circuiting skips subscriptions for faster queries and can leave detection pending forever'
+		);
 	});
 
 	it('keeps the guided import center reachable from the finished screen', () => {
