@@ -183,6 +183,32 @@ public sealed class TenantAccountQueryServiceSqlTests
     }
 
     [Fact]
+    public void DepositPage_CreatedAtSortPagesAuthorizedIdsBeforeAggregateViews()
+    {
+        using var db = NewContext();
+        var sql = NewService(db).BuildDepositPageQuery(
+            Scope,
+            new TenantAccountDepositListQuery
+            {
+                Sort = "-createdAtUtc",
+                Skip = 0,
+                Take = 20,
+            }).ToQueryString();
+
+        AssertDepositAuthorized(sql);
+        var limitIndex = sql.IndexOf("LIMIT", StringComparison.Ordinal);
+        limitIndex.Should().BeGreaterThan(-1);
+        limitIndex.Should().BeLessThan(
+            sql.IndexOf("vw_lease_management_lifecycle", StringComparison.Ordinal),
+            "the authorized deposit IDs must be paged before lifecycle display data is joined");
+        limitIndex.Should().BeLessThan(
+            sql.IndexOf("vw_security_deposit_balances", StringComparison.Ordinal),
+            "the authorized deposit IDs must be paged before aggregate balances are joined");
+        sql.Split("JOIN LATERAL", StringSplitOptions.None).Should().HaveCount(3,
+            "both expensive display views must be correlated to one already-paged deposit seed");
+    }
+
+    [Fact]
     public void DepositPage_UnsupportedSortKeepsStableAscendingPropertyUnitDepositOrder()
     {
         using var db = NewContext();
@@ -436,20 +462,18 @@ public sealed class TenantAccountQueryServiceSqlTests
 
     private static void AssertAuthorized(string sql)
     {
-        sql.Should().Contain("AuthSessions");
-        sql.Should().Contain("AccessRevision");
-        sql.Should().Contain("MembershipRoleAssignments");
-        sql.Should().Contain("MembershipRoleAssignmentProperties");
+        sql.Should().Contain("public.rc_api_effective_capability_scopes(", Exactly.Once());
         sql.Should().Contain(CapabilityKeys.MoneyBalancesRead);
         sql.Should().Contain(Scope.SessionId.ToString());
+        sql.Should().NotContain("AuthSessions");
+        sql.Should().NotContain("RoleProfileCapabilities");
+        sql.Should().NotContain("MembershipRoleAssignments");
+        sql.Should().NotContain("MembershipRoleAssignmentProperties");
     }
 
     private static void AssertDepositAuthorized(string sql)
     {
-        sql.Should().Contain("AuthSessions");
-        sql.Should().Contain("AccessRevision");
-        sql.Should().Contain("MembershipRoleAssignments");
-        sql.Should().Contain("MembershipRoleAssignmentProperties");
+        sql.Should().Contain("public.rc_api_effective_capability_scopes(", Exactly.Once());
         sql.Should().Contain(CapabilityKeys.MoneyDepositsManage);
         sql.Should().Contain(CapabilityKeys.LeasingDepositsRead);
         sql.Should().NotContain("UNION",
@@ -457,6 +481,10 @@ public sealed class TenantAccountQueryServiceSqlTests
         sql.Should().NotContain(CapabilityKeys.MoneyBalancesRead,
             "balance-only access must not authorize security-deposit reads");
         sql.Should().Contain(Scope.SessionId.ToString());
+        sql.Should().NotContain("AuthSessions");
+        sql.Should().NotContain("RoleProfileCapabilities");
+        sql.Should().NotContain("MembershipRoleAssignments");
+        sql.Should().NotContain("MembershipRoleAssignmentProperties");
     }
 
     private static void AssertFinalOrderingKey(IQueryable query, string expectedMemberName)

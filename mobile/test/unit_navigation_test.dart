@@ -464,21 +464,84 @@ void main() {
     );
   });
 
-  test('Unit destinations keep one top-level tab surface', () {
+  test('Unit destinations keep one top-level section surface', () {
     final source = File(
       'lib/features/units/unit_command_center_screen.dart',
     ).readAsStringSync();
 
     expect(
-      RegExp(r'const unitTabs = TabBar\(').allMatches(source),
+      RegExp(r'MobileSectionSelector<int>\(').allMatches(source),
       hasLength(1),
     );
+    expect(source, isNot(contains('const unitTabs = TabBar(')));
     expect(
       RegExp(r'final tabView = TabBarView\(').allMatches(source),
       hasLength(1),
     );
     expect(source, isNot(contains('class _UnitAreaTabs')));
     expect(RegExp(r'_UnitAreaSurface\(').allMatches(source), hasLength(4));
+  });
+
+  testWidgets('unit selector exposes and changes all top-level sections', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          activityRepositoryProvider.overrideWithValue(
+            _UnitNavigationActivityRepository(),
+          ),
+        ],
+        child: MaterialApp(
+          home: UnitCommandCenterScreen(
+            dashboard: _unitDashboard(
+              nextBestAction: const UnitNextBestAction(
+                label: 'Review unit',
+                href: '/units/42?tab=summary',
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byTooltip('Choose unit section'));
+    await tester.pumpAndSettle();
+
+    for (final id in const [
+      'summary',
+      'leasing',
+      'tenant-lease',
+      'money',
+      'maintenance',
+      'documents-history',
+    ]) {
+      expect(find.byKey(ValueKey('unit-section-$id')), findsOneWidget);
+    }
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('unit-section-summary')),
+        matching: find.byIcon(Icons.check_rounded),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('unit-section-money')));
+    await tester.pumpAndSettle();
+
+    var controller = DefaultTabController.of(
+      tester.element(find.byKey(const Key('unit-section-selector'))),
+    );
+    expect(controller.index, UnitCommandCenterTab.money.index);
+
+    await _selectUnitSection(tester, 'documents-history');
+
+    controller = DefaultTabController.of(
+      tester.element(find.byKey(const Key('unit-section-selector'))),
+    );
+    expect(controller.index, UnitCommandCenterTab.documentsHistory.index);
+    expect(find.text('Documents'), findsWidgets);
+    expect(find.text('History'), findsOneWidget);
   });
 
   testWidgets(
@@ -501,7 +564,8 @@ void main() {
         ),
       );
 
-      expect(find.byType(TabBar), findsOneWidget);
+      expect(find.byKey(const Key('unit-section-selector')), findsOneWidget);
+      expect(find.byType(TabBar), findsNothing);
       expect(find.text('Agreement'), findsOneWidget);
       expect(find.text('Residents'), findsOneWidget);
       expect(find.text('This unit is currently vacant.'), findsOneWidget);
@@ -541,7 +605,8 @@ void main() {
       await tester.pump();
       await tester.pump();
 
-      expect(find.byType(TabBar), findsOneWidget);
+      expect(find.byKey(const Key('unit-section-selector')), findsOneWidget);
+      expect(find.byType(TabBar), findsNothing);
       expect(find.byType(TabBarView), findsOneWidget);
       expect(find.text('Documents'), findsWidgets);
       expect(find.text('Scan document').hitTestable(), findsOneWidget);
@@ -686,9 +751,8 @@ void main() {
       expect(find.text('Residents').hitTestable(), findsOneWidget);
       expect(find.text('No governing agreement').hitTestable(), findsOneWidget);
 
-      await tester.tap(find.text('Money'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Tenant & lease'));
+      await _selectUnitSection(tester, 'money');
+      await _selectUnitSection(tester, 'tenant-lease');
       await tester.pumpAndSettle();
 
       expect(find.text('Residents').hitTestable(), findsOneWidget);
@@ -815,15 +879,9 @@ void main() {
         await tester.pump();
         expect(find.text('Summary'), findsOneWidget);
 
-        final tenantLeaseTab = find.text('Tenant & lease');
-        await tester.ensureVisible(tenantLeaseTab);
-        await tester.pumpAndSettle();
-        expect(tenantLeaseTab.hitTestable(), findsOneWidget);
-        await tester.tap(tenantLeaseTab);
-        await tester.pump();
-        await tester.pump(const Duration(milliseconds: 450));
+        await _selectUnitSection(tester, 'tenant-lease');
         final settledTabController = DefaultTabController.of(
-          tester.element(find.byType(TabBar).hitTestable()),
+          tester.element(find.byKey(const Key('unit-section-selector'))),
         );
         expect(settledTabController.indexIsChanging, isFalse);
         expect(
@@ -851,10 +909,12 @@ void main() {
             ? find.text('Executed PDF')
             : find.text('No governing agreement');
         Future<void> expectPaintedTenantLeaseSurface() async {
-          final visibleTabBar = find.byType(TabBar).hitTestable();
-          expect(visibleTabBar, findsOneWidget);
+          final visibleSelector = find.byKey(
+            const Key('unit-section-selector'),
+          );
+          expect(visibleSelector, findsOneWidget);
           final tabController = DefaultTabController.of(
-            tester.element(visibleTabBar),
+            tester.element(visibleSelector),
           );
           expect(tabController.index, UnitCommandCenterTab.tenantLease.index);
           expect(tabController.indexIsChanging, isFalse);
@@ -904,21 +964,15 @@ void main() {
             200,
             scrollable: leaseScrollable,
           );
+          await tester.ensureVisible(residentsHeading);
+          await tester.pump();
           expect(residentsHeading.hitTestable(), findsOneWidget);
         }
 
         await expectPaintedTenantLeaseSurface();
 
-        final moneyTab = find.text('Money');
-        await tester.ensureVisible(moneyTab);
-        await tester.pumpAndSettle();
-        expect(moneyTab.hitTestable(), findsOneWidget);
-        await tester.tap(moneyTab);
-        await tester.pumpAndSettle();
-        await tester.ensureVisible(tenantLeaseTab);
-        await tester.pumpAndSettle();
-        expect(tenantLeaseTab.hitTestable(), findsOneWidget);
-        await tester.tap(tenantLeaseTab);
+        await _selectUnitSection(tester, 'money');
+        await _selectUnitSection(tester, 'tenant-lease');
         await tester.pumpAndSettle();
 
         await expectPaintedTenantLeaseSurface();
@@ -982,6 +1036,16 @@ void main() {
 
     expect(find.text('New turnover task'), findsOneWidget);
   });
+}
+
+Future<void> _selectUnitSection(WidgetTester tester, String id) async {
+  await tester.tap(find.byTooltip('Choose unit section'));
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 300));
+  await tester.tap(find.byKey(ValueKey('unit-section-$id')));
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 450));
+  await tester.pump(const Duration(milliseconds: 450));
 }
 
 class _UnitsListRestorationHarness extends StatefulWidget {

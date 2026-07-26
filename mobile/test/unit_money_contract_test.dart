@@ -10,63 +10,69 @@ import 'package:rental_command/features/payments/payments_repository.dart';
 import 'package:rental_command/features/units/units_repository.dart';
 
 void main() {
-  test('UnitDashboard keeps account and relationship identity without an agreement', () {
-    final dashboard = UnitDashboard.fromJson({
-      'unit': {
-        'id': 17,
-        'propertyId': 8,
-        'unitNumber': 'Left',
-        'bedrooms': 2,
-        'bathrooms': 1,
-        'marketRent': 1250,
-        'status': 'Occupied',
-        'createdAt': '2026-01-01T00:00:00Z',
-        'updatedAt': '2026-01-01T00:00:00Z',
-      },
-      'propertyName': 'Hilliard Duplex',
-      'lifecycleStage': 'Active',
-      'leaseManagementId': 23,
-      'tenantAccountId': 41,
-      'nextBestAction': {'label': 'Rent on track', 'href': '/units/17'},
-      'header': {},
-      'currentLease': null,
-      'overview': {},
-      'turnover': {},
-    });
+  test(
+    'UnitDashboard keeps account and relationship identity without an agreement',
+    () {
+      final dashboard = UnitDashboard.fromJson({
+        'unit': {
+          'id': 17,
+          'propertyId': 8,
+          'unitNumber': 'Left',
+          'bedrooms': 2,
+          'bathrooms': 1,
+          'marketRent': 1250,
+          'status': 'Occupied',
+          'createdAt': '2026-01-01T00:00:00Z',
+          'updatedAt': '2026-01-01T00:00:00Z',
+        },
+        'propertyName': 'Hilliard Duplex',
+        'lifecycleStage': 'Active',
+        'leaseManagementId': 23,
+        'tenantAccountId': 41,
+        'nextBestAction': {'label': 'Rent on track', 'href': '/units/17'},
+        'header': {},
+        'currentLease': null,
+        'overview': {},
+        'turnover': {},
+      });
 
-    expect(dashboard.leaseManagementId, 23);
-    expect(dashboard.tenantAccountId, 41);
-    expect(dashboard.currentLease, isNull);
-  });
+      expect(dashboard.leaseManagementId, 23);
+      expect(dashboard.tenantAccountId, 41);
+      expect(dashboard.currentLease, isNull);
+    },
+  );
 
-  test('UnitPaymentSummary requires canonical account and relationship ids', () {
-    final receipt = UnitPaymentSummary.fromJson({
-      'id': 901,
-      'tenantAccountId': 41,
-      'leaseManagementId': 23,
-      'leaseAgreementId': 77,
-      'type': 'Rent',
-      'status': 'Paid',
-      'amount': 1200,
-      'dueDate': '2026-07-01T00:00:00Z',
-    });
-
-    expect(receipt.tenantAccountId, 41);
-    expect(receipt.leaseManagementId, 23);
-    expect(receipt.leaseAgreementId, 77);
-    expect(
-      () => UnitPaymentSummary.fromJson({
-        'id': 902,
-        'leaseId': 23,
+  test(
+    'UnitPaymentSummary requires canonical account and relationship ids',
+    () {
+      final receipt = UnitPaymentSummary.fromJson({
+        'id': 901,
+        'tenantAccountId': 41,
+        'leaseManagementId': 23,
+        'leaseAgreementId': 77,
         'type': 'Rent',
         'status': 'Paid',
         'amount': 1200,
         'dueDate': '2026-07-01T00:00:00Z',
-      }),
-      throwsA(isA<TypeError>()),
-      reason: 'legacy leaseId must not be accepted as an identity fallback',
-    );
-  });
+      });
+
+      expect(receipt.tenantAccountId, 41);
+      expect(receipt.leaseManagementId, 23);
+      expect(receipt.leaseAgreementId, 77);
+      expect(
+        () => UnitPaymentSummary.fromJson({
+          'id': 902,
+          'leaseId': 23,
+          'type': 'Rent',
+          'status': 'Paid',
+          'amount': 1200,
+          'dueDate': '2026-07-01T00:00:00Z',
+        }),
+        throwsA(isA<TypeError>()),
+        reason: 'legacy leaseId must not be accepted as an identity fallback',
+      );
+    },
+  );
 
   test('Unit scan upload sends account and relationship context', () async {
     final adapter = _RecordingAdapter();
@@ -93,24 +99,71 @@ void main() {
     expect(_field(form, 'leaseId'), isNull);
   });
 
-  test('Unit Money uses independent server pages and persisted SingleRental gating', () async {
-    final source = File(
-      'lib/features/units/unit_command_center_screen.dart',
-    ).readAsStringSync();
+  test(
+    'Unit Money uses independent server pages and persisted SingleRental gating',
+    () async {
+      final source = File(
+        'lib/features/units/unit_command_center_screen.dart',
+      ).readAsStringSync();
 
-    expect(source, contains('unitMoneyActivityPageProvider'));
-    expect(source, contains('unitMoneyChargesPageProvider'));
-    expect(source, contains('unitMoneyDepositsPageProvider'));
-    expect(source, contains('expensesPageProvider'));
-    expect(source, contains('unitMoneyFinancingPageProvider'));
-    expect(
-      source,
-      contains(
-        'propertyAsync.value?.rentalStructure == RentalStructure.singleRental',
-      ),
-    );
-    expect(source, isNot(contains('unitExpensesProvider(')));
-  });
+      expect(source, contains('unitMoneyActivityPageProvider'));
+      expect(source, contains('unitMoneyChargesPageProvider'));
+      expect(source, contains('unitMoneyDepositsPageProvider'));
+      expect(source, contains('expensesPageProvider'));
+      expect(source, contains('unitMoneyFinancingPageProvider'));
+      expect(
+        source,
+        contains(
+          'propertyAsync.value?.rentalStructure == RentalStructure.singleRental',
+        ),
+      );
+      expect(source, isNot(contains('unitExpensesProvider(')));
+    },
+  );
+
+  test(
+    'Unit Command Center translates wire labels at the presentation boundary',
+    () {
+      final source = File(
+        'lib/features/units/unit_command_center_screen.dart',
+      ).readAsStringSync();
+
+      expect(source, contains("label: 'Tenant account'"));
+      expect(source, contains('tenantLedgerEntryLabel(entry.entryType)'));
+      expect(source, contains("title: 'Rent charges'"));
+      expect(source, contains('Charge amount:'));
+      expect(source, contains('Still due:'));
+      expect(source, isNot(contains('Charge allocation and open amount')));
+      expect(source, isNot(contains('allocated of')));
+      expect(
+        source,
+        isNot(contains("value: '#\${dashboard.tenantAccountId}'")),
+      );
+
+      for (final call in const [
+        'plainEnglishLabel(dashboard.occupancyPossession.status)',
+        'plainEnglishLabel(dashboard.marketingAvailability.status)',
+        'plainEnglishLabel(dashboard.tenantAccountCondition.status)',
+        'plainEnglishLabel(dashboard.legalNoticeCondition.status)',
+        'plainEnglishLabel(dashboard.maintenanceTurnover.status)',
+        'plainEnglishLabel(deposit.status)',
+        'plainEnglishLabel(inspection.type)',
+        'plainEnglishLabel(inspection.status)',
+        'plainEnglishLabel(item.type)',
+        'plainEnglishLabel(item.status)',
+        'plainEnglishLabel(item.priority',
+        'plainEnglishLabel(turnover.status)',
+        'plainEnglishLabel(status)',
+        'plainEnglishLabel(option)',
+      ]) {
+        expect(
+          source,
+          contains(call),
+          reason: 'Missing translator call: $call',
+        );
+      }
+    },
+  );
 
   test('Money repository sends paging to canonical account owners', () async {
     final adapter = _RecordingAdapter(
@@ -160,15 +213,16 @@ void main() {
     final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
       ..httpClientAdapter = adapter;
 
-    await MoneyRepository(dio).financingPage((
-      propertyId: 8,
-      skip: 0,
-      take: 10,
-    ));
+    await MoneyRepository(
+      dio,
+    ).financingPage((propertyId: 8, skip: 0, take: 10));
 
     expect(adapter.options!.path, '/loans/page');
     expect(adapter.options!.queryParameters['propertyId'], 8);
-    expect(adapter.options!.queryParameters, isNot(contains('tenantAccountId')));
+    expect(
+      adapter.options!.queryParameters,
+      isNot(contains('tenantAccountId')),
+    );
 
     final source = File(
       'lib/features/units/unit_command_center_screen.dart',
@@ -182,39 +236,42 @@ void main() {
     expect(financingGate.group(0), isNot(contains('tenantAccountId:')));
   });
 
-  test('Payment correction uses canonical refund route and an idempotency key', () async {
-    final adapter = _RecordingAdapter(
-      response: {
-        'value': {
-          'applied': true,
-          'outcome': 'Refunded',
-          'paymentEntryId': 901,
-          'refundEntryId': 902,
-          'compensatedAllocationAmount': 1200,
-          'compensatedAllocationCount': 2,
+  test(
+    'Payment correction uses canonical refund route and an idempotency key',
+    () async {
+      final adapter = _RecordingAdapter(
+        response: {
+          'value': {
+            'applied': true,
+            'outcome': 'Refunded',
+            'paymentEntryId': 901,
+            'refundEntryId': 902,
+            'compensatedAllocationAmount': 1200,
+            'compensatedAllocationCount': 2,
+          },
+          'replayed': false,
         },
-        'replayed': false,
-      },
-    );
-    final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
-      ..httpClientAdapter = adapter;
-    final result = await PaymentsRepository(dio).correctPayment(
-      41,
-      CorrectTenantPaymentInput(
-        paymentEntryId: 901,
-        effectiveOn: DateTime(2026, 7, 24),
-        reason: 'Correction of immutable payment receipt',
-        paymentMethodSummary: 'Check',
-        externalReference: 'refund-check-7',
-      ),
-    );
+      );
+      final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+        ..httpClientAdapter = adapter;
+      final result = await PaymentsRepository(dio).correctPayment(
+        41,
+        CorrectTenantPaymentInput(
+          paymentEntryId: 901,
+          effectiveOn: DateTime(2026, 7, 24),
+          reason: 'Correction of immutable payment receipt',
+          paymentMethodSummary: 'Check',
+          externalReference: 'refund-check-7',
+        ),
+      );
 
-    expect(adapter.options!.path, '/tenant-accounts/41/refunds');
-    expect(adapter.options!.path, isNot(contains('/reversals')));
-    expect(adapter.options!.headers['Idempotency-Key'], isNotEmpty);
-    expect(result.refundEntryId, 902);
-    expect(result.compensatedAllocationCount, 2);
-  });
+      expect(adapter.options!.path, '/tenant-accounts/41/refunds');
+      expect(adapter.options!.path, isNot(contains('/reversals')));
+      expect(adapter.options!.headers['Idempotency-Key'], isNotEmpty);
+      expect(result.refundEntryId, 902);
+      expect(result.compensatedAllocationCount, 2);
+    },
+  );
 }
 
 String? _field(FormData data, String key) {

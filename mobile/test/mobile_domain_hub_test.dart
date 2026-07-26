@@ -29,6 +29,143 @@ void main() {
     ]);
   });
 
+  testWidgets('large hub exposes every destination in one section menu', (
+    tester,
+  ) async {
+    final destinations = <MobileDestination>[
+      for (final entry in const [
+        (
+          id: MobileDestinationId.properties,
+          icon: Symbols.apartment_rounded,
+          label: 'Properties',
+        ),
+        (
+          id: MobileDestinationId.owners,
+          icon: Symbols.account_balance_rounded,
+          label: 'Owners',
+        ),
+        (
+          id: MobileDestinationId.units,
+          icon: Symbols.home_work_rounded,
+          label: 'Units',
+        ),
+        (
+          id: MobileDestinationId.tenants,
+          icon: Symbols.group_rounded,
+          label: 'Tenants',
+        ),
+        (
+          id: MobileDestinationId.leases,
+          icon: Symbols.description_rounded,
+          label: 'Leases',
+        ),
+        (
+          id: MobileDestinationId.applications,
+          icon: Symbols.assignment_rounded,
+          label: 'Applications',
+        ),
+      ])
+        MobileDestination(
+          id: entry.id,
+          icon: entry.icon,
+          label: entry.label,
+          subtitle: '${entry.label} section',
+          builder: (_) => Scaffold(body: Text('${entry.label} root')),
+        ),
+    ];
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: MobileDomainHubScreen(
+            title: 'Rentals',
+            subtitle: 'Test',
+            destinations: destinations,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byKey(const Key('hub-section-selector')), findsOneWidget);
+    expect(find.byKey(const Key('hub-segment-scroll')), findsNothing);
+
+    await tester.tap(find.byTooltip('Choose section'));
+    await tester.pumpAndSettle();
+
+    for (final destination in destinations) {
+      expect(
+        find.byKey(ValueKey('hub-section-${destination.id.name}')),
+        findsOneWidget,
+      );
+    }
+
+    await tester.tap(find.byKey(const ValueKey('hub-section-applications')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Applications root'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Choose section'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('hub-section-units')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Units root'), findsOneWidget);
+  });
+
+  testWidgets('three destination hub keeps direct segment navigation', (
+    tester,
+  ) async {
+    final destinations = <MobileDestination>[
+      for (final entry in const [
+        (
+          id: MobileDestinationId.messages,
+          icon: Symbols.chat_rounded,
+          label: 'Messages',
+        ),
+        (
+          id: MobileDestinationId.notifications,
+          icon: Symbols.notifications_rounded,
+          label: 'Notifications',
+        ),
+        (
+          id: MobileDestinationId.activityHistory,
+          icon: Symbols.history_rounded,
+          label: 'Activity History',
+        ),
+      ])
+        MobileDestination(
+          id: entry.id,
+          icon: entry.icon,
+          label: entry.label,
+          subtitle: '${entry.label} section',
+          builder: (_) => Scaffold(body: Text('${entry.label} root')),
+        ),
+    ];
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: MobileDomainHubScreen(
+            title: 'Inbox',
+            subtitle: 'Test',
+            destinations: destinations,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byKey(const Key('hub-section-selector')), findsNothing);
+    expect(find.byKey(const Key('hub-segment-scroll')), findsOneWidget);
+    expect(find.text('Messages'), findsWidgets);
+    expect(find.text('Notifications'), findsOneWidget);
+    expect(find.text('Activity History'), findsOneWidget);
+
+    await tester.tap(find.text('Activity History'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Activity History root'), findsOneWidget);
+  });
+
   testWidgets('cross-tab detail opens target tab and backs to that tab root', (
     tester,
   ) async {

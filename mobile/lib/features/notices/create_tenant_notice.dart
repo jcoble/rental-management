@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../settings/notification_foundation_repository.dart';
+import 'notice_content_safety.dart';
 import 'notices_models.dart';
 import 'notices_repository.dart';
 
@@ -199,6 +200,17 @@ class _ReviewNoticeSheetState extends ConsumerState<_ReviewNoticeSheet> {
   List<NoticeDraft> get _sendableDrafts =>
       widget.drafts.where((d) => d.status == 'Draft').toList();
 
+  String? get _contentSafetyIssue {
+    for (final draft in _sendableDrafts) {
+      final issue = noticeContentSafetyIssue(
+        subject: _subjectCtrls[draft.id]?.text ?? draft.subject,
+        body: _bodyCtrls[draft.id]?.text ?? draft.body,
+      );
+      if (issue != null) return issue;
+    }
+    return null;
+  }
+
   Future<void> _send() async {
     final channels = _channels;
     final sendable = _sendableDrafts;
@@ -272,6 +284,7 @@ class _ReviewNoticeSheetState extends ConsumerState<_ReviewNoticeSheet> {
     final cs = theme.colorScheme;
     final bottom = MediaQuery.viewInsetsOf(context).bottom;
     final hasSendableDraft = _sendableDrafts.isNotEmpty;
+    final contentSafetyIssue = _contentSafetyIssue;
 
     return Padding(
       padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottom),
@@ -315,6 +328,7 @@ class _ReviewNoticeSheetState extends ConsumerState<_ReviewNoticeSheet> {
                           TextField(
                             controller: _subjectCtrls[d.id],
                             readOnly: !editable,
+                            onChanged: editable ? (_) => setState(() {}) : null,
                             decoration: const InputDecoration(
                               labelText: 'Subject',
                               border: OutlineInputBorder(),
@@ -324,6 +338,7 @@ class _ReviewNoticeSheetState extends ConsumerState<_ReviewNoticeSheet> {
                           TextField(
                             controller: _bodyCtrls[d.id],
                             readOnly: !editable,
+                            onChanged: editable ? (_) => setState(() {}) : null,
                             minLines: 4,
                             maxLines: 10,
                             decoration: const InputDecoration(
@@ -432,9 +447,20 @@ class _ReviewNoticeSheetState extends ConsumerState<_ReviewNoticeSheet> {
               const SizedBox(height: 12),
               Text(_error!, style: TextStyle(color: cs.error, fontSize: 13)),
             ],
+            if (contentSafetyIssue != null) ...[
+              const SizedBox(height: 12),
+              Text(
+                contentSafetyIssue,
+                style: TextStyle(color: cs.error, fontSize: 13),
+              ),
+            ],
             const SizedBox(height: 16),
             FilledButton.icon(
-              onPressed: (_busy || _channels.isEmpty || !hasSendableDraft)
+              onPressed:
+                  (_busy ||
+                      _channels.isEmpty ||
+                      !hasSendableDraft ||
+                      contentSafetyIssue != null)
                   ? null
                   : _send,
               icon: _busy
@@ -500,12 +526,17 @@ class _ReviewNoticeSheetTestHarnessState
 
   @override
   Widget build(BuildContext context) {
+    final issue = noticeContentSafetyIssue(
+      subject: _subjectCtrl.text,
+      body: _bodyCtrl.text,
+    );
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         TextField(
           controller: _subjectCtrl,
+          onChanged: (_) => setState(() {}),
           decoration: const InputDecoration(
             labelText: 'Subject',
             border: OutlineInputBorder(),
@@ -514,6 +545,7 @@ class _ReviewNoticeSheetTestHarnessState
         const SizedBox(height: 8),
         TextField(
           controller: _bodyCtrl,
+          onChanged: (_) => setState(() {}),
           minLines: 4,
           maxLines: 10,
           decoration: const InputDecoration(
@@ -521,9 +553,16 @@ class _ReviewNoticeSheetTestHarnessState
             border: OutlineInputBorder(),
           ),
         ),
+        if (issue != null) ...[
+          const SizedBox(height: 12),
+          Text(
+            issue,
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
+        ],
         const SizedBox(height: 16),
         FilledButton.icon(
-          onPressed: () {},
+          onPressed: issue == null ? () {} : null,
           icon: const Icon(Icons.send_outlined),
           label: const Text('Send notice'),
         ),

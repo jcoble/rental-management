@@ -176,6 +176,45 @@ class MobileQuickActionScope
   }
 }
 
+/// Temporarily hides the nearest shell quick-action launcher while [child] is
+/// mounted.
+///
+/// Multiple hiders can overlap safely because each owns its own registration.
+/// Removing one hider does not reveal the launcher until every owner clears.
+class MobileQuickActionHider extends StatefulWidget {
+  const MobileQuickActionHider({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  State<MobileQuickActionHider> createState() => _MobileQuickActionHiderState();
+}
+
+class _MobileQuickActionHiderState extends State<MobileQuickActionHider> {
+  final Object _owner = Object();
+  MobileQuickActionController? _controller;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final nextController = MobileQuickActionScope.maybeOf(context);
+    if (identical(nextController, _controller)) return;
+
+    _controller?.clearHidden(_owner);
+    _controller = nextController;
+    _controller?.setHidden(_owner, true);
+  }
+
+  @override
+  void dispose() {
+    _controller?.clearHidden(_owner);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
 class MobileQuickActionFabRegistry extends ChangeNotifier {
   int _mountedFabCount = 0;
   bool _notificationScheduled = false;
@@ -397,6 +436,37 @@ class _MobileQuickActionFabState extends ConsumerState<MobileQuickActionFab> {
           : Icons.add_rounded,
       key: ValueKey((_open, hasGlobalScan)),
     );
+    final animatedFabIcon = disableAnimations
+        ? fabIcon
+        : AnimatedSwitcher(
+            duration: const Duration(milliseconds: 160),
+            transitionBuilder: (child, animation) {
+              return ScaleTransition(
+                scale: animation,
+                child: RotationTransition(
+                  turns: Tween<double>(begin: -0.08, end: 0).animate(animation),
+                  child: child,
+                ),
+              );
+            },
+            child: fabIcon,
+          );
+    final launcher = _open
+        ? FloatingActionButton.extended(
+            heroTag: widget.heroTag,
+            onPressed: _toggle,
+            tooltip: 'Close quick actions',
+            elevation: 3,
+            icon: animatedFabIcon,
+            label: const Text('Close'),
+          )
+        : FloatingActionButton(
+            heroTag: widget.heroTag,
+            onPressed: _toggle,
+            tooltip: hasGlobalScan ? 'Scan / Add' : 'Open quick actions',
+            elevation: 3,
+            child: animatedFabIcon,
+          );
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -411,41 +481,7 @@ class _MobileQuickActionFabState extends ConsumerState<MobileQuickActionFab> {
             alignment: Alignment.bottomRight,
             child: actionMenu,
           ),
-        FloatingActionButton.extended(
-          heroTag: widget.heroTag,
-          onPressed: _toggle,
-          tooltip: _open
-              ? 'Close quick actions'
-              : hasGlobalScan
-              ? 'Scan / Add'
-              : 'Open quick actions',
-          elevation: 3,
-          icon: disableAnimations
-              ? fabIcon
-              : AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 160),
-                  transitionBuilder: (child, animation) {
-                    return ScaleTransition(
-                      scale: animation,
-                      child: RotationTransition(
-                        turns: Tween<double>(
-                          begin: -0.08,
-                          end: 0,
-                        ).animate(animation),
-                        child: child,
-                      ),
-                    );
-                  },
-                  child: fabIcon,
-                ),
-          label: Text(
-            _open
-                ? 'Close'
-                : hasGlobalScan
-                ? 'Scan / Add'
-                : 'Open',
-          ),
-        ),
+        launcher,
       ],
     );
   }

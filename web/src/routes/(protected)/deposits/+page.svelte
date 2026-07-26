@@ -25,7 +25,7 @@
 	const initialParams = page.url.searchParams;
 	let search = $state(readGridParam(initialParams, 'q'));
 	let statusFilter = $state(readGridParam(initialParams, 'status'));
-	let gridSort = $state(readGridParam(initialParams, 'sort'));
+	let gridSort = $state(readGridParam(initialParams, 'sort') || '-createdAtUtc');
 	let gridPage = $state(readGridParam(initialParams, 'page', 1));
 	const debouncedSearch = debounced(() => search, 300);
 

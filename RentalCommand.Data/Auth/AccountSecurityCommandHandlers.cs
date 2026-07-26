@@ -84,7 +84,8 @@ public sealed class BootstrapAccountHandler
             .TagWith("TSK-733 fresh-workspace latest legal notice template selection");
 
         var legalReplacementCount = await legalReplacementQuery.CountAsync(ct);
-        if (legalReplacementCount != SuppliedNoticeTemplateBaseline.V2Legal.Count)
+        var latestLegalDefinitionCount = SuppliedNoticeTemplateBaseline.V3Legal.Count;
+        if (legalReplacementCount != latestLegalDefinitionCount)
         {
             throw new InvalidOperationException(
                 "Fresh workspace notice bootstrap did not resolve both legal supplied-template replacements.");
@@ -156,7 +157,7 @@ public sealed class BootstrapAccountHandler
                 workspace.PortfolioId,
                 legalReplacements.Select(row => row.Current.Id).ToArray(),
                 ct);
-        if (deletedTemplateCount != SuppliedNoticeTemplateBaseline.V2Legal.Count)
+        if (deletedTemplateCount != latestLegalDefinitionCount)
         {
             throw new InvalidOperationException(
                 "Fresh workspace notice bootstrap did not remove both replaced v1 templates.");
