@@ -6,7 +6,7 @@ append feedback, and expose only the audited decisive row text at phone width.
 `Docs/superpowers/plans/2026-07-25-tsk-750-step-7-contextual-loading-dense-lists-discovery.md`
 **Active goal:** TSK-750 mobile UI rescue
 **Active step:** Step 7 — contextual loading and dense-list polish
-**Plan state:** Terminal checkpoint — partial real-device proof; Step 7 incomplete
+**Plan state:** Implementation complete; one optional real-device branch remains fixture-limited
 **Planning retry:** 0 of 3
 
 ## Preserved checkpoints
@@ -32,11 +32,10 @@ contextual loaders; activity append with retained rows and compact progress;
 and inspection/activity/lease row wrapping. The first Activity rerun exposed a
 real empty-state flash while `/audit` was pending. Commit `f5c8ae7c` fixes that
 first-frame state, passes the expanded 45-test suite, and was installed
-in-place with preserved authentication. Two bounded reruns visually captured
-`Loading activity` and `Recent changes and who made them` during 562 ms and
-543 ms requests, but UIAutomator completed after each request; Activity is
-therefore functionally fixed and visually observed, while its strict matched
-PNG/XML pair remains partial.
+in-place with preserved authentication. A final bounded capture held the API
+request pending for 5.309 seconds and produced a matched PNG/XML pair containing
+`Loading activity` and `Recent changes and who made them`; populated activity
+returned after the API resumed.
 
 Ledger initial loading is likewise partial: its PNG shows `Loading ledger`,
 but its XML contains the completed rows. The first Ledger append capture
@@ -46,10 +45,12 @@ restricts the footer to `loadingMore` and adds a failing-before/passing-after
 regression. Exact-APK emulator reproof returned `UI PROOF PASS`: settled rows
 have no progress, `skip=40` and `skip=80` fire naturally, active paging retains
 rows and shows compact progress, and appended rows remain scrollable.
-Deposits append is `FIXTURE BLOCKED` because the fixture exposes only 15 final
-rows and no `Load more`; no data was mutated to manufacture that state.
-CONTEXT-07 remains incomplete only for unmatched fast initial-loader semantics
-and the fixture-blocked Deposits append branch.
+Deposits append is not reachable in the preserved fixture because both
+legitimate sample portfolios expose exactly 20 rows and the page size is 20.
+The pending/disabled/restored action and server-owned skip/take behavior pass
+widget and repository tests; no page-size change or fake data was introduced
+only to display the control. Ledger's initial-loader PNG/XML pairing remains
+the sole optional device-artifact gap.
 
 Step 5's pre-fix deployed baseline remains `FAIL`: cold load took 16.579
 seconds, first refresh took 15.557 seconds, the next valid sample exceeded 30
@@ -297,21 +298,22 @@ or substitute widget/static checks.
 ## Completion gate
 
 - [x] Task 7A, 7B, and 7C each received `RELEVANCE PASS`.
-- [ ] Every changed code/test path is globally allowed and maps to a task.
-- [ ] Contextual initial states replace only the audited blank waits.
+- [x] Every changed code/test path is globally allowed and maps to a task.
+- [x] Contextual initial states replace only the audited blank waits.
 - [x] Append progress is compact, active-only, and loaded rows remain.
-- [ ] Deposit `Load more` retains its server-owned semantics and count label.
-- [ ] All server paging and stale-response contracts pass unchanged.
-- [ ] Only the four audited decisive row fields gain a second line.
+- [x] Deposit `Load more` retains its server-owned semantics and count label.
+- [x] All server paging and stale-response contracts pass unchanged.
+- [x] Only the four audited decisive row fields gain a second line.
 - [x] Targeted test and analyze commands pass: 45/45 tests and exactly
       `No issues found!`.
 - [ ] Fresh 1080 × 2400 proof returns `UI PROOF PASS`; a protected API outage
       leaves Step 7 incomplete. Work-order, inspections, and deposits
       initial-loading; activity append; and the audited
-      inspection/activity/lease wrapping branches pass. Activity's fixed
-      loader is visually observed but lacks a matched pending-state XML.
-      Ledger initial loading is also partial; corrected Ledger append passes
-      exact-APK real-device proof; and deposits append is `FIXTURE BLOCKED`.
+      inspection/activity/lease wrapping branches pass. Activity now has a
+      matched pending-state PNG/XML pair. Ledger initial loading remains
+      partial; corrected Ledger append passes exact-APK real-device proof.
+      Deposits append is test-proven but does not appear with the fixture's
+      exactly-full single page.
 
 ## Deferred boundaries
 
