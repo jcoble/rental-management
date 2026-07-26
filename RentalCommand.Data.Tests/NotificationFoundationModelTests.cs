@@ -188,6 +188,53 @@ public sealed class NotificationFoundationModelTests
     }
 
     [Fact]
+    public void SuppliedLegalTemplateV3_IsTheExactSafeAppendOnlySuccessor()
+    {
+        const string nonRenewalRemovedParagraph =
+            "\n\nWorkspace administrator: before sending, review and adapt this starting copy for every state and local timing, delivery, and content requirement. This jurisdiction-neutral template is not a determination that the notice is legally sufficient.";
+        const string lateRentOriginalFinalParagraph =
+            "Any future action will be taken only under the rental agreement and applicable requirements. Workspace administrator: before sending, review and adapt this starting copy for every state and local timing, delivery, and content requirement. This jurisdiction-neutral template is not a determination that the notice is legally sufficient.";
+        const string lateRentSafeFinalParagraph =
+            "Any future action will be taken only under the rental agreement and applicable requirements.";
+
+        SuppliedNoticeTemplateBaseline.V3Legal.Should().HaveCount(2);
+        SuppliedNoticeTemplateBaseline.V3Legal.Select(template => template.Id)
+            .Should().Equal(8, 9);
+        SuppliedNoticeTemplateBaseline.V3Legal.Select(template => template.SystemKey)
+            .Should().Equal("lease-non-renewal", "late-rent-late-fee");
+        SuppliedNoticeTemplateBaseline.SafeLegalVersion.Should().Be(3);
+        SuppliedNoticeTemplateBaseline.SafeLegalV3PublishedAtUtc.Should()
+            .Be(new DateTime(2026, 7, 25, 9, 0, 0, DateTimeKind.Utc));
+        SuppliedNoticeTemplateBaseline.SafeLegalV3PublishedAtUtc.Kind.Should().Be(DateTimeKind.Utc);
+        SuppliedNoticeTemplateBaseline.V1.Select(template => template.Id)
+            .Concat(SuppliedNoticeTemplateBaseline.V2Legal.Select(template => template.Id))
+            .Concat(SuppliedNoticeTemplateBaseline.V3Legal.Select(template => template.Id))
+            .Should().OnlyHaveUniqueItems();
+
+        var v2NonRenewal = SuppliedNoticeTemplateBaseline.V2Legal[0];
+        var v3NonRenewal = SuppliedNoticeTemplateBaseline.V3Legal[0];
+        v3NonRenewal.Subject.Should().Be(v2NonRenewal.Subject);
+        v3NonRenewal.Body.Should().Be(v2NonRenewal.Body.Replace(
+            nonRenewalRemovedParagraph,
+            string.Empty,
+            StringComparison.Ordinal));
+
+        var v2LateRent = SuppliedNoticeTemplateBaseline.V2Legal[1];
+        var v3LateRent = SuppliedNoticeTemplateBaseline.V3Legal[1];
+        v3LateRent.Subject.Should().Be(v2LateRent.Subject);
+        v3LateRent.Body.Should().Be(v2LateRent.Body.Replace(
+            lateRentOriginalFinalParagraph,
+            lateRentSafeFinalParagraph,
+            StringComparison.Ordinal));
+
+        SuppliedNoticeTemplateBaseline.V3Legal.Should().OnlyContain(template =>
+            !template.Body.Contains("Workspace administrator:", StringComparison.Ordinal) &&
+            !template.Body.Contains(
+                "not a determination that the notice is legally sufficient",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void SuppliedTemplateWorkspaceCopyAndDraftPolicies_AreOneConflictSafeCommand()
     {
         var createdAtUtc = new DateTime(2026, 7, 13, 1, 2, 3, DateTimeKind.Utc);

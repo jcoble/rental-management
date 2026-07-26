@@ -1,0 +1,115 @@
+engine-1  | 2026-07-25T22:31:59.177288163Z info: Program[0]
+engine-1  | 2026-07-25T22:31:59.177350295Z       Engine advisory lock 59484 acquired (PID 1) — this is the only running instance
+engine-1  | 2026-07-25T22:31:59.214406023Z info: Microsoft.Hosting.Lifetime[0]
+engine-1  | 2026-07-25T22:31:59.214462377Z       Application started. Press Ctrl+C to shut down.
+engine-1  | 2026-07-25T22:31:59.215504494Z info: Microsoft.Hosting.Lifetime[0]
+engine-1  | 2026-07-25T22:31:59.215515010Z       Hosting environment: Development
+engine-1  | 2026-07-25T22:31:59.215534419Z info: Microsoft.Hosting.Lifetime[0]
+engine-1  | 2026-07-25T22:31:59.215537453Z       Content root path: /app
+engine-1  | 2026-07-25T22:31:59.215540027Z info: RentalCommand.Engine.Workers.OutboxDispatchWorker[0]
+engine-1  | 2026-07-25T22:31:59.215542701Z       OutboxDispatchWorker starting (poll interval 00:00:10)
+engine-1  | 2026-07-25T22:31:59.216271142Z info: RentalCommand.Engine.Workers.WorkerWatchdogService[0]
+api-1     | 2026-07-25T22:32:02.243920219Z info: RentalCommand.Api.Services.Auth.IdentitySeeder[0]
+api-1     | 2026-07-25T22:32:02.243952437Z       Users already present; skipping default admin seed.
+api-1     | 2026-07-25T22:32:02.581817464Z warn: Microsoft.AspNetCore.Hosting.Diagnostics[15]
+api-1     | 2026-07-25T22:32:02.581876912Z       Overriding HTTP_PORTS '8080' and HTTPS_PORTS ''. Binding to values defined by URLS instead 'http://+:8080'.
+api-1     | 2026-07-25T22:32:02.623087261Z info: RentalCommand.Api.Services.EntityChangeListener[0]
+api-1     | 2026-07-25T22:32:02.623114051Z       EntityChangeListener connected — LISTEN rc_entity_change (realtime backplane active).
+api-1     | 2026-07-25T22:32:02.639701825Z info: Microsoft.Hosting.Lifetime[14]
+api-1     | 2026-07-25T22:32:02.639725160Z       Now listening on: http://[::]:8080
+api-1     | 2026-07-25T22:32:02.640455474Z info: Microsoft.Hosting.Lifetime[0]
+api-1     | 2026-07-25T22:32:02.640466310Z       Application started. Press Ctrl+C to shut down.
+api-1       | 2026-07-25T22:32:02.640469605Z info: Microsoft.Hosting.Lifetime[0]
+postgres-1  | 2026-07-25T22:31:48.400890120Z 
+gateway-1   | 2026-07-25T22:32:04.141594316Z /docker-entrypoint.sh: /docker-entrypoint.d/ is not empty, will attempt to perform configuration
+api-1       | 2026-07-25T22:32:02.640472479Z       Hosting environment: Development
+api-1       | 2026-07-25T22:32:02.640475273Z info: Microsoft.Hosting.Lifetime[0]
+api-1       | 2026-07-25T22:32:02.640477777Z       Content root path: /app
+api-1       | 2026-07-25T22:32:03.883889860Z info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+api-1       | 2026-07-25T22:32:03.883908338Z       Request starting HTTP/1.1 GET http://localhost:8080/health - - -
+api-1       | 2026-07-25T22:32:03.944373656Z info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+api-1       | 2026-07-25T22:32:03.944398192Z       Executing endpoint 'HTTP: GET /health'
+gateway-1   | 2026-07-25T22:32:04.141614336Z /docker-entrypoint.sh: Looking for shell scripts in /docker-entrypoint.d/
+gateway-1   | 2026-07-25T22:32:04.142300975Z /docker-entrypoint.sh: Launching /docker-entrypoint.d/10-listen-on-ipv6-by-default.sh
+gateway-1   | 2026-07-25T22:32:04.143735370Z 10-listen-on-ipv6-by-default.sh: info: can not modify /etc/nginx/conf.d/default.conf (read-only file system?)
+gateway-1   | 2026-07-25T22:32:04.144835699Z /docker-entrypoint.sh: Sourcing /docker-entrypoint.d/15-local-resolvers.envsh
+gateway-1   | 2026-07-25T22:32:04.144842228Z /docker-entrypoint.sh: Launching /docker-entrypoint.d/20-envsubst-on-templates.sh
+gateway-1   | 2026-07-25T22:32:04.146170531Z /docker-entrypoint.sh: Launching /docker-entrypoint.d/30-tune-worker-processes.sh
+gateway-1   | 2026-07-25T22:32:04.147535397Z /docker-entrypoint.sh: Configuration complete; ready for start up
+gateway-1   | 2026-07-25T22:32:04.171116095Z 2026/07/25 22:32:04 [notice] 1#1: using the "epoll" event method
+gateway-1   | 2026-07-25T22:32:04.171131017Z 2026/07/25 22:32:04 [notice] 1#1: nginx/1.27.5
+gateway-1   | 2026-07-25T22:32:04.171134562Z 2026/07/25 22:32:04 [notice] 1#1: built by gcc 14.2.0 (Alpine 14.2.0) 
+gateway-1   | 2026-07-25T22:32:04.171137396Z 2026/07/25 22:32:04 [notice] 1#1: OS: Linux 6.17.0-1018-azure
+gateway-1   | 2026-07-25T22:32:04.171140080Z 2026/07/25 22:32:04 [notice] 1#1: getrlimit(RLIMIT_NOFILE): 1024:524288
+gateway-1   | 2026-07-25T22:32:04.173653612Z 2026/07/25 22:32:04 [notice] 1#1: start worker processes
+gateway-1   | 2026-07-25T22:32:04.173819419Z 2026/07/25 22:32:04 [notice] 1#1: start worker process 21
+gateway-1   | 2026-07-25T22:32:04.173970688Z 2026/07/25 22:32:04 [notice] 1#1: start worker process 22
+gateway-1   | 2026-07-25T22:32:04.174112849Z 2026/07/25 22:32:04 [notice] 1#1: start worker process 23
+gateway-1   | 2026-07-25T22:32:04.174285055Z 2026/07/25 22:32:04 [notice] 1#1: start worker process 24
+api-1       | 2026-07-25T22:32:03.947379649Z info: Microsoft.AspNetCore.Http.Result.OkObjectResult[1]
+api-1       | 2026-07-25T22:32:03.947390635Z       Setting HTTP status code 200.
+api-1       | 2026-07-25T22:32:03.957659052Z info: Microsoft.AspNetCore.Http.Result.OkObjectResult[3]
+api-1       | 2026-07-25T22:32:03.957670779Z       Writing value of type '<>f__AnonymousType36`1' as Json.
+api-1       | 2026-07-25T22:32:03.960900355Z info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+api-1       | 2026-07-25T22:32:03.960912182Z       Executed endpoint 'HTTP: GET /health'
+api-1       | 2026-07-25T22:32:03.961859939Z info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+api-1       | 2026-07-25T22:32:03.961868803Z       Request finished HTTP/1.1 GET http://localhost:8080/health - 200 - application/json;+charset=utf-8 78.4142ms
+api-1       | 2026-07-25T22:32:04.185318427Z info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+api-1       | 2026-07-25T22:32:04.185333850Z       Request starting HTTP/1.0 GET http://api:8080/health - - -
+api-1       | 2026-07-25T22:32:04.191699812Z info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+api-1       | 2026-07-25T22:32:04.191712320Z       Executing endpoint 'HTTP: GET /health'
+api-1       | 2026-07-25T22:32:04.191715315Z info: Microsoft.AspNetCore.Http.Result.OkObjectResult[1]
+api-1       | 2026-07-25T22:32:04.191717538Z       Setting HTTP status code 200.
+api-1       | 2026-07-25T22:32:04.192948836Z info: Microsoft.AspNetCore.Http.Result.OkObjectResult[3]
+api-1       | 2026-07-25T22:32:04.192964249Z       Writing value of type '<>f__AnonymousType36`1' as Json.
+api-1       | 2026-07-25T22:32:04.193207140Z info: Microsoft.AspNetCore.Routing.EndpointMiddleware[1]
+api-1       | 2026-07-25T22:32:04.193211496Z       Executed endpoint 'HTTP: GET /health'
+api-1       | 2026-07-25T22:32:04.193331835Z info: Microsoft.AspNetCore.Hosting.Diagnostics[2]
+api-1       | 2026-07-25T22:32:04.193337484Z       Request finished HTTP/1.0 GET http://api:8080/health - 200 - application/json;+charset=utf-8 8.0533ms
+engine-1  | 2026-07-25T22:31:59.216277652Z       WorkerWatchdog started — checking every 30s, requires 3 consecutive stuck detections before restart
+postgres-1  | 2026-07-25T22:31:48.400930540Z PostgreSQL Database directory appears to contain a database; Skipping initialization
+engine-1    | 2026-07-25T22:31:59.218292313Z info: RentalCommand.Engine.Workers.AdvisoryLockWatcherService[0]
+engine-1    | 2026-07-25T22:31:59.218304602Z       AdvisoryLockWatcher started — monitoring lock connection (PID 1)
+engine-1    | 2026-07-25T22:31:59.219179661Z info: RentalCommand.Engine.Workers.AccountingTokenRefreshWorker[0]
+engine-1    | 2026-07-25T22:31:59.219189225Z       AccountingTokenRefreshWorker starting (poll interval 00:05:00)
+postgres-1  | 2026-07-25T22:31:48.400934155Z 
+gateway-1   | 2026-07-25T22:32:04.193621996Z 100.126.201.65 - - [25/Jul/2026:22:32:04 +0000] "GET /health HTTP/1.1" 200 25 "-" "curl/8.5.0" "-"
+postgres-1  | 2026-07-25T22:31:48.437227949Z 2026-07-25 22:31:48.437 UTC [1] LOG:  starting PostgreSQL 16.14 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit
+postgres-1  | 2026-07-25T22:31:48.437265219Z 2026-07-25 22:31:48.437 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+postgres-1  | 2026-07-25T22:31:48.437273992Z 2026-07-25 22:31:48.437 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+postgres-1  | 2026-07-25T22:31:48.447564166Z 2026-07-25 22:31:48.447 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+postgres-1  | 2026-07-25T22:31:48.457307648Z 2026-07-25 22:31:48.457 UTC [29] LOG:  database system was shut down at 2026-07-25 22:27:31 UTC
+postgres-1  | 2026-07-25T22:31:48.473664004Z 2026-07-25 22:31:48.473 UTC [1] LOG:  database system is ready to accept connections
+engine-1    | 2026-07-25T22:32:01.472694695Z info: RentalCommand.Engine.Workers.ScanProcessingWorker[0]
+engine-1    | 2026-07-25T22:32:01.472745851Z       ScanProcessingWorker starting (poll interval 00:00:02)
+engine-1    | 2026-07-25T22:32:01.795603155Z info: RentalCommand.Engine.Workers.PendingFileUploadCleanupWorker[0]
+engine-1    | 2026-07-25T22:32:01.795630035Z       PendingFileUploadCleanupWorker starting (poll interval 00:15:00)
+engine-1    | 2026-07-25T22:32:01.795634131Z info: RentalCommand.Engine.Workers.AccountingPullWorker[0]
+engine-1    | 2026-07-25T22:32:01.795637145Z       AccountingPullWorker starting (poll interval 00:15:00)
+engine-1    | 2026-07-25T22:32:01.838757560Z info: RentalCommand.Engine.Workers.ProviderInboxReconciliationWorker[0]
+engine-1    | 2026-07-25T22:32:01.838780654Z       ProviderInboxReconciliationWorker starting (poll interval 00:00:30)
+engine-1    | 2026-07-25T22:32:01.839413444Z info: RentalCommand.Engine.Workers.NativeEsignReconciliationWorker[0]
+web-1       | 2026-07-25T22:31:59.167959773Z Listening on http://0.0.0.0:3000
+engine-1    | 2026-07-25T22:32:01.839458911Z       NativeEsignReconciliationWorker starting (poll interval 00:01:00)
+engine-1    | 2026-07-25T22:32:01.840095206Z info: RentalCommand.Engine.Workers.NoticeDraftWorker[0]
+engine-1    | 2026-07-25T22:32:01.840102146Z       NoticeDraftWorker starting (poll interval 12:00:00)
+engine-1    | 2026-07-25T22:32:01.865013484Z info: RentalCommand.Engine.Workers.DailyBriefingDeliveryWorker[0]
+engine-1    | 2026-07-25T22:32:01.865037730Z       DailyBriefingDeliveryWorker starting (poll interval 01:00:00)
+engine-1    | 2026-07-25T22:32:01.867415451Z info: RentalCommand.Engine.Workers.TenantNoticeCandidateWorker[0]
+engine-1    | 2026-07-25T22:32:01.867448410Z       TenantNoticeCandidateWorker starting (poll interval 06:00:00)
+engine-1    | 2026-07-25T22:32:01.867465425Z info: RentalCommand.Engine.Workers.LateFeeWorker[0]
+engine-1    | 2026-07-25T22:32:01.867468620Z       LateFeeWorker starting (poll interval 06:00:00)
+engine-1    | 2026-07-25T22:32:01.867471474Z info: RentalCommand.Engine.Workers.RecurringMaintenanceWorker[0]
+engine-1    | 2026-07-25T22:32:01.867474128Z       RecurringMaintenanceWorker starting (poll interval 1.00:00:00)
+engine-1    | 2026-07-25T22:32:01.867617320Z info: RentalCommand.Engine.Workers.AutopayChargeWorker[0]
+engine-1    | 2026-07-25T22:32:01.867622608Z       AutopayChargeWorker starting (poll interval 01:00:00)
+engine-1    | 2026-07-25T22:32:01.868265393Z info: RentalCommand.Engine.Workers.RecurringExpenseWorker[0]
+engine-1    | 2026-07-25T22:32:01.868272243Z       RecurringExpenseWorker starting (poll interval 01:00:00)
+engine-1    | 2026-07-25T22:32:01.868984901Z info: RentalCommand.Engine.Workers.DebtServiceWorker[0]
+engine-1    | 2026-07-25T22:32:01.868994726Z       DebtServiceWorker starting (poll interval 01:00:00)
+engine-1    | 2026-07-25T22:32:01.869710448Z info: RentalCommand.Engine.Workers.RentChargeWorker[0]
+engine-1    | 2026-07-25T22:32:01.869720233Z       RentChargeWorker starting (poll interval 01:00:00)
+engine-1    | 2026-07-25T22:32:02.969517304Z info: RentalCommand.Engine.Services.RentChargeService[0]
+engine-1    | 2026-07-25T22:32:02.969536493Z       RentChargeService posted 0 canonical tenant-account rent charge(s)
+engine-1    | 2026-07-25T22:32:02.970323701Z info: RentalCommand.Engine.Services.LateFeeService[0]
+engine-1    | 2026-07-25T22:32:02.970333366Z       LateFeeService posted 0 canonical tenant-account late-fee charge(s)
