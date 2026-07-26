@@ -444,10 +444,16 @@ Map<String, dynamic> buildOverridesMap({
     if (createNewProperty) {
       // Empty-portfolio bootstrap (C3): propertyId=0 explicitly requests a new
       // property. unitId=0 explicitly clears any Unit command-center capture
-      // context so the server creates the first unit from the reviewed document.
-      // Structure comes only from this user choice.
+      // context so the server creates the first unit from the reviewed
+      // document. Clear the rest of the captured rental chain as well: those
+      // ids can be present in the extracted field map when the scan was opened
+      // from a Unit command center, but they cannot belong to a property/unit
+      // that is being created now.
       overrides['propertyId'] = 0;
       overrides['unitId'] = 0;
+      overrides['leaseManagementId'] = 0;
+      overrides['tenantAccountId'] = 0;
+      overrides['leaseAgreementId'] = 0;
       if (newPropertyRentalStructure == null) {
         throw ArgumentError.value(
           newPropertyRentalStructure,
@@ -473,9 +479,9 @@ Map<String, dynamic> buildOverridesMap({
       // silently win on the server.
       overrides['unitId'] = selectedUnitId ?? 0;
     }
-    // Tenant: a chosen id links; null lets the server match/create from
-    // tenant_name (same in both property modes).
-    if (selectedTenantId != null) overrides['tenantId'] = selectedTenantId;
+    // Tenant: a chosen id links; zero explicitly clears any extracted/captured
+    // tenant id so the server matches or creates from the reviewed name/email.
+    overrides['tenantId'] = selectedTenantId ?? 0;
     if (leaseReviewDisposition != null) {
       overrides['reviewDisposition'] = leaseReviewDisposition.wireValue;
       if (leaseReviewDisposition ==
