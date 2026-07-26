@@ -707,14 +707,24 @@
 - Direct PostgreSQL reads matched every reviewed value and proved all six aggregate counts
   advanced atomically from 15 to 16.
 - Evidence: `mobile/azure/d018-native-gallery-resolution-fixed.png`.
+- `SCN-0017` exercised a nine-page low-contrast photocopy PDF through the native Android document
+  picker. Extraction correctly identified Quarry House, 389 Quarry Street, Dana Garcia, Unit Main,
+  agreement `SCN-0017`, both agreement dates, rent, deposit, and due day. Every low-confidence or
+  omitted field was manually completed in the canonical mobile review, including email, phone,
+  emergency contact, four bedrooms, one bathroom, 965 square feet, possession date, and late fee.
+- Draft 22 preserved the exact source and executed-artifact SHA-256
+  `6866b049f3a4c037f54e5a44b3af24f21f5961a8c99ba0fcc2e660f56d904137`.
+  Direct PostgreSQL reads matched all reviewed values and proved Properties, Units, Tenants,
+  LeaseManagements, LeaseAgreements, and TenantAccounts advanced atomically from 16 to 17.
+- Evidence: `mobile/azure/scn-0017-opening-lease-confirmed.png`.
 
 ## Checkpoint 2026-07-26
 
 - Status: isolated run initialized; January 3 opening-lease batch in progress
 - Completed run rows: 1 / 1,996
-- Uploaded and confirmed scan assets: 16 / 953
+- Uploaded and confirmed scan assets: 17 / 953
 - Pilot scan confirmations: 1
-- Official scan confirmations: 16
+- Official scan confirmations: 17
 - Findings and safety blockers: 18
 - Current blockers: none for the January 3 opening-lease batch.
-- Next action: execute `SCN-0017` through `SCN-0024`, then execute the January 3 rent receipts.
+- Next action: execute `SCN-0018` through `SCN-0024`, then execute the January 3 rent receipts.
