@@ -144,9 +144,19 @@ const _fieldGroups = <({String label, List<String> fields})>[
   (label: 'Details', fields: ['document_kind', 'category', 'notes']),
 ];
 
-// Lease-draft field group (target == 'LeaseAgreement'). The property/unit/tenant are
-// chosen with pickers below, so only the lease *terms* live here.
+// Lease-draft review fields (target == 'LeaseAgreement'). Canonical rows can be
+// selected with the pickers below, but create-new confirmation also accepts the
+// reviewed tenant contact and Unit details. Keep those visible here so a scan
+// never creates an incomplete rental graph simply because extraction was unsure.
 const _leaseFieldOrder = <String>[
+  'tenant_name',
+  'tenant_email',
+  'tenant_phone',
+  'tenant_emergency_contact',
+  'unit_number',
+  'unit_bedrooms',
+  'unit_bathrooms',
+  'unit_square_feet',
   'lease_number',
   'start_date',
   'end_date',
@@ -242,6 +252,8 @@ const _moneyFields = {
   'monthly_rent',
   'security_deposit',
   'late_fee',
+  'unit_bedrooms',
+  'unit_bathrooms',
   // Applicant fields
   'monthly_income',
   // Loan terms
@@ -273,7 +285,12 @@ enum LeaseScanReviewDisposition {
 }
 
 // Whole-number fields use an integer keypad (e.g. the rent due day-of-month).
-const _intFields = {'rent_due_day', 'term_months', 'day_of_month_due'};
+const _intFields = {
+  'rent_due_day',
+  'unit_square_feet',
+  'term_months',
+  'day_of_month_due',
+};
 
 // Friendly label overrides for keys where plain Title Case reads awkwardly.
 const _labelOverrides = <String, String>{
@@ -298,6 +315,13 @@ const _labelOverrides = <String, String>{
   'late_fee': 'Late fee',
   'rent_due_day': 'Rent due day (of month)',
   'tenant_name': 'Tenant',
+  'tenant_email': 'Tenant email',
+  'tenant_phone': 'Tenant phone',
+  'tenant_emergency_contact': 'Emergency contact',
+  'unit_number': 'Unit number',
+  'unit_bedrooms': 'Bedrooms',
+  'unit_bathrooms': 'Bathrooms',
+  'unit_square_feet': 'Square feet',
   // Applicant fields (mirror the web review page's labels)
   'first_name': 'First name',
   'last_name': 'Last name',
@@ -2703,7 +2727,7 @@ class _LeaseTermsSection extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'LEASE TERMS',
+            'TENANT, UNIT & LEASE DETAILS',
             style: theme.textTheme.labelSmall?.copyWith(
               fontWeight: FontWeight.w700,
               letterSpacing: 0.8,
@@ -3053,6 +3077,8 @@ class _FieldInputState extends State<_FieldInput> {
     final isDate = _dateFields.contains(widget.field.name);
     final isMoney = _moneyFields.contains(widget.field.name);
     final isInt = _intFields.contains(widget.field.name);
+    final isEmail = widget.field.name == 'tenant_email';
+    final isPhone = widget.field.name == 'tenant_phone';
 
     // Date fields open a calendar picker so the landlord taps a date instead of
     // typing one (design#5). Free-text editing is still allowed as a fallback.
@@ -3130,6 +3156,10 @@ class _FieldInputState extends State<_FieldInput> {
               ? const TextInputType.numberWithOptions(decimal: true)
               : isInt
               ? TextInputType.number
+              : isEmail
+              ? TextInputType.emailAddress
+              : isPhone
+              ? TextInputType.phone
               : null,
           decoration: InputDecoration(
             border: const OutlineInputBorder(),
