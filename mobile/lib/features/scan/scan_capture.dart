@@ -126,14 +126,14 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
 
   Future<void> _pick(ImageSource source) async {
     final picker = ImagePicker();
-    final XFile? picked = await picker.pickImage(
-      source: source,
-      // Documents only need enough resolution for legible text + extraction;
-      // smaller files upload/store/retrieve faster and decode cheaper on-device.
-      imageQuality: 80,
-      maxWidth: 1600,
-      maxHeight: 1600,
-    );
+    // Gallery documents may be multi-page scans composited into one tall image.
+    // A maxHeight silently reduced a 6,605px scan to 1,600px (only 165px wide),
+    // making its text unreadable before it ever reached extraction. Preserve
+    // selected document bytes; camera captures may still use JPEG compression,
+    // but must retain their original dimensions.
+    final XFile? picked = source == ImageSource.gallery
+        ? await picker.pickImage(source: source)
+        : await picker.pickImage(source: source, imageQuality: 90);
     if (picked == null) return; // user cancelled
 
     await _uploadBytes(
@@ -159,11 +159,9 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
   }
 
   Future<void> _pickDocumentPages() async {
-    final picked = await ImagePicker().pickMultiImage(
-      imageQuality: 80,
-      maxWidth: 1600,
-      maxHeight: 1600,
-    );
+    // Preserve page resolution for OCR/extraction. The PDF stitcher controls
+    // the rendered page size without discarding source pixels.
+    final picked = await ImagePicker().pickMultiImage();
     if (picked.isEmpty) return;
     try {
       final pages = <Uint8List>[];
