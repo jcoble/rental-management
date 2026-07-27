@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:rental_command/core/api/api_exception.dart';
 import 'package:rental_command/features/scan/scan_models.dart';
 import 'package:rental_command/features/scan/scan_repository.dart';
 import 'package:rental_command/features/scan/scan_review_screen.dart';
@@ -113,9 +114,30 @@ void main() {
     expect(adapter.requests, hasLength(1));
     expect(adapter.requests.single.method, 'POST');
     expect(adapter.requests.single.path, '/scans/107/retry');
+    expect(adapter.requests.single.headers['Idempotency-Key'], isNotEmpty);
     expect(draft.id, 107);
     expect(draft.status, 'Pending');
   });
+
+  test(
+    'repository retry reuses idempotency key after ambiguous failure',
+    () async {
+      final adapter = _RetryAdapter(failFirst: true);
+      final dio = Dio(BaseOptions(baseUrl: 'https://example.test'))
+        ..httpClientAdapter = adapter;
+      final repository = ScanRepository(dio: dio);
+
+      await expectLater(repository.retry(108), throwsA(isA<ApiException>()));
+      final firstKey = adapter.requests.single.headers['Idempotency-Key'];
+
+      final draft = await repository.retry(108);
+
+      expect(adapter.requests, hasLength(2));
+      expect(firstKey, isNotEmpty);
+      expect(adapter.requests.last.headers['Idempotency-Key'], firstKey);
+      expect(draft.status, 'Pending');
+    },
+  );
 }
 
 class _FakeFailedScanRepository extends ScanRepository {
@@ -144,6 +166,9 @@ class _FakeFailedScanRepository extends ScanRepository {
 }
 
 class _RetryAdapter implements HttpClientAdapter {
+  _RetryAdapter({this.failFirst = false});
+
+  final bool failFirst;
   final requests = <RequestOptions>[];
 
   @override
@@ -153,9 +178,18 @@ class _RetryAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     requests.add(options);
+
+    if (failFirst && requests.length == 1) {
+      throw DioException(
+        requestOptions: options,
+        type: DioExceptionType.receiveTimeout,
+        message: 'simulated ambiguous retry failure',
+      );
+    }
+
     return ResponseBody.fromString(
       jsonEncode({
-        'id': 107,
+        'id': int.parse(options.path.split('/')[2]),
         'portfolioId': 1,
         'targetEntityType': 'Expense',
         'status': 'Pending',
