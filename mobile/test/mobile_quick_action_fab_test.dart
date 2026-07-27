@@ -421,6 +421,70 @@ void main() {
     },
   );
 
+  testWidgets('modal helper hides shell quick action while sheet is mounted', (
+    tester,
+  ) async {
+    final controller = MobileQuickActionController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      _authenticatedApp(
+        home: MobileQuickActionScope(
+          controller: controller,
+          child: Scaffold(
+            body: Builder(
+              builder: (context) => Center(
+                child: FilledButton(
+                  onPressed: () {
+                    showMobileQuickActionHiddenModalBottomSheet<void>(
+                      context: context,
+                      builder: (_) => const SizedBox(
+                        height: 120,
+                        child: Center(child: Text('Action sheet')),
+                      ),
+                    );
+                  },
+                  child: const Text('Open sheet'),
+                ),
+              ),
+            ),
+            floatingActionButton: AnimatedBuilder(
+              animation: controller,
+              builder: (context, _) {
+                if (controller.hidden) return const SizedBox.shrink();
+                return MobileQuickActionFab(
+                  heroTag: 'shell-fab',
+                  primaryActions: controller.primaryActions,
+                  useNearestScope: false,
+                  onChat: () {},
+                  onRecord: () {},
+                  onScan: () {},
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byType(FloatingActionButton), findsOneWidget);
+
+    await tester.tap(find.text('Open sheet'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Action sheet'), findsOneWidget);
+    expect(controller.hidden, isTrue);
+    expect(find.byType(FloatingActionButton), findsNothing);
+
+    await tester.tapAt(const Offset(20, 20));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Action sheet'), findsNothing);
+    expect(controller.hidden, isFalse);
+    expect(find.byType(FloatingActionButton), findsOneWidget);
+  });
+
   testWidgets('scoped primary action falls back when top action unmounts', (
     tester,
   ) async {

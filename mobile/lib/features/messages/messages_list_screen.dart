@@ -189,15 +189,16 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
   }
 
   Future<void> _startNewConversation(BuildContext context) async {
-    final created = await showModalBottomSheet<Conversation>(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) =>
-          const MobileQuickActionHider(child: _ComposeConversationSheet()),
-    );
+    final created =
+        await showMobileQuickActionHiddenModalBottomSheet<Conversation>(
+          context: context,
+          isScrollControlled: true,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+          ),
+          builder: (_) =>
+              const MobileQuickActionHider(child: _ComposeConversationSheet()),
+        );
     if (created == null || !context.mounted) return;
     // Refresh the inbox and open the freshly created thread.
     ref.invalidate(conversationsPageProvider);

@@ -7,6 +7,7 @@ import '../../core/api/api_exception.dart';
 import '../../core/models/work_order.dart';
 import '../../core/time/app_clock.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
+import '../home/mobile_quick_action_fab.dart';
 import '../maintenance/work_orders_repository.dart';
 import '../vendors/vendors_models.dart';
 import '../vendors/vendors_repository.dart';
@@ -26,7 +27,7 @@ Future<void> showCreateExpenseSheet(
   WidgetRef ref, {
   VoidCallback? onSaved,
 }) async {
-  final saved = await showModalBottomSheet<bool>(
+  final saved = await showMobileQuickActionHiddenModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
     shape: const RoundedRectangleBorder(
