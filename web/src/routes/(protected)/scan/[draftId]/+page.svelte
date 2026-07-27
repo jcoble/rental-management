@@ -245,6 +245,7 @@
 	let newPropertyFieldsSeeded = $state(false);
 	let leaseReviewDisposition = $state<LeaseScanReviewDisposition | ''>('');
 	let leaseDocumentTemplateId = $state('');
+	let possessionGivenOn = $state('');
 	let rentTrackingStartMode = $state<
 		'ForwardOnly' | 'BackfillFromLeaseStart' | 'CustomCutoffDate'
 	>('ForwardOnly');
@@ -266,6 +267,7 @@
 		newPropertyFieldsSeeded = false;
 		leaseReviewDisposition = '';
 		leaseDocumentTemplateId = '';
+		possessionGivenOn = '';
 		rentTrackingStartMode = 'ForwardOnly';
 		rentTrackingStartOn = '';
 	}
@@ -1020,6 +1022,9 @@
 				overrides['tenantId'] = Number(selectedTenantId);
 			}
 			overrides['reviewDisposition'] = leaseReviewDisposition;
+			if (leaseReviewDisposition === 'AlreadyFullySigned' && possessionGivenOn) {
+				overrides['possessionGivenAtUtc'] = possessionGivenOn;
+			}
 			overrides['rentTrackingStartMode'] = rentTrackingStartMode;
 			if (rentTrackingStartMode === 'CustomCutoffDate') {
 				overrides['rentTrackingStartOn'] = rentTrackingStartOn;
@@ -1651,6 +1656,22 @@
 										disabled={reviewControlsDisabled}
 									/>
 								</div>
+								{#if leaseReviewDisposition === 'AlreadyFullySigned'}
+									<div class="mb-5 rounded-md border border-border bg-muted/20 p-3">
+										<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-possession-given-date">
+											Possession given
+										</label>
+										<DatePicker
+											id="scan-possession-given-date"
+											bind:value={possessionGivenOn}
+											min={editedFields['start_date'] || undefined}
+											testid="scan-possession-given-date"
+										/>
+										<p class="mt-1 text-xs text-muted-foreground">
+											Required when the signed lease term has started and the tenant already received possession.
+										</p>
+									</div>
+								{/if}
 								<div class="mb-5 grid gap-3 rounded-md border border-border bg-muted/20 p-3 sm:grid-cols-2">
 									<div class={rentTrackingStartMode === 'CustomCutoffDate' ? '' : 'sm:col-span-2'}>
 										<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-rent-tracking-mode">

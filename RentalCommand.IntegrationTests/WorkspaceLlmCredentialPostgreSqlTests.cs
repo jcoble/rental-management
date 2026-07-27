@@ -185,6 +185,39 @@ public sealed class WorkspaceLlmCredentialPostgreSqlTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task DevelopmentClaudeCli_RecordsZeroCostUsageButCannotBeActivatedAsApiCredential()
+    {
+        var portfolioId = await CreatePortfolioAsync("claude-cli-usage");
+        var service = CreateService();
+
+        await service.RecordUsageAsync(
+            portfolioId,
+            "claude-cli",
+            "claude-cli:sonnet",
+            "scan.extraction",
+            42,
+            0,
+            0,
+            0m);
+
+        var usage = await _context.Db.LlmUsageEvidence
+            .AsNoTracking()
+            .SingleAsync(row => row.PortfolioId == portfolioId);
+        usage.Provider.Should().Be("claude-cli");
+        usage.ModelId.Should().Be("claude-cli:sonnet");
+        usage.EstimatedCostUsd.Should().Be(0m);
+
+        var activate = () => service.ActivateAsync(
+            Access(portfolioId),
+            new ActivateAiCredentialRequest(
+                "claude-cli",
+                "sonnet",
+                "not-a-customer-api-key"));
+        await activate.Should().ThrowAsync<ArgumentException>()
+            .WithMessage("*OpenAI or Anthropic*");
+    }
+
+    [Fact]
     public async Task ScanCandidates_PageInPostgreSql()
     {
         var scanService = new ScanService(

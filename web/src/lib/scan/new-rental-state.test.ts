@@ -110,6 +110,17 @@ describe('new rental lease prefill seeding', () => {
 		assert.doesNotMatch(source, /unitForm\.bathrooms\s*=\s*values\.unitBathrooms\s*\|\|\s*['"]0['"]/);
 	});
 
+	it('reviews and sends square feet when the guided import creates a unit', () => {
+		const source = readFileSync(
+			resolve(dirname(fileURLToPath(import.meta.url)), '../components/scan/LeaseFirstImport.svelte'),
+			'utf8'
+		);
+
+		assert.match(source, /unitSquareFeet = values\.unitSquareFeet/);
+		assert.match(source, /data-testid="new-rental-unit-square-feet-input"/);
+		assert.match(source, /o\.unitSquareFeet = Number\(unitSquareFeet\)/);
+	});
+
 	it('sends the explicit rental structure when the guided import creates a property', () => {
 		const source = readFileSync(
 			resolve(dirname(fileURLToPath(import.meta.url)), '../components/scan/LeaseFirstImport.svelte'),

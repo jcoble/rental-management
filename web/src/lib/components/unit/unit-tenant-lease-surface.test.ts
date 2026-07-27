@@ -37,4 +37,8 @@ describe('Unit Tenant & lease surface', () => {
 		assert.match(unitPageSource, /dashboard\.tenantAccountId \?\? undefined/);
 		assert.match(unitPageSource, /dashboard\.currentLease\?\.id \?\? undefined/);
 	});
+
+	it('passes the unit dashboard into the listing tab so occupied units can link back to Tenant & lease', () => {
+		assert.match(unitPageSource, /<ListingTab \{dashboard\} \/>/);
+	});
 });

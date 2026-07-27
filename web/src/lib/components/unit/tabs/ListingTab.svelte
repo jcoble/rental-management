@@ -2,7 +2,7 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { untrack } from 'svelte';
 	import { units } from '$lib/api/endpoints/units';
-	import type { ListingPhoto, ListingPublication, ListingPublicationStatus, ListingWorkspace, SaveListingWorkspaceRequest } from '$lib/types';
+	import type { ListingPhoto, ListingPublication, ListingPublicationStatus, ListingWorkspace, SaveListingWorkspaceRequest, UnitDashboard } from '$lib/types';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import LoadingState from '$lib/components/shared/LoadingState.svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -19,10 +19,13 @@
 		photosConfirmed: boolean;
 	};
 
-	let { unitId }: { unitId: number } = $props();
+	let { unitId: propUnitId, dashboard }: { unitId?: number; dashboard?: UnitDashboard } = $props();
+	const unitId = $derived(dashboard?.unit.id ?? propUnitId ?? 0);
 	const queryClient = useQueryClient();
 	let loadedVersion = $state<number | null>(null);
 	let form = $state<Form>(blankForm());
+	const activeLeaseHref = $derived(`/units/${unitId}?tab=tenant-lease&view=agreements${dashboard?.leaseManagementId ? `&leaseManagement=${dashboard.leaseManagementId}` : ''}`);
+	const isOccupied = $derived(dashboard?.occupancyPossession.isOccupied ?? false);
 
 	const workspaceQuery = createQuery(() => ({
 		queryKey: ['listing-workspace', unitId],
@@ -153,30 +156,42 @@
 	}
 </script>
 
-<div class="space-y-4" data-testid="unit-listing-tab">
-	<div class="flex flex-wrap items-center justify-between gap-3">
-		<div><h2 class="text-lg font-semibold">Listing workspace</h2><p class="text-sm text-muted-foreground">One listing for this unit, published through guided or connected channels.</p></div>
-		<div class="flex gap-2">
-			<Button variant="outline" size="sm" class="gap-1" onclick={() => generateMutation.mutate()} disabled={generateMutation.isPending}>
-				<RefreshCw class="h-4 w-4" /> {workspace ? 'Sync unit details' : 'Prepare listing'}
-			</Button>
-			<Button size="sm" class="gap-1" onclick={() => saveMutation.mutate(false)} disabled={!canSave || saveMutation.isPending}>
-				<Save class="h-4 w-4" /> Save
-			</Button>
+	<div class="space-y-4" data-testid="unit-listing-tab">
+		<div class="flex flex-wrap items-center justify-between gap-3">
+			<div><h2 class="text-lg font-semibold">Listing workspace</h2><p class="text-sm text-muted-foreground">Marketing and applications for a vacant or soon-available unit. Active residents and leases live under Tenant &amp; lease.</p></div>
+			{#if workspace || !isOccupied}
+				<div class="flex gap-2">
+					<Button variant="outline" size="sm" class="gap-1" onclick={() => generateMutation.mutate()} disabled={generateMutation.isPending}>
+						<RefreshCw class="h-4 w-4" /> {workspace ? 'Sync unit details' : 'Prepare listing'}
+					</Button>
+					<Button size="sm" class="gap-1" onclick={() => saveMutation.mutate(false)} disabled={!canSave || saveMutation.isPending}>
+						<Save class="h-4 w-4" /> Save
+					</Button>
+				</div>
+			{/if}
 		</div>
-	</div>
+		{#if isOccupied}
+			<DetailCard title="This unit is occupied" icon={FileDown} accent="success">
+				<p class="text-sm text-muted-foreground">The current tenant, agreement, rent, and move-out actions are on the Tenant &amp; lease tab.</p>
+				<Button class="mt-4 gap-2" href={activeLeaseHref}><FileDown class="h-4 w-4" /> Open Tenant &amp; lease</Button>
+			</DetailCard>
+		{/if}
 
-	{#if workspaceQuery.isLoading}
-		<LoadingState label="Loading listing workspace" testid="unit-listing-loading" />
+		{#if workspaceQuery.isLoading}
+			<LoadingState label="Loading listing workspace" testid="unit-listing-loading" />
 	{:else if workspaceQuery.isError}
 		<div class="rounded-lg border bg-card p-6 text-center" data-testid="unit-listing-error">
 			<p class="text-sm text-destructive">Listing workspace could not be loaded.</p>
 			<Button class="mt-3" variant="outline" size="sm" onclick={() => workspaceQuery.refetch()}>Retry</Button>
 		</div>
-	{:else if !workspace}
-		<DetailCard title="Prepare this rental listing" icon={FileDown} accent="primary">
-			<p class="text-sm text-muted-foreground">Rental Command will prepare reusable copy, terms, and an ordered photo package for this unit.</p>
-			<Button class="mt-4 gap-2" onclick={() => generateMutation.mutate()}><RefreshCw class="h-4 w-4" /> Prepare listing</Button>
+		{:else if !workspace && isOccupied}
+			<DetailCard title="No active listing" icon={FileDown} accent="muted">
+				<p class="text-sm text-muted-foreground">Because this unit is occupied, there is no listing workspace to prepare right now.</p>
+			</DetailCard>
+		{:else if !workspace}
+			<DetailCard title="Prepare this rental listing" icon={FileDown} accent="primary">
+				<p class="text-sm text-muted-foreground">Rental Command will prepare reusable copy, terms, and an ordered photo package for this unit.</p>
+				<Button class="mt-4 gap-2" onclick={() => generateMutation.mutate()}><RefreshCw class="h-4 w-4" /> Prepare listing</Button>
 		</DetailCard>
 	{:else}
 		<p class="text-xs text-muted-foreground">Syncing updates bedrooms, bathrooms, and square footage. Your listing copy, rent, deposit, and lease terms are never replaced.</p>

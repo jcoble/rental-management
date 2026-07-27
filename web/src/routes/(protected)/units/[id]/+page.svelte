@@ -372,11 +372,11 @@
 							<section tabindex="-1" class="scroll-mt-4 outline-none" data-testid="unit-applications-section">
 								<ApplicationsTab {dashboard} />
 							</section>
-							{:else}
-							<section tabindex="-1" class="scroll-mt-4 outline-none" data-testid="unit-listing-section">
-								<ListingTab unitId={dashboard.unit.id} />
-							</section>
-							{/if}
+								{:else}
+								<section tabindex="-1" class="scroll-mt-4 outline-none" data-testid="unit-listing-section">
+									<ListingTab {dashboard} />
+								</section>
+								{/if}
 						</div>
 					</div>
 					{:else if activeTab === 'tenant-lease'}

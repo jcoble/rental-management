@@ -102,19 +102,23 @@ describe("lease scan signature review contract", () => {
     );
   });
 
-  it("lets guided signed imports review and send the possession date required by leasing", () => {
-    assert.match(leaseFirstImportSource, /Possession given/);
+  it("lets both signed-import entry points review and send the possession date required by leasing", () => {
+    for (const source of [generalReviewSource, leaseFirstImportSource]) {
+      assert.match(source, /Possession given/);
+      assert.match(source, /possessionGivenOn/);
+      assert.match(
+        source,
+        /AlreadyFullySigned' && possessionGivenOn/
+      );
+      assert.match(source, /possessionGivenAtUtc/);
+    }
+    assert.match(
+      generalReviewSource,
+      /testid="scan-possession-given-date"/
+    );
     assert.match(
       leaseFirstImportSource,
       /testid="new-rental-possession-given-date"/
-    );
-    assert.match(
-      leaseFirstImportSource,
-      /reviewDisposition === 'AlreadyFullySigned' && possessionGivenOn/
-    );
-    assert.match(
-      leaseFirstImportSource,
-      /o\.possessionGivenAtUtc = possessionGivenOn/
     );
   });
 });

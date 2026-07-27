@@ -213,7 +213,7 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
         _db.LlmUsageEvidence.Add(new LlmUsageEvidence
         {
             PortfolioId = portfolioId,
-            Provider = NormalizeProvider(provider),
+            Provider = NormalizeUsageProvider(provider),
             ModelId = Required(modelId, nameof(modelId), 128),
             Feature = Required(feature, nameof(feature), 80),
             LatencyMilliseconds = Math.Max(0, latencyMilliseconds),
@@ -275,6 +275,18 @@ public sealed class WorkspaceLlmCredentialService : IWorkspaceLlmCredentialServi
         if (!ApprovedProviders.Contains(normalized))
         {
             throw new ArgumentException("Provider must be OpenAI or Anthropic.", nameof(provider));
+        }
+        return normalized;
+    }
+
+    private static string NormalizeUsageProvider(string provider)
+    {
+        var normalized = Required(provider, nameof(provider), 32).ToLowerInvariant();
+        if (!ApprovedProviders.Contains(normalized) && normalized != "claude-cli")
+        {
+            throw new ArgumentException(
+                "Usage provider must be OpenAI, Anthropic, or claude-cli.",
+                nameof(provider));
         }
         return normalized;
     }
