@@ -47,6 +47,7 @@
 	const isAdmin = $derived(hasCapability('security.manage', 'billing.manage'));
 	const canBroadcast = $derived(hasCapability('rentals.manage', 'leasing.onboarding.manage'));
 	const canManageTeamRouting = $derived(hasCapability('notifications.manage'));
+	const canManageAutomations = $derived(hasCapability('notifications.manage'));
 	const canManageTenantNotices = $derived(hasCapability('notifications.manage'));
 	const canManageAiProvider = $derived(hasCapability('integrations.manage'));
 
@@ -135,6 +136,12 @@
 		queryFn: () => portfolios.get(portfolioId),
 	}));
 
+	const lateFeeSettingsQuery = createQuery(() => ({
+		queryKey: ['automation-settings', 'late-fees', portfolioId],
+		enabled: authState.isAuthenticated && portfolioId > 0 && canManageAutomations,
+		queryFn: () => notifications.automationSettings.getLateFees(),
+	}));
+
 	let form = $state({
 		name: '',
 		description: '',
@@ -168,6 +175,11 @@
 		messaging: { email: false, sms: false },
 		customRows: [],
 		preserved: {},
+	});
+
+	let lateFeeSettingsForm = $state({
+		enableLateFees: false,
+		lateFeeGraceDays: 5,
 	});
 
 	let showAdvanced = $state(false);
@@ -270,6 +282,15 @@
 		}
 	});
 
+	$effect(() => {
+		if (lateFeeSettingsQuery.data) {
+			lateFeeSettingsForm = {
+				enableLateFees: lateFeeSettingsQuery.data.enableLateFees,
+				lateFeeGraceDays: lateFeeSettingsQuery.data.lateFeeGraceDays,
+			};
+		}
+	});
+
 	const updateMutation = createMutation(() => ({
 		mutationFn: () => portfolios.update(portfolioId, {
 			name: form.name,
@@ -301,6 +322,25 @@
 			queryClient.invalidateQueries({ queryKey: ['notifications-unread-count'] });
 			void notificationStore.refresh();
 			showSuccess('Broadcast notification sent.');
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	const lateFeeSettingsMutation = createMutation(() => ({
+		mutationFn: () =>
+			notifications.automationSettings.updateLateFees({
+				enableLateFees: lateFeeSettingsForm.enableLateFees,
+				lateFeeGraceDays: Math.max(0, Math.min(31, Number(lateFeeSettingsForm.lateFeeGraceDays) || 0)),
+			}),
+		onSuccess: (saved) => {
+			lateFeeSettingsForm = {
+				enableLateFees: saved.enableLateFees,
+				lateFeeGraceDays: saved.lateFeeGraceDays,
+			};
+			queryClient.setQueryData(['automation-settings', 'late-fees', portfolioId], saved);
+			queryClient.invalidateQueries({ queryKey: ['portfolio', portfolioId] });
+			queryClient.invalidateQueries({ queryKey: ['portfolios'] });
+			showSuccess('Late fee automation settings saved.');
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
@@ -643,6 +683,64 @@
 		<Tabs.Content value="automations">
 			<div class="space-y-4">
 				{@render sectionIntro(section('automations'))}
+
+				<Card.Root class="gap-0 py-0" data-coach="settings-automations" data-testid="settings-late-fee-automations">
+					<Card.Content class="p-5">
+						<div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+							<div>
+								<p class="text-sm font-semibold">Rent and late fees</p>
+								<p class="mt-1 text-xs text-muted-foreground">
+									Rent charges post from active leases automatically. Choose whether overdue rent also receives the saved lease late fee after your workspace grace period.
+								</p>
+							</div>
+							<span class="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground">Rent charges always on</span>
+						</div>
+
+						{#if canManageAutomations}
+							{#if lateFeeSettingsQuery.isLoading}
+								<p class="mt-4 text-sm text-muted-foreground" data-testid="settings-late-fee-loading">Loading late fee settings...</p>
+							{:else if lateFeeSettingsQuery.error}
+								<p class="mt-4 text-sm text-destructive" data-testid="settings-late-fee-error">{apiErrorMessage(lateFeeSettingsQuery.error)}</p>
+							{:else}
+								<div class="mt-4 grid gap-4 sm:grid-cols-[minmax(0,1fr)_160px]">
+									<label class="flex items-start gap-3">
+										<Checkbox
+											checked={lateFeeSettingsForm.enableLateFees}
+											onCheckedChange={(v) => (lateFeeSettingsForm.enableLateFees = v === true)}
+											data-testid="settings-enable-late-fees"
+										/>
+										<span class="text-sm leading-tight">
+											<span class="font-medium">Auto-assess late fees</span>
+											<span class="block text-xs text-muted-foreground">When rent remains open after the grace period, Rental Command adds one late-fee charge for that rent period.</span>
+										</span>
+									</label>
+									<div>
+										<label for="settings-late-fee-grace-days" class="text-xs font-medium text-muted-foreground">Grace days</label>
+										<Input
+											id="settings-late-fee-grace-days"
+											type="number"
+											min="0"
+											max="31"
+											bind:value={lateFeeSettingsForm.lateFeeGraceDays}
+											data-testid="settings-late-fee-grace-days"
+										/>
+									</div>
+								</div>
+								<div class="mt-4">
+									<Button
+										onclick={() => lateFeeSettingsMutation.mutate()}
+										disabled={lateFeeSettingsMutation.isPending}
+										data-testid="settings-late-fee-save"
+									>
+										{lateFeeSettingsMutation.isPending ? 'Saving...' : 'Save late fees'}
+									</Button>
+								</div>
+							{/if}
+						{:else}
+							<p class="mt-4 text-sm text-muted-foreground">Your team assignment does not include permission to manage financial automations.</p>
+						{/if}
+					</Card.Content>
+				</Card.Root>
 
 				{#if canManageTenantNotices}<Card.Root class="gap-0 py-0" data-coach="settings-automations">
 					<Card.Content class="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">

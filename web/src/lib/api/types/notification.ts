@@ -106,6 +106,17 @@ export interface UpdateMorningBriefingSettingsRequest {
   includeEmpty: boolean;
 }
 
+export interface LateFeeAutomationSettingsResponse {
+  rentChargesAlwaysOn: boolean;
+  enableLateFees: boolean;
+  lateFeeGraceDays: number;
+}
+
+export interface UpdateLateFeeAutomationSettingsRequest {
+  enableLateFees: boolean;
+  lateFeeGraceDays: number;
+}
+
 export type TeamRoutingTopic =
   | "RentAndMoney"
   | "ApplicationsAndLeasing"

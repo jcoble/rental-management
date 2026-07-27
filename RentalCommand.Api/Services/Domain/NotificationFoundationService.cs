@@ -67,6 +67,24 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
         return ReadSnapshot<MorningBriefingSettingsResponse>(outcome.Value);
     }
 
+    public async Task<LateFeeAutomationSettingsResponse> GetLateFeeAutomationSettingsAsync(
+        int portfolioId, CancellationToken ct) =>
+        await LateFeeAutomationSettingsQuery(portfolioId).SingleAsync(ct);
+
+    public async Task<LateFeeAutomationSettingsResponse> UpdateLateFeeAutomationSettingsAsync(
+        WorkspaceReadScope scope,
+        UpdateLateFeeAutomationSettingsRequest request,
+        string operationKey,
+        CancellationToken ct)
+    {
+        var command = AtomicNotificationMutation.Command(scope,
+            AtomicNotificationMutationDomain.LateFeeSettings, 0, string.Empty,
+            operationKey, request);
+        var outcome = await _atomic.ExecuteAsync(
+            AtomicNotificationMutation.Identity(command), command, AtomicNotificationMutation.Codec, ct);
+        return ReadSnapshot<LateFeeAutomationSettingsResponse>(outcome.Value);
+    }
+
     public async Task<IReadOnlyList<TeamRoutingRuleResponse>> ListTeamRoutingRulesAsync(
         int portfolioId, CancellationToken ct) =>
         await TeamRoutingRuleResponses(portfolioId)
@@ -591,6 +609,15 @@ public sealed class NotificationFoundationService : INotificationFoundationServi
             settings.MorningBriefingSendHourLocal,
             settings.MorningBriefingIncludeEmpty,
             portfolio.TimeZone == "" ? "America/New_York" : portfolio.TimeZone);
+
+    private IQueryable<LateFeeAutomationSettingsResponse> LateFeeAutomationSettingsQuery(int portfolioId) =>
+        from settings in _db.AutomationSettings.AsNoTracking()
+        join portfolio in _db.Portfolios.AsNoTracking() on settings.PortfolioId equals portfolio.Id
+        where settings.PortfolioId == portfolioId && portfolio.DeletedAt == null
+        select new LateFeeAutomationSettingsResponse(
+            settings.EnableRentCharges,
+            settings.EnableLateFees,
+            settings.LateFeeGraceDays);
 
     private IQueryable<TeamRoutingRuleResponse> TeamRoutingRuleResponses(int portfolioId) =>
         from rule in _db.TeamRoutingRules.AsNoTracking()

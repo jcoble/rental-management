@@ -21,6 +21,10 @@ test('notification settings is a three-area route-backed landing with no legacy 
 	assert.match(settingsSource, /\/settings\/notifications\/my-alerts/);
 	assert.match(settingsSource, /\/settings\/notifications\/team-routing/);
 	assert.match(settingsSource, /\/settings\/notifications\/tenant-notices/);
+	assert.match(settingsSource, /settings-late-fee-automations/);
+	assert.match(settingsSource, /settings-enable-late-fees/);
+	assert.match(settingsSource, /settings-late-fee-grace-days/);
+	assert.match(settingsSource, /Rent charges always on/);
 	assert.doesNotMatch(settingsSource, /settings-notification-audience-matrix/);
 	assert.doesNotMatch(settingsSource, /Send tenant notices/);
 	assert.doesNotMatch(settingsSource, /notifications\.getSettings/);
@@ -67,6 +71,7 @@ test('Team routing and Tenant notices use separate canonical persistence', () =>
 
 test('notification API clients do not preserve the broad legacy settings path', () => {
 	assert.match(endpointSource, /"\/my-alerts"/);
+	assert.match(endpointSource, /"\/automation-settings\/late-fees"/);
 	assert.match(endpointSource, /"\/team-routing"/);
 	assert.match(endpointSource, /"\/tenant-notices"/);
 	assert.doesNotMatch(endpointSource, /\/notification-settings\//);
