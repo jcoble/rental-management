@@ -34,15 +34,15 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
         foreach (var loan in loans)
         {
             var startMonth = Month(loan.StartDate);
-            var currentMonth = Month(command.BusinessDateUtc);
+            var dueDay = DueDay(loan.DayOfMonthDue);
             var lastPeriodToGenerate = Math.Min(
-                MonthsBetween(startMonth, currentMonth) + 1,
+                LastDuePeriodIndexOnOrBefore(command.BusinessDateUtc, startMonth, dueDay),
                 loan.TermMonths);
             tails.TryGetValue(loan.Id, out var tail);
             var nextPeriod = tail is null
-                ? 1
+                ? FirstDuePeriodIndexOnOrAfter(Max(loan.StartDate, loan.CreatedAt), startMonth, dueDay)
                 : PeriodIndexFromKey(tail.PeriodKey, startMonth) + 1;
-            var openingBalance = tail?.BalanceAfter ?? loan.OriginalAmount;
+            var openingBalance = tail?.BalanceAfter ?? loan.CurrentBalance;
             var lastBalance = openingBalance;
             var paidOff = false;
             var generatedForLoan = 0;
@@ -58,16 +58,16 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
                     loan.AnnualInterestRatePct,
                     loan.MonthlyPrincipalInterest,
                     loan.MonthlyEscrow);
-                var dueDay = Math.Min(
-                    loan.DayOfMonthDue <= 0 ? 1 : loan.DayOfMonthDue,
-                    DateTime.DaysInMonth(periodMonth.Year, periodMonth.Month));
                 var payment = new LoanPayment
                 {
                     PortfolioId = loan.PortfolioId,
                     LoanId = loan.Id,
                     PeriodKey = $"{periodMonth.Year:D4}-{periodMonth.Month:D2}",
                     DueDate = new DateTime(
-                        periodMonth.Year, periodMonth.Month, dueDay, 0, 0, 0, DateTimeKind.Utc),
+                        periodMonth.Year,
+                        periodMonth.Month,
+                        Math.Min(dueDay, DateTime.DaysInMonth(periodMonth.Year, periodMonth.Month)),
+                        0, 0, 0, DateTimeKind.Utc),
                     InterestAmount = split.Interest,
                     PrincipalAmount = split.Principal,
                     EscrowAmount = split.Escrow,
@@ -144,6 +144,42 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
 
     private static int MonthsBetween(DateTime from, DateTime to) =>
         (to.Year - from.Year) * 12 + to.Month - from.Month;
+
+    private static int DueDay(int dayOfMonthDue) => Math.Max(dayOfMonthDue, 1);
+
+    private static int FirstDuePeriodIndexOnOrAfter(
+        DateTime activationDate,
+        DateTime startMonth,
+        int dueDay)
+    {
+        var activationMonth = Month(activationDate);
+        var firstDueMonth = DueDate(activationMonth, dueDay) < activationDate.Date
+            ? activationMonth.AddMonths(1)
+            : activationMonth;
+        return Math.Max(1, MonthsBetween(startMonth, firstDueMonth) + 1);
+    }
+
+    private static int LastDuePeriodIndexOnOrBefore(
+        DateTime businessDate,
+        DateTime startMonth,
+        int dueDay)
+    {
+        var businessMonth = Month(businessDate);
+        var dueThroughMonth = DueDate(businessMonth, dueDay) > businessDate.Date
+            ? businessMonth.AddMonths(-1)
+            : businessMonth;
+        return MonthsBetween(startMonth, dueThroughMonth) + 1;
+    }
+
+    private static DateTime DueDate(DateTime month, int dueDay) =>
+        new(
+            month.Year,
+            month.Month,
+            Math.Min(dueDay, DateTime.DaysInMonth(month.Year, month.Month)),
+            0, 0, 0, DateTimeKind.Utc);
+
+    private static DateTime Max(DateTime left, DateTime right) =>
+        left >= right ? left : right;
 
     private static int PeriodIndexFromKey(string periodKey, DateTime startMonth)
     {

@@ -149,7 +149,7 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
     {
         SkipIfNoDocker();
         var loanId = await SeedLoanAsync();
-        var claim = await ClaimDebtAsync();
+        var claim = (await ClaimDebtAsync()).Single();
         var identity = DebtIdentity(claim.ClaimToken, "canonical");
         var command = new ApplyClaimedDebtServiceBatchCommand(
             [claim.Id], claim.ClaimToken, _today, _today.AddMinutes(1));
@@ -197,7 +197,7 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
     {
         SkipIfNoDocker();
         var loanId = await SeedLoanAsync(_today.AddMonths(-40));
-        var firstClaim = await ClaimDebtAsync();
+        var firstClaim = (await ClaimDebtAsync()).Single();
         var first = await Atomic.ExecuteAsync(
             DebtIdentity(firstClaim.ClaimToken, "bounded-first"),
             new ApplyClaimedDebtServiceBatchCommand(
@@ -205,7 +205,7 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
             DebtCodec);
 
         first.Value.GeneratedRowCount.Should().Be(36);
-        var secondClaim = await ClaimDebtAsync();
+        var secondClaim = (await ClaimDebtAsync()).Single();
         var second = await Atomic.ExecuteAsync(
             DebtIdentity(secondClaim.ClaimToken, "bounded-second"),
             new ApplyClaimedDebtServiceBatchCommand(
@@ -223,6 +223,72 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         periods.Should().ContainInOrder(
             Enumerable.Range(0, 41)
                 .Select(offset => _today.AddMonths(-40 + offset).ToString("yyyy-MM")));
+    }
+
+    [SkippableFact]
+    public async Task DebtService_ImportedHistoricalLoanStartsAtFirstDueDateAfterImport_AndUsesCurrentBalance()
+    {
+        SkipIfNoDocker();
+        var importDate = new DateTime(2027, 1, 8, 0, 0, 0, DateTimeKind.Utc);
+        var firstDueDate = new DateTime(2027, 1, 12, 0, 0, 0, DateTimeKind.Utc);
+        var importedBalance = 125_825m;
+        var loanId = await SeedLoanAsync(
+            new DateTime(2017, 2, 15, 0, 0, 0, DateTimeKind.Utc),
+            createdAt: importDate,
+            currentBalance: importedBalance,
+            dayOfMonthDue: 12,
+            monthlyPrincipalInterest: 900m);
+
+        (await ClaimDebtAsync(importDate)).Should().BeEmpty();
+        var claim = (await ClaimDebtAsync(firstDueDate)).Single();
+        var result = await Atomic.ExecuteAsync(
+            DebtIdentity(claim.ClaimToken, "imported-current-balance"),
+            new ApplyClaimedDebtServiceBatchCommand(
+                [claim.Id], claim.ClaimToken, firstDueDate, firstDueDate.AddMinutes(1)),
+            DebtCodec);
+
+        result.Value.GeneratedRowCount.Should().Be(1);
+        await using var verify = NewContext();
+        var payment = await verify.LoanPayments.SingleAsync(row => row.LoanId == loanId);
+        payment.PeriodKey.Should().Be("2027-01");
+        payment.DueDate.Should().Be(firstDueDate);
+        payment.BalanceAfter.Should().BeLessThan(importedBalance);
+        payment.BalanceAfter.Should().BeGreaterThan(123_999.58m);
+        var loan = await verify.Loans.SingleAsync(row => row.Id == loanId);
+        loan.CurrentBalance.Should().Be(payment.BalanceAfter);
+    }
+
+    [SkippableFact]
+    public async Task DebtService_ImportedHistoricalLoanCreatedAfterDueDayStartsNextMonth_AndUsesCurrentBalance()
+    {
+        SkipIfNoDocker();
+        var importDate = new DateTime(2027, 1, 13, 0, 0, 0, DateTimeKind.Utc);
+        var nextDueDate = new DateTime(2027, 2, 12, 0, 0, 0, DateTimeKind.Utc);
+        var importedBalance = 125_825m;
+        var loanId = await SeedLoanAsync(
+            new DateTime(2017, 2, 15, 0, 0, 0, DateTimeKind.Utc),
+            createdAt: importDate,
+            currentBalance: importedBalance,
+            dayOfMonthDue: 12,
+            monthlyPrincipalInterest: 900m);
+
+        (await ClaimDebtAsync(importDate)).Should().BeEmpty();
+        var claim = (await ClaimDebtAsync(nextDueDate)).Single();
+        var result = await Atomic.ExecuteAsync(
+            DebtIdentity(claim.ClaimToken, "imported-after-due-day"),
+            new ApplyClaimedDebtServiceBatchCommand(
+                [claim.Id], claim.ClaimToken, nextDueDate, nextDueDate.AddMinutes(1)),
+            DebtCodec);
+
+        result.Value.GeneratedRowCount.Should().Be(1);
+        await using var verify = NewContext();
+        var payment = await verify.LoanPayments.SingleAsync(row => row.LoanId == loanId);
+        payment.PeriodKey.Should().Be("2027-02");
+        payment.DueDate.Should().Be(nextDueDate);
+        payment.BalanceAfter.Should().BeLessThan(importedBalance);
+        payment.BalanceAfter.Should().BeGreaterThan(123_999.58m);
+        var loan = await verify.Loans.SingleAsync(row => row.Id == loanId);
+        loan.CurrentBalance.Should().Be(payment.BalanceAfter);
     }
 
     [SkippableFact]
@@ -384,24 +450,31 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
         return template.Id;
     }
 
-    private async Task<int> SeedLoanAsync(DateTime? startDate = null)
+    private async Task<int> SeedLoanAsync(
+        DateTime? startDate = null,
+        DateTime? createdAt = null,
+        decimal currentBalance = 100_000m,
+        int? dayOfMonthDue = null,
+        decimal monthlyPrincipalInterest = 600m)
     {
         await using var db = NewContext();
+        var effectiveStartDate = startDate ?? _today;
+        var effectiveCreatedAt = createdAt ?? effectiveStartDate;
         var loan = new Loan
         {
             PortfolioId = _portfolioId,
             PropertyId = _propertyId,
             Lender = "Atomic Bank",
             OriginalAmount = 100_000m,
-            CurrentBalance = 100_000m,
+            CurrentBalance = currentBalance,
             AnnualInterestRatePct = 6m,
             TermMonths = 360,
-            StartDate = startDate ?? _today,
-            DayOfMonthDue = 1,
-            MonthlyPrincipalInterest = 600m,
+            StartDate = effectiveStartDate,
+            DayOfMonthDue = dayOfMonthDue ?? _today.Day,
+            MonthlyPrincipalInterest = monthlyPrincipalInterest,
             Status = LoanStatus.Active,
-            CreatedAt = _today,
-            UpdatedAt = _today,
+            CreatedAt = effectiveCreatedAt,
+            UpdatedAt = effectiveCreatedAt,
         };
         db.Loans.Add(loan);
         await db.SaveChangesAsync();
@@ -438,11 +511,11 @@ public sealed class ScheduledFinanceAtomicCommandTests : IAsyncLifetime
             "expense-test", _today, TimeSpan.FromMinutes(5), 1)).Single();
     }
 
-    private async Task<ScheduledAutomationClaim> ClaimDebtAsync()
+    private async Task<IReadOnlyList<ScheduledAutomationClaim>> ClaimDebtAsync(DateTime? today = null)
     {
         await using var db = NewContext();
-        return (await new ScheduledAutomationClaimStore(db).ClaimDebtServiceAsync(
-            "debt-test", _today, TimeSpan.FromMinutes(5), 1)).Single();
+        return await new ScheduledAutomationClaimStore(db).ClaimDebtServiceAsync(
+            "debt-test", today ?? _today, TimeSpan.FromMinutes(5), 1);
     }
 
     private async Task<ScheduledAutomationClaim> ClaimMaintenanceAsync()

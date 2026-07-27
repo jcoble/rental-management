@@ -27,14 +27,62 @@ internal sealed class AtomicScheduledFinancePersistence : IAtomicScheduledFinanc
         return await _db.Loans.FromSqlInterpolated($"""
             SELECT loan.*
             FROM "Loans" AS loan
+            LEFT JOIN LATERAL (
+                SELECT MAX(payment."PeriodKey") AS last_period
+                FROM "LoanPayments" AS payment
+                WHERE payment."LoanId" = loan."Id"
+            ) AS tail ON TRUE
+            CROSS JOIN LATERAL (
+                SELECT
+                    date_trunc('month', loan."StartDate") AS start_month,
+                    GREATEST(loan."StartDate", loan."CreatedAt") AS activation_at,
+                    GREATEST(loan."DayOfMonthDue", 1) AS due_day
+            ) AS base
+            CROSS JOIN LATERAL (
+                SELECT
+                    date_trunc('month', base.activation_at) AS activation_month,
+                    date_trunc('month', {AsUtc(businessDateUtc)}) AS today_month
+            ) AS months
+            CROSS JOIN LATERAL (
+                SELECT
+                    months.activation_month + make_interval(days =>
+                        LEAST(
+                            base.due_day,
+                            EXTRACT(DAY FROM months.activation_month + interval '1 month - 1 day')::int) - 1) AS activation_due,
+                    months.today_month + make_interval(days =>
+                        LEAST(
+                            base.due_day,
+                            EXTRACT(DAY FROM months.today_month + interval '1 month - 1 day')::int) - 1) AS today_due
+            ) AS due_dates
+            CROSS JOIN LATERAL (
+                SELECT
+                    CASE
+                        WHEN due_dates.activation_due < base.activation_at::date
+                            THEN months.activation_month + interval '1 month'
+                        ELSE months.activation_month
+                    END AS first_month,
+                    CASE
+                        WHEN due_dates.today_due > {AsUtc(businessDateUtc)}::date
+                            THEN months.today_month - interval '1 month'
+                        ELSE months.today_month
+                    END AS due_through_month
+            ) AS bounds
+            CROSS JOIN LATERAL (
+                SELECT
+                    COALESCE(to_date(tail.last_period, 'YYYY-MM') + interval '1 month', bounds.first_month) AS next_month,
+                    LEAST(
+                        bounds.due_through_month,
+                        base.start_month + make_interval(months => loan."TermMonths" - 1)) AS last_month
+            ) AS schedule
             WHERE loan."Id" = ANY({loanIds})
               AND loan."DeletedAt" IS NULL
               AND loan."WorkerClaimToken" = {claimToken}
               AND loan."WorkerClaimExpiresAtUtc" > clock_timestamp()
               AND loan."Status" = {(int)LoanStatus.Active}
               AND loan."TermMonths" > 0
-              AND date_trunc('month', loan."StartDate") <= date_trunc('month', {AsUtc(businessDateUtc)})
-            ORDER BY loan."StartDate", loan."Id"
+              AND schedule.next_month >= base.start_month
+              AND schedule.next_month <= schedule.last_month
+            ORDER BY schedule.next_month, loan."Id"
             FOR UPDATE OF loan
             """).IgnoreQueryFilters().ToListAsync(ct);
     }
