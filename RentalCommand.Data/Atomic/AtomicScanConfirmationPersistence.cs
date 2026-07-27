@@ -32,7 +32,7 @@ internal sealed class AtomicScanConfirmationPersistence : IAtomicScanConfirmatio
         DateTime utcNow,
         CancellationToken ct = default) =>
         ScanDraftAuthorizationQuery.CanCreateDraftAsync(
-            _db, scope, targetEntityType, propertyId, utcNow, ct);
+            _db, scope, targetEntityType, propertyId, utcNow, ct: ct);
 
     public async Task<AtomicScanDraftClaim> TryClaimAsync(
         int portfolioId,
