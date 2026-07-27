@@ -56,6 +56,8 @@ describe('Prepare move-in form contract', () => {
 			securityDepositObligation: 1875.5,
 			lateFeeAmount: 65,
 			gracePeriodDays: 5,
+			rentTrackingStartMode: 'ForwardOnly',
+			rentTrackingStartOn: null,
 			termsSchemaVersion: 1,
 			termsPayload: {},
 			createSecurityDepositAccount: true,
@@ -77,6 +79,46 @@ describe('Prepare move-in form contract', () => {
 		assert.equal(result.request?.termEndOn, null);
 		assert.equal(result.request?.openingBalanceAmount, null);
 		assert.equal(result.request?.openingBalanceEffectiveOn, null);
+	});
+
+	it('preserves backfill and custom rent tracking choices in the atomic request', () => {
+		const backfillForm = completeForm();
+		backfillForm.rentTrackingStartMode = 'BackfillFromLeaseStart';
+
+		const backfillResult = buildPrepareMoveInRequest(backfillForm);
+
+		assert.deepEqual(backfillResult.errors, {});
+		assert.equal(backfillResult.request?.rentTrackingStartMode, 'BackfillFromLeaseStart');
+		assert.equal(backfillResult.request?.rentTrackingStartOn, null);
+
+		const customForm = completeForm();
+		customForm.rentTrackingStartMode = 'CustomCutoffDate';
+		customForm.rentTrackingStartOn = '2027-01-01';
+
+		const customResult = buildPrepareMoveInRequest(customForm);
+
+		assert.deepEqual(customResult.errors, {});
+		assert.equal(customResult.request?.rentTrackingStartMode, 'CustomCutoffDate');
+		assert.equal(customResult.request?.rentTrackingStartOn, '2027-01-01');
+	});
+
+	it('requires a valid date for custom rent tracking', () => {
+		const missingDateForm = completeForm();
+		missingDateForm.rentTrackingStartMode = 'CustomCutoffDate';
+
+		const missingDateResult = buildPrepareMoveInRequest(missingDateForm);
+
+		assert.equal(missingDateResult.request, null);
+		assert.match(missingDateResult.errors.rentTrackingStartOn ?? '', /custom rent tracking/);
+
+		const beforeAgreementForm = completeForm();
+		beforeAgreementForm.rentTrackingStartMode = 'CustomCutoffDate';
+		beforeAgreementForm.rentTrackingStartOn = '2026-08-31';
+
+		const beforeAgreementResult = buildPrepareMoveInRequest(beforeAgreementForm);
+
+		assert.equal(beforeAgreementResult.request, null);
+		assert.match(beforeAgreementResult.errors.rentTrackingStartOn ?? '', /cannot start before/);
 	});
 
 	it('uses the supplied Rental Command lease when no custom template is selected', () => {
