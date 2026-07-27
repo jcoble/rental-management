@@ -334,13 +334,13 @@ public sealed class CreateWorkspaceMembershipHandler
             PortfolioId = command.PortfolioId,
             Status = WorkspaceMembershipStatus.Active,
             DefaultExperience = role.DefaultExperience,
-            EffectiveFromUtc = command.EffectiveFromUtc,
+            EffectiveFromUtc = changedAtUtc,
             CreatedAtUtc = changedAtUtc,
             UpdatedAtUtc = changedAtUtc,
         };
         var assignment = WorkspaceTeamAuthoritySupport.NewAssignment(
             membership, command.PortfolioId, role, command.ScopeKind,
-            command.SelectedPropertyIds, command.EffectiveFromUtc, changedAtUtc);
+            command.SelectedPropertyIds, changedAtUtc, changedAtUtc);
         attempt.Persistence.Add(assignment);
         await attempt.FlushBusinessAsync(ct);
 
@@ -549,7 +549,7 @@ public sealed class AddWorkspaceRoleAssignmentHandler
             command.PortfolioId, attempt.Persistence, ct);
         var assignment = WorkspaceTeamAuthoritySupport.NewAssignment(
             target.Membership, command.PortfolioId, role, command.ScopeKind,
-            command.SelectedPropertyIds, command.EffectiveFromUtc, changedAtUtc);
+            command.SelectedPropertyIds, changedAtUtc, changedAtUtc);
         attempt.Persistence.Add(assignment);
         target.Context.UpdatedAtUtc = changedAtUtc;
         target.Context.AdvanceRevision(command.ExpectedRevision);
@@ -715,7 +715,8 @@ public sealed class ChangeWorkspaceMembershipStatusHandler
                 command.Action,
                 AccessContextStatus = target.Context.Status,
                 MembershipStatus = target.Membership.Status,
-                Revision = command.ExpectedRevision + 1 }));
+                Revision = command.ExpectedRevision + 1
+            }));
         return AddWorkspaceRoleAssignmentHandler.Result(target, null, command.ExpectedRevision + 1);
     }
 
