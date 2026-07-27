@@ -545,6 +545,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             AnnualInterestRatePct = interestRate,
             TermMonths = target.TermMonths is >= 1 and <= 1200 ? target.TermMonths.Value : 360,
             StartDate = ToUtc(target.StartDate) ?? ToUtc(command.ConfirmedAtUtc),
+            DebtServiceAutomationStartDate = ToUtc(command.ConfirmedAtUtc),
             DayOfMonthDue = target.DayOfMonthDue is >= 1 and <= 31 ? target.DayOfMonthDue.Value : 1,
             MonthlyPrincipalInterest = monthlyPrincipalInterest,
             MonthlyEscrow = monthlyEscrow,

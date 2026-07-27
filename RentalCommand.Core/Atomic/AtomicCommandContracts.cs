@@ -498,6 +498,7 @@ public interface IAtomicCoreCsvImportPersistence
         AtomicCoreCsvImportDomain domain,
         string rowsJson,
         DateTime createdAtUtc,
+        DateTime loanAutomationStartDateUtc,
         CancellationToken ct = default);
 }
 

@@ -1909,6 +1909,7 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.Property(e => e.AnnualInterestRatePct).HasPrecision(9, 4);
             entity.Property(e => e.MonthlyPrincipalInterest).HasPrecision(18, 2);
             entity.Property(e => e.MonthlyEscrow).HasPrecision(18, 2);
+            entity.Property(e => e.DebtServiceAutomationStartDate);
             entity.Property(e => e.Notes).HasMaxLength(2000);
             entity.Property(e => e.Status).HasConversion<int>();
             entity.Property(e => e.WorkerClaimOwner).HasMaxLength(200);

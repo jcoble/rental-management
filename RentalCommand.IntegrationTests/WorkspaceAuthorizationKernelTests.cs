@@ -8,6 +8,7 @@ using RentalCommand.Core.Authorization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Time;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Data;
@@ -515,6 +516,45 @@ public sealed class WorkspaceAuthorizationKernelTests : IAsyncLifetime
             row.Id == first.Value.EntityId && row.PortfolioId == _portfolioId)).Should().Be(1);
         (await verify.AtomicCommandReceipts.AsNoTracking().CountAsync(row =>
             row.CommandType == identity.CommandType && row.IdempotencyKey == identity.IdempotencyKey)).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task AtomicMoneyMutation_ManualLoanCreateUsesSimulationBusinessDateForDebtServiceBoundary()
+    {
+        SkipIfNoDocker();
+        var simulatedBusinessDate = new DateTime(2027, 1, 8, 0, 0, 0, DateTimeKind.Utc);
+        await using (var setup = NewContext())
+        {
+            var clock = await setup.SimulationClocks.SingleAsync(row => row.Id == 1);
+            clock.Mode = ClockMode.Frozen;
+            clock.SimAnchorUtc = simulatedBusinessDate;
+            clock.RealAnchorUtc = _now;
+            clock.TimeZoneId = "UTC";
+            clock.UpdatedAtRealUtc = _now;
+            await setup.SaveChangesAsync();
+        }
+
+        var scope = new WorkspaceReadScope(
+            _portfolioId, _userId, _sessionId, _accessContextId, AccessRevision: 7);
+        var request = ValidLoanRequest(_managerPropertyId);
+        request.StartDate = new DateTime(2017, 2, 15, 0, 0, 0, DateTimeKind.Utc);
+        request.CurrentBalance = 125_825m;
+        request.DayOfMonthDue = 12;
+        var command = AtomicMoneyMutation.Command(scope, CapabilityKeys.MoneyExpensesManage,
+            AtomicMoneyDomain.Loan, AtomicMoneyOperation.Create, 0, "simulated-loan-create", request);
+        var identity = AtomicMoneyMutation.Identity(command);
+
+        var result = await AtomicUnitOfWork.ExecuteAsync(identity, command, AtomicMoneyMutation.Codec);
+
+        result.Disposition.Should().Be(AtomicCommandDisposition.Executed);
+        await using var verify = NewContext();
+        var loan = await verify.Loans.AsNoTracking()
+            .SingleAsync(row => row.Id == result.Value.EntityId && row.PortfolioId == _portfolioId);
+        loan.StartDate.Should().Be(request.StartDate);
+        loan.CurrentBalance.Should().Be(request.CurrentBalance);
+        loan.DebtServiceAutomationStartDate.Should().Be(simulatedBusinessDate);
+        loan.CreatedAt.Should().BeBefore(simulatedBusinessDate.AddDays(-1),
+            "manual create must preserve DB-wall audit time instead of replacing it with simulated business time");
     }
 
     [SkippableFact]

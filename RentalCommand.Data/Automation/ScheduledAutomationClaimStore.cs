@@ -42,7 +42,9 @@ public sealed class ScheduledAutomationClaimStore : IScheduledAutomationClaimSto
             CROSS JOIN LATERAL (
                 SELECT
                     date_trunc('month', loan."StartDate") AS start_month,
-                    GREATEST(loan."StartDate", loan."CreatedAt") AS activation_at,
+                    GREATEST(
+                        loan."StartDate",
+                        COALESCE(loan."DebtServiceAutomationStartDate", loan."CreatedAt")) AS activation_at,
                     GREATEST(loan."DayOfMonthDue", 1) AS due_day
             ) AS base
             CROSS JOIN LATERAL (

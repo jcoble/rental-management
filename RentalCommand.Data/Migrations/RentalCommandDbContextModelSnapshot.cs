@@ -4272,6 +4272,9 @@ namespace RentalCommand.Data.Migrations
                     b.Property<int>("DayOfMonthDue")
                         .HasColumnType("integer");
 
+                    b.Property<DateTime?>("DebtServiceAutomationStartDate")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTime?>("DeletedAt")
                         .HasColumnType("timestamp with time zone");
 

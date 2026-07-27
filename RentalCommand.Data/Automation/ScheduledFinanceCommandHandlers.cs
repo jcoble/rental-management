@@ -40,10 +40,13 @@ public sealed class ApplyClaimedDebtServiceBatchHandler
                 loan.TermMonths);
             tails.TryGetValue(loan.Id, out var tail);
             var firstEligiblePeriod = FirstDuePeriodIndexOnOrAfter(
-                Max(loan.StartDate, loan.CreatedAt), startMonth, dueDay);
+                Max(
+                    loan.StartDate,
+                    loan.DebtServiceAutomationStartDate ?? loan.CreatedAt),
+                startMonth,
+                dueDay);
             var tailPeriod = tail is null ? (int?)null : PeriodIndexFromKey(tail.PeriodKey, startMonth);
-            // There is no explicit "imported existing loan" marker; the safe invariant is that
-            // Engine never generates a period whose due date predates the loan record creation.
+            // The automation boundary is business-effective; CreatedAt remains DB-wall audit time.
             var nextPeriod = tailPeriod is null
                 ? firstEligiblePeriod
                 : Math.Max(tailPeriod.Value + 1, firstEligiblePeriod);
