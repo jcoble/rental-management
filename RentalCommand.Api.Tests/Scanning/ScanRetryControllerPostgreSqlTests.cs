@@ -171,6 +171,40 @@ public sealed class ScanRetryControllerPostgreSqlTests : IAsyncLifetime
         reopened.CaptureContext!.TenantAccountId.Should().Be(account.Id);
     }
 
+    [Fact]
+    public async Task GlobalScanCreate_UsesRealSecurityClock_WhenBusinessClockIsFuture()
+    {
+        var realSecurityNow = DateTime.UtcNow;
+        await SetAuthSessionExpiresAtAsync(realSecurityNow.AddDays(30));
+        var simulatedBusinessNow = realSecurityNow.AddMonths(6);
+
+        var authorized = await ScanDraftAuthorizationQuery.CanCreateGlobalDraftAsync(
+            _db,
+            _authorization.Scope,
+            "Expense",
+            simulatedBusinessNow,
+            securityUtcNow: realSecurityNow);
+
+        authorized.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task GlobalScanCreate_DeniesActuallyExpiredSession_WhenBusinessClockIsFuture()
+    {
+        var realSecurityNow = DateTime.UtcNow;
+        await SetAuthSessionExpiresAtAsync(realSecurityNow.AddSeconds(-1));
+        var simulatedBusinessNow = realSecurityNow.AddMonths(6);
+
+        var authorized = await ScanDraftAuthorizationQuery.CanCreateGlobalDraftAsync(
+            _db,
+            _authorization.Scope,
+            "Expense",
+            simulatedBusinessNow,
+            securityUtcNow: realSecurityNow);
+
+        authorized.Should().BeFalse();
+    }
+
     private ScanController CreateController()
     {
         var controller = new ScanController(
@@ -310,5 +344,18 @@ public sealed class ScanRetryControllerPostgreSqlTests : IAsyncLifetime
         _db.SaveChanges();
         _db.ChangeTracker.Clear();
         return account;
+    }
+
+    private async Task SetAuthSessionExpiresAtAsync(DateTime expiresAtUtc)
+    {
+        var session = await _db.AuthSessions.SingleAsync(candidate => candidate.Id == SessionId);
+        if (session.CreatedAtUtc >= expiresAtUtc)
+        {
+            session.CreatedAtUtc = expiresAtUtc.AddMinutes(-1);
+            session.LastSeenAtUtc = session.CreatedAtUtc;
+        }
+        session.ExpiresAtUtc = expiresAtUtc;
+        await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear();
     }
 }

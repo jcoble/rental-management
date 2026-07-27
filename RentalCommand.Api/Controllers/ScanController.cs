@@ -340,7 +340,7 @@ public class ScanController : ManagementControllerBase
             && context.RentalListingId is null
             && await ScanDraftAuthorizationQuery.CanCreateGlobalDraftAsync(
                 _db, GetWorkspaceReadScope(), targetEntityType,
-                _timeProvider.GetUtcNow().UtcDateTime, ct);
+                _timeProvider.GetUtcNow().UtcDateTime, ct: ct);
     }
 
     // -------------------------------------------------------------------------

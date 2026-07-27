@@ -36,18 +36,22 @@ public static class ScanDraftAuthorizationQuery
         this IQueryable<ScanDraft> drafts,
         RentalCommandDbContext db,
         WorkspaceReadScope scope,
-        DateTime utcNow)
+        DateTime businessUtcNow,
+        DateTime? securityUtcNow = null)
     {
-        var expense = WhereForTarget(drafts, db, scope, utcNow, ["Expense"], ExpenseCapabilities);
-        var payment = WhereForTarget(drafts, db, scope, utcNow, ["Payment"], PaymentCapabilities);
-        var workOrder = WhereForTarget(drafts, db, scope, utcNow, ["WorkOrder"], WorkOrderCapabilities);
+        var sessionUtcNow = securityUtcNow ?? TimeProvider.System.GetUtcNow().UtcDateTime;
+        var expense = WhereForTarget(drafts, db, scope, businessUtcNow, sessionUtcNow, ["Expense"], ExpenseCapabilities);
+        var payment = WhereForTarget(drafts, db, scope, businessUtcNow, sessionUtcNow, ["Payment"], PaymentCapabilities);
+        var workOrder = WhereForTarget(
+            drafts, db, scope, businessUtcNow, sessionUtcNow, ["WorkOrder"], WorkOrderCapabilities);
         var agreement = WhereForTarget(
-            drafts, db, scope, utcNow, [nameof(LeaseAgreement)], AgreementCapabilities);
+            drafts, db, scope, businessUtcNow, sessionUtcNow, [nameof(LeaseAgreement)], AgreementCapabilities);
         var application = WhereForTarget(
-            drafts, db, scope, utcNow, ["Application", "RentalApplication"], ApplicationCapabilities);
-        var loan = WhereForTarget(drafts, db, scope, utcNow, ["Loan"], LoanCapabilities);
+            drafts, db, scope, businessUtcNow, sessionUtcNow,
+            ["Application", "RentalApplication"], ApplicationCapabilities);
+        var loan = WhereForTarget(drafts, db, scope, businessUtcNow, sessionUtcNow, ["Loan"], LoanCapabilities);
         var pendingClassification = WhereForTarget(
-            drafts, db, scope, utcNow, [string.Empty], AnyScanCapabilities);
+            drafts, db, scope, businessUtcNow, sessionUtcNow, [string.Empty], AnyScanCapabilities);
 
         // Target types are mutually exclusive, so UNION ALL cannot duplicate a row and remains one
         // translated SQL statement for filtering, counting, sorting, and paging.
@@ -64,15 +68,17 @@ public static class ScanDraftAuthorizationQuery
         RentalCommandDbContext db,
         WorkspaceReadScope scope,
         string? targetEntityType,
-        DateTime utcNow,
+        DateTime businessUtcNow,
+        DateTime? securityUtcNow = null,
         CancellationToken ct = default)
     {
+        var sessionUtcNow = securityUtcNow ?? TimeProvider.System.GetUtcNow().UtcDateTime;
         // Assigned-work capture is never context-free: a technician must first choose one current
         // responsibility. Managers retain the existing global classification workflow.
         var capabilities = targetEntityType?.Trim() == "WorkOrder"
             ? new[] { CapabilityKeys.WorkManage }
             : CapabilitiesForTarget(targetEntityType);
-        return EffectiveAssignments(db, scope, capabilities, utcNow).AnyAsync(ct);
+        return EffectiveAssignments(db, scope, capabilities, businessUtcNow, sessionUtcNow).AnyAsync(ct);
     }
 
     public static Task<bool> CanCreateDraftAsync(
@@ -80,7 +86,8 @@ public static class ScanDraftAuthorizationQuery
         WorkspaceReadScope scope,
         string? targetEntityType,
         int? propertyId,
-        DateTime utcNow,
+        DateTime businessUtcNow,
+        DateTime? securityUtcNow = null,
         CancellationToken ct = default)
     {
         var capabilities = CapabilitiesForTarget(targetEntityType);
@@ -89,9 +96,9 @@ public static class ScanDraftAuthorizationQuery
 
         return propertyId is int selectedPropertyId
             ? db.Properties.AsNoTracking()
-                .WhereAuthorized(db, scope, capabilities, utcNow)
+                .WhereAuthorized(db, scope, capabilities, businessUtcNow)
                 .AnyAsync(property => property.Id == selectedPropertyId, ct)
-            : CanCreateGlobalDraftAsync(db, scope, targetEntityType, utcNow, ct);
+            : CanCreateGlobalDraftAsync(db, scope, targetEntityType, businessUtcNow, securityUtcNow, ct);
     }
 
     public static IReadOnlyCollection<string> CapabilitiesForTarget(string? targetEntityType) =>
@@ -111,17 +118,18 @@ public static class ScanDraftAuthorizationQuery
         IQueryable<ScanDraft> drafts,
         RentalCommandDbContext db,
         WorkspaceReadScope scope,
-        DateTime utcNow,
+        DateTime businessUtcNow,
+        DateTime securityUtcNow,
         IReadOnlyCollection<string> targetTypes,
         IReadOnlyCollection<string> capabilityKeys)
     {
         var capabilities = capabilityKeys.Distinct(StringComparer.Ordinal).ToArray();
         var types = targetTypes.Distinct(StringComparer.Ordinal).ToArray();
         var authorizedProperties = db.Properties.AsNoTracking()
-            .WhereAuthorized(db, scope, capabilities, utcNow);
+            .WhereAuthorized(db, scope, capabilities, businessUtcNow);
         var authorizedWorkOrders = db.WorkOrders.AsNoTracking()
-            .WhereAuthorized(db, scope, capabilities, utcNow);
-        var assignments = EffectiveAssignments(db, scope, capabilities, utcNow);
+            .WhereAuthorized(db, scope, capabilities, businessUtcNow);
+        var assignments = EffectiveAssignments(db, scope, capabilities, businessUtcNow, securityUtcNow);
         var allPropertiesAssignments = assignments.Where(assignment =>
             assignment.ScopeKind == MembershipRoleAssignmentScopeKind.AllProperties);
 
@@ -193,23 +201,24 @@ public static class ScanDraftAuthorizationQuery
         RentalCommandDbContext db,
         WorkspaceReadScope scope,
         IReadOnlyCollection<string> capabilityKeys,
-        DateTime utcNow)
+        DateTime businessUtcNow,
+        DateTime securityUtcNow)
     {
         var keys = capabilityKeys.Distinct(StringComparer.Ordinal).ToArray();
         return db.MembershipRoleAssignments.AsNoTracking().Where(assignment =>
             assignment.PortfolioId == scope.PortfolioId
             && assignment.Status == MembershipRoleAssignmentStatus.Active
             && assignment.SuspendedAtUtc == null && assignment.RevokedAtUtc == null
-            && assignment.EffectiveFromUtc <= utcNow
-            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > utcNow)
+            && assignment.EffectiveFromUtc <= businessUtcNow
+            && (assignment.EffectiveToUtc == null || assignment.EffectiveToUtc > businessUtcNow)
             && assignment.WorkspaceMembership!.AccessContextId == scope.AccessContextId
             && assignment.WorkspaceMembership.PortfolioId == scope.PortfolioId
             && assignment.WorkspaceMembership.Status == WorkspaceMembershipStatus.Active
             && assignment.WorkspaceMembership.SuspendedAtUtc == null
             && assignment.WorkspaceMembership.RevokedAtUtc == null
-            && assignment.WorkspaceMembership.EffectiveFromUtc <= utcNow
+            && assignment.WorkspaceMembership.EffectiveFromUtc <= businessUtcNow
             && (assignment.WorkspaceMembership.EffectiveToUtc == null
-                || assignment.WorkspaceMembership.EffectiveToUtc > utcNow)
+                || assignment.WorkspaceMembership.EffectiveToUtc > businessUtcNow)
             && assignment.WorkspaceMembership.AccessContext!.UserId == scope.UserId
             && assignment.WorkspaceMembership.AccessContext.AccessRevision == scope.AccessRevision
             && assignment.WorkspaceMembership.AccessContext.Status == WorkspaceAccessContextStatus.Active
@@ -219,7 +228,7 @@ public static class ScanDraftAuthorizationQuery
                 session.Id == scope.SessionId && session.UserId == scope.UserId
                 && session.ActiveAccessContextId == scope.AccessContextId
                 && session.Status == AuthSessionStatus.Active && session.RevokedAtUtc == null
-                && session.ExpiresAtUtc > utcNow)
+                && session.ExpiresAtUtc > securityUtcNow)
             && assignment.RoleProfile!.Capabilities.Any(profileCapability =>
                 keys.Contains(profileCapability.CapabilityDefinition!.Key)
                 && profileCapability.CapabilityDefinition.AuthorizationTargetKind
