@@ -364,6 +364,48 @@ public sealed class ProductionScanConfirmationTargetWriterTests : IAsyncLifetime
     }
 
     [SkippableFact]
+    public async Task ExpenseScanConfirmation_MissingRequiredReviewFactsRejectsAndRollsBackClaimTargetAndReceipt()
+    {
+        SkipIfDockerUnavailable();
+        var draftId = await SeedDraftAsync(ScanConfirmationTargetKind.Expense);
+        var identity = ScanConfirmationCommandIdentity.Create(
+            _portfolioId, draftId, "expense-missing-required-review-facts");
+        var incompleteReceipt = Receipt(" ") with
+        {
+            TransactionDate = null,
+            Subtotal = 0m,
+            Total = null,
+            Category = null,
+        };
+        var command = Command(draftId, ScanConfirmationTargetKind.Expense) with
+        {
+            Target = new ScanConfirmationTargetData(
+                ScanConfirmationTargetKind.Expense,
+                Expense: new ScanExpenseTargetData(
+                    incompleteReceipt, true, null, null, null)),
+        };
+        int expenseCountBefore;
+        await using (var before = Scope())
+        {
+            expenseCountBefore = await before.Db.Expenses.CountAsync(row => row.PortfolioId == _portfolioId);
+        }
+
+        var action = () => UnitOfWork.ExecuteAsync(identity, command, Codec);
+
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>()
+            .WithMessage("*vendor*transaction date*positive total or subtotal*category*property, unit, or work order*");
+        await using var verify = Scope();
+        (await verify.Db.ScanDrafts.AsNoTracking().SingleAsync(row => row.Id == draftId))
+            .Status.Should().Be("Reviewing");
+        (await verify.Db.Expenses.CountAsync(row => row.PortfolioId == _portfolioId))
+            .Should().Be(expenseCountBefore);
+        (await verify.Db.AtomicCommandReceipts.CountAsync(row =>
+            row.CommandType == identity.CommandType
+            && row.IdempotencyKey == identity.IdempotencyKey))
+            .Should().Be(0);
+    }
+
+    [SkippableFact]
     public async Task SignedLeaseImport_PersistsCanonicalAgreementArtifactAndPartyGraph()
     {
         SkipIfDockerUnavailable();

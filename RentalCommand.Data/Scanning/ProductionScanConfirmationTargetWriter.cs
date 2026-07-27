@@ -281,11 +281,7 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         CancellationToken ct)
     {
         var receipt = Required(target.Receipt);
-        var amount = receipt.Total ?? receipt.Subtotal ?? 0m;
-        if (amount <= 0m)
-        {
-            throw new ScanConfirmationValidationException("Confirmed expense amount must be greater than zero.");
-        }
+        var reviewed = RequireReviewedExpenseFacts(receipt, target);
 
         var location = await ResolveExpenseLocationAsync(command.PortfolioId, target, attempt.Persistence, ct);
         var vendorId = await ResolveOrCreateVendorAsync(
@@ -299,16 +295,14 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
             UnitId = location.UnitId,
             WorkOrderId = location.WorkOrderId,
             VendorId = vendorId,
-            Category = receipt.Category ?? ScheduleECategory.Other,
-            Description = string.IsNullOrWhiteSpace(receipt.VendorName)
-                ? "Scanned receipt"
-                : receipt.VendorName.Trim(),
-            Amount = amount,
+            Category = reviewed.Category,
+            Description = reviewed.VendorName,
+            Amount = reviewed.Amount,
             Subtotal = receipt.Subtotal,
             TaxAmount = receipt.Tax,
-            IncurredAt = ToUtc(receipt.TransactionDate) ?? now,
+            IncurredAt = reviewed.TransactionDate,
             DueDate = target.IsPaid ? null : ToUtc(receipt.DueDate),
-            PaidAt = target.IsPaid ? ToUtc(receipt.TransactionDate) ?? now : null,
+            PaidAt = target.IsPaid ? reviewed.TransactionDate : null,
             Status = target.IsPaid ? ExpenseStatus.Paid : ExpenseStatus.Pending,
             BillableToOwner = false,
             Notes = receipt.Notes,
@@ -337,6 +331,48 @@ public sealed class ProductionScanConfirmationTargetWriter : IScanConfirmationTa
         await attempt.FlushBusinessAsync(ct);
         return new ScanConfirmationTargetWriteResult(expense.Id, expense.UnitId);
     }
+
+    private static ReviewedExpenseFacts RequireReviewedExpenseFacts(
+        ScanReceiptData receipt,
+        ScanExpenseTargetData target)
+    {
+        var missing = new List<string>();
+        var vendorName = receipt.VendorName?.Trim();
+        if (string.IsNullOrWhiteSpace(vendorName))
+            missing.Add("vendor");
+        var transactionDate = ToUtc(receipt.TransactionDate);
+        if (transactionDate is null)
+            missing.Add("transaction date");
+        var amount = receipt.Total is > 0m
+            ? receipt.Total.Value
+            : receipt.Subtotal is > 0m
+                ? receipt.Subtotal.Value
+                : (decimal?)null;
+        if (amount is null)
+            missing.Add("positive total or subtotal");
+        if (receipt.Category is null)
+            missing.Add("category");
+        if (target.PropertyId is not > 0 && target.UnitId is not > 0 && target.WorkOrderId is not > 0)
+            missing.Add("property, unit, or work order");
+
+        if (missing.Count > 0)
+        {
+            throw new ScanConfirmationValidationException(
+                "Review " + string.Join(", ", missing) + " before creating this expense.");
+        }
+
+        return new ReviewedExpenseFacts(
+            vendorName!,
+            transactionDate!.Value,
+            amount!.Value,
+            receipt.Category!.Value);
+    }
+
+    private sealed record ReviewedExpenseFacts(
+        string VendorName,
+        DateTime TransactionDate,
+        decimal Amount,
+        ScheduleECategory Category);
 
     private static async Task<ScanConfirmationTargetWriteResult> WritePaymentAsync(
         ConfirmScanDraftCommand command,
