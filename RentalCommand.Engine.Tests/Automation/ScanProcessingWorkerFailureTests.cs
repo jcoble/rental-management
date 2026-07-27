@@ -2,9 +2,13 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
@@ -30,6 +34,8 @@ public class ScanProcessingWorkerFailureTests : IDisposable
     private readonly StubLlmProvider _llm = new();
     private readonly StubUsageEvidenceRecorder _usage = new();
     private readonly StubWorkspaceCredentialResolver _credentials = new();
+    private readonly AssistantConfig _assistant = new();
+    private readonly StubHostEnvironment _environment = new();
 
     public ScanProcessingWorkerFailureTests()
     {
@@ -52,6 +58,8 @@ public class ScanProcessingWorkerFailureTests : IDisposable
         services.AddSingleton<IWorkspaceLlmExtractionProvider>(_llm);
         services.AddSingleton<IWorkspaceLlmCredentialResolver>(_credentials);
         services.AddSingleton<ILlmUsageEvidenceRecorder>(_usage);
+        services.AddSingleton<IOptions<AssistantConfig>>(Options.Create(_assistant));
+        services.AddSingleton<IHostEnvironment>(_environment);
         services.AddSingleton<IFileStorage, StubFileStorage>();
         services.AddSingleton<IDataUpdateService, StubDataUpdateService>();
         services.AddSingleton(TimeProvider.System);
@@ -116,6 +124,71 @@ public class ScanProcessingWorkerFailureTests : IDisposable
     // -----------------------------------------------------------------------
     // Pure decision: GetExtractionFailureReason
     // -----------------------------------------------------------------------
+
+    [Theory]
+    [InlineData("Development", "claude-cli", true)]
+    [InlineData("Development", "anthropic", false)]
+    [InlineData("Production", "claude-cli", false)]
+    public void ShouldUseDevelopmentSubscriptionProvider_RequiresDevelopmentAndClaudeCli(
+        string environmentName,
+        string provider,
+        bool expected)
+    {
+        ScanProcessingWorker.ShouldUseDevelopmentSubscriptionProvider(
+                environmentName,
+                provider)
+            .Should()
+            .Be(expected);
+    }
+
+    [Theory]
+    [InlineData("Development", "claude-cli", 210)]
+    [InlineData("Development", "anthropic", 90)]
+    [InlineData("Production", "claude-cli", 90)]
+    public void ResolveStepTimeout_AllowsClaudeCliToFinishBeforeItsOwnTimeout(
+        string environmentName,
+        string provider,
+        int expectedSeconds)
+    {
+        ScanProcessingWorker.ResolveStepTimeout(environmentName, provider)
+            .Should()
+            .Be(TimeSpan.FromSeconds(expectedSeconds));
+    }
+
+    [Theory]
+    [InlineData("Development", "claude-cli", 240)]
+    [InlineData("Development", "anthropic", 120)]
+    [InlineData("Production", "claude-cli", 120)]
+    public void ResolveClaimLease_OutlivesTheSelectedStepTimeout(
+        string environmentName,
+        string provider,
+        int expectedSeconds)
+    {
+        ScanProcessingWorker.ResolveClaimLease(environmentName, provider)
+            .Should()
+            .Be(TimeSpan.FromSeconds(expectedSeconds));
+    }
+
+    [Fact]
+    public async Task Cycle_DevelopmentClaudeCli_BypassesWorkspaceApiCredential()
+    {
+        _environment.EnvironmentName = Environments.Development;
+        _assistant.Provider = "claude-cli";
+        _assistant.ModelId = "sonnet";
+        _credentials.Credential = null;
+        var draftId = SeedPendingDraft();
+        _llm.Result = Extracted(("total", "42.00"));
+
+        await RunCycleAsync();
+
+        var draft = await ReloadAsync(draftId);
+        draft.Status.Should().Be("Reviewing");
+        draft.ModelId.Should().Be("test-model");
+        _llm.LastCredential.Should().BeNull();
+        _usage.Receipts.Should().ContainSingle(receipt =>
+            receipt.Provider == "claude-cli" &&
+            receipt.EstimatedCostUsd == 0m);
+    }
 
     [Fact]
     public void GetExtractionFailureReason_AllFieldsBlank_ReturnsNoFieldsReason()
@@ -597,6 +670,14 @@ public class ScanProcessingWorkerFailureTests : IDisposable
                 Credential is null
                     ? null
                     : Credential with { PortfolioId = portfolioId });
+    }
+
+    private sealed class StubHostEnvironment : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Production;
+        public string ApplicationName { get; set; } = "RentalCommand.Engine.Tests";
+        public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
+        public IFileProvider ContentRootFileProvider { get; set; } = null!;
     }
 
     private sealed class StubUsageEvidenceRecorder : ILlmUsageEvidenceRecorder

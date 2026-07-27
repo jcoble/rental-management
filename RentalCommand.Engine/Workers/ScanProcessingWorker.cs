@@ -2,8 +2,11 @@ using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using RentalCommand.Api.Scanning;       // ReceiptExtractionSchema
+using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -28,18 +31,41 @@ public class ScanProcessingWorker : EngineWorkerBase
     // Extraction is remote and sequential. Claim one row so a cycle timeout cannot strand later
     // rows from a pre-claimed batch; the next cycle claims the next oldest row.
     private const int BatchSize = 1;
-    private static readonly TimeSpan ClaimLease = TimeSpan.FromMinutes(2);
     private readonly string _claimOwner = $"{Environment.MachineName}:{Environment.ProcessId}:scan:{Guid.NewGuid():N}";
+    private readonly TimeSpan _claimLease;
+    private readonly TimeSpan _stepTimeout;
 
     protected override string WorkerName => "ScanProcessingWorker";
     // Poll quickly: the user is actively waiting on extraction, so pick up a
-    // freshly-uploaded scan within ~2s instead of up to 5s. The OpenAI call is
+    // freshly-uploaded scan within ~2s instead of up to 5s. Provider extraction is
     // the only unavoidable latency after pickup.
     protected override TimeSpan PollInterval => TimeSpan.FromSeconds(2);
-    protected override TimeSpan StepTimeout => TimeSpan.FromSeconds(90);
+    protected override TimeSpan StepTimeout => _stepTimeout;
 
     public ScanProcessingWorker(IServiceProvider serviceProvider, ILogger<ScanProcessingWorker> logger)
-        : base(serviceProvider, logger) { }
+        : base(serviceProvider, logger)
+    {
+        var environment = serviceProvider.GetRequiredService<IHostEnvironment>();
+        var assistant = serviceProvider.GetRequiredService<IOptions<AssistantConfig>>().Value;
+        _claimLease = ResolveClaimLease(environment.EnvironmentName, assistant.Provider);
+        _stepTimeout = ResolveStepTimeout(environment.EnvironmentName, assistant.Provider);
+    }
+
+    internal static bool ShouldUseDevelopmentSubscriptionProvider(
+        string environmentName,
+        string? provider) =>
+        string.Equals(environmentName, Environments.Development, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(provider, "claude-cli", StringComparison.OrdinalIgnoreCase);
+
+    internal static TimeSpan ResolveStepTimeout(string environmentName, string? provider) =>
+        ShouldUseDevelopmentSubscriptionProvider(environmentName, provider)
+            ? TimeSpan.FromSeconds(210)
+            : TimeSpan.FromSeconds(90);
+
+    internal static TimeSpan ResolveClaimLease(string environmentName, string? provider) =>
+        ShouldUseDevelopmentSubscriptionProvider(environmentName, provider)
+            ? TimeSpan.FromMinutes(4)
+            : TimeSpan.FromMinutes(2);
 
     public static ExtractionSchema ChooseExtractionSchema(string? targetEntityType)
         => string.Equals(targetEntityType, "WorkOrder", StringComparison.OrdinalIgnoreCase)
@@ -91,9 +117,17 @@ public class ScanProcessingWorker : EngineWorkerBase
         var timeProvider = scoped.GetRequiredService<TimeProvider>();
         var logger = scoped.GetRequiredService<ILogger<ScanProcessingWorker>>();
         var claimStore = scoped.GetRequiredService<IScanProcessingClaimStore>();
+        var assistant = scoped.GetRequiredService<IOptions<AssistantConfig>>().Value;
+        var environment = scoped.GetRequiredService<IHostEnvironment>();
+        var useDevelopmentSubscriptionProvider = ShouldUseDevelopmentSubscriptionProvider(
+            environment.EnvironmentName,
+            assistant.Provider);
+        var developmentSubscriptionProvider = useDevelopmentSubscriptionProvider
+            ? scoped.GetRequiredService<ILlmProvider>()
+            : null;
 
         var pending = await claimStore.ClaimAsync(
-            _claimOwner, ClaimLease, BatchSize, ct);
+            _claimOwner, _claimLease, BatchSize, ct);
         if (pending.Count == 0) return 0;
 
         var processed = 0;
@@ -103,26 +137,31 @@ public class ScanProcessingWorker : EngineWorkerBase
 
             try
             {
-                var credential = await credentialResolver.ResolveActiveAsync(
-                    draft.PortfolioId, ct);
-                if (credential is null)
+                WorkspaceLlmRuntimeCredential? credential = null;
+                IWorkspaceLlmExtractionProvider? workspaceProvider = null;
+                if (!useDevelopmentSubscriptionProvider)
                 {
-                    await MarkFailedAsync(
-                        scoped, dataUpdate, draft.PortfolioId, draft.Id,
-                        draft.ClaimOwner, draft.ClaimToken, logger,
-                        "AI extraction unavailable: configure a workspace OpenAI or Anthropic credential in Settings");
-                    continue;
-                }
+                    credential = await credentialResolver.ResolveActiveAsync(
+                        draft.PortfolioId, ct);
+                    if (credential is null)
+                    {
+                        await MarkFailedAsync(
+                            scoped, dataUpdate, draft.PortfolioId, draft.Id,
+                            draft.ClaimOwner, draft.ClaimToken, logger,
+                            "AI extraction unavailable: configure a workspace OpenAI or Anthropic credential in Settings");
+                        continue;
+                    }
 
-                if (!workspaceProviders.TryGetValue(
-                        credential.Provider,
-                        out var workspaceProvider))
-                {
-                    await MarkFailedAsync(
-                        scoped, dataUpdate, draft.PortfolioId, draft.Id,
-                        draft.ClaimOwner, draft.ClaimToken, logger,
-                        "AI extraction unavailable: the configured workspace provider is not supported");
-                    continue;
+                    if (!workspaceProviders.TryGetValue(
+                            credential.Provider,
+                            out workspaceProvider))
+                    {
+                        await MarkFailedAsync(
+                            scoped, dataUpdate, draft.PortfolioId, draft.Id,
+                            draft.ClaimOwner, draft.ClaimToken, logger,
+                            "AI extraction unavailable: the configured workspace provider is not supported");
+                        continue;
+                    }
                 }
 
                 // Read the stored bytes back from the blob store.
@@ -149,6 +188,33 @@ public class ScanProcessingWorker : EngineWorkerBase
                 // prompt small/cheap on large portfolios.
                 var groundingContext = await BuildGroundingContextAsync(db, draft.PortfolioId, ct);
 
+                Task<ExtractedFields> InvokeExtractionAsync(
+                    ExtractionSchema extractionSchema,
+                    string feature,
+                    CancellationToken token) =>
+                    useDevelopmentSubscriptionProvider
+                        ? InvokeDevelopmentSubscriptionExtractionAsync(
+                            developmentSubscriptionProvider!,
+                            usageRecorder,
+                            draft.PortfolioId,
+                            feature,
+                            bytes,
+                            contentType,
+                            extractionSchema,
+                            groundingContext,
+                            token)
+                        : InvokeWorkspaceExtractionAsync(
+                            workspaceProvider!,
+                            credential!,
+                            usageRecorder,
+                            draft.PortfolioId,
+                            feature,
+                            bytes,
+                            contentType,
+                            extractionSchema,
+                            groundingContext,
+                            token);
+
                 var resolvedTargetEntityType = draft.TargetEntityType;
                 ExtractedFields? classification = null;
                 if (string.IsNullOrWhiteSpace(resolvedTargetEntityType))
@@ -157,15 +223,10 @@ public class ScanProcessingWorker : EngineWorkerBase
                         DocumentClassificationExtractionSchema.Instructions,
                         DocumentClassificationExtractionSchema.Fields);
                     classification = await ExtractWithRetryAsync(
-                        workspaceProvider,
-                        credential,
-                        usageRecorder,
-                        draft.PortfolioId,
-                        "scan.classification",
-                        bytes,
-                        contentType,
-                        classificationSchema,
-                        groundingContext,
+                        token => InvokeExtractionAsync(
+                            classificationSchema,
+                            "scan.classification",
+                            token),
                         draft.Id,
                         logger,
                         ct);
@@ -191,15 +252,10 @@ public class ScanProcessingWorker : EngineWorkerBase
 
                 var schema = ChooseExtractionSchema(resolvedTargetEntityType);
                 var extracted = await ExtractWithRetryAsync(
-                    workspaceProvider,
-                    credential,
-                    usageRecorder,
-                    draft.PortfolioId,
-                    "scan.extraction",
-                    bytes,
-                    contentType,
-                    schema,
-                    groundingContext,
+                    token => InvokeExtractionAsync(
+                        schema,
+                        "scan.extraction",
+                        token),
                     draft.Id,
                     logger,
                     ct);
@@ -234,16 +290,9 @@ public class ScanProcessingWorker : EngineWorkerBase
                                 " Return the full extraction schema again. Keep previously correct fields unchanged; " +
                                 "only improve fields you can read from the document.",
                                 schema.Fields);
-                            var repaired = await InvokeWorkspaceExtractionAsync(
-                                workspaceProvider,
-                                credential,
-                                usageRecorder,
-                                draft.PortfolioId,
-                                "scan.quality-repair",
-                                bytes,
-                                contentType,
+                            var repaired = await InvokeExtractionAsync(
                                 repairSchema,
-                                groundingContext,
+                                "scan.quality-repair",
                                 ct);
                             ApplyQualityRepair(resolvedTargetEntityType, extracted, repaired);
                         }
@@ -752,32 +801,14 @@ public class ScanProcessingWorker : EngineWorkerBase
     /// a reason. Honours the cycle token (a real cancellation/timeout propagates as before).
     /// </summary>
     private static async Task<ExtractedFields> ExtractWithRetryAsync(
-        IWorkspaceLlmExtractionProvider provider,
-        WorkspaceLlmRuntimeCredential credential,
-        ILlmUsageEvidenceRecorder usageRecorder,
-        int portfolioId,
-        string feature,
-        byte[] bytes,
-        string contentType,
-        ExtractionSchema schema,
-        string? groundingContext,
+        Func<CancellationToken, Task<ExtractedFields>> invoke,
         int draftId,
         ILogger logger,
         CancellationToken ct)
     {
         try
         {
-            return await InvokeWorkspaceExtractionAsync(
-                provider,
-                credential,
-                usageRecorder,
-                portfolioId,
-                feature,
-                bytes,
-                contentType,
-                schema,
-                groundingContext,
-                ct);
+            return await invoke(ct);
         }
         catch (HttpRequestException ex) when (!ct.IsCancellationRequested)
         {
@@ -786,17 +817,53 @@ public class ScanProcessingWorker : EngineWorkerBase
             logger.LogWarning(ex,
                 "Transient extraction error for draft {DraftId}; retrying once", draftId);
             await Task.Delay(TimeSpan.FromMilliseconds(750), ct);
-            return await InvokeWorkspaceExtractionAsync(
-                provider,
-                credential,
-                usageRecorder,
-                portfolioId,
-                feature,
+            return await invoke(ct);
+        }
+    }
+
+    private static async Task<ExtractedFields> InvokeDevelopmentSubscriptionExtractionAsync(
+        ILlmProvider provider,
+        ILlmUsageEvidenceRecorder usageRecorder,
+        int portfolioId,
+        string feature,
+        byte[] bytes,
+        string contentType,
+        ExtractionSchema schema,
+        string? groundingContext,
+        CancellationToken ct)
+    {
+        var startedAt = Stopwatch.GetTimestamp();
+        ExtractedFields? result = null;
+        try
+        {
+            result = await provider.ExtractAsync(
                 bytes,
                 contentType,
-                schema,
+                schema.Instructions,
+                schema.Fields,
                 groundingContext,
                 ct);
+            return result;
+        }
+        finally
+        {
+            var modelId = string.IsNullOrWhiteSpace(result?.ModelId)
+                ? "claude-cli"
+                : result.ModelId;
+            var latency = (int)Math.Clamp(
+                Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds,
+                0,
+                int.MaxValue);
+            await usageRecorder.RecordUsageAsync(
+                portfolioId,
+                "claude-cli",
+                modelId,
+                feature,
+                latency,
+                Math.Max(0, result?.InputTokens ?? 0),
+                Math.Max(0, result?.OutputTokens ?? 0),
+                0m,
+                ct.IsCancellationRequested ? CancellationToken.None : ct);
         }
     }
 
