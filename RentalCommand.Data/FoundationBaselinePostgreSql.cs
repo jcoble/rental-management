@@ -502,14 +502,14 @@ internal static class FoundationBaselinePostgreSql
     private static readonly HashSet<string> EngineAppendOnlyTables = new(StringComparer.Ordinal)
     {
         "AtomicAuditLogs", "NoticeDeliveryEvidence", "Notifications",
-        "LoanPayments", "RenderedNotices", "SecurityDepositEntries", "SignatureAuditEvents",
-        "TenantLedgerAllocations", "TenantLedgerEntries", "WorkspaceNoticeTemplateVersions",
+        "LegalDocumentArtifacts", "LoanPayments", "RenderedNotices", "SecurityDepositEntries", "SignatureAuditEvents",
+        "StoredFiles", "TenantLedgerAllocations", "TenantLedgerEntries", "WorkspaceNoticeTemplateVersions",
         "WorkOrderStatusEvents",
     };
 
     private static readonly HashSet<string> EngineUpdateOnlyTables = new(StringComparer.Ordinal)
     {
-        "Loans",
+        "LeaseAddenda", "Loans",
     };
 
     // Worker claim state is mutable; this list is intentionally separate from the API matrix.
@@ -537,15 +537,15 @@ internal static class FoundationBaselinePostgreSql
         "AspNetUsers", "CapabilityDefinitions", "CapitalAssets",
         "DeviceTokens", "DocumentTemplateFields", "DocumentTemplates", "EvictionCaseEvents",
         "EvictionCaseRespondents", "EvictionCases", "ExternalListingSignals", "InspectionItems",
-        "Inspections", "LeaseAddenda", "LeaseAddendumFinancialEffects", "LeaseAddendumSigners",
+        "Inspections", "LeaseAddendumFinancialEffects", "LeaseAddendumSigners",
         "LeaseAgreementSigners", "LeaseManagementParties", "LeaseManagements",
-        "LeaseRenewalAddendumDecisions", "LegalDocumentArtifacts", "LegalDocumentSourceVersions", "ListingPhotos",
+        "LeaseRenewalAddendumDecisions", "LegalDocumentSourceVersions", "ListingPhotos",
         "ListingPublications", "MembershipRoleAssignmentProperties",
         "MembershipRoleAssignments", "AutomationSettings", "MessagingProviderSettings",
         "OwnerDistributions", "OwnerEntities", "OwnerUserAccesses",
         "Portfolios", "Properties", "PropertyDispositions", "PropertyOwnerships", "QueuedJobs", "RentalApplications",
         "RentalListings", "RoleProfileCapabilities", "RoleProfiles", "SimulationClocks",
-        "StoredFiles", "SystemNoticeTemplateVersions", "TeamRoutingRuleRecipients",
+        "SystemNoticeTemplateVersions", "TeamRoutingRuleRecipients",
         "TeamRoutingRules", "TenantAccountConditionPeriods", "TenantAutopayEnrollments",
         "TenantNoticePolicies", "TenantUserAccesses", "TechnicianWorkEntries", "Tenants", "UnitOperationalPeriods", "Units",
         "UserAlertPreferences", "VendorDispatches", "VendorRatings", "Vendors",

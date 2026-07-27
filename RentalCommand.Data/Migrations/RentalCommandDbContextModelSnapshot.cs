@@ -8660,9 +8660,14 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("Provider", "IdempotencyKey")
                         .IsUnique();
 
+                    b.HasIndex("Provider", "TenantAccountId", "ProviderObjectId")
+                        .HasDatabaseName("IX_TenantPaymentAttempts_ManualProviderObject")
+                        .IsUnique()
+                        .HasFilter("\"Provider\" = 'manual' AND \"ProviderObjectId\" IS NOT NULL");
+
                     b.HasIndex("Provider", "ProviderObjectId")
                         .IsUnique()
-                        .HasFilter("\"ProviderObjectId\" IS NOT NULL");
+                        .HasFilter("\"ProviderObjectId\" IS NOT NULL AND \"Provider\" <> 'manual'");
 
                     b.HasIndex("TenantAccountId", "PortfolioId");
 

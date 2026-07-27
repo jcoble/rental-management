@@ -35,6 +35,7 @@ internal sealed class AtomicTenantMoneyPersistence : IAtomicTenantMoneyPersisten
                        account."Currency",
                        account."CreatedByUserId",
                        agreement."PublicId" AS agreement_public_id,
+                       agreement."ChangeType",
                        agreement."BaseRentAmount",
                        agreement."RentDueDay",
                        agreement."GoverningFromOn",
@@ -124,6 +125,16 @@ internal sealed class AtomicTenantMoneyPersistence : IAtomicTenantMoneyPersisten
                       FROM "TenantLedgerEntries" AS existing
                       WHERE existing."TenantAccountId" = candidate."TenantAccountId"
                         AND existing."BusinessKey" = candidate.business_key)
+                  AND (
+                      candidate."ChangeType" NOT IN ('Correction', 'Restatement')
+                      OR NOT EXISTS (
+                          SELECT 1
+                          FROM "TenantLedgerEntries" AS existing_period
+                          WHERE existing_period."PortfolioId" = candidate."PortfolioId"
+                            AND existing_period."TenantAccountId" = candidate."TenantAccountId"
+                            AND existing_period."EntryType" = 'RentCharge'
+                            AND existing_period."DueOn" >= candidate.month_start
+                            AND existing_period."DueOn" < candidate.month_start + interval '1 month'))
                 ORDER BY candidate.due_on, candidate."TenantAccountId", candidate."LeaseAgreementId"
                 LIMIT {batchSize}
             ), inserted AS (

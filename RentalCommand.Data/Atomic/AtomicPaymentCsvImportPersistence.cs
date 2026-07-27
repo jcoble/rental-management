@@ -59,11 +59,14 @@ internal sealed class AtomicPaymentCsvImportPersistence
                                   lower(COALESCE(trim(input."ExternalReference"), ''))
                      ORDER BY input."RowNumber") AS "NaturalKeyOrdinal",
                    row_number() OVER (
-                     PARTITION BY lower(COALESCE(trim(input."ExternalReference"), ''))
+                     PARTITION BY account_match."TenantAccountId",
+                                  lower(COALESCE(trim(input."ExternalReference"), ''))
                      ORDER BY input."RowNumber") AS "ExternalReferenceOrdinal",
                    EXISTS (
                      SELECT 1 FROM "TenantPaymentAttempts" provider_attempt
                      WHERE provider_attempt."Provider" = 'manual'
+                       AND provider_attempt."PortfolioId" = @portfolioId
+                       AND provider_attempt."TenantAccountId" = account_match."TenantAccountId"
                        AND nullif(trim(input."ExternalReference"), '') IS NOT NULL
                        AND lower(trim(provider_attempt."ProviderObjectId")) =
                            lower(trim(input."ExternalReference"))) AS "ProviderReferenceExists",
@@ -114,7 +117,7 @@ internal sealed class AtomicPaymentCsvImportPersistence
                           ELSE ARRAY[]::text[] END
                      || CASE
                           WHEN resolved."ProviderReferenceExists" AND NOT resolved."AlreadyExists"
-                            THEN ARRAY['External reference is already attached to another payment.']::text[]
+                            THEN ARRAY['External reference is already attached to another payment for this tenant account.']::text[]
                           WHEN nullif(trim(resolved."ExternalReference"), '') IS NOT NULL
                                AND resolved."ExternalReferenceOrdinal" > 1
                                AND resolved."NaturalKeyOrdinal" = 1

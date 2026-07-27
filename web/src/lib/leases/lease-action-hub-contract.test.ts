@@ -61,6 +61,20 @@ describe('canonical lease lifecycle action hub', () => {
 		assert.match(detailPageSource, /editAgreementId = result\.leaseAgreementId/);
 	});
 
+	it('requires an active lease template only for imported-source successor drafts', () => {
+		assert.match(endpointSource, /documentTemplateId: number \| null/);
+		assert.match(successorDialogSource, /const sourceRequiresTemplate = \$derived\(source\.hasSourceScan\)/);
+		assert.match(successorDialogSource, /documentTemplates\.listPage\(\{/);
+		assert.match(successorDialogSource, /kind: 'Lease'/);
+		assert.match(successorDialogSource, /status: 'Active'/);
+		assert.match(successorDialogSource, /propertyId: templatePropertyId!/);
+		assert.match(successorDialogSource, /const defaultTemplates = templates\.filter\(\(template\) => template\.defaultForPortfolio\)/);
+		assert.match(successorDialogSource, /selectedDocumentTemplateId = Number\(documentTemplateId\)/);
+		assert.match(successorDialogSource, /documentTemplateId: selectedDocumentTemplateId/);
+		assert.match(successorDialogSource, /agreement-successor-document-template/);
+		assert.match(successorDialogSource, /if \(!sourceRequiresTemplate\) \{\s*documentTemplateId = ''/s);
+	});
+
 	it('supports the correction successor UX and abandoned-draft cancellation', () => {
 		assert.match(endpointSource, /correctionReason: string \| null/);
 		assert.match(endpointSource, /cancelAgreementSuccessorDraft:/);
