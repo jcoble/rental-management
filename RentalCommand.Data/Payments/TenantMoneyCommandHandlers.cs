@@ -35,9 +35,10 @@ public sealed class RecordTenantReceiptHandler
         if (!account.SourceAllowed)
             throw new ArgumentException("Receipt source provenance must belong to the current portfolio.");
 
+        var recordedAtUtc = TenantMoneyCommandSupport.CommandTimestamp(command.RecordedAtUtc, times.WallClockUtc);
         var paymentAttempt = TenantMoneyCommandSupport.ManualAttempt(
             command, account.Currency, command.Amount, command.PaymentMethodSummary,
-            command.ExternalReference, command.PayerName, command.CheckNumber, command.BankName, times.WallClockUtc);
+            command.ExternalReference, command.PayerName, command.CheckNumber, command.BankName, recordedAtUtc);
         attempt.Persistence.Add(paymentAttempt);
         await attempt.FlushBusinessAsync(ct);
 
@@ -50,7 +51,7 @@ public sealed class RecordTenantReceiptHandler
             Amount = command.Amount,
             Currency = account.Currency,
             EffectiveOn = command.EffectiveOn,
-            PostedAtUtc = times.WallClockUtc,
+            PostedAtUtc = recordedAtUtc,
             Description = command.Description.Trim(),
             BusinessKey = command.BusinessKey,
             ProviderPaymentAttemptId = paymentAttempt.Id,
@@ -63,11 +64,11 @@ public sealed class RecordTenantReceiptHandler
         var allocations = command.AllocateOldestCharges
             ? await TenantMoneyCommandSupport.AllocateOldestAsync(
                 command.PortfolioId, command.TenantAccountId, receipt.Id, command.Amount,
-                command.BusinessKey, command.ActorUserId, times.WallClockUtc, attempt, ct)
+                command.BusinessKey, command.ActorUserId, recordedAtUtc, attempt, ct)
             : new AtomicLedgerAllocationSummary();
 
         TenantMoneyCommandSupport.StageMutation(
-            attempt, command, times.WallClockUtc, nameof(TenantLedgerEntry), receipt.Id,
+            attempt, command, recordedAtUtc, nameof(TenantLedgerEntry), receipt.Id,
             "Tenant payment receipt recorded", new { receipt.Amount, receipt.EffectiveOn, allocations = allocations.AllocationCount });
         return new RecordTenantReceiptResult(true, account.Id, receipt.Id, paymentAttempt.Id,
             receipt.Amount, allocations.AllocatedAmount, allocations.AllocationCount);
@@ -1222,6 +1223,17 @@ internal static class TenantMoneyCommandSupport
 
     internal static string? Clean(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    internal static DateTime CommandTimestamp(DateTime requestedUtc, DateTime fallbackUtc)
+    {
+        var timestamp = requestedUtc == default ? fallbackUtc : requestedUtc;
+        return timestamp.Kind switch
+        {
+            DateTimeKind.Utc => timestamp,
+            DateTimeKind.Local => timestamp.ToUniversalTime(),
+            _ => DateTime.SpecifyKind(timestamp, DateTimeKind.Utc),
+        };
+    }
 
     internal static Task<AtomicLedgerAllocationSummary> AllocateOldestAsync(
         int portfolioId, int accountId, long receiptId, decimal available, string businessKey,
