@@ -156,6 +156,9 @@
 		gap: 8px;
 		padding: 10px;
 	}
+	.sim-panel:not(.sim-collapsed):not(:hover):not(:focus-within) .sim-body {
+		display: none;
+	}
 	.sim-now {
 		color: #cfc8e6;
 		word-break: break-all;

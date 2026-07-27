@@ -12,3 +12,11 @@ test('desktop simulated-clock panel stays outside the sidebar hit area', () => {
 	);
 	assert.doesNotMatch(source, /pointer-events:\s*none/);
 });
+
+test('expanded simulated-clock controls collapse their hitbox when inactive', () => {
+	assert.match(
+		source,
+		/\.sim-panel:not\(\.sim-collapsed\):not\(:hover\):not\(:focus-within\)\s+\.sim-body\s*\{[\s\S]*?display:\s*none;/
+	);
+	assert.doesNotMatch(source, /\.sim-panel:not\(\.sim-collapsed\)[^{]*\{[\s\S]*?pointer-events:\s*none/);
+});

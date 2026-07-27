@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Atomic;
 using RentalCommand.Core.Auth;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Data.Atomic;
 
@@ -87,6 +89,86 @@ internal sealed class AtomicAccountSecurityPersistence : IAtomicAccountSecurityP
                 row.AccessContextId,
                 row.InvitedUserId,
                 row.AcceptedAtUtc);
+    }
+
+    public async Task RevokeActiveSessionsForPasswordResetAsync(
+        int userId,
+        DateTime revokedAtUtc,
+        string reason,
+        CancellationToken ct = default)
+    {
+        if (userId <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(userId));
+        }
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+
+        await RevokeActiveSessionsAsync(userId, preservedAuthSessionId: null, revokedAtUtc, reason, ct);
+    }
+
+    public async Task RevokeOtherActiveSessionsForPasswordChangeAsync(
+        int userId,
+        Guid preservedAuthSessionId,
+        DateTime revokedAtUtc,
+        string reason,
+        CancellationToken ct = default)
+    {
+        if (userId <= 0 || preservedAuthSessionId == Guid.Empty)
+        {
+            throw new ArgumentOutOfRangeException(nameof(userId));
+        }
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+
+        await RevokeActiveSessionsAsync(userId, preservedAuthSessionId, revokedAtUtc, reason, ct);
+    }
+
+    private async Task RevokeActiveSessionsAsync(
+        int userId,
+        Guid? preservedAuthSessionId,
+        DateTime revokedAtUtc,
+        string reason,
+        CancellationToken ct)
+    {
+        await _db.AuthSessionRefreshCredentials
+            .IgnoreQueryFilters()
+            .Where(credential =>
+                credential.RevokedAtUtc == null &&
+                _db.AuthSessionRefreshTokenFamilies
+                    .IgnoreQueryFilters()
+                    .Where(family =>
+                        family.AuthSession!.UserId == userId &&
+                        family.AuthSession.Status == AuthSessionStatus.Active &&
+                        family.AuthSession.RevokedAtUtc == null &&
+                        (preservedAuthSessionId == null || family.AuthSessionId != preservedAuthSessionId))
+                    .Select(family => family.Id)
+                    .Contains(credential.RefreshTokenFamilyId))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(credential => credential.RevokedAtUtc, revokedAtUtc)
+                .SetProperty(credential => credential.RevocationReason, reason), ct);
+
+        await _db.AuthSessionRefreshTokenFamilies
+            .IgnoreQueryFilters()
+            .Where(family =>
+                family.AuthSession!.UserId == userId &&
+                family.AuthSession.Status == AuthSessionStatus.Active &&
+                family.AuthSession.RevokedAtUtc == null &&
+                family.RevokedAtUtc == null &&
+                (preservedAuthSessionId == null || family.AuthSessionId != preservedAuthSessionId))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(family => family.RevokedAtUtc, revokedAtUtc)
+                .SetProperty(family => family.RevocationReason, reason), ct);
+
+        await _db.AuthSessions
+            .IgnoreQueryFilters()
+            .Where(session =>
+                session.UserId == userId &&
+                session.Status == AuthSessionStatus.Active &&
+                session.RevokedAtUtc == null &&
+                (preservedAuthSessionId == null || session.Id != preservedAuthSessionId))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(session => session.Status, AuthSessionStatus.Revoked)
+                .SetProperty(session => session.RevokedAtUtc, revokedAtUtc)
+                .SetProperty(session => session.RevocationReason, reason), ct);
     }
 
     private sealed class InitialWorkspaceBootstrapRow

@@ -372,6 +372,19 @@ public interface IAtomicAccountSecurityPersistence
         string newSecurityStamp,
         string newConcurrencyStamp,
         CancellationToken ct = default);
+
+    Task RevokeActiveSessionsForPasswordResetAsync(
+        int userId,
+        DateTime revokedAtUtc,
+        string reason,
+        CancellationToken ct = default);
+
+    Task RevokeOtherActiveSessionsForPasswordChangeAsync(
+        int userId,
+        Guid preservedAuthSessionId,
+        DateTime revokedAtUtc,
+        string reason,
+        CancellationToken ct = default);
 }
 
 public sealed record AtomicWorkspaceInvitationActivation(

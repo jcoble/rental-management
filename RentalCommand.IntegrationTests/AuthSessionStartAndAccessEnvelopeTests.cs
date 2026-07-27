@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FluentAssertions;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
@@ -42,6 +43,8 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         new("auth-email-confirm-result:v1");
     private static readonly AtomicJsonResultCodec<ResetAccountPasswordResult> ResetPasswordCodec =
         new("auth-password-reset-result:v1");
+    private static readonly AtomicJsonResultCodec<ChangePasswordResult> ChangePasswordCodec =
+        new("auth-password-change-result:v1");
 
     private readonly DateTime _now = CurrentTestTimeUtc();
     private PostgreSqlContainer? _postgres;
@@ -128,6 +131,10 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             ResetAccountPasswordCommand,
             ResetAccountPasswordResult,
             ResetAccountPasswordHandler>();
+        services.AddAtomicCommandHandler<
+            ChangePasswordCommand,
+            ChangePasswordResult,
+            ChangePasswordHandler>();
         services.AddAtomicCommandHandler<
             ConfirmGoogleAccountEmailCommand,
             ConfirmAccountEmailResult,
@@ -360,6 +367,117 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         (await verify.AtomicAuditLogs.CountAsync(row =>
             row.AttemptId == reset.AttemptId &&
             row.ChangeReason == "Password reset completed")).Should().Be(1);
+    }
+
+    [SkippableFact]
+    public async Task PasswordReset_RevokesEveryExistingSessionSoPreResetBearerCannotResolve()
+    {
+        SkipIfNoDocker();
+        var firstSession = await RuntimeStartSessionAsync();
+        var secondSession = await RuntimeStartSessionAsync();
+        var operationDigest = LowerSha256(Guid.NewGuid().ToString("N"));
+        var command = new ResetAccountPasswordCommand(
+            _userId,
+            _securityStamp,
+            true,
+            "reset-revocation-password-hash",
+            LowerSha256($"{_userId}\0reset-password-session-revocation"));
+        var identity = new AtomicCommandIdentity(
+            "auth.password.reset",
+            $"{_userId}:{operationDigest}");
+
+        var reset = await RuntimeAtomic.ExecuteAsync(identity, command, ResetPasswordCodec);
+
+        reset.Value.Outcome.Should().Be(ResetAccountPasswordOutcome.Reset);
+        await using var verify = NewPlainContext();
+        var revoked = await verify.AuthSessions
+            .IgnoreQueryFilters()
+            .Where(session => session.Id == firstSession.AuthSessionId || session.Id == secondSession.AuthSessionId)
+            .Select(session => new { session.Id, session.Status, session.RevokedAtUtc })
+            .ToListAsync();
+        revoked.Should().HaveCount(2);
+        revoked.Should().OnlyContain(session =>
+            session.Status == AuthSessionStatus.Revoked && session.RevokedAtUtc != null);
+        (await verify.AtomicAuditLogs.CountAsync(row =>
+            row.AttemptId == reset.AttemptId &&
+            row.ChangeReason == "Password reset completed")).Should().Be(1);
+
+        await using var runtimeScope = RuntimeServices.CreateAsyncScope();
+        var query = new AccessEnvelopeQuery(
+            runtimeScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
+        (await query.GetAsync(
+                firstSession.AuthSessionId,
+                _userId,
+                _firstContextId,
+                1,
+                _now.AddSeconds(1)))
+            .Should().BeNull("a bearer issued before the reset must no longer resolve to protected access");
+        (await query.GetAsync(
+                secondSession.AuthSessionId,
+                _userId,
+                _firstContextId,
+                1,
+                _now.AddSeconds(1)))
+            .Should().BeNull("reset signs out every existing session");
+    }
+
+    [SkippableFact]
+    public async Task ChangePassword_RevokesOtherSessionsButKeepsCurrentSessionResolving()
+    {
+        SkipIfNoDocker();
+        var staleSession = await RuntimeStartSessionAsync();
+        var currentSession = await RuntimeStartSessionAsync();
+        var operationDigest = LowerSha256(Guid.NewGuid().ToString("N"));
+        var command = new ChangePasswordCommand(
+            currentSession.AuthSessionId,
+            _userId,
+            _firstContextId,
+            1,
+            "OldPassword123!",
+            "NewPassword123!",
+            LowerSha256($"{_userId}\0change-password-session-revocation"));
+        var identity = new AtomicCommandIdentity(
+            "auth.password.change",
+            $"{_userId}:{_firstContextId}:{operationDigest}");
+
+        var changed = await Atomic.ExecuteAsync(identity, command, ChangePasswordCodec);
+
+        changed.Value.Outcome.Should().Be(ChangePasswordOutcome.Changed);
+        await using var verify = NewPlainContext();
+        var sessions = await verify.AuthSessions
+            .IgnoreQueryFilters()
+            .Where(session => session.Id == staleSession.AuthSessionId || session.Id == currentSession.AuthSessionId)
+            .Select(session => new { session.Id, session.Status, session.RevokedAtUtc })
+            .ToListAsync();
+        sessions.Single(session => session.Id == staleSession.AuthSessionId).Status
+            .Should().Be(AuthSessionStatus.Revoked);
+        sessions.Single(session => session.Id == staleSession.AuthSessionId).RevokedAtUtc
+            .Should().NotBeNull();
+        sessions.Single(session => session.Id == currentSession.AuthSessionId).Status
+            .Should().Be(AuthSessionStatus.Active);
+        sessions.Single(session => session.Id == currentSession.AuthSessionId).RevokedAtUtc
+            .Should().BeNull();
+        (await verify.AtomicAuditLogs.CountAsync(row =>
+            row.AttemptId == changed.AttemptId &&
+            row.ChangeReason == "Password changed by account user.")).Should().Be(1);
+
+        await using var runtimeScope = RuntimeServices.CreateAsyncScope();
+        var query = new AccessEnvelopeQuery(
+            runtimeScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>());
+        (await query.GetAsync(
+                staleSession.AuthSessionId,
+                _userId,
+                _firstContextId,
+                1,
+                _now.AddSeconds(1)))
+            .Should().BeNull("a bearer issued before the password change must no longer resolve");
+        (await query.GetAsync(
+                currentSession.AuthSessionId,
+                _userId,
+                _firstContextId,
+                1,
+                _now.AddSeconds(1)))
+            .Should().NotBeNull("the command session remains active for the signed-in user");
     }
 
     [SkippableFact]
@@ -1079,6 +1197,18 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
         return command;
     }
 
+    private async Task<StartAuthSessionResult> RuntimeStartSessionAsync()
+    {
+        var challenge = await IssueChallengeAsync();
+        var start = Start(challenge);
+        var started = await RuntimeAtomic.ExecuteAsync(
+            SessionRefreshCommandIdentity.ForStart(Guid.NewGuid()),
+            start,
+            StartCodec);
+        started.Value.Started.Should().BeTrue();
+        return started.Value;
+    }
+
     private IssueLoginContextSelectionChallengeCommand Challenge(DateTime? expiresAtUtc = null) =>
         new(
             _userId,
@@ -1208,17 +1338,23 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             UpdatedAtUtc = now,
         };
 
-    private ApplicationUser User(string email, string displayName) => new()
+    private ApplicationUser User(string email, string displayName)
     {
-        UserName = email,
-        NormalizedUserName = email.ToUpperInvariant(),
-        Email = email,
-        NormalizedEmail = email.ToUpperInvariant(),
-        DisplayName = displayName,
-        SecurityStamp = Guid.NewGuid().ToString("N"),
-        ConcurrencyStamp = Guid.NewGuid().ToString("N"),
-        CreatedAt = _now.AddDays(-2),
-    };
+        var user = new ApplicationUser
+        {
+            UserName = email,
+            NormalizedUserName = email.ToUpperInvariant(),
+            Email = email,
+            NormalizedEmail = email.ToUpperInvariant(),
+            DisplayName = displayName,
+            SecurityStamp = Guid.NewGuid().ToString("N"),
+            ConcurrencyStamp = Guid.NewGuid().ToString("N"),
+            CreatedAt = _now.AddDays(-2),
+        };
+        user.PasswordHash = new PasswordHasher<ApplicationUser>()
+            .HashPassword(user, "OldPassword123!");
+        return user;
+    }
 
     private Portfolio Portfolio(string name) => new()
     {
@@ -1293,6 +1429,9 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
     private IAtomicUnitOfWork RuntimeAtomic =>
         (_runtimeServices ?? throw new InvalidOperationException("Runtime auth-start services are unavailable."))
         .GetRequiredService<IAtomicUnitOfWork>();
+
+    private ServiceProvider RuntimeServices =>
+        _runtimeServices ?? throw new InvalidOperationException("Runtime auth-start services are unavailable.");
 
     private void SkipIfNoDocker() =>
         Skip.IfNot(_dockerAvailable, "Docker is unavailable; auth start PostgreSQL proof skipped.");
