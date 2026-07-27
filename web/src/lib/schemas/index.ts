@@ -151,6 +151,10 @@ const optionalNonNegative = (label: string) =>
 			)
 			.optional()
 	);
+const optionalWholeNumberMax = (label: string, max: number) =>
+	optionalNonNegative(label)
+		.refine((v) => v === undefined || v === null || Number.isInteger(v), `${label} must be a whole number`)
+		.refine((v) => v === undefined || v === null || v <= max, `${label} cannot exceed ${max.toLocaleString()}`);
 
 // Lengths mirror the server data annotations on Create/UpdatePropertyRequest (PropertyDtos.cs):
 // Name 200, AddressLine1/2 250, City/State 100, PostalCode 20 — so an over-long value is caught
@@ -175,11 +179,17 @@ export const propertySchema = z.object({
 export const unitSchema = z.object({
 	// unitNumber: server [MaxLength(50)]
 	unitNumber: required('Unit number').max(50, 'Unit number must be 50 characters or fewer'),
+	// floorPlan: server [MaxLength(100)]
+	floorPlan: optionalTextMax('Floor plan', 100),
 	// bedrooms/bathrooms: server [Range(0, 99)] — non-negative, max 99
 	bedrooms: nonNegativeNumeric('Bedrooms').refine((v) => v <= 99, 'Bedrooms cannot exceed 99'),
 	bathrooms: nonNegativeNumeric('Bathrooms').refine((v) => v <= 99, 'Bathrooms cannot exceed 99'),
+	// squareFeet: server nullable int [Range(0, 99999)]
+	squareFeet: optionalWholeNumberMax('Square feet', 99999),
 	// marketRent: server [Range(0, 99999999)] — can be 0 for a vacant/unlisted unit
 	marketRent: nonNegativeNumeric('Market rent').refine((v) => v <= 99999999, 'Market rent cannot exceed 99,999,999'),
+	// notes: server [MaxLength(2000)]
+	notes: optionalTextMax('Notes', 2000),
 });
 
 export const tenantSchema = z.object({

@@ -313,7 +313,7 @@
 	}));
 
 	// ── Unit form ──────────────────────────────────────────────────────────────
-	const emptyUnit = { unitNumber: '', bedrooms: '1', bathrooms: '1', marketRent: '1200' };
+	const emptyUnit = { unitNumber: '', floorPlan: '', bedrooms: '1', bathrooms: '1', squareFeet: '', marketRent: '1200', notes: '' };
 	let showUnitForm = $state(false);
 	let editingUnitId = $state<number | null>(null);
 	let unitForm = $state({ ...emptyUnit });
@@ -332,9 +332,12 @@
 		editingUnitId = u.id;
 		unitForm = {
 			unitNumber: u.unitNumber,
+			floorPlan: u.floorPlan ?? '',
 			bedrooms: String(u.bedrooms),
 			bathrooms: String(u.bathrooms),
+			squareFeet: u.squareFeet == null ? '' : String(u.squareFeet),
 			marketRent: String(u.marketRent),
+			notes: u.notes ?? '',
 		};
 		unitFormErrors = {};
 		showUnitForm = true;

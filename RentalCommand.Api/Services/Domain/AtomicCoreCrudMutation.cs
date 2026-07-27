@@ -199,6 +199,9 @@ public sealed class AtomicCoreCrudMutationHandler
         ValidateSetup(setup, command.EntityId);
 
         var updated = command.EntityId > 0;
+        var mutationNow = updated
+            ? command.ChangedAtUtc ?? now
+            : command.CreatedAtUtc ?? now;
         if (updated)
         {
             if (!await AuthorizePropertyEntityAsync(command, persistence, now, CapabilityKeys.RentalsManage, ct))
@@ -256,11 +259,11 @@ public sealed class AtomicCoreCrudMutationHandler
                     throw Conflict("A MultiRental Property with multiple Unit records or Unit history cannot be converted to SingleRental.");
             }
 
-            ApplyPropertySetup(property, request, now);
+            ApplyPropertySetup(property, request, mutationNow);
             var ownerships = await BuildOwnershipsAsync(
-                command.PortfolioId, property.Id, requestedOwnerships, now, persistence, ct);
+                command.PortfolioId, property.Id, requestedOwnerships, mutationNow, persistence, ct);
             await ReplaceCurrentOwnershipsAsync(
-                command.PortfolioId, property.Id, ownerships, now, persistence, ct);
+                command.PortfolioId, property.Id, ownerships, mutationNow, persistence, ct);
             attempt.BindSemanticAudit(property, Audit(command, nameof(Property),
                 AuditLogOperation.Updated, $"Property {property.Name} updated during Guided Setup", property.Id));
         }
@@ -269,9 +272,9 @@ public sealed class AtomicCoreCrudMutationHandler
             property = new Property
             {
                 PortfolioId = command.PortfolioId,
-                CreatedAt = now,
+                CreatedAt = mutationNow,
             };
-            ApplyPropertySetup(property, request, now);
+            ApplyPropertySetup(property, request, mutationNow);
             persistence.Add(property);
             attempt.BindSemanticAudit(property, Audit(command, nameof(Property),
                 AuditLogOperation.Created, $"Property {property.Name} created during Guided Setup", entityId: 0));
@@ -288,7 +291,7 @@ public sealed class AtomicCoreCrudMutationHandler
         if (!updated && requestedOwnerships.Count > 0)
         {
             var ownerships = await BuildOwnershipsAsync(
-                command.PortfolioId, property.Id, requestedOwnerships, now, persistence, ct);
+                command.PortfolioId, property.Id, requestedOwnerships, mutationNow, persistence, ct);
             foreach (var ownership in ownerships)
                 persistence.Add(ownership);
             await attempt.FlushBusinessAsync(ct);
@@ -306,8 +309,8 @@ public sealed class AtomicCoreCrudMutationHandler
             SquareFeet = unit.SquareFeet,
             MarketRent = unit.MarketRent,
             Notes = unit.Notes,
-            CreatedAt = now,
-            UpdatedAt = now,
+            CreatedAt = mutationNow,
+            UpdatedAt = mutationNow,
         }).ToList();
 
         foreach (var unit in units)
@@ -318,9 +321,9 @@ public sealed class AtomicCoreCrudMutationHandler
         }
         await attempt.FlushBusinessAsync(ct);
 
-        StageDataUpdate(attempt, command, nameof(Property), property.Id, now, "property");
+        StageDataUpdate(attempt, command, nameof(Property), property.Id, mutationNow, "property");
         for (var index = 0; index < units.Count; index++)
-            StageDataUpdate(attempt, command, nameof(Unit), units[index].Id, now, $"unit-{index + 1}");
+            StageDataUpdate(attempt, command, nameof(Unit), units[index].Id, mutationNow, $"unit-{index + 1}");
 
         var currentUnits = await persistence.Query<Unit>().AsNoTracking()
             .Where(unit => unit.PortfolioId == command.PortfolioId
@@ -329,7 +332,7 @@ public sealed class AtomicCoreCrudMutationHandler
             .ThenBy(unit => unit.Id)
             .ToListAsync(ct);
         var propertySnapshot = JsonSerializer.Deserialize<PropertyResponse>(
-            await SnapshotPropertyAsync(property, persistence, ct))
+            await SnapshotPropertyAsync(property, persistence, ct, mutationNow))
             ?? throw new AtomicReceiptInvariantException("Property setup response could not be created.");
         var response = new PropertySetupResponse
         {
@@ -941,9 +944,10 @@ public sealed class AtomicCoreCrudMutationHandler
     private static async Task<string> SnapshotPropertyAsync(
         Property entity,
         IAtomicPersistenceSession persistence,
-        CancellationToken ct)
+        CancellationToken ct,
+        DateTime? effectiveNowUtc = null)
     {
-        var now = await persistence.ReadDatabaseClockUtcAsync(ct);
+        var now = effectiveNowUtc ?? await persistence.ReadDatabaseClockUtcAsync(ct);
         var facts = await persistence.Query<Property>().AsNoTracking()
             .Where(property => property.PortfolioId == entity.PortfolioId && property.Id == entity.Id)
             .Select(property => new

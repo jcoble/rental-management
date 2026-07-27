@@ -116,9 +116,9 @@ describe('new rental lease prefill seeding', () => {
 			'utf8'
 		);
 
-		assert.match(source, /unitSquareFeet = values\.unitSquareFeet/);
-		assert.match(source, /data-testid="new-rental-unit-square-feet-input"/);
-		assert.match(source, /o\.unitSquareFeet = Number\(unitSquareFeet\)/);
+		assert.match(source, /unitForm\.squareFeet = values\.unitSquareFeet/);
+		assert.match(source, /<UnitFields[\s\S]*testidPrefix="new-rental-unit"/);
+		assert.match(source, /o\.unitSquareFeet = Number\(unitForm\.squareFeet\)/);
 	});
 
 	it('sends the explicit rental structure when the guided import creates a property', () => {
