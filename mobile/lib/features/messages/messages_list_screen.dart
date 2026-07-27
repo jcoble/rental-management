@@ -195,7 +195,8 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      builder: (_) => const _ComposeConversationSheet(),
+      builder: (_) =>
+          const MobileQuickActionHider(child: _ComposeConversationSheet()),
     );
     if (created == null || !context.mounted) return;
     // Refresh the inbox and open the freshly created thread.
