@@ -302,6 +302,28 @@ void main() {
     expect(find.text('Open payment detail'), findsOneWidget);
   });
 
+  testWidgets('detached shell reveal ignores inactive route context', (
+    tester,
+  ) async {
+    late BuildContext routeContext;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) {
+            routeContext = context;
+            return const SizedBox.shrink();
+          },
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+
+    expect(() => revealMobileShellIfDetached(routeContext), returnsNormally);
+  });
+
   testWidgets('detail header replaces the destination header above top tabs', (
     tester,
   ) async {

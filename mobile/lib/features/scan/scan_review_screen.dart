@@ -684,6 +684,12 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
       }
     }
 
+    if (draft.isPayment && _selectedTenantAccountId == null) {
+      _selectedTenantAccountId = _positiveOrNull(
+        draft.captureContext?.tenantAccountId,
+      );
+    }
+
     // Start/stop polling based on status. The worker flips the draft
     // Pending → Processing → Reviewing, so we must keep polling through BOTH
     // Pending and Processing to catch the final Reviewing state.
@@ -719,6 +725,8 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
     final parsed = int.tryParse(field?.value.trim() ?? '');
     return (parsed != null && parsed > 0) ? parsed : null;
   }
+
+  int? _positiveOrNull(int? value) => value != null && value > 0 ? value : null;
 
   /// Reads an extracted scalar field's raw value, or '' when absent. Used to
   /// seed the create-new-property address fields.
@@ -1751,17 +1759,16 @@ class _TenantAccountSelectorState
     );
     final pageAccounts =
         accountsAsync.value?.items ?? const <TenantAccountOption>[];
-    final contextualId = widget.selectedTenantAccountId == null
-        ? widget.contextualTenantAccountId
-        : null;
+    final exactAccountId =
+        widget.selectedTenantAccountId ?? widget.contextualTenantAccountId;
     final contextualIsInPage =
-        contextualId != null &&
-        pageAccounts.any((item) => item.tenantAccountId == contextualId);
+        exactAccountId != null &&
+        pageAccounts.any((item) => item.tenantAccountId == exactAccountId);
     final contextualAccountAsync =
-        contextualId != null &&
+        exactAccountId != null &&
             accountsAsync.value != null &&
             !contextualIsInPage
-        ? ref.watch(_tenantAccountOptionProvider(contextualId))
+        ? ref.watch(_tenantAccountOptionProvider(exactAccountId))
         : const AsyncValue<TenantAccountOption?>.data(null);
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
@@ -1805,7 +1812,7 @@ class _TenantAccountSelectorState
               final accounts = [...page.items];
               final contextualAccount = contextualIsInPage
                   ? accounts
-                        .where((item) => item.tenantAccountId == contextualId)
+                        .where((item) => item.tenantAccountId == exactAccountId)
                         .firstOrNull
                   : contextualAccountAsync.value;
               if (contextualAccount != null &&
