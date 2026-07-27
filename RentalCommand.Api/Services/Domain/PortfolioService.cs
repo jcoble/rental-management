@@ -81,8 +81,8 @@ public class PortfolioService : IPortfolioService
                     settings.SmsProvider != null && settings.SmsProvider != string.Empty),
                 HasAutomations = _db.AutomationSettings.Any(settings =>
                     settings.PortfolioId == p.Id &&
-                    (settings.EnableRentCharges || settings.EnableLateFees ||
-                     settings.EnableRecurringMaintenance || settings.EnableMorningBriefing)),
+                    (settings.EnableLateFees || settings.EnableRecurringMaintenance ||
+                     settings.EnableMorningBriefing)),
             })
             .FirstOrDefaultAsync(ct);
 

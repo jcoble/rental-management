@@ -80,6 +80,40 @@ public sealed class PrepareMoveInValidationTests
         act.Should().Throw<ArgumentException>();
     }
 
+    [Fact]
+    public void Custom_rent_tracking_requires_a_start_date()
+    {
+        var command = Command(null,
+        [
+            NewParty("Primary", "Tenant", "primary@example.com",
+                LeaseManagementPartyRole.PrimaryTenant, true, 1),
+        ]) with
+        {
+            RentTrackingStartMode = RentTrackingStartMode.CustomCutoffDate,
+        };
+
+        var act = () => PrepareMoveInHandler.ValidateCommandShape(command);
+
+        act.Should().Throw<ArgumentException>();
+    }
+
+    [Fact]
+    public void Forward_rent_tracking_rejects_an_inapplicable_custom_date()
+    {
+        var command = Command(null,
+        [
+            NewParty("Primary", "Tenant", "primary@example.com",
+                LeaseManagementPartyRole.PrimaryTenant, true, 1),
+        ]) with
+        {
+            RentTrackingStartOn = new DateOnly(2026, 9, 1),
+        };
+
+        var act = () => PrepareMoveInHandler.ValidateCommandShape(command);
+
+        act.Should().Throw<ArgumentException>();
+    }
+
     private static PrepareMoveInParty NewParty(
         string firstName,
         string lastName,

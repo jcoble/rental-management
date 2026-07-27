@@ -14,6 +14,9 @@ public static class ReceiptExtractionSchema
         "strongly names or references that property/unit; otherwise leave the id empty for human review. " +
         "Never return an id that is not present in the grounding list, and never guess or fabricate an id. " +
         "If the document is a tenant's rent check / cheque / payment stub, set document_kind=RentCheck and fill payer_name, check_number, bank_name, amount, transaction_date. " +
+        "Copy every visible date exactly before converting it to ISO 8601. Do not reorder, reverse, or infer date digits. " +
+        "A clearly labeled document header date may supply transaction_date when the payment instrument has no separate date; " +
+        "if no complete date is visible anywhere, leave transaction_date empty instead of inventing one. " +
         "For other documents, classify using 'document_kind': use 'Receipt' for a paid receipt, 'Bill' or 'Invoice' for an unpaid bill or invoice, " +
         "'UtilityBill' for a utility bill, 'PropertyTax' for a property-tax bill, or 'Other' if none of the above apply. " +
         "For 'due_date', capture the payment due date if the document is an unpaid bill or invoice; leave blank for an already-paid receipt. " +
@@ -39,7 +42,8 @@ public static class ReceiptExtractionSchema
         new ExtractionFieldSpec("unit_id", "integer",
             "Exact id of the matching unit, copied from the grounding list's units[].id, only when strongly matched. Empty otherwise."),
         new ExtractionFieldSpec("transaction_date", "date",
-            "Date of the transaction in ISO 8601 (YYYY-MM-DD).", Required: true),
+            "Date of the transaction in ISO 8601 (YYYY-MM-DD). Copy a complete visible date exactly; do not reorder or infer digits. A clearly labeled document header date may be used when the instrument has no separate date. Empty when no complete date is visible.",
+            Required: true),
         new ExtractionFieldSpec("subtotal", "number",
             "Subtotal before tax/tip/discount, as a decimal number (no currency symbol)."),
         new ExtractionFieldSpec("tax",      "number",

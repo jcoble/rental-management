@@ -115,92 +115,49 @@ public class ScanServiceTests : IDisposable
                 take: 20)
             .ToQueryString());
 
-        AssertPropertyAuthorizationShape(technicianSql, "w1");
+        technicianSql.Should().Contain(
+            "public.rc_api_effective_capability_scopes(",
+            Exactly.Twice());
+        technicianSql.Should().Contain("maintenance.assigned-work.update");
+        technicianSql.Should().Contain("work.manage");
+        technicianSql.Should().Contain("'Property'");
+        technicianSql.Should().Contain("'WorkOrder'");
         AssertSqlContains(
             technicianSql,
             """
-            ) AS s8 ON m2."WorkspaceMembershipId" = s8."Id"
-                AND m2."PortfolioId" = s8."PortfolioId"
-            INNER JOIN "RoleProfiles" AS r1 ON m2."RoleProfileId" = r1."Id"
+            r."ScopeKind" = 'AllProperties'
+                OR (r."ScopeKind" = 'SelectedProperties' AND r."PropertyId" = w."PropertyId")
             """);
+        technicianSql.Should().Contain("""r0."ScopeKind" = 'AssignedWorkOrders'""");
         AssertSqlContains(
             technicianSql,
             """
-            m2."ScopeKind" = 'AssignedWorkOrders'
-                AND m2."Status" = 'Active'
-                AND m2."SuspendedAtUtc" IS NULL
-                AND m2."RevokedAtUtc" IS NULL
-                AND m2."EffectiveFromUtc" <= @utcNow
-                AND (m2."EffectiveToUtc" IS NULL OR m2."EffectiveToUtc" > @utcNow)
-                AND s8."AccessContextId" = @scope_AccessContextId
-                AND s8."PortfolioId" = @scope_PortfolioId
-                AND s8."Status" = 'Active'
-                AND s8."SuspendedAtUtc" IS NULL
-                AND s8."RevokedAtUtc" IS NULL
-                AND s8."EffectiveFromUtc" <= @utcNow
-                AND (s8."EffectiveToUtc" IS NULL OR s8."EffectiveToUtc" > @utcNow)
-                AND s8."UserId" = @scope_UserId
-                AND s8."AccessRevision" = @scope_AccessRevision
-                AND s8."Status0" = 'Active'
-                AND s8."SuspendedAtUtc0" IS NULL
-                AND s8."RevokedAtUtc0" IS NULL
-            """);
-        AssertSqlContains(
-            technicianSql,
-            """
-            ) AS s9 ON a0."ActiveAccessContextId" = s9."Id" AND a0."UserId" = s9."UserId"
-            WHERE s9."DeletedAt" IS NULL
-                AND a0."Id" = @scope_SessionId
-                AND a0."UserId" = @scope_UserId
-                AND a0."ActiveAccessContextId" = @scope_AccessContextId
-                AND a0."Status" = 'Active'
-                AND a0."RevokedAtUtc" IS NULL
-                AND a0."ExpiresAtUtc" > @utcNow
-            """);
-        AssertSqlContains(
-            technicianSql,
-            """
-            FROM "RoleProfileCapabilities" AS r2
-            INNER JOIN "CapabilityDefinitions" AS c0
-                ON r2."CapabilityDefinitionId" = c0."Id"
-            WHERE r1."Id" = r2."RoleProfileId"
-                AND c0."Key" = ANY (@keys)
-                AND c0."AuthorizationTargetKind" = 'WorkOrder'
-            """);
-        AssertSqlContains(
-            technicianSql,
-            """
-            FROM "WorkOrderResponsibilities" AS w10
+            FROM "WorkOrderResponsibilities" AS w0
             INNER JOIN (
-                SELECT w11."Id", w11."DeletedAt", w11."PortfolioId", w11."PropertyId"
-                FROM "WorkOrders" AS w11
-                WHERE w11."DeletedAt" IS NULL
-            ) AS w12 ON w10."WorkOrderId" = w12."Id"
-                AND w10."PropertyId" = w12."PropertyId"
-                AND w10."PortfolioId" = w12."PortfolioId"
+                SELECT w1."Id", w1."DeletedAt", w1."PortfolioId", w1."PropertyId"
+                FROM "WorkOrders" AS w1
+                WHERE w1."DeletedAt" IS NULL
+            ) AS w2 ON w0."WorkOrderId" = w2."Id"
+                AND w0."PropertyId" = w2."PropertyId"
+                AND w0."PortfolioId" = w2."PortfolioId"
             """);
         AssertSqlContains(
             technicianSql,
             """
-            w."Id" = w10."WorkOrderId"
-                AND w."PropertyId" = w10."PropertyId"
-                AND w."PortfolioId" = w10."PortfolioId"
-                AND w10."PortfolioId" = w."PortfolioId"
-                AND w10."WorkspaceMembershipId" = m2."WorkspaceMembershipId"
-                AND w10."MembershipRoleAssignmentId" = m2."Id"
-                AND w10."EffectiveFromUtc" <= @utcNow
-                AND (w10."EffectiveToUtc" IS NULL OR w10."EffectiveToUtc" > @utcNow)
-            """);
-        AssertSqlContains(
-            technicianSql,
-            """
-            p."Id" = w."PropertyId" AND p."PortfolioId" = w."PortfolioId"
+            w."Id" = w0."WorkOrderId"
+                AND w."PropertyId" = w0."PropertyId"
+                AND w."PortfolioId" = w0."PortfolioId"
+                AND w0."PortfolioId" = w."PortfolioId"
+                AND w0."WorkspaceMembershipId" = r0."WorkspaceMembershipId"
+                AND w0."MembershipRoleAssignmentId" = r0."AssignmentId"
+                AND w0."EffectiveFromUtc" <= @utcNow
+                AND (w0."EffectiveToUtc" IS NULL OR w0."EffectiveToUtc" > @utcNow)
             """);
         AssertSqlContains(
             technicianSql,
             """
             w."Title" ILIKE @pattern ESCAPE ''
-                OR p17."Name" ILIKE @pattern ESCAPE ''
+                OR p2."Name" ILIKE @pattern ESCAPE ''
                 OR (u0."Id" IS NOT NULL AND u0."UnitNumber" ILIKE @pattern ESCAPE '')
             """);
         AssertSqlContains(
@@ -210,7 +167,17 @@ public class ScanServiceTests : IDisposable
             LIMIT @p OFFSET @p
             """);
 
-        AssertPropertyAuthorizationShape(targetSql, "w0");
+        targetSql.Should().Contain(
+            "public.rc_api_effective_capability_scopes(",
+            Exactly.Once());
+        targetSql.Should().Contain("rentals.manage");
+        targetSql.Should().Contain("'Property'");
+        AssertSqlContains(
+            targetSql,
+            """
+            r."ScopeKind" = 'AllProperties'
+                OR (r."ScopeKind" = 'SelectedProperties' AND r."PropertyId" = p."Id")
+            """);
         AssertSqlContains(
             targetSql,
             """
@@ -233,115 +200,6 @@ public class ScanServiceTests : IDisposable
             """
             ORDER BY p."Name", u0."UnitNumber", u0."Id"
             LIMIT @p OFFSET @p
-            """);
-    }
-
-    private static void AssertPropertyAuthorizationShape(string sql, string membershipAlias)
-    {
-        AssertSqlContains(
-            sql,
-            """
-            FROM "AuthSessions" AS a
-            INNER JOIN (
-            """);
-        AssertSqlContains(
-            sql,
-            """
-            ) AS s ON a."ActiveAccessContextId" = s."Id" AND a."UserId" = s."UserId"
-            LEFT JOIN (
-            """);
-        AssertSqlContains(
-            sql,
-            $"""
-            FROM "WorkspaceMemberships" AS {membershipAlias}
-            INNER JOIN (
-            """);
-        AssertSqlContains(
-            sql,
-            """
-            ) AS s1 ON s."Id" = s1."AccessContextId"
-                AND s."PortfolioId" = s1."PortfolioId"
-            """);
-        AssertSqlContains(
-            sql,
-            """
-            a."Id" = @scope_SessionId
-                AND a."UserId" = @scope_UserId
-                AND a."ActiveAccessContextId" = @scope_AccessContextId
-                AND a."Status" = 'Active'
-                AND a."RevokedAtUtc" IS NULL
-                AND a."ExpiresAtUtc" > @utcNow
-                AND s."Id" = @scope_AccessContextId
-                AND s."UserId" = @scope_UserId
-                AND s."PortfolioId" = @scope_PortfolioId
-                AND s."AccessRevision" = @scope_AccessRevision
-                AND s."Status" = 'Active'
-                AND s."SuspendedAtUtc" IS NULL
-                AND s."RevokedAtUtc" IS NULL
-                AND s1."Id" IS NOT NULL
-                AND s1."PortfolioId" = p."PortfolioId"
-                AND s1."Status" = 'Active'
-                AND s1."SuspendedAtUtc" IS NULL
-                AND s1."RevokedAtUtc" IS NULL
-                AND s1."EffectiveFromUtc" <= @utcNow
-                AND (s1."EffectiveToUtc" IS NULL OR s1."EffectiveToUtc" > @utcNow)
-            """);
-        AssertSqlContains(
-            sql,
-            """
-            FROM "MembershipRoleAssignments" AS m
-            INNER JOIN (
-            """);
-        AssertSqlContains(
-            sql,
-            """
-            ) AS s3 ON m."WorkspaceMembershipId" = s3."Id"
-                AND m."PortfolioId" = s3."PortfolioId"
-            INNER JOIN "RoleProfiles" AS r ON m."RoleProfileId" = r."Id"
-            """);
-        AssertSqlContains(
-            sql,
-            """
-            s1."Id" = m."WorkspaceMembershipId"
-                AND s1."PortfolioId" = m."PortfolioId"
-                AND m."PortfolioId" = p."PortfolioId"
-                AND m."Status" = 'Active'
-                AND m."SuspendedAtUtc" IS NULL
-                AND m."RevokedAtUtc" IS NULL
-                AND m."EffectiveFromUtc" <= @utcNow
-                AND (m."EffectiveToUtc" IS NULL OR m."EffectiveToUtc" > @utcNow)
-            """);
-        AssertSqlContains(
-            sql,
-            """
-            FROM "RoleProfileCapabilities" AS r0
-            INNER JOIN "CapabilityDefinitions" AS c
-                ON r0."CapabilityDefinitionId" = c."Id"
-            WHERE r."Id" = r0."RoleProfileId"
-                AND c."Key" = ANY (@keys)
-                AND c."AuthorizationTargetKind" = 'Property'
-            """);
-        AssertSqlContains(
-            sql,
-            """
-            m."ScopeKind" = 'AllProperties'
-                OR (m."ScopeKind" = 'SelectedProperties' AND EXISTS (
-                SELECT 1
-                FROM "MembershipRoleAssignmentProperties" AS m0
-            """);
-        AssertSqlContains(
-            sql,
-            """
-            ) AS p7 ON m0."PropertyId" = p7."Id"
-                AND m0."PortfolioId" = p7."PortfolioId"
-            """);
-        AssertSqlContains(
-            sql,
-            """
-            m."Id" = m0."MembershipRoleAssignmentId"
-                AND m."PortfolioId" = m0."PortfolioId"
-                AND m0."PortfolioId" = p."PortfolioId"
-                AND m0."PropertyId" = p."Id"
             """);
     }
 
@@ -481,8 +339,46 @@ public class ScanServiceTests : IDisposable
         command.Target.LeaseAgreement.LeaseManagementId.Should().Be(56);
         command.Target.LeaseAgreement.TenantAccountId.Should().Be(78);
         command.Target.LeaseAgreement.DocumentTemplateId.Should().BeNull();
+        command.Target.LeaseAgreement.RentTrackingStartMode.Should()
+            .Be(RentTrackingStartMode.ForwardOnly);
+        command.Target.LeaseAgreement.RentTrackingStartOn.Should().BeNull();
         command.Target.LeaseAgreement.PossessionGivenAtUtc.Should()
             .Be(new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc));
+    }
+
+    [Fact]
+    public async Task PrepareConfirmationAsync_LeaseTarget_PreservesCustomRentTrackingChoice()
+    {
+        var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "LeaseAgreement");
+
+        var result = await _sut.PrepareConfirmationAsync(
+            PortfolioId,
+            draft.Id,
+            userId: 7,
+            overridesJson:
+                """{"propertyId":0,"unitId":0,"reviewDisposition":"AlreadyFullySigned","rentTrackingStartMode":"CustomCutoffDate","rentTrackingStartOn":"2026-06-20"}""");
+
+        result.Outcome.Should().Be(ScanConfirmationPreparationOutcome.Ready);
+        result.Command!.Target.LeaseAgreement!.RentTrackingStartMode.Should()
+            .Be(RentTrackingStartMode.CustomCutoffDate);
+        result.Command.Target.LeaseAgreement.RentTrackingStartOn.Should()
+            .Be(new DateOnly(2026, 6, 20));
+    }
+
+    [Fact]
+    public async Task PrepareConfirmationAsync_LeaseTarget_CustomRentTrackingRequiresDate()
+    {
+        var draft = SeedDraft("Reviewing", extractedFields: null, targetEntityType: "LeaseAgreement");
+
+        var action = () => _sut.PrepareConfirmationAsync(
+            PortfolioId,
+            draft.Id,
+            userId: 7,
+            overridesJson:
+                """{"propertyId":0,"unitId":0,"reviewDisposition":"AlreadyFullySigned","rentTrackingStartMode":"CustomCutoffDate"}""");
+
+        await action.Should().ThrowAsync<ScanConfirmationValidationException>()
+            .WithMessage("*custom date*");
     }
 
     [Fact]

@@ -261,7 +261,9 @@ public sealed class LeaseManagementController : ManagementControllerBase
                 request.OpeningBalanceAmount,
                 request.OpeningBalanceEffectiveOn,
                 request.OpeningBalanceNote,
-                $"prepare-move-in:{portfolioId}:{(request.ApplicationId.HasValue ? $"application:{request.ApplicationId}" : $"unit:{request.UnitId}")}:{keyDigest}");
+                $"prepare-move-in:{portfolioId}:{(request.ApplicationId.HasValue ? $"application:{request.ApplicationId}" : $"unit:{request.UnitId}")}:{keyDigest}",
+                request.RentTrackingStartMode,
+                request.RentTrackingStartOn);
 
             var outcome = await _atomic.ExecuteAsync(
                 new AtomicCommandIdentity(

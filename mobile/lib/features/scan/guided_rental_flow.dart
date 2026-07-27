@@ -66,6 +66,8 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
   DateTime? _start;
   DateTime? _end;
   String? _reviewDisposition;
+  String _rentTrackingStartMode = 'ForwardOnly';
+  DateTime? _rentTrackingStartOn;
 
   @override
   void initState() {
@@ -286,6 +288,11 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
     if (_reviewDisposition != null) {
       o['reviewDisposition'] = _reviewDisposition;
     }
+    o['rentTrackingStartMode'] = _rentTrackingStartMode;
+    if (_rentTrackingStartMode == 'CustomCutoffDate' &&
+        _rentTrackingStartOn != null) {
+      o['rentTrackingStartOn'] = _iso(_rentTrackingStartOn!);
+    }
     return jsonEncode(o);
   }
 
@@ -312,6 +319,9 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
     } else if (_step == 3) {
       if (_reviewDisposition == null) {
         err = 'Choose whether the lease is already signed.';
+      } else if (_rentTrackingStartMode == 'CustomCutoffDate' &&
+          _rentTrackingStartOn == null) {
+        err = 'Pick the custom rent start date.';
       } else if (_start == null || _end == null) {
         err = 'Pick the lease start and end dates.';
       } else if ((num.tryParse(_rent.text.trim()) ?? 0) <= 0) {
@@ -596,6 +606,57 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
               extractionKey: 'rent_due_day',
               keyboard: TextInputType.number,
             ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              key: ValueKey(_rentTrackingStartMode),
+              initialValue: _rentTrackingStartMode,
+              decoration: const InputDecoration(
+                labelText: 'Begin rent charges',
+              ),
+              items: const [
+                DropdownMenuItem(
+                  value: 'ForwardOnly',
+                  child: Text('Start from the current date'),
+                ),
+                DropdownMenuItem(
+                  value: 'BackfillFromLeaseStart',
+                  child: Text('Backfill from the lease start'),
+                ),
+                DropdownMenuItem(
+                  value: 'CustomCutoffDate',
+                  child: Text('Start from a custom date'),
+                ),
+              ],
+              onChanged: (value) => setState(() {
+                _rentTrackingStartMode = value ?? 'ForwardOnly';
+                if (_rentTrackingStartMode != 'CustomCutoffDate') {
+                  _rentTrackingStartOn = null;
+                }
+              }),
+            ),
+            if (_rentTrackingStartMode == 'CustomCutoffDate')
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Custom rent start date'),
+                subtitle: Text(
+                  _rentTrackingStartOn == null
+                      ? 'Pick a date'
+                      : _iso(_rentTrackingStartOn!),
+                ),
+                trailing: const Icon(Icons.calendar_today_outlined),
+                onTap: () async {
+                  final firstDate = _start ?? DateTime(2000);
+                  final selected = await showDatePicker(
+                    context: context,
+                    initialDate: _rentTrackingStartOn ?? firstDate,
+                    firstDate: firstDate,
+                    lastDate: DateTime(2100),
+                  );
+                  if (selected != null && mounted) {
+                    setState(() => _rentTrackingStartOn = selected);
+                  }
+                },
+              ),
             const SizedBox(height: 8),
             Text(
               'What signing state is this lease in?',

@@ -666,6 +666,7 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
         modelBuilder.Entity<AutomationSettings>(entity =>
         {
             entity.HasKey(e => e.Id);
+            entity.Property(e => e.EnableRentCharges).HasDefaultValue(true);
             entity.Property(e => e.EnableLeaseExpiryReminders).HasDefaultValue(true);
             entity.Property(e => e.EnableRecurringMaintenance).HasDefaultValue(true);
             entity.Property(e => e.EnableMorningBriefing).HasDefaultValue(true);
@@ -673,6 +674,9 @@ public class RentalCommandDbContext : IdentityUserContext<ApplicationUser, int>
             entity.Property(e => e.LateFeeGraceDays).HasDefaultValue(5);
             entity.Property(e => e.LeaseExpiryReminderDays).HasDefaultValue(60);
             entity.Property(e => e.MorningBriefingSendHourLocal).HasDefaultValue(8);
+            entity.ToTable(table => table.HasCheckConstraint(
+                "CK_AutomationSettings_RentChargesAlwaysEnabled",
+                "\"EnableRentCharges\" = TRUE"));
             entity.HasIndex(e => e.PortfolioId).IsUnique();
             entity.HasOne(e => e.Portfolio).WithMany().HasForeignKey(e => e.PortfolioId).OnDelete(DeleteBehavior.Cascade);
         });

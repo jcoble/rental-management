@@ -425,6 +425,8 @@ Map<String, dynamic> buildOverridesMap({
   RentalStructure? newPropertyRentalStructure,
   LeaseScanReviewDisposition? leaseReviewDisposition,
   int? documentTemplateId,
+  String rentTrackingStartMode = 'ForwardOnly',
+  DateTime? rentTrackingStartOn,
   // Create-new-property fields (only used when createNewProperty is true).
   String? newPropertyName,
   String? newPropertyAddress,
@@ -489,6 +491,14 @@ Map<String, dynamic> buildOverridesMap({
           documentTemplateId != null) {
         overrides['documentTemplateId'] = documentTemplateId;
       }
+    }
+    overrides['rentTrackingStartMode'] = rentTrackingStartMode;
+    if (rentTrackingStartMode == 'CustomCutoffDate' &&
+        rentTrackingStartOn != null) {
+      overrides['rentTrackingStartOn'] = rentTrackingStartOn
+          .toIso8601String()
+          .split('T')
+          .first;
     }
   } else if (isApplication) {
     // The edited applicant scalar fields (first_name, last_name, email, …) are
@@ -562,6 +572,8 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
   // signatures becomes a draft from the selected active template.
   LeaseScanReviewDisposition? _leaseReviewDisposition;
   int? _selectedDocumentTemplateId;
+  String _rentTrackingStartMode = 'ForwardOnly';
+  DateTime? _rentTrackingStartOn;
 
   // Loan scans launched from a property arrive with this preselected. Reopened
   // drafts choose here so a pending mortgage scan never dead-ends after restart.
@@ -722,6 +734,8 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
         newPropertyRentalStructure: _newPropertyRentalStructure,
         leaseReviewDisposition: _leaseReviewDisposition,
         documentTemplateId: _selectedDocumentTemplateId,
+        rentTrackingStartMode: _rentTrackingStartMode,
+        rentTrackingStartOn: _rentTrackingStartOn,
         newPropertyName: _editedFields['property_name'],
         newPropertyAddress: _editedFields['property_address'],
         newPropertyCity: _editedFields['property_city'],
@@ -928,6 +942,14 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
           selectedDocumentTemplateId: _selectedDocumentTemplateId,
           onDocumentTemplateSelected: (id) =>
               setState(() => _selectedDocumentTemplateId = id),
+          rentTrackingStartMode: _rentTrackingStartMode,
+          onRentTrackingStartModeChanged: (value) => setState(() {
+            _rentTrackingStartMode = value;
+            if (value != 'CustomCutoffDate') _rentTrackingStartOn = null;
+          }),
+          rentTrackingStartOn: _rentTrackingStartOn,
+          onRentTrackingStartOnChanged: (value) =>
+              setState(() => _rentTrackingStartOn = value),
           loanPropertyId: _selectedLoanPropertyId,
           onLoanPropertySelected: (id) =>
               setState(() => _selectedLoanPropertyId = id),
@@ -968,6 +990,10 @@ class _ReviewBody extends ConsumerWidget {
     required this.onLeaseReviewDispositionChanged,
     required this.selectedDocumentTemplateId,
     required this.onDocumentTemplateSelected,
+    required this.rentTrackingStartMode,
+    required this.onRentTrackingStartModeChanged,
+    required this.rentTrackingStartOn,
+    required this.onRentTrackingStartOnChanged,
     required this.loanPropertyId,
     required this.onLoanPropertySelected,
     required this.confirming,
@@ -998,6 +1024,10 @@ class _ReviewBody extends ConsumerWidget {
   onLeaseReviewDispositionChanged;
   final int? selectedDocumentTemplateId;
   final ValueChanged<int?> onDocumentTemplateSelected;
+  final String rentTrackingStartMode;
+  final ValueChanged<String> onRentTrackingStartModeChanged;
+  final DateTime? rentTrackingStartOn;
+  final ValueChanged<DateTime?> onRentTrackingStartOnChanged;
   final int? loanPropertyId;
   final ValueChanged<int?> onLoanPropertySelected;
   final bool confirming;
@@ -1041,6 +1071,10 @@ class _ReviewBody extends ConsumerWidget {
                 : selectedPropertyId != null &&
                       (selectedUnitId != null || hasUsableUnitText)) &&
             leaseReviewDisposition != null);
+    final rentTrackingReady =
+        !draft.isLease ||
+        rentTrackingStartMode != 'CustomCutoffDate' ||
+        rentTrackingStartOn != null;
     // An Application needs a first + last name (both [Required] on the create),
     // mirroring the web review page's applicationInvalid guard.
     final applicationReady =
@@ -1054,6 +1088,7 @@ class _ReviewBody extends ConsumerWidget {
         !isTerminal &&
         (!draft.isPayment || selectedTenantAccountId != null) &&
         leaseReady &&
+        rentTrackingReady &&
         applicationReady &&
         loanReady;
     final leaseActionLabel = switch (leaseReviewDisposition) {
@@ -1150,6 +1185,15 @@ class _ReviewBody extends ConsumerWidget {
                     selectedTemplateId: selectedDocumentTemplateId,
                     onTemplateSelected: onDocumentTemplateSelected,
                     propertyId: createNewProperty ? null : selectedPropertyId,
+                  ),
+                  _RentTrackingStartSection(
+                    mode: rentTrackingStartMode,
+                    startOn: rentTrackingStartOn,
+                    leaseStart: DateTime.tryParse(
+                      editedFields['start_date'] ?? '',
+                    ),
+                    onModeChanged: onRentTrackingStartModeChanged,
+                    onStartOnChanged: onRentTrackingStartOnChanged,
                   ),
 
                   // ---- Property / Unit / Tenant pickers ----
@@ -2144,6 +2188,92 @@ class _LeaseSignatureDispositionSectionState
               ],
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RentTrackingStartSection extends StatelessWidget {
+  const _RentTrackingStartSection({
+    required this.mode,
+    required this.startOn,
+    required this.leaseStart,
+    required this.onModeChanged,
+    required this.onStartOnChanged,
+  });
+
+  final String mode;
+  final DateTime? startOn;
+  final DateTime? leaseStart;
+  final ValueChanged<String> onModeChanged;
+  final ValueChanged<DateTime?> onStartOnChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card.filled(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Begin rent charges',
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              key: ValueKey(mode),
+              initialValue: mode,
+              items: const [
+                DropdownMenuItem(
+                  value: 'ForwardOnly',
+                  child: Text('Start from the current date'),
+                ),
+                DropdownMenuItem(
+                  value: 'BackfillFromLeaseStart',
+                  child: Text('Backfill from the lease start'),
+                ),
+                DropdownMenuItem(
+                  value: 'CustomCutoffDate',
+                  child: Text('Start from a custom date'),
+                ),
+              ],
+              onChanged: (value) {
+                if (value != null) onModeChanged(value);
+              },
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'This decides whether older rent periods are posted when the lease is imported.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            if (mode == 'CustomCutoffDate')
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Custom start date'),
+                subtitle: Text(
+                  startOn == null
+                      ? 'Required'
+                      : startOn!.toIso8601String().split('T').first,
+                ),
+                trailing: const Icon(Icons.calendar_today_outlined),
+                onTap: () async {
+                  final firstDate = leaseStart ?? DateTime(2000);
+                  final initial = startOn ?? firstDate;
+                  final selected = await showDatePicker(
+                    context: context,
+                    initialDate: initial.isBefore(firstDate)
+                        ? firstDate
+                        : initial,
+                    firstDate: firstDate,
+                    lastDate: DateTime(2100),
+                  );
+                  if (selected != null) onStartOnChanged(selected);
+                },
+              ),
+          ],
         ),
       ),
     );

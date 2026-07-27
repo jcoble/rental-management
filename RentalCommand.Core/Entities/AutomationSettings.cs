@@ -8,7 +8,9 @@ public sealed class AutomationSettings
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
-    public bool EnableRentCharges { get; set; }
+    // Rent charges are core ledger behavior, not an optional automation. This persisted value is
+    // retained for schema compatibility and is constrained to true by the database.
+    public bool EnableRentCharges { get; set; } = true;
     public int RentChargeLeadDays { get; set; } = 5;
     public bool EnableLateFees { get; set; }
     public int LateFeeGraceDays { get; set; } = 5;

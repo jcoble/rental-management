@@ -288,6 +288,8 @@ export interface PrepareMoveInRequest {
   securityDepositObligation: number;
   lateFeeAmount: number;
   gracePeriodDays: number;
+  rentTrackingStartMode: "BackfillFromLeaseStart" | "ForwardOnly" | "CustomCutoffDate";
+  rentTrackingStartOn: string | null;
   termsSchemaVersion: number;
   termsPayload: Record<string, unknown>;
   createSecurityDepositAccount: boolean;

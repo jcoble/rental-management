@@ -33,7 +33,13 @@ internal static class CanonicalLeaseScanConfirmationWriter
         // Different lease scans for the same empty portfolio must not create duplicate physical
         // inventory. This transaction-scoped lock serializes matching/creation before Unit locking.
         await attempt.Locking.AcquireAsync(AtomicLockResource.Portfolio, command.PortfolioId, ct);
-        var now = await attempt.Persistence.ReadDatabaseClockUtcAsync(ct);
+        var times = await attempt.Persistence.ReadCommandTimesAsync(command.PortfolioId, ct);
+        var now = times.WallClockUtc;
+        var rentTrackingStartOn = RentTrackingStartPolicy.Resolve(
+            DateOnly.FromDateTime(target.StartDate!.Value),
+            target.RentTrackingStartMode,
+            target.RentTrackingStartOn,
+            times.BusinessDate);
         var home = await ResolveHomeAsync(command, target, attempt, now, ct);
         await attempt.Locking.AcquireAsync(AtomicLockResource.Unit, home.UnitId, ct);
         if (target.LeaseManagementId is > 0)
@@ -81,7 +87,8 @@ internal static class CanonicalLeaseScanConfirmationWriter
 
         var tenant = await ResolveTenantAsync(command, target, attempt, now, ct);
         var relationship = await ResolveRelationshipAsync(command, target, home, attempt, now, ct);
-        var account = await ResolveAccountAsync(command, target, relationship, home.Currency, attempt, now, ct);
+        var account = await ResolveAccountAsync(
+            command, target, relationship, home.Currency, rentTrackingStartOn, attempt, now, ct);
 
         if (target.LeaseAgreementId is > 0)
         {
@@ -682,6 +689,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
         ScanLeaseTargetData target,
         LeaseManagement relationship,
         string currency,
+        DateOnly? rentTrackingStartOn,
         IAtomicWriteAttempt attempt,
         DateTime now,
         CancellationToken ct)
@@ -695,6 +703,17 @@ internal static class CanonicalLeaseScanConfirmationWriter
             if (target.TenantAccountId is > 0 && target.TenantAccountId != account.Id)
                 throw new ScanConfirmationValidationException(
                     "The selected tenant account does not belong to this rental relationship.");
+            if (account.RentTrackingStartOn != rentTrackingStartOn)
+            {
+                account.RentTrackingStartOn = rentTrackingStartOn;
+                attempt.BindSemanticAudit(account, new AtomicSemanticAudit(
+                    command.PortfolioId,
+                    nameof(TenantAccount),
+                    account.Id,
+                    AuditLogOperation.Updated,
+                    UserId: command.ConfirmedByUserId,
+                    ChangeReason: "Applied the reviewed rent tracking start choice from the lease scan."));
+            }
             return account;
         }
         if (target.TenantAccountId is > 0)
@@ -707,6 +726,7 @@ internal static class CanonicalLeaseScanConfirmationWriter
             LeaseManagementId = relationship.Id,
             AccountNumber = $"TA-SCAN-{command.DraftId:D8}",
             Currency = currency,
+            RentTrackingStartOn = rentTrackingStartOn,
             OpenedAtUtc = now,
             CreatedAtUtc = now,
             CreatedByUserId = command.ConfirmedByUserId,
@@ -721,6 +741,11 @@ internal static class CanonicalLeaseScanConfirmationWriter
     private static void Validate(ConfirmScanDraftCommand command, ScanLeaseTargetData target)
     {
         if (target.ReviewDisposition is null || target.StartDate is null
+            || !Enum.IsDefined(target.RentTrackingStartMode)
+            || (target.RentTrackingStartMode == RentTrackingStartMode.CustomCutoffDate
+                && target.RentTrackingStartOn is null)
+            || (target.RentTrackingStartMode != RentTrackingStartMode.CustomCutoffDate
+                && target.RentTrackingStartOn is not null)
             || target.MonthlyRent is null or < 0
             || target.RentDueDay is not (>= 1 and <= 31)
             || target.SecurityDeposit is < 0 || target.LateFee is < 0

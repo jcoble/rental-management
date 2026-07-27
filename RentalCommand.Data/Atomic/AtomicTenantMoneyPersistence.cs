@@ -47,6 +47,7 @@ internal sealed class AtomicTenantMoneyPersistence : IAtomicTenantMoneyPersisten
                        GREATEST(
                            agreement."TermStartOn",
                            agreement."GoverningFromOn",
+                           COALESCE(account."RentTrackingStartOn", agreement."TermStartOn"),
                            month.month_start::date) AS period_start,
                        LEAST(
                            COALESCE(agreement."TermEndOn", 'infinity'::date),
@@ -64,12 +65,14 @@ internal sealed class AtomicTenantMoneyPersistence : IAtomicTenantMoneyPersisten
                 JOIN "Portfolios" AS portfolio ON portfolio."Id" = agreement."PortfolioId"
                 JOIN "AutomationSettings" AS settings
                   ON settings."PortfolioId" = agreement."PortfolioId"
-                 AND settings."EnableRentCharges"
                 CROSS JOIN LATERAL (
                     SELECT rc_business_date(agreement."PortfolioId") AS business_date
                 ) AS effective_date
                 CROSS JOIN LATERAL generate_series(
-                    date_trunc('month', GREATEST(agreement."TermStartOn", agreement."GoverningFromOn")::timestamp),
+                    date_trunc('month', GREATEST(
+                        agreement."TermStartOn",
+                        agreement."GoverningFromOn",
+                        COALESCE(account."RentTrackingStartOn", agreement."TermStartOn"))::timestamp),
                     date_trunc('month', (effective_date.business_date
                         + GREATEST(settings."RentChargeLeadDays", 0))::timestamp),
                     interval '1 month') AS month(month_start)

@@ -315,6 +315,47 @@ public sealed class ScanService : IScanService
                 throw new ScanConfirmationValidationException(
                     "Choose whether the uploaded lease is AlreadyFullySigned or NeedsSignatures.");
             }
+            var rentTrackingModeText = TryGetOverrideString(
+                overrideRoot, out var suppliedRentTrackingMode,
+                "rentTrackingStartMode", "rent_tracking_start_mode")
+                ? suppliedRentTrackingMode
+                : nameof(RentTrackingStartMode.ForwardOnly);
+            if (!Enum.TryParse<RentTrackingStartMode>(
+                    rentTrackingModeText, ignoreCase: true, out var rentTrackingMode)
+                || !Enum.IsDefined(rentTrackingMode))
+            {
+                throw new ScanConfirmationValidationException(
+                    "Choose whether rent starts today, at the lease start, or on a custom date.");
+            }
+            DateOnly? rentTrackingStartOn = null;
+            if (TryGetOverrideString(
+                    overrideRoot, out var suppliedRentTrackingStartOn,
+                    "rentTrackingStartOn", "rent_tracking_start_on")
+                && !string.IsNullOrWhiteSpace(suppliedRentTrackingStartOn))
+            {
+                if (!DateOnly.TryParse(
+                        suppliedRentTrackingStartOn,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None,
+                        out var parsedRentTrackingStartOn))
+                {
+                    throw new ScanConfirmationValidationException(
+                        "Rent tracking start date is invalid.");
+                }
+                rentTrackingStartOn = parsedRentTrackingStartOn;
+            }
+            if (rentTrackingMode == RentTrackingStartMode.CustomCutoffDate
+                && rentTrackingStartOn is null)
+            {
+                throw new ScanConfirmationValidationException(
+                    "Choose the custom date when rent tracking uses a custom start.");
+            }
+            if (rentTrackingMode != RentTrackingStartMode.CustomCutoffDate
+                && rentTrackingStartOn is not null)
+            {
+                throw new ScanConfirmationValidationException(
+                    "A custom rent tracking date can only be used with the custom start choice.");
+            }
 
             target = new(kind, LeaseAgreement: new ScanLeaseTargetData(
                 fields.PropertyId, fields.UnitId, fields.TenantId, fields.TenantName,
@@ -329,7 +370,9 @@ public sealed class ScanService : IScanService
                 TermsSchemaVersion: 1,
                 TermsPayload: string.IsNullOrWhiteSpace(draft.ExtractedFields) ? "{}" : draft.ExtractedFields,
                 GracePeriodDays: 0,
-                PossessionGivenAtUtc: fields.PossessionGivenAtUtc));
+                PossessionGivenAtUtc: fields.PossessionGivenAtUtc,
+                RentTrackingStartMode: rentTrackingMode,
+                RentTrackingStartOn: rentTrackingStartOn));
         }
         else if (kind == ScanConfirmationTargetKind.Application)
         {
