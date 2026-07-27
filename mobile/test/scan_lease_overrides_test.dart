@@ -344,4 +344,92 @@ void main() {
       expect(proposal.unit.isSelect, isTrue);
     });
   });
+
+  group('expenseScanReadinessMessage', () {
+    test('lists required expense facts without optional accounting fields', () {
+      final message = expenseScanReadinessMessage(
+        draft: _expenseDraft(
+          fields: const [
+            ScanField(name: 'tax', value: '0', confidence: 1),
+            ScanField(name: 'tip', value: '0', confidence: 1),
+            ScanField(name: 'discount', value: '0', confidence: 1),
+            ScanField(name: 'shipping', value: '0', confidence: 1),
+          ],
+        ),
+      );
+
+      expect(message, contains('vendor'));
+      expect(message, contains('transaction date'));
+      expect(message, contains('positive total or subtotal'));
+      expect(message, contains('category'));
+      expect(message, contains('property, unit, or work order'));
+      expect(message, isNot(contains('payment method')));
+      expect(message, isNot(contains('card last 4')));
+      expect(message, isNot(contains('due date')));
+      expect(message, isNot(contains('line items')));
+      expect(message, isNot(contains('allocations')));
+    });
+
+    test('accepts reviewed minimum with zero optional amount components', () {
+      final message = expenseScanReadinessMessage(
+        draft: _expenseDraft(
+          captureContext: const ScanCaptureContext(propertyId: 44),
+          fields: const [
+            ScanField(name: 'vendor_name', value: 'Supply Shop', confidence: 1),
+            ScanField(
+              name: 'transaction_date',
+              value: '2026-07-12',
+              confidence: 1,
+            ),
+            ScanField(name: 'total', value: '0', confidence: 1),
+            ScanField(name: 'subtotal', value: '157.00', confidence: 1),
+            ScanField(name: 'tax', value: '0', confidence: 1),
+            ScanField(name: 'tip', value: '0', confidence: 1),
+            ScanField(name: 'discount', value: '0', confidence: 1),
+            ScanField(name: 'shipping', value: '0', confidence: 1),
+            ScanField(name: 'category', value: 'Other', confidence: 1),
+            ScanField(name: 'payment_method', value: 'ACH', confidence: 1),
+          ],
+        ),
+      );
+
+      expect(message, isNull);
+    });
+
+    test('uses edited fields to clear extraction gaps', () {
+      final message = expenseScanReadinessMessage(
+        draft: _expenseDraft(
+          fields: const [
+            ScanField(name: 'vendor_name', value: '', confidence: 0.2),
+            ScanField(name: 'total', value: '0', confidence: 0.2),
+          ],
+        ),
+        editedFields: const {
+          'vendor_name': 'Hardware House',
+          'transaction_date': '2026-07-12',
+          'total': r'$1,230.45',
+          'category': 'Repairs',
+          'property_id': '8',
+        },
+      );
+
+      expect(message, isNull);
+    });
+  });
+}
+
+ScanDraft _expenseDraft({
+  List<ScanField> fields = const [],
+  ScanCaptureContext? captureContext,
+}) {
+  return ScanDraft(
+    id: 1,
+    portfolioId: 1,
+    targetEntityType: 'Expense',
+    status: 'Reviewing',
+    fileUrl: '',
+    fields: fields,
+    createdAt: DateTime(2026, 7, 12),
+    captureContext: captureContext,
+  );
 }

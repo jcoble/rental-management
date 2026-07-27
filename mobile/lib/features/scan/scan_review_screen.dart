@@ -632,6 +632,57 @@ String? paymentContextConflictMessage({
   return null;
 }
 
+String? expenseScanReadinessMessage({
+  required ScanDraft draft,
+  Map<String, String> editedFields = const {},
+}) {
+  if (draft.isPayment ||
+      draft.isWorkOrder ||
+      draft.isLease ||
+      draft.isApplication ||
+      draft.isLoan) {
+    return null;
+  }
+
+  final missing = <String>[];
+  if (_effectiveFieldText(draft, editedFields, const [
+    'vendorName',
+    'vendor_name',
+  ]).isEmpty) {
+    missing.add('vendor');
+  }
+
+  final transactionDate = _effectiveFieldText(draft, editedFields, const [
+    'transactionDate',
+    'transaction_date',
+  ]);
+  if (DateTime.tryParse(transactionDate) == null) {
+    missing.add('transaction date');
+  }
+
+  final total = _effectivePositiveFieldDecimal(draft, editedFields, const [
+    'total',
+    'amount',
+  ]);
+  final subtotal = _effectivePositiveFieldDecimal(draft, editedFields, const [
+    'subtotal',
+  ]);
+  if (total == null && subtotal == null) {
+    missing.add('positive total or subtotal');
+  }
+
+  if (_effectiveFieldText(draft, editedFields, const ['category']).isEmpty) {
+    missing.add('category');
+  }
+
+  if (!_hasReviewedExpenseScope(draft, editedFields)) {
+    missing.add('property, unit, or work order');
+  }
+
+  if (missing.isEmpty) return null;
+  return 'Review ${missing.join(', ')} before creating this expense.';
+}
+
 bool _hasReviewedPaymentTargetIds(
   ScanDraft draft,
   Map<String, String> editedFields,
@@ -667,6 +718,64 @@ bool _conflictsWithCapture({
       capturedId != extractedId;
 }
 
+bool _hasReviewedExpenseScope(
+  ScanDraft draft,
+  Map<String, String> editedFields,
+) {
+  final capture = draft.captureContext;
+  return _isPositiveId(capture?.propertyId) ||
+      _isPositiveId(capture?.unitId) ||
+      _isPositiveId(capture?.workOrderId) ||
+      _effectivePositiveFieldInt(draft, editedFields, const [
+            'propertyId',
+            'property_id',
+          ]) !=
+          null ||
+      _effectivePositiveFieldInt(draft, editedFields, const [
+            'unitId',
+            'unit_id',
+          ]) !=
+          null ||
+      _effectivePositiveFieldInt(draft, editedFields, const [
+            'workOrderId',
+            'work_order_id',
+          ]) !=
+          null;
+}
+
+String _effectiveFieldText(
+  ScanDraft draft,
+  Map<String, String> editedFields,
+  List<String> names,
+) {
+  for (final name in names) {
+    if (editedFields.containsKey(name)) {
+      return editedFields[name]?.trim() ?? '';
+    }
+  }
+  for (final name in names) {
+    final field = draft.fields.where((f) => f.name == name).firstOrNull;
+    final value = field?.value.trim() ?? '';
+    if (value.isNotEmpty) return value;
+  }
+  return '';
+}
+
+double? _effectivePositiveFieldDecimal(
+  ScanDraft draft,
+  Map<String, String> editedFields,
+  List<String> names,
+) {
+  final value = double.tryParse(
+    _effectiveFieldText(
+      draft,
+      editedFields,
+      names,
+    ).replaceAll(RegExp(r'[$,]'), ''),
+  );
+  return value != null && value > 0 ? value : null;
+}
+
 int? _effectivePositiveFieldInt(
   ScanDraft draft,
   Map<String, String> editedFields,
@@ -680,6 +789,8 @@ int? _effectivePositiveFieldInt(
   }
   return _positiveFieldInt(draft, names);
 }
+
+bool _isPositiveId(int? value) => value != null && value > 0;
 
 int? _positiveFieldInt(ScanDraft draft, List<String> names) {
   for (final name in names) {
@@ -1361,6 +1472,10 @@ class _ReviewBody extends ConsumerWidget {
       selectedTenantAccount: selectedTenantAccount,
       editedFields: editedFields,
     );
+    final expenseReadinessMessage = expenseScanReadinessMessage(
+      draft: draft,
+      editedFields: editedFields,
+    );
     final confirmEnabled =
         !actionsLocked &&
         !busy &&
@@ -1368,6 +1483,7 @@ class _ReviewBody extends ConsumerWidget {
         !isTerminal &&
         (!draft.isPayment || selectedTenantAccountId != null) &&
         paymentConflictMessage == null &&
+        expenseReadinessMessage == null &&
         leaseReady &&
         rentTrackingReady &&
         applicationReady &&
@@ -1653,6 +1769,15 @@ class _ReviewBody extends ConsumerWidget {
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
                   'Select a property to enable loan creation.',
+                  style: TextStyle(fontSize: 12, color: Colors.amber.shade700),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            if (expenseReadinessMessage != null && !isTerminal)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  expenseReadinessMessage,
                   style: TextStyle(fontSize: 12, color: Colors.amber.shade700),
                   textAlign: TextAlign.center,
                 ),
