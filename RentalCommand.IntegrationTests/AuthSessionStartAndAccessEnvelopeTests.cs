@@ -890,7 +890,7 @@ public sealed class AuthSessionStartAndAccessEnvelopeTests : IAsyncLifetime
             AccessContextId = tenantContext.Id,
             ApplicationUserId = tenantUser.Id,
             LeaseManagementPartyId = party.Id,
-            GrantedAtUtc = now,
+            GrantedAtUtc = now.AddMinutes(-2),
             GrantedByUserId = ownerUser.Id,
             Reason = "proof",
         };
