@@ -16,7 +16,6 @@ import '../../core/models/work_order.dart';
 import '../../core/models/property.dart';
 import '../../core/navigation/mobile_restoration_state.dart';
 import '../../core/presentation/plain_english_labels.dart';
-import '../../core/widgets/mobile_section_selector.dart';
 import '../activity/activity_history_screen.dart';
 import '../applications/application_detail_screen.dart';
 import '../applications/applications_models.dart';
@@ -328,52 +327,45 @@ class _UnitCommandCenterScreenState extends State<UnitCommandCenterScreen> {
         builder: (tabContext) {
           final topController = DefaultTabController.of(tabContext);
           _bindTopController(topController);
-          final unitSelector = AnimatedBuilder(
-            animation: topController.animation!,
-            builder: (context, _) => MobileSectionSelector<int>(
-              items: const [
-                MobileSectionItem(
-                  value: 0,
-                  id: 'summary',
-                  label: 'Summary',
-                  icon: Icons.dashboard_outlined,
+          final unitTabs = Semantics(
+            label: 'Unit sections',
+            child: TabBar(
+              key: const Key('unit-section-tabs'),
+              controller: topController,
+              isScrollable: true,
+              tabAlignment: TabAlignment.start,
+              tabs: const [
+                Tab(
+                  key: ValueKey('unit-section-summary'),
+                  icon: Icon(Icons.dashboard_outlined),
+                  text: 'Summary',
                 ),
-                MobileSectionItem(
-                  value: 1,
-                  id: 'leasing',
-                  label: 'Leasing',
-                  icon: Icons.campaign_outlined,
+                Tab(
+                  key: ValueKey('unit-section-leasing'),
+                  icon: Icon(Icons.campaign_outlined),
+                  text: 'Leasing',
                 ),
-                MobileSectionItem(
-                  value: 2,
-                  id: 'tenant-lease',
-                  label: 'Tenant & lease',
-                  icon: Icons.group_outlined,
+                Tab(
+                  key: ValueKey('unit-section-tenant-lease'),
+                  icon: Icon(Icons.group_outlined),
+                  text: 'Tenant & lease',
                 ),
-                MobileSectionItem(
-                  value: 3,
-                  id: 'money',
-                  label: 'Money',
-                  icon: Icons.payments_outlined,
+                Tab(
+                  key: ValueKey('unit-section-money'),
+                  icon: Icon(Icons.payments_outlined),
+                  text: 'Money',
                 ),
-                MobileSectionItem(
-                  value: 4,
-                  id: 'maintenance',
-                  label: 'Maintenance',
-                  icon: Icons.build_outlined,
+                Tab(
+                  key: ValueKey('unit-section-maintenance'),
+                  icon: Icon(Icons.build_outlined),
+                  text: 'Maintenance',
                 ),
-                MobileSectionItem(
-                  value: 5,
-                  id: 'documents-history',
-                  label: 'Documents & history',
-                  icon: Icons.folder_copy_outlined,
+                Tab(
+                  key: ValueKey('unit-section-documents-history'),
+                  icon: Icon(Icons.folder_copy_outlined),
+                  text: 'Documents & history',
                 ),
               ],
-              selectedValue: topController.index,
-              onSelected: topController.animateTo,
-              tooltip: 'Choose unit section',
-              selectorKey: const Key('unit-section-selector'),
-              itemKeyPrefix: 'unit-section',
             ),
           );
           return _UnitViewScope(
@@ -406,7 +398,7 @@ class _UnitCommandCenterScreenState extends State<UnitCommandCenterScreen> {
                       children: [
                         Material(
                           color: Theme.of(context).colorScheme.surface,
-                          child: unitSelector,
+                          child: unitTabs,
                         ),
                         Expanded(child: tabView),
                       ],
@@ -415,7 +407,7 @@ class _UnitCommandCenterScreenState extends State<UnitCommandCenterScreen> {
                       children: [
                         Material(
                           color: Theme.of(context).colorScheme.surface,
-                          child: unitSelector,
+                          child: unitTabs,
                         ),
                         Expanded(child: tabView),
                       ],

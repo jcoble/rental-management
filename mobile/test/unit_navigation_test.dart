@@ -469,11 +469,9 @@ void main() {
       'lib/features/units/unit_command_center_screen.dart',
     ).readAsStringSync();
 
-    expect(
-      RegExp(r'MobileSectionSelector<int>\(').allMatches(source),
-      hasLength(1),
-    );
-    expect(source, isNot(contains('const unitTabs = TabBar(')));
+    expect(source, isNot(contains('MobileSectionSelector<int>(')));
+    expect(RegExp(r'child: TabBar\(').allMatches(source), hasLength(1));
+    expect(source, contains("Key('unit-section-tabs')"));
     expect(
       RegExp(r'final tabView = TabBarView\(').allMatches(source),
       hasLength(1),
@@ -482,7 +480,7 @@ void main() {
     expect(RegExp(r'_UnitAreaSurface\(').allMatches(source), hasLength(4));
   });
 
-  testWidgets('unit selector exposes and changes all top-level sections', (
+  testWidgets('unit tab bar exposes and changes all top-level sections', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -505,9 +503,6 @@ void main() {
       ),
     );
 
-    await tester.tap(find.byTooltip('Choose unit section'));
-    await tester.pumpAndSettle();
-
     for (final id in const [
       'summary',
       'leasing',
@@ -518,26 +513,23 @@ void main() {
     ]) {
       expect(find.byKey(ValueKey('unit-section-$id')), findsOneWidget);
     }
-    expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('unit-section-summary')),
-        matching: find.byIcon(Icons.check_rounded),
-      ),
-      findsOneWidget,
+    var controller = DefaultTabController.of(
+      tester.element(find.byKey(const Key('unit-section-tabs'))),
     );
+    expect(controller.index, UnitCommandCenterTab.summary.index);
 
     await tester.tap(find.byKey(const ValueKey('unit-section-money')));
     await tester.pumpAndSettle();
 
-    var controller = DefaultTabController.of(
-      tester.element(find.byKey(const Key('unit-section-selector'))),
+    controller = DefaultTabController.of(
+      tester.element(find.byKey(const Key('unit-section-tabs'))),
     );
     expect(controller.index, UnitCommandCenterTab.money.index);
 
     await _selectUnitSection(tester, 'documents-history');
 
     controller = DefaultTabController.of(
-      tester.element(find.byKey(const Key('unit-section-selector'))),
+      tester.element(find.byKey(const Key('unit-section-tabs'))),
     );
     expect(controller.index, UnitCommandCenterTab.documentsHistory.index);
     expect(find.text('Documents'), findsWidgets);
@@ -564,8 +556,8 @@ void main() {
         ),
       );
 
-      expect(find.byKey(const Key('unit-section-selector')), findsOneWidget);
-      expect(find.byType(TabBar), findsNothing);
+      expect(find.byKey(const Key('unit-section-tabs')), findsOneWidget);
+      expect(find.byType(TabBar), findsOneWidget);
       expect(find.text('Agreement'), findsOneWidget);
       expect(find.text('Residents'), findsOneWidget);
       expect(find.text('This unit is currently vacant.'), findsOneWidget);
@@ -605,8 +597,8 @@ void main() {
       await tester.pump();
       await tester.pump();
 
-      expect(find.byKey(const Key('unit-section-selector')), findsOneWidget);
-      expect(find.byType(TabBar), findsNothing);
+      expect(find.byKey(const Key('unit-section-tabs')), findsOneWidget);
+      expect(find.byType(TabBar), findsOneWidget);
       expect(find.byType(TabBarView), findsOneWidget);
       expect(find.text('Documents'), findsWidgets);
       expect(find.text('Scan document').hitTestable(), findsOneWidget);
@@ -881,7 +873,7 @@ void main() {
 
         await _selectUnitSection(tester, 'tenant-lease');
         final settledTabController = DefaultTabController.of(
-          tester.element(find.byKey(const Key('unit-section-selector'))),
+          tester.element(find.byKey(const Key('unit-section-tabs'))),
         );
         expect(settledTabController.indexIsChanging, isFalse);
         expect(
@@ -909,9 +901,7 @@ void main() {
             ? find.text('Executed PDF')
             : find.text('No governing agreement');
         Future<void> expectPaintedTenantLeaseSurface() async {
-          final visibleSelector = find.byKey(
-            const Key('unit-section-selector'),
-          );
+          final visibleSelector = find.byKey(const Key('unit-section-tabs'));
           expect(visibleSelector, findsOneWidget);
           final tabController = DefaultTabController.of(
             tester.element(visibleSelector),
@@ -1039,10 +1029,10 @@ void main() {
 }
 
 Future<void> _selectUnitSection(WidgetTester tester, String id) async {
-  await tester.tap(find.byTooltip('Choose unit section'));
+  final tab = find.byKey(ValueKey('unit-section-$id'));
+  await tester.ensureVisible(tab);
   await tester.pump();
-  await tester.pump(const Duration(milliseconds: 300));
-  await tester.tap(find.byKey(ValueKey('unit-section-$id')));
+  await tester.tap(tab);
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 450));
   await tester.pump(const Duration(milliseconds: 450));
